@@ -979,7 +979,11 @@ sealed interface ServerFrame {
 
     /** Broker `{type:"error", reason}` — switch/respond failures surface here. */
     @Serializable @SerialName("error")
-    data class Error(val reason: String = "") : ServerFrame
+    data class Error(
+        val reason: String = "",
+        /** #104: the app's id of the send this refuses, when the broker names one (a send from an html card). */
+        @SerialName("client_message_id") val clientMessageId: String? = null,
+    ) : ServerFrame
 }
 
 @Serializable

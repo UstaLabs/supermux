@@ -42,6 +42,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
+import kotlinx.coroutines.test.runTest
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -102,29 +103,35 @@ class HtmlCardTest {
 
     // --- supermux.send's answer ---
 
-    @Test fun aSendWithoutTheUsersInputIsRefused() {
+    @Test fun aSendWithoutTheUsersInputIsRefused() = runTest {
         val sent = mutableListOf<String>()
-        val answer = cardSendAnswer(JsonObject(mapOf("text" to JsonPrimitive("Use B"))), fromUserInput = false) { sent += it }
+        val answer = cardSendAnswer(JsonObject(mapOf("text" to JsonPrimitive("Use B"))), fromUserInput = false) { sent += it; null }
         assertFalse(answer["ok"]!!.jsonPrimitive.boolean)
         assertTrue(answer["reason"]!!.jsonPrimitive.content.isNotEmpty())
         assertEquals(emptyList(), sent)
     }
 
-    @Test fun anEmptyOrTooLongTextIsRefused() {
+    @Test fun anEmptyOrTooLongTextIsRefused() = runTest {
         val sent = mutableListOf<String>()
         for (params in listOf(JsonObject(mapOf("text" to JsonPrimitive(""))), JsonObject(mapOf("text" to JsonPrimitive("x".repeat(2001)))), JsonNull)) {
-            val answer = cardSendAnswer(params, fromUserInput = true) { sent += it }
+            val answer = cardSendAnswer(params, fromUserInput = true) { sent += it; null }
             assertFalse(answer["ok"]!!.jsonPrimitive.boolean, "$params")
             assertTrue(answer["reason"]!!.jsonPrimitive.content.isNotEmpty())
         }
         assertEquals(emptyList(), sent)
     }
 
-    @Test fun aClickedSendGoesOut() {
+    @Test fun aClickedSendGoesOut() = runTest {
         val sent = mutableListOf<String>()
-        val answer = cardSendAnswer(JsonObject(mapOf("text" to JsonPrimitive("x".repeat(2000)))), fromUserInput = true) { sent += it }
+        val answer = cardSendAnswer(JsonObject(mapOf("text" to JsonPrimitive("x".repeat(2000)))), fromUserInput = true) { sent += it; null }
         assertEquals(JsonObject(mapOf("ok" to JsonPrimitive(true))), answer)
         assertEquals(listOf("x".repeat(2000)), sent)
+    }
+
+    @Test fun theHostsRefusalIsThePagesAnswer() = runTest {
+        val answer = cardSendAnswer(JsonObject(mapOf("text" to JsonPrimitive("Use B"))), fromUserInput = true) { "one send a second" }
+        assertFalse(answer["ok"]!!.jsonPrimitive.boolean)
+        assertEquals("one send a second", answer["reason"]!!.jsonPrimitive.content)
     }
 
     // --- The card in the chat ---
@@ -135,7 +142,7 @@ class HtmlCardTest {
         val engines = FakeWebEngineFactory(behavior = FakeEngineBehavior(contentHeight = { 200f }))
         val sends = mutableListOf<Pair<FromCardDto, String>>()
         val page = "<div class=bar></div>"
-        val host = HtmlCardHost(page = { pageGate?.await(); page }, send = { c, t -> sends += c to t })
+        val host = HtmlCardHost(page = { pageGate?.await(); page }, send = { c, t -> sends += c to t; null })
         val calls: List<String> get() = engines.created.flatMap { it.calls }
     }
 

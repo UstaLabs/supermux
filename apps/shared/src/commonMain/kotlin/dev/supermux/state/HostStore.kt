@@ -135,6 +135,8 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
@@ -845,6 +847,7 @@ class HostStore(
             // A resumed session leaves the archive.
             is ServerFrame.SessionAdded -> if (_archivedSessions.value.any { it.id == frame.session.id }) refreshArchived("resumed")
             is ServerFrame.MessageAppend -> {
+                frame.entry.message_id?.let { cardAnswers.value[it]?.complete("") }
                 if (frame.entry.direction == "outbound" && frame.entry.op == "reply") {
                     _agentReplies.tryEmit(AgentReplyEvent(frame.session, frame.entry))
                 }
@@ -870,7 +873,9 @@ class HostStore(
             is ServerFrame.KeepAwakeChanged -> _keepAwake.value = frame.keepAwake
             is ServerFrame.TelemetryChanged -> _telemetry.value = TelemetryState(frame.enabled, frame.source, frame.noticeShown)
             // An older broker didn't know a frame this app sent: said once in the log (the reducer shows the user nothing).
-            is ServerFrame.Error -> if (frame.reason == UNKNOWN_FRAME_TYPE && !unknownFrameLogged) {
+            is ServerFrame.Error -> if (frame.clientMessageId != null) {
+                cardAnswers.value[frame.clientMessageId]?.complete(frame.reason.ifBlank { "refused" })
+            } else if (frame.reason == UNKNOWN_FRAME_TYPE && !unknownFrameLogged) {
                 unknownFrameLogged = true
                 println("[HostStore] the broker answered \"$UNKNOWN_FRAME_TYPE\": it is older than this app; carrying on without it")
             }
@@ -1106,18 +1111,46 @@ class HostStore(
         stateScope.launch { deliverOrQueue(frame) }
     }
 
+    /** #104: card sends waiting for the broker's answer, by their client message id: "" taken, else its reason. */
+    private val cardAnswers = MutableStateFlow<Map<String, CompletableDeferred<String>>>(emptyMap())
+
     /**
-     * #104: a click in [card] sends [text] as the user's message: a `send` frame with `from_card`, no attachments. The
-     * broker refuses a card it doesn't know, or a second send within a second. The app's click rules are the caller's.
+     * #104: a click in [card] sends [text] as the user's message: a `send` frame with `from_card`, no attachments. It
+     * returns null once the broker has taken it (its copy of the message arrived), or why not: the broker refused it (an
+     * unknown card, a second send within a second), the app isn't connected (a click's send is never kept for later),
+     * or no answer came in [CARD_SEND_TIMEOUT_MS]. A refused send's own bubble goes.
      */
-    fun sendFromCard(sessionId: String, card: FromCardDto, text: String) {
-        if (text.isEmpty()) return
+    suspend fun sendFromCard(sessionId: String, card: FromCardDto, text: String): String? {
+        if (text.isEmpty()) return "the text is empty"
         val clientMessageId = newClientMessageId()
-        appendLocalEcho(sessionId, text, clientMessageId, fromCard = card)
-        markPendingSend(sessionId)
-        val frame = ClientFrame.Send(sessionId, args = SendArgs(text, fromCard = CardRef(card.id)), clientMessageId = clientMessageId)
-        stateScope.launch { deliverOrQueue(frame) }
+        val answer = CompletableDeferred<String>()
+        cardAnswers.update { it + (clientMessageId to answer) }
+        try {
+            appendLocalEcho(sessionId, text, clientMessageId, fromCard = card)
+            markPendingSend(sessionId)
+            val frame = ClientFrame.Send(sessionId, args = SendArgs(text, fromCard = CardRef(card.id)), clientMessageId = clientMessageId)
+            if (!trySendFrame(frame)) {
+                dropCardEcho(sessionId, clientMessageId)
+                return "not connected"
+            }
+            val said = withTimeoutOrNull(CARD_SEND_TIMEOUT_MS) { answer.await() } ?: return "no answer from the host"
+            if (said.isEmpty()) return null
+            dropCardEcho(sessionId, clientMessageId)
+            return said
+        } finally {
+            cardAnswers.update { it - clientMessageId }
+        }
     }
+
+    private fun dropCardEcho(sessionId: String, clientMessageId: String) {
+        _pendingSend.update { it - sessionId }
+        val echo = localEchoId(clientMessageId)
+        _state.update { st ->
+            val log = st.messages[sessionId] ?: return@update st
+            st.copy(messages = st.messages + (sessionId to log.filterNot { it.id == echo }))
+        }
+    }
+
 
     /** Android name for [sendMessage] with attachments. */
     fun sendWith(sessionId: String, text: String, attachments: List<String>) =
@@ -3085,6 +3118,8 @@ class HostStore(
         /** Ceiling for a worktree delete batch (final review I-1); the Settings screen also chunks. */
         const val WORKTREE_DELETE_TIMEOUT_MS = 600_000L
         const val SPEAK_TIMEOUT_MS = 600_000L
+        /** #104: how long a card's send waits for the broker's answer. */
+        const val CARD_SEND_TIMEOUT_MS = 10_000L
         /** One 4 MB range of an attachment download. */
         const val MEDIA_TIMEOUT_MS = 120_000L
     }

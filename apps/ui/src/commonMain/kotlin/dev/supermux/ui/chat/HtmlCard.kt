@@ -66,7 +66,8 @@ import kotlinx.serialization.json.putJsonObject
 /** What a chat's html cards reach: their pages by id, and a send from a card. Null where the chat has neither. */
 class HtmlCardHost(
     val page: suspend (id: String) -> String?,
-    val send: (card: FromCardDto, text: String) -> Unit,
+    /** Null once the broker took the message, else why not. */
+    val send: suspend (card: FromCardDto, text: String) -> String?,
     /** The page if it is already in memory, so a card scrolled back in builds at once. */
     val peek: (id: String) -> String? = { null },
 )
@@ -196,18 +197,16 @@ private fun refused(reason: String): JsonObject {
 
 /**
  * The host's answer to a page's `supermux.send(text)`: [send] runs only for a call that followed the user's own click
- * or tap in this card ([fromUserInput], from the bridge's `handleWithUserInput`) with 1 to [CARD_SEND_MAX] characters.
+ * or tap in this card ([fromUserInput], from the bridge's `handleWithUserInput`) with 1 to [CARD_SEND_MAX] characters,
+ * and answers what became of it: sent only once the broker took the message, else its reason.
  */
-internal fun cardSendAnswer(params: JsonElement, fromUserInput: Boolean, send: (String) -> Unit): JsonObject {
+internal suspend fun cardSendAnswer(params: JsonElement, fromUserInput: Boolean, send: suspend (String) -> String?): JsonObject {
     val text = ((params as? JsonObject)?.get("text") as? JsonPrimitive)?.takeIf { it.isString }?.content
     return when {
         !fromUserInput -> refused("no click or tap in the card")
         text.isNullOrEmpty() -> refused("the text is empty")
         text.length > CARD_SEND_MAX -> refused("the text is over $CARD_SEND_MAX characters")
-        else -> {
-            send(text)
-            SENT
-        }
+        else -> send(text)?.let(::refused) ?: SENT
     }
 }
 
@@ -273,7 +272,7 @@ private fun CardPageView(entryId: String, content: WebContent.Html, card: HtmlCa
     DisposableEffect(state, card.id, card.title) {
         val from = FromCardDto(card.id, card.title)
         val off = state.bridge.handleWithUserInput("send") { params, fromUserInput ->
-            cardSendAnswer(params, fromUserInput) { text -> currentHost?.send(from, text) }
+            cardSendAnswer(params, fromUserInput) { text -> currentHost?.send?.invoke(from, text) ?: "this card cannot send" }
         }
         onDispose { off() }
     }

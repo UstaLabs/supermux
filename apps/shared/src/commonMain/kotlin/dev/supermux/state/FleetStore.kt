@@ -1332,9 +1332,10 @@ class FleetStore(
     fun sendWith(sessionId: String, text: String, attachments: List<String>) {
         appFor(sessionId)?.sendWith(sessionId, text, attachments)
     }
-    /** #104: a click in an html card sends [text] from [card]. */
-    fun sendFromCard(sessionId: String, card: dev.supermux.proto.FromCardDto, text: String) {
-        appFor(sessionId)?.sendFromCard(sessionId, card, text)
+    /** #104: a click in an html card sends [text] from [card]: null once the broker took it, else why not. */
+    suspend fun sendFromCard(sessionId: String, card: dev.supermux.proto.FromCardDto, text: String): String? {
+        val app = appFor(sessionId) ?: return "not connected"
+        return app.sendFromCard(sessionId, card, text)
     }
     /** #104: the html card [id]'s page on the session's host, kept in memory there. */
     suspend fun htmlPage(sessionId: String, id: String): String? = appFor(sessionId)?.htmlPages?.get(id)
