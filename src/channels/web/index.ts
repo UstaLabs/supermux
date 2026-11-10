@@ -148,6 +148,12 @@ function clientMessageIdOf(value: unknown): string | undefined {
   return typeof value === "string" && /^web-[A-Za-z0-9._:-]{1,120}$/.test(value) ? value : undefined
 }
 
+/** #104: the send a card refusal answers, as the app named it, for the error frame. */
+function cardSendId(value: unknown): { client_message_id?: string } {
+  const id = clientMessageIdOf(value)
+  return id ? { client_message_id: id } : {}
+}
+
 // Auth-failure rate-limit state is now per-WebChannel-instance (see the
 // `authFailures` field on the class), so there is no process-global bucket to
 // clear. Kept as an exported no-op for tests that build a fresh channel per
@@ -2052,13 +2058,15 @@ export class WebChannel implements Channel {
       const fromCardId = frame.args?.from_card?.id
       let fromCard: { id: string; title: string } | undefined
       if (frame.args?.from_card !== undefined) {
+        // A refusal names the send it refuses, so the card can tell its page why.
+        const refuse = (reason: string) => ws.send(JSON.stringify({ type: "error", reason, ...cardSendId(frame.client_message_id) }))
         const ok = this.cardSends.check(String(frame.session), fromCardId, frame.args?.text)
         if (!ok.ok) {
-          ws.send(JSON.stringify({ type: "error", reason: ok.reason }))
+          refuse(ok.reason)
           return
         }
         if (Array.isArray(frame.args?.attachments) && frame.args.attachments.length > 0) {
-          ws.send(JSON.stringify({ type: "error", reason: "a card message carries no attachments" }))
+          refuse("a card message carries no attachments")
           return
         }
         fromCard = { id: fromCardId, title: ok.title }

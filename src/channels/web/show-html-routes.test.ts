@@ -114,6 +114,21 @@ test("a card sends one message per second", async () => {
   c.ws.close()
 })
 
+test("a card send's refusal names the send it refuses, so the card can tell its page", async () => {
+  const { base, id, token } = await boot()
+  const c = open(base, token)
+  await c.ready
+  for (const [text, cid] of [["one", "web-1"], ["two", "web-2"]]) {
+    c.ws.send(JSON.stringify({ type: "send", session: "a", op: "reply", client_message_id: cid, args: { text, from_card: { id } } }))
+  }
+  c.ws.send(JSON.stringify({ type: "send", session: "a", op: "reply", client_message_id: "web-3", args: { text: "hi", from_card: { id: "f".repeat(64) } } }))
+  await c.settle()
+  const errors = c.frames.filter((f) => f.type === "error")
+  expect(errors.map((f) => f.client_message_id)).toEqual(["web-2", "web-3"])
+  expect(errors.every((f) => typeof f.reason === "string" && f.reason.length > 0)).toBe(true)
+  c.ws.close()
+})
+
 test("an ordinary send is untouched by the card rules", async () => {
   const { base, token, sent } = await boot()
   const c = open(base, token)
