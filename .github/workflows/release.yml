@@ -729,8 +729,8 @@ jobs:
     # Windows .msi installer and native host. jpackage's MSI backend needs the
     # WiX Toolset, which is preinstalled on windows-latest — jpackage CANNOT cross-build
     # MSI, so this is the only place it's produced. Same Gradle task + JDK 17 as the .deb.
-    # Unsigned v1 (SmartScreen "unknown publisher" warning accepted). Stable asset name:
-    # supermux-windows.msi.
+    # Signed with the Certum Open Source certificate (#116): publisher "Open Source Developer Ahmet Hüseyin Dok".
+    # Stable asset name: supermux-windows.msi.
     # A SHIPPED client must carry the native editor's grammars: :web:stageForBroker, the desktop
     # jar staging and the iOS tables phase fail without them (instead of a plain-text editor).
     # Set per packaging job, not workflow-wide: the update-flow e2e builds throwaway binaries.
@@ -738,6 +738,12 @@ jobs:
       SUPERMUX_REQUIRE_EDITOR_SYNTAX: "1"
     runs-on: windows-latest
     needs: [build-terminal-jni-windows, editor-syntax-natives, web-client]
+    # #116: the job signs with the Certum certificate. The environment is where its approval gate lives, and one
+    # signing job at a time: each login spends a one-time code, and refused logins lock the account.
+    environment: windows-signing
+    concurrency:
+      group: certum-simplysign
+      cancel-in-progress: false
     defaults:
       run:
         working-directory: apps
@@ -825,8 +831,58 @@ jobs:
           foreach ($helper in @($broker, $sessiond)) {
             if ($helper.Length -le 0) { throw "empty host helper: $($helper.FullName)" }
           }
-      - name: Build distributable image and .msi
-        run: ./gradlew.bat :desktop:createDistributable :desktop:packageMsi --console=plain --no-daemon -PsupermuxVersion="${{ steps.ver.outputs.version }}"
+      - name: Find signtool
+        shell: pwsh
+        run: |
+          $st = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $st) { throw "no x64 signtool.exe in the Windows SDK" }
+          "SIGNTOOL=$($st.FullName)" >> $env:GITHUB_ENV
+      - name: Build the distributable image
+        run: ./gradlew.bat :desktop:createDistributable --console=plain --no-daemon -PsupermuxVersion="${{ steps.ver.outputs.version }}"
+      # #116: our own Certum SimplySign client (scripts/certum-sign) logs in once per step with the account's e-mail and
+      # a one-time code from the seed; signtool's digest mode builds each signature and adds Certum's RFC 3161 timestamp.
+      - name: Sign the host helpers and the launcher in the app image
+        shell: pwsh
+        env:
+          SIMPLYSIGN_EMAIL: ${{ secrets.SIMPLYSIGN_EMAIL }}
+          SIMPLYSIGN_OTP_URI: ${{ secrets.SIMPLYSIGN_OTP_URI }}
+        run: |
+          $image = "desktop/build/compose/binaries/main/app"
+          $files = foreach ($name in @("supermux-broker.exe", "mux-sessiond.exe", "supermux.exe")) {
+            $found = @(Get-ChildItem $image -Recurse -File -Filter $name)
+            if ($found.Count -ne 1) { throw "expected one $name in the app image, found $($found.Count)" }
+            $found[0].FullName
+          }
+          bun ../scripts/certum-sign/sign.ts @files
+          if ($LASTEXITCODE -ne 0) { throw "signing the app image failed" }
+      - name: Build the .msi from the signed image
+        run: ./gradlew.bat :desktop:packageMsi -x :desktop:createDistributable --console=plain --no-daemon -PsupermuxVersion="${{ steps.ver.outputs.version }}"
+      - name: Sign the .msi
+        shell: pwsh
+        env:
+          SIMPLYSIGN_EMAIL: ${{ secrets.SIMPLYSIGN_EMAIL }}
+          SIMPLYSIGN_OTP_URI: ${{ secrets.SIMPLYSIGN_OTP_URI }}
+        run: |
+          $msi = @(Get-ChildItem desktop/build/compose/binaries/main/msi -File -Filter *.msi)
+          if ($msi.Count -ne 1) { throw "expected one .msi, found $($msi.Count)" }
+          bun ../scripts/certum-sign/sign.ts $msi[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw "signing the .msi failed" }
+      - name: Verify the Windows signatures
+        # The gate: a file that is not signed by our certificate, with a timestamp, fails the release here.
+        shell: pwsh
+        run: |
+          $image = "desktop/build/compose/binaries/main/app"
+          $files = @(Get-ChildItem desktop/build/compose/binaries/main/msi -File -Filter *.msi) +
+            @(foreach ($name in @("supermux-broker.exe", "mux-sessiond.exe", "supermux.exe")) { Get-ChildItem $image -Recurse -File -Filter $name })
+          foreach ($f in $files) {
+            & $env:SIGNTOOL verify /pa /tw $f.FullName
+            if ($LASTEXITCODE -ne 0) { throw "signtool verify /pa failed for $($f.Name)" }
+            $sig = Get-AuthenticodeSignature $f.FullName
+            if ($sig.Status -ne "Valid") { throw "$($f.Name): $($sig.Status) $($sig.StatusMessage)" }
+            if ($sig.SignerCertificate.Subject -notlike "*CN=Open Source Developer Ahmet H*") { throw "$($f.Name) is signed by $($sig.SignerCertificate.Subject)" }
+            if (-not $sig.TimeStamperCertificate) { throw "$($f.Name) has no timestamp" }
+            Write-Host "$($f.Name): signed by $($sig.SignerCertificate.Subject), timestamped by $($sig.TimeStamperCertificate.Subject)"
+          }
       - name: Assert packaged host helpers
         shell: pwsh
         run: |

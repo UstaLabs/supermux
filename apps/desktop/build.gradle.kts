@@ -562,6 +562,13 @@ afterEvaluate {
             doLast { addStartupWmClassToDebs(destinationDir.get().asFile) }
         }
     }
+    // #116: the MSI wraps the app image createDistributable made, which the Windows release job signs first (the host
+    // helpers and the launcher). Left to itself, jpackage builds a fresh, unsigned image for the MSI.
+    tasks.named<AbstractJPackageTask>("packageMsi") {
+        val image = tasks.named<AbstractJPackageTask>("createDistributable")
+        dependsOn(image)
+        appImage.set(image.flatMap { it.destinationDir.dir(it.packageName) })
+    }
     tasks.named<AbstractJPackageTask>("createDistributable") {
         doLast {
             val appDirectoryName = if (macBuildHost) "${packageName.get()}.app" else packageName.get()
