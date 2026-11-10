@@ -73,6 +73,7 @@ import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.nextAppearance
 import dev.supermux.ui.theme.paintedAppearance
 import kotlinx.coroutines.launch
+import androidx.lifecycle.lifecycleScope
 import dev.supermux.workspace.toDomainOrNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -277,7 +278,11 @@ class MainActivity : ComponentActivity() {
                     val obs = LifecycleEventObserver { _, event ->
                         when (event) {
                             Lifecycle.Event.ON_START -> appVisible = true
-                            Lifecycle.Event.ON_STOP -> appVisible = false
+                            Lifecycle.Event.ON_STOP -> {
+                                appVisible = false
+                                // Card #121: write the offline cache now; Android may end the app before the next sample.
+                                vm.fleet.let { f -> lifecycleScope.launch { f.writeSnapshots() } }
+                            }
                             else -> {}
                         }
                     }

@@ -4,8 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.sample
+import kotlinx.coroutines.withTimeoutOrNull
 import dev.supermux.ui.perf.PerfPanelHost
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -496,9 +495,13 @@ fun main() {
                 WindowPosition.PlatformDefault
             },
         )
+        // Same, for the fleet: the tray reads this computer's session count and the remote host.
+        var pairedFleet by remember { mutableStateOf<FleetStore?>(null) }
         var shuttingDown by remember { mutableStateOf(false) }
         LaunchedEffect(shuttingDown) {
             if (shuttingDown) {
+                // Card #121: the offline cache gets this session's last state before the app goes.
+                pairedFleet?.let { f -> withTimeoutOrNull(2_000) { f.writeSnapshots() } }
                 // First let the Window content recompose empty, detaching every SwingPanel while
                 // Compose's Skia layer is still live. Then close the native window.
                 delay(100)
@@ -525,8 +528,6 @@ fun main() {
         // and after unpair, when there is no shell to select into — the click handler
         // no-ops in that case (see onAction below).
         var pairedUi by remember { mutableStateOf<ShellUiState?>(null) }
-        // Same, for the fleet: the tray reads this computer's session count and the remote host.
-        var pairedFleet by remember { mutableStateOf<FleetStore?>(null) }
 
         // Card #86 part 2: a locked screen or sleeping displays are nobody reading, focused window or not.
         val screenWatch = remember { ScreenWatch(screenProbe()) }
@@ -1160,7 +1161,7 @@ fun main() {
                     }
                     DisposableEffect(Unit) { onDispose { fleet.close() } }
                     // Keep that cache current: at most every 20 s while the lists change, off the UI thread.
-                    LaunchedEffect(fleet) { keepDesktopSnapshots(fleet, desktopSnapshots) }
+                    LaunchedEffect(fleet) { fleet.keepSnapshots() }
                     // Published up to the tray (session count, the remote host's name/reachability).
                     DisposableEffect(fleet) {
                         pairedFleet = fleet
@@ -2387,44 +2388,4 @@ private fun ProvideDesktopAdaptiveLocals(content: @Composable () -> Unit) {
 @Composable
 private fun ShortcutDispatcher.rememberCanInvoke(command: AppCommand): Boolean =
     remember(this, command) { derivedStateOf { canInvoke(command) } }.value
-
-/**
- * Card #54: write each host's live sessions, workspaces, projects and preview lines to the desktop's
- * offline cache, so the next launch draws its sidebar before the socket opens. Sampled (at most one
- * write per 20 s while things change) and written off the UI thread.
- */
-@OptIn(kotlinx.coroutines.FlowPreview::class)
-private suspend fun keepDesktopSnapshots(fleet: FleetStore, cache: dev.supermux.host.HostSnapshotStore) {
-    combine(fleet.sessions, fleet.workspaces, fleet.projects) { s, w, p -> Triple(s, w, p) }
-        .sample(20_000)
-        .collect { (sessions, workspaces, projects) ->
-            // Not while the archived rows are loading: the cache needs them to leave out archived-only projects.
-            if (sessions.isEmpty() || fleet.archivedPending.value) return@collect
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                val owners = fleet.sessionHost.value
-                val wsOwners = fleet.workspaceHost.value
-                val tails = fleet.messages.value
-                // The live sidebar hides a project whose workspaces are all archived; the cache has no
-                // archived rows to tell, so it leaves those projects out instead of drawing them empty.
-                val liveProjects = workspaces.mapNotNull { it.projectId }.toSet()
-                val archivedOnly = fleet.archivedWorkspaces.value.mapNotNull { it.projectId }.toSet() - liveProjects
-                val now = System.currentTimeMillis()
-                synchronized(cache) {
-                    for (host in fleet.store.list()) {
-                        val mine = sessions.filter { owners[it.id] == host.recordId }
-                        if (mine.isEmpty()) continue
-                        cache.replace(
-                            host.recordId,
-                            mine,
-                            now,
-                            host.version,
-                            workspaces = workspaces.filter { wsOwners[it.id] == host.recordId },
-                            projects = projects.filter { it.hostId == host.recordId && it.project.id !in archivedOnly }.map { it.project },
-                            lastMessages = mine.mapNotNull { s -> tails[s.id]?.lastOrNull()?.let { s.id to it } }.toMap(),
-                        )
-                    }
-                }
-            }
-        }
-}
 
