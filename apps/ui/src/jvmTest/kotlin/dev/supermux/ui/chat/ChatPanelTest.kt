@@ -116,6 +116,35 @@ class ChatPanelTest {
         runOnIdle { assertEquals(listOf("What's the current state?"), sent) }
     }
 
+    @Test fun a_chat_whose_history_has_not_loaded_shows_no_starters() = runComposeUiTest {
+        // Card #121: an uncached chat opened offline (or still loading) is not an empty session.
+        setPlatformContent {
+            ChatPanel(
+                session = session,
+                state = ChatState(historyLoaded = false),
+                actions = ChatActions(),
+                draft = "",
+                onDraftChange = {},
+                showHeader = false,
+            )
+        }
+        waitForIdle()
+        onNodeWithTag("chat_starter_0").assertDoesNotExist()
+    }
+
+    @Test fun an_offline_chat_says_messages_wait_above_the_composer() = runComposeUiTest {
+        setPlatformContent {
+            androidx.compose.runtime.CompositionLocalProvider(
+                dev.supermux.ui.shell.LocalConnectionStatus provides
+                    dev.supermux.ui.shell.ConnectionStatus(dev.supermux.ui.shell.ConnectionBanner.Offline) {},
+            ) {
+                ChatPanel(session = session, state = ChatState(), actions = ChatActions(), draft = "", onDraftChange = {}, showHeader = false)
+            }
+        }
+        waitForIdle()
+        onNodeWithText("Offline · messages send when you're back").assertIsDisplayed()
+    }
+
     @Test fun a_dead_agent_shows_the_banner_with_or_without_a_header() = runComposeUiTest {
         setPlatformContent {
             ChatPanel(

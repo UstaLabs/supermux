@@ -979,7 +979,9 @@ fun ChatPanel(
     }
 
     val focusManager = LocalFocusManager.current
-    val emptySession = timelineItems.isEmpty() && !working
+    // Card #121: a chat whose history has not loaded (an uncached chat opened offline, or still on its way) is not
+    // an empty session; it shows no starters.
+    val emptySession = timelineItems.isEmpty() && !working && state.historyLoaded
 
     // ── Scroll-to-hide chrome ──────────────────────────────────────────────────────────────────
     // Only on a NARROW view (phone-width, whatever the device): scrolling down tucks the header and
@@ -1406,6 +1408,8 @@ fun ChatPanel(
                         }
                     }
                     WalkthroughUnreadChip(state, onOpenWalkthrough, Modifier.align(Alignment.CenterHorizontally))
+                    // Card #121: offline or reconnecting, just above the composer.
+                    dev.supermux.ui.shell.ConnectionStrip(inChat = true)
                     // A pointer host can still raise a soft keyboard (a tablet with a mouse, DeX
                     // with the phone as touchpad), so the composer clears it here too; the inset
                     // is zero on a desktop, where this is the layout it always was.
