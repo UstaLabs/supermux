@@ -766,38 +766,44 @@ class ConfigurationChangeWorkTest {
         assertEquals("Kotlin", onNodeWithTag("voice_glossary_input").editableText())
     }
 
-    // ── Settings › Curator: a schedule changed and not yet saved ─────────────────────────────────
+    // ── Settings › Memory: a change saved at once, and the page that showed it ──────────────────
 
     private fun curatorHost() = testHostStore(
-        Broker(mapOf("GET /settings/curator" to """{"config":{"enabled":false,"hour":1,"minute":0,"agent":"claude"}}""")).handler,
+        Broker(
+            mapOf(
+                "GET /settings/curator" to """{"config":{"enabled":false,"hour":1,"minute":0,"agent":"claude"}}""",
+                "PUT /settings/curator" to """{"config":{"enabled":true,"hour":1,"minute":0,"agent":"claude"}}""",
+            ),
+        ).handler,
     )
 
     private fun ComposeUiTest.switchTheCuratorOn() {
-        await("assistant_curator_enabled")
-        onNodeWithTag("assistant_curator_enabled").performClick()
+        await("memory_memory-nightly")
+        onNodeWithTag("memory_memory-nightly").performClick()
         waitForIdle()
-        onNodeWithTag("assistant_curator_enabled").assertIsOn()
+        onNodeWithTag("memory_memory-nightly").assertIsOn()
     }
 
-    @Test fun an_unsaved_curator_change_survives_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(curatorHost(), settings = true) { openSettings(SettingsSection.Memory) }
+    @Test fun a_curator_change_survives_a_recreation() = runComposeUiTest {
+        val host = curatorHost()
+        val activity = phoneShell(host, testFleet(host, online = true), settings = true) { openSettings(SettingsSection.Memory) }
         switchTheCuratorOn()
 
         activity.recreate()
 
-        // Not reloaded from the host (where it is still off) over the user's change.
-        await("assistant_curator_enabled")
-        onNodeWithTag("assistant_curator_enabled").assertIsOn()
+        await("memory_memory-nightly")
+        onNodeWithTag("memory_memory-nightly").assertIsOn()
     }
 
-    @Test fun an_unsaved_curator_change_survives_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(curatorHost(), settings = true) { openSettings(SettingsSection.Memory) }
+    @Test fun a_curator_change_survives_the_compact_to_wide_swap() = runComposeUiTest {
+        val host = curatorHost()
+        val width = flippablePhone(host, testFleet(host, online = true), settings = true) { openSettings(SettingsSection.Memory) }
         switchTheCuratorOn()
 
         unfold(width)
 
-        await("assistant_curator_enabled")
-        onNodeWithTag("assistant_curator_enabled").assertIsOn()
+        await("memory_memory-nightly")
+        onNodeWithTag("memory_memory-nightly").assertIsOn()
     }
 
     // ── Settings › Devices: a pairing link minted mid-change ────────────────────────────────────

@@ -63,6 +63,10 @@ val SettingsSearchIndex: List<SettingsSearchEntry> = listOf(
     page(SettingsSection.Voice, "dictation speech"),
     page(SettingsSection.Coding, "editor git"),
     page(SettingsSection.Memory, "curator"),
+    SettingsSearchEntry(SettingsSection.Memory, "memory-nightly", "Tidy up memory every night", "curator nightly digest memory"),
+    SettingsSearchEntry(SettingsSection.Memory, "memory-time", "At", "curator time schedule hour"),
+    SettingsSearchEntry(SettingsSection.Memory, "memory-next", "Next tidy-up", "run now curator"),
+    SettingsSearchEntry(SettingsSection.Memory, "memory-agent", "Done by", "curator agent model effort"),
     page(SettingsSection.PrivacyLabs, "telemetry experimental"),
     SettingsSearchEntry(SettingsSection.PrivacyLabs, "telemetry", "Send anonymous usage statistics", "telemetry analytics privacy statistics"),
     SettingsSearchEntry(

@@ -78,4 +78,17 @@ class SettingsSearchTest {
         assertTrue(searchSettings("bubble", web).isEmpty())
         assertEquals(1, searchSettings("analytics", web).flatMap { it.hits }.size)
     }
+
+    @Test fun memorys_rows_follow_its_page_entry_in_page_order() {
+        val memory = SettingsSearchIndex.filter { it.section == SettingsSection.Memory }.map { it.anchor }
+        assertEquals(listOf(null, "memory-nightly", "memory-time", "memory-next", "memory-agent"), memory)
+        assertEquals(
+            listOf(SettingsSection.Memory to "memory-next"),
+            searchSettings("run now", desk).flatMap { it.hits }.map { it.section to it.anchor },
+        )
+        assertEquals(
+            listOf(SettingsSection.Memory to "memory-agent"),
+            searchSettings("curator effort", desk).flatMap { it.hits }.map { it.section to it.anchor },
+        )
+    }
 }

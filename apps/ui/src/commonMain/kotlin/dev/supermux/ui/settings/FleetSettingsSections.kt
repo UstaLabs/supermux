@@ -23,6 +23,8 @@ import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.settings.pages.GeneralPage
 import dev.supermux.ui.settings.pages.InterimMachinePage
+import dev.supermux.ui.settings.pages.MemoryPage
+import dev.supermux.ui.settings.pages.rememberCuratorSettingsActions
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.settings.pages.PrivacyLabsPage
 
@@ -90,10 +92,10 @@ fun FleetSettingsSection(
                 topBarShown = scope.topBarShown,
             )
         }
-        SettingsSection.Memory -> CuratorSettingsScreen(
+        SettingsSection.Memory -> MemoryPage(
             actions = rememberCuratorSettingsActions(fleet),
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
+            anchor = place.anchor,
+            onAnchorShown = scope.onAnchorShown,
         )
         SettingsSection.PrivacyLabs -> PrivacyLabsPage(
             system = rememberSystemSettingsActions(fleet),
