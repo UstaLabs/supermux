@@ -107,9 +107,12 @@ jobs:
               - 'apps/ui/**'
               - 'apps/shared/**'
               - 'apps/gradle/**'
+              # :ui depends on the webview library (#105): a change to it can break the app.
+              - 'apps/webview-compose/**'
             desktop:
               - 'apps/desktop/**'
               - 'apps/ui/**'
+              - 'apps/webview-compose/**'
             ios:
               - 'apps/iosApp/**'
               # The Kotlin half of the iOS app, which this lane could not see before. `apps/ios` is
@@ -119,6 +122,7 @@ jobs:
               # lane through the `wire` filter below.)
               - 'apps/ios/**'
               - 'apps/ui/**'
+              - 'apps/webview-compose/**'
             # The POSIX workspace-terminal backend: the vendored zmx patch, the
             # Zig helper, the TypeScript that drives them, and the build script
             # that produces the binaries the suite refuses to run without.

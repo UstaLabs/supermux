@@ -18,6 +18,7 @@ import dev.supermux.ui.files.affectedOpenPaths
 import dev.supermux.ui.retain.LocalRetainedUiState
 import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.workspace.LayoutNode
+import dev.supermux.workspace.WorkspaceBrowserOpener
 import dev.supermux.workspace.WorkspaceFileOpener
 import dev.supermux.workspace.groupIdOf
 import dev.supermux.workspace.isFileView
@@ -38,6 +39,7 @@ class WorkspaceSession(
     val previewModes: SnapshotStateMap<String, Boolean>,
     val viewsById: Map<String, ViewDto>,
     val fileOpener: WorkspaceFileOpener,
+    val browserOpener: WorkspaceBrowserOpener? = null,
     /** Fresh client-minted view ids (cluster G8: the phone/tablet add-view paths need one too). */
     val newId: () -> String = { "" },
     /** Per-view Files-tree state (open folders, root, selection, scroll), outliving the panes. */
@@ -157,7 +159,7 @@ fun rememberWorkspaceSession(
     patchLayout: suspend (LayoutNode) -> Unit,
     fsRead: suspend (String) -> Result<String>,
     fsWrite: suspend (String, String) -> Boolean,
-    postView: suspend (id: String, state: JsonObject, groupId: String) -> String?,
+    postView: suspend (id: String, kind: String, state: JsonObject, groupId: String) -> String?,
     newId: () -> String,
 ): WorkspaceSession {
     // Local tree for drag responsiveness; the debounced PATCH and the
@@ -240,7 +242,20 @@ fun rememberWorkspaceSession(
         reveal = { p, line, endLine -> documents.openAtLine(p, line, endLine) },
         // Answers with the id the broker actually created, which is not
         // always the one we asked for — see WorkspaceFileOpener.post.
-        post = postView,
+        post = { id, state, groupId -> postView(id, "editor", state, groupId) },
+        scope = overlayScope,
+        newId = newId,
+    )
+    val platform = dev.supermux.ui.platform.LocalPlatform.current
+    // Links open in this workspace's Browser tabs (#105), placed like files: beside the other tabs, else right of the chat.
+    val browserOpener = WorkspaceBrowserOpener(
+        workspaceId = workspace.id,
+        treeOf = { layoutSync.tree },
+        viewsOf = { provisionalViews.toMap() + workspace.views.associateBy { it.id } },
+        edit = { transform -> layoutSync.edit(transform) },
+        provisional = provisionalViews,
+        post = { id, state, groupId -> postView(id, "browser", state, groupId) },
+        openSystem = { url -> platform.openUrl(url) },
         scope = overlayScope,
         newId = newId,
     )
@@ -252,6 +267,7 @@ fun rememberWorkspaceSession(
         previewModes = previewModes,
         viewsById = viewsById,
         fileOpener = fileOpener,
+        browserOpener = browserOpener,
         newId = newId,
         treeStates = treeStates,
     )

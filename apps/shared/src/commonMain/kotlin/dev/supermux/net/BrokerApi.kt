@@ -596,6 +596,28 @@ data class CreateProxyResponse(
     val port: Int = 0,
 )
 
+/** The cookie the broker asks a Browser tab to keep (#105 car 2): its preview-only token, for this host's previews. */
+@Serializable
+data class PreviewCookieDto(
+    val name: String,
+    val value: String,
+    val url: String,
+    val path: String = "/",
+    val domain: String? = null,
+    val httpOnly: Boolean = true,
+    val secure: Boolean = true,
+    val sameSite: String = "Lax",
+    val maxAge: Long? = null,
+)
+
+/** POST /devices/preview-token's answer. */
+@Serializable
+data class PreviewTokenResponse(val token: String, val cookie: PreviewCookieDto)
+
+/** GET /proxies/by-port's answer: the host's by-port preview URL, `{port}` standing for the port. */
+@Serializable
+data class ByPortDto(val url: String)
+
 /** POST /devices → one-time pairing URL for a freshly minted device token. */
 @Serializable
 data class AddDeviceResponse(val url: String = "", val name: String = "")
@@ -2982,6 +3004,13 @@ class BrokerApi(
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(CreateProxyBody(sessionName, port, domain)))
         })
+
+    /** POST /devices/preview-token: a token that opens this host's port previews and nothing else (#105). Bearer only. */
+    suspend fun previewToken(): PreviewTokenResponse =
+        decode(http.post("$httpBase/devices/preview-token") { authHeader() })
+
+    /** GET /proxies/by-port: the host's `/p/<port>/` template (#105), or null from a broker without by-port previews. */
+    suspend fun byPortTemplate(): String? = runCatching { getJson<ByPortDto>("$httpBase/proxies/by-port").url }.getOrNull()
 
     /** PATCH /proxies/<domain> {isPublic} */
     suspend fun setProxyPublic(domain: String, isPublic: Boolean) =

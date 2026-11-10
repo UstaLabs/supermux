@@ -54,6 +54,7 @@ import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.material.icons.outlined.Difference
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Add
@@ -1064,6 +1065,7 @@ fun addTerminalInWindow(ui: ShellUiState, hostId: String, ws: WorkspaceSession, 
 /** A pane's [KeyContext], from its view's kind (ViewHost.kt's switch). */
 internal fun paneKeyContext(view: ViewDto): KeyContext = when (view.kind) {
     "chat" -> KeyContext.Chat
+    "browser" -> KeyContext.Browser
     // A terminal or a remote display is scoped where it is drawn, so every one is, not only a pane's.
     "editor" -> when (view.stateString("mode")) {
         "file", "diff" -> KeyContext.Editor
@@ -1405,11 +1407,24 @@ private fun ViewTabIcon(v: ViewDto?, agent: String?, selected: Boolean) {
         AgentLogo(agent = agent, size = 14.dp)
         return
     }
+    if (v?.kind == "browser") {
+        dev.supermux.ui.browser.LocalBrowserIcons.current?.get(v.id)?.let { icon ->
+            coil3.compose.AsyncImage(
+                model = icon,
+                contentDescription = null,
+                // A preview's icon needs the tab's cookie, which this request doesn't carry: the globe instead.
+                error = androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Outlined.Language),
+                modifier = Modifier.size(15.dp),
+            )
+            return
+        }
+    }
     val cs = MaterialTheme.colorScheme
     val glyph = when {
         v?.kind == "chat" -> Icons.Outlined.ChatBubbleOutline
         v?.kind == "terminal" -> Icons.Outlined.Terminal
         v?.kind == "display" -> Icons.Outlined.DesktopWindows
+        v?.kind == "browser" -> Icons.Outlined.Language
         v?.kind == "editor" && v.stateString("mode") == "diff" -> Icons.Outlined.Difference
         v != null && v.isFilesTreeView() -> Icons.Outlined.Folder
         else -> Icons.AutoMirrored.Outlined.InsertDriveFile

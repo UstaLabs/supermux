@@ -1,5 +1,8 @@
 package dev.supermux.workspace
 
+import dev.supermux.browser.BrowserViewState
+import dev.supermux.browser.DisplayAddress
+import dev.supermux.browser.displayAddress
 import dev.supermux.fs.pathLeaf
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.chatSessionId
@@ -26,7 +29,20 @@ fun viewTitle(view: ViewDto, sessionName: (String) -> String? = { null }): Strin
             // "Files", not "Explorer": the tab says what it holds, the way Changes does.
             else -> "Files"
         }
+        "browser" -> browserTabTitle(view)
         "display" -> "Display"
         else -> view.kind
     }
+}
+
+/** A Browser tab before its page has a title: the site, the port on the host, or a new tab. */
+private fun browserTabTitle(view: ViewDto): String = when (val state = BrowserViewState.from(view.state)) {
+    is BrowserViewState.Page -> when (val shown = displayAddress(state.url, emptyList())) {
+        is DisplayAddress.Local -> "localhost:${shown.port}"
+        is DisplayAddress.Preview -> "port ${shown.port}"
+        is DisplayAddress.Web -> shown.host
+    }
+    // An agent page (#104) names itself through the view's title.
+    is BrowserViewState.Doc -> "Page"
+    BrowserViewState.Empty -> "New tab"
 }

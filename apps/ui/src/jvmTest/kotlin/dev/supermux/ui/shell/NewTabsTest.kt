@@ -50,8 +50,10 @@ class NewTabsTest {
 
     @Test fun everyKindGetsARowSayingWhatItIsFor() {
         val rows = newTabChoices(ws, real, emptyMap())
-        assertEquals(listOf("Chat", "Terminal", "Files", "Changes", "Display"), rows.map { it.label })
+        assertEquals(listOf("Chat", "Terminal", "Files", "Changes", "Display", "Browser"), rows.map { it.label })
         assertEquals("A shell in supermux", rows[1].detail)
+        assertEquals("A web page, or an app running on a port", rows[5].detail)
+        assertEquals(NewTabGlyphs.Browser, rows[5].icon)
     }
 
     @Test fun anOpenFilesRowSaysSo() {

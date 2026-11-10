@@ -7,6 +7,7 @@ enum class CommandGroup(val title: String) {
     Workspace("Workspace"),
     Chat("Chat"),
     Files("Files"),
+    Browser("Browser"),
 }
 
 /**
@@ -30,9 +31,18 @@ object AppCommands {
     val SplitRight = AppCommand("workspace.splitRight", "Split right (a new column)", CommandGroup.Workspace)
     val SplitDown = AppCommand("workspace.splitDown", "Split down (a new row)", CommandGroup.Workspace)
     val CloseTab = AppCommand("tab.close", "Close tab", CommandGroup.Workspace)
+    val BrowserFocusAddress = AppCommand("browser.focusAddress", "Focus the address bar", CommandGroup.Browser)
+    val BrowserReload = AppCommand("browser.reload", "Reload the page", CommandGroup.Browser)
+    val BrowserBack = AppCommand("browser.back", "Back", CommandGroup.Browser)
+    val BrowserForward = AppCommand("browser.forward", "Forward", CommandGroup.Browser)
+    val BrowserZoomIn = AppCommand("browser.zoomIn", "Zoom in", CommandGroup.Browser)
+    val BrowserZoomOut = AppCommand("browser.zoomOut", "Zoom out", CommandGroup.Browser)
+    val BrowserZoomReset = AppCommand("browser.zoomReset", "Actual size", CommandGroup.Browser)
+    val BrowserOpenExternally = AppCommand("browser.openExternally", "Open in your browser", CommandGroup.Browser)
 
     val all: List<AppCommand> = listOf(
         NewSession, MoveToNewWindow, NewTerminal, ToggleSidebar, GoToFile, Find,
         OpenSettings, ShowShortcuts, PasteImage, SplitRight, SplitDown, CloseTab,
+        BrowserFocusAddress, BrowserReload, BrowserBack, BrowserForward, BrowserZoomIn, BrowserZoomOut, BrowserZoomReset, BrowserOpenExternally,
     )
 }

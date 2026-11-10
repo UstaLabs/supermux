@@ -54,7 +54,7 @@ class NewTabPageTest {
 
     @Test fun everyKindHasARow() = runComposeUiTest {
         page()
-        for (label in listOf("Chat", "Terminal", "Files", "Changes", "Display")) onNodeWithText(label).assertExists()
+        for (label in listOf("Chat", "Terminal", "Files", "Changes", "Display", "Browser")) onNodeWithText(label).assertExists()
     }
 
     @Test fun aDigitOpensThatRow() = runComposeUiTest {

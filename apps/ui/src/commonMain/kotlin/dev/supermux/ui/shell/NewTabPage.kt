@@ -77,7 +77,7 @@ import dev.supermux.workspace.NewViewKind
  * Picking one turns the tab into it ([onPick]); Esc closes the tab ([onClose]). [opening] is the
  * kind on its way, once one is picked.
  *
- * Keys: 1–5 open that row, ↑/↓ move the selection, Enter opens it. ⌘/Ctrl + digit is left alone: it
+ * Keys: 1–6 open that row, ↑/↓ move the selection, Enter opens it. ⌘/Ctrl + digit is left alone: it
  * is kept for "go to tab N" (#96).
  *
  * Instant, on purpose (Ahmet: "the card animation makes the app feel slow"): nothing fades, slides
