@@ -91,4 +91,19 @@ class SettingsSearchTest {
             searchSettings("curator effort", desk).flatMap { it.hits }.map { it.section to it.anchor },
         )
     }
+
+    @Test fun voices_rows_follow_its_page_entry_in_page_order() {
+        val voice = SettingsSearchIndex.filter { it.section == SettingsSection.Voice }.map { it.anchor }
+        assertEquals(
+            listOf(null, "speech-engine", "languages", "glossary", "read-aloud", "tidy-up-engine", "tidy-up-model", "dictation"),
+            voice,
+        )
+        assertEquals(
+            listOf(SettingsSection.Voice to "glossary"),
+            searchSettings("spelling", desk).flatMap { it.hits }.map { it.section to it.anchor },
+        )
+        // "Turn speech into text" is only where this device has its own recogniser.
+        assertTrue(searchSettings("offline", desk).flatMap { it.hits }.none { it.anchor == "dictation" })
+        assertTrue(searchSettings("offline", desk.copy(liveTranscript = true)).flatMap { it.hits }.any { it.anchor == "dictation" })
+    }
 }

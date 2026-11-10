@@ -22,11 +22,14 @@ import dev.supermux.state.FleetStore
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.settings.pages.GeneralPage
+import dev.supermux.ui.settings.pages.GlossaryPage
 import dev.supermux.ui.settings.pages.InterimMachinePage
 import dev.supermux.ui.settings.pages.MemoryPage
 import dev.supermux.ui.settings.pages.rememberCuratorSettingsActions
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.settings.pages.PrivacyLabsPage
+import dev.supermux.ui.settings.pages.VoicePage
+import dev.supermux.ui.settings.pages.rememberVoiceSettingsActions
 
 /**
  * Renders [place] against the fleet's active host. Called from the hub's `content` slot.
@@ -63,11 +66,19 @@ fun FleetSettingsSection(
                 onSignInAgain = { scope.onOpenSection(SettingsSection.Providers) },
             )
         }
-        SettingsSection.Voice -> VoiceSettingsScreen(
-            actions = rememberVoiceSettingsActions(fleet),
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
+        SettingsSection.Voice -> {
+            val voice = rememberVoiceSettingsActions(fleet)
+            if (place.sub == GLOSSARY_SUB) {
+                GlossaryPage(voice, onBack = scope.onClose)
+            } else {
+                VoicePage(
+                    actions = voice,
+                    anchor = place.anchor,
+                    onAnchorShown = scope.onAnchorShown,
+                    onOpenSub = { scope.onOpen(SettingsPlace(SettingsSection.Voice, it)) },
+                )
+            }
+        }
         SettingsSection.Coding -> if (place.anchor == "github") {
             GitHostingScreen(
                 actions = rememberGitHostingActions(fleet),

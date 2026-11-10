@@ -732,21 +732,24 @@ class ConfigurationChangeWorkTest {
         assertTheLanguageServer()
     }
 
-    // ── Settings › Voice: the open glossary and the term being typed ─────────────────────────────
+    // ── Settings › Voice: the open word list and the word being typed ───────────────────────────
 
     private fun voiceHost() = testHostStore(Broker(mapOf("GET /config/voice-glossary" to """{"glossary":["supermux"]}""")).handler)
 
     private fun ComposeUiTest.typeAGlossaryTerm(term: String) {
         await("voice_glossary_link")
         onNodeWithTag("voice_glossary_link").performScrollTo().performClick()
-        await("voice_glossary_input")
+        await("voice_glossary_add_item")
         awaitText("supermux")
+        onNodeWithTag("voice_glossary_add_item").performScrollTo().performClick()
+        await("voice_glossary_input")
         onNodeWithTag("voice_glossary_input").performTextInput(term)
         waitForIdle()
     }
 
     @Test fun the_voice_glossary_and_its_new_term_survive_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(voiceHost(), settings = true) { openSettings(SettingsSection.Voice) }
+        val host = voiceHost()
+        val activity = phoneShell(host, testFleet(host, online = true), settings = true) { openSettings(SettingsSection.Voice) }
         typeAGlossaryTerm("Kotlin")
 
         activity.recreate()
@@ -756,12 +759,13 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_voice_glossary_and_its_new_term_survive_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(voiceHost(), settings = true) { openSettings(SettingsSection.Voice) }
+        val host = voiceHost()
+        val width = flippablePhone(host, testFleet(host, online = true), settings = true) { openSettings(SettingsSection.Voice) }
         typeAGlossaryTerm("Kotlin")
 
         unfold(width)
 
-        // On a wide hub the glossary opens in place instead of as a page of its own.
+        // The wide hub shows the word list as Voice's sub-page too, with "‹ Voice" above it.
         await("voice_glossary_input")
         assertEquals("Kotlin", onNodeWithTag("voice_glossary_input").editableText())
     }

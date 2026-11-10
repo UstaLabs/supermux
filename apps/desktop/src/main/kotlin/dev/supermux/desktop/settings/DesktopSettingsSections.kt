@@ -20,19 +20,21 @@ import dev.supermux.ui.settings.GitHostingScreen
 import dev.supermux.ui.settings.EditorSettingsScreen
 import dev.supermux.ui.settings.SettingsPlace
 import dev.supermux.ui.settings.SystemSettingsScreen
-import dev.supermux.ui.settings.VoiceSettingsScreen
 import dev.supermux.ui.settings.WorktreesSettingsScreen
+import dev.supermux.ui.settings.GLOSSARY_SUB
 import dev.supermux.ui.settings.pages.GeneralPage
+import dev.supermux.ui.settings.pages.GlossaryPage
 import dev.supermux.ui.settings.pages.InterimMachinePage
 import dev.supermux.ui.settings.pages.MemoryPage
 import dev.supermux.ui.settings.pages.PrivacyLabsPage
+import dev.supermux.ui.settings.pages.VoicePage
+import dev.supermux.ui.settings.pages.rememberVoiceSettingsActions
 import dev.supermux.ui.settings.rememberAgentSettingsActions
 import dev.supermux.ui.settings.pages.rememberCuratorSettingsActions
 import dev.supermux.ui.settings.rememberDevicesSettingsActions
 import dev.supermux.ui.settings.rememberProxiesSettingsActions
 import dev.supermux.ui.settings.rememberGitHostingActions
 import dev.supermux.ui.settings.rememberSystemSettingsActions
-import dev.supermux.ui.settings.rememberVoiceSettingsActions
 import dev.supermux.ui.settings.rememberWorktreesSettingsActions
 import dev.supermux.ui.settings.SettingsSlotScope
 import dev.supermux.ui.theme.AppearanceMode
@@ -71,11 +73,19 @@ fun DesktopSettingsSection(
                 onSignInAgain = { scope.onOpenSection(SettingsSection.Providers) },
             )
         }
-        SettingsSection.Voice -> VoiceSettingsScreen(
-            actions = rememberVoiceSettingsActions(host),
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
+        SettingsSection.Voice -> {
+            val voice = rememberVoiceSettingsActions(host)
+            if (place.sub == GLOSSARY_SUB) {
+                GlossaryPage(voice, onBack = scope.onClose)
+            } else {
+                VoicePage(
+                    actions = voice,
+                    anchor = place.anchor,
+                    onAnchorShown = scope.onAnchorShown,
+                    onOpenSub = { scope.onOpen(SettingsPlace(SettingsSection.Voice, it)) },
+                )
+            }
+        }
         // E7: the Editor page is the wrap/font steppers ABOVE the same `LspSettingsScreen` desktop used to
         // reach bare here. The steppers write the `SettingsKeys.EDITOR_*` values `WebCodeEditor`/`DiffView`
         // already read, so desktop's editor behaviour is unchanged.
