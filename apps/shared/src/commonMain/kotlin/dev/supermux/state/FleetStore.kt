@@ -1,7 +1,9 @@
 package dev.supermux.state
 
 import dev.supermux.state.AgentReplyEvent
+import dev.supermux.host.HostSnapshot
 import dev.supermux.host.HostSnapshotStore
+import dev.supermux.host.recentLogs
 import dev.supermux.host.HostView
 import dev.supermux.host.PairedHost
 import dev.supermux.host.PairedHostStore
@@ -118,6 +120,11 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.sample
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.atomicfu.locks.SynchronizedObject
@@ -660,9 +667,8 @@ class FleetStore(
     private fun open(recordId: String, url: String, token: String) {
         val app = appFactory(url, token) { online -> onConnState(recordId, online) }
         app.bindMedia(recordId)
-        // Card #54: a cache that holds workspaces (the desktop's) draws the sidebar before the
-        // socket opens; one that holds only sessions keeps the older, session-only seed above.
-        snapshots?.get(recordId)?.takeIf { it.workspaces.isNotEmpty() }?.let { app.seedFromCache(it) }
+        // Card #54/#121: the cache draws the sidebar and the recent chats before the socket opens.
+        snapshots?.get(recordId)?.takeIf { it.sessions.isNotEmpty() }?.let { app.seedFromCache(it) }
         val conn = HostConn(app)
         // Collectors funnel each host's flows into the merged state, tagged by recordId.
         conn.jobs += fleetScope.launch { app.sessions.collect { onHostSessions(recordId, it) } }
@@ -688,6 +694,62 @@ class FleetStore(
             // Same teardown `close(recordId)` does, minus the registry work — this one was never in.
             conn.jobs.forEach { it.cancel() }
             conn.app.close()
+        }
+    }
+
+    /** Card #121's Retry: every host that is not connected dials again now. */
+    fun retryNow() {
+        synchronized(lock) { conns.values.toList() }.forEach { it.app.retryNow() }
+    }
+
+    private val snapshotWrites = Mutex()
+
+    /**
+     * Card #121: keep every host's offline cache current, so the next launch draws the chat list and
+     * the recent chats at once, even with no connection. Sampled: at most one write per [periodMs]
+     * while things change. Platforms also call [writeSnapshots] when the app goes to the background.
+     */
+    @OptIn(kotlinx.coroutines.FlowPreview::class)
+    suspend fun keepSnapshots(periodMs: Long = 20_000) {
+        combine(sessions, workspaces, projects, messages) { _, _, _, _ -> }
+            .sample(periodMs)
+            .collect { writeSnapshots() }
+    }
+
+    /** Write each host's live sessions, workspaces, projects and recent messages to the offline cache. */
+    suspend fun writeSnapshots() {
+        val cache = snapshots ?: return
+        // Not while the archived rows are loading: the cache needs them to leave out archived-only projects.
+        if (archivedPending.value) return
+        val now = nowMs()
+        val records = store.list()
+        val rows = synchronized(lock) {
+            records.mapNotNull { host ->
+                val mine = sessionsByHost[host.recordId].orEmpty()
+                if (mine.isEmpty()) return@mapNotNull null
+                val workspaces = workspacesByHost[host.recordId].orEmpty()
+                // The live sidebar hides a project whose workspaces are all archived; the cache has no
+                // archived rows to tell, so it leaves those projects out instead of drawing them empty.
+                val liveProjects = workspaces.mapNotNull { it.projectId }.toSet()
+                val archivedOnly = archivedWorkspacesByHost[host.recordId].orEmpty().mapNotNull { it.projectId }.toSet() - liveProjects
+                val logs = messagesByHost[host.recordId].orEmpty()
+                HostSnapshot(
+                    recordId = host.recordId,
+                    sessions = mine,
+                    fetchedAt = now,
+                    brokerVersion = host.version,
+                    workspaces = workspaces,
+                    projects = projectsByHost[host.recordId].orEmpty().filter { it.id !in archivedOnly },
+                    lastMessages = mine.mapNotNull { s -> logs[s.id]?.lastOrNull()?.let { s.id to it } }.toMap(),
+                    recentLogs = recentLogs(mine, logs),
+                )
+            }
+        }
+        snapshotWrites.withLock {
+            withContext(Dispatchers.Default) {
+                cache.retainOnly(records.map { it.recordId })
+                rows.forEach { cache.replace(it.recordId, it.sessions, it.fetchedAt, it.brokerVersion, it.workspaces, it.projects, it.lastMessages, it.recentLogs) }
+            }
         }
     }
 

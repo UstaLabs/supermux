@@ -15,7 +15,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
 /**
@@ -82,20 +81,10 @@ object AppFleet {
             },
         )
         fleet.bindMessageTts()
-        // Spec §5: persist each host's last-known LIVE session list so the push service (and the
-        // next launch) can name a session for a host that is currently offline.
-        scope.launch {
-            combine(fleet.sessions, fleet.sessionHost) { sessions, owners -> sessions to owners }
-                .collect { (sessions, owners) ->
-                    val records = fleet.store.list()
-                    snapshotStore.retainOnly(records.map { it.recordId })
-                    val now = System.currentTimeMillis()
-                    records.forEach { host ->
-                        val mine = sessions.filter { owners[it.id] == host.recordId }
-                        if (mine.isNotEmpty()) snapshotStore.replace(host.recordId, mine, now, host.version)
-                    }
-                }
-        }
+        // Spec §5 + card #121: persist each host's last-known live screen (sessions, workspaces, recent
+        // chats) so the next launch draws it at once, even offline, and the push service can name a
+        // session for a host that is currently offline.
+        scope.launch { fleet.keepSnapshots() }
         return Shared(deps, UiPrefs(deps.settings), fleet, scope)
     }
 }

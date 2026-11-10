@@ -14,7 +14,6 @@ import kotlin.concurrent.Volatile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.serialization.encodeToString
@@ -25,6 +24,22 @@ class ReconnectPolicy(private val baseMs: Long, private val maxMs: Long) {
         var d = baseMs
         repeat(attempt) { d = (d * 2).coerceAtMost(maxMs) }
         return d
+    }
+}
+
+/**
+ * The pause between reconnect attempts, which [retryNow] cuts short (card #121: the offline strip's
+ * Retry). A retry asked for while no wait is running ends the next one at once.
+ */
+class ReconnectWait {
+    private val kick = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.CONFLATED)
+
+    suspend fun await(ms: Long) {
+        kotlinx.coroutines.withTimeoutOrNull(ms) { kick.receive() }
+    }
+
+    fun retryNow() {
+        kick.trySend(Unit)
     }
 }
 
@@ -59,6 +74,12 @@ class BrokerClient(
     val sync = ConnectionSyncState()
     // Written by [run] (a background dispatcher), read by [trySend] from any thread.
     @Volatile private var liveSession: DefaultClientWebSocketSession? = null
+    private val reconnectWait = ReconnectWait()
+
+    /** Dial again now instead of waiting out the backoff (card #121). No-op while connected. */
+    fun retryNow() {
+        if (liveSession == null) reconnectWait.retryNow()
+    }
 
     suspend fun run() {
         var attempt = 0
@@ -136,7 +157,7 @@ class BrokerClient(
             }
             onConnectionChange?.invoke(false)
             sync.onDisconnect()
-            delay(policy.delayForAttempt(attempt++))
+            reconnectWait.await(policy.delayForAttempt(attempt++))
         }
     }
 

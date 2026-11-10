@@ -638,6 +638,9 @@ class HostStore(
     /** Whether the client has a fresh snapshot from the broker (i.e. we're synced/connected). */
     val connected: Boolean get() = client.sync.synced
 
+    /** Dial the broker now instead of waiting out the reconnect backoff (card #121's Retry). */
+    fun retryNow() = client.retryNow()
+
     init {
         PerfTrace.milestone("host.init", "host" to baseUrl)
         attachMessageTts()
@@ -2108,7 +2111,7 @@ class HostStore(
                     workspaces = snap.workspaces,
                     projects = snap.projects,
                     projectCatalogKnown = snap.projects.isNotEmpty(),
-                    messages = snap.lastMessages.mapValues { listOf(it.value) },
+                    messages = snap.lastMessages.mapValues { listOf(it.value) } + snap.recentLogs,
                 )
             }
         }

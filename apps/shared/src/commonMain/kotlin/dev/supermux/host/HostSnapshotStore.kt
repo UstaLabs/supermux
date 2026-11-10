@@ -38,8 +38,9 @@ class HostSnapshotStore(private val persistence: SnapshotPersistence) {
         workspaces: List<WorkspaceDto> = emptyList(),
         projects: List<ProjectDto> = emptyList(),
         lastMessages: Map<String, LogEntry> = emptyMap(),
+        recentLogs: Map<String, List<LogEntry>> = emptyMap(),
     ) {
-        byRecord[recordId] = HostSnapshot(recordId, sessions, fetchedAt, brokerVersion, workspaces, projects, lastMessages)
+        byRecord[recordId] = HostSnapshot(recordId, sessions, fetchedAt, brokerVersion, workspaces, projects, lastMessages, recentLogs)
         flush()
     }
 

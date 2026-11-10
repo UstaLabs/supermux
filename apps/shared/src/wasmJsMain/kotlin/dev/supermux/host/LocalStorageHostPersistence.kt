@@ -70,6 +70,11 @@ class LocalStorageSnapshotPersistence(private val key: String = "supermux:snapsh
     override fun loadAll(): List<HostSnapshot> = HostSnapshotCodec.decode(localStorage[key])
 
     override fun saveAll(snapshots: List<HostSnapshot>) {
-        localStorage[key] = HostSnapshotCodec.encode(snapshots)
+        // Card #121: the recent chats can outgrow the origin's quota; fewer of them is better than no cache.
+        var rows: List<HostSnapshot>? = snapshots
+        while (rows != null) {
+            if (runCatching { localStorage[key] = HostSnapshotCodec.encode(rows!!) }.isSuccess) return
+            rows = shrinkRecentLogs(rows)
+        }
     }
 }

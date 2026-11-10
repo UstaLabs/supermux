@@ -419,14 +419,23 @@ private fun keepsLoadedLog(state: HostState, id: String, tail: List<LogEntry>): 
 
 private fun snapshotMessages(state: HostState, frame: ServerFrame.Snapshot): Map<String, List<LogEntry>> {
     val partial = frame.partialLogs?.toSet() ?: return frame.logs
-    return frame.logs.mapValues { (id, log) ->
-        if (id !in partial || !keepsLoadedLog(state, id, log)) {
-            log
-        } else {
-            val newest = log.last()
-            state.messages.getValue(id).map { if (it.id == newest.id) newest else it }
-        }
+    return frame.logs.mapValues { (id, tail) ->
+        val held = state.messages[id]?.filterNot { it.id.startsWith("local-") }
+        if (id !in partial || held.isNullOrEmpty()) tail else withTail(held, tail)
     }
+}
+
+/**
+ * Card #121: a chat we already hold (fetched, or seeded from the offline cache) never shrinks to a
+ * snapshot's tail. The tail's copies of entries we hold win (they may have been edited), and its
+ * entries newer than ours are appended; the chat's own fetch fills any gap. Local echoes are left
+ * out: the outbox re-echoes whatever is still unsent after the snapshot.
+ */
+private fun withTail(held: List<LogEntry>, tail: List<LogEntry>): List<LogEntry> {
+    val byId = tail.associateBy { it.id }
+    val newestTs = held.last().ts
+    val known = held.mapTo(HashSet()) { it.id }
+    return held.map { byId[it.id] ?: it } + tail.filter { it.id !in known && it.ts > newestTs }
 }
 
 private fun snapshotCompleteLogs(state: HostState, frame: ServerFrame.Snapshot): Set<String> {

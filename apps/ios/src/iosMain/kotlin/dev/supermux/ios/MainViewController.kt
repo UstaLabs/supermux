@@ -57,7 +57,6 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -252,6 +251,8 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
             }
             var groupByProject by remember { mutableStateOf(readGroupByProject(defaults)) }
             val foreground by IosAppState.foreground.collectAsState()
+            // Card #121: going to the background writes the offline cache now; iOS may end the app before the next sample.
+            LaunchedEffect(foreground) { if (!foreground) fleet.writeSnapshots() }
 
             // Read-aloud goes on with the app in the background (#118 car 3b), as the audio player does: the app has
             // `UIBackgroundModes: audio` and the voice the .playback session; the lock screen's ❚❚ or the dock's ✕
@@ -434,18 +435,8 @@ private fun buildFleet(deps: HostStoreDeps, scope: CoroutineScope): FleetStore {
         },
     )
     fleet.bindMessageTts()
-    scope.launch {
-        combine(fleet.sessions, fleet.sessionHost) { sessions, owners -> sessions to owners }
-            .collect { (sessions, owners) ->
-                val records = fleet.store.list()
-                snapshots.retainOnly(records.map { it.recordId })
-                val now = deps.nowMs()
-                records.forEach { host ->
-                    val mine = sessions.filter { owners[it.id] == host.recordId }
-                    if (mine.isNotEmpty()) snapshots.replace(host.recordId, mine, now, host.version)
-                }
-            }
-    }
+    // Card #121: the chat list and recent chats, cached for an instant (and offline) next launch.
+    scope.launch { fleet.keepSnapshots() }
     return fleet
 }
 

@@ -1807,6 +1807,8 @@ fun SessionListScreen(
             newSessionCard()
             aboveList()
         }
+        // Card #121: offline or reconnecting, above the list on every width.
+        dev.supermux.ui.shell.ConnectionStrip(inChat = false)
         Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
                 state = listState,

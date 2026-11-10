@@ -39,11 +39,40 @@ class HostReducerLogTailTest {
         assertTrue("a" in out.completeLogs)
     }
 
-    @Test fun reconnectDropsALoadedLogThatMissedMessages() {
+    @Test fun reconnectKeepsALoadedLogThatMissedMessagesAndAddsTheNewTail() {
+        // Card #121: the chat never shrinks to its tail; it is no longer whole, so its fetch runs.
         val loaded = HostState(messages = mapOf("a" to listOf(e("1"), e("2"))), completeLogs = setOf("a"))
         val out = reduceHostFrame(loaded, snapshot(mapOf("a" to listOf(e("5"))), partial = listOf("a")))
-        assertEquals(listOf(e("5")), out.messages["a"])
+        assertEquals(listOf(e("1"), e("2"), e("5")), out.messages["a"])
         assertFalse("a" in out.completeLogs)
+    }
+
+    @Test fun aCachedLogSurvivesTheFirstSnapshotTail() {
+        // Card #121: a chat seeded from the offline cache keeps its messages; the tail patches its own entries.
+        val cached = HostState(messages = mapOf("a" to listOf(e("1"), e("2"), e("3"))))
+        val out = reduceHostFrame(cached, snapshot(mapOf("a" to listOf(e("2"), e("3", text = "edited"))), partial = listOf("a")))
+        assertEquals(listOf(e("1"), e("2"), e("3", text = "edited")), out.messages["a"])
+        assertFalse("a" in out.completeLogs)
+    }
+
+    @Test fun aCachedLogGainsOnlyTheTailEntriesNewerThanIt() {
+        val cached = HostState(messages = mapOf("a" to listOf(e("1"), e("2"))))
+        val out = reduceHostFrame(cached, snapshot(mapOf("a" to listOf(e("2"), e("4"), e("5"))), partial = listOf("a")))
+        assertEquals(listOf(e("1"), e("2"), e("4"), e("5")), out.messages["a"])
+    }
+
+    @Test fun aSnapshotTailDropsHeldLocalEchoes() {
+        // The outbox re-echoes what is still unsent after the snapshot; a kept echo would show twice.
+        val held = HostState(messages = mapOf("a" to listOf(e("1"), e("local-x", ts = "2"))))
+        val out = reduceHostFrame(held, snapshot(mapOf("a" to listOf(e("1"))), partial = listOf("a")))
+        assertEquals(listOf(e("1")), out.messages["a"])
+    }
+
+    @Test fun aFullLogInTheSnapshotStillReplacesTheCache() {
+        val cached = HostState(messages = mapOf("a" to listOf(e("0"), e("1"))))
+        val out = reduceHostFrame(cached, snapshot(mapOf("a" to listOf(e("1"), e("2"))), partial = emptyList()))
+        assertEquals(listOf(e("1"), e("2")), out.messages["a"])
+        assertTrue("a" in out.completeLogs)
     }
 
     @Test fun snapshotPrunesSessionsItNoLongerCarries() {

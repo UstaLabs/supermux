@@ -852,6 +852,8 @@ fun SupermuxApp(
         // The fleet's downloads (#95): one a screen starts outlives it, as its retained state does.
         LocalDownloads provides fleet.downloads,
         dev.supermux.ui.work.LocalAudioPlayer provides fleet.audio,
+        // Card #121: the offline / reconnecting strip above the chat list and the composer.
+        LocalConnectionStatus provides rememberConnectionStatus(hostViews, fleet::retryNow),
     ) {
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         // The web's player element, unseen, at the root: what plays outlives every screen change.

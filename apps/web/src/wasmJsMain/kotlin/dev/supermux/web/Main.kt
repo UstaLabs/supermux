@@ -59,7 +59,6 @@ import kotlinx.browser.window
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.configureWebResources
@@ -200,6 +199,8 @@ fun main() {
                     mutableStateOf(settings.stringNow(GROUP_BY_PROJECT_KEY) != "false")
                 }
                 val foreground by WebAppState.foreground.collectAsState()
+                // Card #121: a hidden tab writes the offline cache now; it may be closed before the next sample.
+                LaunchedEffect(foreground) { if (!foreground) fleet.writeSnapshots() }
 
                 // Read-aloud goes on in a background tab (#118 car 3b), as the audio player does: the dock's ✕ stops it.
 
@@ -387,17 +388,7 @@ private fun buildFleet(deps: HostStoreDeps, scope: CoroutineScope): FleetStore {
         },
     )
     fleet.bindMessageTts()
-    scope.launch {
-        combine(fleet.sessions, fleet.sessionHost) { sessions, owners -> sessions to owners }
-            .collect { (sessions, owners) ->
-                val records = fleet.store.list()
-                snapshots.retainOnly(records.map { it.recordId })
-                val now = deps.nowMs()
-                records.forEach { host ->
-                    val mine = sessions.filter { owners[it.id] == host.recordId }
-                    if (mine.isNotEmpty()) snapshots.replace(host.recordId, mine, now, host.version)
-                }
-            }
-    }
+    // Card #121: the chat list and recent chats, cached for an instant (and offline) next launch.
+    scope.launch { fleet.keepSnapshots() }
     return fleet
 }
