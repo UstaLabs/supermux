@@ -11,11 +11,15 @@ import dev.supermux.ui.settings.kit.MACHINE_FALLBACK_NAME
 @Immutable
 data class SettingsPlace(val section: SettingsSection, val sub: String? = null, val anchor: String? = null)
 
-/** The machine page's one sub-place: [COMPUTER] is the "This computer" card's page, whose hosting is this computer's. */
+/**
+ * The machine page's sub-places: [COMPUTER] is the "This computer" card's page, whose hosting is this computer's;
+ * [WORKTREES] is the machine's chat worktrees, opened from its Disk row (#97 Step 2).
+ */
 object MachineSub {
     const val COMPUTER = "computer"
+    const val WORKTREES = "worktrees"
 
-    val ALL = setOf(COMPUTER)
+    val ALL = setOf(COMPUTER, WORKTREES)
 }
 
 /**
@@ -26,18 +30,20 @@ private val OLD_MACHINE_SCREENS = mapOf(
     "status" to "updates",
     "devices" to "devices",
     "links" to "links",
-    "worktrees" to "worktrees",
 )
 
 /**
  * Where [route] really goes: the old Devices and Proxies destinations and Step 1's machine screens are the machine
- * page at their part (#97 Step 2); every other route is itself. The shell pushes and restores only these, so menus,
+ * page at their part (#97 Step 2), and the old Disk anchor `worktrees` is the Worktrees sub-page; every other route is
+ * itself. The shell pushes and restores only these, so menus,
  * hooks, saved back stacks and web addresses that name the old places keep working.
  */
 fun canonicalRoute(route: Route): Route = when (route) {
     Route.Devices -> Route.Settings(SettingsSection.Machine, anchor = "devices")
     Route.Proxies -> Route.Settings(SettingsSection.Machine, anchor = "links")
-    is Route.Settings -> {
+    is Route.Settings -> if (route.section == SettingsSection.Machine && route.sub == null && route.anchor == MachineSub.WORKTREES) {
+        route.copy(sub = MachineSub.WORKTREES, anchor = null)
+    } else {
         val part = route.sub?.takeIf { route.section == SettingsSection.Machine }?.let(OLD_MACHINE_SCREENS::get)
         if (part != null) route.copy(sub = null, anchor = route.anchor ?: part) else route
     }
@@ -71,7 +77,11 @@ fun settingsTitle(place: SettingsPlace, machineName: String? = null, labs: Boole
         SettingsSection.Voice -> if (sub == GLOSSARY_SUB) "Words to spell your way" else place.section.label
         SettingsSection.PrivacyLabs -> if (labs) "Privacy & labs" else "Privacy"
         // The "This computer" card's page: no local host is paired, so it is not the current machine's.
-        SettingsSection.Machine -> if (sub == MachineSub.COMPUTER) "This computer" else machineName ?: MACHINE_FALLBACK_NAME
+        SettingsSection.Machine -> when (sub) {
+            MachineSub.COMPUTER -> "This computer"
+            MachineSub.WORKTREES -> "Chat worktrees"
+            else -> machineName ?: MACHINE_FALLBACK_NAME
+        }
         else -> place.section.label
     }
 }

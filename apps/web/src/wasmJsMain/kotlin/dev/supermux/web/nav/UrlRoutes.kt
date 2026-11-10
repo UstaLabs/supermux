@@ -33,7 +33,8 @@ private val oldSettingsSlugs: Map<String, Route.Settings> = mapOf(
     "system" to Route.Settings(SettingsSection.Machine, anchor = "updates"),
     "devices" to Route.Settings(SettingsSection.Machine, anchor = "devices"),
     "proxies" to Route.Settings(SettingsSection.Machine, anchor = "links"),
-    "worktrees" to Route.Settings(SettingsSection.Machine, anchor = "worktrees"),
+    // The machine page's Worktrees sub-page (#97 Step 2).
+    "worktrees" to Route.Settings(SettingsSection.Machine, sub = "worktrees"),
     "appearance" to Route.Settings(SettingsSection.General),
     "updates" to Route.Settings(SettingsSection.General, anchor = "app-version"),
 )

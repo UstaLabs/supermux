@@ -27,6 +27,7 @@ import dev.supermux.ui.settings.pages.ProviderDetailPage
 import dev.supermux.ui.settings.pages.ProvidersPage
 import dev.supermux.ui.settings.pages.rememberProvidersState
 import dev.supermux.ui.settings.pages.VoicePage
+import dev.supermux.ui.settings.pages.WorktreesPage
 import dev.supermux.ui.settings.pages.rememberVoiceSettingsActions
 import dev.supermux.ui.settings.rememberAgentSettingsActions
 import dev.supermux.ui.settings.pages.rememberCuratorSettingsActions
@@ -110,24 +111,33 @@ fun DesktopSettingsSection(
         )
         // `Machine/computer` (the "This computer" card) and the machine page itself: this computer's own page
         // carries its hosting under While you're away; another machine's page has one line there instead.
-        SettingsSection.Machine -> MachinePage(
-            system = rememberSystemSettingsActions(host),
-            chats = rememberMachineChats(host),
-            hosting = if (
+        SettingsSection.Machine -> {
+            val hosting = if (
                 LocalPlatform.current.caps.localBroker &&
                 (place.sub == MachineSub.COMPUTER || LocalSettingsMachines.current?.current?.local != false)
             ) {
                 rememberThisComputerHosting()
             } else {
                 null
-            },
-            devices = rememberDevicesSettingsActions(host),
-            links = rememberProxiesSettingsActions(host),
-            worktrees = rememberWorktreesSettingsActions(host),
-            usage = rememberUsageActions(host),
-            onOpenUsage = scope.onOpenUsage,
-            anchor = place.anchor,
-            onAnchorShown = scope.onAnchorShown,
-        )
+            }
+            if (place.sub == MachineSub.WORKTREES) {
+                // The machine's Worktrees page: on this computer, quiet while it isn't hosting.
+                WorktreesPage(rememberWorktreesSettingsActions(host), onBack = scope.onClose, hosting = hosting)
+            } else {
+                MachinePage(
+                    system = rememberSystemSettingsActions(host),
+                    chats = rememberMachineChats(host),
+                    hosting = hosting,
+                    devices = rememberDevicesSettingsActions(host),
+                    links = rememberProxiesSettingsActions(host),
+                    worktrees = rememberWorktreesSettingsActions(host),
+                    usage = rememberUsageActions(host),
+                    onOpenUsage = scope.onOpenUsage,
+                    onOpenWorktrees = { scope.onOpen(SettingsPlace(SettingsSection.Machine, MachineSub.WORKTREES)) },
+                    anchor = place.anchor,
+                    onAnchorShown = scope.onAnchorShown,
+                )
+            }
+        }
     }
 }

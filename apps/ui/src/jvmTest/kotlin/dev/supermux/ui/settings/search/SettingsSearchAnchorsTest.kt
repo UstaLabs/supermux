@@ -173,7 +173,8 @@ class SettingsSearchAnchorsTest {
     }
 
     private fun ComposeUiTest.everyAnchorLands(d: Device) {
-        val entries = SettingsSearchIndex.filter { it.anchor != null && it.shownWhen(d.ctx) }
+        // A sub-page's result opens that sub-page at its top (SettingsSearchTest checks it has one).
+        val entries = SettingsSearchIndex.filter { it.anchor != null && it.sub == null && it.shownWhen(d.ctx) }
         assertTrue(entries.isNotEmpty())
         var current by mutableStateOf(entries.first())
         setPlatformContent(

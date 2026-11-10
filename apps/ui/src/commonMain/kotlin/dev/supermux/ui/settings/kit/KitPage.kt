@@ -52,6 +52,7 @@ import androidx.compose.ui.semantics.SemanticsPropertyReceiver
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
@@ -133,6 +134,8 @@ fun KitPage(
     tag: String? = null,
     /** A glyph before the wide title (the machine page's laptop or server). */
     titleGlyph: ImageVector? = null,
+    /** How wide the page's column grows: the prototype's `.page`; a list page (`.page.wide`) is wider. */
+    maxWidth: Dp = 660.dp,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val c = kitColors()
@@ -179,7 +182,7 @@ fun KitPage(
         ) {
             Column(
                 Modifier
-                    .widthIn(max = 660.dp)
+                    .widthIn(max = maxWidth)
                     .fillMaxWidth()
                     .padding(start = m.pagePadH, end = m.pagePadH, top = m.pagePadTop, bottom = 60.dp)
                     .then(if (tag != null) Modifier.testTag(tag) else Modifier),

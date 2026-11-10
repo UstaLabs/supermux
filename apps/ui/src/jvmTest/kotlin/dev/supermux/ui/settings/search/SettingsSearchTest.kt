@@ -57,6 +57,14 @@ class SettingsSearchTest {
         )
     }
 
+    @Test fun a_sub_page_result_names_a_sub_page_its_section_has() {
+        val subs = SettingsSearchIndex.filter { it.sub != null }
+        for (e in subs) assertEquals(e.sub, dev.supermux.ui.settings.settingsSubOrNull(e.section, e.sub), "${e.section}/${e.sub}")
+        // The machine's worktrees are the Worktrees page now, not a row on the machine page (#97 Step 2).
+        val hits = searchSettings("worktrees", desk).flatMap { it.hits }
+        assertEquals(listOf(SettingsSection.Machine to dev.supermux.ui.settings.MachineSub.WORKTREES), hits.map { it.section to it.sub })
+    }
+
     @Test fun anchors_are_unique_within_a_page() {
         val dupes = SettingsSearchIndex.filter { it.anchor != null }.groupBy { it.section to it.anchor }.filterValues { it.size > 1 }
         assertTrue(dupes.isEmpty(), "duplicate anchors: ${dupes.keys}")

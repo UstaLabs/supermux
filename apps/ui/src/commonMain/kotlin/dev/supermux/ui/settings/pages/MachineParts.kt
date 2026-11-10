@@ -6,7 +6,7 @@
 // asks first. Pairing is ONE sheet that shows the code at once (no name step): QR + copyable link + a clock. With remote
 // access off on this computer, the link is its local address and says so ("same network").
 // Shared links: Copy link / Open / ⋯ (Make public asks, Make private doesn't, Remove asks) and a Share a port sheet.
-// Disk: a summary and a Review sheet; folders with changes (or in use) are kept and cannot be picked; Delete asks.
+// Disk: one summary row that opens the Worktrees page (`WorktreesPage.kt`).
 // Limits: each login's windows, warning from 90 %, Refresh, and Open full usage.
 package dev.supermux.ui.settings.pages
 
@@ -54,7 +54,6 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
@@ -63,32 +62,26 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.chat.parseChatTs
-import dev.supermux.fs.hostParent
 import dev.supermux.net.DeviceDto
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.UsageResponse
-import dev.supermux.net.WorktreeListDto
-import dev.supermux.net.WorktreeSummaryDto
 import dev.supermux.state.AccountResult
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.retain.rememberRetainedOnPage
 import dev.supermux.ui.retain.rememberRetainedScope
 import dev.supermux.ui.settings.DevicesSettingsActions
 import dev.supermux.ui.settings.ProxiesSettingsActions
-import dev.supermux.ui.settings.WorktreesSettingsActions
 import dev.supermux.ui.settings.kit.KitGhostButton
 import dev.supermux.ui.settings.kit.KitGlyphs
 import dev.supermux.ui.settings.kit.KitIconButton
 import dev.supermux.ui.settings.kit.KitItem
 import dev.supermux.ui.settings.kit.KitItemList
-import dev.supermux.ui.settings.kit.KitItemStatus
 import dev.supermux.ui.settings.kit.KitMark
 import dev.supermux.ui.settings.kit.KitNote
 import dev.supermux.ui.settings.kit.KitSectionHead
 import dev.supermux.ui.settings.kit.KitSheet
 import dev.supermux.ui.settings.kit.KitTextAction
 import dev.supermux.ui.settings.kit.KitTextField
-import dev.supermux.ui.settings.kit.KitToggle
 import dev.supermux.ui.settings.kit.kitAnchor
 import dev.supermux.ui.settings.kit.kitColors
 import dev.supermux.ui.settings.kit.kitFocusRing
@@ -100,7 +93,6 @@ import dev.supermux.ui.usage.formatResetIso
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
 import dev.supermux.ui.widgets.qrBitmap
-import dev.supermux.ui.worktree.formatBytes
 import kotlin.math.roundToInt
 import kotlin.time.Clock
 import kotlinx.coroutines.Job
@@ -172,21 +164,6 @@ object MachinePartsCopy {
     const val NO_CHATS = "No chats to share from yet."
     const val WORKING = "working"
 
-    const val DISK = "Disk"
-    const val WORKTREES = "Chat worktrees"
-    const val REVIEW = "Review…"
-    const val DISK_NOTE = "Folders agents worked in. Nothing is deleted on its own."
-    const val COUNTING = "Counting…"
-    const val KEPT = "Kept"
-    const val CLEAR = "Clear"
-    const val NOTHING_PICKED = "Nothing picked"
-    const val EVERY_FOLDER_CHANGED = "Every folder has changes."
-    const val DELETE = "Delete"
-    const val REPO_MISSING = "Repository missing"
-    const val REPO_GONE = "repository gone"
-    const val GONE_TEXT = "The repository is gone; this deletes the folder."
-    const val PICK_IT = "Pick it"
-
     const val LIMITS = "Limits"
     const val REFRESH = "Refresh"
     const val REFRESHING = "Refreshing…"
@@ -245,58 +222,6 @@ object MachinePartsCopy {
     fun shareFailed(port: Int) = "Couldn’t share port $port. Try again."
     fun portOk(text: String): Boolean = text.toIntOrNull()?.let { it in 1..65535 } == true
 
-    fun diskSummary(bytes: Long, folders: Int, clean: Int) = "${formatBytes(bytes)} in ${folders(folders)} · " +
-        when (clean) {
-            0 -> "all have changes"
-            1 -> "1 has no changes"
-            else -> "$clean have no changes"
-        }
-    fun folders(n: Int) = if (n == 1) "1 folder" else "$n folders"
-    fun diskFailed(machine: String) = "Couldn’t read the worktrees on $machine."
-    fun reviewText(bytes: Long, folders: Int, machine: String, shown: Int) =
-        "${formatBytes(bytes)} in ${folders(folders)} on $machine. Folders with changes are kept and can’t be picked. " +
-            "Biggest first; showing $shown of $folders."
-    fun selectClean(n: Int) = "Select the $n without changes"
-    fun picked(n: Int, bytes: Long) = "$n picked · ${formatBytes(bytes)}"
-    fun deleteN(n: Int) = "Delete $n"
-    fun deleteTitle(n: Int) = if (n == 1) "Delete 1 worktree?" else "Delete $n worktrees?"
-    /** [gone] of the [n] are folders whose repository is gone (picked one at a time); the rest have no changes. */
-    fun deleteText(n: Int, bytes: Long, gone: Int = 0) =
-        "Deletes ${if (n == 1) "the folder and its branch" else "the folders and their branches"} · ${formatBytes(bytes)}. " +
-            when {
-                gone == 0 -> "None of them has changes."
-                gone == n -> if (n == 1) "Its repository is gone." else "Their repositories are gone."
-                else -> "$gone of them have no repository any more; the rest have no changes."
-            } + " This can’t be undone."
-    fun moreGone(left: Int) = "Show more ($left left)"
-    fun deleting(done: Int, total: Int) = "Deleting $done of $total…"
-
-    /** "made today", "3 weeks old", "2 months old". */
-    fun age(nowMs: Long, mtimeMs: Long): String {
-        val days = ((nowMs - mtimeMs).coerceAtLeast(0) / 86_400_000L).toInt()
-        return when {
-            days < 1 -> "made today"
-            days == 1 -> "1 day old"
-            days < 14 -> "$days days old"
-            days < 60 -> "${days / 7} weeks old"
-            else -> "${days / 30} months old"
-        }
-    }
-
-    /** Why a worktree is kept, or null when it can be picked. */
-    fun keptWhy(w: WorktreeSummaryDto): String? {
-        val live = w.liveOwners
-        return when {
-            live.isNotEmpty() -> "In use by ${live.joinToString { it.name }}"
-            w.error != null -> "Couldn’t look inside"
-            !w.hasChanges -> null
-            else -> listOfNotNull(
-                w.uncommitted.takeIf { it > 0 }?.let { if (it == 1) "1 change" else "$it changes" },
-                w.unmerged?.takeIf { it > 0 }?.let { if (it == 1) "1 unmerged commit" else "$it unmerged commits" },
-            ).joinToString(" · ").ifEmpty { "Has changes" }
-        }
-    }
-
     fun updated(nowMs: Long, thenMs: Long): String {
         val min = ((nowMs - thenMs).coerceAtLeast(0)) / 60_000
         return "Updated " + when {
@@ -318,12 +243,6 @@ internal sealed interface Loaded<out T> {
 internal fun <T> Loaded<T>.valueOrNull(): T? = (this as? Loaded.Ready<T>)?.value
 
 private const val AUTO_RETRY_MS = 3_000L
-private const val SCAN_POLL_MS = 3_000L
-private const val DELETE_CHUNK = 20
-/** Rows the review sheet draws (biggest first); "Select the N without changes" still takes every one. */
-private const val REVIEW_ROWS = 200
-/** Folders whose repository is gone, asked for a page at a time. */
-private const val ORPHAN_PAGE = 200
 
 private fun nowMs(): Long = Clock.System.now().toEpochMilliseconds()
 
@@ -1144,372 +1063,6 @@ private fun ShareSheet(actions: ProxiesSettingsActions, form: LinksForm, machine
 @Composable
 private fun FieldLabel(text: String) {
     Text(text, fontSize = 12.sp, color = kitColors().dim, modifier = Modifier.padding(top = 12.dp, bottom = 5.dp))
-}
-
-// ─── Disk ────────────────────────────────────────────────────────────────────────────────────────
-
-private class DiskForm {
-    var reviewOpen by mutableStateOf(false)
-    var confirming by mutableStateOf(false)
-    var selected by mutableStateOf(setOf<String>())
-    /** (done, total) while a delete runs. */
-    var progress by mutableStateOf<Pair<Int, Int>?>(null)
-    var rowErrors by mutableStateOf(mapOf<String, String>())
-    var deleted by mutableStateOf(setOf<String>())
-    var changed by mutableStateOf(0)
-    /** The folders whose repository is gone, as far as they are loaded, and how many there are. */
-    var gone by mutableStateOf<List<WorktreeSummaryDto>>(emptyList())
-    var goneTotal by mutableStateOf(0)
-    /** The gone-repository folder whose pick is being confirmed. */
-    var confirmGone by mutableStateOf<WorktreeSummaryDto?>(null)
-}
-
-private fun pickable(w: WorktreeSummaryDto) = MachinePartsCopy.keptWhy(w) == null
-
-/** A folder whose repository is gone can be picked (one at a time, after a confirm) unless a chat still uses it. */
-private fun goneIsPickable(w: WorktreeSummaryDto) = w.liveOwners.isEmpty()
-
-/** Groups by repository ROOT, labelled by name; a name shared by several roots gets its parent folder. */
-internal fun worktreeGroups(rows: List<WorktreeSummaryDto>): List<Pair<String, List<WorktreeSummaryDto>>> {
-    val byRoot = rows.groupBy { it.repoRoot ?: "name:${it.repoName}" }
-    val rootsPerName = byRoot.values.groupBy { it.first().repoName }.mapValues { it.value.size }
-    return byRoot.values.map { g ->
-        val first = g.first()
-        val label = if ((rootsPerName[first.repoName] ?: 1) > 1) {
-            "${first.repoName} (${first.repoRoot?.let { hostParent(it) ?: it } ?: "unknown location"})"
-        } else {
-            first.repoName
-        }
-        label to g
-    }
-}
-
-@Composable
-internal fun DiskSection(actions: WorktreesSettingsActions, machine: String, quiet: String?) {
-    val form = rememberRetainedOnPage("machine-disk") { DiskForm() }
-    var state by remember(actions) { mutableStateOf<Loaded<WorktreeListDto>>(Loaded.Loading) }
-    var reload by remember { mutableStateOf(0) }
-    val running = quiet == null
-    val sizes = actions.sizes()
-    val removed = actions.removedIds()
-
-    LaunchedEffect(actions, reload, running) {
-        if (!running) return@LaunchedEffect
-        if (state !is Loaded.Ready) state = Loaded.Loading
-        val r = actions.load(false)
-        state = r?.let { Loaded.Ready(it) } ?: Loaded.Failed
-        if (r != null) {
-            form.deleted = emptySet()
-            // The broker answers from its cache and is still looking: ask again shortly.
-            if (r.scanning) {
-                delay(SCAN_POLL_MS)
-                reload++
-            }
-        }
-    }
-    LaunchedEffect(form, form.changed) {
-        if (form.changed == 0) return@LaunchedEffect
-        form.changed = 0
-        reload++
-    }
-
-    KitSectionHead(MachinePartsCopy.DISK, Modifier.kitAnchor("disk"))
-    if (!running) {
-        Quiet(quiet!!, "machine_disk_quiet")
-        return
-    }
-    val list = state.valueOrNull()
-    val visible = remember(list, removed, form.deleted) {
-        list?.worktrees.orEmpty().filter { it.id !in removed && it.id !in form.deleted }
-    }
-    val sizeOf: (WorktreeSummaryDto) -> Long = { sizes[it.id] ?: it.bytes ?: 0L }
-    val orphans = list?.orphans
-    val folders = visible.size + (orphans?.count ?: 0)
-    val bytes = visible.sumOf(sizeOf) + (orphans?.bytes ?: 0L)
-    val clean = visible.filter(::pickable)
-    val subtitle = when {
-        state is Loaded.Failed -> MachinePartsCopy.diskFailed(machine)
-        list == null || (list.scanning && folders == 0) -> MachinePartsCopy.COUNTING
-        else -> MachinePartsCopy.diskSummary(bytes, folders, clean.size)
-    }
-    KitItemList(Modifier.kitAnchor("worktrees")) {
-        KitItem(
-            MachinePartsCopy.WORKTREES,
-            Modifier.testTag("machine_worktrees"),
-            subtitle = subtitle,
-            subtitleWarn = state is Loaded.Failed,
-            mark = KitMark.Glyph(KitGlyphs.Tree),
-        ) {
-            if (state is Loaded.Failed) {
-                KitTextAction(MachinePartsCopy.TRY_AGAIN, { reload++ }, Modifier.testTag("wt_retry"))
-            } else {
-                KitGhostButton(
-                    MachinePartsCopy.REVIEW,
-                    {
-                        form.selected = emptySet()
-                        form.rowErrors = emptyMap()
-                        form.gone = emptyList()
-                        form.goneTotal = 0
-                        form.reviewOpen = true
-                    },
-                    Modifier.testTag("wt_review"),
-                    enabled = folders > 0,
-                )
-            }
-        }
-    }
-    KitNote(MachinePartsCopy.DISK_NOTE)
-
-    if (form.reviewOpen && list != null) ReviewSheet(actions, form, machine, visible, sizeOf, bytes, folders, list)
-}
-
-@Composable
-private fun ReviewSheet(
-    actions: WorktreesSettingsActions,
-    form: DiskForm,
-    machine: String,
-    visible: List<WorktreeSummaryDto>,
-    sizeOf: (WorktreeSummaryDto) -> Long,
-    bytes: Long,
-    folders: Int,
-    list: WorktreeListDto,
-) {
-    val calls = rememberRetainedScope()
-    val c = kitColors()
-    val now = nowMs()
-    val clean = visible.filter(::pickable)
-    val cleanIds = clean.map { it.id }.toSet()
-    // Biggest first, by the sizes known when the sheet opened: a live size must not move a row under a finger.
-    val shown = remember(visible) { visible.sortedByDescending(sizeOf).take(REVIEW_ROWS) }
-    val removed = actions.removedIds()
-    val gone = form.gone.filter { it.id !in form.deleted && it.id !in removed }
-    val goneIds = gone.filter(::goneIsPickable).map { it.id }.toSet()
-    val selected = form.selected.filter { it in cleanIds || it in goneIds }.toSet()
-    val selectedRows = (clean + gone).filter { it.id in selected }
-    val selectedGone = selectedRows.count { it.id in goneIds }
-    val selectedBytes = selectedRows.sumOf(sizeOf)
-
-    suspend fun loadGone(offset: Int) {
-        val page = actions.orphans(offset, ORPHAN_PAGE) ?: return
-        form.gone = if (offset == 0) page.worktrees else form.gone + page.worktrees
-        form.goneTotal = page.total
-    }
-    LaunchedEffect(list.orphans.count) { if (list.orphans.count > 0 && form.gone.isEmpty()) loadGone(0) }
-    val progress = form.progress
-    val busy = progress != null
-
-    fun delete() {
-        val ids = selectedRows.map { it.id }
-        form.confirming = false
-        form.progress = 0 to ids.size
-        calls.launch {
-            try {
-                var done = 0
-                // A batch of 20 at a time: the broker deletes one by one, and a big batch would sit silent for minutes.
-                for (chunk in ids.chunked(DELETE_CHUNK)) {
-                    val res = actions.delete(chunk)
-                    if (res == null) {
-                        form.rowErrors = form.rowErrors + chunk.associateWith { "Couldn’t reach $machine" }
-                        break
-                    }
-                    val ok = res.filter { it.ok }.map { it.id }.toSet()
-                    form.deleted = form.deleted + ok
-                    form.gone = form.gone.filter { it.id !in ok }
-                    form.selected = form.selected - ok
-                    form.rowErrors = form.rowErrors - ok + res.filter { !it.ok }.associate { r ->
-                        r.id to if (r.error == "in_use") "In use by ${r.inUseBy.joinToString()}" else "Couldn’t delete it" + (r.error?.let { ": $it" } ?: "")
-                    }
-                    done += chunk.size
-                    form.progress = done to ids.size
-                }
-            } finally {
-                form.progress = null
-                if (form.rowErrors.isEmpty()) form.reviewOpen = false
-                form.changed++
-            }
-        }
-    }
-
-    if (form.confirming) {
-        KitSheet(
-            MachinePartsCopy.deleteTitle(selectedRows.size),
-            onDismiss = { form.confirming = false },
-            description = MachinePartsCopy.deleteText(selectedRows.size, selectedBytes, selectedGone),
-            tag = "wt_delete_dialog",
-            buttons = {
-                KitGhostButton(MachinePartsCopy.CANCEL, { form.confirming = false }, Modifier.testTag("wt_delete_cancel"))
-                KitGhostButton(MachinePartsCopy.DELETE, ::delete, Modifier.testTag("wt_delete_confirm"), destructive = true)
-            },
-        )
-        return
-    }
-
-    form.confirmGone?.let { w ->
-        KitSheet(
-            worktreeTitle(w),
-            onDismiss = { form.confirmGone = null },
-            description = MachinePartsCopy.GONE_TEXT,
-            tag = "wt_gone_dialog",
-            buttons = {
-                KitGhostButton(MachinePartsCopy.CANCEL, { form.confirmGone = null }, Modifier.testTag("wt_gone_cancel"))
-                KitGhostButton(
-                    MachinePartsCopy.PICK_IT,
-                    {
-                        form.selected = form.selected + w.id
-                        form.confirmGone = null
-                    },
-                    Modifier.testTag("wt_gone_confirm"),
-                    destructive = true,
-                )
-            },
-        )
-        return
-    }
-
-    KitSheet(
-        MachinePartsCopy.WORKTREES,
-        onDismiss = { if (!busy) form.reviewOpen = false },
-        description = if (busy) null else MachinePartsCopy.reviewText(bytes, folders, machine, shown.size),
-        tag = "wt_review_sheet",
-        wide = true,
-        buttons = {
-            if (!busy) {
-                Text(
-                    if (selectedRows.isEmpty()) MachinePartsCopy.NOTHING_PICKED else MachinePartsCopy.picked(selectedRows.size, selectedBytes),
-                    fontSize = 12.5.sp,
-                    color = c.dim,
-                    modifier = Modifier.testTag("wt_picked"),
-                )
-                KitGhostButton(MachinePartsCopy.CANCEL, { form.reviewOpen = false }, Modifier.testTag("wt_cancel"))
-                KitGhostButton(
-                    if (selectedRows.isEmpty()) MachinePartsCopy.DELETE else MachinePartsCopy.deleteN(selectedRows.size),
-                    { form.confirming = true },
-                    Modifier.testTag("wt_delete"),
-                    enabled = selectedRows.isNotEmpty(),
-                    destructive = true,
-                )
-            }
-        },
-    ) {
-        if (progress != null) {
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 30.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(KitGlyphs.Trash, contentDescription = null, tint = c.dim, modifier = Modifier.size(15.dp))
-                Text(
-                    MachinePartsCopy.deleting(progress.first, progress.second),
-                    fontSize = 12.5.sp,
-                    color = c.text,
-                    modifier = Modifier.testTag("wt_delete_progress").semantics { liveRegion = LiveRegionMode.Polite },
-                )
-            }
-            return@KitSheet
-        }
-        Box(Modifier.padding(top = 12.dp)) {
-            when {
-                clean.isEmpty() -> KitNote(MachinePartsCopy.EVERY_FOLDER_CHANGED)
-                // Only the folders without changes: a gone repository's folder is never taken in (nor dropped) by these.
-                selected.containsAll(cleanIds) ->
-                    KitTextAction(MachinePartsCopy.CLEAR, { form.selected = form.selected - cleanIds }, Modifier.testTag("wt_select_clean"))
-                else -> KitTextAction(MachinePartsCopy.selectClean(clean.size), { form.selected = form.selected + cleanIds }, Modifier.testTag("wt_select_clean"))
-            }
-        }
-        Column(Modifier.padding(top = 12.dp).fillMaxWidth()) {
-            dev.supermux.ui.settings.kit.KitHairline()
-            worktreeGroups(shown).forEach { (label, rows) ->
-                Text(
-                    label.uppercase(),
-                    fontSize = 10.5.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    letterSpacing = 0.63.sp,
-                    color = c.faint,
-                    modifier = Modifier.padding(top = 12.dp, bottom = 4.dp).testTag("wt_group_$label"),
-                )
-                rows.forEach { w -> WorktreeItem(w, sizeOf(w), now, w.id in selected, form.rowErrors[w.id]) { on -> form.selected = if (on) form.selected + w.id else form.selected - w.id } }
-            }
-            // Folders whose repository is gone: the broker can't tell what they hold, so none is taken by "Select the
-            // N without changes"; each is picked on its own, after saying what deleting it means.
-            list.orphans.takeIf { it.count > 0 }?.let { o ->
-                Text(
-                    "${MachinePartsCopy.REPO_MISSING} · ${MachinePartsCopy.folders(o.count)} · ${formatBytes(o.bytes)}".uppercase(),
-                    fontSize = 10.5.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    letterSpacing = 0.63.sp,
-                    color = c.faint,
-                    modifier = Modifier.padding(top = 12.dp, bottom = 4.dp).testTag("wt_orphans"),
-                )
-                gone.forEach { w ->
-                    GoneItem(w, sizeOf(w), now, w.id in selected, form.rowErrors[w.id]) { on ->
-                        if (on) form.confirmGone = w else form.selected = form.selected - w.id
-                    }
-                }
-                val left = form.goneTotal - form.gone.size
-                if (form.gone.isNotEmpty() && left > 0) {
-                    KitTextAction(MachinePartsCopy.moreGone(left), { calls.launch { loadGone(form.gone.size) } }, Modifier.testTag("wt_orphans_more"))
-                }
-            }
-        }
-    }
-}
-
-private fun worktreeTitle(w: WorktreeSummaryDto) = w.owners.firstOrNull()?.name ?: w.branch ?: w.id.substringAfter('/')
-
-/** A folder whose repository is gone: pickable on its own (the caller confirms first) unless a chat still uses it. */
-@Composable
-private fun GoneItem(w: WorktreeSummaryDto, size: Long, now: Long, picked: Boolean, error: String?, onPick: (Boolean) -> Unit) {
-    val c = kitColors()
-    val title = worktreeTitle(w)
-    val live = w.liveOwners
-    KitItem(
-        title,
-        Modifier.testTag("wt_row_${w.id}"),
-        subtitleRich = buildAnnotatedString {
-            append("${formatBytes(size)} · ${MachinePartsCopy.age(now, w.mtime)} · ")
-            withStyle(SpanStyle(color = c.warn)) {
-                append(if (live.isNotEmpty()) "In use by ${live.joinToString { it.name }}" else MachinePartsCopy.REPO_GONE)
-            }
-        },
-        mark = KitMark.Glyph(if (live.isNotEmpty()) KitGlyphs.Lock else KitGlyphs.Tree),
-        muted = live.isNotEmpty(),
-        below = if (error == null) null else {
-            { Text(error, fontSize = 12.sp, color = c.danger, modifier = Modifier.testTag("wt_error_${w.id}")) }
-        },
-    ) {
-        if (live.isNotEmpty()) {
-            KitItemStatus(MachinePartsCopy.KEPT, modifier = Modifier.testTag("wt_kept_${w.id}"))
-        } else {
-            KitToggle(picked, onPick, "Pick $title", Modifier.testTag("wt_check_${w.id}"))
-        }
-    }
-}
-
-@Composable
-private fun WorktreeItem(w: WorktreeSummaryDto, size: Long, now: Long, picked: Boolean, error: String?, onPick: (Boolean) -> Unit) {
-    val c = kitColors()
-    val title = worktreeTitle(w)
-    val why = MachinePartsCopy.keptWhy(w)
-    val head = "${formatBytes(size)} · ${MachinePartsCopy.age(now, w.mtime)} · "
-    KitItem(
-        title,
-        Modifier.testTag("wt_row_${w.id}"),
-        subtitleRich = buildAnnotatedString {
-            append(head)
-            if (why != null) withStyle(SpanStyle(color = c.warn)) { append(why) } else append("no changes")
-        },
-        mark = KitMark.Glyph(if (why != null) KitGlyphs.Lock else KitGlyphs.Tree),
-        muted = why != null,
-        below = if (error == null) null else {
-            { Text(error, fontSize = 12.sp, color = c.danger, modifier = Modifier.testTag("wt_error_${w.id}")) }
-        },
-    ) {
-        if (why != null) {
-            KitItemStatus(MachinePartsCopy.KEPT, modifier = Modifier.testTag("wt_kept_${w.id}"))
-        } else {
-            KitToggle(picked, onPick, "Pick $title", Modifier.testTag("wt_check_${w.id}"))
-        }
-    }
 }
 
 // ─── Limits ──────────────────────────────────────────────────────────────────────────────────────

@@ -8,6 +8,7 @@ import dev.supermux.ui.keys.DefaultKeymap
 import dev.supermux.ui.keys.currentKeyOs
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.platform.Caps
+import dev.supermux.ui.settings.MachineSub
 import dev.supermux.ui.settings.SettingsPlace
 import dev.supermux.ui.settings.pages.shortcutAnchor
 import dev.supermux.ui.settings.settingsTitle
@@ -24,13 +25,17 @@ data class SettingsSearchContext(
     val mediaCache: Boolean = true,
 )
 
-/** One searchable row; [anchor] null is the page itself. [keywords] are other words people type for it. */
+/**
+ * One searchable row; [anchor] null is the page itself. [keywords] are other words people type for it. [sub] set: the
+ * result is that sub-page of the section, opened at its top ([anchor] is then only the result's id).
+ */
 data class SettingsSearchEntry(
     val section: SettingsSection,
     val anchor: String?,
     val label: String,
     val keywords: String = "",
     val shownWhen: (SettingsSearchContext) -> Boolean = { true },
+    val sub: String? = null,
 )
 
 data class SettingsSearchGroup(val section: SettingsSection, val hits: List<SettingsSearchEntry>)
@@ -150,6 +155,10 @@ val SettingsSearchIndex: List<SettingsSearchEntry> = listOf(
     SettingsSearchEntry(SettingsSection.Machine, "pair", "Pair a phone or computer", "qr code add device link"),
     SettingsSearchEntry(SettingsSection.Machine, "links", "Shared links", "proxy port public private"),
     SettingsSearchEntry(SettingsSection.Machine, "share", "Share a port…", "expose proxy link"),
-    SettingsSearchEntry(SettingsSection.Machine, "worktrees", "Chat worktrees", "disk space delete clean folders"),
+    // The machine page's Worktrees sub-page (#97 Step 2).
+    SettingsSearchEntry(
+        SettingsSection.Machine, "worktrees", "Chat worktrees", "disk space delete clean folders",
+        sub = MachineSub.WORKTREES,
+    ),
     SettingsSearchEntry(SettingsSection.Machine, "limits", "Limits", "usage quota reset"),
 )

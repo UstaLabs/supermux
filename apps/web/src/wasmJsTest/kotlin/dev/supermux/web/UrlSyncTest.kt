@@ -44,7 +44,8 @@ class UrlSyncTest {
         "/settings/privacy",
         "/settings/machine",
         "/settings/machine/computer",
-        // Not Step 1's /settings/machine/status|devices|links|worktrees: parts of the machine page now (as above).
+        "/settings/machine/worktrees",
+        // Not Step 1's /settings/machine/status|devices|links: parts of the machine page now (as above).
         // Not "/settings/appearance" or "/settings/updates": old slugs, they land on General (below).
     )
 
@@ -117,7 +118,7 @@ class UrlSyncTest {
         // Every old slug canonicalises by replacing.
         val olds = listOf("accounts", "agents", "curator", "editor", "git-hosting", "system", "devices", "proxies", "worktrees")
             .map { "/settings/$it" } +
-            listOf("/settings/machine/status", "/settings/machine/devices", "/settings/machine/links", "/settings/machine/worktrees", "/devices", "/proxies")
+            listOf("/settings/machine/status", "/settings/machine/devices", "/settings/machine/links", "/devices", "/proxies")
         for (path in olds) {
             val ui2 = ShellUiState()
             applyTarget(ui2, parsePath(path))

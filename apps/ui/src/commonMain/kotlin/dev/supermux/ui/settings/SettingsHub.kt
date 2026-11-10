@@ -463,12 +463,12 @@ fun SettingsHub(
     /** A search result: its page at its row. A wide rail goes back to its rows; a phone keeps the results for Back. */
     fun pickResult(e: SettingsSearchEntry) {
         if (compact) {
-            open(HubTarget.Sec(e.section), anchor = e.anchor)
+            open(HubTarget.Sec(e.section), sub = e.sub, anchor = e.anchor.takeIf { e.sub == null })
             return
         }
         // Only once the page is really left: "Keep editing" stays on the results.
         guard {
-            open(HubTarget.Sec(e.section), anchor = e.anchor)
+            open(HubTarget.Sec(e.section), sub = e.sub, anchor = e.anchor.takeIf { e.sub == null })
             query = ""
         }
     }

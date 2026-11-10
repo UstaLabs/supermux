@@ -28,6 +28,7 @@ class UrlRoutesTest {
         assertEquals("/settings/providers/claude", pathFor(Route.Settings(SettingsSection.Providers, sub = "claude"), null))
         assertEquals("/settings/voice/glossary", pathFor(Route.Settings(SettingsSection.Voice, sub = "glossary"), null))
         assertEquals("/settings/machine/computer", pathFor(Route.Settings(SettingsSection.Machine, sub = "computer"), null))
+        assertEquals("/settings/machine/worktrees", pathFor(Route.Settings(SettingsSection.Machine, sub = "worktrees"), null))
         // A flash is a one-off: the anchor is never in the URL.
         assertEquals("/settings/coding", pathFor(Route.Settings(SettingsSection.Coding, anchor = "github"), null))
     }
@@ -37,6 +38,7 @@ class UrlRoutesTest {
             Route.Settings(SettingsSection.Providers, sub = "codex"),
             Route.Settings(SettingsSection.Voice, sub = "glossary"),
             Route.Settings(SettingsSection.Machine, sub = "computer"),
+            Route.Settings(SettingsSection.Machine, sub = "worktrees"),
         )
         for (r in cases) assertEquals(UrlTarget.Screen(r), parsePath(pathFor(r, null)), r.toString())
     }
@@ -57,12 +59,13 @@ class UrlRoutesTest {
             "/settings/system" to Route.Settings(SettingsSection.Machine, anchor = "updates"),
             "/settings/devices" to Route.Settings(SettingsSection.Machine, anchor = "devices"),
             "/settings/proxies" to Route.Settings(SettingsSection.Machine, anchor = "links"),
-            "/settings/worktrees" to Route.Settings(SettingsSection.Machine, anchor = "worktrees"),
+            "/settings/worktrees" to Route.Settings(SettingsSection.Machine, sub = "worktrees"),
             // Step 1's machine screens are parts of the machine page now.
             "/settings/machine/status" to Route.Settings(SettingsSection.Machine, anchor = "updates"),
             "/settings/machine/devices" to Route.Settings(SettingsSection.Machine, anchor = "devices"),
             "/settings/machine/links" to Route.Settings(SettingsSection.Machine, anchor = "links"),
-            "/settings/machine/worktrees" to Route.Settings(SettingsSection.Machine, anchor = "worktrees"),
+            // Worktrees is the machine page's sub-page of its own (#97 Step 2).
+            "/settings/machine/worktrees" to Route.Settings(SettingsSection.Machine, sub = "worktrees"),
             // And so are the standalone pages.
             "/devices" to Route.Settings(SettingsSection.Machine, anchor = "devices"),
             "/proxies" to Route.Settings(SettingsSection.Machine, anchor = "links"),

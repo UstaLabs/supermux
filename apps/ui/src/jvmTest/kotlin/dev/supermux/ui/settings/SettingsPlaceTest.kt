@@ -13,6 +13,7 @@ class SettingsPlaceTest {
         assertEquals("Words to spell your way", settingsTitle(SettingsPlace(SettingsSection.Voice, sub = GLOSSARY_SUB)))
         assertEquals("This computer", settingsTitle(SettingsPlace(SettingsSection.Machine, sub = MachineSub.COMPUTER), machineName = "studio-mini"))
         assertEquals("studio-mini", settingsTitle(SettingsPlace(SettingsSection.Machine), machineName = "studio-mini"))
+        assertEquals("Chat worktrees", settingsTitle(SettingsPlace(SettingsSection.Machine, sub = MachineSub.WORKTREES), machineName = "studio-mini"))
         assertEquals("Privacy", settingsTitle(SettingsPlace(SettingsSection.PrivacyLabs), labs = false))
     }
 
@@ -21,8 +22,9 @@ class SettingsPlaceTest {
         assertNull(settingsSubOrNull(SettingsSection.Providers, "glossary"))
         assertEquals(GLOSSARY_SUB, settingsSubOrNull(SettingsSection.Voice, GLOSSARY_SUB))
         assertEquals("computer", settingsSubOrNull(SettingsSection.Machine, "computer"))
-        // Step 1's machine screens are parts of the machine page now: none is a sub-page.
-        for (sub in listOf("status", "devices", "links", "worktrees")) assertNull(settingsSubOrNull(SettingsSection.Machine, sub))
+        // The Worktrees page is the machine page's sub-page (#97 Step 2); Step 1's other machine screens are parts of it.
+        assertEquals("worktrees", settingsSubOrNull(SettingsSection.Machine, MachineSub.WORKTREES))
+        for (sub in listOf("status", "devices", "links")) assertNull(settingsSubOrNull(SettingsSection.Machine, sub))
         assertNull(settingsSubOrNull(SettingsSection.Machine, "nope"))
         assertNull(settingsSubOrNull(SettingsSection.General, "theme"))
         assertNull(settingsSubOrNull(SettingsSection.Voice, null))
@@ -68,7 +70,9 @@ class SettingsPlaceTest {
         assertEquals(Route.Settings(machine, anchor = "updates"), canonicalRoute(Route.Settings(machine, sub = "status")))
         assertEquals(Route.Settings(machine, anchor = "devices"), canonicalRoute(Route.Settings(machine, sub = "devices")))
         assertEquals(Route.Settings(machine, anchor = "links"), canonicalRoute(Route.Settings(machine, sub = "links")))
-        assertEquals(Route.Settings(machine, anchor = "worktrees"), canonicalRoute(Route.Settings(machine, sub = "worktrees")))
+        // Worktrees is a sub-page of its own now: its old screen is itself, and its old anchor opens it.
+        assertEquals(Route.Settings(machine, sub = "worktrees"), canonicalRoute(Route.Settings(machine, sub = "worktrees")))
+        assertEquals(Route.Settings(machine, sub = "worktrees"), canonicalRoute(Route.Settings(machine, anchor = "worktrees")))
         // An explicit anchor wins over the old screen's.
         assertEquals(Route.Settings(machine, anchor = "pair"), canonicalRoute(Route.Settings(machine, sub = "devices", anchor = "pair")))
         // "This computer" is the card's own page, not an old screen.
@@ -92,8 +96,10 @@ class SettingsPlaceTest {
         ui.navigateByName("proxies")
         assertEquals(Route.Settings(SettingsSection.Machine, anchor = "links"), ui.currentRoute)
         ui.openSettings(SettingsSection.Machine, sub = "worktrees")
-        assertEquals(Route.Settings(SettingsSection.Machine, anchor = "worktrees"), ui.currentRoute)
-        assertNull(ui.settingsSub)
+        assertEquals(Route.Settings(SettingsSection.Machine, sub = "worktrees"), ui.currentRoute)
+        ui.openMachine("worktrees")
+        assertEquals(Route.Settings(SettingsSection.Machine, sub = "worktrees"), ui.currentRoute)
+        assertEquals("worktrees", ui.settingsSub)
         ui.openMachine()
         assertEquals(Route.Settings(SettingsSection.Machine), ui.currentRoute)
     }

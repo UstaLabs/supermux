@@ -968,15 +968,13 @@ class ConfigurationChangeWorkTest {
         return testHostStore(broker.handler) to broker
     }
 
+    /** On the machine's Worktrees page (`openMachine("worktrees")`, the old Disk anchor): every clean one, then Delete. */
     private fun ComposeUiTest.deleteEveryWorktree(gate: Gate) {
-        await("wt_review")
-        waitUntil(timeoutMillis = 10_000) { runCatching { onNodeWithTag("wt_review").assertIsEnabled() }.isSuccess }
-        onNodeWithTag("wt_review").performScrollTo().performClick()
         await("wt_select_clean")
         onNodeWithTag("wt_select_clean").performScrollTo().performClick()
-        // The sheet scrolls as a whole: its buttons sit under the 21 rows.
+        // The delete bar stays at the bottom of the page.
         await("wt_delete")
-        onNodeWithTag("wt_delete").performScrollTo().performClick()
+        onNodeWithTag("wt_delete").performClick()
         await("wt_delete_confirm")
         onNodeWithTag("wt_delete_confirm").performScrollTo().performClick()
         // The first chunk is at the broker.
@@ -995,7 +993,7 @@ class ConfigurationChangeWorkTest {
         // The second chunk went too, and the batch closed its progress when done.
         waitUntil(timeoutMillis = 10_000) { broker.count("DELETE /worktrees") == 2 }
         awaitGone("wt_delete_progress")
-        awaitGone("wt_review_sheet")
+        await("wt_delete_words")
     }
 
     @Test fun a_worktree_batch_delete_finishes_through_the_compact_to_wide_swap() = runComposeUiTest {
@@ -1009,7 +1007,7 @@ class ConfigurationChangeWorkTest {
 
         waitUntil(timeoutMillis = 10_000) { broker.count("DELETE /worktrees") == 2 }
         awaitGone("wt_delete_progress")
-        awaitGone("wt_review_sheet")
+        await("wt_delete_words")
     }
 
     // ── Add host: a one-time claim in flight ─────────────────────────────────────────────────────

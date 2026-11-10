@@ -36,6 +36,7 @@ import dev.supermux.ui.settings.pages.ProvidersPage
 import dev.supermux.ui.settings.pages.rememberProvidersState
 import dev.supermux.ui.accounts.rememberAccountsActions
 import dev.supermux.ui.settings.pages.VoicePage
+import dev.supermux.ui.settings.pages.WorktreesPage
 import dev.supermux.ui.settings.pages.rememberVoiceSettingsActions
 
 /**
@@ -108,16 +109,21 @@ fun FleetSettingsSection(
             onAnchorShown = scope.onAnchorShown,
         )
         // Hosting is desktop-only, so a `Machine/computer` link lands on the machine page here too.
-        SettingsSection.Machine -> MachinePage(
-            system = rememberSystemSettingsActions(fleet),
-            chats = rememberMachineChats(fleet),
-            devices = rememberDevicesSettingsActions(fleet),
-            links = rememberProxiesSettingsActions(fleet),
-            worktrees = rememberWorktreesSettingsActions(fleet),
-            usage = rememberUsageActions(fleet),
-            onOpenUsage = scope.onOpenUsage,
-            anchor = place.anchor,
-            onAnchorShown = scope.onAnchorShown,
-        )
+        SettingsSection.Machine -> if (place.sub == MachineSub.WORKTREES) {
+            WorktreesPage(rememberWorktreesSettingsActions(fleet), onBack = scope.onClose)
+        } else {
+            MachinePage(
+                system = rememberSystemSettingsActions(fleet),
+                chats = rememberMachineChats(fleet),
+                devices = rememberDevicesSettingsActions(fleet),
+                links = rememberProxiesSettingsActions(fleet),
+                worktrees = rememberWorktreesSettingsActions(fleet),
+                usage = rememberUsageActions(fleet),
+                onOpenUsage = scope.onOpenUsage,
+                onOpenWorktrees = { scope.onOpen(SettingsPlace(SettingsSection.Machine, MachineSub.WORKTREES)) },
+                anchor = place.anchor,
+                onAnchorShown = scope.onAnchorShown,
+            )
+        }
     }
 }

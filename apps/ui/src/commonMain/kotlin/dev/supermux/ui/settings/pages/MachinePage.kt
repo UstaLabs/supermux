@@ -241,6 +241,21 @@ object MachineCopy {
 }
 
 /**
+ * The one line a machine's parts show instead of their rows while supermux isn't there to ask: this computer not
+ * hosting (or still starting, or failed), another machine offline; null while it is running.
+ */
+internal fun machineQuiet(hosting: ThisComputerHosting?, up: Boolean, name: String, lastSeen: String): String? = when {
+    hosting != null -> when (hosting.state.phase) {
+        HostingPhase.Off -> MachinePartsCopy.NOT_HOSTING
+        HostingPhase.Starting -> MachinePartsCopy.STARTING
+        HostingPhase.Failed -> MachinePartsCopy.NOT_RUNNING
+        else -> null
+    }
+    !up -> MachinePartsCopy.offline(name, lastSeen)
+    else -> null
+}
+
+/**
  * The machine page of the machine Settings is about.
  *
  * @param system that machine's update status, update and restart calls.
@@ -250,6 +265,7 @@ object MachineCopy {
  * @param devices, links, worktrees, usage that machine's paired devices, shared links, chat worktrees and limits:
  *   today's actions holders. [usage] null leaves Limits with its head only.
  * @param onOpenUsage "Open full usage": the Usage screen.
+ * @param onOpenWorktrees the Disk row: the machine's Worktrees page.
  * @param pairTimings how long a pairing code lives and how often its sheet looks for the device that used it.
  */
 @Composable
@@ -263,6 +279,7 @@ fun MachinePage(
     worktrees: WorktreesSettingsActions = WorktreesSettingsActions(),
     usage: UsageActions? = null,
     onOpenUsage: () -> Unit = {},
+    onOpenWorktrees: () -> Unit = {},
     anchor: String? = null,
     onAnchorShown: () -> Unit = {},
     pollDelayMs: Long = 1_500L,
@@ -450,21 +467,12 @@ fun MachinePage(
         }
 
         // ── The machine's own parts: one quiet line each while supermux isn't there to ask ──
-        val quiet = when {
-            hosting != null -> when (phase) {
-                HostingPhase.Off -> MachinePartsCopy.NOT_HOSTING
-                HostingPhase.Starting -> MachinePartsCopy.STARTING
-                HostingPhase.Failed -> MachinePartsCopy.NOT_RUNNING
-                else -> null
-            }
-            !up -> MachinePartsCopy.offline(name, machine?.lastSeen.orEmpty())
-            else -> null
-        }
+        val quiet = machineQuiet(hosting, up, name, machine?.lastSeen.orEmpty())
         // Reaching it from anywhere is off on this computer: a pairing link must use its address on this network.
         val pairOrigin = hosting?.state?.takeIf { phase == HostingPhase.Running && !it.relay }?.localUrl?.takeIf { it.isNotBlank() }
         DevicesSection(devices, name, quiet, pairOrigin, pairTimings)
         LinksSection(links, name, quiet, chats.working)
-        DiskSection(worktrees, name, quiet)
+        DiskSection(worktrees, name, quiet, onOpenWorktrees)
         LimitsSection(usage, quiet, onOpenUsage)
     }
 }
