@@ -269,6 +269,8 @@ fun WorkspacePanes(
 ) {
     val layoutSync = ws.layoutSync
     val viewsById = ws.viewsById
+    // A Browser tab closed here or elsewhere lets its live page go (#105).
+    dev.supermux.ui.browser.ReleaseClosedBrowserTabs(viewsById.values)
     val documents = ws.documents
     val previewModes = ws.previewModes
     val fileOpener = ws.fileOpener
@@ -540,6 +542,8 @@ fun PhoneWorkspacePanes(
     )
     val tabs = phoneTabModel(layout, current.activeViewId)
     val viewsById = ws.viewsById
+    // A Browser tab closed here or elsewhere lets its live page go (#105).
+    dev.supermux.ui.browser.ReleaseClosedBrowserTabs(viewsById.values)
     val kept = rememberWorkspacePanesKept(current.id)
     var showAdd by kept::addViewOpen
     val closeCandidate = kept.closingViewId?.let { viewsById[it] }
