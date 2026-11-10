@@ -32,6 +32,8 @@ private val oldSettingsSlugs: Map<String, Route.Settings> = mapOf(
     "devices" to Route.Settings(SettingsSection.Machine, sub = "devices"),
     "proxies" to Route.Settings(SettingsSection.Machine, sub = "links"),
     "worktrees" to Route.Settings(SettingsSection.Machine, sub = "worktrees"),
+    "appearance" to Route.Settings(SettingsSection.General),
+    "updates" to Route.Settings(SettingsSection.General, anchor = "app-version"),
 )
 
 /**
@@ -40,8 +42,7 @@ private val oldSettingsSlugs: Map<String, Route.Settings> = mapOf(
  *
  * [selectedId] only shows up on [Route.Home]: every other destination is a full-pane overlay whose
  * URL says nothing about which session is selected underneath it (closing it returns to `/s/<id>`).
- * [Route.Appearance]/[Route.AppUpdate] live under `/settings/` because that is where the Vue app
- * put them, even though they are their own routes here. A Settings sub-page is a third segment
+ * A Settings sub-page is a third segment
  * (`/settings/machine/links`); its anchor is never in the URL — a flash is a one-off (#97).
  */
 fun pathFor(route: Route, selectedId: String?): String = when (route) {
@@ -58,8 +59,6 @@ fun pathFor(route: Route, selectedId: String?): String = when (route) {
     Route.Archived -> "/archived"
     Route.Proxies -> "/proxies"
     Route.Displays -> "/displays"
-    Route.Appearance -> "/settings/appearance"
-    Route.AppUpdate -> "/settings/updates"
 }
 
 /**
@@ -84,8 +83,6 @@ fun parsePath(pathAndQuery: String): UrlTarget {
         segs[0] == "proxies" -> UrlTarget.Screen(Route.Proxies)
         segs[0] == "displays" -> UrlTarget.Screen(Route.Displays)
         segs[0] == "settings" && segs.size == 1 -> UrlTarget.Screen(Route.Settings())
-        segs[0] == "settings" && segs[1] == "appearance" -> UrlTarget.Screen(Route.Appearance)
-        segs[0] == "settings" && segs[1] == "updates" -> UrlTarget.Screen(Route.AppUpdate)
         segs[0] == "settings" -> UrlTarget.Screen(
             // A sub-page the page does not have (a typo, an old link) opens the page itself.
             slugSections[segs[1]]?.let { Route.Settings(it, sub = settingsSubOrNull(it, segs.getOrNull(2))) }

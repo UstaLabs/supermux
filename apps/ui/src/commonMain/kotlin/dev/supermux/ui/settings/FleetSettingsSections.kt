@@ -18,11 +18,12 @@
 package dev.supermux.ui.settings
 
 import androidx.compose.runtime.Composable
-import dev.supermux.ui.update.AppUpdateScreen
 import dev.supermux.state.FleetStore
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.settings.pages.GeneralPage
 import dev.supermux.ui.settings.pages.InterimMachinePage
+import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.settings.pages.PrivacyLabsPage
 
 /**
@@ -40,9 +41,11 @@ fun FleetSettingsSection(
     fleet: FleetStore,
 ) {
     when (place.section) {
-        SettingsSection.General -> AppearanceSettingsScreen(
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
+        SettingsSection.General -> GeneralPage(
+            // What these hosts paint when nothing is stored: the system's choice (spec §10.6).
+            defaultAppearance = AppearanceMode.SYSTEM,
+            anchor = place.anchor,
+            onAnchorShown = scope.onAnchorShown,
         )
         SettingsSection.Providers -> if (place.sub == null) {
             AgentSettingsScreen(
@@ -130,29 +133,5 @@ fun FleetSettingsSection(
                 onAnchorShown = scope.onAnchorShown,
             )
         }
-    }
-}
-
-/**
- * Renders one host-local [SettingsExtra] row's page. Appearance is shared since E7 and the in-app
- * updater since G5; the ROWS are still host-local — the hub filters them by `Caps` — so a host
- * reaches only the ones it advertises. iOS never reaches `AppUpdate`: `Caps.appUpdate` is false
- * there because the App Store owns updates.
- */
-@Composable
-fun FleetSettingsExtra(extra: SettingsExtra, scope: SettingsSlotScope) {
-    when (extra) {
-        SettingsExtra.Appearance -> AppearanceSettingsScreen(
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
-        SettingsExtra.AppUpdate -> AppUpdateScreen(
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
-        SettingsExtra.Storage -> StorageSettingsScreen(
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
     }
 }

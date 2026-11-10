@@ -174,7 +174,6 @@ class ShellUiState {
     val archivedOpen: Boolean get() = currentRoute is Route.Archived
     val displaysOpen: Boolean get() = currentRoute is Route.Displays
     val settingsOpen: Boolean get() = currentRoute is Route.Settings
-    val appUpdateOpen: Boolean get() = currentRoute is Route.AppUpdate
     val addHostOpen: Boolean get() = currentRoute is Route.AddHost
     /** The New-Session launcher is showing (a detail-pane swap on a wide host). */
     val launcherOpen: Boolean get() = currentRoute is Route.NewSession
@@ -323,7 +322,8 @@ class ShellUiState {
 
     /** File ▸ "Coding…" and every "language servers" link: Coding, at its code-intelligence row. */
     fun openLspSettings() = openSettings(SettingsSection.Coding, anchor = "code-intelligence")
-    fun openAppUpdate() = navigate(Route.AppUpdate)
+    /** File ▸ "Check for Updates…" and the sidebar card's open: General, at its App version row (#97). */
+    fun openAppUpdate() = openSettings(SettingsSection.General, anchor = "app-version")
 
     /**
      * The session list's legacy string-keyed navigation callback (`onNavigate("settings")`).
@@ -337,7 +337,7 @@ class ShellUiState {
             "devices" -> navigate(Route.Devices)
             "archived" -> openArchived()
             "proxies" -> navigate(Route.Proxies)
-            "appearance" -> navigate(Route.Appearance)
+            "appearance" -> openSettings(SettingsSection.General)
             "displays" -> openDisplays()
             "addhost" -> openAddHost()
         }

@@ -45,7 +45,6 @@ import dev.supermux.ui.push.PushTapHandle
 import dev.supermux.ui.push.notificationCancelSessionIds
 import dev.supermux.ui.push.pushTapHandleDecision
 import dev.supermux.ui.push.resolvePushTap
-import dev.supermux.ui.settings.FleetSettingsExtra
 import dev.supermux.ui.settings.FleetSettingsSection
 import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.ui.shell.SupermuxApp
@@ -375,7 +374,6 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
                 // `FleetSettingsSection` is the same function Android calls, which is the point:
                 // the mapping is decided by `SettingsSection` and `FleetStore`, and both are
                 // shared. `Caps` still filters the extras, so `AppUpdate` is unreachable here.
-                settingsExtra = { extra, scope -> FleetSettingsExtra(extra, scope) },
                 settingsSection = { place, scope -> FleetSettingsSection(place, scope, fleet) },
                 // No `chatFallback`: that slot IS the host-specific escape hatch, and iOS has no
                 // screen to put in it. `UnavailableSessionPane` (H3.7) is what covers its absence.

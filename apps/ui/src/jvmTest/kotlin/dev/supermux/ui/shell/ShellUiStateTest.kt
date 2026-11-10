@@ -142,6 +142,20 @@ class WorkspaceUiStateTest {
         assertEquals(Route.Settings(SettingsSection.Coding, anchor = "code-intelligence"), ui.currentRoute)
     }
 
+    /** The update page is General's "App version" row now (#97): File ▸ "Check for Updates…" and the card land there. */
+    @Test fun openAppUpdateLandsOnGeneralsAppVersion() {
+        val ui = ShellUiState()
+        ui.openAppUpdate()
+        assertTrue(ui.settingsOpen)
+        assertEquals(Route.Settings(SettingsSection.General, anchor = "app-version"), ui.currentRoute)
+    }
+
+    @Test fun theOldAppearanceNameOpensGeneral() {
+        val ui = ShellUiState()
+        ui.navigateByName("appearance")
+        assertEquals(Route.Settings(SettingsSection.General), ui.currentRoute)
+    }
+
     @Test fun plainSettingsIsNoSectionAndARailClickDropsTheSubPageAndAnchor() {
         val ui = ShellUiState()
         ui.openSettings()
@@ -309,9 +323,8 @@ class WorkspaceUiStateTest {
         // still REPLACES whatever was open — the exclusivity rule that guard sat next to.
         val ui = ShellUiState()
         listOf(
-            Route.NewSession("d1"), Route.Usage, Route.Appearance, Route.Devices, Route.Proxies,
+            Route.NewSession("d1"), Route.Usage, Route.Devices, Route.Proxies,
             Route.AddHost, Route.Displays, Route.Settings(SettingsSection.Voice), Route.Archived,
-            Route.AppUpdate,
         ).forEach {
             ui.navigate(it)
             assertEquals(listOf(Route.Home, it), ui.backStack.toList())

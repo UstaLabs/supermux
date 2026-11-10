@@ -51,7 +51,7 @@ class RouteTest {
     fun every_object_route_round_trips_as_itself() {
         val objects = listOf(
             Route.Home, Route.AddHost, Route.Usage, Route.Devices,
-            Route.Archived, Route.Proxies, Route.Displays, Route.Appearance, Route.AppUpdate,
+            Route.Archived, Route.Proxies, Route.Displays,
         )
         for (route in objects) {
             assertEquals(route, roundTrip(route))
@@ -70,8 +70,6 @@ class RouteTest {
             Route.Archived to "archived",
             Route.Proxies to "proxies",
             Route.Displays to "displays",
-            Route.Appearance to "appearance",
-            Route.AppUpdate to "app_update",
         )
         for ((route, name) in names) {
             assertEquals("""{"type":"$name"}""", json.encodeToString(Route.serializer(), route))

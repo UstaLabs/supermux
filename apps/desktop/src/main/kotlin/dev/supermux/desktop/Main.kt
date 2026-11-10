@@ -118,7 +118,6 @@ import dev.supermux.ui.adaptive.widthClassForPx
 import dev.supermux.ui.shell.SupermuxApp
 import dev.supermux.ui.shell.windows.tearOutTabLive
 import dev.supermux.ui.shell.windows.tearOutCanvasLive
-import dev.supermux.desktop.settings.DesktopSettingsExtra
 import dev.supermux.desktop.settings.LocalHostSupervisor
 import dev.supermux.desktop.settings.LocalHostingFleet
 import dev.supermux.desktop.settings.LocalHostingSessions
@@ -2072,7 +2071,6 @@ fun main() {
                             autoSelectName = System.getenv("SM_SMOKE_SEND")
                                 ?.substringBefore(':')?.takeIf { it.isNotBlank() },
                             defaultDeviceName = remember { desktopDeviceName() },
-                            settingsExtra = { extra, scope -> DesktopSettingsExtra(extra, scope) },
                             settingsSection = { place, scope ->
                                 DesktopSettingsSection(place, scope, fleet.activeApp() ?: app)
                             },

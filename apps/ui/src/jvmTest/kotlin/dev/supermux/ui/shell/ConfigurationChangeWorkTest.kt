@@ -275,11 +275,9 @@ class ConfigurationChangeWorkTest {
         assertEquals(SettingsSection.Machine, ui.settingsSection)
     }
 
-    private fun withAppearance() = FakePlatform(caps = NO_CAPS.copy(appearanceControls = true))
-
-    @Test fun an_extra_settings_page_open_on_a_phone_survives_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(testHostStore(), platform = withAppearance(), settings = true) { openSettings() }
-        openFromTheIndex("settings_row_appearance", "appearance_settings_screen")
+    @Test fun general_open_on_a_phone_survives_a_recreation() = runComposeUiTest {
+        val activity = phoneShell(testHostStore(), settings = true) { openSettings() }
+        openFromTheIndex("settings_row_general", "appearance_settings_screen")
 
         activity.recreate()
 
@@ -287,14 +285,16 @@ class ConfigurationChangeWorkTest {
         onNodeWithTag("settings_index").assertDoesNotExist()
     }
 
-    @Test fun an_extra_settings_page_stays_open_through_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(testHostStore(), platform = withAppearance(), settings = true) { openSettings() }
-        openFromTheIndex("settings_row_appearance", "appearance_settings_screen")
+    @Test fun general_stays_open_through_the_compact_to_wide_swap() = runComposeUiTest {
+        val ui = ShellUiState()
+        val width = flippablePhone(testHostStore(), settings = true, ui = ui) { openSettings() }
+        openFromTheIndex("settings_row_general", "appearance_settings_screen")
 
         unfold(width)
 
         await("settings_hub_rail")
         await("appearance_settings_screen")
+        assertEquals(SettingsSection.General, ui.settingsSection)
     }
 
     // ── Settings › Providers: a pasted API key, the OpenCode code step, an agent's login code ────

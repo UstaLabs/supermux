@@ -60,7 +60,7 @@ object SettingsKeys {
     const val DICTATION_MODE = "dictation:mode"
 
     // Appearance (cluster E7) — the ONE source of truth for the app's own look on every platform.
-    // The shared `ui/settings/AppearanceSettingsScreen.kt` writes these; each app's theme wrapper
+    // The shared General page (`ui/settings/pages/GeneralPage.kt`) writes these; each app's theme wrapper
     // reads them (Android's MainActivity, desktop's Main + the sidebar theme toggle), so a change
     // made in Settings and a change made by desktop's toggle are the same stored value.
     //

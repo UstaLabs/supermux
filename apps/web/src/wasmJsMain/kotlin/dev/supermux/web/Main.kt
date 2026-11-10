@@ -35,7 +35,6 @@ import dev.supermux.ui.push.notificationCancelSessionIds
 import dev.supermux.ui.push.pushTapHandleDecision
 import dev.supermux.ui.push.resolvePushTap
 import dev.supermux.ui.session.SessionListMode
-import dev.supermux.ui.settings.FleetSettingsExtra
 import dev.supermux.ui.settings.FleetSettingsSection
 import dev.supermux.ui.settings.rememberAgentSettingsActions
 import dev.supermux.ui.settings.rememberDevicesSettingsActions
@@ -343,7 +342,6 @@ fun main() {
                             groupByProject = value
                             appScope.launch { settings.putString(GROUP_BY_PROJECT_KEY, value.toString()) }
                         },
-                        settingsExtra = { extra, scope -> FleetSettingsExtra(extra, scope) },
                         settingsSection = { place, scope -> FleetSettingsSection(place, scope, fleet) },
                     )
                     // An OVERLAY at the top, not a row above the shell: the strip must not reflow

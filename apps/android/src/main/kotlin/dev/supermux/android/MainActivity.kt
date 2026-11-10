@@ -68,7 +68,6 @@ import dev.supermux.ui.push.PushTapHandle
 import dev.supermux.ui.push.notificationCancelSessionIds
 import dev.supermux.ui.push.pushTapHandleDecision
 import dev.supermux.ui.push.resolvePushTap
-import dev.supermux.ui.settings.FleetSettingsExtra
 import dev.supermux.ui.settings.FleetSettingsSection
 import dev.supermux.ui.theme.AppearanceMode
 import kotlinx.coroutines.launch
@@ -375,7 +374,6 @@ class MainActivity : ComponentActivity() {
                             onOpenDisplays = { ui.openDisplays() },
                         )
                     },
-                    settingsExtra = { extra, scope -> FleetSettingsExtra(extra, scope) },
                     settingsSection = { place, scope -> FleetSettingsSection(place, scope, vm.fleet) },
                 )
             }

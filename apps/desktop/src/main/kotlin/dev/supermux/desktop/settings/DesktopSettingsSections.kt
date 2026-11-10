@@ -18,13 +18,12 @@ import dev.supermux.ui.settings.DevicesSettingsScreen
 import dev.supermux.ui.settings.MachineSub
 import dev.supermux.ui.settings.ProxiesSettingsScreen
 import dev.supermux.ui.settings.GitHostingScreen
-import dev.supermux.ui.settings.AppearanceSettingsScreen
 import dev.supermux.ui.settings.EditorSettingsScreen
 import dev.supermux.ui.settings.SettingsPlace
-import dev.supermux.ui.settings.StorageSettingsScreen
 import dev.supermux.ui.settings.SystemSettingsScreen
 import dev.supermux.ui.settings.VoiceSettingsScreen
 import dev.supermux.ui.settings.WorktreesSettingsScreen
+import dev.supermux.ui.settings.pages.GeneralPage
 import dev.supermux.ui.settings.pages.InterimMachinePage
 import dev.supermux.ui.settings.pages.PrivacyLabsPage
 import dev.supermux.ui.settings.rememberAgentSettingsActions
@@ -35,10 +34,8 @@ import dev.supermux.ui.settings.rememberGitHostingActions
 import dev.supermux.ui.settings.rememberSystemSettingsActions
 import dev.supermux.ui.settings.rememberVoiceSettingsActions
 import dev.supermux.ui.settings.rememberWorktreesSettingsActions
-import dev.supermux.ui.settings.SettingsExtra
 import dev.supermux.ui.settings.SettingsSlotScope
 import dev.supermux.ui.theme.AppearanceMode
-import dev.supermux.ui.update.AppUpdateScreen
 
 /**
  * Renders [place]'s desktop screen against [host]. Called from the hub's `content` slot.
@@ -54,11 +51,11 @@ fun DesktopSettingsSection(
     host: HostStore,
 ) {
     when (place.section) {
-        SettingsSection.General -> AppearanceSettingsScreen(
-            // Desktop opens dark when nobody has chosen — the same fallback `Main.kt` applies.
+        SettingsSection.General -> GeneralPage(
+            // Desktop opens dark when nobody has chosen — the same fallback `Main.kt` applies (spec §10.6).
             defaultAppearance = AppearanceMode.DARK,
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
+            anchor = place.anchor,
+            onAnchorShown = scope.onAnchorShown,
         )
         SettingsSection.Providers -> if (place.sub == null) {
             AgentSettingsScreen(
@@ -153,31 +150,5 @@ fun DesktopSettingsSection(
                 onAnchorShown = scope.onAnchorShown,
             )
         }
-    }
-}
-
-/**
- * Renders one host-local [SettingsExtra] row's page (cluster E7 — desktop shows both rows now).
- *
- * Appearance is the shared screen, reading and writing the same `SettingsKeys.APPEARANCE` the
- * sidebar's theme toggle does. The updater is the shared screen too since cluster G5.
- */
-@Composable
-fun DesktopSettingsExtra(extra: SettingsExtra, scope: SettingsSlotScope) {
-    when (extra) {
-        SettingsExtra.Appearance -> AppearanceSettingsScreen(
-            // Desktop opens dark when nobody has chosen — the same fallback `Main.kt` applies.
-            defaultAppearance = AppearanceMode.DARK,
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
-        SettingsExtra.AppUpdate -> AppUpdateScreen(
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
-        SettingsExtra.Storage -> StorageSettingsScreen(
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
     }
 }

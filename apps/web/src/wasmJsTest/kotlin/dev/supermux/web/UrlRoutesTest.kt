@@ -61,18 +61,19 @@ class UrlRoutesTest {
             "/settings/devices" to Route.Settings(SettingsSection.Machine, sub = "devices"),
             "/settings/proxies" to Route.Settings(SettingsSection.Machine, sub = "links"),
             "/settings/worktrees" to Route.Settings(SettingsSection.Machine, sub = "worktrees"),
+            "/settings/appearance" to Route.Settings(SettingsSection.General),
+            "/settings/updates" to Route.Settings(SettingsSection.General, anchor = "app-version"),
         )
         for ((path, route) in old) assertEquals(UrlTarget.Screen(route), parsePath(path), path)
     }
     @Test fun topLevels() {
         assertEquals("/usage", pathFor(Route.Usage, null)); assertEquals("/devices", pathFor(Route.Devices, null))
         assertEquals("/archived", pathFor(Route.Archived, null)); assertEquals("/proxies", pathFor(Route.Proxies, null))
-        assertEquals("/displays", pathFor(Route.Displays, null)); assertEquals("/settings/appearance", pathFor(Route.Appearance, null))
-        assertEquals("/settings/updates", pathFor(Route.AppUpdate, null)); assertEquals("/add-host", pathFor(Route.AddHost, null))
+        assertEquals("/displays", pathFor(Route.Displays, null)); assertEquals("/add-host", pathFor(Route.AddHost, null))
     }
     @Test fun parseRoundTrips() {
         val cases = listOf(Route.Home, Route.NewSession("d1"), Route.Settings(SettingsSection.Memory), Route.Usage, Route.Devices,
-            Route.Archived, Route.Proxies, Route.Displays, Route.Appearance, Route.AppUpdate, Route.AddHost,
+            Route.Archived, Route.Proxies, Route.Displays, Route.AddHost,
             Route.Settings(SettingsSection.Machine, sub = "worktrees"))
         for (r in cases) assertEquals(UrlTarget.Screen(r), parsePath(pathFor(r, null)), r.toString())
         assertEquals(UrlTarget.Session("abc"), parsePath("/s/abc"))

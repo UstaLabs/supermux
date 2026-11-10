@@ -82,12 +82,6 @@ sealed interface Route {
     @SerialName("displays")
     data object Displays : Route
 
-    @Serializable
-    @SerialName("appearance")
-    data object Appearance : Route
-
-    /** Desktop-only today: the in-app updater's full-pane screen. */
-    @Serializable
-    @SerialName("app_update")
-    data object AppUpdate : Route
+    // Appearance and the updater's page are General's rows since #97 (`openSettings(General)`,
+    // `ShellUiState.openAppUpdate`); a saved back stack naming them decodes to Home.
 }

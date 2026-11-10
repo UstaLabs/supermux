@@ -29,7 +29,6 @@ import dev.supermux.ui.chat.PlatformTestProviders
 import dev.supermux.ui.chat.testHostStore
 import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.prefs.UiPrefs
-import dev.supermux.ui.settings.FleetSettingsExtra
 import dev.supermux.ui.settings.FleetSettingsSection
 import dev.supermux.workspace.singleViewLayout
 import dev.supermux.workspace.toDto
@@ -110,7 +109,6 @@ internal fun ShellWithSettings(fleet: FleetStore, ui: ShellUiState, settings: Bo
             fleet = fleet,
             ui = ui,
             settingsSection = { place, scope -> FleetSettingsSection(place, scope, fleet) },
-            settingsExtra = { extra, scope -> FleetSettingsExtra(extra, scope) },
         )
     } else {
         SupermuxApp(fleet = fleet, ui = ui)

@@ -52,6 +52,13 @@ private fun page(section: SettingsSection, keywords: String = "") = SettingsSear
 /** The index. Page entries first in each page's block, then its rows in page order (page tasks append). */
 val SettingsSearchIndex: List<SettingsSearchEntry> = listOf(
     page(SettingsSection.General, "appearance preferences"),
+    SettingsSearchEntry(SettingsSection.General, "theme", "Theme", "dark light mode appearance colour"),
+    SettingsSearchEntry(SettingsSection.General, "text-size", "Text size", "font zoom scale bigger smaller"),
+    SettingsSearchEntry(SettingsSection.General, "live-replies", "Show replies as they're written", "stream streaming"),
+    SettingsSearchEntry(SettingsSection.General, "chat-detail", "Chat detail", "tools verbose transcript"),
+    SettingsSearchEntry(SettingsSection.General, "terminal-colours", "Terminal colours", "terminal palette color"),
+    SettingsSearchEntry(SettingsSection.General, "app-version", "App version", "update upgrade release check"),
+    SettingsSearchEntry(SettingsSection.General, "cache", "Cached images and files", "storage cache disk media clear"),
     page(SettingsSection.Providers, "agents accounts logins sign in"),
     page(SettingsSection.Voice, "dictation speech"),
     page(SettingsSection.Coding, "editor git"),

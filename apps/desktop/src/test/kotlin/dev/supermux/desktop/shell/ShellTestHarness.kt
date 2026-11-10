@@ -8,7 +8,6 @@ package dev.supermux.desktop.shell
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
-import dev.supermux.desktop.settings.DesktopSettingsExtra
 import dev.supermux.desktop.settings.DesktopSettingsSection
 import dev.supermux.desktop.testDeps
 import dev.supermux.host.HostPersistence
@@ -73,7 +72,6 @@ internal fun TestAppShell(
         persistSelection = true,
         // Desktop's own Settings wiring — the same one `Main.kt` passes, so a hub suite drives
         // the real sections rather than an empty slot.
-        settingsExtra = { extra, scope -> DesktopSettingsExtra(extra, scope) },
         settingsSection = { place, scope ->
             DesktopSettingsSection(place, scope, store.activeApp() ?: app)
         },

@@ -164,11 +164,9 @@ import dev.supermux.ui.session.rememberArchivedActions
 import dev.supermux.ui.session.rememberLauncherActions
 import dev.supermux.ui.session.rememberSessionListActions
 import dev.supermux.ui.session.withWorkspaceOps
-import dev.supermux.ui.settings.AppearanceSettingsScreen
 import dev.supermux.ui.settings.DevicesSettingsScreen
 import dev.supermux.ui.settings.ProxiesSettingsScreen
 import dev.supermux.ui.settings.MachineSub
-import dev.supermux.ui.settings.SettingsExtra
 import dev.supermux.ui.settings.SettingsHub
 import dev.supermux.ui.settings.SettingsPlace
 import dev.supermux.ui.settings.SettingsSlotScope
@@ -180,7 +178,6 @@ import dev.supermux.ui.settings.rememberDevicesSettingsActions
 import dev.supermux.ui.settings.rememberProxiesSettingsActions
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.update.AppUpdateCard
-import dev.supermux.ui.update.AppUpdateScreen
 import dev.supermux.ui.update.announceUpdate
 import dev.supermux.ui.update.keepUpdated
 import dev.supermux.ui.usage.UsagePopover
@@ -311,7 +308,6 @@ fun SupermuxApp(
     onAddedHost: () -> Unit = {},
     /** Whether a broker identity (`GET /host` hostId) is the broker this app runs itself. */
     isLocalHost: (hostId: String?) -> Boolean = { false },
-    settingsExtra: @Composable (SettingsExtra, SettingsSlotScope) -> Unit = { _, _ -> },
     settingsSection: @Composable (SettingsPlace, SettingsSlotScope) -> Unit = { _, _ -> },
     /** The text of the key that focuses Settings' search ("⌘F" on a Mac); null where there is no keyboard shortcut. */
     settingsSearchShortcut: String? = null,
@@ -1248,7 +1244,6 @@ fun SupermuxApp(
                                         onRegisterCloseHandler = { settingsTryClose = it },
                                         machines = settingsMachines,
                                         searchShortcut = settingsSearchShortcut,
-                                        extraContent = settingsExtra,
                                         content = settingsSection,
                                     )
                                 }
@@ -1292,7 +1287,7 @@ fun SupermuxApp(
                                                 onProjectSettings = { ref -> projectSettingsTarget = ref.hostId to ref.project.id },
                                                 // Every full-pane route paints its own title +
                                                 // Back at every width (G5's `standalone` rule for
-                                                // `Route.AppUpdate`, now applied to all of them):
+                                                // the old update page, now applied to all of them):
                                                 // Escape is not an affordance on a phone, and a
                                                 // wide window with no visible way out was the G4
                                                 // review's blocker.
@@ -1359,24 +1354,6 @@ fun SupermuxApp(
                                             }
                                         }
                                     }
-                                }
-                            }
-
-                            entry<Route.Appearance>(
-                                metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
-                            ) {
-                                EscapeBox("appearance_overlay", onEscape = { ui.goBack() }) {
-                                    AppearanceSettingsScreen(onBack = { ui.goBack() }, standalone = true)
-                                }
-                            }
-
-                            entry<Route.AppUpdate>(
-                                metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
-                            ) {
-                                EscapeBox("app_update_overlay", onEscape = { ui.goBack() }) {
-                                    // `standalone`: a full-pane ROUTE, not a hub detail, so the
-                                    // page paints its own title + Back at every width.
-                                    AppUpdateScreen(onBack = { ui.goBack() }, standalone = true)
                                 }
                             }
                         },

@@ -47,8 +47,7 @@ class UrlSyncTest {
         "/settings/machine/devices",
         "/settings/machine/links",
         "/settings/machine/worktrees",
-        "/settings/appearance",
-        "/settings/updates",
+        // Not "/settings/appearance" or "/settings/updates": old slugs, they land on General (below).
     )
 
     @Test fun everyPathSurvivesTheRoundTrip() {
@@ -56,6 +55,14 @@ class UrlSyncTest {
             val ui = ShellUiState()
             applyTarget(ui, parsePath(path))
             assertEquals(path, pathFor(ui.currentRoute, ui.selectedId), "round trip of $path")
+        }
+    }
+
+    @Test fun theOldAppearanceAndUpdatesSlugsLandOnGeneral() {
+        for (path in listOf("/settings/appearance", "/settings/updates")) {
+            val ui = ShellUiState()
+            applyTarget(ui, parsePath(path))
+            assertEquals("/settings/general", pathFor(ui.currentRoute, ui.selectedId), path)
         }
     }
 

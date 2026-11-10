@@ -66,7 +66,7 @@ import kotlin.test.assertTrue
  * The shared Settings shell (cluster E1): desktop's rail + detail on a roomy window, Android's
  * index + push on a phone, ONE composable. Sections are slots, so this suite drives a stub slot
  * rather than any real settings screen — what is under test is navigation, the dirty-close guard,
- * the host scoping of the compact push stack and the `Caps` gate on the extra rows.
+ * and the host scoping of the compact push stack.
  */
 @OptIn(ExperimentalTestApi::class)
 class SettingsHubTest {
@@ -85,13 +85,6 @@ class SettingsHubTest {
 
     /** The rail and the index: every page but [SettingsSection.Machine], which machine cards open. */
     private val listed = SettingsSection.entries.filter { it != SettingsSection.Machine }
-
-    private val extraStub: @androidx.compose.runtime.Composable (
-        SettingsExtra,
-        SettingsSlotScope,
-    ) -> Unit = { e, _ ->
-        Text("extra", modifier = Modifier.testTag("extra_${e.name.lowercase()}"))
-    }
 
     // ── rail + detail (Expanded) ───────────────────────────────────────────────────────────────
 
@@ -402,57 +395,15 @@ class SettingsHubTest {
         onNodeWithTag("settings_index").assertExists()
     }
 
-    // ── Caps-gated extra rows ──────────────────────────────────────────────────────────────────
+    // ── no extra rows (#97) ────────────────────────────────────────────────────────────────────
 
-    @Test fun the_appearance_and_update_rows_are_absent_on_a_host_without_those_caps() = runComposeUiTest {
-        setPlatformContent(
-            pointer = false,
-            widthClass = WindowWidthClass.Compact,
-            inputMode = InputMode.Touch,
-        ) {
-            SettingsHub(
-                section = null,
-                onSectionChange = {},
-                onBack = {},
-                extraContent = extraStub,
-                content = sectionStub(),
-            )
+    /** Appearance, Storage and Check for updates are General's rows now: no device gets rows of its own. */
+    @Test fun a_host_with_every_cap_gets_no_rows_beyond_the_pages() = runComposeUiTest {
+        setPlatformContent(platform = FakePlatform(caps = gatedCaps), widthClass = WindowWidthClass.Expanded) {
+            SettingsHub(section = SettingsSection.Providers, onSectionChange = {}, onBack = {}, content = sectionStub())
         }
         waitForIdle()
-        onNodeWithTag("settings_row_appearance").assertDoesNotExist()
-        onNodeWithTag("settings_row_appupdate").assertDoesNotExist()
-    }
-
-    @Test fun a_host_with_the_caps_gets_the_extra_rows_and_they_push_the_extra_page() = runComposeUiTest {
-        setPlatformContent(
-            platform = FakePlatform(caps = gatedCaps),
-            pointer = false,
-            widthClass = WindowWidthClass.Compact,
-            inputMode = InputMode.Touch,
-        ) {
-            SettingsHub(
-                section = null,
-                onSectionChange = {},
-                onBack = {},
-                extraContent = extraStub,
-                content = sectionStub(),
-            )
-        }
-        waitForIdle()
-        onNodeWithTag("settings_row_appearance").assertExists()
-        onNodeWithTag("settings_row_appupdate").assertExists()
-
-        // Scroll first: the index is a plain scrolled Column, and with enough sections above it
-        // (e.g. Worktrees) the Appearance row sits below the test window's fixed viewport —
-        // performClick() dispatches at the node's actual position, so an off-screen click is a
-        // silent no-op rather than a failure at the click site itself.
-        onNodeWithTag("settings_row_appearance").performScrollTo().performClick()
-        waitForIdle()
-        onNodeWithTag("extra_appearance").assertExists()
-
-        onNodeWithTag("settings_detail_back").performClick()
-        waitForIdle()
-        onNodeWithTag("settings_index").assertExists()
+        for (gone in listOf("appearance", "appupdate", "storage")) onNodeWithTag("settings_section_$gone").assertDoesNotExist()
     }
 
     /**
@@ -473,7 +424,6 @@ class SettingsHubTest {
                 onSectionChange = {},
                 onBack = { closed++ },
                 onRegisterCloseHandler = { handler = it },
-                extraContent = extraStub,
             ) { place, _ -> Text("page ${place.section} ${place.sub}") }
         }
         waitForIdle()
@@ -489,30 +439,6 @@ class SettingsHubTest {
         runOnIdle { handler!!() }
         waitForIdle()
         assertEquals(1, closed)
-    }
-
-    @Test fun the_gated_rows_join_the_rail_on_a_wide_window_too() = runComposeUiTest {
-        setPlatformContent(
-            platform = FakePlatform(caps = gatedCaps),
-            widthClass = WindowWidthClass.Expanded,
-        ) {
-            SettingsHub(
-                section = SettingsSection.Providers,
-                onSectionChange = {},
-                onBack = {},
-                extraContent = extraStub,
-                content = sectionStub(),
-            )
-        }
-        waitForIdle()
-        onNodeWithTag("settings_section_appupdate").assertExists()
-        onNodeWithTag("section_providers").assertIsDisplayed()
-
-        onNodeWithTag("settings_section_appupdate").performClick()
-        waitForIdle()
-        onNodeWithTag("extra_appupdate").assertIsDisplayed()
-        // The extra replaces the section detail without touching the host's section selection.
-        onNodeWithTag("section_providers").assertDoesNotExist()
     }
 
     @Test fun a_pushed_detail_survives_the_host_rewriting_its_section_state() = runComposeUiTest {
@@ -745,8 +671,8 @@ class SettingsHubTest {
     /** The field's own text, not its "Search settings" placeholder. */
     private val emptyQuery = SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString(""))
 
-    /** General's Theme row, which the General page (a later task) adds to the real index. */
-    private val index = SettingsSearchIndex + SettingsSearchEntry(SettingsSection.General, "theme", "Theme", "dark light mode")
+    /** The real index: General's Theme row is in it since #97's General page. */
+    private val index = SettingsSearchIndex
 
     /**
      * The hub as the shell drives it: what the wide hub reports (a page, a sub-page) is written back into the

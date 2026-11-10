@@ -25,6 +25,7 @@ import dev.supermux.ui.platform.FakeAppUpdater
 import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.platform.NO_CAPS
 import dev.supermux.ui.platform.UpdateStatus
+import dev.supermux.ui.settings.pages.AppUpdateRows
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.launch
 import kotlin.test.Test
@@ -121,17 +122,6 @@ class AppUpdateCardTest {
         onNodeWithTag("app_update_card_whats_new").performClick()
         waitForIdle()
         onNodeWithTag("app_update_card_notes").assertIsDisplayed()
-        notes.forEach { onNodeWithText(it).assertIsDisplayed() }
-    }
-
-    @Test fun the_page_lists_every_highlight() = runComposeUiTest {
-        val notes = listOf("Agent lanes", "Windows sessions start", "No console windows", "Faster sidebar")
-        val updater = FakeAppUpdater(release = release(highlights = notes))
-        setPlatformContent(platform(updater), widthClass = WindowWidthClass.Expanded) {
-            AppUpdateScreen(standalone = true)
-        }
-        waitForIdle()
-        onNodeWithTag("app_update_whats_new").assertIsDisplayed()
         notes.forEach { onNodeWithText(it).assertIsDisplayed() }
     }
 
@@ -266,16 +256,16 @@ class AppUpdateCardTest {
         setPlatformContent(platform(updater), widthClass = WindowWidthClass.Expanded) {
             Column(Modifier.fillMaxSize()) {
                 CheckedCard(updater)
-                AppUpdateScreen(standalone = true)
+                AppUpdateRows()
             }
         }
         waitForIdle()
         onNodeWithTag("app_update_card").assertIsDisplayed()
-        onNodeWithTag("app_update_message").assertTextEquals("Update available: 1.1.0")
+        onNodeWithTag("app_update_version").assertTextEquals("supermux 1.0.0 · 1.1.0 is ready")
         onNodeWithTag("app_update_card_dismiss").performClick()
         waitForIdle()
         onNodeWithTag("app_update_card").assertDoesNotExist()
-        // Dismissal is about the CARD; the page still offers the update.
+        // Dismissal is about the CARD; General still offers the update.
         onNodeWithTag("app_update_install").assertIsDisplayed()
     }
 

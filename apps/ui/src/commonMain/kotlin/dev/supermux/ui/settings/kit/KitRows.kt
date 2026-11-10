@@ -58,7 +58,8 @@ private val RowRing = RoundedCornerShape(4.dp)
 /**
  * One setting. [stacked] puts the control under the label (option rows on phones); [indent] marks a sub-row
  * ("Also on battery"); [dim] greys a row whose parent is off; [hot] paints the label in the accent (a clickable
- * row under the pointer); [divider] draws the hairline under it.
+ * row under the pointer); [divider] draws the hairline under it; [descriptionTag] tags the description's text (a
+ * value that changes, such as a cache's size).
  */
 @Composable
 fun KitRow(
@@ -71,6 +72,7 @@ fun KitRow(
     stacked: Boolean = false,
     hot: Boolean = false,
     divider: Boolean = true,
+    descriptionTag: String? = null,
     trailing: @Composable RowScope.() -> Unit = {},
 ) {
     val c = kitColors()
@@ -95,7 +97,7 @@ fun KitRow(
                     fontSize = m.desc,
                     color = if (dim) c.faint else c.dim,
                     lineHeight = (m.desc.value * 1.45f).sp,
-                    modifier = Modifier.padding(top = 2.dp),
+                    modifier = Modifier.padding(top = 2.dp).then(if (descriptionTag != null) Modifier.testTag(descriptionTag) else Modifier),
                 )
             }
         }
@@ -233,8 +235,9 @@ fun KitActionRow(
     destructive: Boolean = false,
     buttonTag: String? = null,
     divider: Boolean = true,
+    descriptionTag: String? = null,
 ) {
-    KitRow(label, modifier, description = description, divider = divider) {
+    KitRow(label, modifier, description = description, divider = divider, descriptionTag = descriptionTag) {
         KitGhostButton(
             button, onClick,
             modifier = if (buttonTag != null) Modifier.testTag(buttonTag) else Modifier,

@@ -62,6 +62,13 @@ class SettingsSearchTest {
         assertTrue(dupes.isEmpty(), "duplicate anchors: ${dupes.keys}")
     }
 
+    @Test fun generals_rows_follow_its_page_entry_in_page_order() {
+        val general = SettingsSearchIndex.filter { it.section == SettingsSection.General }.map { it.anchor }
+        assertEquals(listOf(null, "theme", "text-size", "live-replies", "chat-detail", "terminal-colours", "app-version", "cache"), general)
+        assertEquals(listOf(SettingsSection.General to "app-version"), searchSettings("upgrade", desk, SettingsSearchIndex).flatMap { it.hits }.map { it.section to it.anchor })
+        assertEquals(listOf(SettingsSection.General to "cache"), searchSettings("disk media", desk, SettingsSearchIndex).flatMap { it.hits }.map { it.section to it.anchor })
+    }
+
     @Test fun privacy_and_labs_rows_are_found_where_they_are_shown() {
         val stats = searchSettings("statistics", desk).flatMap { it.hits }
         assertEquals(listOf(SettingsSection.PrivacyLabs to "telemetry"), stats.map { it.section to it.anchor })

@@ -648,7 +648,7 @@ class AppShellTest {
 
         onNodeWithTag("workspace-layer-w1").assertIsDisplayed()
 
-        ui.openAppUpdate()
+        ui.openSettings()
         waitForIdle()
 
         assertEquals(0.dp, onNodeWithTag("workspace-layer-w1").getBoundsInRoot().width)

@@ -3,8 +3,9 @@ package dev.supermux.desktop.settings
 
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.desktop.shell.TestAppShell
 import dev.supermux.ui.shell.ShellUiState
@@ -34,11 +35,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * Before E7 `Caps.appearanceControls` and `Caps.appUpdate` were false on desktop, so the hub's
- * rail ended at the last [SettingsSection]. Both are real now: Appearance is the SHARED screen
- * (the same one Android's hub and its `Route.Appearance` render) and Check-for-updates routes to
- * desktop's own updater. What this pins is the rail wiring — `DesktopSettingsExtra` reached from
- * the hub's `extraContent` slot; the Appearance screen's own behaviour is `:ui`'s suite.
+ * Desktop's General page (#97): the shared page, wired with desktop's own default theme (Dark, what the app paints
+ * when nothing is stored), and no Appearance / Check for updates rows of its own any more — both are General's rows.
  */
 @OptIn(ExperimentalTestApi::class, ExperimentalCoroutinesApi::class)
 class AppearanceHubTest {
@@ -72,27 +70,8 @@ class AppearanceHubTest {
         )
     }
 
-    @Test fun the_rail_offers_appearance_and_opens_the_shared_screen() = runComposeUiTest {
-        val ui = ShellUiState().apply { openSettings(SettingsSection.Providers) }
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                TestAppShell(app(), ui)
-            }
-        }
-        waitForIdle()
-        onNodeWithTag("settings_section_appearance").assertIsDisplayed()
-        onNodeWithTag("settings_section_appearance").performClick()
-        waitForIdle()
-        onNodeWithTag("appearance_settings_screen").assertIsDisplayed()
-        // Material You is Android-only — the row must not appear on a machine with no such OS.
-        onNodeWithTag("appearance_dynamic_row").assertDoesNotExist()
-        // The wide rail owns navigation, so the page paints no back arrow of its own.
-        onNodeWithTag("appearance_settings_back").assertDoesNotExist()
-    }
-
-    @Test fun plain_settings_opens_on_general_which_shows_appearance_for_now() = runComposeUiTest {
-        // #97: File ▸ "Settings…" opens General on a wide window; until General is rebuilt it is today's
-        // Appearance screen.
+    @Test fun plain_settings_opens_on_general_with_desktops_dark_default() = runComposeUiTest {
+        // #97: File ▸ "Settings…" opens General on a wide window.
         val ui = ShellUiState().apply { openSettings() }
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
@@ -102,9 +81,13 @@ class AppearanceHubTest {
         waitForIdle()
         onNodeWithTag("settings_section_general").assertIsDisplayed()
         onNodeWithTag("appearance_settings_screen").assertIsDisplayed()
+        onNodeWithTag("general_theme_Dark").assertIsSelected()
+        // Material You is gone, and the wide rail owns navigation: no back arrow of the page's own.
+        onNodeWithText("Material You").assertDoesNotExist()
+        onNodeWithTag("appearance_settings_back").assertDoesNotExist()
     }
 
-    @Test fun the_rail_offers_check_for_updates() = runComposeUiTest {
+    @Test fun the_rail_has_no_rows_beyond_the_pages() = runComposeUiTest {
         val ui = ShellUiState().apply { openSettings(SettingsSection.Providers) }
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
@@ -112,7 +95,22 @@ class AppearanceHubTest {
             }
         }
         waitForIdle()
-        onNodeWithTag("settings_section_appupdate").assertIsDisplayed()
+        onNodeWithTag("settings_section_general").assertIsDisplayed()
+        onNodeWithTag("settings_section_appearance").assertDoesNotExist()
+        onNodeWithTag("settings_section_appupdate").assertDoesNotExist()
+        onNodeWithTag("settings_section_storage").assertDoesNotExist()
+    }
+
+    @Test fun check_for_updates_opens_general_at_the_app_version() = runComposeUiTest {
+        val ui = ShellUiState().apply { openAppUpdate() }
+        setContent {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
+                TestAppShell(app(), ui)
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("appearance_settings_screen").assertIsDisplayed()
+        onNodeWithTag("app_update_version").assertExists()
     }
 
     // ── the synchronous cold-start seed ───────────────────────────────────────────────────────

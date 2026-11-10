@@ -384,15 +384,5 @@ class SystemSettingsHubTest {
         assertEquals(SettingsSection.Machine, ui.settingsSection)
         assertTrue(ui.overlayOpen)
         assertFalse(ui.launcherOpen)
-        assertFalse(ui.appUpdateOpen)
-    }
-
-    @Test fun open_settings_system_closes_app_update_overlay() {
-        val ui = ShellUiState()
-        ui.openAppUpdate()
-        assertTrue(ui.appUpdateOpen)
-        ui.openSettings(SettingsSection.Machine, sub = MachineSub.STATUS)
-        assertTrue(ui.settingsOpen)
-        assertFalse(ui.appUpdateOpen)
     }
 }

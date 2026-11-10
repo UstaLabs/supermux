@@ -66,7 +66,7 @@ class DesktopPlatform : Platform {
         appearanceControls = true,
         // No wallpaper-derived scheme off Android: the Material You row would be an inert switch.
         dynamicColor = false,
-        // The app updates ITSELF here as well (Route.AppUpdate → the shared `ui/update/AppUpdate.kt`).
+        // The app updates ITSELF here as well (General ▸ App version, `ui/settings/pages/AppUpdateRows.kt`).
         appUpdate = true,
         // The shared Ghostty renderer is bound (`terminalView()` never returns the
         // unavailable factory here).

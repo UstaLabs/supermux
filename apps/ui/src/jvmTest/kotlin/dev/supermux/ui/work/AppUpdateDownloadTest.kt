@@ -22,7 +22,7 @@ import dev.supermux.ui.session.SessionListFooter
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.SupermuxTheme
 import dev.supermux.ui.update.AppUpdateCard
-import dev.supermux.ui.update.AppUpdateScreen
+import dev.supermux.ui.settings.pages.AppUpdateRows
 import dev.supermux.update.ClientUpdateStatus
 import dev.supermux.work.Download
 import dev.supermux.work.DownloadCenter
@@ -129,7 +129,7 @@ class AppUpdateDownloadTest {
     /** On [center]'s phone: the page's button pressed, the page left mid-download, then the download let finish. */
     private fun ComposeUiTest.startOnThePageThenLeave(updater: FakeAppUpdater, center: DownloadCenter): () -> Unit {
         var shown by mutableStateOf(true)
-        phone(center, platform(updater)) { if (shown) AppUpdateScreen() else BottomBar() }
+        phone(center, platform(updater)) { if (shown) AppUpdateRows() else BottomBar() }
         onNodeWithTag("app_update_install").performClick()
         settle { center.items.value.isNotEmpty() }
         assertEquals(listOf("app-update:1.1.0"), center.items.value.map { it.key })
@@ -137,7 +137,7 @@ class AppUpdateDownloadTest {
         // He goes back; the download goes on without the page.
         shown = false
         waitForIdle()
-        onNodeWithTag("app_update_overlay").assertDoesNotExist()
+        onNodeWithTag("app_update_version").assertDoesNotExist()
         gate.complete(Unit)
         settle { center.items.value.firstOrNull()?.state is DownloadState.Done }
         return { shown = true }
@@ -224,7 +224,7 @@ class AppUpdateDownloadTest {
         val updater = updater()
         val center = DownloadCenter(scope)
         val heard = announced(center)
-        phone(center, platform(updater)) { AppUpdateScreen() }
+        phone(center, platform(updater)) { AppUpdateRows() }
         onNodeWithTag("app_update_install").performClick()
         settle { center.items.value.isNotEmpty() }
         assertEquals(listOf("app-update:1.1.0"), center.items.value.map { it.key }, "listed in the bar while it runs")
