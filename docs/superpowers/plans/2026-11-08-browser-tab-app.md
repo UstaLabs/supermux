@@ -75,6 +75,62 @@ flock -w 3600 /tmp/supermux-heavy.lock systemd-run --user --scope -q -p MemoryMa
 
 ---
 
+## Amendment (2026-11-10): the tab's keys go through #96's registry, which is now on dev
+
+#96 phase 2 is on dev and merged into `mux/browser-tab`. The pane never gets local key handling. This replaces every
+part of Tasks 6 and 7 about `BrowserShortcut`, `browserShortcut(event, apple)` and the pane's `onPreviewKeyEvent`.
+
+**Task 6:** drop `BrowserShortcut`, `browserShortcut` and the test
+`theModifierIsCmdOnApplePlatformsAndCtrlElsewhereNeverEither`. Instead, test-first:
+
+- In `apps/ui/src/commonMain/kotlin/dev/supermux/ui/keys/AppCommands.kt`:
+  - add `CommandGroup.Browser("Browser")`;
+  - add these commands, and include them in `all`:
+    - `BrowserFocusAddress`: "browser.focusAddress", "Focus the address bar"
+    - `BrowserReload`: "browser.reload", "Reload the page"
+    - `BrowserBack`: "browser.back", "Back"
+    - `BrowserForward`: "browser.forward", "Forward"
+    - `BrowserZoomIn`: "browser.zoomIn", "Zoom in"
+    - `BrowserZoomOut`: "browser.zoomOut", "Zoom out"
+    - `BrowserZoomReset`: "browser.zoomReset", "Actual size"
+    - `BrowserOpenExternally`: "browser.openExternally", "Open in your browser"
+- In `KeyScopes.kt`, add `KeyContext.Browser`, NOT opaque: the page goes first, and the app gets the keys the page
+  hands back in the bubble pass.
+- In `Keymap.kt`'s `DefaultKeymap`:
+  - `bind("Mod-l", BrowserFocusAddress)`
+  - `bind("Mod-r", BrowserReload)`
+  - `bind("Mod-[", BrowserBack)`
+  - `bind("Mod-]", BrowserForward)`
+  - `bind("Mod-=", BrowserZoomIn)`
+  - `bind("Mod--", BrowserZoomOut)`
+  - `bind("Mod-0", BrowserZoomReset)`
+  - `bind("Mod-Shift-o", BrowserOpenExternally)`
+
+  None of them is `appFirst`. Find stays the existing `AppCommands.Find` (Mod-f), which the pane registers as its own
+  handler.
+- In `WorkspacePanes.kt`'s `paneKeyContext(view)`, add `"browser" -> KeyContext.Browser`.
+- In `apps/ui/src/jvmTest/kotlin/dev/supermux/ui/keys/KeymapConflictTest.kt`, the new keys collide with editor keys
+  (indent, zoom) and, off Apple, with terminal Ctrl keys. That's fine, because only the Browser pane registers them.
+  Add exactly the pairs the test reports to its editor and terminal allowlists, each with a comment saying "only the
+  Browser pane registers it". Make no other change to the test.
+- Test: a new `apps/ui/src/jvmTest/kotlin/dev/supermux/ui/keys/BrowserKeysTest.kt` asserts:
+  - `DefaultKeymap.chordsFor(AppCommands.BrowserReload, KeyOs.Other)` is Ctrl+R and, on `KeyOs.Apple`, ⌘R;
+  - likewise one more of the commands;
+  - `paneKeyContext` of a browser view is `KeyContext.Browser`, and it isn't opaque.
+
+**Task 7:** in `BrowserPane`, remove the `onPreviewKeyEvent` block. Register handlers inside the pane:
+`RegisterCommand(AppCommands.BrowserReload) { state.navigator.reload(); true }`, and the same for focus address, back,
+forward, the three zooms, open externally and `AppCommands.Find` (`finding = true`).
+- Read `ViewHost` / `WorkspacePanes` to see which scope the pane's composition sits in. If the pane needs its own
+  `rememberKeyScope(KeyContext.Browser, viewId)` / provider to get its key scope, follow what the chat pane does for
+  `KeyContext.Chat`.
+- Test, in `BrowserPaneTest`: replace the Ctrl+R / Ctrl+F test with one that runs the pane under the app's
+  `ShortcutRoot` (see how `dev.supermux.ui.keys` tests host a scope), presses Ctrl+R and Ctrl+F, and asserts `reload`
+  and the find bar. If hosting the root in the test is impractical, test that the handlers are registered on the
+  pane's scope instead.
+
+---
+
 ### Task 1: `:ui` depends on webview-compose, and CI's app lanes see it
 
 **Files:**

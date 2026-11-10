@@ -118,7 +118,12 @@ export type OpenCodeServerClient = {
   parentOf(sessionId: string, signal: AbortSignal): Promise<string | undefined>
   /** Abort a session's running work (`POST /session/:id/abort`) — reaches task children, which ACP cannot. */
   abort(sessionId: string, signal: AbortSignal): Promise<void>
+  /** `sessionId`'s status from `GET /session/status` (busy sessions only; absent = idle). */
+  sessionStatus(sessionId: string, signal: AbortSignal): Promise<OpenCodeSessionStatus | undefined>
 }
+
+/** OpenCode 1.x `SessionStatus.Info`: `retry` while it waits to resend a failed request (`next` = epoch ms). */
+export type OpenCodeSessionStatus = { type?: string; next?: number; action?: { reason?: string } }
 
 export function openCodeServerClient(info: OpenCodeServerInfo, directory: string, timeoutMs = 5000): OpenCodeServerClient {
   const base = `http://127.0.0.1:${info.port}`
@@ -174,6 +179,11 @@ export function openCodeServerClient(info: OpenCodeServerInfo, directory: string
     },
     async abort(sessionId, signal) {
       await call(`/session/${encodeURIComponent(sessionId)}/abort`, signal, { method: 'POST' })
+    },
+    async sessionStatus(sessionId, signal) {
+      const all = await call('/session/status', signal) as Record<string, OpenCodeSessionStatus> | null
+      const status = all && typeof all === 'object' ? all[sessionId] : undefined
+      return status && typeof status === 'object' ? status : undefined
     },
     async parentOf(sessionId, signal) {
       const info = await call(`/session/${encodeURIComponent(sessionId)}`, signal) as { parentID?: unknown } | null

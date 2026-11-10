@@ -11,7 +11,7 @@ import { Session } from "./session.js"
 import { SessionStore } from "./store.js"
 import { AccountRegistry, systemAccountId } from "./accounts/registry.js"
 import { adapterFor } from "./accounts/adapters/index.js"
-import { ACCOUNT_UNAVAILABLE_ERROR, BALANCE_WINDOW, accountHttpStatus, limited, pickAccount, switchable } from "./accounts/policy.js"
+import { ACCOUNT_UNAVAILABLE_ERROR, NOT_SIGNED_IN_ERROR, BALANCE_WINDOW, accountHttpStatus, earliestReset, freesAt, limited, pickAccount, switchable } from "./accounts/policy.js"
 import { UsageStore } from "./accounts/usage-store.js"
 import { defaultLoginRunner, defaultLoginSchedule, findCommand, startLogin, type LoginKind } from "./accounts/login.js"
 import { assertVaultId } from "./accounts/vault.js"
@@ -412,7 +412,7 @@ export class Core {
      * turn ends. False for a session on an isolated or Cursor account, or with an authProfile.
      */
     willSwitch: (sessionId: string): Promise<boolean> => {
-      const pending = this.switchQueue.has(sessionId) || this.limitSwitching.has(sessionId)
+      const pending = this.autoSwitch() && (this.switchQueue.has(sessionId) || this.limitSwitching.has(sessionId))
       const record = this.live.get(sessionId)?.snapshot()
       if (!pending || !record || record.authProfile !== undefined) return Promise.resolve(false)
       return this.operation(async () => {
@@ -616,13 +616,15 @@ export class Core {
         const status = accountHttpStatus(result.error)
         if (status !== undefined) this.accountRefusedTurn(event.sessionId, status, result.error)
       }
-    } else if (event.type === "session.event" && event.event.kind === "error" && event.event.errorType === ACCOUNT_UNAVAILABLE_ERROR) {
+    } else if (event.type === "session.event" && event.event.kind === "error" && (event.event.errorType === ACCOUNT_UNAVAILABLE_ERROR || event.event.errorType === NOT_SIGNED_IN_ERROR)) {
       const record = this.live.get(event.sessionId)?.snapshot()
       if (!record || record.authProfile !== undefined) return
       const account = record.account ?? systemAccountId(record.agent)
       const reason = event.event.message
       if (this.inTurn.has(event.sessionId)) this.turnRefused.add(event.sessionId)
-      if (this.usage.markUnavailable(account, reason)) {
+      // Not signed in (#106): the login is dead (expired, revoked or gone), so it is marked to be signed in again.
+      const code = event.event.errorType === NOT_SIGNED_IN_ERROR ? ACCOUNT_EXPIRED : undefined
+      if (this.usage.markUnavailable(account, reason, new Date(), code)) {
         this.events.emit({ type: "account.unavailable", sessionId: event.sessionId, agent: record.agent, account, reason })
       }
       if (this.autoSwitch()) {
@@ -639,7 +641,8 @@ export class Core {
       if (limited(windows) && this.inTurn.has(event.sessionId)) this.turnLimited.add(event.sessionId)
       // No turn runs, so background work (a subagent) hit the limit: the work it stopped continues after the switch.
       else if (limited(windows)) { this.lastTurnLimited.add(event.sessionId); this.backgroundLimited.add(event.sessionId) }
-      if (limited(windows) && this.autoSwitch()) {
+      // Queued without autoSwitch too: limitSwitch then only reports the wait for the reset (#92).
+      if (limited(windows)) {
         if (!this.switchQueue.has(event.sessionId)) this.switchQueue.set(event.sessionId, "limit")
         void this.limitSwitch(event.sessionId)
       }
@@ -691,10 +694,8 @@ export class Core {
       if (!limited(this.usage.get(account) ?? [])) {
         this.usage.set(account, [{ name: BALANCE_WINDOW, usedPercent: 100, resetsAt: new Date(Date.now() + BALANCE_RETRY_MS) }])
       }
-      if (this.autoSwitch()) {
-        if (!this.switchQueue.has(id)) this.switchQueue.set(id, "limit")
-        void this.limitSwitch(id)
-      }
+      if (!this.switchQueue.has(id)) this.switchQueue.set(id, "limit")
+      void this.limitSwitch(id)
       return
     }
     const detail = (error as { data?: { message?: unknown } | null }).data?.message
@@ -728,8 +729,9 @@ export class Core {
    */
   private async switchTarget(agent: string, account: string | undefined): Promise<{ from: string; next: Account | undefined } | undefined> {
     const from = account ?? systemAccountId(agent)
+    // A session whose account was removed can still move to a registered one.
     const current = await this.registry.get(from)
-    if (!current || !switchable(current)) return undefined
+    if (current && !switchable(current)) return undefined
     const candidates = (await this.registry.list(agent)).filter(candidate => candidate.id !== from)
     return { from, next: pickAccount(candidates, id => this.usage.get(id), Date.now(), id => this.usage.unavailable(id) !== undefined) }
   }
@@ -752,11 +754,12 @@ export class Core {
       const queued = record.pending > 0
       // Read before the switch reopens the agent, which stops subagents still running.
       const background = this.backgroundLimited.delete(id) || live.subagents().some(sub => sub.status === "running")
-      const target = await this.switchTarget(record.agent, record.account)
-      if (!target) return
-      const { from, next } = target
+      // Without autoSwitch, or on an account that is never switched (isolated, Cursor), there is no target.
+      const target = this.autoSwitch() ? await this.switchTarget(record.agent, record.account) : undefined
+      const next = target?.next
       if (!next) {
-        this.events.emit({ type: "account.exhausted", sessionId: id, agent: record.agent, account: from, reason })
+        if (target) this.events.emit({ type: "account.exhausted", sessionId: id, agent: record.agent, account: target.from, reason })
+        if (reason === "limit" && this.lastTurnLimited.delete(id)) await this.reportWait(id, record, target !== undefined, background)
         return
       }
       const session = await this.resume(id, { account: next.id }, reason)
@@ -775,6 +778,19 @@ export class Core {
       this.switching.delete(id)
       this.limitSwitching.delete(id)
     }
+  }
+
+  /**
+   * account.waiting for a session stopped on a limit: when switching is allowed, the account of the agent
+   * that frees up first; otherwise its own account. Without a known reset time, its own account, no time.
+   */
+  private async reportWait(id: string, record: SessionRecord, anyAccount: boolean, background: boolean): Promise<void> {
+    const own = record.account ?? systemAccountId(record.agent)
+    const now = Date.now()
+    const first = anyAccount
+      ? earliestReset(await this.registry.list(record.agent), account => this.usage.get(account), now, account => this.usage.unavailable(account) !== undefined)
+      : (at => at && { account: own, at })(freesAt(this.usage.get(own) ?? [], now))
+    this.events.emit({ type: "account.waiting", sessionId: id, agent: record.agent, account: first?.account ?? own, ...(first ? { resetsAt: first.at } : {}), background })
   }
 
   /** Token accounts whose vault can refresh: reopen the session when its token nears expiry (see refreshSession). */
@@ -849,7 +865,7 @@ export class Core {
         await this.ready()
         if (input.id !== undefined && await this.registry.get(input.id)) throw new CoreError("account_exists", `Account ${input.id} already exists`)
       },
-      promote: async (directory, identity, tokens) => {
+      promote: async (directory, identity, tokens, credential) => {
         this.assertOpen()
         const base = {
           agent: input.agent, identity,
@@ -857,9 +873,13 @@ export class Core {
           ...(input.label !== undefined ? { label: input.label } : {}),
           ...(input.isolated ? { isolated: true } : {}),
         }
-        return as === "token"
-          ? this.registry.add({ ...base, method: "token", secret: tokens! })
-          : this.registry.adoptHome({ ...base, method: "subscription" }, directory)
+        // Signing in again as an account's identity repairs that account (#106): same id, so its sessions keep it.
+        const account = as === "token"
+          ? await this.registry.add({ ...base, method: "token", secret: tokens! }, { repair: true })
+          : await this.registry.adoptHome({ ...base, method: "subscription" }, directory, { repair: { credential } })
+        // A fresh sign-in: whatever refused the old one no longer applies.
+        this.usage.clearUnavailable(account.id)
+        return account
       },
     })
     this.logins.add(handle)
@@ -909,6 +929,8 @@ export class Core {
      * raw update went out unnormalized.
      */
     let heldCommands: AgentUpdate | undefined
+    /** Likewise the last model list (an ACP session start's configOptions, #102): state, normalized once the Session exists. */
+    let heldModels: AgentUpdate | undefined
     /**
      * A new conversation the agent went on in while opening (a re-attach replaying a /clear, or a record one /clear
      * behind its process): the record is made with it, and the Session reports it once it exists.
@@ -968,6 +990,7 @@ export class Core {
           if (session) session.update(update)
           else if (!discarded) {
             if (carriesCommands(update)) heldCommands = update
+            if (carriesModels(update)) heldModels = update
             if (holding) {
               earlyBytes += jsonBytes(update.value)
               if (earlyBytes > EARLY_UPDATE_BYTES) {
@@ -1077,10 +1100,12 @@ export class Core {
         else if (item.normalize) {
           session.update(item.update)
           if (item.update === heldCommands) heldCommands = undefined
+          if (item.update === heldModels) heldModels = undefined
         }
         else this.events.emit({ type: "session.update", sessionId: record.id, update: item.update })
       }
-      if (heldCommands) session.reportHeldCommands(heldCommands)
+      if (heldCommands) session.reportHeldState(heldCommands)
+      if (heldModels) session.reportHeldState(heldModels)
       // The latest one: a replay can report it after open() returned, while the record was being saved.
       if (openingReset) session.conversationReset(openingReset)
       if (!holding) for (const notice of outstandingActivity.values()) session.reportActivity(notice)
@@ -1623,6 +1648,8 @@ const DEFAULT_UNAVAILABLE_CONTINUE_PROMPT = "Continue from where you stopped. Yo
 const LIMIT_STOP_REASON = /limit|quota/i
 /** An out-of-credits account (HTTP 402) counts as full this long, unless fresher usage says otherwise first. */
 const BALANCE_RETRY_MS = 60 * 60_000
+/** The unavailable-mark code of a login that must be signed in again (the broker's SIGN_IN_EXPIRED). */
+const ACCOUNT_EXPIRED = "account_expired"
 /** Token sessions open with at least this much validity and are reopened (when idle) this long before expiry. */
 const SESSION_TOKEN_MARGIN_MS = 30 * 60_000
 const LOGIN_TIMEOUT_MS = 30 * 60_000
@@ -1645,6 +1672,12 @@ function carriesCommands(update: AgentUpdate): boolean {
   if (update.protocol === "acp") return value.sessionUpdate === "available_commands_update"
   if (value.type === "system") return value.subtype === "commands_changed"
   return value.type === "control_response" && Array.isArray(value.response?.response?.commands)
+}
+
+/** An ACP driver's forwarded session-start option lists (the agent's models, #102). */
+function carriesModels(update: AgentUpdate): boolean {
+  const value = update.value as { method?: unknown } | null | undefined
+  return update.protocol === "native" && !!value && typeof value === "object" && value.method === "config_options"
 }
 
 /** A driver's ConversationReset, copied; undefined unless both ids are nonempty strings. */

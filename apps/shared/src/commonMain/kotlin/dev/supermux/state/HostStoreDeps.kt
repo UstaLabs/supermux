@@ -123,9 +123,30 @@ class HostStoreDeps(
     val media: dev.supermux.media.MediaCache? = null,
     /** Which app this is, told to each broker on connect (TELEMETRY.md). Null = say nothing. */
     val clientInfo: dev.supermux.net.ClientInfo? = null,
+    /** The web's downloads (#95), which have no files to land in. Null everywhere else. */
+    val browserDownload: BrowserDownload? = null,
 ) {
     fun nowIso(): String = clock.now().toString()
     fun nowMs(): Long = clock.now().toEpochMilliseconds()
+}
+
+/**
+ * The web's download: the browser fetches [url] with [headers] straight into a Blob it holds (#95) — the bytes
+ * never enter the Wasm heap. Answers the Blob (opaque here) and its size, or null on failure.
+ */
+fun interface BrowserDownload {
+    suspend fun fetch(url: String, headers: Map<String, String>, progress: (received: Long, total: Long?) -> Unit): Pair<Any, Long>?
+}
+
+/**
+ * The total a [BrowserDownload]'s progress can promise, from the response's `Content-Length` — unless the body came
+ * encoded (`Content-Encoding: gzip`, `br`, …): the browser hands the reader the DECODED bytes, so that length counts
+ * bytes the progress never sees and the bar would run past 100 %. Null when there is no honest total.
+ */
+fun browserDownloadTotal(contentLength: String?, contentEncoding: String?): Long? {
+    val encoding = contentEncoding?.trim().orEmpty()
+    if (encoding.isNotEmpty() && !encoding.equals("identity", ignoreCase = true)) return null
+    return contentLength?.trim()?.toLongOrNull()?.takeIf { it >= 0 }
 }
 
 /** Card #76: the stored "Show replies as they're written" answer; on unless it says "false". */

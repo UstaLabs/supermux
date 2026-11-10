@@ -145,6 +145,8 @@ import dev.supermux.proto.SlashCommand
 import dev.supermux.ui.TestIds
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.files.GoToEntry
+import dev.supermux.ui.keys.KeyOs
+import dev.supermux.ui.keys.currentKeyOs
 import dev.supermux.ui.prefs.LocalUiPrefsOrNull
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.files.GoToFileDebounceMs
@@ -469,10 +471,9 @@ internal fun composerKind(mime: String): String? =
     if (mime.startsWith("audio")) "voice" else null
 
 /**
- * Pure Ctrl/Cmd+V paste-key predicate: `true` only for a KeyDown V with Ctrl OR Meta held
- * (Windows/Linux vs macOS) and Shift **not** held. Ctrl and Meta are **separate** flags so tests can
- * prove each modifier path distinctly. Ctrl/Cmd+Shift+V is the conventional "paste as plain text"
- * chord and must fall through to the text field.
+ * Pure paste-image key predicate: `true` only for a KeyDown V with this platform's primary modifier (⌘ on Apple,
+ * Ctrl elsewhere, never the other one, #96) and Shift **not** held. Ctrl/Cmd+Shift+V is the conventional "paste
+ * as plain text" chord and must fall through to the text field.
  */
 internal fun isComposerPasteKey(
     key: Key,
@@ -480,11 +481,12 @@ internal fun isComposerPasteKey(
     ctrlPressed: Boolean,
     metaPressed: Boolean,
     shiftPressed: Boolean = false,
+    os: KeyOs = currentKeyOs,
 ): Boolean =
     type == KeyEventType.KeyDown &&
         key == Key.V &&
-        (ctrlPressed || metaPressed) &&
-        !shiftPressed
+        !shiftPressed &&
+        if (os == KeyOs.Apple) metaPressed && !ctrlPressed else ctrlPressed && !metaPressed
 
 /**
  * Whether a paste-image gesture should consume the key and stage: the upload seam must be bound
@@ -504,12 +506,13 @@ internal fun handleComposerPasteKey(
     ctrlPressed: Boolean,
     metaPressed: Boolean,
     shiftPressed: Boolean,
+    os: KeyOs = currentKeyOs,
     uploadBound: Boolean,
     /** Lazily evaluated so the clipboard is only probed after the paste-key chord matches. */
     likelyHasImage: () -> Boolean,
     onPasteImage: () -> Unit,
 ): Boolean {
-    if (!isComposerPasteKey(key, type, ctrlPressed, metaPressed, shiftPressed)) return false
+    if (!isComposerPasteKey(key, type, ctrlPressed, metaPressed, shiftPressed, os)) return false
     if (uploadBound && likelyHasImage()) {
         onPasteImage()
         return true
@@ -796,6 +799,8 @@ fun Composer(
         val seq = ++ids.nextSeq
         val att = attachments[idx].copy(state = UploadState.Uploading(0f), runSeq = seq)
         attachments[idx] = att
+        // The app's own work: "Restart to update" waits for it (#113).
+        val endWork = dev.supermux.ui.platform.InFlightWork.begin(dev.supermux.ui.platform.InFlightWork.Kind.Upload)
         uploadScope.launch {
             val fileId = up(att.source, att.name, att.mime, att.kind) { sent, total ->
                 val pct = if (total > 0) (sent.toFloat() / total).coerceIn(0f, 1f) else 0f
@@ -820,7 +825,7 @@ fun Composer(
                 if (fileId != null) it.copy(state = UploadState.Done(fileId))
                 else it.copy(state = UploadState.Failed)
             }
-        }
+        }.invokeOnCompletion { endWork() }
     }
 
     /** Stage ONE picked/captured/pasted/dropped file — the single funnel every source shares, so a
@@ -1245,9 +1250,6 @@ fun Composer(
     val cs = MaterialTheme.colorScheme
     val inputInteraction = remember { MutableInteractionSource() }
     val inputFocused by inputInteraction.collectIsFocusedAsState()
-    // Where Ctrl/Cmd+V means "paste an image" (desktop's Edit ▸ Paste image accelerator): only here.
-    androidx.compose.runtime.LaunchedEffect(inputFocused) { ChatInputFocus.report(inputInteraction, inputFocused) }
-    androidx.compose.runtime.DisposableEffect(inputInteraction) { onDispose { ChatInputFocus.report(inputInteraction, false) } }
     // Focus moving away means Space's key-up will be delivered somewhere else: end the gesture here.
     LaunchedEffect(inputFocused) { if (!inputFocused) applySpaceHold(spaceHold.cancel()) }
     var ownDragOver by remember(sessionKey) { mutableStateOf(false) }

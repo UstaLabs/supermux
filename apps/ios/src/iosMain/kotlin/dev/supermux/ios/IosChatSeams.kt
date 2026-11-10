@@ -9,6 +9,7 @@ import dev.supermux.net.ByteArrayChunkSource
 import dev.supermux.ui.platform.CapturedAudio
 import dev.supermux.ui.platform.ClipboardAccess
 import dev.supermux.ui.platform.FileAccess
+import dev.supermux.ui.platform.FileAction
 import dev.supermux.ui.platform.LiveTranscript
 import dev.supermux.ui.platform.MicCapture
 import dev.supermux.ui.platform.PickedFile
@@ -16,6 +17,8 @@ import dev.supermux.ui.platform.SavedFile
 import dev.supermux.ui.platform.TtsEngine
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.Haptics
+import dev.supermux.work.DownloadedFile
+import dev.supermux.work.stagingFolderName
 import kotlinx.cinterop.ExperimentalForeignApi
 import dev.supermux.util.toByteArray
 import dev.supermux.util.toNSData
@@ -33,6 +36,8 @@ import kotlinx.coroutines.withContext
 import platform.Foundation.NSTemporaryDirectory
 import platform.Foundation.NSURL
 import platform.Foundation.NSFileManager
+import platform.Foundation.NSFileSize
+import platform.Foundation.NSNumber
 import platform.Foundation.writeToFile
 import platform.UIKit.UIImage
 import platform.UIKit.UIImagePNGRepresentation
@@ -122,6 +127,10 @@ class IosClipboardAccess : ClipboardAccess {
  * `UIActivityViewController` both have to be PRESENTED from a view controller, which a Compose
  * surface does not have — so they go out through [IosBridge] and come back as callbacks.
  * [stageTemp] is pure file I/O and stays here.
+ *
+ * A finished download (#95) is handed over as the FILE it already is: [saveFile] and [shareFile]
+ * give Swift the path of a copy under its real name ([stageNamed]), so none of it is read into
+ * memory.
  */
 @OptIn(ExperimentalForeignApi::class)
 class IosFileAccess(private val bridge: IosBridge) : FileAccess {
@@ -182,17 +191,80 @@ class IosFileAccess(private val bridge: IosBridge) : FileAccess {
             if (!bytes.toNSData().writeToFile(path, atomically = true)) return@withContext null
             NSURL.fileURLWithPath(path).absoluteString
         }
+
+    /** Save (to Files) and Share. iOS's "Open in…" IS the share sheet, so there is no Open (R3). */
+    override val fileActions: Set<FileAction> = setOf(FileAction.Save, FileAction.Share)
+
+    /**
+     * The downloaded file under its real name ([stageNamed]), exported by the document picker to
+     * where the user chooses in Files — the picker copies it, so nothing is read into memory. Null:
+     * no file on disk to save (a browser handle, or one cleared since), the staging failed, or the
+     * user dismissed the picker.
+     */
+    override suspend fun saveFile(file: DownloadedFile): SavedFile? {
+        val staged = staged(file) ?: return null
+        // What iOS reports is the name the copy got ("Keep Both" can make it "report 2.pdf"), never
+        // a location we may open again — [openSaved] is false here — so it is both.
+        val saved = awaitCallback<String?> { done -> bridge.saveFileAt(staged, done) } ?: return null
+        return SavedFile(name = saved, location = saved)
+    }
+
+    /**
+     * The share sheet over the downloaded file under its real name ([stageNamed]). True when the
+     * sheet went up — as for [openExternally], what the user then did is not reported.
+     */
+    override suspend fun shareFile(file: DownloadedFile): Boolean {
+        val staged = staged(file) ?: return false
+        return awaitCallback { done -> bridge.shareFileAt(staged, done) }
+    }
+
+    /** [stageNamed] off the main thread: [awaitCallback] hops back to it for the sheet. */
+    private suspend fun staged(file: DownloadedFile): String? =
+        withContext(Dispatchers.Default) { stageNamed(file) }
 }
 
 /**
- * Strip any directory part and refuse an empty name.
+ * A finished download (#95) under its REAL name, where a system sheet can be handed it:
+ * `NSTemporaryDirectory()/supermux-attachments/<unique>/<name>`. The media store keeps the file
+ * under an id of its own, which would arrive as "3f9c4d….bin"; `<unique>` ([stagingFolderName], a
+ * hash of where the file is stored) keeps two different `report.pdf`s from overwriting each other.
+ *
+ * `copyItemAtPath` makes the copy, which on APFS is a clone: instant, no extra space, nothing read
+ * into memory. A copy and not the stored file, so an app that edits what it is given cannot rewrite
+ * the media store's entry. A file already staged at the stored one's size is used as it is; another
+ * size means that path was fetched again since, and the old copy is replaced. Null: no file on disk
+ * to stage (a browser handle, or one cleared since), or the copy failed. The temp directory is the
+ * right home, as for [IosFileAccess.stageTemp]: iOS empties it when it needs the space.
+ */
+@OptIn(ExperimentalForeignApi::class)
+internal fun stageNamed(file: DownloadedFile): String? {
+    val stored = file.path ?: return null
+    val size = fileSize(stored) ?: return null
+    val folder = NSTemporaryDirectory() + "supermux-attachments/" + stagingFolderName(stored)
+    val staged = "$folder/${safeFileName(file.name)}"
+    if (fileSize(staged) == size) return staged
+    val manager = NSFileManager.defaultManager
+    manager.createDirectoryAtPath(folder, withIntermediateDirectories = true, attributes = null, error = null)
+    // `copyItemAtPath` refuses a destination that exists, so a stale copy goes first.
+    manager.removeItemAtPath(staged, error = null)
+    return staged.takeIf { manager.copyItemAtPath(stored, toPath = staged, error = null) }
+}
+
+/** The size of what is at [path]; null when there is nothing there. */
+@OptIn(ExperimentalForeignApi::class)
+private fun fileSize(path: String): Long? =
+    (NSFileManager.defaultManager.attributesOfItemAtPath(path, error = null)?.get(NSFileSize) as? NSNumber)?.longLongValue
+
+/**
+ * Strip any directory part and refuse an empty name, `.` and `..`.
  *
  * The attachment name is BROKER-supplied, so it is untrusted input that ends up in a path: a name
- * of `../../Library/Preferences/x.plist` would otherwise write outside the temp directory. The
- * same guard exists on desktop (`safeFileName` there) for the same reason.
+ * of `../../Library/Preferences/x.plist` would otherwise write outside the temp directory, and a
+ * bare `..` names the folder above (which [stageNamed] would then replace). The same guard exists
+ * on desktop (`safeFileName` there) for the same reason.
  */
 internal fun safeFileName(name: String): String =
-    fileNameOf(name).ifBlank { "file" }
+    fileNameOf(name).takeUnless { it.isBlank() || it == "." || it == ".." } ?: "file"
 
 // ── mic + read-aloud (cluster H3) ────────────────────────────────────────────
 

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createCore } from '../src/index.js'
-import { TEST_LIMITS } from "./helpers.js"
+import { TEST_LIMITS, FIXTURE_SETUP_MS } from "./helpers.js"
 import { fakeKeeper } from './fake-keeper.js'
 import { codex } from '../src/codex/index.js'
 import { transport } from '../src/codex/transport.js'
@@ -100,7 +100,7 @@ test('process death leaves keeper; reattach replays live turn without a second h
     command: process.execPath,
     args: [fixture],
     env: { MODE: 'overlap-turns', TRACE: trace },
-    setupTimeoutMs: 5000,
+    setupTimeoutMs: FIXTURE_SETUP_MS,
     requestTimeoutMs: 5000,
     shutdownTimeoutMs: 500,
     keeper: { stateDirectory, limits: keeperLimits() },
@@ -146,7 +146,7 @@ test('parked approval is delivered to the reattached host', async () => {
     command: process.execPath,
     args: [fixture],
     env: { TRACE: trace, EXPECT_DECISION: 'accept' },
-    setupTimeoutMs: 5000,
+    setupTimeoutMs: FIXTURE_SETUP_MS,
     requestTimeoutMs: 8000,
     shutdownTimeoutMs: 500,
     keeper: { stateDirectory, limits: keeperLimits() },
@@ -193,7 +193,7 @@ test('parked approval is listed on reattached Session and respond allow reaches 
       command: process.execPath,
       args: [fixture],
       env: { TRACE: trace, EXPECT_DECISION: 'accept' },
-      setupTimeoutMs: 5000,
+      setupTimeoutMs: FIXTURE_SETUP_MS,
       requestTimeoutMs: 8000,
       shutdownTimeoutMs: 500,
       keeper: { stateDirectory, limits: keeperLimits() },
@@ -290,7 +290,7 @@ test('Codex detach keeps keeper and agent; later resume re-attaches', async () =
   const r = await codex(libraryCodex({
     command: process.execPath,
     args: [fixture],
-    setupTimeoutMs: 5000,
+    setupTimeoutMs: FIXTURE_SETUP_MS,
     requestTimeoutMs: 3000,
     shutdownTimeoutMs: 500,
     keeper: { stateDirectory, limits: keeperLimits() },
@@ -306,7 +306,7 @@ test('Codex detach keeps keeper and agent; later resume re-attaches', async () =
   const r2 = await codex(libraryCodex({
     command: process.execPath,
     args: [fixture],
-    setupTimeoutMs: 5000,
+    setupTimeoutMs: FIXTURE_SETUP_MS,
     requestTimeoutMs: 3000,
     shutdownTimeoutMs: 500,
     keeper: { stateDirectory, limits: keeperLimits() },
@@ -325,7 +325,7 @@ test("core.close({agents:'detach'}) leaves keeper-backed agent alive and release
     agents: [codex(libraryCodex({
       command: process.execPath,
       args: [fixture],
-      setupTimeoutMs: 5000,
+      setupTimeoutMs: FIXTURE_SETUP_MS,
       requestTimeoutMs: 3000,
       shutdownTimeoutMs: 500,
       keeper: { stateDirectory, limits: keeperLimits() },
@@ -344,7 +344,7 @@ test("core.close({agents:'detach'}) leaves keeper-backed agent alive and release
     agents: [codex(libraryCodex({
       command: process.execPath,
       args: [fixture],
-      setupTimeoutMs: 5000,
+      setupTimeoutMs: FIXTURE_SETUP_MS,
       requestTimeoutMs: 3000,
       shutdownTimeoutMs: 500,
       keeper: { stateDirectory, limits: keeperLimits() },
@@ -369,7 +369,7 @@ test('detach never interrupts the running turn; resume re-attaches to it', async
   const { createCore } = await import('../src/index.js')
   const mk = () => createCore({ stateDirectory: join(stateDirectory, 'core'), limits: { interruptTimeoutMs: 5000, maxPending: 8, outstandingActivity: 64 }, agents: [codex({
     id: 'codex', command: process.execPath, args: [fixture], inheritEnv: false, env: { MODE: 'overlap-turns', TRACE: trace },
-    sandbox: 'read-only', approvalPolicy: 'never', permissions: { kind: 'codex', approvalPolicy: 'never', sandbox: 'read-only' }, setupTimeoutMs: 5000, requestTimeoutMs: 8000, shutdownTimeoutMs: 500, maxFrameBytes: 4096,
+    sandbox: 'read-only', approvalPolicy: 'never', permissions: { kind: 'codex', approvalPolicy: 'never', sandbox: 'read-only' }, setupTimeoutMs: FIXTURE_SETUP_MS, requestTimeoutMs: 8000, shutdownTimeoutMs: 500, maxFrameBytes: 4096,
     keeper: { stateDirectory, limits: keeperLimits() },
   })] })
   const core1 = mk()
@@ -407,7 +407,7 @@ test('a turn that ended while no host was attached arrives as normalized events 
   const release = join(stateDirectory, 'release')
   const mk = () => createCore({ stateDirectory: join(stateDirectory, 'core'), limits: { interruptTimeoutMs: 5000, maxPending: 8, outstandingActivity: 64 }, agents: [codex({
     id: 'codex', command: process.execPath, args: [fixture], inheritEnv: false, env: { RELEASE: release },
-    sandbox: 'read-only', approvalPolicy: 'never', permissions: { kind: 'codex', approvalPolicy: 'never', sandbox: 'read-only' }, setupTimeoutMs: 5000, requestTimeoutMs: 8000, shutdownTimeoutMs: 500, maxFrameBytes: 4096,
+    sandbox: 'read-only', approvalPolicy: 'never', permissions: { kind: 'codex', approvalPolicy: 'never', sandbox: 'read-only' }, setupTimeoutMs: FIXTURE_SETUP_MS, requestTimeoutMs: 8000, shutdownTimeoutMs: 500, maxFrameBytes: 4096,
     keeper: { stateDirectory, limits: keeperLimits() },
   })] })
   const core1 = mk()
@@ -469,7 +469,7 @@ test('frames a re-attach replays at once reach the driver after it applied the k
   let ended!: () => void
   const turnEnded = new Promise<void>(resolve => { ended = resolve })
   const r = await codex(libraryCodex({
-    setupTimeoutMs: 5000, requestTimeoutMs: 5000, shutdownTimeoutMs: 500,
+    setupTimeoutMs: FIXTURE_SETUP_MS, requestTimeoutMs: 5000, shutdownTimeoutMs: 500,
     keeper: { stateDirectory, limits: keeperLimits() },
   })).open(ctx({
     sessionId: 'k-welcome',
@@ -494,7 +494,7 @@ test('keeper re-attach meta beats a conflicting session permissions spec', async
   const env = { EXPECT_POLICY: 'on-request', EXPECT_SANDBOX: 'workspace-write', EXPECT_TURN_POLICY: 'on-request', EXPECT_TURN_SANDBOX: 'workspace-write' }
   const open = (permissions: DriverContext['permissions'], resumeId?: string) => codex(libraryCodex({
     env,
-    setupTimeoutMs: 5000,
+    setupTimeoutMs: FIXTURE_SETUP_MS,
     requestTimeoutMs: 3000,
     shutdownTimeoutMs: 500,
     keeper: { stateDirectory, limits: keeperLimits() },

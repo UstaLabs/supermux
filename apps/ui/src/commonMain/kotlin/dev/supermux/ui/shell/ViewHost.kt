@@ -723,6 +723,8 @@ private fun FilePaneForWorkspace(
         onOpenFile = openLink,
         rawBytes = { abs -> actions.fileSystemFor(workspaceId)?.raw(abs) ?: Result.failure(IllegalStateException("Host offline")) },
         fileSystem = actions.fileSystemFor(workspaceId),
+        // A binary file's "Save and open…" as one of the fleet's downloads (#95): closing the tab no longer stops it.
+        hostFileDownload = { abs -> actions.hostFileDownloadFor(workspaceId, abs) },
         modifier = modifier.fillMaxSize(),
     )
 }

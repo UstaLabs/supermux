@@ -148,6 +148,9 @@ dependencies {
     // Inline markdown images (async load + cache). ktor3 backend reuses our ktor stack.
     implementation(libs.coil.compose)
     implementation(libs.coil.network.ktor3)
+    // The audio player's background playback (#118 car 3a): our own ExoPlayer in a MediaSessionService.
+    implementation(libs.media3.exoplayer)
+    implementation(libs.media3.session)
     debugImplementation(libs.compose.ui.tooling)
     debugImplementation("androidx.compose.ui:ui-test-manifest")
     implementation(libs.compose.ui.tooling.preview)

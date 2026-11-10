@@ -62,7 +62,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.chat.parseChatTs
+import dev.supermux.proto.LimitWaitDto
 import dev.supermux.proto.LogEntry
+import dev.supermux.ui.accounts.limitWaitRowText
+import dev.supermux.ui.theme.LocalSemantics
+import kotlin.time.Clock
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.sessionPreviewPlainText
 import dev.supermux.ui.theme.MonoFontFamily
@@ -83,7 +87,17 @@ internal data class AgentEntry(
     /** The Agent's own avatar; null draws the default blob. */
     val rig: AvatarRig? = null,
     val sessionId: String? = null,
+    /** #92: waiting for a usage-limit reset; the row says when it resumes. */
+    val limitWait: LimitWaitDto? = null,
 )
+
+/** The row's second line when it is not the last message: working, waiting for a limit reset (#92), asleep. */
+internal fun agentRowStatus(a: AgentEntry, nowMs: Long): String? = when {
+    a.working -> "working…"
+    a.limitWait != null -> limitWaitRowText(a.limitWait, nowMs)
+    !a.online -> "asleep"
+    else -> null
+}
 
 /** The Agents zone's header item. */
 internal const val AGENTS_HEADER_KEY = "chrome:agents"
@@ -201,11 +215,7 @@ private fun AgentRow(
     val previewText = remember(a.preview) {
         a.preview?.text?.let(::sessionPreviewPlainText)?.lineSequence()?.firstOrNull { it.isNotBlank() }?.trim()
     }
-    val status = when {
-        a.working -> "working…"
-        !a.online -> "asleep"
-        else -> null
-    }
+    val status = agentRowStatus(a, Clock.System.now().toEpochMilliseconds())
     RowContextMenu(items = menu) {
         Row(
             dragModifier
@@ -270,6 +280,7 @@ private fun AgentRow(
                     status ?: previewText ?: "Always on",
                     color = when {
                         a.working -> cs.primary
+                        a.limitWait != null -> LocalSemantics.current.warning
                         a.unread -> cs.onSurface.copy(alpha = 0.75f)
                         else -> cs.onSurfaceVariant.copy(alpha = 0.6f)
                     },

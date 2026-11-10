@@ -238,6 +238,12 @@ class AndroidPlatform(
     override val notices: NoticeChannel = AndroidNotices(context.applicationContext)
 
     /**
+     * The audio player's outputs (#118 car 3a): the media session's ExoPlayer ([AudioPlaybackService]), so what plays
+     * goes on in the background with the media notification. Process-wide, as [tts] is: one session for every window.
+     */
+    override val audioOutputs: dev.supermux.work.AudioOutputs get() = AndroidAudio.forApp(context)
+
+    /**
      * Decodes that completed with nobody left to await them — the activity was re-created while the
      * scanner was in the foreground. The re-created add-host screen collects this and claims the
      * host exactly as if its own `scanQr()` had returned, instead of the scan being silently lost.

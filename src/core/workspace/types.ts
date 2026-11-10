@@ -2,7 +2,7 @@ import type { LayoutNode } from "./layout-tree"
 
 export type WorkspaceStatus = "active" | "archived"
 
-export type ViewKind = "chat" | "terminal" | "editor" | "display" | "browser"
+export type ViewKind = "chat" | "terminal" | "editor" | "display" | "browser" | "new"
 
 /** A chat view names exactly one agent session. */
 export type ChatViewState = { sessionId: string }
@@ -30,7 +30,10 @@ export type DisplayViewState = { displayId: string }
 /** A Browser tab (#105): the page it shows, an agent page (#104), or nothing yet. Checked by browserStateError. */
 export type BrowserViewState = { url?: string; doc?: string }
 
-export type ViewState = ChatViewState | TerminalViewState | EditorViewState | DisplayViewState | BrowserViewState
+/** A New tab (#91): asks what to show, and holds nothing until a pick replaces it with a real view. */
+export type NewViewState = Record<string, never>
+
+export type ViewState = ChatViewState | TerminalViewState | EditorViewState | DisplayViewState | BrowserViewState | NewViewState
 
 export type WorkspaceRecord = {
   id: string

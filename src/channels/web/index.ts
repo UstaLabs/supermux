@@ -14,9 +14,11 @@ import { tmpdir } from "os"
 import { join, resolve, sep } from "path"
 import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
 import { PayloadTooLargeError, EmptyUploadError, OffsetConflictError, UploadOverflowError, UploadNotFoundError } from "../../core/files/store"
-import { extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie } from "./proxy"
-import { AUTH_COOKIE, authToken, authedViaBearer, buildAuthCookie, buildClearCookie, crossSiteRefusal, sameOriginOk } from "./cookies"
+import { buildProxyPublicUrl, extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie, portFromSlug } from "./proxy"
+import { AUTH_COOKIE, PREVIEW_COOKIE, authToken, authedViaBearer, bearerToken, buildAuthCookie, buildClearCookie, crossSiteRefusal, previewCookieSpec, previewCookieToken, sameOriginOk } from "./cookies"
 import { browserStateError } from "../../core/workspace/browser-state"
+
+const isEmptyObject = (v: unknown): boolean => typeof v === "object" && v !== null && !Array.isArray(v) && Object.keys(v).length === 0
 import { FileSystemService } from "../../core/fs/file-system-service"
 import { toFsError } from "../../core/fs/errors"
 import { WorkdirFs } from "../../core/fs/legacy"
@@ -98,6 +100,10 @@ const RATE_LIMIT_MAX = 16
 // 10min delete) are meaningless while the SERVER drops the connection first, so this must be
 // raised too. See src/channels/web/serve-idle-timeout.test.ts.
 export const SERVE_IDLE_TIMEOUT_SECONDS = 255
+
+/** What a proxied WebSocket may send before its upstream socket has opened: past either bound the client is closed with 1009. */
+export const PROXY_WS_PENDING_MAX_BYTES = 1024 * 1024
+export const PROXY_WS_PENDING_MAX_MESSAGES = 256
 
 // Only a proxy we actually sit behind may name the peer for us. The relay tunnel and the nginx
 // exposure recipe both forward from loopback and set X-Forwarded-For; anyone else reaching
@@ -289,13 +295,21 @@ export interface WebAccountsApi {
   list(agent?: string): Promise<unknown[]>
   add(body: Record<string, unknown>): Promise<unknown>
   remove(id: string, options: { deleteHome?: boolean }): Promise<void>
+  /** What removing the account would do: how many chats move, and to which account (#106). */
+  removalPlan(id: string): Promise<unknown>
   startLogin(body: Record<string, unknown>): unknown
   loginState(loginId: string): unknown | undefined
   submitCode(loginId: string, code: string): void
   cancelLogin(loginId: string): void
   setSessionAccount(sessionId: string, account: string): Promise<unknown>
-  getSettings(): { autoSwitch: boolean }
-  setSettings(patch: Record<string, unknown>): { autoSwitch: boolean }
+  /** #92: drop the session's wait for a limit reset; false when it had none. */
+  cancelLimitWait?(sessionId: string): boolean
+  /** #92: resume a waiting session now; false when it had no wait. */
+  resumeLimitWait?(sessionId: string): Promise<boolean>
+  /** #92 demo: a real wait on the session, resuming in `minutes`; false when there is no such session. */
+  forceLimitWait?(sessionId: string, minutes: number): boolean
+  getSettings(): { autoSwitch: boolean; autoResume?: boolean }
+  setSettings(patch: Record<string, unknown>): { autoSwitch: boolean; autoResume?: boolean }
 }
 
 export interface WebChannelOpts {
@@ -487,6 +501,8 @@ export interface WebChannelOpts {
   proxyMainHost?: string
   proxyLookup?: (domain: string) => { port: number; sessionName: string; isPublic: boolean } | undefined
   proxyAuth?: (token: string) => boolean
+  /** The base URL named proxies' links are built on (main.ts: the relay's, else MUX_WEB_PUBLIC_URL); GET /proxies/by-port builds on it too. Defaults to [publicUrl]. */
+  proxyLinksBaseUrl?: () => string | undefined
   internalSecret?: string
   /**
    * The per-boot token of POST /internal/stop (src/core/session-manager/stop-token.ts). With [onStopRequest], a request
@@ -826,6 +842,13 @@ export class WebChannel implements Channel {
               ? new WebSocket(wsUrl, protocols)
               : new WebSocket(wsUrl)
             ;(ws.data as any)._proxyWs = upstream
+            // A client that speaks first sends before this dial has finished; keep those frames and flush them on open.
+            const pending: { frames: Array<string | Buffer>; bytes: number } = { frames: [], bytes: 0 }
+            ;(ws.data as any)._proxyPending = pending
+            upstream.addEventListener("open", () => {
+              for (const frame of pending.frames.splice(0)) { try { upstream.send(frame) } catch {} }
+              pending.bytes = 0
+            })
             upstream.addEventListener("message", (e) => { try { ws.send(e.data) } catch {} })
             upstream.addEventListener("close", () => { try { ws.close() } catch {} })
             upstream.addEventListener("error", () => { try { ws.close() } catch {} })
@@ -843,6 +866,20 @@ export class WebChannel implements Channel {
         message: (ws, msg) => {
           if ((ws.data as any)?._proxyWs) {
             const upstream = (ws.data as any)._proxyWs as WebSocket
+            if (upstream.readyState === WebSocket.CONNECTING) {
+              const pending = (ws.data as any)._proxyPending as { frames: Array<string | Buffer>; bytes: number }
+              const size = typeof msg === "string" ? Buffer.byteLength(msg) : msg.byteLength
+              if (pending.frames.length >= PROXY_WS_PENDING_MAX_MESSAGES || pending.bytes + size > PROXY_WS_PENDING_MAX_BYTES) {
+                pending.frames.length = 0
+                pending.bytes = 0
+                try { upstream.close() } catch {}
+                try { ws.close(1009, "too much sent before the app's socket opened") } catch {}
+                return
+              }
+              pending.frames.push(typeof msg === "string" ? msg : Buffer.from(msg)) // a copy: the socket reuses its buffer
+              pending.bytes += size
+              return
+            }
             try { upstream.send(msg) } catch {}
             return
           }
@@ -1073,8 +1110,9 @@ export class WebChannel implements Channel {
     const sub = this.opts.proxyBaseDomain
       ? extractSubdomain(req.headers.get("host") ?? "", this.opts.proxyBaseDomain, this.opts.proxyMainHost)
       : undefined
-    // Path-based proxy (active only when no base domain is configured).
-    const pm = !this.opts.proxyBaseDomain && this.opts.proxyLookup ? matchProxyPath(url.pathname) : undefined
+    // Path-based proxy (active only when no base domain is configured). A digits slug is a port and needs no lookup.
+    const pathMatch = !this.opts.proxyBaseDomain ? matchProxyPath(url.pathname) : null
+    const pm = pathMatch && (this.opts.proxyLookup || portFromSlug(pathMatch.slug) !== undefined) ? pathMatch : undefined
     // Before any route, so a new route can't miss it (cookies.ts explains the rules).
     const appOrigins = [this.opts.publicUrl, this.getRelayUrl?.(), hostOrigin(req)]
     if (crossSiteRefusal(req, { appOrigins, proxied: Boolean(sub || pm) })) {
@@ -1084,6 +1122,8 @@ export class WebChannel implements Channel {
       return this.handleProxyRoute(req, sub, server)
     }
     if (pm) {
+      // A digits slug that is not a usable port is a 404 whatever follows it (no 301 on the way to one).
+      if (portFromSlug(pm.slug) !== undefined && !this.proxyTarget(pm.slug)) return new Response("not found", { status: 404 })
       if (pm.rest === null) {
         // bare /p/<slug> → 301 so the browser anchors relative URLs correctly
         return new Response(null, { status: 301, headers: { location: `/p/${pm.slug}/${url.search}` } })
@@ -2468,14 +2508,28 @@ export class WebChannel implements Channel {
     })
   }
 
+  /**
+   * What a preview slug opens. A digits slug is a PORT on this host (never a name; Registry.addProxy refuses digits-only
+   * names), always private. It is looked up nowhere, so a digits-only named proxy stored before that rule is shadowed:
+   * the by-port route wins. Nothing for a digits slug that is no usable port, nor for this broker's own port: a request
+   * forwarded to it would arrive from loopback with Host 127.0.0.1 and no forwarding header, which classifyPeer takes
+   * for the desktop app on this computer and answers GET /host with the local-only facts (state dir, install mode).
+   */
+  private proxyTarget(slug: string): { port: number; sessionName: string; isPublic: boolean } | undefined {
+    const port = portFromSlug(slug)
+    if (port === undefined) return this.opts.proxyLookup?.(slug)
+    if (port === null || port === this.boundPort || port === this.opts.port) return undefined
+    return { port, sessionName: `port ${port}`, isPublic: false }
+  }
+
   private async handleProxyRoute(
     req: Request,
     slug: string,
     server?: import("bun").Server<WSData>,
     pathOpts?: { prefix: string; upstreamPath: string },
   ): Promise<Response | undefined> {
-    if (!this.opts.proxyLookup) return new Response("proxy not configured", { status: 500 })
-    const upstream = this.opts.proxyLookup(slug)
+    if (!this.opts.proxyLookup && portFromSlug(slug) === undefined) return new Response("proxy not configured", { status: 500 })
+    const upstream = this.proxyTarget(slug)
     if (!upstream) return new Response("not found", { status: 404 })
 
     if (!upstream.isPublic) {
@@ -2483,7 +2537,8 @@ export class WebChannel implements Channel {
       // (subdomain mode), so a paired device already sends it here. A static
       // 401 (no reflected input) replaces the old /proxy-auth redirect dance.
       const token = authToken(req)
-      if (!token || !this.opts.proxyAuth?.(token)) {
+      const preview = previewCookieToken(req)
+      if (!(token && this.opts.proxyAuth?.(token)) && !(preview && this.store.verifyPreview(preview))) {
         const mainUrl = this.opts.publicUrl.replace(/\/$/, "")
         return new Response(
           `<!DOCTYPE html><meta charset="utf-8"><title>Not paired</title><body style="font-family:system-ui;background:#0a0a0a;color:#e5e5e5;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0"><p>Pair this device in the <a style="color:#6ea8fe" href="${mainUrl}/">main app</a> first, then reload.</p></body>`,
@@ -2509,7 +2564,7 @@ export class WebChannel implements Channel {
       return upgraded ? undefined : new Response("ws upgrade failed", { status: 500 })
     }
 
-    return handleProxyRequest(req, upstream, pathOpts, { cookies: [AUTH_COOKIE], isOwnBearer: (t) => !!this.store.verify(t) })
+    return handleProxyRequest(req, upstream, pathOpts, { cookies: [AUTH_COOKIE, PREVIEW_COOKIE], isOwnBearer: (t) => !!this.store.verify(t) })
   }
 
   private async routeRequest(req: Request): Promise<Response> {
@@ -3320,6 +3375,30 @@ export class WebChannel implements Channel {
       return this.json({ ok: true })
     }
 
+    // ── #92 demo: force a wait for a usage-limit reset on a session (paired clients only, like every /debug route) ──
+    if (path === "/debug/limit-wait" && method === "POST" && this.opts.accounts?.forceLimitWait) {
+      const body = (await req.json().catch(() => ({}))) as { session?: unknown; minutes?: unknown }
+      const minutes = Number(body.minutes)
+      if (typeof body.session !== "string" || !body.session || !Number.isFinite(minutes) || minutes <= 0 || minutes > 24 * 60) {
+        return this.json({ error: "session and minutes (1..1440) required" }, 400)
+      }
+      return this.opts.accounts.forceLimitWait(body.session, minutes) ? this.json({ ok: true }) : this.json({ error: "no such session" }, 404)
+    }
+
+    // ── a session's wait for a usage-limit reset (#92): Cancel, Resume now ──
+    const limitWait = path.match(/^\/sessions\/([^/]+)\/limit-wait(\/resume)?$/)
+    if (limitWait) {
+      const api = this.opts.accounts
+      const id = decodeURIComponent(limitWait[1]!)
+      if (method === "DELETE" && !limitWait[2] && api?.cancelLimitWait) {
+        return api.cancelLimitWait(id) ? this.json({ ok: true }) : this.json({ error: "no limit wait" }, 404)
+      }
+      if (method === "POST" && limitWait[2] && api?.resumeLimitWait) {
+        return (await api.resumeLimitWait(id)) ? this.json({ ok: true }) : this.json({ error: "no limit wait" }, 404)
+      }
+      return this.json({ error: "not found" }, 404)
+    }
+
     // ── accounts (one registry for every agent; secrets go in, never out) ──
     if (path === "/accounts" || path.startsWith("/accounts/") || path === "/settings/accounts" || path.match(/^\/sessions\/[^/]+\/account$/)) {
       const api = this.opts.accounts
@@ -3355,6 +3434,8 @@ export class WebChannel implements Channel {
             return this.json({ ok: true })
           }
         }
+        const removal = path.match(/^\/accounts\/([^/]+)\/removal$/)
+        if (removal && method === "GET") return this.json(await api.removalPlan(decodeURIComponent(removal[1]!)))
         const one = path.match(/^\/accounts\/([^/]+)$/)
         if (one && method === "DELETE") {
           const deleteHome = url.searchParams.get("deleteHome")
@@ -4363,12 +4444,14 @@ export class WebChannel implements Channel {
       const workspaceId = decodeURIComponent(path.split("/")[2]!)
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
       const kind = body.kind as string | undefined
-      if (!kind || !["chat", "terminal", "editor", "display", "browser"].includes(kind)) {
+      if (!kind || !["chat", "terminal", "editor", "display", "browser", "new"].includes(kind)) {
         return this.json({ error: `unknown view kind: ${String(kind)}` }, 400)
       }
       if (body.state == null) return this.json({ error: "state required" }, 400)
       const browserError = kind === "browser" ? browserStateError(body.state) : undefined
       if (browserError) return this.json({ error: browserError }, 400)
+      // A New tab holds nothing: a pick replaces it with a real view.
+      if (kind === "new" && !isEmptyObject(body.state)) return this.json({ error: "a new tab's state is {}" }, 400)
       const rawId = body.id
       if (rawId !== undefined && typeof rawId !== "string") {
         return this.json({ error: "id must be a string" }, 400)
@@ -4655,6 +4738,13 @@ export class WebChannel implements Channel {
       const url = `${pairBase.replace(/\/$/, "")}/pair?t=${token}`
       return this.json({ url, name: finalName })
     }
+    if (method === "POST" && path === "/devices/preview-token") {
+      // Native apps only: the web app never shows private previews, and a token in page JavaScript is one to lose.
+      if (!authedViaBearer(req)) return this.json({ error: "preview tokens are for the native apps" }, 403)
+      const token = this.store.mintPreview(bearerToken(req))
+      if (!token) return this.json({ error: "unknown device" }, 401)
+      return this.json({ token, cookie: previewCookieSpec(token, { publicUrl: this.opts.publicUrl, proxyBaseDomain: this.opts.proxyBaseDomain }) })
+    }
     if (method === "DELETE" && path.startsWith("/devices/")) {
       const name = decodeURIComponent(path.slice("/devices/".length))
       const ok = this.store.revoke(name)
@@ -4714,6 +4804,15 @@ export class WebChannel implements Channel {
       }
     }
 
+    // The by-port URL as a template, `{port}` where the port goes, built the way a named proxy's URL is.
+    if (method === "GET" && path === "/proxies/by-port") {
+      return this.json({
+        url: buildProxyPublicUrl("{port}", {
+          baseDomain: this.opts.proxyBaseDomain,
+          publicUrl: this.opts.proxyLinksBaseUrl?.() ?? this.opts.publicUrl,
+        }),
+      })
+    }
     if (method === "GET" && path === "/proxies") {
       const proxies = this.opts.listProxies?.() ?? []
       return this.json(proxies)

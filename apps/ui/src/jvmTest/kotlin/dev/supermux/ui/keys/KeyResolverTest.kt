@@ -12,7 +12,7 @@ class KeyResolverTest {
         override fun keeps(chord: KeyChord) = chord in kept
     }
 
-    private val window = Scope(AppCommands.NewSession, AppCommands.NewTerminal, AppCommands.ToggleSidebar, AppCommands.FindInChat)
+    private val window = Scope(AppCommands.NewSession, AppCommands.NewTerminal, AppCommands.ToggleSidebar, AppCommands.Find)
     private val terminal = Scope(opaque = true)
 
     @Test fun aWindowKeyWaitsForTheBubbleWhenNoOwnerHasTheFocus() {
@@ -84,21 +84,21 @@ class KeyResolverTest {
     }
 
     @Test fun theDeepestHandlerWins() {
-        val keymap = Keymap(listOf(bind("Mod-k", AppCommands.FindInChat), bind("Mod-k", AppCommands.GoToFile)))
-        val chat = Scope(AppCommands.FindInChat)
+        val keymap = Keymap(listOf(bind("Mod-k", AppCommands.Find), bind("Mod-k", AppCommands.GoToFile)))
+        val chat = Scope(AppCommands.Find)
         val files = Scope(AppCommands.GoToFile)
         val ctrlK = KeyChord("k", ctrl = true)
-        assertEquals("chat.find", resolveKey(ctrlK, listOf(chat, files), KeyPhase.Bubble, KeyOs.Other, keymap)?.binding?.commandId)
+        assertEquals("find", resolveKey(ctrlK, listOf(chat, files), KeyPhase.Bubble, KeyOs.Other, keymap)?.binding?.commandId)
         assertEquals("files.goTo", resolveKey(ctrlK, listOf(files, chat), KeyPhase.Bubble, KeyOs.Other, keymap)?.binding?.commandId)
     }
 
     @Test fun aDeeperHandlerThatWaitsBlocksAShallowerAppFirstOne() {
-        val keymap = Keymap(listOf(bind("Mod-k", AppCommands.FindInChat), bind("Mod-k", AppCommands.GoToFile, appFirst = true)))
-        val chat = Scope(AppCommands.FindInChat)
+        val keymap = Keymap(listOf(bind("Mod-k", AppCommands.Find), bind("Mod-k", AppCommands.GoToFile, appFirst = true)))
+        val chat = Scope(AppCommands.Find)
         val outer = Scope(AppCommands.GoToFile)
         val ctrlK = KeyChord("k", ctrl = true)
         assertNull(resolveKey(ctrlK, listOf(chat, outer), KeyPhase.Preview, KeyOs.Other, keymap))
-        assertEquals("chat.find", resolveKey(ctrlK, listOf(chat, outer), KeyPhase.Bubble, KeyOs.Other, keymap)?.binding?.commandId)
+        assertEquals("find", resolveKey(ctrlK, listOf(chat, outer), KeyPhase.Bubble, KeyOs.Other, keymap)?.binding?.commandId)
     }
 
     @Test fun noHandlerMeansNoHit() {

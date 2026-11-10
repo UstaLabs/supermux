@@ -49,6 +49,8 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import dev.supermux.ui.accounts.limitWaitRowText
+import kotlin.time.Clock
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
@@ -535,9 +537,19 @@ private fun PointerSessionRow(
                         Spacer(Modifier.height(Space.xs))
                     }
 
-                    // Preview: last message or workdir fallback.
+                    // Preview: a wait for a usage-limit reset (#92), else the last message, else the workdir.
                     val previewText = sessionRowPreview(preview)
-                    if (previewText != null) {
+                    val limitWait = s.limitWait
+                    if (limitWait != null) {
+                        Text(
+                            limitWaitRowText(limitWait, Clock.System.now().toEpochMilliseconds()),
+                            color = Color(c.warning),
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.testTag("session-row-limit-wait:${s.id}"),
+                        )
+                    } else if (previewText != null) {
                         Text(
                             previewText,
                             color = cs.onSurfaceVariant,

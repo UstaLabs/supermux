@@ -7,7 +7,7 @@ import { claude, claudeRelayPrompt } from "../src/claude/index.js"
 import { createCore } from "../src/index.js"
 import type { CoreEvent } from "../src/types.js"
 import type { EventEnvelope, NormalizedBody } from "../src/events/normalized.js"
-import { TEST_LIMITS, nextId, WORKDIR } from "./helpers.js"
+import { TEST_LIMITS, nextId, WORKDIR, FIXTURE_SETUP_MS } from "./helpers.js"
 import { fixturePath, replayAgent } from "./subagent-fixtures.js"
 
 setDefaultTimeout(20_000)
@@ -28,7 +28,7 @@ async function setup(fixture: string, extra: Record<string, unknown> = {}) {
     id: "claude", command: process.execPath, args: [replayAgent, "--replay", fixturePath(fixture)],
     env: { REPLAY_TRACE: trace }, inheritEnv: true, tools: "default", permissionPrompts: "none",
     permissions: { kind: "claude", permissionMode: "bypassPermissions" }, partialMessages: true,
-    setupTimeoutMs: 5000, requestTimeoutMs: 5000, shutdownTimeoutMs: 200, maxFrameBytes: 16 * 1024 * 1024,
+    setupTimeoutMs: FIXTURE_SETUP_MS, requestTimeoutMs: 5000, shutdownTimeoutMs: 200, maxFrameBytes: 16 * 1024 * 1024,
     keeper: { stateDirectory: join(dir, "keeper"), limits: { parkedDeadlineMs: 5000, journalMaxBytes: 5_000_000, connectTimeoutMs: 4000 } },
     ...extra,
   })

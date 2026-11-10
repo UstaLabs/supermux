@@ -1,5 +1,7 @@
 import { EventEmitter } from "events"
+import { recordOpenCodeFreeLimit } from "../../usage/opencode-free"
 import type { AgentCommandEntry } from "../../slash-commands/types"
+import type { AgentModelEntry } from "../../../../packages/supermux-core/src/events/normalized.js"
 import { readFile } from "node:fs/promises"
 import type { AgentAdapter, AgentKind, BrokerRequest, InboundMeta, RequestAnswerInput } from "../types"
 import { mapPendingRequest, toCoreAnswer } from "./request-map"
@@ -254,6 +256,8 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   availableModels: { modelId: string }[] = []
   /** The slash commands the agent last reported (ACP push, Claude's initialize reply); undefined until it reports. */
   availableCommands?: AgentCommandEntry[]
+  /** The models the agent offered at its last start (ACP options; Cursor's model list, #102). */
+  offeredModels?: AgentModelEntry[]
 
   onUsageUpdate?: (data: CodexUsage) => void
   getPrevUsage?: () => CodexUsage | null
@@ -352,10 +356,15 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
         this.availableCommands = commands
         this.emit("commands-update", { kind: "commands-update" })
       },
+      onModels: (models) => {
+        this.offeredModels = models
+        this.emit("models-update", { kind: "models-update" })
+      },
       onUsage: (rateLimits) => {
         const data = codexUsageFromRateLimits(rateLimits, this.getPrevUsage?.() ?? null)
         if (data) this.onUsageUpdate?.(data)
       },
+      onOpenCodeFreeLimit: (resetsAt) => recordOpenCodeFreeLimit(resetsAt),
     })
   }
 
@@ -1234,6 +1243,10 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     }
     if (event.type === "account.exhausted") {
       this.emit("account", { kind: "account", event: "exhausted", account: event.account, reason: event.reason })
+      return
+    }
+    if (event.type === "account.waiting") {
+      this.emit("account", { kind: "account", event: "waiting", account: event.account, ...(event.resetsAt ? { resetsAt: event.resetsAt } : {}), background: event.background })
       return
     }
     if (event.type === "account.unavailable") {

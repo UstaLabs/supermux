@@ -12,6 +12,7 @@ import { AgentKind } from "../../../shared/agents"
 import { resolvePermissionMode } from "../permission-modes"
 import { antigravitySkillsDirs } from "../../plugins"
 import type { Core, HostHandle } from "../../../../packages/supermux-core/src/index.js"
+import { systemAccountId } from "../../../../packages/supermux-core/src/accounts/registry.js"
 
 export type AntigravityCommandContext = {
   skillsDirs: string[]
@@ -289,6 +290,6 @@ export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): 
       onAntigravitySessionId: (_name, sid) => { ctx.persistAgentSessionId(sid) },
       antigravityHost: ctx.antigravityHost,
     },
-    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, agent_session_id: session.agent_session_id, account: session.account ?? undefined, permissionMode: session.permissionMode ?? undefined },
+    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, agent_session_id: session.agent_session_id, account: session.account ?? systemAccountId("antigravity"), permissionMode: session.permissionMode ?? undefined },
   )
 }

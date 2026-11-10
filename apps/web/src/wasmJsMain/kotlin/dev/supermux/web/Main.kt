@@ -44,6 +44,7 @@ import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.ui.shell.SupermuxApp
 import dev.supermux.ui.shell.visibleWorkspaceChatIdsAt
 import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.web.seams.WebDownload
 import dev.supermux.web.seams.WebMedia
 import dev.supermux.web.auth.CookieSession
 import dev.supermux.web.auth.SessionState
@@ -100,7 +101,14 @@ fun main() {
 
     val settings = LocalStorageSettingsStore()
     // The browser has no reliable version or OS source and we don't parse the User-Agent: surface only.
-    val deps = HostStoreDeps(httpFactory = jsHttpFactory(), settings = settings, media = WebMedia.cache, clientInfo = dev.supermux.net.ClientInfo("web"))
+    // Downloads (#95) are the browser's own fetch into a Blob: this page has no files for them to land in.
+    val deps = HostStoreDeps(
+        httpFactory = jsHttpFactory(),
+        settings = settings,
+        media = WebMedia.cache,
+        clientInfo = dev.supermux.net.ClientInfo("web"),
+        browserDownload = WebDownload,
+    )
     val uiPrefs = UiPrefs(settings)
     // The page's own scope: `Dispatchers.Main` because everything it drives ends in a Compose state
     // read, `SupervisorJob` so one failed collector cannot tear the app's state down. Never
@@ -190,9 +198,7 @@ fun main() {
                 }
                 val foreground by WebAppState.foreground.collectAsState()
 
-                // Silence read-aloud when the tab goes to the background, the way Android stops it
-                // on ON_STOP: nothing else would ever stop it, since the composition stays alive.
-                LaunchedEffect(foreground) { if (!foreground) MessageTts.stop(platform.tts) }
+                // Read-aloud goes on in a background tab (#118 car 3b), as the audio player does: the dock's ✕ stops it.
 
                 // Has this broker been through first-run setup? `null` until its first snapshot,
                 // which is the whole reason this is a tri-state: a default of `false` would flash

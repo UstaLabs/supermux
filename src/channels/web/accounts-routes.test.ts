@@ -62,6 +62,7 @@ function setup(overrides: Partial<WebAccountsApi> = {}) {
     list: (agent) => accounts.list(agent),
     add: (body) => accounts.add(body),
     remove: (id, options) => accounts.remove(id, options),
+    removalPlan: (id) => accounts.removalPlan(id),
     startLogin: (body) => accounts.startLogin(body),
     loginState: (id) => accounts.loginState(id),
     submitCode: (id, code) => accounts.submitLoginCode(id, code),
@@ -311,4 +312,40 @@ test("Auto's background refresh failing is logged, never thrown, and the pick st
   usage.set("grok:system", [{ name: "weekly", usedPercent: 100, resetsAt: new Date(Date.now() + 86_400_000) }])
   expect(await accounts.autoAccount("grok")).toBe("grok-a")
   await Bun.sleep(0)
+})
+
+test("GET /accounts/:id/removal says where a removal moves the account's chats (#106)", async () => {
+  const { call } = setup({ removalPlan: async (id) => ({ account: id, sessions: 3, to: "claude-b", toLabel: "4@supermux.dev" }) })
+  await channel!.start()
+  const r = await call("GET", "/accounts/claude-a/removal")
+  expect(r.status).toBe(200)
+  expect(r.body).toEqual({ account: "claude-a", sessions: 3, to: "claude-b", toLabel: "4@supermux.dev" })
+})
+
+test("the limit wait (#92): DELETE /sessions/:id/limit-wait cancels it, POST …/limit-wait/resume resumes now; 404 without one", async () => {
+  const waiting = new Set(["s1", "s2"])
+  const calls: string[] = []
+  const { call, cookieLessPost } = setup({
+    cancelLimitWait: (id) => { calls.push(`cancel ${id}`); return waiting.delete(id) },
+    resumeLimitWait: async (id) => { calls.push(`resume ${id}`); return waiting.delete(id) },
+  })
+  await channel!.start()
+  expect(await call("DELETE", "/sessions/s1/limit-wait")).toEqual({ status: 200, body: { ok: true } })
+  expect((await call("DELETE", "/sessions/s1/limit-wait")).status).toBe(404)
+  expect(await call("POST", "/sessions/s2/limit-wait/resume")).toEqual({ status: 200, body: { ok: true } })
+  expect((await call("POST", "/sessions/s2/limit-wait/resume")).status).toBe(404)
+  expect(calls).toEqual(["cancel s1", "cancel s1", "resume s2", "resume s2"])
+  expect((await cookieLessPost("/sessions/s3/limit-wait/resume", {})).status).toBe(403)
+  expect(calls).toHaveLength(4)
+})
+
+test("POST /debug/limit-wait (#92) makes a real wait on a session for a demo; bad input is refused", async () => {
+  const forced: Array<[string, number]> = []
+  const { call } = setup({ forceLimitWait: (id, minutes) => { forced.push([id, minutes]); return id === "s1" } })
+  await channel!.start()
+  expect(await call("POST", "/debug/limit-wait", { session: "s1", minutes: 3 })).toEqual({ status: 200, body: { ok: true } })
+  expect((await call("POST", "/debug/limit-wait", { session: "nope", minutes: 3 })).status).toBe(404)
+  expect((await call("POST", "/debug/limit-wait", { session: "s1", minutes: 0 })).status).toBe(400)
+  expect((await call("POST", "/debug/limit-wait", { minutes: 3 })).status).toBe(400)
+  expect(forced).toEqual([["s1", 3], ["nope", 3]])
 })

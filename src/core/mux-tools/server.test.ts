@@ -133,6 +133,31 @@ describe("mux-shim host server: calls through the shared handlers", () => {
     expect(await call(worker, "get_active", { chat_id: "c" })).toEqual(denied)
   })
 
+  test("expose_port refuses a digits-only domain (/p/<digits>/ means a port) and still takes digits plus anything else", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    const worker = await connect(AgentKind.Codex, t.worker.id)
+    expect(await call(worker, "expose_port", { port: 3000, domain: "5173" }))
+      .toEqual({ isError: true, content: [{ type: "text", text: "proxy names can't be only digits: /p/5173/ means a port" }] })
+    expect(t.registry.listProxies()).toEqual([])
+    for (const domain of ["px-1234", "app5173", "5173a"]) {
+      const ok = await call(worker, "expose_port", { port: 3000, domain })
+      expect(JSON.parse(ok.content[0].text)).toMatchObject({ domain, port: 3000 })
+    }
+    const random = JSON.parse((await call(worker, "expose_port", { port: 3001 })).content[0].text)
+    expect(random.domain).toMatch(/^px-[0-9a-f]{8}$/)
+  })
+
+  test("expose_port refuses the broker's own port and still takes any other", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    t.registry.refuseProxyPort(9898)
+    const worker = await connect(AgentKind.Codex, t.worker.id)
+    expect(await call(worker, "expose_port", { port: 9898, domain: "app" }))
+      .toEqual({ isError: true, content: [{ type: "text", text: "can't expose port 9898: that is the broker itself" }] })
+    expect(t.registry.listProxies()).toEqual([])
+    const ok = await call(worker, "expose_port", { port: 9899, domain: "app" })
+    expect(JSON.parse(ok.content[0].text)).toMatchObject({ domain: "app", port: 9899 })
+  })
+
   test("rename_session needs no gate: a worker renames itself", async () => {
     const t = setup(); cleanups.push(t.unbind)
     const worker = await connect(AgentKind.Codex, t.worker.id)

@@ -96,6 +96,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -138,6 +139,10 @@ import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.effectiveChatDetail
 import dev.supermux.ui.formatLowWorkingStatus
 import dev.supermux.ui.workingBaseLabel
+import dev.supermux.ui.keys.AppCommands
+import dev.supermux.ui.keys.LocalShortcutDispatcher
+import dev.supermux.ui.keys.RegisterCommand
+import dev.supermux.ui.keys.matchesKey
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.LocalSemantics
@@ -157,6 +162,7 @@ import kotlinx.coroutines.launch
 import kotlin.math.exp
 import kotlin.math.max
 import kotlin.time.Clock
+import dev.supermux.ui.accounts.LimitWaitStrip
 
 /** Reading-width cap for the composer so it lines up with the timeline's own cap. */
 private val CONTENT_MAX_WIDTH = 860.dp
@@ -329,6 +335,9 @@ class ChatActions(
     val openAccounts: (() -> Unit)? = null,
     /** Opens the agent's own sign-in, Settings ▸ Providers (the link when the system login's sign-in expired); null = none. */
     val openSignIn: (() -> Unit)? = null,
+    /** #92: the wait for a usage-limit reset — drop it, or resume now. */
+    val cancelLimitWait: suspend () -> Unit = {},
+    val resumeLimitWait: suspend () -> Unit = {},
 )
 
 /** [ChatActions] wired to a [HostStore] for one session — desktop's ergonomics, kept. */
@@ -371,6 +380,8 @@ fun rememberChatActions(
             setAccount = { id -> app.setSessionAccount(session.id, id) },
             openAccounts = openAccounts,
             openSignIn = openSignIn,
+            cancelLimitWait = { app.cancelLimitWait(session.id) },
+            resumeLimitWait = { app.resumeLimitWait(session.id) },
         )
     }
 }
@@ -871,11 +882,18 @@ fun ChatPanel(
     // The message a picked All-chats hit lands on, held until the transcript has it.
     var findTarget by remember(session.id) { mutableStateOf<String?>(null) }
     var findQueryShown by remember(session.id) { mutableStateOf("") }
+    // A download's row opens its chat here (#95): the message it asks for, held until the transcript has it —
+    // or, once the whole history is in without it, said to be gone.
+    var revealTarget by remember(session.id) { mutableStateOf<String?>(null) }
+    var revealed by remember(session.id) { mutableStateOf<RevealMark?>(null) }
+    val revealGlow = remember(session.id) { androidx.compose.animation.core.Animatable(0f) }
     val pendingJump = searchHost?.jump?.collectAsState()?.value
     LaunchedEffect(pendingJump, session.id) {
         val jump = pendingJump?.takeIf { it.sessionId == session.id } ?: return@LaunchedEffect
         searchHost.consume(jump)
-        if (jump.messageId == null) {
+        if (jump.reveal && jump.messageId != null) {
+            revealTarget = jump.messageId
+        } else if (jump.messageId == null) {
             find.show()
         } else {
             findTarget = jump.messageId
@@ -895,6 +913,29 @@ fun ChatPanel(
         }
         findQueryShown = find.query
     }
+    LaunchedEffect(revealTarget, timelineItems, state.historyLoaded) {
+        val target = revealTarget ?: return@LaunchedEffect
+        if (timelineItems.none { (it as? TimelineItem.Msg)?.entry?.id == target }) {
+            if (state.historyLoaded) {
+                revealTarget = null
+                platform.notices.show("That message is no longer in the chat")
+            }
+            return@LaunchedEffect
+        }
+        revealTarget = null
+        revealed = RevealMark(target)
+    }
+    LaunchedEffect(revealed) {
+        val mark = revealed ?: return@LaunchedEffect
+        val index = timelineItems.indexOfFirst { (it as? TimelineItem.Msg)?.entry?.id == mark.messageId }
+        if (index < 0) return@LaunchedEffect
+        revealGlow.snapTo(1f)
+        listState.animateScrollToItem(index, scrollOffset = -with(density) { 96.dp.roundToPx() })
+        // A short tint that fades: the one place the transcript fades anything.
+        delay(REVEAL_HOLD_MS)
+        revealGlow.animateTo(0f, tween(REVEAL_FADE_MS))
+    }
+    val revealedId = revealed?.messageId
     val findCurrentIndex = findMatches.getOrNull(find.current) ?: -1
     val findCurrentKey = timelineKeys.getOrNull(findCurrentIndex)
     val findMatchSet = remember(findMatches) { findMatches.toHashSet() }
@@ -974,16 +1015,22 @@ fun ChatPanel(
     // stages into the composer through the same funnel (the card highlights while dragging).
     val dropState = remember(session.id) { ComposerDropState() }
 
+    // ⌘F / Ctrl+F: this chat's find bar, also right after a click in the transcript (which leaves no focus).
+    // Not while another panel is on top (Android's chat tabs keep it composed, hidden): the key is that panel's.
+    RegisterCommand(AppCommands.Find, enabled = active) { find.show(); true }
     Column(
         modifier
             .fillMaxSize()
             .background(cs.surfaceContainerLow)
             .onSizeChanged { panelWidth = with(density) { it.width.toDp() } }
-            .onPreviewKeyEvent { event ->
-                if (!isFindChord(event)) return@onPreviewKeyEvent false
-                find.show()
-                true
-            }
+            // Hosts without a ShortcutRoot (the assistant overlay) keep the chat's own ⌘F.
+            .then(
+                if (LocalShortcutDispatcher.current == null) {
+                    Modifier.onPreviewKeyEvent { if (AppCommands.Find.matchesKey(it)) { find.show(); true } else false }
+                } else {
+                    Modifier
+                },
+            )
             .externalFileDropTarget(
                 enabled = actions.upload != null,
                 onDragOver = { dropState.dragOver = it },
@@ -1175,6 +1222,8 @@ fun ChatPanel(
             androidx.compose.runtime.CompositionLocalProvider(
                 LocalCouncilActivity provides state.councilActivity,
                 LocalChatMediaViewer provides mediaOpener,
+                LocalChatSessionId provides session.id,
+                LocalChatTitle provides session.name,
                 LocalLiveReveals provides reveals,
             ) {
             LazyColumn(
@@ -1196,9 +1245,21 @@ fun ChatPanel(
                         i in findMatchSet -> cs.primary.copy(alpha = 0.05f)
                         else -> null
                     }
+                    val isRevealed = revealedId != null && (item as? TimelineItem.Msg)?.entry?.id == revealedId
+                    val revealTint = cs.primary
                     Box(
-                        if (findTint == null) Modifier
-                        else Modifier.background(findTint, RoundedCornerShape(Radii.sm)).padding(horizontal = Space.sm),
+                        Modifier
+                            .then(
+                                if (!isRevealed) Modifier
+                                else Modifier.testTag(CHAT_REVEALED_TAG).drawBehind {
+                                    val a = REVEAL_ALPHA * revealGlow.value
+                                    if (a > 0f) drawRoundRect(revealTint.copy(alpha = a), cornerRadius = androidx.compose.ui.geometry.CornerRadius(Radii.sm.toPx()))
+                                },
+                            )
+                            .then(
+                                if (findTint == null) Modifier
+                                else Modifier.background(findTint, RoundedCornerShape(Radii.sm)).padding(horizontal = Space.sm),
+                            ),
                     ) {
                         val run = toolRuns[i]
                         when {
@@ -1287,6 +1348,7 @@ fun ChatPanel(
         }
 
         viewerKey?.let { key ->
+            androidx.compose.runtime.CompositionLocalProvider(LocalChatSessionId provides session.id) {
             ChatMediaViewer(
                 items = mediaItems,
                 startKey = viewer.current ?: key,
@@ -1300,6 +1362,7 @@ fun ChatPanel(
                 },
                 onCurrentChange = { viewer.current = it },
             )
+            }
         }
 
         // Body: transcript + composer.
@@ -1384,6 +1447,14 @@ fun ChatPanel(
                                 },
                                 modifier = Modifier.padding(bottom = Space.sm),
                             )
+                            // #92: docked above the composer while every account waits for its reset.
+                            session.limitWait?.let { wait ->
+                                LimitWaitStrip(
+                                    wait = wait,
+                                    onCancel = { scope.launch { actions.cancelLimitWait() } },
+                                    onResumeNow = { scope.launch { actions.resumeLimitWait() } },
+                                )
+                            }
                             composer()
                         }
                     }
@@ -1609,3 +1680,11 @@ private class SubagentCards {
     var open by mutableStateOf(setOf<String>())
     var seen by mutableStateOf(mapOf<String, Int>())
 }
+
+/** Where a [ChatSearchHost.reveal] landed: a new mark each time, so revealing the same message again tints it again. */
+private class RevealMark(val messageId: String)
+
+/** The revealed message's tint: how strong, how long it holds, how long it fades. */
+private const val REVEAL_ALPHA = 0.16f
+private const val REVEAL_HOLD_MS = 900L
+private const val REVEAL_FADE_MS = 1_200

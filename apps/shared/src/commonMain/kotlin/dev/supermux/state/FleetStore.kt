@@ -24,6 +24,9 @@ import dev.supermux.net.PairClaimResult
 import dev.supermux.pairing.ClaimRedemption
 import dev.supermux.pairing.redeem
 import dev.supermux.media.AttachmentMedia
+import dev.supermux.work.AudioPlayer
+import dev.supermux.work.DownloadCenter
+import dev.supermux.work.DownloadedFile
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.Attachment
 import dev.supermux.proto.ClientFrame
@@ -166,6 +169,18 @@ class FleetStore(
 
     /** The UI state that outlives a recreation or a layout swap (see [RetainedUiState]); its work stops with [close]. */
     val retainedUi = RetainedUiState(fleetScope)
+
+    /**
+     * The app's downloads (#95). On [fleetScope], so a download outlives the screen that started it — leaving a chat,
+     * closing a viewer or a tab — and ends only with [close], when the app closes.
+     */
+    val downloads = DownloadCenter(fleetScope)
+
+    /**
+     * The app's audio player (#118): what plays outlives the chat that started it, a rotation and a layout change,
+     * and stops with [close]. The shell installs the platform's outputs ([AudioPlayer.useOutputs]).
+     */
+    val audio = AudioPlayer()
 
     // Insertion-ordered so the merged list / active-fallback follow the store's host order.
     private val conns = LinkedHashMap<String, HostConn>()
@@ -434,6 +449,14 @@ class FleetStore(
         combine(hostApps, _activeHost) { _, _ -> activeApp() }
             .distinctUntilChanged()
             .flatMapLatest { app -> app?.accountsAutoSwitch ?: flowOf(null) }
+            .stateIn(fleetScope, SharingStarted.Eagerly, null)
+
+    /** The ACTIVE host's auto-resume setting ([HostStore.accountsAutoResume], #92). */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val activeAccountsAutoResume: StateFlow<Boolean?> =
+        combine(hostApps, _activeHost) { _, _ -> activeApp() }
+            .distinctUntilChanged()
+            .flatMapLatest { app -> app?.accountsAutoResume ?: flowOf(null) }
             .stateIn(fleetScope, SharingStarted.Eagerly, null)
 
     /** `account_login_state` frames from the ACTIVE host. */
@@ -1153,6 +1176,10 @@ class FleetStore(
 
     /** Stop every host's connection + fold, and release the throwaway claim/probe HttpClient. */
     fun close() {
+        // Downloads first, as the user's Cancel does them: each is listed Cancelled and its source told at once,
+        // before the hosts below close under a transfer the media cache runs on its own scope.
+        downloads.close()
+        audio.close()
         fleetScope.cancel()
         // Detach first, then tear the sockets down WITHOUT [lock]: `HostStore.close()` cancels
         // scopes and releases HTTP clients, and a caller waiting on this store must not wait on
@@ -1705,6 +1732,15 @@ class FleetStore(
             appFor(sessionId)?.media?.bytes(att, refresh)
 
         override suspend fun playableUri(att: Attachment): String? = appFor(sessionId)?.media?.playableUri(att)
+
+        override suspend fun download(att: Attachment, progress: (received: Long, total: Long?) -> Unit): DownloadedFile? =
+            appFor(sessionId)?.media?.download(att, progress)
+
+        override fun cancelDownload(att: Attachment) {
+            appFor(sessionId)?.media?.cancelDownload(att)
+        }
+
+        override fun downloadKey(att: Attachment): String? = appFor(sessionId)?.media?.downloadKey(att)
     }
 
     suspend fun listProjects(): List<String> = activeApp()?.listProjects().orEmpty()
