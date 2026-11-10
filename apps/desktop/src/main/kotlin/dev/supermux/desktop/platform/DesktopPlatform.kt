@@ -173,6 +173,9 @@ class DesktopPlatform : Platform {
     /** AVAudioPlayer on macOS (#118: the library cannot play an audio-only file there); the library elsewhere. */
     override val audioOutputs: dev.supermux.work.AudioOutputs? = desktopAudioOutputs()
 
+    /** The Mac's Now Playing and media keys, Windows's media keys (#118 car 3c); none on Linux. */
+    override val systemNowPlaying: dev.supermux.work.SystemNowPlaying? get() = DesktopNowPlaying.shared
+
     /** Rendered by `DesktopTheme`'s snackbar host — one bus per window root, which is where
      *  [DesktopPlatform] itself is constructed. */
     override val notices: DesktopNotices = DesktopNotices()

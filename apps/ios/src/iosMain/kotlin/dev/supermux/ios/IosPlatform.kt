@@ -210,6 +210,9 @@ class IosPlatform(
     /** AVAudioPlayer for the app's audio (#118), as on the Mac: the library's AVPlayer wants a video track. */
     override val audioOutputs: dev.supermux.work.AudioOutputs = IosAudioOutputs()
 
+    /** The lock screen's and Control Center's Now Playing for what the audio player plays (#118 car 3b). */
+    override val systemNowPlaying: dev.supermux.work.SystemNowPlaying get() = IosNowPlaying.shared
+
 }
 
 /**

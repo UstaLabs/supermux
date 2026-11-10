@@ -126,6 +126,13 @@ interface Platform {
      */
     val audioOutputs: dev.supermux.work.AudioOutputs? get() = null
 
+    /**
+     * The system's Now Playing for what the audio player plays (#118 cars 3b/3c): the lock screen and Control Center on
+     * iOS, the Mac's Now Playing and media keys, Windows's media keys. Null where there is none (Android has its media
+     * session in its outputs). One for the process.
+     */
+    val systemNowPlaying: dev.supermux.work.SystemNowPlaying? get() = null
+
     /** Read-aloud output (OS synthesiser + broker audio playback). */
     val tts: TtsEngine
 
