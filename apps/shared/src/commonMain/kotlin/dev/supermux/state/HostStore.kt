@@ -22,6 +22,7 @@ import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.AgentLoginState
 import dev.supermux.net.AccountDto
 import dev.supermux.net.AccountLoginStateDto
+import dev.supermux.net.AccountRemovalPlanDto
 import dev.supermux.net.SessionAccountResult
 import dev.supermux.net.AppConfigDto
 import dev.supermux.net.ArchivedDto
@@ -2338,8 +2339,12 @@ class HostStore(
     suspend fun removeAccount(id: String, deleteHome: Boolean = false): AccountResult<Unit> =
         accountCall { api.removeAccount(id, deleteHome) }.also { if (it is AccountResult.Ok) refreshAccounts() }
 
-    suspend fun startAccountLogin(agent: String, loginAs: String? = null, label: String? = null): AccountResult<AccountLoginStateDto> =
-        accountCall { api.startAccountLogin(agent, loginAs = loginAs, label = label) }
+    suspend fun startAccountLogin(agent: String, loginAs: String? = null, label: String? = null, email: String? = null): AccountResult<AccountLoginStateDto> =
+        accountCall { api.startAccountLogin(agent, loginAs = loginAs, email = email, label = label) }
+
+    /** GET /accounts/<id>/removal; null when the broker cannot say (older broker, offline). */
+    suspend fun accountRemovalPlan(id: String): AccountRemovalPlanDto? =
+        runApi("accountRemovalPlan") { api.accountRemovalPlan(id) }
 
     suspend fun accountLoginState(loginId: String): AccountLoginStateDto? =
         runApi("accountLoginState") { api.accountLoginState(loginId) }
