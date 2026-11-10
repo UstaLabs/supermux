@@ -298,6 +298,7 @@ final class SpeechDictation {
         do {
             try session.setCategory(.record, mode: .measurement, options: .duckOthers)
             try session.setActive(true, options: .notifyOthersOnDeactivation)
+            AudioCapture.live = true
             return true
         } catch {
             return false
@@ -313,7 +314,12 @@ final class SpeechDictation {
     }
 
     private func deactivateSession() {
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        AudioCapture.live = false
+        let session = AVAudioSession.sharedInstance()
+        try? session.setActive(false, options: .notifyOthersOnDeactivation)
+        // Hand the category back, as AudioRecorder does: `.record` left set made every read-aloud after a
+        // dictation silent (#118).
+        try? session.setCategory(.playback)
     }
 
     private func startTicker() {

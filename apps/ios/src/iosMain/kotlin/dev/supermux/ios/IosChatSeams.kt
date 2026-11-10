@@ -391,7 +391,9 @@ internal class IosLiveTranscript(private val bridge: IosBridge) : LiveTranscript
 
 /**
  * Read-aloud over Swift's `MessageSpeech` — `AVSpeechSynthesizer` for the platform voice, an
- * `AVAudioPlayer` for the mp3 chunks the broker streams for the codex one.
+ * `AVAudioPlayer` for the mp3 chunks the broker streams for the codex one. No URL player ([canPlayUrl] stays false):
+ * AVPlayer never starts a live `/speak/audio` stream, whose length is unknown — it says "playing" with its clock
+ * at 0, and the iPhone was silent (#118).
  *
  * All four members are thin: `MessageTts` in `:ui` decides WHAT to speak, which message owns the
  * speaking state, and how the codex chunks are queued. This only makes noise, which is exactly the
@@ -411,12 +413,6 @@ internal class IosTtsEngine(private val bridge: IosBridge) : TtsEngine {
     override suspend fun playAudioChunk(bytes: ByteArray) {
         if (bytes.isEmpty()) return
         awaitCallback<Unit> { done -> bridge.playAudioChunk(bytes) { done(Unit) } }
-    }
-
-    override val canPlayUrl: Boolean get() = true
-
-    override suspend fun playUrl(url: String) {
-        awaitCallback<Unit> { done -> bridge.playAudioUrl(url) { done(Unit) } }
     }
 
     override fun stop() = onMainThread { bridge.stopSpeaking() }
