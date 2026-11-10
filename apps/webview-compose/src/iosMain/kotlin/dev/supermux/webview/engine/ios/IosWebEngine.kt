@@ -197,7 +197,9 @@ internal class IosWebEngine private constructor(
     private val navigations = NavigationEpochs()
     private var lease: Job = SupervisorJob(scope.coroutineContext[Job])
     /** A sideways drag past the page's edge goes to the views around it (the phone's tab swipe). */
-    private val sideSwipe = PageSideSwipe(webView.scrollView)
+    private val sideSwipe = PageSideSwipe(webView.scrollView) { script, done ->
+        webView.evaluateJavaScript(script) { result, _ -> done((result as? Boolean)?.toString()) }
+    }
 
     private var released = false
     private var crashed = false

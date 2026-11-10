@@ -6,12 +6,24 @@ import kotlin.math.abs
  * One gesture's sideways hand-off from the page to the scrolling parents (the phone's tab swipe). What the page can't
  * take of a mostly sideways, one-finger drag is offered to them; once they take some, the rest of the gesture is
  * [taken]: theirs, both ways, until the finger lifts. A pinch never is, even after its second finger lifts.
+ *
+ * The page is asked first ([ask], [innerScrollQuestion]): a box under the finger that can still scroll that way (a
+ * carousel, a long `<pre>`, a wide table) keeps the gesture, as the page itself does until its edge. Nothing is offered
+ * until it answers; turning the other way asks again.
  */
 internal class SideSwipe {
     private var totalX = 0f
     private var totalY = 0f
     private var pinch = false
     private var fraction = 0f
+
+    /** The way the page was asked about (-1 the finger moving left, 1 right, 0 not asked), and what it said. */
+    private var askedWay = 0
+    private var innerScrolls: Boolean? = null
+
+    /** Counts gestures, so an answer for an earlier one can be told apart. */
+    var gesture = 0
+        private set
 
     /** Whether the parents took this gesture: the page gets no more of it. */
     var taken = false
@@ -23,6 +35,9 @@ internal class SideSwipe {
         pinch = false
         fraction = 0f
         taken = false
+        askedWay = 0
+        innerScrolls = null
+        gesture++
     }
 
     /** The finger moved by [dx], [dy] px, with [pointers] fingers down. */
@@ -33,7 +48,24 @@ internal class SideSwipe {
     }
 
     /** Whether what the page left of a sideways drag may go to the parents. */
-    fun mayOffer(): Boolean = !taken && !pinch && abs(totalX) > abs(totalY)
+    fun mayOffer(): Boolean = sideways() && askedWay == way() && innerScrolls == false
+
+    /** The way to ask the page about now, or null: not a one-finger sideways drag, or asked about this way already. */
+    fun ask(): Int? {
+        if (!sideways() || way() == askedWay) return null
+        askedWay = way()
+        innerScrolls = null
+        return askedWay
+    }
+
+    /** The page's answer for [way]: whether something under the finger can still scroll that way. */
+    fun answered(way: Int, innerScrolls: Boolean) {
+        if (way == askedWay) this.innerScrolls = innerScrolls
+    }
+
+    private fun sideways() = !taken && !pinch && abs(totalX) > abs(totalY)
+
+    private fun way() = if (totalX < 0f) -1 else if (totalX > 0f) 1 else 0
 
     fun take() {
         taken = true
@@ -58,5 +90,21 @@ internal class SideSwipe {
             fingerDx < 0f -> offsetX >= contentWidth - viewWidth - 0.5
             else -> false
         }
+
+        /**
+         * A script asking whether the element at [x], [y] (CSS px from the visual viewport's corner), or one of its
+         * ancestors below the page's own scroller, can still scroll the way a finger moving [direction] pushes it: -1,
+         * the finger moving left, scrolls content right. It evaluates to true or false.
+         */
+        fun innerScrollQuestion(x: Float, y: Float, direction: Int): String =
+            "(function(x,y,d){var v=window.visualViewport,e=document.elementFromPoint(x+(v?v.offsetLeft:0),y+(v?v.offsetTop:0))," +
+                "r=document.scrollingElement;" +
+                "for(;e&&e!==r&&e!==document.documentElement&&e!==document.body;e=e.parentElement){" +
+                "var o=getComputedStyle(e).overflowX,m=e.scrollWidth-e.clientWidth,l=Math.abs(e.scrollLeft);" +
+                "if((o==='auto'||o==='scroll')&&m>1&&(d<0?l<m-1:l>1))return true}" +
+                "return false})($x,$y,$direction)"
+
+        /** The script's result as the engine gets it: anything but true (no script, an error) means nothing scrolls. */
+        fun readAnswer(result: String?): Boolean = result?.trim() == "true"
     }
 }

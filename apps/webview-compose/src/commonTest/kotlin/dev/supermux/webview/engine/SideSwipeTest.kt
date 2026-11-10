@@ -1,6 +1,8 @@
 package dev.supermux.webview.engine
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -10,6 +12,8 @@ class SideSwipeTest {
         val s = SideSwipe()
         s.down()
         s.moved(-30f, 4f, pointers = 1)
+        assertEquals(-1, s.ask())
+        s.answered(-1, innerScrolls = false)
         assertTrue(s.mayOffer())
     }
 
@@ -74,5 +78,75 @@ class SideSwipeTest {
     fun aPageThatCantScrollSidewaysIsAtBothEdges() {
         assertTrue(SideSwipe.atEdge(offsetX = 0.0, contentWidth = 400.0, viewWidth = 400.0, fingerDx = 5f))
         assertTrue(SideSwipe.atEdge(offsetX = 0.0, contentWidth = 390.0, viewWidth = 400.0, fingerDx = -5f))
+    }
+
+    // The element under the finger: a carousel, a <pre>, a wide table scroll first.
+
+    @Test
+    fun nothingIsOfferedUntilThePageAnswers() {
+        val s = SideSwipe()
+        s.down()
+        s.moved(-30f, 0f, pointers = 1)
+        assertEquals(-1, s.ask())
+        // Asked once per direction: the answer is on its way.
+        assertNull(s.ask())
+        assertFalse(s.mayOffer())
+    }
+
+    @Test
+    fun anInnerScrollerThatCanGoThatWayKeepsTheGesture() {
+        val s = SideSwipe()
+        s.down()
+        s.moved(-30f, 0f, pointers = 1)
+        s.ask()
+        s.answered(-1, innerScrolls = true)
+        assertFalse(s.mayOffer())
+        s.moved(-30f, 0f, pointers = 1)
+        assertNull(s.ask())
+        assertFalse(s.mayOffer())
+    }
+
+    @Test
+    fun anAnswerForTheOtherDirectionOrAnOldGestureIsIgnored() {
+        val s = SideSwipe()
+        s.down()
+        s.moved(-30f, 0f, pointers = 1)
+        s.ask()
+        s.answered(1, innerScrolls = false)
+        assertFalse(s.mayOffer())
+        s.down()
+        s.moved(-30f, 0f, pointers = 1)
+        // The last gesture's answer comes late.
+        s.answered(-1, innerScrolls = false)
+        assertFalse(s.mayOffer())
+    }
+
+    @Test
+    fun turningBackAsksAgain() {
+        val s = SideSwipe()
+        s.down()
+        s.moved(-30f, 0f, pointers = 1)
+        s.ask()
+        s.answered(-1, innerScrolls = true)
+        s.moved(80f, 0f, pointers = 1)
+        assertEquals(1, s.ask())
+        s.answered(1, innerScrolls = false)
+        assertTrue(s.mayOffer())
+    }
+
+    @Test
+    fun theQuestionNamesThePointAndTheWay() {
+        val js = SideSwipe.innerScrollQuestion(x = 300f, y = 900f, direction = -1)
+        assertTrue(js.contains("300.0") && js.contains("900.0"), js)
+        assertTrue(js.contains("elementFromPoint"), js)
+    }
+
+    @Test
+    fun thePagesAnswerReadsAsABoolean() {
+        assertEquals(true, SideSwipe.readAnswer("true"))
+        assertEquals(false, SideSwipe.readAnswer("false"))
+        // No answer (a page without script, an error): nothing is known to scroll, the swipe may go.
+        assertEquals(false, SideSwipe.readAnswer("null"))
+        assertEquals(false, SideSwipe.readAnswer(null))
     }
 }

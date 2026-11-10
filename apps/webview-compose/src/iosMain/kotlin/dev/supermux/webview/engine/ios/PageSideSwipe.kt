@@ -29,7 +29,11 @@ import platform.darwin.NSObject
  * as ever. The finger is read in the window, since the views around may move this one under it.
  */
 @OptIn(BetaInteropApi::class, ExperimentalForeignApi::class)
-internal class PageSideSwipe(private val scrollView: UIScrollView) : NSObject() {
+internal class PageSideSwipe(
+    private val scrollView: UIScrollView,
+    /** Runs a script in the page; the result as text ("true"), or null. */
+    private val evaluate: (script: String, done: (String?) -> Unit) -> Unit,
+) : NSObject() {
     /** The surface's, while it is composed; and Compose's px per point. */
     var dispatcher: NestedScrollDispatcher? = null
     var density: Float = 1f
@@ -38,6 +42,9 @@ internal class PageSideSwipe(private val scrollView: UIScrollView) : NSObject() 
     private var lastX = 0.0
     private var lastY = 0.0
     private var pinnedX = 0.0
+    /** Where the finger went down, in the page's CSS px from the visible corner. */
+    private var downX = 0.0
+    private var downY = 0.0
 
     init {
         scrollView.panGestureRecognizer.addTarget(this, NSSelectorFromString("pan:"))
@@ -55,6 +62,11 @@ internal class PageSideSwipe(private val scrollView: UIScrollView) : NSObject() 
             side.down()
             lastX = 0.0
             lastY = 0.0
+            val zoom = scrollView.zoomScale.takeIf { it > 0.0 } ?: 1.0
+            val at = recognizer.locationInView(scrollView.superview ?: scrollView).useContents { x to y }
+            val start = recognizer.translationInView(scrollView.superview ?: scrollView).useContents { x to y }
+            downX = (at.first - start.first) / zoom
+            downY = (at.second - start.second) / zoom
         }
         val (tx, ty) = recognizer.translationInView(null).useContents { x to y }
         val dx = (tx - lastX).toFloat()
@@ -67,6 +79,8 @@ internal class PageSideSwipe(private val scrollView: UIScrollView) : NSObject() 
                 if (side.taken) {
                     pin()
                     send(dx)
+                } else if (dx != 0f && atEdge(dx) && side.ask()?.let(::askPage) != null) {
+                    // Asked the page; nothing is handed on until it answers.
                 } else if (dx != 0f && side.mayOffer() && atEdge(dx) && send(dx) != 0f) {
                     side.take()
                     pinnedX = edge(dx)
@@ -81,6 +95,17 @@ internal class PageSideSwipe(private val scrollView: UIScrollView) : NSObject() 
                 side.down()
             }
             else -> Unit
+        }
+    }
+
+    /**
+     * Asks the page whether the box under the finger (a carousel, a `<pre>`, a wide table) can still scroll the [way] the
+     * finger pushes: if it can, the gesture stays the page's.
+     */
+    private fun askPage(way: Int) {
+        val gesture = side.gesture
+        evaluate(SideSwipe.innerScrollQuestion(downX.toFloat(), downY.toFloat(), way)) { result ->
+            if (side.gesture == gesture) side.answered(way, SideSwipe.readAnswer(result))
         }
     }
 

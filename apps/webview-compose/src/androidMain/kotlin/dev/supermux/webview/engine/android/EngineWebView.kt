@@ -70,6 +70,9 @@ internal class EngineWebView(
     private var lastRawY = 0f
     private var sideVelocity: VelocityTracker? = null
     private var pageCancelled = false
+    /** Where the finger went down, in this view's px: the page is asked what is there. */
+    private var downX = 0f
+    private var downY = 0f
 
     init {
         nested = NestedScrollingChildHelper(this).also { it.isNestedScrollingEnabled = true }
@@ -118,6 +121,8 @@ internal class EngineWebView(
             getLocationInWindow(downAt)
             side.down()
             pageCancelled = false
+            downX = event.x
+            downY = event.y
             lastRawX = event.rawX
             lastRawY = event.rawY
             sideVelocity?.recycle()
@@ -226,6 +231,7 @@ internal class EngineWebView(
         maxOverScrollY: Int,
         isTouchEvent: Boolean,
     ): Boolean {
+        if (touching && deltaX != 0 && hasNestedScrollingParent(ViewCompat.TYPE_TOUCH)) side.ask()?.let(::askPage)
         if (touching && deltaX != 0 && side.mayOffer() && hasNestedScrollingParent(ViewCompat.TYPE_TOUCH)) {
             // In the finger's px, as below.
             @Suppress("DEPRECATION")
@@ -255,6 +261,19 @@ internal class EngineWebView(
             }
         }
         return super.overScrollBy(deltaX, deltaY, scrollX, scrollY, scrollRangeX, scrollRangeY, maxOverScrollX, maxOverScrollY, isTouchEvent)
+    }
+
+    /**
+     * Asks the page whether the box under the finger (a carousel, a `<pre>`, a wide table) can still scroll the [way] the
+     * finger pushes: until it answers, nothing is handed on; if it can, the gesture stays the page's.
+     */
+    private fun askPage(way: Int) {
+        val gesture = side.gesture
+        @Suppress("DEPRECATION")
+        val cssPx = scale
+        evaluateJavascript(SideSwipe.innerScrollQuestion(downX / cssPx, downY / cssPx, way)) { result ->
+            if (!gone && side.gesture == gesture) side.answered(way, SideSwipe.readAnswer(result))
+        }
     }
 
     override fun onDetachedFromWindow() {
