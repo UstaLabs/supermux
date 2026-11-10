@@ -69,6 +69,7 @@ import {
   BrokerAccounts,
   SETTINGS_KEY_ACCOUNTS,
   isSystemAccount,
+  markSignInExpired,
   migrateSettingsCredentials,
   parseAccountsSettings,
   setAccountsAutoSwitchSource,
@@ -3388,6 +3389,12 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       add: (body) => brokerAccounts.add(body),
       remove: (id, options) => brokerAccounts.remove(id, options),
       removalPlan: (id) => brokerAccounts.removalPlan(id),
+      markExpired: async (id) => {
+        if (!(await brokerAccounts.get(id))) return false
+        // Cleared like a real one: by a usage fetch that works, or by signing in again.
+        markSignInExpired(id, "Marked signed out from /debug/account-expired (#106 demo)")
+        return true
+      },
       startLogin: (body) => brokerAccounts.startLogin(body),
       loginState: (loginId) => brokerAccounts.loginState(loginId),
       submitCode: (loginId, code) => brokerAccounts.submitLoginCode(loginId, code),

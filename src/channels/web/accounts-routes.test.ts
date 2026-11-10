@@ -349,3 +349,13 @@ test("POST /debug/limit-wait (#92) makes a real wait on a session for a demo; ba
   expect((await call("POST", "/debug/limit-wait", { minutes: 3 })).status).toBe(400)
   expect(forced).toEqual([["s1", 3], ["nope", 3]])
 })
+
+test("POST /debug/account-expired marks a login signed out, for trying the signed-out state (#106)", async () => {
+  const marked: string[] = []
+  const { call } = setup({ markExpired: async (id) => { if (id === "nope") return false; marked.push(id); return true } })
+  await channel!.start()
+  expect(await call("POST", "/debug/account-expired", { account: "claude-s" })).toEqual({ status: 200, body: { ok: true } })
+  expect((await call("POST", "/debug/account-expired", { account: "nope" })).status).toBe(404)
+  expect((await call("POST", "/debug/account-expired", {})).status).toBe(400)
+  expect(marked).toEqual(["claude-s"])
+})
