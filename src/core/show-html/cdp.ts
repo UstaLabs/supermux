@@ -128,12 +128,12 @@ export interface ChromeProcess {
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 /** Launch `executable` headless with a throwaway profile and connect to it. */
-export async function launchChrome(executable: string, o: { args?: string[]; env?: Record<string, string | undefined>; timeoutMs?: number } = {}): Promise<ChromeProcess> {
+/** [sandbox] false launches with --no-sandbox: only where the host refuses Chrome's own sandbox (launchSandboxFirst). */
+export async function launchChrome(executable: string, o: { args?: string[]; env?: Record<string, string | undefined>; timeoutMs?: number; sandbox?: boolean } = {}): Promise<ChromeProcess> {
   const dir = await mkdtemp(join(tmpdir(), "supermux-check-"))
   const proc = Bun.spawn([executable, "--headless=new", "--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1",
     `--user-data-dir=${dir}`, "--no-first-run", "--no-default-browser-check",
-    // As Playwright launched it before: Chrome's own sandbox needs user namespaces, which the hosts we run on may not allow.
-    "--no-sandbox", ...(o.args ?? []), "about:blank"],
+    ...(o.sandbox === false ? ["--no-sandbox"] : []), ...(o.args ?? []), "about:blank"],
   { stdin: "ignore", stdout: "ignore", stderr: "ignore", env: o.env as Record<string, string> | undefined })
   let exited = false
   void proc.exited.then(() => { exited = true })

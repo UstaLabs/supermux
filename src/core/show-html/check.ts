@@ -9,6 +9,9 @@ import { existsSync } from "node:fs"
 import { pagePrelude } from "./page-api"
 import { startProxy } from "./check-proxy"
 import { CdpClient, CdpSession, launchChrome } from "./cdp"
+import { makeLogger } from "../../shared/log"
+
+const log = makeLogger("show-html")
 
 // The functions handed to page.evaluate run in the browser; the broker's tsconfig has no DOM lib, so name what they use.
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -75,19 +78,37 @@ export interface CheckBrowser {
   close(): Promise<void>
   /** Resolves when the browser is gone, however it went. */
   disconnected: Promise<void>
+  /** False when the host refused Chrome's own sandbox and the browser runs without it (launchSandboxFirst). */
+  sandboxed: boolean
+}
+
+export const UNSANDBOXED_NOTE = "checked without Chrome's own sandbox: this host refused it"
+
+/**
+ * Chrome's own sandbox first; where the host refuses it (Ubuntu's user-namespace restriction, a container), without it,
+ * logged and said in every result (Tally, 2026-11-10). No host is changed to make the sandbox start.
+ */
+export async function launchSandboxFirst<T>(launch: (sandbox: boolean) => Promise<T>, warn: (msg: string) => void = (m) => log.warn(m)): Promise<{ chrome: T; sandboxed: boolean }> {
+  try {
+    return { chrome: await launch(true), sandboxed: true }
+  } catch (e) {
+    warn(`the HTML check's Chrome would not start with its sandbox (${(e as Error).message}); running it without its sandbox`)
+    return { chrome: await launch(false), sandboxed: false }
+  }
 }
 
 /** Chrome set up for one SOCKS5 proxy per check (startProxy), which refuses private addresses after resolving. */
 export async function launchBrowser(): Promise<CheckBrowser | undefined> {
   const executable = findBrowser()
   if (!executable) return undefined
-  const chrome = await launchChrome(executable, {
+  const { chrome, sandboxed } = await launchSandboxFirst((sandbox) => launchChrome(executable, {
+    sandbox,
     env: { ...process.env, DBUS_SESSION_BUS_ADDRESS: "disabled:" },
     args: ["--force-webrtc-ip-handling-policy=disable_non_proxied_udp", "--webrtc-ip-handling-policy=disable_non_proxied_udp",
       "--hide-scrollbars", "--mute-audio", "--force-color-profile=srgb", "--disable-extensions", "--disable-sync",
       "--disable-background-networking", "--disable-component-update", "--disable-default-apps"],
-  })
-  return { client: chrome.client, close: () => chrome.close(), disconnected: chrome.client.closed }
+  }))
+  return { client: chrome.client, close: () => chrome.close(), disconnected: chrome.client.closed, sandboxed }
 }
 
 /** The card as the app frames it: the page API first, then the agent's document or fragment. */
@@ -549,8 +570,8 @@ export async function checkPage(html: string, opts: { capMs?: number } = {}): Pr
   try {
     const browser = await sharedBrowser()
     if (!browser) return { problems: [], notes: [NO_BROWSER_NOTE] }
-    const r = await checkWithBrowser(html, browser, { capMs: opts.capMs })
-    return toPageCheck(r)
+    const r = toPageCheck(await checkWithBrowser(html, browser, { capMs: opts.capMs }))
+    return browser.sandboxed ? r : { ...r, notes: [UNSANDBOXED_NOTE, ...r.notes] }
   } catch (e) {
     return { problems: [], notes: [`not checked: the browser would not start: ${(e as Error).message.split("\n")[0]}`] }
   } finally {
