@@ -382,7 +382,13 @@ val icon: String? = state.navigator.favicon()                   // <link rel="ic
   - macOS: find says found or not (`count` is null: WebKit's `findString` answers only that), zoom is WebKit's
     `pageZoom`, the cookie goes into the view's `WKHTTPCookieStore`, and the inspector is Safari's (`Elsewhere`: Safari ▸
     Develop lists the page, which `WebSettings.inspectable` makes inspectable).
-  - Android, iOS, Windows, Linux, the web: not yet. `find` answers null, `setZoom` and `setCookie` false,
+  - iOS: the same WebKit calls. `find` is `findString` (iOS 16; null before it; `count` is null), `clearFind` clears the
+    selection, `setZoom` is `pageZoom` and answers true, `setCookie` goes into the view's own data store (its profile's,
+    named ones from iOS 17) and returns once WebKit has it, and `openInspector` is `Elsewhere("Safari ▸ Develop on a Mac,
+    with the device connected")` for an inspectable page (`WebSettings.inspectable`, iOS 16.4), else `Unsupported`.
+    `pageZoom` changes the page's layout width (`document.documentElement.clientWidth`) and its `devicePixelRatio`;
+    `innerWidth` stays the view's.
+  - Android, Windows, Linux, the web: not yet. `find` answers null, `setZoom` and `setCookie` false,
     `openInspector` `Unsupported` (the engine API's defaults), until their own plans land.
 
 ## The bridge
