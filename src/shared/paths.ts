@@ -73,6 +73,9 @@ export const HOST_KEY_FILE = join(STATE_DIR, "host-key")
 
 export const INBOX_DIR = join(STATE_DIR, "inbox")
 
+/** show_html pages (#104), one `<sha256>.html` each. */
+export const HTML_DIR = join(STATE_DIR, "html")
+
 // Plugin host (see the plugin-host design spec).
 // Plugins live at the MUX_HOME root (alongside domains/personal/state),
 // NOT under state/, so they survive state resets and are shared across sessions.

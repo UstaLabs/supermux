@@ -8,6 +8,8 @@ import { paneSessionId } from "./core/session-manager/pane-owner"
 import { TelegramChannel } from "./channels/telegram"
 import { WhatsAppChannel } from "./channels/whatsapp"
 import { WebChannel, WEB_CAPABILITIES, type WebChannelOpts } from "./channels/web"
+import { checkPage } from "./core/show-html/check"
+import { FsHtmlPageStore, showHtml, type HtmlCard } from "./core/show-html/service"
 import { buildProxyPublicUrl } from "./channels/web/proxy"
 import { EMBEDDED_STATIC } from "./channels/web/static-manifest.generated"
 import { requireAtLeastOneChannel } from "./shared/channels"
@@ -160,7 +162,7 @@ import { createRelayClient } from "./core/push/relay-adapter"
 import { ViewingTracker } from "./core/push/viewing-tracker"
 import { usesFilesystemEndpoint } from "./core/local-endpoint"
 import {
-  MUX_HOME, MUX_HOME_NOTE, STATE_DIR, PID_FILE, SOCKETS_DIR, ENV_FILE, INBOX_DIR, SESSION_INBOX_DIR, DEVICES_FILE, HOST_KEY_FILE,
+  MUX_HOME, MUX_HOME_NOTE, STATE_DIR, PID_FILE, SOCKETS_DIR, ENV_FILE, INBOX_DIR, HTML_DIR, SESSION_INBOX_DIR, DEVICES_FILE, HOST_KEY_FILE,
 } from "./shared/paths"
 import { validateWebEnv } from "./shared/web-env"
 import { readEnvText } from "./shared/env-file"
@@ -810,6 +812,7 @@ if (existsSync(REGISTRY_FILE)) {
 
 const filesDir = join(STATE_DIR, "files")
 const fileStore = new FileStore(db, filesDir)
+const htmlPages = new FsHtmlPageStore(HTML_DIR)
 const messageLog = new MessageStore(db, fileStore)
 const searchStore = new SearchStore(db, MUX_HOME)
 try {
@@ -1335,6 +1338,17 @@ const sessionManager = new SessionManager(registry, {
   outbound: {
     onAssistantMessage,
     getChannel: (name) => channels[name],
+    showHtml: (sessionId, args) => showHtml(sessionId, args, {
+      workdir: (id) => registry.get(id)?.workdir,
+      check: (html) => checkPage(html),
+      store: htmlPages,
+      post: async (id, card) => {
+        const r = await onAssistantMessage(id, { text: "", card })
+        return r.ok ? { ok: true } : { ok: false, error: r.error }
+      },
+      // The broker's own state (tokens, the database) is never a card's source, even from an agent's folder.
+      forbidden: [STATE_DIR],
+    }),
     telegramApi: telegram ? { token: TG_TOKEN!, getFile: (id: string) => telegram.getFile(id) } : undefined,
   },
   orchestration: {
@@ -1504,7 +1518,7 @@ export type DispatchResult = { ok: true; delivered: number } | { ok: false; erro
 
 async function onAssistantMessage(
   sessionId: string,
-  ev: { text: string; reply_to?: string; files?: string[]; format?: "text" | "markdownv2"; keyboard?: string[]; error?: boolean; system?: boolean; stream?: string },
+  ev: { text: string; reply_to?: string; files?: string[]; format?: "text" | "markdownv2"; keyboard?: string[]; error?: boolean; system?: boolean; stream?: string; card?: HtmlCard },
 ): Promise<DispatchResult> {
   // A broker notice ("Resuming session…") is not the agent finishing a turn.
   if (!ev.system) agentStateStore.applyEvent(sessionId, "Stop")
@@ -1567,8 +1581,9 @@ async function onAssistantMessage(
       log.warn("dispatch_unknown_channel", { sessionName, chat_id, channel: channelName })
       continue
     }
+    // A card has no text of its own: the web app draws it, so any other channel gets the title.
     const initial: OutboundAction = {
-      op: "reply", chat_id, text: ev.text,
+      op: "reply", chat_id, text: ev.card && !ev.text && channelName !== WEB_CHANNEL ? ev.card.title : ev.text,
       reply_to: ev.reply_to, files: resolvedFiles, format: ev.format, keyboard: ev.keyboard,
     }
     try {
@@ -1595,6 +1610,8 @@ async function onAssistantMessage(
         error: ev.error,
         // Card #76: the app swaps the live text with this stream id for this stored reply.
         ...(ev.stream ? { stream: ev.stream } : {}),
+        // #104: an html card (show_html); the app fetches the page by this id.
+        ...(ev.card ? { card: ev.card } : {}),
         attachments: action.attachments?.map((a) => ({
           file_id: a.file_id, kind: a.kind, mime: a.mime, size: a.size, name: a.name,
         })),
@@ -2926,6 +2943,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     },
     onSendFromWeb: () => {},                                // wired below via webChannel.on('inbound')
     fileStore,
+    htmlPages,
+    findCard: (session, id) => messageLog.findCard(session, id),
     pushStore,
     deviceTokenStore,
     relayUrl,

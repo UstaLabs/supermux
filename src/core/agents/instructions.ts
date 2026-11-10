@@ -4,6 +4,7 @@ import { shellWord } from "../../shared/shell-word"
 import { shellReadsFor, type ShellReads } from "./shell-reads"
 import { buildMemoryPreamble } from "../memory/preamble"
 import { readEnvironmentMd } from "./environment"
+import { interactiveHtmlInstructions } from "../show-html/description"
 import { buildAgentHeader, type CreatedBy } from "./agent-header"
 import type { SessionRole } from "../session-manager/policy"
 
@@ -65,15 +66,21 @@ export function bindCreatedBy(lookup: (sessionId: string) => CreatedBy | undefin
  * OpenCode: context instructions). Nothing is written to the workdir or the session home.
  * Fixed when the session is created. `id` is the broker session id (defaults to `sessionId`);
  * `sessionId` alone also adds the inbox block (an rpc worker passes `id` without `sessionId`: no inbox).
- * Order: rules header, environment.md (reference), domain index, inbox.
+ * Order: rules header, environment.md (reference) and its Interactive HTML section, domain index, inbox.
  */
 export function sessionInstructions(opts: { agent: AgentKind; sessionName: string; workdir: string; id?: string; sessionId?: string; inboxDir?: string; shellReads?: ShellReads }): string {
   const id = opts.id ?? opts.sessionId
   const role = id && roleLookup(id) === "personal_assistant" ? "personal_assistant" : "worker"
   return [
     buildAgentHeader({ name: opts.sessionName, role, workdir: opts.workdir, agent: opts.agent, id, createdBy: opts.sessionId ? createdByLookup?.(opts.sessionId) : undefined }),
-    readEnvironmentMd(),
+    // Diagrams is environment.md's last section; the Interactive HTML section (#104) follows it.
+    withInteractiveHtml(readEnvironmentMd()),
     buildMemoryPreamble(),
     opts.sessionId ? inboxInstructions(opts.sessionId, opts.inboxDir, opts.agent, opts.shellReads) : "",
   ].filter(s => s && s.trim()).join("\n")
+}
+
+/** environment.md as it was, then the Interactive HTML section (#104) after its last section, Diagrams. */
+function withInteractiveHtml(env: string): string {
+  return env + (env.endsWith("\n") ? "\n" : "\n\n") + interactiveHtmlInstructions()
 }

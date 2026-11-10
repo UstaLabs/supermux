@@ -1,4 +1,5 @@
 import { AGENT_KINDS, AgentKind } from "../shared/agents"
+import { SHOW_HTML_DESCRIPTION } from "../core/show-html/description"
 import type { ShimTool, ToolOperation, ToolRoute } from "../shared/socket-frames"
 export type { AgentKind } from "../shared/agents"
 export type { ToolRoute } from "../shared/socket-frames"
@@ -48,6 +49,23 @@ const OUTBOUND_TOOLS = [
       },
       required: ["files"],
     },
+  },
+  {
+    // #104: a live HTML page as a card in the chat. Outbound like attach: the broker checks the page and posts it.
+    name: "show_html",
+    description: SHOW_HTML_DESCRIPTION,
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string", minLength: 1, maxLength: 80, description: "The card's title." },
+        html: { type: "string", description: "A whole document or a fragment. Exactly one of html or file." },
+        file: { type: "string", description: "A path to an .html file inside your working folder. Exactly one of html or file." },
+        height: { type: "integer", minimum: 80, maximum: 2000, description: "px for the first paint when the check can't measure it (default 280)." },
+      },
+      required: ["title"],
+    },
+    // It changes no file, so plan modes (Claude's among them) don't refuse it.
+    annotations: SENDS_ONLY,
   },
   {
     name: "react",
@@ -397,6 +415,8 @@ export function toolResult(name: string, result: ToolCallResult, rpcOnly = false
     const id = value && typeof value === "object" && "message_id" in value ? value.message_id : undefined
     return { content: [{ type: "text", text: id != null ? `sent (id: ${id})` : "sent" }] }
   }
+  // show_html answers in a sentence (shown, or not shown with its problems), not JSON.
+  if (!rpcOnly && name === "show_html" && typeof result.value === "string") return { content: [{ type: "text", text: result.value }] }
   return { content: [{ type: "text", text: JSON.stringify(result.value ?? "ok") }] }
 }
 
