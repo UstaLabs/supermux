@@ -5,6 +5,7 @@ import dev.supermux.desktop.testDeps
 
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -275,20 +276,19 @@ class SystemSettingsHubTest {
                 false
             }
         }
+        // #97 Step 2: the status is the machine page's own header now, not a sub-page.
         ui.openSettings(SettingsSection.Machine)
-        waitForIdle()
-        onNodeWithTag("machine_row_status").performClick()
         waitForIdle()
         assertEquals(SettingsSection.Machine, ui.settingsSection)
         waitUntil(timeoutMillis = 5_000) {
             try {
-                onNodeWithText("supermux 4.5.6").assertIsDisplayed()
+                onNodeWithTag("machine_status").assertTextContains("supermux 4.5.6", substring = true)
                 true
             } catch (_: Throwable) {
                 false
             }
         }
-        onNodeWithTag("settings_hub_back").assertIsDisplayed()
+        onNodeWithTag("machine_restart").assertIsDisplayed()
     }
 
     @Test fun multi_host_keying_reloads_system_per_active_host() = runComposeUiTest {

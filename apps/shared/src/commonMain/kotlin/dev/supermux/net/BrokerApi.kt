@@ -1577,6 +1577,14 @@ data class UpdateStatus(
     val disabled: Boolean = false,
 )
 
+/** What came of asking a broker to restart (`POST /system/restart`). */
+enum class BrokerRestart {
+    Accepted,
+    /** 409: no service manager runs it, so it can't bring itself back. */
+    CantRestartItself,
+    Failed,
+}
+
 /** Result of POST /api/update/run. `started=true` (HTTP 202) means the broker
  *  began self-updating — poll [UpdateStatus] for progress. `error="busy"` (409)
  *  means an update is already in flight. For source/docker/disabled installs the
@@ -2723,6 +2731,20 @@ class BrokerApi(
         ensureMutationSuccess(
             http.post("$httpBase/system/restart") { authHeader() },
         )
+    }
+
+    /**
+     * POST /system/restart, read for the machine page: a 409 is a broker no service manager runs, which refuses
+     * rather than stop for good ([BrokerRestart.CantRestartItself]); any other non-2xx is [BrokerRestart.Failed].
+     * Transport failures throw, as every call here does.
+     */
+    suspend fun restartBrokerResult(): BrokerRestart {
+        val resp = http.post("$httpBase/system/restart") { authHeader() }
+        return when {
+            resp.status.isSuccess() -> BrokerRestart.Accepted
+            resp.status.value == 409 -> BrokerRestart.CantRestartItself
+            else -> BrokerRestart.Failed
+        }
     }
 
 

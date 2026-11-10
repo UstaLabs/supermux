@@ -331,7 +331,7 @@ fun KitNote(text: String, modifier: Modifier = Modifier) {
     Text(text, fontSize = 12.sp, lineHeight = 18.sp, color = c.dim, modifier = modifier.padding(top = 10.dp))
 }
 
-enum class KitDot { Ok, Off, Warn }
+enum class KitDot { Ok, Off, Warn, Danger }
 
 @Composable
 fun KitDotMark(dot: KitDot, modifier: Modifier = Modifier) {
@@ -340,6 +340,7 @@ fun KitDotMark(dot: KitDot, modifier: Modifier = Modifier) {
         KitDot.Ok -> c.ok
         KitDot.Off -> c.faint
         KitDot.Warn -> c.warn
+        KitDot.Danger -> c.danger
     }
     Box(modifier.size(6.dp).clip(CircleShape).background(tone))
 }

@@ -71,16 +71,21 @@ import dev.supermux.net.KeepAwakeState
 import dev.supermux.state.FleetStore
 import dev.supermux.ui.settings.HostingActions
 import dev.supermux.ui.settings.HostingCopy
+import dev.supermux.ui.settings.HostingPhase
 import dev.supermux.ui.settings.HostingPowerUi
 import dev.supermux.ui.settings.KeepAwakeUi
 import dev.supermux.ui.settings.LidClosedUi
 import dev.supermux.ui.settings.HostingSettingsScreen
 import dev.supermux.ui.settings.HostingUiState
+import dev.supermux.ui.settings.pages.ThisComputerHosting
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.widgets.Dialog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -171,7 +176,18 @@ internal fun desktopHostingUiState(
         gitRequirement = gitRequirement.takeIf { running },
         power = power?.let { p -> if (running) p else p.copy(keepAwake = null) },
         checkoutMoved = checkoutMoved.takeIf { running },
+        phase = hostingPhase(status),
+        failReason = (status as? HostingStatus.CantStart)?.reason,
     )
+}
+
+/** Pure: the machine page's word for where hosting is. A takeover or downgrade question is still starting. */
+internal fun hostingPhase(status: HostingStatus): HostingPhase = when (status) {
+    HostingStatus.NotHosting -> HostingPhase.Off
+    HostingStatus.Starting, is HostingStatus.AskTakeover, is HostingStatus.AskDowngrade -> HostingPhase.Starting
+    is HostingStatus.Running -> HostingPhase.Running
+    is HostingStatus.Restarting -> HostingPhase.Restarting
+    is HostingStatus.CantStart -> HostingPhase.Failed
 }
 
 /**
@@ -302,7 +318,108 @@ fun DesktopHostingSettings(onBack: () -> Unit, topBarShown: Boolean) {
         return
     }
     val hostStore = LocalPairedHostStore.current
+    val lanIp = rememberLanIp()
+    val gitRequirement by sup.gitRequirement.collectAsState()
+    val wizard by HostingTurnOn.model.collectAsState()
+    var showPair by remember { mutableStateOf(false) }
+    val state = rememberDesktopHostingState(sup)
+    val actions = rememberDesktopHostingActions(sup, onPair = { showPair = true })
+    HostingSettingsScreen(state = state, actions = actions, onBack = onBack, topBarShown = topBarShown)
+
+    if (showPair && hostStore != null) {
+        PairQrDialog(sup, hostStore, lanIp, onClose = { showPair = false })
+    }
+    wizard?.let { m -> TurnOnWizardDialog(sup, m, gitRequirement) { installGitOnThisComputer(sup, hostStore, m.localToken) } }
+}
+
+/**
+ * The machine page's Start hosting (#97 Step 2): the turn-on sheet's three switches, then the wizard's start + pair
+ * of "This computer" without its QR (a phone pairs from Devices). It outlives the page, like every supervisor call.
+ */
+object HostingStart {
+    /** The run in flight (null when none): its model says Preparing / Ready / Error. */
+    val model = MutableStateFlow<HostWizardModel?>(null)
+    internal var background = true
+    internal var awake = true
+}
+
+internal fun startHosting(
+    sup: HostSupervisor,
+    hostStore: PairedHostStore?,
+    power: KeepAwakeControls?,
+    background: Boolean,
+    awake: Boolean,
+    relay: Boolean,
+    refreshFleet: () -> Unit,
+) {
+    HostingStart.background = background
+    HostingStart.awake = awake
+    hostingScope.launch {
+        if (sup.prefs.value.relay != relay) sup.setRelay(relay)
+        if (sup.prefs.value.background != background) sup.setBackground(background)
+        if (hostStore == null || DesktopHostBootstrap.isReadOnly(sup.status.value)) {
+            sup.setHosting(true)
+            return@launch
+        }
+        val m = DesktopHostBootstrap.buildModel(hostingScope, hostStore, sup, onStoreChanged = refreshFleet)
+        HostingStart.model.value = m
+        sup.setHosting(true)
+        finishStart(m, power)
+    }
+}
+
+/** Prepares [m] and, once it is ready, pairs "This computer" and applies the sheet's switches. */
+private suspend fun finishStart(m: HostWizardModel, power: KeepAwakeControls?) {
+    m.prepare()
+    val end = m.state.first { it !is HostWizardUiState.Preparing }
+    if (end is HostWizardUiState.Ready) {
+        m.finish(HostingStart.background)
+        HostingStart.model.value = null
+        power?.setEnabled(HostingStart.awake)
+    }
+}
+
+/** The hosting of this computer as its machine page shows it; null where the app does not host. */
+@Composable
+fun rememberThisComputerHosting(): ThisComputerHosting? {
+    val sup = LocalHostSupervisor.current ?: return null
+    val hostStore = LocalPairedHostStore.current
+    val power = LocalKeepAwakeControls.current
     val fleet by rememberUpdatedState(LocalHostingFleet.current)
+    val state = rememberDesktopHostingState(sup)
+    val status by sup.status.collectAsState()
+    val starting by HostingStart.model.collectAsState()
+    val startState = starting?.state?.collectAsState()?.value
+    var recent by remember { mutableStateOf(emptyList<String>()) }
+    LaunchedEffect(status) {
+        while (true) {
+            recent = withContext(Dispatchers.IO) { tailLines(sup.logFile, 3) }
+            delay(5_000)
+        }
+    }
+    val actions = rememberDesktopHostingActions(sup, onPair = {})
+    return ThisComputerHosting(
+        state = state,
+        actions = actions,
+        recentLog = recent,
+        readLog = { withContext(Dispatchers.IO) { tailLines(sup.logFile, 400) } },
+        startHosting = { bg, awake, relay -> startHosting(sup, hostStore, power, bg, awake, relay) { fleet?.refreshFromStore() } },
+        restart = { hostingScope.async { sup.restart() }.await() },
+        turnOnError = (startState as? HostWizardUiState.Error)?.message,
+        retryTurnOn = { starting?.let { m -> hostingScope.launch { finishStart(m, power) } } },
+    )
+}
+
+@Composable
+private fun rememberLanIp(): String? {
+    val lanIp by produceState<String?>(null) { value = withContext(Dispatchers.IO) { lanIpv4(systemNetIfs()) } }
+    return lanIp
+}
+
+/** Settings' view of the supervisor: status, prefs, addresses, git, power. */
+@Composable
+private fun rememberDesktopHostingState(sup: HostSupervisor): HostingUiState {
+    val hostStore = LocalPairedHostStore.current
     val sessions = LocalHostingSessions.current
     val status by sup.status.collectAsState()
     val prefs by sup.prefs.collectAsState()
@@ -311,7 +428,6 @@ fun DesktopHostingSettings(onBack: () -> Unit, topBarShown: Boolean) {
     val backgroundError by sup.backgroundError.collectAsState()
     val gitRequirement by sup.gitRequirement.collectAsState()
     val checkoutMoved by sup.checkoutMoved.collectAsState()
-    val wizard by HostingTurnOn.model.collectAsState()
     val power = LocalKeepAwakeControls.current
     val powerUi = power?.let { c ->
         val keepAwake by c.keepAwake.collectAsState()
@@ -322,11 +438,9 @@ fun DesktopHostingSettings(onBack: () -> Unit, topBarShown: Boolean) {
         val fileVaultOff by c.fileVaultOff.collectAsState()
         desktopPowerUi(keepAwake, hasBattery, appHeld, writeError, c.isMac, lid, fileVaultOff)
     }
-
-    val lanIp by produceState<String?>(null) { value = withContext(Dispatchers.IO) { lanIpv4(systemNetIfs()) } }
+    val lanIp = rememberLanIp()
     var relayUrl by remember { mutableStateOf<String?>(null) }
     var logTail by remember { mutableStateOf(emptyList<String>()) }
-    var showPair by remember { mutableStateOf(false) }
 
     // The relay address comes from /me, with "This computer"'s token.
     LaunchedEffect(status, prefs.relay, hostId) {
@@ -342,7 +456,7 @@ fun DesktopHostingSettings(onBack: () -> Unit, topBarShown: Boolean) {
         logTail = if (status is HostingStatus.CantStart) withContext(Dispatchers.IO) { tailLines(sup.logFile) } else emptyList()
     }
 
-    val state = desktopHostingUiState(
+    return desktopHostingUiState(
         status = status,
         prefs = prefs,
         sessions = sessions,
@@ -356,7 +470,16 @@ fun DesktopHostingSettings(onBack: () -> Unit, topBarShown: Boolean) {
         power = powerUi,
         checkoutMoved = checkoutMoved,
     )
-    val actions = remember(sup, hostStore, power) {
+}
+
+/** What Settings asks of the supervisor; every call outlives the page. */
+@Composable
+private fun rememberDesktopHostingActions(sup: HostSupervisor, onPair: () -> Unit): HostingActions {
+    val hostStore = LocalPairedHostStore.current
+    val fleet by rememberUpdatedState(LocalHostingFleet.current)
+    val power = LocalKeepAwakeControls.current
+    val pair by rememberUpdatedState(onPair)
+    return remember(sup, hostStore, power) {
         object : HostingActions {
             override fun setHosting(on: Boolean) {
                 when {
@@ -373,7 +496,7 @@ fun DesktopHostingSettings(onBack: () -> Unit, topBarShown: Boolean) {
             override fun restart() { hostingScope.launch { sup.restart() } }
             override fun retry() { hostingScope.launch { sup.ensure() } }
             override fun showLog() { openFile(sup.logFile) }
-            override fun pairDevice() { showPair = true }
+            override fun pairDevice() { pair() }
             override fun manageIt() {
                 val id = sup.hostId.value
                 hostingScope.launch { if (id != null) sup.forgetLeftAlone(id) else sup.ensure() }
@@ -385,13 +508,6 @@ fun DesktopHostingSettings(onBack: () -> Unit, topBarShown: Boolean) {
             override fun uninstallLidHelper() { power?.let { hostingScope.launch { it.uninstallLidHelper() } } }
         }
     }
-
-    HostingSettingsScreen(state = state, actions = actions, onBack = onBack, topBarShown = topBarShown)
-
-    if (showPair && hostStore != null) {
-        PairQrDialog(sup, hostStore, lanIp, onClose = { showPair = false })
-    }
-    wizard?.let { m -> TurnOnWizardDialog(sup, m, gitRequirement) { installGitOnThisComputer(sup, hostStore, m.localToken) } }
 }
 
 private fun openTurnOnWizard(sup: HostSupervisor, hostStore: PairedHostStore, refreshFleet: () -> Unit) {

@@ -91,10 +91,17 @@ data class HostingUiState(
     val gitRequirement: GitRequirement? = null,
     val power: HostingPowerUi? = null,
     val checkoutMoved: String? = null,
+    /** Where hosting is, for the machine page's status line and its While you're away section. */
+    val phase: HostingPhase = if (hosting) HostingPhase.Running else HostingPhase.Off,
+    /** Why it can't start ([HostingPhase.Failed]), in words. */
+    val failReason: String? = null,
 ) {
     /** The local broker has no git: its git features are off (agents still run). */
     val gitMissing: Boolean get() = gitRequirement?.ok == false
 }
+
+/** This computer's hosting, as the machine page tells it (#97 Step 2). */
+enum class HostingPhase { Off, Starting, Running, Restarting, Failed }
 
 /**
  * The power rows of Settings ▸ Hosting (spec "Keep the computer awake while hosting"):

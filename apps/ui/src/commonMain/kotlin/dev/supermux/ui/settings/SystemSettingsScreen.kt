@@ -58,6 +58,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import dev.supermux.net.BrokerRestart
 import dev.supermux.net.RunUpdateResult
 import dev.supermux.net.TelemetryRecent
 import dev.supermux.net.TelemetryState
@@ -95,6 +96,11 @@ class SystemSettingsActions(
     val runUpdate: suspend () -> RunUpdateResult? = { null },
     /** True when the restart POST was accepted. */
     val restartBroker: suspend () -> Boolean = { false },
+    /**
+     * The machine page's Restart: tells a broker that can't restart itself (409, no service manager) from one that
+     * failed. Defaults to [restartBroker]'s yes/no.
+     */
+    val restart: suspend () -> BrokerRestart = { if (restartBroker()) BrokerRestart.Accepted else BrokerRestart.Failed },
     /** Telemetry state on the host; `null` = failure or an older broker (section hidden). */
     val getTelemetry: suspend () -> TelemetryState? = { null },
     val setTelemetry: suspend (Boolean) -> TelemetryState? = { null },
@@ -109,6 +115,7 @@ fun rememberSystemSettingsActions(app: HostStore): SystemSettingsActions = remem
         checkUpdate = { app.checkUpdate() },
         runUpdate = { app.runUpdate() },
         restartBroker = { app.restartBroker() },
+        restart = { app.restartBrokerResult() },
         getTelemetry = { app.getTelemetry() },
         setTelemetry = { app.setTelemetry(it) },
         getTelemetryRecent = { app.getTelemetryRecent() },
@@ -123,6 +130,7 @@ fun rememberSystemSettingsActions(fleet: FleetStore): SystemSettingsActions = re
         checkUpdate = { fleet.checkUpdate() },
         runUpdate = { fleet.runUpdate() },
         restartBroker = { fleet.restartBroker() },
+        restart = { fleet.restartBrokerResult() },
         getTelemetry = { fleet.getTelemetry() },
         setTelemetry = { fleet.setTelemetry(it) },
         getTelemetryRecent = { fleet.getTelemetryRecent() },

@@ -1567,6 +1567,8 @@ class FleetStore(
      * `SystemSettingsScreen` surfaces the failure off this Boolean.
      */
     suspend fun restartBroker(): Boolean = activeApp()?.restartBroker() == true
+    suspend fun restartBrokerResult(): dev.supermux.net.BrokerRestart =
+        activeApp()?.restartBrokerResult() ?: dev.supermux.net.BrokerRestart.Failed
     fun bindMessageTts() { activeApp()?.bindMessageTts() }
     // Voice settings mutations (cluster E5). These were fire-and-forget `Unit`s launched into
     // [fleetScope], so a rejected save looked exactly like an accepted one and the picked chip

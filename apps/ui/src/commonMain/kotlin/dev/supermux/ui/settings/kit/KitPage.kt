@@ -5,6 +5,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Spacer
@@ -15,6 +16,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -22,6 +25,7 @@ import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -38,8 +42,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsPropertyKey
 import androidx.compose.ui.semantics.SemanticsPropertyReceiver
@@ -125,6 +131,8 @@ fun KitPage(
     backLabel: String? = null,
     onBack: (() -> Unit)? = null,
     tag: String? = null,
+    /** A glyph before the wide title (the machine page's laptop or server). */
+    titleGlyph: ImageVector? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val c = kitColors()
@@ -185,14 +193,19 @@ fun KitPage(
                     )
                 }
                 if (!m.phone) {
-                    Text(
-                        title,
-                        fontSize = m.pageTitle,
-                        fontWeight = FontWeight.SemiBold,
-                        letterSpacing = (-0.19).sp,
-                        color = c.text,
-                        modifier = Modifier.semantics { heading() }.testTag("settings_page_title"),
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        if (titleGlyph != null) {
+                            Icon(titleGlyph, contentDescription = null, tint = c.text, modifier = Modifier.size(20.dp))
+                        }
+                        Text(
+                            title,
+                            fontSize = m.pageTitle,
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = (-0.19).sp,
+                            color = c.text,
+                            modifier = Modifier.semantics { heading() }.testTag("settings_page_title"),
+                        )
+                    }
                 }
                 scope?.invoke()
                 if (lede != null) Text(lede, fontSize = 12.5.sp, lineHeight = 19.sp, color = c.dim, modifier = Modifier.padding(top = 10.dp))

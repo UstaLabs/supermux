@@ -2473,6 +2473,10 @@ class HostStore(
     suspend fun restartBroker(): Boolean =
         runApi("restartBroker") { api.restartBroker(); true } ?: false
 
+    /** POST /system/restart, telling a broker that can't restart itself (409) from one that failed. */
+    suspend fun restartBrokerResult(): dev.supermux.net.BrokerRestart =
+        runApi("restartBroker") { api.restartBrokerResult() } ?: dev.supermux.net.BrokerRestart.Failed
+
 
     // ── LSP settings (M4g-4 Task 1) ────────────────────────────────────────────────────
     // Backs the LspSettingsScreen overlay (M4g-4 Task 2/3): enable/disable + install + add/remove

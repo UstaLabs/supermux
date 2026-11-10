@@ -126,4 +126,24 @@ val SettingsSearchIndex: List<SettingsSearchEntry> = listOf(
         SettingsSection.PrivacyLabs, "assistant-overlay", "Assistant overlay", "experimental bubble float head talk",
         shownWhen = { it.caps.assistantOverlay },
     ),
+    // The machine page (Step 2): the machine Settings is about. While you're away is this computer's, on desktop.
+    SettingsSearchEntry(SettingsSection.Machine, "restart", "Restart", "reboot"),
+    SettingsSearchEntry(SettingsSection.Machine, "updates", "Update supermux", "version check for updates"),
+    SettingsSearchEntry(SettingsSection.Machine, "away", "While you're away", "hosting background", shownWhen = { it.caps.localBroker }),
+    SettingsSearchEntry(
+        SettingsSection.Machine, "keep-running", "Keep running in the background", "hosting startup service",
+        shownWhen = { it.caps.localBroker },
+    ),
+    SettingsSearchEntry(
+        SettingsSection.Machine, "keep-awake", "Keep this computer awake", "sleep battery lid",
+        shownWhen = { it.caps.localBroker },
+    ),
+    SettingsSearchEntry(
+        SettingsSection.Machine, "reach-anywhere", "Reach it from anywhere", "remote relay",
+        shownWhen = { it.caps.localBroker },
+    ),
+    SettingsSearchEntry(SettingsSection.Machine, "address", "On this network", "address url ip", shownWhen = { it.caps.localBroker }),
+    SettingsSearchEntry(SettingsSection.Machine, "log", "Recent log", "log show", shownWhen = { it.caps.localBroker }),
+    // Its row shows only while not hosting: the anchor is the whole section, so it lands either way.
+    SettingsSearchEntry(SettingsSection.Machine, "host-on", "Host on this computer", "hosting start", shownWhen = { it.caps.localBroker }),
 )

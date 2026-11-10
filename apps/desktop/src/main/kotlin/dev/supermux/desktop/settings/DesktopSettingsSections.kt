@@ -21,7 +21,9 @@ import dev.supermux.ui.settings.GLOSSARY_SUB
 import dev.supermux.ui.settings.pages.CodingPage
 import dev.supermux.ui.settings.pages.GeneralPage
 import dev.supermux.ui.settings.pages.GlossaryPage
-import dev.supermux.ui.settings.pages.InterimMachinePage
+import dev.supermux.ui.settings.pages.MachinePage
+import dev.supermux.ui.settings.pages.rememberMachineChats
+import dev.supermux.ui.settings.kit.LocalSettingsMachines
 import dev.supermux.ui.settings.pages.KeyboardShortcutsPage
 import dev.supermux.ui.settings.pages.MemoryPage
 import dev.supermux.ui.settings.pages.PrivacyLabsPage
@@ -44,8 +46,8 @@ import dev.supermux.ui.theme.AppearanceMode
 /**
  * Renders [place]'s desktop screen against [host]. Called from the hub's `content` slot.
  *
- * #97, the same mapping as `FleetSettingsSection`: every section is its page, the machine's own screens are on the
- * interim machine page; accounts live on each provider's page, and Git hosting is Coding's `github` anchor.
+ * #97, the same mapping as `FleetSettingsSection`: every section is its page, the machine page carries the
+ * machine's own parts; accounts live on each provider's page, and Git hosting is Coding's `github` anchor.
  */
 @Composable
 fun DesktopSettingsSection(
@@ -115,11 +117,6 @@ fun DesktopSettingsSection(
                 onBack = scope.onClose,
                 topBarShown = scope.topBarShown,
             )
-            // The supervisor, host store and session count come in through `LocalHostSupervisor` & co.
-            MachineSub.COMPUTER -> DesktopHostingSettings(
-                onBack = scope.onClose,
-                topBarShown = scope.topBarShown,
-            )
             MachineSub.DEVICES -> DevicesSettingsScreen(
                 actions = rememberDevicesSettingsActions(host),
                 onBack = scope.onClose,
@@ -136,12 +133,20 @@ fun DesktopSettingsSection(
                 // Always: the hub (phone) or the rail (wide) owns the title, never this screen (inventory bug 7).
                 topBarShown = true,
             )
-            else -> InterimMachinePage(
+            // `Machine/computer` (the "This computer" card) and the machine page itself: this computer's own page
+            // carries its hosting under While you're away; another machine's page has one line there instead.
+            else -> MachinePage(
+                system = rememberSystemSettingsActions(host),
+                chats = rememberMachineChats(host),
+                hosting = if (
+                    LocalPlatform.current.caps.localBroker &&
+                    (place.sub == MachineSub.COMPUTER || LocalSettingsMachines.current?.current?.local != false)
+                ) {
+                    rememberThisComputerHosting()
+                } else {
+                    null
+                },
                 onOpen = { scope.onOpen(SettingsPlace(SettingsSection.Machine, it)) },
-                // This computer's hosting, on this computer's own page (or with no machine known yet): a remote
-                // machine's page has none, and the hub would not show it there.
-                showComputer = LocalPlatform.current.caps.localBroker &&
-                    dev.supermux.ui.settings.kit.LocalSettingsMachines.current?.current?.local != false,
                 anchor = place.anchor,
                 onAnchorShown = scope.onAnchorShown,
             )

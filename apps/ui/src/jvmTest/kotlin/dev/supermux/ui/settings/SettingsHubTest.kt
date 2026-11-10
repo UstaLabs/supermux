@@ -441,8 +441,8 @@ class SettingsHubTest {
     }
 
     /**
-     * The Hosting extra row is gone (#97): this computer's hosting is the Machine page's "This computer" sub-page,
-     * whose row `InterimMachinePageTest` gates on `Caps.localBroker`. The Machine page itself is never a rail row —
+     * The Hosting extra row is gone (#97): this computer's hosting is on the Machine page (While you're away), and
+     * the "This computer" card still opens it as `Machine/computer`. The Machine page itself is never a rail row —
      * a machine card opens it — and its sub-pages go back to it before Settings closes.
      */
     @Test fun the_machine_page_is_not_a_rail_row_and_its_sub_pages_go_back_to_it() = runComposeUiTest {
