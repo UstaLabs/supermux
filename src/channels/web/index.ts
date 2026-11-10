@@ -4733,7 +4733,8 @@ export class WebChannel implements Channel {
       }
     }
     if (method === "GET" && path === "/devices") {
-      return this.json(this.store.list().map((d) => ({ name: d.name, created_at: d.created_at, last_seen_at: d.last_seen_at })))
+      // `current` marks the device whose token made this request, so a client can label its own row and keep it unrevocable.
+      return this.json(this.store.list().map((d) => ({ name: d.name, created_at: d.created_at, last_seen_at: d.last_seen_at, current: d.name === auth.device.name })))
     }
     if (method === "POST" && path === "/devices") {
       const body = await req.json().catch(() => ({})) as Record<string, unknown>

@@ -280,6 +280,8 @@ data class DeviceDto(
     val name: String,
     val created_at: String? = null,
     val last_seen_at: String? = null,
+    /** True on the device whose token made the request ("This device"); an older broker leaves it out → false. */
+    val current: Boolean = false,
 )
 
 @Serializable

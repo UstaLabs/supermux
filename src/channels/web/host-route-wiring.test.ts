@@ -199,3 +199,17 @@ test("POST /pair/claim rejects a reused secret", async () => {
   expect((await fetch(`${base()}/pair/claim`, once)).status).toBe(200)
   expect((await fetch(`${base()}/pair/claim`, once)).status).toBe(401)
 })
+
+test("GET /devices marks the device whose token made the request, and only that one", async () => {
+  const made = makeChannel({})
+  channel = made.channel; await channel.start()
+  const store = new DeviceStore(made.devicesFile)
+  store.mint("laptop")
+  const phone = store.mint("phone").token
+
+  const res = await fetch(`${base()}/devices`, { headers: { authorization: `Bearer ${phone}` } })
+
+  expect(res.status).toBe(200)
+  const body = await res.json() as Array<{ name: string; current: boolean }>
+  expect(body.map((d) => [d.name, d.current])).toEqual([["laptop", false], ["phone", true]])
+})
