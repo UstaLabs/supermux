@@ -26,7 +26,7 @@ class ContractTest {
             "subagent_update", "subagents_cleared", "activity_append_subagent", "activity_append_subagent_message",
             "request_open_subagent", "message_append_subagent", "council_update",
             "fs_dir", "fs_gone", "fs_err",
-            "accounts_changed", "account_login_state", "agents_changed", "accounts_settings", "session_state_account",
+            "accounts_changed", "account_login_state", "agents_changed", "accounts_settings", "session_state_account", "limit_wait",
             "reply_stream", "reply_stream_thinking", "reply_stream_end", "message_append_live", "activity_append_live", "snapshot_live",
         )
         for (n in names) {
@@ -48,6 +48,7 @@ class ContractTest {
                 is ServerFrame.ViewChanged -> {}
                 is ServerFrame.ViewMoved -> {}
                 is ServerFrame.SessionState -> {}
+                is ServerFrame.LimitWait -> assertEquals("Work Max", frame.wait?.accountLabel)
                 is ServerFrame.AgentState -> {}
                 is ServerFrame.AgentError -> {}
                 is ServerFrame.MessageAppend -> {}
@@ -84,7 +85,7 @@ class ContractTest {
                 ServerFrame.AgentsChanged -> {}
                 is ServerFrame.AgentAvatarChanged -> {}
                 is ServerFrame.AccountLoginState -> {}
-                is ServerFrame.AccountsSettings -> {}
+                is ServerFrame.AccountsSettings -> assertEquals(true, frame.autoResume)
                 is ServerFrame.HostRequirementsChanged -> {}
                 is ServerFrame.KeepAwakeChanged -> {}
                 is ServerFrame.TelemetryChanged -> {}

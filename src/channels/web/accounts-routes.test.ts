@@ -338,3 +338,14 @@ test("the limit wait (#92): DELETE /sessions/:id/limit-wait cancels it, POST …
   expect((await cookieLessPost("/sessions/s3/limit-wait/resume", {})).status).toBe(403)
   expect(calls).toHaveLength(4)
 })
+
+test("POST /debug/limit-wait (#92) makes a real wait on a session for a demo; bad input is refused", async () => {
+  const forced: Array<[string, number]> = []
+  const { call } = setup({ forceLimitWait: (id, minutes) => { forced.push([id, minutes]); return id === "s1" } })
+  await channel!.start()
+  expect(await call("POST", "/debug/limit-wait", { session: "s1", minutes: 3 })).toEqual({ status: 200, body: { ok: true } })
+  expect((await call("POST", "/debug/limit-wait", { session: "nope", minutes: 3 })).status).toBe(404)
+  expect((await call("POST", "/debug/limit-wait", { session: "s1", minutes: 0 })).status).toBe(400)
+  expect((await call("POST", "/debug/limit-wait", { minutes: 3 })).status).toBe(400)
+  expect(forced).toEqual([["s1", 3], ["nope", 3]])
+})
