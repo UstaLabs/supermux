@@ -15,6 +15,7 @@ import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.net.AccountUsage
@@ -34,6 +35,7 @@ import dev.supermux.net.WorktreeOrphanPageDto
 import dev.supermux.net.WorktreeOrphansDto
 import dev.supermux.net.WorktreeOwnerDto
 import dev.supermux.net.WorktreeSummaryDto
+import dev.supermux.state.AccountResult
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.setPlatformContent
 import dev.supermux.ui.platform.FakePlatform
@@ -198,6 +200,96 @@ class MachinePartsTest {
         onNodeWithTag("devices_revoke_error").assertTextEquals("Couldn’t revoke Ahmet's MacBook. Try again.")
         onNodeWithTag("devices_revoke_dialog").assertExists()
         onNodeWithTag("device_row_Ahmet's MacBook").assertExists()
+    }
+
+    // ── Rename (#97) ──
+
+    private fun ComposeUiTest.typeName(text: String) {
+        onNodeWithTag("devices_rename_field").performTextClearance()
+        onNodeWithTag("devices_rename_field").performTextInput(text)
+        waitForIdle()
+    }
+
+    @Test fun rename_opens_with_the_current_name_and_save_renames_then_reloads() = runComposeUiTest {
+        var list = listOf(fold, mac)
+        val renamed = mutableListOf<Pair<String, String>>()
+        page(devices = DevicesSettingsActions(
+            devicesLoad = { list },
+            deviceRename = { from, to ->
+                renamed += from to to
+                list = list.map { if (it.name == from) it.copy(name = to) else it }
+                AccountResult.Ok(list.first { it.name == to })
+            },
+        ))
+        click("device_rename_Ahmet's MacBook")
+        await("devices_rename_dialog")
+        has("devices_rename_dialog", "Rename device")
+        // The label, then the name in the field.
+        onNodeWithTag("devices_rename_field").assertTextEquals("Name", "Ahmet's MacBook")
+        typeName("  Studio laptop ")
+        tap("devices_rename_save")
+        gone("devices_rename_dialog")
+        assertEquals(listOf("Ahmet's MacBook" to "Studio laptop"), renamed)
+        await("device_row_Studio laptop")
+        onNodeWithTag("device_row_Ahmet's MacBook").assertDoesNotExist()
+    }
+
+    @Test fun this_device_can_be_renamed() = runComposeUiTest {
+        val renamed = mutableListOf<Pair<String, String>>()
+        page(devices = DevicesSettingsActions(
+            devicesLoad = { listOf(fold, mac) },
+            deviceRename = { from, to -> renamed += from to to; AccountResult.Ok(fold.copy(name = to)) },
+        ))
+        await("device_rename_Galaxy Z Fold7")
+        onNodeWithTag("device_rename_Galaxy Z Fold7").assertIsEnabled()
+        click("device_rename_Galaxy Z Fold7")
+        typeName("My Fold")
+        tap("devices_rename_save")
+        gone("devices_rename_dialog")
+        assertEquals(listOf("Galaxy Z Fold7" to "My Fold"), renamed)
+    }
+
+    @Test fun a_taken_name_is_refused_in_the_sheet_and_the_sheet_stays() = runComposeUiTest {
+        page(devices = DevicesSettingsActions(
+            devicesLoad = { listOf(fold, mac) },
+            deviceRename = { _, _ -> AccountResult.Failed(409, "name_taken", "Another device already has that name.") },
+        ))
+        click("device_rename_Ahmet's MacBook")
+        typeName("Galaxy Z Fold7")
+        tap("devices_rename_save")
+        await("devices_rename_error")
+        onNodeWithTag("devices_rename_error").assertTextEquals("Another device already has that name.")
+        onNodeWithTag("devices_rename_dialog").assertExists()
+        // Editing the name clears the refusal.
+        onNodeWithTag("devices_rename_field").performTextInput("2")
+        gone("devices_rename_error")
+    }
+
+    @Test fun any_other_refusal_says_try_again() = runComposeUiTest {
+        page(devices = DevicesSettingsActions(
+            devicesLoad = { listOf(mac) },
+            deviceRename = { _, _ -> AccountResult.Failed(null, null, "timeout") },
+        ))
+        click("device_rename_Ahmet's MacBook")
+        typeName("Studio")
+        tap("devices_rename_save")
+        await("devices_rename_error")
+        onNodeWithTag("devices_rename_error").assertTextEquals("Couldn’t rename Ahmet's MacBook. Try again.")
+    }
+
+    @Test fun a_blank_name_cannot_be_saved_and_the_same_name_asks_nothing() = runComposeUiTest {
+        val calls = AtomicInteger(0)
+        page(devices = DevicesSettingsActions(
+            devicesLoad = { listOf(mac) },
+            deviceRename = { _, to -> calls.incrementAndGet(); AccountResult.Ok(mac.copy(name = to)) },
+        ))
+        click("device_rename_Ahmet's MacBook")
+        typeName("   ")
+        onNodeWithTag("devices_rename_save").assertIsNotEnabled()
+        typeName(" Ahmet's MacBook ")
+        tap("devices_rename_save")
+        gone("devices_rename_dialog")
+        assertEquals(0, calls.get())
     }
 
     @Test fun pairing_shows_the_code_at_once_with_its_link_and_clock() = runComposeUiTest {

@@ -69,6 +69,7 @@ import dev.supermux.net.ProxyDto
 import dev.supermux.net.UsageResponse
 import dev.supermux.net.WorktreeListDto
 import dev.supermux.net.WorktreeSummaryDto
+import dev.supermux.state.AccountResult
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.retain.rememberRetainedOnPage
 import dev.supermux.ui.retain.rememberRetainedScope
@@ -116,6 +117,14 @@ object MachinePartsCopy {
     const val DEVICES = "Devices"
     const val THIS_DEVICE = "This device"
     const val REVOKE = "Revoke"
+    const val RENAME = "Rename"
+    const val RENAME_SAVE = "Save"
+    const val SAVING = "Saving…"
+    const val RENAME_TITLE = "Rename device"
+    const val NAME_TAKEN = "Another device already has that name."
+    /** The broker's limit on a device's name (#97). */
+    const val DEVICE_NAME_MAX = 40
+    const val NAME_TOO_LONG = "Use a name of 40 characters or fewer."
     const val REVOKING = "Revoking…"
     const val PAIR = "Pair a phone or computer"
     const val PAIR_HELP = "Scan a code or open a link on it"
@@ -196,6 +205,8 @@ object MachinePartsCopy {
     fun revokeTitle(device: String) = "Revoke $device?"
     fun revokeText(machine: String) = "It can’t reach $machine any more, and its open chats close on it. Pair it again to bring it back."
     fun revokeFailed(device: String) = "Couldn’t revoke $device. Try again."
+    fun renameFailed(device: String) = "Couldn’t rename $device. Try again."
+    fun renameGone(device: String) = "$device isn’t paired any more."
     fun pairText(sameNetwork: Boolean) = PAIR_TEXT + if (sameNetwork) SAME_NETWORK else ""
     fun expires(leftMs: Long): String {
         val s = ((leftMs.coerceAtLeast(0) + 999) / 1000).toInt()
@@ -365,6 +376,11 @@ private class DevicesForm {
     var revokeTarget by mutableStateOf<String?>(null)
     var revokeBusy by mutableStateOf(false)
     var revokeError by mutableStateOf<String?>(null)
+    /** The device being renamed, the name in the field, and the refusal under it (#97). */
+    var renameTarget by mutableStateOf<String?>(null)
+    var renameText by mutableStateOf("")
+    var renameBusy by mutableStateOf(false)
+    var renameError by mutableStateOf<String?>(null)
     var pairOpen by mutableStateOf(false)
     var minting by mutableStateOf(false)
     var mintFailed by mutableStateOf(false)
@@ -440,6 +456,17 @@ internal fun DevicesSection(
                 mark = KitMark.Glyph(KitGlyphs.Devices),
                 titleBadge = if (d.current) MachinePartsCopy.THIS_DEVICE else null,
             ) {
+                // Any device can be renamed, this one too.
+                KitGhostButton(
+                    MachinePartsCopy.RENAME,
+                    {
+                        form.renameError = null
+                        form.renameBusy = false
+                        form.renameText = d.name
+                        form.renameTarget = d.name
+                    },
+                    Modifier.testTag("device_rename_${d.name}"),
+                )
                 KitGhostButton(
                     MachinePartsCopy.REVOKE,
                     {
@@ -507,7 +534,77 @@ internal fun DevicesSection(
         }
     }
 
+    form.renameTarget?.let { target -> RenameSheet(actions, form, target) }
+
     if (form.pairOpen) PairSheet(actions, form, machine, pairOrigin, timings, onClose = { form.pairOpen = false })
+}
+
+/** Rename a device (#97): its current name in the field; the broker's refusal stays in the sheet. */
+@Composable
+private fun RenameSheet(actions: DevicesSettingsActions, form: DevicesForm, target: String) {
+    val calls = rememberRetainedScope()
+    val wanted = form.renameText.trim()
+    val canSave = wanted.isNotEmpty() && !form.renameBusy
+    val close = {
+        if (!form.renameBusy) {
+            form.renameTarget = null
+            form.renameError = null
+        }
+    }
+    fun save() {
+        if (!canSave) return
+        // The same name is no change: nothing to ask the broker.
+        if (wanted == target) { close(); return }
+        form.renameBusy = true
+        form.renameError = null
+        calls.launch {
+            val r = actions.deviceRename(target, wanted)
+            form.renameBusy = false
+            when {
+                r is AccountResult.Ok -> {
+                    form.renameTarget = null
+                    // The list comes from the broker again, never a local edit.
+                    form.changed++
+                }
+                r is AccountResult.Failed && (r.status == 409 || r.code == "name_taken") ->
+                    form.renameError = MachinePartsCopy.NAME_TAKEN
+                r is AccountResult.Failed && r.status == 404 -> {
+                    form.renameError = MachinePartsCopy.renameGone(target)
+                    form.changed++
+                }
+                r is AccountResult.Failed && (r.status == 400 || r.code == "name_invalid") ->
+                    form.renameError = MachinePartsCopy.NAME_TOO_LONG
+                else -> form.renameError = MachinePartsCopy.renameFailed(target)
+            }
+        }
+    }
+    KitSheet(
+        MachinePartsCopy.RENAME_TITLE,
+        onDismiss = close,
+        tag = "devices_rename_dialog",
+        buttons = {
+            KitGhostButton(MachinePartsCopy.CANCEL, close, Modifier.testTag("devices_rename_cancel"), enabled = !form.renameBusy)
+            KitGhostButton(
+                if (form.renameBusy) MachinePartsCopy.SAVING else MachinePartsCopy.RENAME_SAVE,
+                { save() },
+                Modifier.testTag("devices_rename_save"),
+                enabled = canSave,
+            )
+        },
+    ) {
+        KitTextField(
+            form.renameText,
+            {
+                form.renameText = it.take(MachinePartsCopy.DEVICE_NAME_MAX)
+                form.renameError = null
+            },
+            label = MachinePartsCopy.NAME,
+            enabled = !form.renameBusy,
+            onSubmit = { save() },
+            fieldTag = "devices_rename_field",
+        )
+        form.renameError?.let { SheetError(it, "devices_rename_error") }
+    }
 }
 
 /**

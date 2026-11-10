@@ -2910,6 +2910,17 @@ class BrokerApi(
             setBody(json.encodeToString(AddDeviceBody(name)))
         })
 
+    /**
+     * PATCH /devices/<urlencoded name> {name} → the renamed device (#97). Non-2xx throws: 409 `name_taken`
+     * (another device has it), 404 (not paired any more), 400 `name_invalid` (blank or too long).
+     */
+    suspend fun renameDevice(name: String, newName: String): DeviceDto =
+        decode(http.patch("$httpBase/devices/${urlEncode(name)}") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(AddDeviceBody(newName)))
+        })
+
     /** DELETE /devices/<urlencoded name> — non-2xx throws (same contract as postJson/putJson). */
     suspend fun revokeDevice(name: String) {
         ensureMutationSuccess(http.delete("$httpBase/devices/${urlEncode(name)}") {

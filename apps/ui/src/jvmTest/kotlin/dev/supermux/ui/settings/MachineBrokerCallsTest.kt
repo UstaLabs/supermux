@@ -1,6 +1,8 @@
 package dev.supermux.ui.settings
 
 import dev.supermux.net.BrokerApi
+import dev.supermux.net.DeviceDto
+import dev.supermux.state.AccountResult
 import dev.supermux.state.HostStore
 import dev.supermux.state.HostStoreDeps
 import dev.supermux.ui.chat.FakeSettingsStore
@@ -154,6 +156,17 @@ class MachineBrokerCallsTest {
     @Test fun revoke_is_false_on_500_and_on_404() {
         withBroker({ m, _ -> if (m == HttpMethod.Delete) broken to "{}" else null }) { assertFalse(it.app.revokeDevice("pixel-8")) }
         withBroker({ m, _ -> if (m == HttpMethod.Delete) HttpStatusCode.NotFound to "{}" else null }) { assertFalse(it.app.revokeDevice("already-gone")) }
+    }
+
+    @Test fun rename_patches_the_device_and_returns_it() = withBroker({ m, _ -> if (m == HttpMethod.Patch) ok to """{"name":"Pixel 9","current":false}""" else null }) {
+        assertEquals(AccountResult.Ok(DeviceDto("Pixel 9")), it.app.renameDevice("pixel-8", "Pixel 9"))
+        assertTrue(HttpMethod.Patch to "/devices/pixel-8" in it.calls, "${it.calls}")
+    }
+
+    @Test fun a_refused_rename_keeps_the_brokers_status_and_code() = withBroker({ m, _ ->
+        if (m == HttpMethod.Patch) HttpStatusCode.Conflict to """{"error":"Another device already has that name.","code":"name_taken"}""" else null
+    }) {
+        assertEquals(AccountResult.Failed(409, "name_taken", "Another device already has that name."), it.app.renameDevice("pixel-8", "mac"))
     }
 
     // ── Shared links ──────────────────────────────────────────────────────────────────────────────

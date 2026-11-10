@@ -1693,6 +1693,9 @@ class FleetStore(
     /** Paired devices; `null` = the call failed (cluster E4 — Android showed "No devices" for it). */
     suspend fun devices(): List<DeviceDto>? = activeApp()?.devices()
     suspend fun addDevice(name: String): AddDeviceResponse? = activeApp()?.addDevice(name)
+    /** Rename a device on the active host (#97). */
+    suspend fun renameDevice(name: String, newName: String): AccountResult<DeviceDto> =
+        activeApp()?.renameDevice(name, newName) ?: AccountResult.Failed(null, null, "No host is connected.")
     /** Revoke a device; true when the broker accepted the DELETE (cluster E4). */
     suspend fun revokeDevice(name: String): Boolean = activeApp()?.revokeDevice(name) == true
     // ── Worktrees ─────────────────────────────────────────────────────────

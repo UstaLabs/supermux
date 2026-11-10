@@ -1,4 +1,4 @@
-// The active host's paired devices: list, mint a pairing link, revoke (#97: the machine page's Devices).
+// The active host's paired devices: list, mint a pairing link, rename, revoke (#97: the machine page's Devices).
 package dev.supermux.ui.settings
 
 import androidx.compose.runtime.Composable
@@ -6,6 +6,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.remember
 import dev.supermux.net.AddDeviceResponse
 import dev.supermux.net.DeviceDto
+import dev.supermux.state.AccountResult
 import dev.supermux.state.FleetStore
 import dev.supermux.state.HostStore
 
@@ -21,6 +22,9 @@ class DevicesSettingsActions(
     val devicesLoad: suspend () -> List<DeviceDto>? = { null },
     val deviceAdd: suspend (name: String) -> AddDeviceResponse? = { null },
     val deviceRevoke: suspend (name: String) -> Boolean = { false },
+    /** The renamed device, or the broker's refusal (409 `name_taken`, 404 gone, 400 `name_invalid`). */
+    val deviceRename: suspend (name: String, newName: String) -> AccountResult<DeviceDto> =
+        { _, _ -> AccountResult.Failed(null, null, null) },
 )
 
 /** [DevicesSettingsActions] against one paired host — desktop's wiring. */
@@ -30,6 +34,7 @@ fun rememberDevicesSettingsActions(app: HostStore): DevicesSettingsActions = rem
         devicesLoad = { app.devices() },
         deviceAdd = { name -> app.addDevice(name) },
         deviceRevoke = { name -> app.revokeDevice(name) },
+        deviceRename = { name, newName -> app.renameDevice(name, newName) },
     )
 }
 
@@ -40,5 +45,6 @@ fun rememberDevicesSettingsActions(fleet: FleetStore): DevicesSettingsActions = 
         devicesLoad = { fleet.devices() },
         deviceAdd = { name -> fleet.addDevice(name) },
         deviceRevoke = { name -> fleet.revokeDevice(name) },
+        deviceRename = { name, newName -> fleet.renameDevice(name, newName) },
     )
 }
