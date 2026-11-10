@@ -35,7 +35,7 @@ fun rememberBrowserActions(app: HostStore): BrowserActions = remember(app) {
     // One token a run: the broker mints a new one each time it's asked. A failed ask isn't remembered (a broker fixed
     // or reachable again later must help without restarting the app); the web client, always refused (bearer only), asks
     // at most once a minute, and its iframe tab needs none.
-    val cookies = PreviewCookieCache(fetch = { runCatching { app.api.previewToken().cookie }.getOrNull() })
+    val cookies = PreviewCookieCache(fetch = { app.api.previewToken().cookie })
     BrowserActions(
         saveView = { workspaceId, viewId, state, title ->
             runCatching { app.api.patchView(workspaceId, viewId, PatchViewBody(title = title, state = state)) }.isSuccess
@@ -49,7 +49,7 @@ fun rememberBrowserActions(app: HostStore): BrowserActions = remember(app) {
     )
 }
 
-/** The preview cookie, asked for once a run when the host gives one; a failed ask is tried again after [retryMs]. */
+/** The preview cookie, asked for once a run when the host gives one; a failed ask is tried again after [retryMs], a cancelled one at once. */
 internal class PreviewCookieCache<T : Any>(
     private val fetch: suspend () -> T?,
     private val now: () -> Long = { START.elapsedNow().inWholeMilliseconds },
@@ -61,7 +61,16 @@ internal class PreviewCookieCache<T : Any>(
     suspend fun get(): T? {
         value?.let { return it }
         failedAt?.let { if (now() - it < retryMs) return null }
-        val got = fetch()
+        // A cancelled ask (the pane's effect restarting while the request is in flight, which over a relay it often is) is
+        // no answer: rethrown, never remembered, so the effect's next run asks again. Any other error is a failure.
+        val got = try {
+            fetch()
+        } catch (c: kotlinx.coroutines.CancellationException) {
+            throw c
+        } catch (e: Exception) {
+            println("[BrowserActions] preview cookie request failed: ${e::class.simpleName}: ${e.message?.take(160)}")
+            null
+        }
         if (got != null) value = got else failedAt = now()
         return got
     }
