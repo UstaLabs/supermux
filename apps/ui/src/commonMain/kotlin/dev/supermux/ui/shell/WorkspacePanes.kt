@@ -1407,6 +1407,18 @@ private fun ViewTabIcon(v: ViewDto?, agent: String?, selected: Boolean) {
         AgentLogo(agent = agent, size = 14.dp)
         return
     }
+    if (v?.kind == "browser") {
+        dev.supermux.ui.browser.LocalBrowserIcons.current?.get(v.id)?.let { icon ->
+            coil3.compose.AsyncImage(
+                model = icon,
+                contentDescription = null,
+                // A preview's icon needs the tab's cookie, which this request doesn't carry: the globe instead.
+                error = androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Outlined.Language),
+                modifier = Modifier.size(15.dp),
+            )
+            return
+        }
+    }
     val cs = MaterialTheme.colorScheme
     val glyph = when {
         v?.kind == "chat" -> Icons.Outlined.ChatBubbleOutline

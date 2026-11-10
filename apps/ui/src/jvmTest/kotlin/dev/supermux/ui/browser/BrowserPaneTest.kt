@@ -3,7 +3,9 @@ package dev.supermux.ui.browser
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.ComposeUiTest
@@ -72,13 +74,13 @@ class BrowserPaneTest {
         previewCookie = { cookie },
     )
 
-    private fun ComposeUiTest.show(rig: Rig, view: MutableState<ViewDto>, actions: BrowserActions, platform: FakePlatform = FakePlatform(), opener: LinkOpener? = null) {
+    private fun ComposeUiTest.show(rig: Rig, view: MutableState<ViewDto>, actions: BrowserActions, platform: FakePlatform = FakePlatform(), opener: LinkOpener? = null, icons: SnapshotStateMap<String, String>? = null) {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         val runtime = WebViewRuntime(
             RuntimeConfig(maxLive = 2, snapshotCacheBytes = 8L shl 20, factory = rig.engines, scope = scope, clock = { mainClock.currentTime }),
         )
         setPlatformContent(platform = platform) {
-            CompositionLocalProvider(LocalAppWebViews provides AppWebViews(runtime), LocalLinkOpener provides opener) {
+            CompositionLocalProvider(LocalAppWebViews provides AppWebViews(runtime), LocalLinkOpener provides opener, LocalBrowserIcons provides icons) {
                 BrowserPane(view.value, "w1", actions, Modifier.size(800.dp, 600.dp))
             }
         }
@@ -180,5 +182,17 @@ class BrowserPaneTest {
         waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag("browser-unavailable").fetchSemanticsNodes().isNotEmpty() }
         onNodeWithText("Open in your browser").performClick()
         assertEquals(listOf("https://vitejs.dev/"), platform.openedUrls)
+    }
+
+    @Test fun eachCommittedPageTellsItsTabItsIcon() = runComposeUiTest {
+        val rig = Rig()
+        val icons = mutableStateMapOf<String, String>()
+        show(rig, mutableStateOf(view("https://a.test/")), rig.actions(), icons = icons)
+        waitUntil(timeoutMillis = 5_000) { "https://a.test/" in rig.loads() }
+        rig.engines.created.forEach { it.evaluateAnswer = { "\"https://vitejs.dev/logo.svg\"" } }
+        onNodeWithTag("browser-address").performClick()
+        onNodeWithTag("browser-address").performTextReplacement("vitejs.dev")
+        onNodeWithTag("browser-address").performKeyInput { pressKey(Key.Enter) }
+        waitUntil(timeoutMillis = 5_000) { icons["b1"] == "https://vitejs.dev/logo.svg" }
     }
 }

@@ -1953,7 +1953,11 @@ private fun WorkspacePanel(
             browserOpener?.open(url, source, modified, onPlaced = { id -> if (compact) wsApp.setActiveView(current.id, id) })
         }
     }
-    CompositionLocalProvider(dev.supermux.ui.browser.LocalLinkOpener provides linkOpener) {
+    val browserIcons = remember(current.id) { mutableStateMapOf<String, String>() }
+    CompositionLocalProvider(
+        dev.supermux.ui.browser.LocalLinkOpener provides linkOpener,
+        dev.supermux.ui.browser.LocalBrowserIcons provides browserIcons,
+    ) {
         if (compact) {
             PhoneWorkspacePanes(
                 current = current,

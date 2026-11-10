@@ -23,3 +23,6 @@ val LocalAppWebViews = staticCompositionLocalOf<AppWebViews?> { null }
 
 /** The Browser tabs' own profile: their cookies and logins, kept apart from every other web view of the app's. */
 val BROWSER_PROFILE: WebProfile = WebProfile.Named("supermux-browser")
+
+/** Each Browser tab's page icon, by view id: the workspace's, so its tab strip can draw them (#105). Not synced. */
+val LocalBrowserIcons = staticCompositionLocalOf<androidx.compose.runtime.snapshots.SnapshotStateMap<String, String>?> { null }

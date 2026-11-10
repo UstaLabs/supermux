@@ -162,6 +162,13 @@ fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, mod
     // A zoom outlives the engine: a new lease gets it again.
     LaunchedEffect(live, zoom) { if (live && zoom != 1f) state.navigator.setZoom(zoom) }
 
+    // The page's icon for its tab, after each page it commits.
+    val icons = LocalBrowserIcons.current
+    LaunchedEffect(state.url, live) {
+        if (!live || icons == null || state.content !is WebContent.Url) return@LaunchedEffect
+        state.navigator.favicon()?.takeIf { it.startsWith("https://") || it.startsWith("http://") }?.let { icons[view.id] = it }
+    }
+
     // Each committed page, and its title, back to the view.
     LaunchedEffect(view.id) {
         snapshotFlow { state.url.takeIf { state.content is WebContent.Url } to state.title }
