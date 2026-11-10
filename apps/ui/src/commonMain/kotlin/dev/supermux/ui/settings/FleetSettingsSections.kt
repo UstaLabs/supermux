@@ -107,42 +107,17 @@ fun FleetSettingsSection(
             anchor = place.anchor,
             onAnchorShown = scope.onAnchorShown,
         )
-        SettingsSection.Machine -> when (place.sub) {
-            MachineSub.STATUS -> SystemSettingsScreen(
-                actions = rememberSystemSettingsActions(fleet),
-                onBack = scope.onClose,
-                topBarShown = scope.topBarShown,
-            )
-            // Devices and Proxies are standalone routes too (Route.Devices / Route.Proxies) — the same
-            // screens, which paint their own chrome there via `standalone = true`.
-            MachineSub.DEVICES -> DevicesSettingsScreen(
-                actions = rememberDevicesSettingsActions(fleet),
-                onBack = scope.onClose,
-                topBarShown = scope.topBarShown,
-            )
-            MachineSub.LINKS -> ProxiesSettingsScreen(
-                actions = rememberProxiesSettingsActions(fleet),
-                onBack = scope.onClose,
-                topBarShown = scope.topBarShown,
-            )
-            MachineSub.WORKTREES -> WorktreesSettingsScreen(
-                actions = rememberWorktreesSettingsActions(fleet),
-                onBack = scope.onClose,
-                // Always: the hub (phone) or the rail (wide) owns the title, never this screen (inventory bug 7).
-                topBarShown = true,
-            )
-            // Hosting is desktop-only, so a `Machine/computer` link lands on the machine page here too.
-            else -> MachinePage(
-                system = rememberSystemSettingsActions(fleet),
-                chats = rememberMachineChats(fleet),
-                devices = rememberDevicesSettingsActions(fleet),
-                links = rememberProxiesSettingsActions(fleet),
-                worktrees = rememberWorktreesSettingsActions(fleet),
-                usage = rememberUsageActions(fleet),
-                onOpenUsage = scope.onOpenUsage,
-                anchor = place.anchor,
-                onAnchorShown = scope.onAnchorShown,
-            )
-        }
+        // Hosting is desktop-only, so a `Machine/computer` link lands on the machine page here too.
+        SettingsSection.Machine -> MachinePage(
+            system = rememberSystemSettingsActions(fleet),
+            chats = rememberMachineChats(fleet),
+            devices = rememberDevicesSettingsActions(fleet),
+            links = rememberProxiesSettingsActions(fleet),
+            worktrees = rememberWorktreesSettingsActions(fleet),
+            usage = rememberUsageActions(fleet),
+            onOpenUsage = scope.onOpenUsage,
+            anchor = place.anchor,
+            onAnchorShown = scope.onAnchorShown,
+        )
     }
 }

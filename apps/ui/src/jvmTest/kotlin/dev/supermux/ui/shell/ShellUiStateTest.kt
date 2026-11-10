@@ -323,7 +323,7 @@ class WorkspaceUiStateTest {
         // still REPLACES whatever was open — the exclusivity rule that guard sat next to.
         val ui = ShellUiState()
         listOf(
-            Route.NewSession("d1"), Route.Usage, Route.Devices, Route.Proxies,
+            Route.NewSession("d1"), Route.Usage,
             Route.AddHost, Route.Displays, Route.Settings(SettingsSection.Voice), Route.Archived,
         ).forEach {
             ui.navigate(it)

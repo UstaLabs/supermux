@@ -11,12 +11,8 @@ import dev.supermux.state.HostStore
 import dev.supermux.ui.accounts.rememberAccountsActions
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.platform.LocalPlatform
-import dev.supermux.ui.settings.DevicesSettingsScreen
 import dev.supermux.ui.settings.MachineSub
-import dev.supermux.ui.settings.ProxiesSettingsScreen
 import dev.supermux.ui.settings.SettingsPlace
-import dev.supermux.ui.settings.SystemSettingsScreen
-import dev.supermux.ui.settings.WorktreesSettingsScreen
 import dev.supermux.ui.settings.GLOSSARY_SUB
 import dev.supermux.ui.settings.pages.CodingPage
 import dev.supermux.ui.settings.pages.GeneralPage
@@ -112,49 +108,26 @@ fun DesktopSettingsSection(
             anchor = place.anchor,
             onAnchorShown = scope.onAnchorShown,
         )
-        SettingsSection.Machine -> when (place.sub) {
-            MachineSub.STATUS -> SystemSettingsScreen(
-                actions = rememberSystemSettingsActions(host),
-                onBack = scope.onClose,
-                topBarShown = scope.topBarShown,
-            )
-            MachineSub.DEVICES -> DevicesSettingsScreen(
-                actions = rememberDevicesSettingsActions(host),
-                onBack = scope.onClose,
-                topBarShown = scope.topBarShown,
-            )
-            MachineSub.LINKS -> ProxiesSettingsScreen(
-                actions = rememberProxiesSettingsActions(host),
-                onBack = scope.onClose,
-                topBarShown = scope.topBarShown,
-            )
-            MachineSub.WORKTREES -> WorktreesSettingsScreen(
-                actions = rememberWorktreesSettingsActions(host),
-                onBack = scope.onClose,
-                // Always: the hub (phone) or the rail (wide) owns the title, never this screen (inventory bug 7).
-                topBarShown = true,
-            )
-            // `Machine/computer` (the "This computer" card) and the machine page itself: this computer's own page
-            // carries its hosting under While you're away; another machine's page has one line there instead.
-            else -> MachinePage(
-                system = rememberSystemSettingsActions(host),
-                chats = rememberMachineChats(host),
-                hosting = if (
-                    LocalPlatform.current.caps.localBroker &&
-                    (place.sub == MachineSub.COMPUTER || LocalSettingsMachines.current?.current?.local != false)
-                ) {
-                    rememberThisComputerHosting()
-                } else {
-                    null
-                },
-                devices = rememberDevicesSettingsActions(host),
-                links = rememberProxiesSettingsActions(host),
-                worktrees = rememberWorktreesSettingsActions(host),
-                usage = rememberUsageActions(host),
-                onOpenUsage = scope.onOpenUsage,
-                anchor = place.anchor,
-                onAnchorShown = scope.onAnchorShown,
-            )
-        }
+        // `Machine/computer` (the "This computer" card) and the machine page itself: this computer's own page
+        // carries its hosting under While you're away; another machine's page has one line there instead.
+        SettingsSection.Machine -> MachinePage(
+            system = rememberSystemSettingsActions(host),
+            chats = rememberMachineChats(host),
+            hosting = if (
+                LocalPlatform.current.caps.localBroker &&
+                (place.sub == MachineSub.COMPUTER || LocalSettingsMachines.current?.current?.local != false)
+            ) {
+                rememberThisComputerHosting()
+            } else {
+                null
+            },
+            devices = rememberDevicesSettingsActions(host),
+            links = rememberProxiesSettingsActions(host),
+            worktrees = rememberWorktreesSettingsActions(host),
+            usage = rememberUsageActions(host),
+            onOpenUsage = scope.onOpenUsage,
+            anchor = place.anchor,
+            onAnchorShown = scope.onAnchorShown,
+        )
     }
 }

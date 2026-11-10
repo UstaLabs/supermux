@@ -37,6 +37,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
@@ -71,7 +72,6 @@ import dev.supermux.ui.display.DisplaysScreen
 import dev.supermux.ui.intro.OnboardingFlow
 import dev.supermux.ui.intro.testPairing
 import dev.supermux.ui.nav.SettingsSection
-import dev.supermux.ui.settings.MachineSub
 import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.platform.NO_CAPS
 import dev.supermux.ui.prefs.UiPrefs
@@ -249,29 +249,33 @@ class ConfigurationChangeWorkTest {
         onNodeWithTag("settings_index").assertDoesNotExist()
     }
 
-    @Test fun a_machine_sub_page_open_on_a_phone_survives_a_recreation() = runComposeUiTest {
-        // #97: Devices is a sub-page of the machine page; the hub saves the sub-page with its place.
-        val activity = phoneShell(devicesHost(), settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.DEVICES) }
-        await("devices_settings_screen")
+    @Test fun the_machine_page_open_on_a_phone_survives_a_recreation() = runComposeUiTest {
+        // #97 Step 2: Devices is a part of the machine page; the old address lands on the page.
+        val host = devicesHost()
+        val activity = phoneShell(host, testFleet(host, online = true), settings = true) { openSettings(SettingsSection.Machine, sub = "devices") }
+        await("machine_page")
+        await("devices_add_button")
 
         activity.recreate()
 
-        await("devices_settings_screen")
-        onNodeWithTag("machine_page").assertDoesNotExist()
+        await("machine_page")
+        await("devices_add_button")
         onNodeWithTag("settings_index").assertDoesNotExist()
     }
 
     @Test fun the_settings_page_open_on_a_phone_stays_open_through_the_compact_to_wide_swap() = runComposeUiTest {
         val ui = ShellUiState()
-        val width = flippablePhone(devicesHost(), settings = true, ui = ui) { openSettings(SettingsSection.Machine, sub = MachineSub.DEVICES) }
-        await("devices_settings_screen")
+        val host = devicesHost()
+        val width = flippablePhone(host, testFleet(host, online = true), settings = true, ui = ui) { openMachine("devices") }
+        await("machine_page")
 
         unfold(width)
 
         // The wide hub shows the page the phone had open (it showed the rail's own section), and
         // its rail says so.
         await("settings_hub_rail")
-        await("devices_settings_screen")
+        await("machine_page")
+        await("devices_add_button")
         assertEquals(SettingsSection.Machine, ui.settingsSection)
     }
 
@@ -683,7 +687,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_expose_port_form_survives_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(proxiesHost(), settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.LINKS) }
+        val activity = proxiesHost().let { h -> phoneShell(h, testFleet(h, online = true), settings = true) { openMachine("links") } }
         fillTheExposeForm()
 
         activity.recreate()
@@ -692,7 +696,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_expose_port_form_survives_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(proxiesHost(), settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.LINKS) }
+        val width = proxiesHost().let { h -> flippablePhone(h, testFleet(h, online = true), settings = true) { openMachine("links") } }
         fillTheExposeForm()
 
         unfold(width)
@@ -701,39 +705,41 @@ class ConfigurationChangeWorkTest {
     }
 
     private fun ComposeUiTest.askToRemoveTheProxy() {
+        await("proxy_more_app.test")
+        onNodeWithTag("proxy_more_app.test").performScrollTo().performClick()
         await("proxy_remove_app.test")
         onNodeWithTag("proxy_remove_app.test").performClick()
         await("proxies_remove_dialog")
     }
 
     @Test fun the_remove_proxy_confirm_stays_open_through_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(proxiesHost(), settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.LINKS) }
+        val activity = proxiesHost().let { h -> phoneShell(h, testFleet(h, online = true), settings = true) { openMachine("links") } }
         askToRemoveTheProxy()
 
         activity.recreate()
 
         await("proxies_remove_dialog")
-        onNodeWithText("Remove proxy for \"app.test\"?").assertExists()
     }
 
     @Test fun the_remove_proxy_confirm_stays_open_through_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(proxiesHost(), settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.LINKS) }
+        val width = proxiesHost().let { h -> flippablePhone(h, testFleet(h, online = true), settings = true) { openMachine("links") } }
         askToRemoveTheProxy()
 
         unfold(width)
 
         await("proxies_remove_dialog")
-        onNodeWithText("Remove proxy for \"app.test\"?").assertExists()
     }
 
     private fun ComposeUiTest.askToMakeTheProxyPublic() {
-        await("proxy_public_switch_app.test")
-        onNodeWithTag("proxy_public_switch_app.test").performClick()
+        await("proxy_more_app.test")
+        onNodeWithTag("proxy_more_app.test").performScrollTo().performClick()
+        await("proxy_make_public_app.test")
+        onNodeWithTag("proxy_make_public_app.test").performClick()
         await("proxies_public_dialog")
     }
 
     @Test fun the_make_public_confirm_stays_open_through_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(proxiesHost(), settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.LINKS) }
+        val activity = proxiesHost().let { h -> phoneShell(h, testFleet(h, online = true), settings = true) { openMachine("links") } }
         askToMakeTheProxyPublic()
 
         activity.recreate()
@@ -742,7 +748,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_make_public_confirm_stays_open_through_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(proxiesHost(), settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.LINKS) }
+        val width = proxiesHost().let { h -> flippablePhone(h, testFleet(h, online = true), settings = true) { openMachine("links") } }
         askToMakeTheProxyPublic()
 
         unfold(width)
@@ -880,19 +886,17 @@ class ConfigurationChangeWorkTest {
         return testHostStore(broker.handler) to broker
     }
 
+    /** The machine page's Pair sheet mints its code the moment it opens (#97 Step 2: no name step). */
     private fun ComposeUiTest.mintAPairingLink(gate: Gate) {
         await("devices_add_button")
-        onNodeWithTag("devices_add_button").performClick()
-        await("devices_add_name")
-        onNodeWithTag("devices_add_name").performTextInput("Work laptop")
-        onNodeWithTag("devices_add_create").performClick()
+        onNodeWithTag("devices_add_button").performScrollTo().performClick()
         awaitHeld(gate)
     }
 
     @Test fun a_pairing_link_minted_during_a_recreation_is_shown() = runComposeUiTest {
         val gate = Gate()
         val (app, broker) = mintingHost(gate)
-        val activity = phoneShell(app, settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.DEVICES) }
+        val activity = phoneShell(app, testFleet(app, online = true), settings = true) { openMachine("devices") }
         mintAPairingLink(gate)
 
         activity.recreate()
@@ -907,7 +911,7 @@ class ConfigurationChangeWorkTest {
     @Test fun a_pairing_link_minted_during_the_compact_to_wide_swap_is_shown() = runComposeUiTest {
         val gate = Gate()
         val (app, broker) = mintingHost(gate)
-        val width = flippablePhone(app, settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.DEVICES) }
+        val width = flippablePhone(app, testFleet(app, online = true), settings = true) { openMachine("devices") }
         mintAPairingLink(gate)
 
         unfold(width)
@@ -922,28 +926,28 @@ class ConfigurationChangeWorkTest {
 
     private fun ComposeUiTest.askToRevokeTheDevice() {
         await("device_revoke_Old phone")
-        onNodeWithTag("device_revoke_Old phone").performClick()
+        onNodeWithTag("device_revoke_Old phone").performScrollTo().performClick()
         await("devices_revoke_dialog")
     }
 
     @Test fun the_revoke_device_confirm_stays_open_through_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(pairedDeviceHost(), settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.DEVICES) }
+        val activity = pairedDeviceHost().let { h -> phoneShell(h, testFleet(h, online = true), settings = true) { openMachine("devices") } }
         askToRevokeTheDevice()
 
         activity.recreate()
 
         await("devices_revoke_dialog")
-        onNodeWithText("Remove \"Old phone\" from authorized devices?").assertExists()
+        onNodeWithText("Revoke Old phone?").assertExists()
     }
 
     @Test fun the_revoke_device_confirm_stays_open_through_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(pairedDeviceHost(), settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.DEVICES) }
+        val width = pairedDeviceHost().let { h -> flippablePhone(h, testFleet(h, online = true), settings = true) { openMachine("devices") } }
         askToRevokeTheDevice()
 
         unfold(width)
 
         await("devices_revoke_dialog")
-        onNodeWithText("Remove \"Old phone\" from authorized devices?").assertExists()
+        onNodeWithText("Revoke Old phone?").assertExists()
     }
 
     // ── Settings › Worktrees: a batch delete that must not stop halfway ─────────────────────────
@@ -965,12 +969,16 @@ class ConfigurationChangeWorkTest {
     }
 
     private fun ComposeUiTest.deleteEveryWorktree(gate: Gate) {
+        await("wt_review")
+        waitUntil(timeoutMillis = 10_000) { runCatching { onNodeWithTag("wt_review").assertIsEnabled() }.isSuccess }
+        onNodeWithTag("wt_review").performScrollTo().performClick()
         await("wt_select_clean")
-        onNodeWithTag("wt_select_clean").performClick()
-        await("wt_delete_bar")
-        onNodeWithTag("wt_delete_bar").performClick()
+        onNodeWithTag("wt_select_clean").performScrollTo().performClick()
+        // The sheet scrolls as a whole: its buttons sit under the 21 rows.
+        await("wt_delete")
+        onNodeWithTag("wt_delete").performScrollTo().performClick()
         await("wt_delete_confirm")
-        onNodeWithTag("wt_delete_confirm").performClick()
+        onNodeWithTag("wt_delete_confirm").performScrollTo().performClick()
         // The first chunk is at the broker.
         awaitHeld(gate)
     }
@@ -978,7 +986,7 @@ class ConfigurationChangeWorkTest {
     @Test fun a_worktree_batch_delete_finishes_through_a_recreation() = runComposeUiTest {
         val gate = Gate()
         val (app, broker) = worktreesHost(gate)
-        val activity = phoneShell(app, settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.WORKTREES) }
+        val activity = phoneShell(app, testFleet(app, online = true), settings = true) { openMachine("worktrees") }
         deleteEveryWorktree(gate)
 
         activity.recreate()
@@ -987,13 +995,13 @@ class ConfigurationChangeWorkTest {
         // The second chunk went too, and the batch closed its progress when done.
         waitUntil(timeoutMillis = 10_000) { broker.count("DELETE /worktrees") == 2 }
         awaitGone("wt_delete_progress")
-        awaitGone("wt_delete_bar")
+        awaitGone("wt_review_sheet")
     }
 
     @Test fun a_worktree_batch_delete_finishes_through_the_compact_to_wide_swap() = runComposeUiTest {
         val gate = Gate()
         val (app, broker) = worktreesHost(gate)
-        val width = flippablePhone(app, settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.WORKTREES) }
+        val width = flippablePhone(app, testFleet(app, online = true), settings = true) { openMachine("worktrees") }
         deleteEveryWorktree(gate)
 
         unfold(width)
@@ -1001,7 +1009,7 @@ class ConfigurationChangeWorkTest {
 
         waitUntil(timeoutMillis = 10_000) { broker.count("DELETE /worktrees") == 2 }
         awaitGone("wt_delete_progress")
-        awaitGone("wt_delete_bar")
+        awaitGone("wt_review_sheet")
     }
 
     // ── Add host: a one-time claim in flight ─────────────────────────────────────────────────────

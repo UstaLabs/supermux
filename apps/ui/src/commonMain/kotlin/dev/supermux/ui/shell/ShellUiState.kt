@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.supermux.ui.nav.Route
 import dev.supermux.ui.nav.SettingsSection
+import dev.supermux.ui.settings.canonicalRoute
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.workspace.LayoutNode
 import kotlinx.serialization.json.Json
@@ -254,7 +255,9 @@ class ShellUiState {
      * exclusive on both hosts, which is what desktop's booleans encoded and what Android's
      * single-level pushes did in practice.
      */
-    fun navigate(route: Route) {
+    fun navigate(to: Route) {
+        // The old Devices / Proxies pages and Step 1's machine screens are the machine page's parts now (#97).
+        val route = canonicalRoute(to)
         popToHome()
         if (route is Route.Home) return
         if (route is Route.Settings) lastSettingsSection = route.section
@@ -320,6 +323,9 @@ class ShellUiState {
     fun openSettings(section: SettingsSection? = null, sub: String? = null, anchor: String? = null) =
         navigate(Route.Settings(section, sub, anchor))
 
+    /** The active machine's page (#97): the host pill's "Open ‹machine›" and the footer's Devices icon; [anchor] a part on it. */
+    fun openMachine(anchor: String? = null) = openSettings(SettingsSection.Machine, anchor = anchor)
+
     /** File ▸ "Coding…" and every "language servers" link: Coding, at its code-intelligence row. */
     fun openLspSettings() = openSettings(SettingsSection.Coding, anchor = "code-intelligence")
     /** File ▸ "Check for Updates…" and the sidebar card's open: General, at its App version row (#97). */
@@ -334,9 +340,9 @@ class ShellUiState {
             "new" -> openLauncher()
             "settings" -> openSettings()
             "usage" -> openUsage()
-            "devices" -> navigate(Route.Devices)
+            "devices" -> openMachine("devices")
             "archived" -> openArchived()
-            "proxies" -> navigate(Route.Proxies)
+            "proxies" -> openMachine("links")
             "appearance" -> openSettings(SettingsSection.General)
             "displays" -> openDisplays()
             "addhost" -> openAddHost()
@@ -452,7 +458,8 @@ class ShellUiState {
                             routeJson.decodeFromString(ListSerializer(Route.serializer()), raw)
                         }.getOrNull()?.takeIf { it.isNotEmpty() }?.let { restored ->
                             backStack.clear()
-                            backStack.addAll(restored)
+                            // A stack saved before #97's Step 2 may name an old machine screen.
+                            backStack.addAll(restored.map(::canonicalRoute))
                         }
                     }
                     selectedId = (parts.getOrNull(1) as? String)?.takeIf { it.isNotBlank() }

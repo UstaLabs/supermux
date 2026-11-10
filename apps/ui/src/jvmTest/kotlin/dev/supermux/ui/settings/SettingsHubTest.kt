@@ -631,17 +631,17 @@ class SettingsHubTest {
         var closed = 0
         setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact, inputMode = InputMode.Touch) {
             CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides owner) {
-                SettingsHub(section = SettingsSection.Machine, sub = MachineSub.DEVICES, onSectionChange = {}, onBack = { closed++ }) { place, _ ->
+                SettingsHub(section = SettingsSection.Providers, sub = "claude", onSectionChange = {}, onBack = { closed++ }) { place, _ ->
                     Text("page ${place.section} ${place.sub}")
                 }
             }
         }
-        onNodeWithText("page Machine devices").assertExists()
-        onNodeWithTag("settings_detail_title").assertTextEquals("Devices")
+        onNodeWithText("page Providers claude").assertExists()
+        onNodeWithTag("settings_detail_title").assertTextEquals("Claude Code")
 
         runOnIdle { input.back() }
         waitForIdle()
-        onNodeWithText("page Machine null").assertExists()
+        onNodeWithText("page Providers null").assertExists()
         assertEquals(0, closed)
 
         runOnIdle { input.back() }
@@ -657,18 +657,18 @@ class SettingsHubTest {
     @Test fun opening_a_sub_page_of_the_page_on_display_keeps_what_the_page_retains() = runComposeUiTest {
         val keys = mutableListOf<String?>()
         setPlatformContent(widthClass = WindowWidthClass.Compact, pointer = false) {
-            SettingsHub(section = SettingsSection.Machine, onSectionChange = {}, onBack = {}) { place, scope ->
+            SettingsHub(section = SettingsSection.Voice, onSectionChange = {}, onBack = {}) { place, scope ->
                 keys += LocalRetainedPage.current
                 Text(
                     "page ${place.section} ${place.sub}",
-                    Modifier.testTag("open_devices").clickable { scope.onOpen(SettingsPlace(SettingsSection.Machine, MachineSub.DEVICES)) },
+                    Modifier.testTag("open_glossary").clickable { scope.onOpen(SettingsPlace(SettingsSection.Voice, GLOSSARY_SUB)) },
                 )
             }
         }
-        onNodeWithText("page Machine null").assertExists()
-        onNodeWithTag("open_devices").performClick()
+        onNodeWithText("page Voice null").assertExists()
+        onNodeWithTag("open_glossary").performClick()
         waitForIdle()
-        onNodeWithText("page Machine devices").assertExists()
+        onNodeWithText("page Voice glossary").assertExists()
         assertEquals(1, keys.distinct().size, "the sub-page must not start a new opening: $keys")
     }
 

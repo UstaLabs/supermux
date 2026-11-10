@@ -27,7 +27,7 @@ class UrlRoutesTest {
     @Test fun subPagesHaveTheirOwnPathAndAnchorsHaveNone() {
         assertEquals("/settings/providers/claude", pathFor(Route.Settings(SettingsSection.Providers, sub = "claude"), null))
         assertEquals("/settings/voice/glossary", pathFor(Route.Settings(SettingsSection.Voice, sub = "glossary"), null))
-        assertEquals("/settings/machine/links", pathFor(Route.Settings(SettingsSection.Machine, sub = "links"), null))
+        assertEquals("/settings/machine/computer", pathFor(Route.Settings(SettingsSection.Machine, sub = "computer"), null))
         // A flash is a one-off: the anchor is never in the URL.
         assertEquals("/settings/coding", pathFor(Route.Settings(SettingsSection.Coding, anchor = "github"), null))
     }
@@ -36,11 +36,7 @@ class UrlRoutesTest {
             Route.Settings(),
             Route.Settings(SettingsSection.Providers, sub = "codex"),
             Route.Settings(SettingsSection.Voice, sub = "glossary"),
-            Route.Settings(SettingsSection.Machine, sub = "status"),
             Route.Settings(SettingsSection.Machine, sub = "computer"),
-            Route.Settings(SettingsSection.Machine, sub = "devices"),
-            Route.Settings(SettingsSection.Machine, sub = "links"),
-            Route.Settings(SettingsSection.Machine, sub = "worktrees"),
         )
         for (r in cases) assertEquals(UrlTarget.Screen(r), parsePath(pathFor(r, null)), r.toString())
     }
@@ -58,24 +54,32 @@ class UrlRoutesTest {
             "/settings/curator" to Route.Settings(SettingsSection.Memory),
             "/settings/editor" to Route.Settings(SettingsSection.Coding, anchor = "code-intelligence"),
             "/settings/git-hosting" to Route.Settings(SettingsSection.Coding, anchor = "github"),
-            "/settings/system" to Route.Settings(SettingsSection.Machine, sub = "status"),
-            "/settings/devices" to Route.Settings(SettingsSection.Machine, sub = "devices"),
-            "/settings/proxies" to Route.Settings(SettingsSection.Machine, sub = "links"),
-            "/settings/worktrees" to Route.Settings(SettingsSection.Machine, sub = "worktrees"),
+            "/settings/system" to Route.Settings(SettingsSection.Machine, anchor = "updates"),
+            "/settings/devices" to Route.Settings(SettingsSection.Machine, anchor = "devices"),
+            "/settings/proxies" to Route.Settings(SettingsSection.Machine, anchor = "links"),
+            "/settings/worktrees" to Route.Settings(SettingsSection.Machine, anchor = "worktrees"),
+            // Step 1's machine screens are parts of the machine page now.
+            "/settings/machine/status" to Route.Settings(SettingsSection.Machine, anchor = "updates"),
+            "/settings/machine/devices" to Route.Settings(SettingsSection.Machine, anchor = "devices"),
+            "/settings/machine/links" to Route.Settings(SettingsSection.Machine, anchor = "links"),
+            "/settings/machine/worktrees" to Route.Settings(SettingsSection.Machine, anchor = "worktrees"),
+            // And so are the standalone pages.
+            "/devices" to Route.Settings(SettingsSection.Machine, anchor = "devices"),
+            "/proxies" to Route.Settings(SettingsSection.Machine, anchor = "links"),
             "/settings/appearance" to Route.Settings(SettingsSection.General),
             "/settings/updates" to Route.Settings(SettingsSection.General, anchor = "app-version"),
         )
         for ((path, route) in old) assertEquals(UrlTarget.Screen(route), parsePath(path), path)
     }
     @Test fun topLevels() {
-        assertEquals("/usage", pathFor(Route.Usage, null)); assertEquals("/devices", pathFor(Route.Devices, null))
-        assertEquals("/archived", pathFor(Route.Archived, null)); assertEquals("/proxies", pathFor(Route.Proxies, null))
+        assertEquals("/usage", pathFor(Route.Usage, null)); assertEquals("/settings/machine", pathFor(Route.Devices, null))
+        assertEquals("/archived", pathFor(Route.Archived, null)); assertEquals("/settings/machine", pathFor(Route.Proxies, null))
         assertEquals("/displays", pathFor(Route.Displays, null)); assertEquals("/add-host", pathFor(Route.AddHost, null))
     }
     @Test fun parseRoundTrips() {
-        val cases = listOf(Route.Home, Route.NewSession("d1"), Route.Settings(SettingsSection.Memory), Route.Usage, Route.Devices,
-            Route.Archived, Route.Proxies, Route.Displays, Route.AddHost,
-            Route.Settings(SettingsSection.Machine, sub = "worktrees"))
+        val cases = listOf(Route.Home, Route.NewSession("d1"), Route.Settings(SettingsSection.Memory), Route.Usage,
+            Route.Archived, Route.Displays, Route.AddHost,
+            Route.Settings(SettingsSection.Machine, sub = "computer"))
         for (r in cases) assertEquals(UrlTarget.Screen(r), parsePath(pathFor(r, null)), r.toString())
         assertEquals(UrlTarget.Session("abc"), parsePath("/s/abc"))
     }

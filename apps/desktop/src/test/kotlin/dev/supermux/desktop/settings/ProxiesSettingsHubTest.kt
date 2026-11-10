@@ -1,6 +1,5 @@
-// Cluster E4 moved [dev.supermux.ui.settings.ProxiesSettingsScreen] and its screen-level suite into
-// `:ui` (`ProxiesSettingsScreenTest`). What stays here is the `AppShell` settings overlay opening
-// on the Proxies section — desktop-only chrome.
+// The machine page's Shared links (#97 Step 2) through desktop's `AppShell` settings overlay: the old Proxies
+// address lands on the machine page and its links load. The page's own behaviour is `:ui`'s `MachinePartsTest`.
 package dev.supermux.desktop.settings
 
 import dev.supermux.desktop.testDeps
@@ -13,7 +12,6 @@ import dev.supermux.state.HostStore
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.ui.nav.SettingsSection
-import dev.supermux.ui.settings.MachineSub
 import dev.supermux.desktop.shell.TestAppShell
 import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.net.BrokerApi
@@ -96,12 +94,12 @@ class ProxiesSettingsHubTest {
     }
 
     @Test fun settings_hub_opens_proxies_section() = runComposeUiTest {
-        // #97: Proxies is the machine page's "Shared links" screen.
-        val ui = ShellUiState().apply { openSettings(SettingsSection.Machine, sub = MachineSub.LINKS) }
+        // #97 Step 2: Proxies is the machine page's Shared links; the old address lands there.
+        val ui = ShellUiState().apply { openSettings(SettingsSection.Machine, sub = "links") }
         val (app, _) = appForProxies()
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                TestAppShell(app, ui)
+                TestAppShell(app, ui, online = true)
             }
         }
         waitForIdle()
@@ -109,7 +107,8 @@ class ProxiesSettingsHubTest {
         onNodeWithTag("settings_section_machine").assertDoesNotExist()
         waitUntil(timeoutMillis = 5_000) {
             try {
-                onNodeWithTag("proxies_settings_screen").assertIsDisplayed()
+                onNodeWithTag("machine_page").assertIsDisplayed()
+                onNodeWithTag("proxy_row_app.example.local").assertExists()
                 true
             } catch (_: Throwable) {
                 false

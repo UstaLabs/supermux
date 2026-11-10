@@ -2,6 +2,7 @@ package dev.supermux.web.nav
 
 import dev.supermux.ui.nav.Route
 import dev.supermux.ui.nav.SettingsSection
+import dev.supermux.ui.settings.canonicalRoute
 import dev.supermux.ui.settings.settingsSubOrNull
 
 /** What a browser path means: a screen, or the chat of one session. */
@@ -29,10 +30,10 @@ private val oldSettingsSlugs: Map<String, Route.Settings> = mapOf(
     "curator" to Route.Settings(SettingsSection.Memory),
     "editor" to Route.Settings(SettingsSection.Coding, anchor = "code-intelligence"),
     "git-hosting" to Route.Settings(SettingsSection.Coding, anchor = "github"),
-    "system" to Route.Settings(SettingsSection.Machine, sub = "status"),
-    "devices" to Route.Settings(SettingsSection.Machine, sub = "devices"),
-    "proxies" to Route.Settings(SettingsSection.Machine, sub = "links"),
-    "worktrees" to Route.Settings(SettingsSection.Machine, sub = "worktrees"),
+    "system" to Route.Settings(SettingsSection.Machine, anchor = "updates"),
+    "devices" to Route.Settings(SettingsSection.Machine, anchor = "devices"),
+    "proxies" to Route.Settings(SettingsSection.Machine, anchor = "links"),
+    "worktrees" to Route.Settings(SettingsSection.Machine, anchor = "worktrees"),
     "appearance" to Route.Settings(SettingsSection.General),
     "updates" to Route.Settings(SettingsSection.General, anchor = "app-version"),
 )
@@ -44,7 +45,8 @@ private val oldSettingsSlugs: Map<String, Route.Settings> = mapOf(
  * [selectedId] only shows up on [Route.Home]: every other destination is a full-pane overlay whose
  * URL says nothing about which session is selected underneath it (closing it returns to `/s/<id>`).
  * A Settings sub-page is a third segment
- * (`/settings/machine/links`); its anchor is never in the URL — a flash is a one-off (#97).
+ * (`/settings/providers/claude`); its anchor is never in the URL — a flash is a one-off (#97). The old Devices and
+ * Proxies pages are the machine page's parts (`canonicalRoute`), so they share its address.
  */
 fun pathFor(route: Route, selectedId: String?): String = when (route) {
     Route.Home -> if (selectedId != null) "/s/$selectedId" else "/"
@@ -56,9 +58,8 @@ fun pathFor(route: Route, selectedId: String?): String = when (route) {
         route.sub.takeIf { route.section != null },
     ).joinToString("/")
     Route.Usage -> "/usage"
-    Route.Devices -> "/devices"
+    Route.Devices, Route.Proxies -> pathFor(canonicalRoute(route), selectedId)
     Route.Archived -> "/archived"
-    Route.Proxies -> "/proxies"
     Route.Displays -> "/displays"
 }
 
@@ -79,14 +80,19 @@ fun parsePath(pathAndQuery: String): UrlTarget {
         segs[0] == "new" -> UrlTarget.Screen(Route.NewSession(queryParam(query, "draft") ?: ""))
         segs[0] == "add-host" -> UrlTarget.Screen(Route.AddHost)
         segs[0] == "usage" -> UrlTarget.Screen(Route.Usage)
-        segs[0] == "devices" -> UrlTarget.Screen(Route.Devices)
+        // Old bookmarks of the standalone pages: the machine page at that part, so the canonical URL replaces them.
+        segs[0] == "devices" -> UrlTarget.Screen(canonicalRoute(Route.Devices))
         segs[0] == "archived" -> UrlTarget.Screen(Route.Archived)
-        segs[0] == "proxies" -> UrlTarget.Screen(Route.Proxies)
+        segs[0] == "proxies" -> UrlTarget.Screen(canonicalRoute(Route.Proxies))
         segs[0] == "displays" -> UrlTarget.Screen(Route.Displays)
         segs[0] == "settings" && segs.size == 1 -> UrlTarget.Screen(Route.Settings())
         segs[0] == "settings" -> UrlTarget.Screen(
-            // A sub-page the page does not have (a typo, an old link) opens the page itself.
-            slugSections[segs[1]]?.let { Route.Settings(it, sub = settingsSubOrNull(it, segs.getOrNull(2))) }
+            // Step 1's machine screens land on the machine page at their part; any other sub-page the page does not
+            // have (a typo, an old link) opens the page itself.
+            slugSections[segs[1]]?.let { section ->
+                (canonicalRoute(Route.Settings(section, sub = segs.getOrNull(2))) as Route.Settings)
+                    .let { it.copy(sub = settingsSubOrNull(section, it.sub)) }
+            }
                 ?: oldSettingsSlugs[segs[1]]
                 ?: Route.Home,
         )
