@@ -8,11 +8,9 @@ package dev.supermux.desktop.settings
 
 import androidx.compose.runtime.Composable
 import dev.supermux.state.HostStore
-import dev.supermux.ui.accounts.AccountsSettingsScreen
 import dev.supermux.ui.accounts.rememberAccountsActions
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.platform.LocalPlatform
-import dev.supermux.ui.settings.AgentSettingsScreen
 import dev.supermux.ui.settings.DevicesSettingsScreen
 import dev.supermux.ui.settings.MachineSub
 import dev.supermux.ui.settings.ProxiesSettingsScreen
@@ -26,6 +24,9 @@ import dev.supermux.ui.settings.pages.GlossaryPage
 import dev.supermux.ui.settings.pages.InterimMachinePage
 import dev.supermux.ui.settings.pages.MemoryPage
 import dev.supermux.ui.settings.pages.PrivacyLabsPage
+import dev.supermux.ui.settings.pages.ProviderDetailPage
+import dev.supermux.ui.settings.pages.ProvidersPage
+import dev.supermux.ui.settings.pages.rememberProvidersState
 import dev.supermux.ui.settings.pages.VoicePage
 import dev.supermux.ui.settings.pages.rememberVoiceSettingsActions
 import dev.supermux.ui.settings.rememberAgentSettingsActions
@@ -42,9 +43,8 @@ import dev.supermux.ui.theme.AppearanceMode
 /**
  * Renders [place]'s desktop screen against [host]. Called from the hub's `content` slot.
  *
- * #97's switch-over, the same temporary mapping as `FleetSettingsSection`: today's screens under their new
- * section until each page is rebuilt; Accounts is a provider's sub-page meanwhile, and Git hosting is Coding's
- * `github` anchor.
+ * #97, the same mapping as `FleetSettingsSection`: every section is its page, the machine's own screens are on the
+ * interim machine page; accounts live on each provider's page, and Git hosting is Coding's `github` anchor.
  */
 @Composable
 fun DesktopSettingsSection(
@@ -59,19 +59,21 @@ fun DesktopSettingsSection(
             anchor = place.anchor,
             onAnchorShown = scope.onAnchorShown,
         )
-        SettingsSection.Providers -> if (place.sub == null) {
-            AgentSettingsScreen(
-                actions = rememberAgentSettingsActions(host),
-                onBack = scope.onClose,
-                topBarShown = scope.topBarShown,
-            )
-        } else {
-            AccountsSettingsScreen(
-                actions = rememberAccountsActions(host),
-                onBack = scope.onClose,
-                topBarShown = scope.topBarShown,
-                onSignInAgain = { scope.onOpenSection(SettingsSection.Providers) },
-            )
+        SettingsSection.Providers -> {
+            val agents = rememberAgentSettingsActions(host)
+            val accounts = rememberAccountsActions(host)
+            // Above the list and the provider pages, so a login or an install keeps going between them.
+            val providers = rememberProvidersState(agents)
+            when (val agent = place.sub) {
+                null -> ProvidersPage(
+                    providers,
+                    accounts,
+                    onOpenProvider = { scope.onOpen(SettingsPlace(SettingsSection.Providers, it)) },
+                    anchor = place.anchor,
+                    onAnchorShown = scope.onAnchorShown,
+                )
+                else -> ProviderDetailPage(agent, providers, agents, accounts, onBack = scope.onClose)
+            }
         }
         SettingsSection.Voice -> {
             val voice = rememberVoiceSettingsActions(host)

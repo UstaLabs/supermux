@@ -418,6 +418,36 @@ class SupermuxAppNavTest {
     }
 
     /**
+     * Usage's "Sign in again" and the composer's "Open Accounts" open `Providers/‹agent›` (#97 spec §10.1, §11): on a
+     * phone that is the provider's page itself, not the Settings index, and Back goes to the provider list.
+     */
+    private fun landsOnTheProvidersPage(agent: String) = runComposeUiTest {
+        val ui = ShellUiState()
+        val app = testHostStore()
+        setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact, inputMode = InputMode.Touch) {
+            SupermuxApp(
+                fleet = rememberTestFleet(app),
+                ui = ui,
+                settingsSection = { place, _ -> Text("body:" + place.section.name + "/" + place.sub) },
+            )
+        }
+        waitForIdle()
+        ui.openSettings(SettingsSection.Providers, sub = agent)
+        waitForIdle()
+        onNodeWithText("body:Providers/$agent").assertIsDisplayed()
+        onNodeWithTag("settings_row_voice").assertDoesNotExist()
+        onNodeWithTag("settings_detail_back").performClick()
+        waitForIdle()
+        onNodeWithText("body:Providers/null").assertIsDisplayed()
+    }
+
+    /** What Usage's card calls for a refused Codex login. */
+    @Test fun compact_usages_sign_in_again_lands_on_the_codex_page() = landsOnTheProvidersPage("codex")
+
+    /** What a Claude chat's "Open Accounts" calls. */
+    @Test fun compact_the_composers_open_accounts_lands_on_the_claude_page() = landsOnTheProvidersPage("claude")
+
+    /**
      * A rail click must not rebuild the hub.
      *
      * `ShellUiState.settingsSection` rewrites the stack slot with a NEW `Route.Settings(section)`,

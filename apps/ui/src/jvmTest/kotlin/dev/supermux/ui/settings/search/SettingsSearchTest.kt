@@ -132,4 +132,29 @@ class SettingsSearchTest {
         assertTrue(searchSettings("accessory", desk).flatMap { it.hits }.none { it.anchor == "accessory-bar" })
         assertTrue(searchSettings("accessory", desk.copy(phone = true)).flatMap { it.hits }.any { it.anchor == "accessory-bar" })
     }
+
+    @Test fun providers_rows_follow_its_page_entry_in_page_order() {
+        val providers = SettingsSearchIndex.filter { it.section == SettingsSection.Providers }.map { it.anchor }
+        assertEquals(
+            listOf(
+                null, "provider-claude", "provider-codex", "provider-opencode", "provider-cursor", "provider-grok",
+                "provider-antigravity", "auto-switch", "limit-resume",
+            ),
+            providers,
+        )
+        assertEquals(
+            listOf(SettingsSection.Providers to "provider-claude"),
+            searchSettings("claude code", desk).flatMap { it.hits }.map { it.section to it.anchor },
+        )
+        assertEquals(
+            listOf(SettingsSection.Providers to "auto-switch"),
+            searchSettings("auto switch", desk).flatMap { it.hits }.map { it.section to it.anchor },
+        )
+        assertEquals(
+            listOf(SettingsSection.Providers to "limit-resume"),
+            searchSettings("resume", desk).flatMap { it.hits }.map { it.section to it.anchor },
+        )
+        // Every provider is found by what people type for it.
+        assertEquals(6, searchSettings("install", desk).flatMap { it.hits }.count { it.anchor?.startsWith("provider-") == true })
+    }
 }

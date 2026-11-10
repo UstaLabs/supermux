@@ -32,12 +32,7 @@ class SettingsLookGuardTest {
     )
 
     /** Converted by this plan, one page task at a time. Remove a file the moment it is clean; never add to it. */
-    private val pending = setOf(
-        "settings/AgentSettingsScreen.kt",
-        "accounts/AccountsSettingsScreen.kt",
-        "accounts/AccountsWidgets.kt",
-        "accounts/AddAccountSheet.kt",
-    )
+    private val pending = emptySet<String>()
 
     /** `settings/X.kt` for `ui`'s files, `desktop/settings/X.kt` for the desktop app's. */
     private fun relOf(f: File) = f.invariantSeparatorsPath.substringAfter("dev/supermux/").removePrefix("ui/")
@@ -97,6 +92,10 @@ class SettingsLookGuardTest {
         assertNotNull(SettingsLook.offence("        androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = {}) {"))
         assertNotNull(SettingsLook.offence("import dev.supermux.ui.widgets.AlertDialog"))
         assertNotNull(SettingsLook.offence("    dev.supermux.ui.widgets.AlertDialog(onDismissRequest = {}, confirmButton = {})"))
+        assertNotNull(SettingsLook.offence("import dev.supermux.ui.widgets.SecretField"))
+        assertNotNull(SettingsLook.offence("import dev.supermux.ui.widgets.settingsFieldColors"))
+        assertNotNull(SettingsLook.offence("        colors = dev.supermux.ui.widgets.settingsFieldColors(),"))
+        assertNull(SettingsLook.offence("import dev.supermux.ui.widgets.SettingsDetailMaxWidth"))
     }
 }
 
@@ -111,6 +110,9 @@ internal object SettingsLook {
     private val m3Reference = Regex("""\bandroidx\.compose\.material3\.(\w+)""")
     private val alertImport = Regex("""^import\s+dev\.supermux\.ui\.widgets\.AlertDialog(?:\s+as\s+\w+)?$""")
     private val alertReference = Regex("""\bdev\.supermux\.ui\.widgets\.AlertDialog\b""")
+    /** The app's Material field wrappers: a Settings field is the kit's `KitTextField` (`secret = true` for keys). */
+    private val fieldImport = Regex("""^import\s+dev\.supermux\.ui\.widgets\.(SecretField|settingsFieldColors)(?:\s+as\s+\w+)?$""")
+    private val fieldReference = Regex("""\bdev\.supermux\.ui\.widgets\.(SecretField|settingsFieldColors)\b""")
 
     fun offence(raw: String): String? {
         val trimmed = raw.trim()
@@ -123,10 +125,12 @@ internal object SettingsLook {
                 val name = m.groupValues[1]
                 return if (name in allowed) null else "Material 3 $name"
             }
+            if (fieldImport.matches(line)) return "a Material field wrapper (use KitTextField)"
             return if (alertImport.matches(line)) "the stock confirmation dialog (use a KitSheet)" else null
         }
         m3Reference.findAll(line).firstOrNull { it.groupValues[1] !in allowed }?.let { return "Material 3 ${it.groupValues[1]}" }
         if (alertReference.containsMatchIn(line)) return "the stock confirmation dialog (use a KitSheet)"
+        if (fieldReference.containsMatchIn(line)) return "a Material field wrapper (use KitTextField)"
         return null
     }
 }

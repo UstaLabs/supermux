@@ -3,6 +3,10 @@
 // Material text field.
 package dev.supermux.ui.settings.kit
 
+import dev.supermux.ui.platform.LocalPlatform
+
+import androidx.compose.foundation.text.selection.SelectionContainer
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -283,4 +287,36 @@ private fun keyboardFor(given: KeyboardOptions, secret: Boolean, hidden: Boolean
     }
     // merge: the argument's set values win.
     return submit.merge(given).merge(guard)
+}
+
+/**
+ * A command to copy ("claude setup-token"), in the mono face on the wash with Copy at its end. Only in a sheet: a page
+ * shows no raw commands (spec §11's carve-out).
+ */
+@Composable
+fun KitCopyCommand(command: String, modifier: Modifier = Modifier) {
+    val c = kitColors()
+    val platform = LocalPlatform.current
+    var copied by remember(command) { mutableStateOf(false) }
+    val shape = RoundedCornerShape(7.dp)
+    Row(
+        modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(c.wash)
+            .border(1.dp, c.line, shape)
+            .padding(start = 10.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        SelectionContainer(Modifier.weight(1f)) { Text(command, fontFamily = MonoFontFamily, fontSize = 12.5.sp, color = c.text) }
+        TextActionBase(
+            if (copied) "Copied" else "Copy",
+            onClick = {
+                platform.copyToClipboard(command)
+                copied = true
+            },
+            touchTarget = false,
+        )
+    }
 }

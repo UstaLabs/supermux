@@ -146,7 +146,8 @@ class AgentSettingsHubTest {
         val app = appForAgents()
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                TestAppShell(app, ui)
+                // Providers is the machine's: an offline machine shows its offline line instead (#97).
+                TestAppShell(app, ui, online = true)
             }
         }
         waitForIdle()
@@ -288,11 +289,14 @@ class AgentSettingsHubTest {
                 }
             },
         ) { "rec-unused" }
+        // Both machines online: Providers loads only for a machine that answers (#97).
+        val connections = mutableListOf<(Boolean) -> Unit>()
         val fleet = FleetStore(
             store = store,
             scope = scope,
             deps = testDeps(),
             appFactory = { url, token, onConn ->
+                connections += onConn
                 val statusJson = when {
                     url.contains("a.relay") -> statusA
                     else -> statusB
@@ -317,6 +321,7 @@ class AgentSettingsHubTest {
                 )
             },
         )
+        connections.forEach { it(true) }
         val ui = ShellUiState().apply { openSettings(SettingsSection.Providers) }
         val primary = fleet.appForRecord("h1")!!
         setContent {
@@ -334,6 +339,7 @@ class AgentSettingsHubTest {
             }
         }
         fleet.setActiveHost("h2")
+        connections.forEach { it(true) }
         waitUntil(timeoutMillis = 5_000) {
             try {
                 onNodeWithTag("agent_row_cursor").assertIsDisplayed()

@@ -297,45 +297,48 @@ class ConfigurationChangeWorkTest {
         assertEquals(SettingsSection.General, ui.settingsSection)
     }
 
-    // ── Settings › Providers: a pasted API key, the OpenCode code step, an agent's login code ────
+    // ── Settings › Providers: a pasted token, the OpenCode code step, an agent's login code ────────
 
     private val claudeToSignIn = """[{"kind":"claude","installed":true,"authed":false}]"""
     private val openCodeToSignIn = """[{"kind":"opencode","installed":true,"authed":false}]"""
 
-    private fun ComposeUiTest.openProviders() {
-        await("settings_row_providers")
-        onNodeWithTag("settings_row_providers").performScrollTo().performClick()
-    }
+    /** A provider's page (#97: what each Agents row held is on its provider's page now). */
+    private fun provider(agent: String): ShellUiState.() -> Unit = { openSettings(SettingsSection.Providers, sub = agent) }
 
+    /** The phone's shell with its machine online: a provider's page loads only for a machine that answers (#97). */
+    private fun ComposeUiTest.onlinePhone(app: HostStore, platform: FakePlatform = FakePlatform(), initial: ShellUiState.() -> Unit) =
+        phoneShell(app, testFleet(app, online = true), platform = platform, settings = true, initial = initial)
+
+    private fun ComposeUiTest.onlineFlippable(app: HostStore, platform: FakePlatform = FakePlatform(), initial: ShellUiState.() -> Unit) =
+        flippablePhone(app, testFleet(app, online = true), platform = platform, settings = true, initial = initial)
+
+    /** "Use a token instead": the machine's own token, in a sheet on the provider's page. */
     private fun ComposeUiTest.pasteAnApiKey(key: String) {
-        openProviders()
-        await("agent_secret_claude")
-        onNodeWithTag("agent_secret_claude").performTextInput(key)
+        await("provider_use_token")
+        onNodeWithTag("provider_use_token").performClick()
+        await("provider_secret")
+        onNodeWithTag("provider_secret").performTextInput(key)
         waitForIdle()
     }
 
     @Test fun a_pasted_api_key_survives_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(testHostStore(Broker(mapOf("GET /agents/status" to claudeToSignIn)).handler), settings = true) {
-            openSettings()
-        }
+        val activity = onlinePhone(testHostStore(Broker(mapOf("GET /agents/status" to claudeToSignIn)).handler), initial = provider("claude"))
         pasteAnApiKey("sk-ant-api-key")
 
         activity.recreate()
 
-        await("agent_secret_claude")
-        assertEquals(masked("sk-ant-api-key"), onNodeWithTag("agent_secret_claude").editableText())
+        await("provider_secret")
+        assertEquals(masked("sk-ant-api-key"), onNodeWithTag("provider_secret").editableText())
     }
 
     @Test fun a_pasted_api_key_survives_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(testHostStore(Broker(mapOf("GET /agents/status" to claudeToSignIn)).handler), settings = true) {
-            openSettings()
-        }
+        val width = onlineFlippable(testHostStore(Broker(mapOf("GET /agents/status" to claudeToSignIn)).handler), initial = provider("claude"))
         pasteAnApiKey("sk-ant-api-key")
 
         unfold(width)
 
-        await("agent_secret_claude")
-        assertEquals(masked("sk-ant-api-key"), onNodeWithTag("agent_secret_claude").editableText())
+        await("provider_secret")
+        assertEquals(masked("sk-ant-api-key"), onNodeWithTag("provider_secret").editableText())
     }
 
     private fun openCodeHost(providers: String) = testHostStore(
@@ -349,14 +352,13 @@ class ConfigurationChangeWorkTest {
     )
 
     private fun ComposeUiTest.pasteAnOpenCodeKey(key: String) {
-        openProviders()
         await("opencode_zen_key_field")
         onNodeWithTag("opencode_zen_key_field").performTextInput(key)
         waitForIdle()
     }
 
     @Test fun a_pasted_opencode_key_survives_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(openCodeHost("[]"), settings = true) { openSettings() }
+        val activity = onlinePhone(openCodeHost("[]"), initial = provider("opencode"))
         pasteAnOpenCodeKey("zen-key")
 
         activity.recreate()
@@ -366,7 +368,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun a_pasted_opencode_key_survives_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(openCodeHost("[]"), settings = true) { openSettings() }
+        val width = onlineFlippable(openCodeHost("[]"), initial = provider("opencode"))
         pasteAnOpenCodeKey("zen-key")
 
         unfold(width)
@@ -379,7 +381,6 @@ class ConfigurationChangeWorkTest {
 
     /** "Login via browser": the browser opens on the provider's page, and the code it gives is pasted back. */
     private fun ComposeUiTest.pasteTheBrowserCode(code: String) {
-        openProviders()
         awaitText("Login via browser")
         onNodeWithText("Login via browser").performClick()
         await("opencode_oauth_code_openrouter")
@@ -389,7 +390,7 @@ class ConfigurationChangeWorkTest {
 
     @Test fun the_opencode_paste_code_step_survives_a_recreation() = runComposeUiTest {
         val platform = FakePlatform()
-        val activity = phoneShell(openCodeHost(browserProvider), platform = platform, settings = true) { openSettings() }
+        val activity = onlinePhone(openCodeHost(browserProvider), platform = platform, initial = provider("opencode"))
         pasteTheBrowserCode("CODE-FROM-BROWSER")
 
         activity.recreate()
@@ -403,7 +404,7 @@ class ConfigurationChangeWorkTest {
 
     @Test fun the_opencode_paste_code_step_survives_the_compact_to_wide_swap() = runComposeUiTest {
         val platform = FakePlatform()
-        val width = flippablePhone(openCodeHost(browserProvider), platform = platform, settings = true) { openSettings() }
+        val width = onlineFlippable(openCodeHost(browserProvider), platform = platform, initial = provider("opencode"))
         pasteTheBrowserCode("CODE-FROM-BROWSER")
 
         unfold(width)
@@ -430,7 +431,6 @@ class ConfigurationChangeWorkTest {
     }
 
     private fun ComposeUiTest.pasteALoginCode(code: String) {
-        openProviders()
         await("agent_login_start_claude")
         onNodeWithTag("agent_login_start_claude").performClick()
         await("agent_login_code_field")
@@ -439,7 +439,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun a_login_code_being_pasted_survives_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(signingInHost(), settings = true) { openSettings() }
+        val activity = onlinePhone(signingInHost(), initial = provider("claude"))
         pasteALoginCode("LOGIN-CODE")
 
         activity.recreate()
@@ -450,7 +450,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun a_login_code_being_pasted_survives_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(signingInHost(), settings = true) { openSettings() }
+        val width = onlineFlippable(signingInHost(), initial = provider("claude"))
         pasteALoginCode("LOGIN-CODE")
 
         unfold(width)
@@ -495,11 +495,12 @@ class ConfigurationChangeWorkTest {
         assertEquals(masked("ghp_token"), onNodeWithTag("git_hosting_token").editableText())
     }
 
-    // ── Settings › Accounts: the add sheet, a token pasted into it, a sign-in in flight ──────────
+    // ── Settings › Providers › Claude Code: Add a login, a token pasted into it, a sign-in in flight
 
     private fun accountsHost(gate: Gate? = null): Pair<HostStore, Broker> {
         val broker = Broker(
             mapOf(
+                "GET /agents/status" to claudeToSignIn,
                 "GET /accounts" to """{"accounts":[{"id":"claude:system","agent":"claude","method":"system","label":"This machine","system":true}]}""",
                 "GET /settings/accounts" to """{"autoSwitch":false}""",
                 "POST /accounts/login" to """{"loginId":"L1","agent":"claude","phase":"awaiting_user","url":"https://claude.ai/oauth","needsCode":true}""",
@@ -510,8 +511,8 @@ class ConfigurationChangeWorkTest {
     }
 
     private fun ComposeUiTest.pasteAnAccountToken(token: String) {
-        await("account-add:claude")
-        onNodeWithTag("account-add:claude").performClick()
+        await("provider_login_add")
+        onNodeWithTag("provider_login_add").performClick()
         await("account-add-option:token")
         onNodeWithTag("account-add-option:token").performClick()
         await("account-token-field")
@@ -520,7 +521,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_add_account_sheet_and_its_token_survive_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(accountsHost().first, settings = true) { openSettings(SettingsSection.Providers, sub = "claude") }
+        val activity = onlinePhone(accountsHost().first, initial = provider("claude"))
         pasteAnAccountToken("sk-ant-oat01-token")
 
         activity.recreate()
@@ -530,7 +531,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_add_account_sheet_and_its_token_survive_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(accountsHost().first, settings = true) { openSettings(SettingsSection.Providers, sub = "claude") }
+        val width = onlineFlippable(accountsHost().first, initial = provider("claude"))
         pasteAnAccountToken("sk-ant-oat01-token")
 
         unfold(width)
@@ -540,8 +541,8 @@ class ConfigurationChangeWorkTest {
     }
 
     private fun ComposeUiTest.startAnAccountSignIn(gate: Gate) {
-        await("account-add:claude")
-        onNodeWithTag("account-add:claude").performClick()
+        await("provider_login_add")
+        onNodeWithTag("provider_login_add").performClick()
         await("account-add-option:login")
         onNodeWithTag("account-add-option:login").performClick()
         awaitHeld(gate)
@@ -550,7 +551,7 @@ class ConfigurationChangeWorkTest {
     @Test fun an_account_sign_in_in_flight_lands_through_a_recreation() = runComposeUiTest {
         val gate = Gate()
         val (app, broker) = accountsHost(gate)
-        val activity = phoneShell(app, settings = true) { openSettings(SettingsSection.Providers, sub = "claude") }
+        val activity = onlinePhone(app, initial = provider("claude"))
         startAnAccountSignIn(gate)
 
         activity.recreate()
@@ -564,7 +565,7 @@ class ConfigurationChangeWorkTest {
     @Test fun an_account_sign_in_in_flight_lands_through_the_compact_to_wide_swap() = runComposeUiTest {
         val gate = Gate()
         val (app, broker) = accountsHost(gate)
-        val width = flippablePhone(app, settings = true) { openSettings(SettingsSection.Providers, sub = "claude") }
+        val width = onlineFlippable(app, initial = provider("claude"))
         startAnAccountSignIn(gate)
 
         unfold(width)
@@ -575,8 +576,8 @@ class ConfigurationChangeWorkTest {
     }
 
     private fun ComposeUiTest.pasteASignInCode(code: String) {
-        await("account-add:claude")
-        onNodeWithTag("account-add:claude").performClick()
+        await("provider_login_add")
+        onNodeWithTag("provider_login_add").performClick()
         await("account-add-option:login")
         onNodeWithTag("account-add-option:login").performClick()
         await("account-login-code")
@@ -586,7 +587,7 @@ class ConfigurationChangeWorkTest {
 
     @Test fun a_code_pasted_into_an_account_sign_in_survives_a_recreation() = runComposeUiTest {
         val (app, broker) = accountsHost()
-        val activity = phoneShell(app, settings = true) { openSettings(SettingsSection.Providers, sub = "claude") }
+        val activity = onlinePhone(app, initial = provider("claude"))
         pasteASignInCode("CODE#1")
 
         activity.recreate()
@@ -598,7 +599,7 @@ class ConfigurationChangeWorkTest {
 
     @Test fun a_code_pasted_into_an_account_sign_in_survives_the_compact_to_wide_swap() = runComposeUiTest {
         val (app, broker) = accountsHost()
-        val width = flippablePhone(app, settings = true) { openSettings(SettingsSection.Providers, sub = "claude") }
+        val width = onlineFlippable(app, initial = provider("claude"))
         pasteASignInCode("CODE#1")
 
         unfold(width)

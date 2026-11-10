@@ -29,16 +29,19 @@ import dev.supermux.ui.settings.pages.MemoryPage
 import dev.supermux.ui.settings.pages.rememberCuratorSettingsActions
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.settings.pages.PrivacyLabsPage
+import dev.supermux.ui.settings.pages.ProviderDetailPage
+import dev.supermux.ui.settings.pages.ProvidersPage
+import dev.supermux.ui.settings.pages.rememberProvidersState
+import dev.supermux.ui.accounts.rememberAccountsActions
 import dev.supermux.ui.settings.pages.VoicePage
 import dev.supermux.ui.settings.pages.rememberVoiceSettingsActions
 
 /**
  * Renders [place] against the fleet's active host. Called from the hub's `content` slot.
  *
- * #97's switch-over: every new section shows today's screen until its page is rebuilt (Tasks 11–16 replace one line
- * each). Two old sections have no page of their own any more and are reached through their new place meanwhile:
- * Accounts is a provider's sub-page (`Providers/‹agent›`, where Usage's and the composer's "Sign in again" land)
- * and Git hosting is Coding's `github` anchor (the old slug, the menu hook), on the Coding page itself.
+ * #97: every section is its page; the machine's own screens stay on the interim machine page until Step 2. Accounts
+ * live on each provider's page (`Providers/‹agent›`, where Usage's and the composer's "Sign in again" land) and Git
+ * hosting is Coding's `github` anchor.
  */
 @Composable
 fun FleetSettingsSection(
@@ -53,19 +56,21 @@ fun FleetSettingsSection(
             anchor = place.anchor,
             onAnchorShown = scope.onAnchorShown,
         )
-        SettingsSection.Providers -> if (place.sub == null) {
-            AgentSettingsScreen(
-                actions = rememberAgentSettingsActions(fleet),
-                onBack = scope.onClose,
-                topBarShown = scope.topBarShown,
-            )
-        } else {
-            dev.supermux.ui.accounts.AccountsSettingsScreen(
-                actions = dev.supermux.ui.accounts.rememberAccountsActions(fleet),
-                onBack = scope.onClose,
-                topBarShown = scope.topBarShown,
-                onSignInAgain = { scope.onOpenSection(SettingsSection.Providers) },
-            )
+        SettingsSection.Providers -> {
+            val agents = rememberAgentSettingsActions(fleet)
+            val accounts = rememberAccountsActions(fleet)
+            // Above the list and the provider pages, so a login or an install keeps going between them.
+            val providers = rememberProvidersState(agents)
+            when (val agent = place.sub) {
+                null -> ProvidersPage(
+                    providers,
+                    accounts,
+                    onOpenProvider = { scope.onOpen(SettingsPlace(SettingsSection.Providers, it)) },
+                    anchor = place.anchor,
+                    onAnchorShown = scope.onAnchorShown,
+                )
+                else -> ProviderDetailPage(agent, providers, agents, accounts, onBack = scope.onClose)
+            }
         }
         SettingsSection.Voice -> {
             val voice = rememberVoiceSettingsActions(fleet)

@@ -51,7 +51,8 @@ fun KitItemList(modifier: Modifier = Modifier, content: @Composable ColumnScope.
 
 /**
  * One item. [onClick] makes the whole item open something (a chevron shows unless it is an add row); the
- * [trailing] slot holds a [KitItemStatus] or a [KitGhostButton].
+ * [trailing] slot holds a [KitItemStatus] or a [KitGhostButton]; [below] is more about it under the title (a login's
+ * usage meters), lined up with the title.
  */
 @Composable
 fun KitItem(
@@ -63,6 +64,7 @@ fun KitItem(
     mark: KitMark? = null,
     onClick: (() -> Unit)? = null,
     indent: Boolean = false,
+    below: (@Composable ColumnScope.() -> Unit)? = null,
     trailing: @Composable RowScope.() -> Unit = {},
 ) {
     val c = kitColors()
@@ -101,6 +103,10 @@ fun KitItem(
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp), content = trailing)
             if (onClick != null && !add) Icon(KitGlyphs.Chevron, contentDescription = null, tint = c.faint, modifier = Modifier.size(14.dp))
+        }
+        if (below != null) {
+            val start = (if (indent) 38.dp else 0.dp) + (if (mark != null) 38.dp else 0.dp)
+            Column(Modifier.fillMaxWidth().padding(start = start, bottom = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp), content = below)
         }
         KitHairline()
     }

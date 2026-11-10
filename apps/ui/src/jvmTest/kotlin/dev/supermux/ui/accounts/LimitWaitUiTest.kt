@@ -3,26 +3,21 @@ package dev.supermux.ui.accounts
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.assertIsOff
-import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.chat.formatChatTime
 import dev.supermux.chat.parseChatTs
-import dev.supermux.net.AccountDto
 import dev.supermux.proto.LimitWaitDto
-import dev.supermux.state.AccountResult
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.setPlatformContent
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.SupermuxTheme
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
-/** #92: the wait for a usage-limit reset — the session row's line, the strip above the composer, the setting. */
+/** #92: the wait for a usage-limit reset — the session row's line, the strip above the composer. */
 @OptIn(ExperimentalTestApi::class)
 class LimitWaitUiTest {
     private val resumeAt = "2026-11-08T18:13:00.000Z"
@@ -56,26 +51,5 @@ class LimitWaitUiTest {
         assertEquals(listOf("cancel", "resume"), calls)
     }
 
-    @Test fun the_setting_is_on_unless_turned_off_and_writes_only_itself() = runComposeUiTest {
-        val calls = mutableListOf<Boolean>()
-        val resume = MutableStateFlow<Boolean?>(null)
-        content {
-            AccountsSettingsScreen(
-                AccountsActions(
-                    accounts = MutableStateFlow(listOf(AccountDto(id = "claude:system", agent = "claude", method = "system", label = "System login", system = true))),
-                    autoResume = resume,
-                    setAutoResume = { calls += it; resume.value = it; AccountResult.Ok(it) },
-                    setAutoSwitch = { error("auto-switch must not be written") },
-                ),
-                topBarShown = true,
-            )
-        }
-        waitForIdle()
-        onNodeWithText("Resume after a limit reset").assertExists()
-        onNodeWithTag("accounts-autoresume").assertIsOn()
-        onNodeWithTag("accounts-autoresume").performClick()
-        waitForIdle()
-        assertEquals(listOf(false), calls)
-        onNodeWithTag("accounts-autoresume").assertIsOff()
-    }
+    // The setting itself is on the Providers & accounts page, under Switch accounts at a limit (#97): ProvidersPageTest.
 }
