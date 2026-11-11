@@ -3,10 +3,12 @@ import { cardDocument, checkPage, findBrowser, launchBrowser, type CheckBrowser 
 import { isLocalName, isPrivateAddress } from "./proxy"
 
 let browser: CheckBrowser | undefined
-beforeAll(async () => { browser = await launchBrowser() }, 30_000)
-afterAll(async () => { await browser?.close() })
 // Real Chrome, on demand: SHOW_HTML_EVALS=1 bun test evals/show-html
-const run = findBrowser() && process.env.SHOW_HTML_EVALS === "1" ? test : test.skip
+const evals = !!findBrowser() && process.env.SHOW_HTML_EVALS === "1"
+const run = evals ? test : test.skip
+// Only launch it when a test will use it: on a CI runner its no-sandbox fallback can outlast the hook.
+beforeAll(async () => { if (evals) browser = await launchBrowser() }, 30_000)
+afterAll(async () => { await browser?.close() })
 
 const clean = `<!doctype html><html><head><title>t</title></head><body>
 <h3 style="margin:0 0 8px">p95 latency</h3>
