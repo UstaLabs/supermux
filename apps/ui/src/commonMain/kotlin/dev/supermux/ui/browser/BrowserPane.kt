@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -28,6 +29,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import dev.supermux.browser.DeviceMode
 import dev.supermux.browser.AddressAction
 import dev.supermux.browser.BrowserTabSync
 import dev.supermux.browser.BrowserViewState
@@ -123,6 +125,11 @@ fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, mod
     val findScope = rememberCoroutineScope()
     var zoom by remember(view.id) { mutableFloatStateOf(1f) }
     var notice by remember(view.id) { mutableStateOf<String?>(null) }
+    // Device mode (#122 phase 2) is this client's, per tab, never synced: an iPhone on the Mac means nothing on the
+    // phone. Off, it keeps the device it had for next time. A phone has none (§3.2).
+    val phone = phoneChrome()
+    var deviceOn by remember(view.id) { mutableStateOf(false) }
+    var device by remember(view.id) { mutableStateOf(DeviceMode.Default) }
 
     // A port resolves through the by-port route or the previews, so the first page waits for them: three seconds at
     // most, then none.
@@ -262,10 +269,20 @@ fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, mod
     RegisterCommand(AppCommands.FindPrevious) { finding = true; findStep(backwards = true); true }
     RegisterCommand(AppCommands.BrowserInspect) { inspectKey() }
     RegisterCommand(AppCommands.BrowserScreenshot, enabled = toChat != null) { sendScreenshot() }
+    RegisterCommand(AppCommands.BrowserDeviceMode, enabled = !phone) { deviceOn = !deviceOn; true }
     val screenshotAction: (() -> Unit)? = if (toChat != null) { { sendScreenshot() } } else null
     // Esc stops a loading page; on a loaded one it declines, so the page keeps it.
     RegisterCommand(AppCommands.BrowserStop) {
         (state.loading is LoadingState.Loading).also { if (it) state.navigator.stop() }
+    }
+
+    // One page, moved (not rebuilt) between the pane and device mode's stage, so turning it on keeps the live page.
+    val livePage = remember(view.id) {
+        movableContentOf {
+            ProvideWebViewRuntime(webViews.runtime) {
+                WebView(state, Modifier.fillMaxSize(), settings = BROWSER_SETTINGS, client = client, activation = Activation.Eager)
+            }
+        }
     }
 
     // The page and what floats over it (the ⋯ menu, the find bar) share one overlay registry: the window's, or the
@@ -294,7 +311,10 @@ fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, mod
             onZoom = ::zoomBy,
             onInspect = ::inspect,
             onScreenshot = screenshotAction,
+            device = deviceOn.takeUnless { phone },
+            onDevice = { deviceOn = !deviceOn },
         )
+        if (deviceOn && !phone) DeviceBar(device, onChange = { device = it }, onClose = { deviceOn = false })
         notice?.let { text ->
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp).testTag("browser-notice"), verticalAlignment = Alignment.CenterVertically) {
                 Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
@@ -306,9 +326,8 @@ fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, mod
                 BrowserBody.NewTab -> BrowserMessage("Type a site, or a port such as 5173.", "browser-new-tab")
                 is BrowserBody.Said -> BrowserMessage(b.message, "browser-said")
                 is BrowserBody.Page -> {
-                    ProvideWebViewRuntime(webViews.runtime) {
-                        WebView(state, Modifier.fillMaxSize(), settings = BROWSER_SETTINGS, client = client, activation = Activation.Eager)
-                    }
+                    if (deviceOn && !phone) DeviceStage(device, livePage)
+                    else Box(Modifier.fillMaxSize().testTag("browser-viewport")) { livePage() }
                     (state.phase as? WebViewPhase.Unavailable)?.let { unavailable ->
                         BrowserMessage(
                             "This device can't show web pages in a tab" + (unavailable.detail?.let { ": $it" } ?: "."),

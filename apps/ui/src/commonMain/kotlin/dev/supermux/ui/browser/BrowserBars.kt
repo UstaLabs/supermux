@@ -94,11 +94,11 @@ internal fun DisplayAddress.text(): String = when (this) {
  * pointer the app's own menu.
  */
 @Composable
-private fun phoneChrome(): Boolean = LocalWindowWidthClass.current == WindowWidthClass.Compact && !LocalPointerAvailable.current
+internal fun phoneChrome(): Boolean = LocalWindowWidthClass.current == WindowWidthClass.Compact && !LocalPointerAvailable.current
 
 /** A glyph button of the bar: no ripple, a soft wash on hover and press, the glyph dimmed when it can't act. */
 @Composable
-private fun BarButton(glyph: ImageVector, label: String, tag: String, onClick: () -> Unit, enabled: Boolean = true, size: Dp = 28.dp) {
+internal fun BarButton(glyph: ImageVector, label: String, tag: String, onClick: () -> Unit, enabled: Boolean = true, size: Dp = 28.dp, on: Boolean = false) {
     val c = kitColors()
     val src = remember { MutableInteractionSource() }
     val hovered by src.collectIsHoveredAsState()
@@ -107,13 +107,13 @@ private fun BarButton(glyph: ImageVector, label: String, tag: String, onClick: (
         Modifier
             .size(size)
             .clip(RoundedCornerShape(6.dp))
-            .background(if (enabled && (hovered || pressed)) c.wash else Color.Transparent)
+            .background(if (on || enabled && (hovered || pressed)) c.wash else Color.Transparent)
             .clickable(interactionSource = src, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)
             .semantics { contentDescription = label }
             .testTag(tag),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(glyph, contentDescription = null, tint = if (enabled) c.dim else c.faint.copy(alpha = 0.45f), modifier = Modifier.size(16.dp))
+        Icon(glyph, contentDescription = null, tint = if (on) c.accent else if (enabled) c.dim else c.faint.copy(alpha = 0.45f), modifier = Modifier.size(16.dp))
     }
 }
 
@@ -143,6 +143,9 @@ internal fun BrowserToolbar(
     onScreenshot: (() -> Unit)? = null,
     /** The page is one of the host's port previews: a green dot before its address. */
     preview: Boolean = false,
+    /** Device mode is on (lit), off, or null where it isn't offered (a phone, #122 §3.2). */
+    device: Boolean? = null,
+    onDevice: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val c = kitColors()
@@ -219,6 +222,7 @@ internal fun BrowserToolbar(
                     }
                 },
             )
+            device?.let { on -> BarButton(KitGlyphs.Phone, "Device mode", "browser-device", onDevice, on = on) }
             if (!phone) BarButton(KitGlyphs.External, "Open in your browser", "browser-external", onOpenExternally)
             Box {
                 BarButton(KitGlyphs.More, "More", "browser-menu", { menu = true }, size = button)
@@ -228,6 +232,7 @@ internal fun BrowserToolbar(
                         ZoomMenuRow(zoomPercent, onZoom)
                         MenuLine()
                         onScreenshot?.let { send -> MenuRow(KitGlyphs.Camera, "Send screenshot to chat", AppCommands.BrowserScreenshot, "browser-menu-screenshot") { menu = false; send() } }
+                        device?.let { MenuRow(KitGlyphs.Phone, "Device mode", AppCommands.BrowserDeviceMode, "browser-menu-device") { menu = false; onDevice() } }
                         MenuRow(KitGlyphs.Code, "Inspect", AppCommands.BrowserInspect, "browser-menu-inspect") { menu = false; onInspect() }
                         MenuRow(KitGlyphs.External, "Open in your browser", AppCommands.BrowserOpenExternally, "browser-menu-external") { menu = false; onOpenExternally() }
                     }

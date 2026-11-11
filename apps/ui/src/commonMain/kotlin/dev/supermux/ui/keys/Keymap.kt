@@ -110,6 +110,7 @@ val DefaultKeymap = Keymap(
         bindApple("Mod-Alt-i", AppCommands.BrowserInspect),
         bind("Escape", AppCommands.BrowserStop),
         bind("Mod-Shift-s", AppCommands.BrowserScreenshot),
+        bind("Mod-Shift-m", AppCommands.BrowserDeviceMode),
         bind("Mod-g", AppCommands.FindNext),
         bindOther("F3", AppCommands.FindNext),
         bind("Mod-Shift-g", AppCommands.FindPrevious),

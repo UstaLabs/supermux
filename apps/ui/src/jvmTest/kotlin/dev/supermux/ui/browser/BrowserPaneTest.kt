@@ -10,7 +10,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertWidthIsEqualTo
 import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -191,7 +193,7 @@ class BrowserPaneTest {
             }
         }
         waitUntil(timeoutMillis = 5_000) { "https://vitejs.dev/" in rig.loads() }
-        rig.engines.created.forEach { it.findAnswer = { _, _ -> FindResult(found = true, count = 5, current = 2) } }
+        rig.engines.created.toList().forEach { it.findAnswer = { _, _ -> FindResult(found = true, count = 5, current = 2) } }
         onNodeWithTag("browser-address").performClick()
         val mod = if (isApplePlatform) Key.MetaLeft else Key.CtrlLeft
         onNodeWithTag("browser-address").performKeyInput { withKeyDown(mod) { pressKey(Key.R) } }
@@ -227,7 +229,7 @@ class BrowserPaneTest {
     @Test fun findNextAndPreviousKeysStepThroughTheMatches() = runComposeUiTest {
         val rig = Rig()
         showWithKeys(rig, mutableStateOf(view("https://vitejs.dev/")))
-        rig.engines.created.forEach { it.findAnswer = { _, _ -> FindResult(found = true, count = 5, current = 2) } }
+        rig.engines.created.toList().forEach { it.findAnswer = { _, _ -> FindResult(found = true, count = 5, current = 2) } }
         onNodeWithTag("browser-address").performClick()
         onNodeWithTag("browser-address").performKeyInput { withKeyDown(mod) { pressKey(Key.F) } }
         onNodeWithTag("browser-find-field").performTextInput("vite")
@@ -390,6 +392,78 @@ class BrowserPaneTest {
         onNodeWithTag("browser-find").assertExists()
     }
 
+    /** #122 phase 2: ⌘⇧M / Ctrl+Shift+M is DevTools' device toolbar: the page at an iPhone 16's size, then back. */
+    @Test fun theDeviceKeyShowsThePageAtAPhonesSize() = runComposeUiTest {
+        val rig = Rig()
+        showWithKeys(rig, mutableStateOf(view("https://vitejs.dev/")))
+        onNodeWithTag("browser-device-bar").assertDoesNotExist()
+        onNodeWithTag("browser-viewport").assertWidthIsEqualTo(800.dp)
+        onNodeWithTag("browser-address").performClick()
+        onNodeWithTag("browser-address").performKeyInput { withKeyDown(mod) { withKeyDown(Key.ShiftLeft) { pressKey(Key.M) } } }
+        onNodeWithTag("browser-device-bar").assertExists()
+        onNodeWithTag("browser-device-preset").assertTextEquals("iPhone 16")
+        // Taller than the pane: the page keeps its size and the pane pans.
+        onNodeWithTag("browser-viewport").assertWidthIsEqualTo(393.dp).assertHeightIsEqualTo(852.dp)
+        onNodeWithTag("browser-address").performKeyInput { withKeyDown(mod) { withKeyDown(Key.ShiftLeft) { pressKey(Key.M) } } }
+        onNodeWithTag("browser-device-bar").assertDoesNotExist()
+        onNodeWithTag("browser-viewport").assertWidthIsEqualTo(800.dp)
+        // The page moved in and out of the stage: the same page, never loaded again.
+        assertEquals(listOf("https://vitejs.dev/"), rig.loads())
+    }
+
+    /** The bar's button and the menu turn it on; a preset sizes the page and rotate turns it; ✕ closes the bar. */
+    @Test fun aPresetSizesThePageAndRotateTurnsIt() = runComposeUiTest {
+        val rig = Rig()
+        showWithKeys(rig, mutableStateOf(view("https://vitejs.dev/")))
+        onNodeWithTag("browser-device").performClick()
+        onNodeWithTag("browser-device-preset").performClick()
+        onNodeWithTag("browser-device-ipad-mini").performClick()
+        onNodeWithTag("browser-viewport").assertWidthIsEqualTo(768.dp).assertHeightIsEqualTo(1024.dp)
+        onNodeWithTag("browser-device-rotate").performClick()
+        onNodeWithTag("browser-viewport").assertWidthIsEqualTo(1024.dp).assertHeightIsEqualTo(768.dp)
+        onNodeWithTag("browser-device-close").performClick()
+        onNodeWithTag("browser-device-bar").assertDoesNotExist()
+        onNodeWithTag("browser-menu").performClick()
+        onNodeWithTag("browser-menu-device").performClick()
+        // It comes back as it was left: the iPad, turned.
+        onNodeWithTag("browser-viewport").assertWidthIsEqualTo(1024.dp).assertHeightIsEqualTo(768.dp)
+    }
+
+    /** A typed size is Responsive: the page takes it on Enter. */
+    @Test fun aTypedSizeIsResponsive() = runComposeUiTest {
+        val rig = Rig()
+        showWithKeys(rig, mutableStateOf(view("https://vitejs.dev/")))
+        onNodeWithTag("browser-device").performClick()
+        onNodeWithTag("browser-device-width").performTextReplacement("500")
+        onNodeWithTag("browser-device-width").performKeyInput { pressKey(Key.Enter) }
+        onNodeWithTag("browser-device-height").performTextReplacement("400")
+        onNodeWithTag("browser-device-height").performKeyInput { pressKey(Key.Enter) }
+        onNodeWithTag("browser-viewport").assertWidthIsEqualTo(500.dp).assertHeightIsEqualTo(400.dp)
+        onNodeWithTag("browser-device-preset").assertTextEquals("Responsive")
+    }
+
+    /** On a phone a phone-sized page inside it is pointless: no device button and no menu row (#122 §3.2). */
+    @Test fun aPhoneHasNoDeviceMode() = runComposeUiTest {
+        val rig = Rig()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        val runtime = WebViewRuntime(
+            RuntimeConfig(maxLive = 2, snapshotCacheBytes = 8L shl 20, factory = rig.engines, scope = scope, clock = { mainClock.currentTime }),
+        )
+        setPlatformContent {
+            CompositionLocalProvider(
+                LocalAppWebViews provides AppWebViews(runtime),
+                dev.supermux.ui.adaptive.LocalWindowWidthClass provides dev.supermux.ui.adaptive.WindowWidthClass.Compact,
+                dev.supermux.ui.adaptive.LocalPointerAvailable provides false,
+            ) {
+                BrowserPane(view("https://vitejs.dev/"), "w1", rig.actions(), Modifier.size(390.dp, 700.dp))
+            }
+        }
+        waitUntil(timeoutMillis = 5_000) { "https://vitejs.dev/" in rig.loads() }
+        onNodeWithTag("browser-device").assertDoesNotExist()
+        onNodeWithTag("browser-menu").performClick()
+        onNodeWithTag("browser-menu-device").assertDoesNotExist()
+    }
+
     @Test fun noEngineHereSaysSoAndOffersTheSystemBrowser() = runComposeUiTest {
         val rig = Rig().apply { engines.unavailable = UnavailableReason.NotImplemented }
         val platform = FakePlatform()
@@ -404,7 +478,7 @@ class BrowserPaneTest {
         val icons = mutableStateMapOf<String, String>()
         show(rig, mutableStateOf(view("https://a.test/")), rig.actions(), icons = icons)
         waitUntil(timeoutMillis = 5_000) { "https://a.test/" in rig.loads() }
-        rig.engines.created.forEach { it.evaluateAnswer = { "\"https://vitejs.dev/logo.svg\"" } }
+        rig.engines.created.toList().forEach { it.evaluateAnswer = { "\"https://vitejs.dev/logo.svg\"" } }
         onNodeWithTag("browser-address").performClick()
         onNodeWithTag("browser-address").performTextReplacement("vitejs.dev")
         onNodeWithTag("browser-address").performKeyInput { pressKey(Key.Enter) }
