@@ -54,6 +54,7 @@ private val NAMED_KEYS: Map<String, Key> = buildMap {
     fn.forEachIndexed { i, k -> put("F${i + 1}", k) }
     put("ArrowLeft", Key.DirectionLeft); put("ArrowRight", Key.DirectionRight)
     put("ArrowUp", Key.DirectionUp); put("ArrowDown", Key.DirectionDown)
+    put("PageUp", Key.PageUp); put("PageDown", Key.PageDown)
 }
 private val KEY_NAMES: Map<Key, String> = NAMED_KEYS.entries.associate { (name, key) -> key to name }
 

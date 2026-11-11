@@ -61,7 +61,7 @@ class BrowserKeysTest {
 
     @Test fun everyBrowserCommandIsListedAndBound() {
         val browser = AppCommands.all.filter { it.group == CommandGroup.Browser }
-        assertEquals(10, browser.size)
+        assertEquals(11, browser.size)
         for (c in browser) assertTrue(DefaultKeymap.chordsFor(c, KeyOs.Other).isNotEmpty(), c.id)
     }
 

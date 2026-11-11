@@ -105,4 +105,13 @@ class KeyResolverTest {
         assertNull(resolveKey(KeyChord("p", meta = true), listOf(window), KeyPhase.Bubble, KeyOs.Apple))
         assertNull(resolveKey(KeyChord("n", meta = true), emptyList(), KeyPhase.Bubble, KeyOs.Apple))
     }
+
+    /** #122 (Q1): in a Browser tab ⌘T / Ctrl+T is a new Browser tab; everywhere else it stays New terminal. */
+    @Test fun modTInABrowserTabIsANewBrowserTab() {
+        val browser = Scope(AppCommands.BrowserNewTab)
+        for ((os, chord) in listOf(KeyOs.Apple to KeyChord("t", meta = true), KeyOs.Other to KeyChord("t", ctrl = true))) {
+            assertEquals("browser.newTab", resolveKey(chord, listOf(browser, window), KeyPhase.Bubble, os)?.binding?.commandId)
+            assertEquals("workspace.newTerminal", resolveKey(chord, listOf(window), KeyPhase.Bubble, os)?.binding?.commandId)
+        }
+    }
 }

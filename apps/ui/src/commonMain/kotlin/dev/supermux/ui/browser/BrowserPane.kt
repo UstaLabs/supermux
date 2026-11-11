@@ -21,6 +21,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -140,6 +141,12 @@ fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, mod
     // The view's stored page: the first to open, then another client's (never this tab's own echo). A port waits for
     // its routes, which it resolves through.
     val stored = remember(view.state) { BrowserViewState.from(view.state) }
+    // A new tab (⌘T, + → Browser) waits with its address bar focused, as Chrome's does (#122).
+    LaunchedEffect(view.id) {
+        if (stored !is BrowserViewState.Empty) return@LaunchedEffect
+        withFrameNanos { }
+        runCatching { address.requestFocus() }
+    }
     val previewsKnown = previews != null
     LaunchedEffect(stored, previewsKnown) {
         if (!previewsKnown) return@LaunchedEffect

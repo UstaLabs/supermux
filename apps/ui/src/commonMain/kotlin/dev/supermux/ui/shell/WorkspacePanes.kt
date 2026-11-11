@@ -149,6 +149,7 @@ import dev.supermux.workspace.NewViewKind
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.firstGroupId
 import dev.supermux.workspace.groupIdOf
+import dev.supermux.workspace.isBrowserView
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 import dev.supermux.workspace.openSingletonView
@@ -321,6 +322,18 @@ fun WorkspacePanes(
             splitWorkspace("column", hostId, current, layoutSync, app, ui)
             true
         }
+    }
+    // Chrome's tab keys (#122): the next/previous tab and tab 1–9 of the pane last worked in.
+    fun showTab(target: Pair<String, String>?): Boolean {
+        val (groupId, viewId) = target ?: return false
+        layoutSync.edit { setActiveViewInGroup(it, groupId, viewId) }
+        ws.focusedViewId = viewId
+        return true
+    }
+    RegisterCommand(AppCommands.TabNext, enabled = !ui.overlayOpen, scope = keyScope) { showTab(tabStep(layout, ws.focusedViewId, +1)) }
+    RegisterCommand(AppCommands.TabPrevious, enabled = !ui.overlayOpen, scope = keyScope) { showTab(tabStep(layout, ws.focusedViewId, -1)) }
+    for (n in 1..9) {
+        RegisterCommand(AppCommands.tabNumber(n), enabled = !ui.overlayOpen, scope = keyScope) { showTab(tabNumbered(layout, ws.focusedViewId, n)) }
     }
     RegisterCommand(AppCommands.CloseTab, enabled = !ui.overlayOpen, scope = keyScope) {
         val view = closeTabTarget(layout, ws.focusedViewId)?.let { viewsById[it] }
@@ -1136,6 +1149,14 @@ private fun WorkspacePaneContent(
             val viewApp = appFor(v.chatSessionId() ?: current.primarySessionId ?: session?.id ?: "")
             // What the keyboard knows about this pane: its kind (a terminal keeps its keys) and its view.
             val paneScope = rememberKeyScope(paneKeyContext(v), viewId)
+            // ⌘T in a Browser tab: a new Browser tab beside it (#122, Q1). Registered on the pane, so it wins over the
+            // window's New terminal only here.
+            if (v.isBrowserView()) {
+                RegisterCommand(AppCommands.BrowserNewTab, enabled = !ui.overlayOpen, scope = paneScope) {
+                    val opener = ws.browserOpener ?: return@RegisterCommand false
+                    groupIdOf(layoutSync.tree, v.id)?.also { opener.openEmpty(it) } != null
+                }
+            }
             ProvideKeyScope(paneScope) {
             ViewHost(
                 previewModeFor = { previewModes[it] == true },

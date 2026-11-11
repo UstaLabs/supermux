@@ -94,6 +94,15 @@ class WorkspaceBrowserOpener(
         }
     }
 
+    /** A new, empty Browser tab in [groupId], on show at once: ⌘T in a Browser tab (#122). Its address bar takes the focus. */
+    fun openEmpty(groupId: String, onPlaced: (viewId: String) -> Unit = {}) {
+        placeNewView(
+            id = newId(), kind = "browser", state = BrowserViewState.Empty.toJson(), groupId = groupId, split = false,
+            workspaceId = workspaceId, provisional = provisional, edit = edit, post = post, scope = scope, newId = newId,
+            onPlaced = onPlaced, onWithdrawn = {},
+        )
+    }
+
     private fun place(url: String, groupId: String, split: Boolean, onPlaced: (viewId: String) -> Unit) {
         // A link the broker would refuse as a tab's page (over 4096 characters) still opens, in the system's browser.
         val state = BrowserViewState.page(url)?.toJson() ?: return openSystem(url)

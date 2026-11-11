@@ -10,6 +10,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
@@ -104,6 +106,21 @@ class BrowserPaneTest {
         onNodeWithTag("browser-address").performTextReplacement("vitejs.dev")
         onNodeWithTag("browser-address").performKeyInput { pressKey(Key.Enter) }
         waitUntil(timeoutMillis = 5_000) { "https://vitejs.dev" in rig.loads() }
+    }
+
+    /** #122: a new tab (⌘T) waits with its address bar focused, as Chrome's does. A tab with a page doesn't take it. */
+    @Test fun aNewTabTakesTheFocusForItsAddress() = runComposeUiTest {
+        val rig = Rig()
+        show(rig, mutableStateOf(view(null)), rig.actions())
+        waitForIdle()
+        onNodeWithTag("browser-address").assertIsFocused()
+    }
+
+    @Test fun aTabWithAPageLeavesTheFocusAlone() = runComposeUiTest {
+        val rig = Rig()
+        show(rig, mutableStateOf(view("https://vitejs.dev/")), rig.actions())
+        waitUntil(timeoutMillis = 5_000) { "https://vitejs.dev/" in rig.loads() }
+        onNodeWithTag("browser-address").assertIsNotFocused()
     }
 
     @Test fun aPageAnotherClientStoredIsFollowed() = runComposeUiTest {
