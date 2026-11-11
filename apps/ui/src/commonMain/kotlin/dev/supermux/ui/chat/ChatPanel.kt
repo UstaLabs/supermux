@@ -1289,6 +1289,7 @@ fun ChatPanel(
                 LocalHtmlCards provides actions.htmlCards,
                 LocalChatViewportHeight provides chatViewportHeight,
             ) {
+            LocalChatCompositionProbe.current?.let { probe -> androidx.compose.runtime.SideEffect { probe("transcript") } }
             LazyColumn(
                 state = listState,
                 // widthIn BEFORE fillMaxHeight: cap the reading width first, then fill the height.

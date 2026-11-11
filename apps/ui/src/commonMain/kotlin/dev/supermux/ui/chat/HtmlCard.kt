@@ -16,6 +16,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.derivedStateOf
@@ -76,6 +77,9 @@ val LocalHtmlCards = staticCompositionLocalOf<HtmlCardHost?> { null }
 
 /** The chat's visible height, for a card's cap. Unspecified outside a chat. */
 val LocalChatViewportHeight = compositionLocalOf { Dp.Unspecified }
+
+/** Test-only: told each time a named part of the chat composes ("transcript", "card"), so a test can count recompositions. */
+internal val LocalChatCompositionProbe = staticCompositionLocalOf<((String) -> Unit)?> { null }
 
 /** The --sm-* variables a page gets, in the order the description names them. */
 internal val CARD_THEME_VARIABLES: List<String> =
@@ -237,6 +241,7 @@ internal fun HtmlCardView(entryId: String, card: HtmlCardDto, modifier: Modifier
     val theme = cardTheme(cs, LocalSemantics.current)
     val currentTheme by rememberUpdatedState(theme)
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
+    LocalChatCompositionProbe.current?.let { probe -> SideEffect { probe("card") } }
     val viewport = LocalChatViewportHeight.current
     val max = if (viewport == Dp.Unspecified) CARD_MAX_FALLBACK else (viewport * CARD_MAX_FRACTION).coerceAtLeast(120.dp)
     val reserved = (cardStoredHeight(card, compact) ?: CARD_DEFAULT_HEIGHT).coerceAtMost(max)
