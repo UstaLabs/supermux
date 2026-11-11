@@ -170,7 +170,7 @@ private fun cardPrelude(theme: CardTheme): String {
     val vars = theme.vars.joinToString(";") { (name, value) -> "$name:$value" }
     return "<style id=\"sm-base\">:root{color-scheme:$scheme;$vars;--sm-radius:8px;" +
         "--sm-font:\"Geist\",system-ui,-apple-system,\"Segoe UI\",sans-serif;--sm-mono:\"Geist Mono\",ui-monospace,monospace}" +
-        "html,body{margin:0;background:transparent;color:var(--sm-fg);font:14px/1.45 var(--sm-font)}</style>" +
+        "html,body{margin:0;background:transparent;overscroll-behavior:none;color:var(--sm-fg);font:14px/1.45 var(--sm-font)}</style>" +
         "<script id=\"sm-api\">" + CARD_API_SCRIPT.replace("\$SCHEME", scheme) + "</script>"
 }
 

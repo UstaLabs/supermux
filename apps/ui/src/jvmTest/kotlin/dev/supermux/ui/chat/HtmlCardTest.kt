@@ -70,6 +70,15 @@ class HtmlCardTest {
         assertTrue("<p>hi</p>" in doc)
     }
 
+    // iOS: WKWebView rubber-bands even a page that doesn't scroll. The sample stops it in its pages' CSS (orbit.html):
+    // overscroll-behavior none on the root. A card that scrolls inside keeps its scroll, without the outer bounce.
+    @Test fun aCardsPageDoesNotBounce() {
+        val doc = cardDocument("<p>hi</p>", dark)
+        val base = doc.substringAfter("<style id=\"sm-base\">").substringBefore("</style>")
+        val rule = base.substringAfter("html,body{").substringBefore("}")
+        assertTrue("overscroll-behavior:none" in rule, "html and body keep their page from bouncing: $rule")
+    }
+
     @Test fun aFragmentIsWrappedInADocument() {
         val doc = cardDocument("<button onclick=\"supermux.send('B')\">B</button>", dark.copy(dark = false))
         assertTrue(doc.startsWith("<!doctype html><html data-theme=\"light\">"))
