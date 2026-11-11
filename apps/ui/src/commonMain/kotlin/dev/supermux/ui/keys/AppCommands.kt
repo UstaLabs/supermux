@@ -25,6 +25,9 @@ object AppCommands {
     val GoToFile = AppCommand("files.goTo", "Go to file", CommandGroup.Files)
     /** Find in the focused thing: a chat registers its find bar, and any other view (a browser page) its own. */
     val Find = AppCommand("find", "Find", CommandGroup.General)
+    /** The next and previous match of the open find (#122): what owns the find registers them. */
+    val FindNext = AppCommand("find.next", "Find next", CommandGroup.General)
+    val FindPrevious = AppCommand("find.previous", "Find previous", CommandGroup.General)
     val OpenSettings = AppCommand("settings.open", "Settings", CommandGroup.General)
     val ShowShortcuts = AppCommand("shortcuts.show", "Keyboard shortcuts", CommandGroup.General)
     val PasteImage = AppCommand("composer.pasteImage", "Paste an image into the message", CommandGroup.Chat)
@@ -39,10 +42,14 @@ object AppCommands {
     val BrowserZoomOut = AppCommand("browser.zoomOut", "Zoom out", CommandGroup.Browser)
     val BrowserZoomReset = AppCommand("browser.zoomReset", "Actual size", CommandGroup.Browser)
     val BrowserOpenExternally = AppCommand("browser.openExternally", "Open in your browser", CommandGroup.Browser)
+    val BrowserInspect = AppCommand("browser.inspect", "Inspect the page", CommandGroup.Browser)
+    /** Stops a page while it loads; on a loaded page it declines, so Esc stays the page's. */
+    val BrowserStop = AppCommand("browser.stop", "Stop loading", CommandGroup.Browser)
 
     val all: List<AppCommand> = listOf(
-        NewSession, MoveToNewWindow, NewTerminal, ToggleSidebar, GoToFile, Find,
+        NewSession, MoveToNewWindow, NewTerminal, ToggleSidebar, GoToFile, Find, FindNext, FindPrevious,
         OpenSettings, ShowShortcuts, PasteImage, SplitRight, SplitDown, CloseTab,
         BrowserFocusAddress, BrowserReload, BrowserBack, BrowserForward, BrowserZoomIn, BrowserZoomOut, BrowserZoomReset, BrowserOpenExternally,
+        BrowserInspect, BrowserStop,
     )
 }

@@ -42,6 +42,9 @@ internal fun bind(keys: String, command: AppCommand, mac: String = keys, appFirs
 internal fun bindOther(keys: String, command: AppCommand, appFirst: Boolean = false, overOwner: Boolean = false) =
     AppBinding(command.id, null, KeyChord.parse(keys, apple = false), appFirst, overOwner)
 
+/** A key that exists only on Apple. */
+internal fun bindApple(keys: String, command: AppCommand) = AppBinding(command.id, KeyChord.parse(keys, apple = true), null)
+
 class Keymap(val bindings: List<AppBinding>) {
     fun bindingsFor(chord: KeyChord, os: KeyOs): List<AppBinding> = bindings.filter { it.chord(os) == chord }
 
@@ -81,6 +84,22 @@ val DefaultKeymap = Keymap(
         bind("Mod--", AppCommands.BrowserZoomOut),
         bind("Mod-0", AppCommands.BrowserZoomReset),
         bind("Mod-Shift-o", AppCommands.BrowserOpenExternally),
+        // Chrome's own keys for a tab (#122), as aliases: its Windows/Linux list off Apple, its ⌘ keys on Apple.
+        bindOther("F5", AppCommands.BrowserReload),
+        bindOther("Alt-ArrowLeft", AppCommands.BrowserBack),
+        bindOther("Alt-ArrowRight", AppCommands.BrowserForward),
+        bindOther("Alt-d", AppCommands.BrowserFocusAddress),
+        bindOther("F6", AppCommands.BrowserFocusAddress),
+        bind("Mod-Shift-=", AppCommands.BrowserZoomIn),
+        bind("Mod-+", AppCommands.BrowserZoomIn),
+        bindOther("F12", AppCommands.BrowserInspect),
+        bindOther("Ctrl-Shift-i", AppCommands.BrowserInspect),
+        bindApple("Mod-Alt-i", AppCommands.BrowserInspect),
+        bind("Escape", AppCommands.BrowserStop),
+        bind("Mod-g", AppCommands.FindNext),
+        bindOther("F3", AppCommands.FindNext),
+        bind("Mod-Shift-g", AppCommands.FindPrevious),
+        bindOther("Shift-F3", AppCommands.FindPrevious),
     ),
 )
 
