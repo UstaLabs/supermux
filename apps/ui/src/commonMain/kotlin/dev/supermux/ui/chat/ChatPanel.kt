@@ -748,8 +748,14 @@ fun ChatPanel(
     // rebuilt panel (a rotation, a width change) closed every card and marked every reply read (#89).
     val cards = rememberRetained("chat.subagents:${session.id}") { SubagentCards() }
     var openSubagents by cards::open
-    val subagentActions = remember(actions, session.id) {
-        SubagentActions(message = actions.messageSubagent, stop = actions.stopSubagent, sessionId = session.id)
+    // The latest actions, so a host's new ChatActions (each time it recomposes) give the subagent cards nothing new.
+    val currentActions by rememberUpdatedState(actions)
+    val subagentActions = remember(session.id) {
+        SubagentActions(
+            message = { id, text -> currentActions.messageSubagent(id, text) },
+            stop = { id -> currentActions.stopSubagent(id) },
+            sessionId = session.id,
+        )
     }
     // Unread replies are client-side: the reply count the user has "seen" per subagent. A subagent
     // first seen counts as read (a reload does not light every card up); an OPEN card keeps up with
@@ -769,17 +775,32 @@ fun ChatPanel(
         if (index >= 0) scope.launch { listState.animateScrollToItem(index) }
     }
     val subagentNames = remember(subagents) { subagents.associate { it.id to it.displayName } }
-    val subagentUi = SubagentUi(
-        isExpanded = { it in openSubagents },
-        onToggle = { id -> openSubagents = if (id in openSubagents) openSubagents - id else openSubagents + id },
-        actions = subagentActions,
-        unread = { s -> s.unreadReplies(seenReplies[s.id] ?: (s.replies ?: 0)) },
-        open = openSubagentCard,
-        nameOf = { subagentNames[it] },
-    )
+    // What the rows get stays the same object while what it does is the same: a host that recomposes hands this panel
+    // new lambdas and new actions each time (ViewHost's ChatViewPane does), and a row given a new one recomposes, its
+    // markdown with it. Each reads the latest one when called; state they read (the open cards, the replies seen) is
+    // read as they run, in the composition that calls them, so it still updates the rows that show it.
+    val currentOpenSubagentCard by rememberUpdatedState(openSubagentCard)
+    val currentSubagentNames by rememberUpdatedState(subagentNames)
+    val subagentUi = remember(cards, subagentActions) {
+        SubagentUi(
+            isExpanded = { it in cards.open },
+            onToggle = { id -> cards.open = if (id in cards.open) cards.open - id else cards.open + id },
+            actions = subagentActions,
+            unread = { s -> s.unreadReplies(cards.seen[s.id] ?: (s.replies ?: 0)) },
+            open = { id -> currentOpenSubagentCard(id) },
+            nameOf = { currentSubagentNames[it] },
+        )
+    }
     // An inbox sender's chat opens from its card only when this host lists it.
     val listedSessions = state.listedSessions
     val canOpenChat = remember(listedSessions) { { id: String -> id in listedSessions } }
+    val rowOpenFile = rememberLatest(onOpenFile)
+    val currentOpenWalkthrough by rememberUpdatedState(onOpenWalkthrough)
+    val rowOpenWalkthrough = remember { { currentOpenWalkthrough(null) } }
+    val endCouncilNow = actions.endCouncil
+    val currentEndCouncil by rememberUpdatedState(endCouncilNow)
+    // Null where this client can't end one (the card shows no Stop): only that changing makes a new one.
+    val rowEndCouncil = remember(endCouncilNow != null) { endCouncilNow?.let { { id: String -> currentEndCouncil?.invoke(id); Unit } } }
 
     run {
         // One rule on every host (was desktop's): instant jump to the end on the first content for a
@@ -1347,12 +1368,12 @@ fun ChatPanel(
                             else -> TimelineItemRow(
                                 item = item,
                                 media = actions.media,
-                                onOpenFile = onOpenFile,
+                                onOpenFile = rowOpenFile,
                                 highDetail = highDetail,
-                                onOpenWalkthrough = { onOpenWalkthrough(null) },
+                                onOpenWalkthrough = rowOpenWalkthrough,
                                 subagentUi = subagentUi,
                                 canOpenChat = canOpenChat,
-                                endCouncil = actions.endCouncil,
+                                endCouncil = rowEndCouncil,
                             )
                         }
                     }
@@ -1361,7 +1382,7 @@ fun ChatPanel(
                 // Card #76: what the agent is writing right now, keyed like the stored rows that replace it.
                 items(liveRows, key = ::liveRowKey) { row ->
                     if (row.thinking) LiveThinkingRow(row, folded = liveRows.any { !it.thinking })
-                    else LiveReplyRow(row, reveals.of(row.stream), onOpenFile)
+                    else LiveReplyRow(row, reveals.of(row.stream), rowOpenFile)
                 }
                 // Running background tasks live in the strip over the composer (with the running
                 // subagents), not as chips in the transcript: one place for "still going".
@@ -1831,4 +1852,11 @@ private class ChromeFollowingPadding(private val top: androidx.compose.ui.unit.D
     override fun calculateTopPadding() = top
     override fun calculateRightPadding(layoutDirection: androidx.compose.ui.unit.LayoutDirection) = 0.dp
     override fun calculateBottomPadding() = bottom()
+}
+
+/** [f] as one lambda for the life of this composition, which calls the latest [f]: a caller's new lambda recomposes nothing. */
+@Composable
+private fun <T> rememberLatest(f: (T) -> Unit): (T) -> Unit {
+    val current by rememberUpdatedState(f)
+    return remember { { t: T -> current(t) } }
 }

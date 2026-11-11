@@ -579,7 +579,12 @@ private fun rememberOpenTappedPath(
 ): (FilePathRef) -> Unit {
     val notices = LocalPlatform.current.notices
     val scope = rememberCoroutineScope()
-    return { ref ->
+    // One lambda while what it opens is the same: a new one each recomposition recomposed every markdown row it reached.
+    val currentOpenFile by androidx.compose.runtime.rememberUpdatedState(onOpenFile)
+    val currentFileSystem by androidx.compose.runtime.rememberUpdatedState(fileSystem)
+    return remember(notices, scope, workdir, relativeTo) { { ref ->
+        val fileSystem = currentFileSystem
+        val onOpenFile = currentOpenFile
         val candidates = tappedPathCandidates(ref, workdir, relativeTo)
         if (candidates.isEmpty()) {
             notices.show("That's the workspace folder itself")
@@ -590,7 +595,7 @@ private fun rememberOpenTappedPath(
                 else onOpenFile(found, ref.line, ref.endLine)
             }
         }
-    }
+    } }
 }
 
 /**
