@@ -1169,6 +1169,7 @@ final class dev.supermux.webview/WebNavigator { // dev.supermux.webview/WebNavig
     final fun stop() // dev.supermux.webview/WebNavigator.stop|stop(){}[0]
     final suspend fun favicon(): kotlin/String? // dev.supermux.webview/WebNavigator.favicon|favicon(){}[0]
     final suspend fun find(kotlin/String, kotlin/Boolean = ...): dev.supermux.webview/FindResult? // dev.supermux.webview/WebNavigator.find|find(kotlin.String;kotlin.Boolean){}[0]
+    final suspend fun screenshot(): androidx.compose.ui.graphics/ImageBitmap? // dev.supermux.webview/WebNavigator.screenshot|screenshot(){}[0]
     final suspend fun setCookie(dev.supermux.webview/WebCookie): kotlin/Boolean // dev.supermux.webview/WebNavigator.setCookie|setCookie(dev.supermux.webview.WebCookie){}[0]
 }
 

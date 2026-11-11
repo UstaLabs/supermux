@@ -1,5 +1,6 @@
 package dev.supermux.webview
 
+import androidx.compose.ui.graphics.ImageBitmap
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import androidx.compose.runtime.Composable
@@ -409,6 +410,12 @@ public class WebNavigator internal constructor(private val state: WebViewState) 
         state.owner?.onEngine { result = it.openInspector() }
         return result
     }
+
+    /**
+     * The page as it looks now, as its engine draws it: null without a live engine, before the page has painted, or
+     * where the engine can't picture its page (the web's cross-origin iframe).
+     */
+    public suspend fun screenshot(): ImageBitmap? = state.owner?.withEngine { it.snapshot() }
 
     /** The page's icon: its `<link rel="icon">`, else `/favicon.ico` on its origin; null without a page or for a non-http one. */
     public suspend fun favicon(): String? {

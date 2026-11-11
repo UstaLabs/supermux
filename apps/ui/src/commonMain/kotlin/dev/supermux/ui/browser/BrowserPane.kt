@@ -21,6 +21,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -140,6 +141,12 @@ fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, mod
     // The view's stored page: the first to open, then another client's (never this tab's own echo). A port waits for
     // its routes, which it resolves through.
     val stored = remember(view.state) { BrowserViewState.from(view.state) }
+    // A new tab (⌘T, + → Browser) waits with its address bar focused, as Chrome's does (#122).
+    LaunchedEffect(view.id) {
+        if (stored !is BrowserViewState.Empty) return@LaunchedEffect
+        withFrameNanos { }
+        runCatching { address.requestFocus() }
+    }
     val previewsKnown = previews != null
     LaunchedEffect(stored, previewsKnown) {
         if (!previewsKnown) return@LaunchedEffect
@@ -220,6 +227,17 @@ fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, mod
         is InspectorResult.Elsewhere -> { notice = r.hint; true }
         else -> false
     }
+    // A picture of the page into the workspace's chat, unsent (#122): only where a chat can take it and the platform can
+    // picture a page.
+    val toChat = LocalBrowserToChat.current?.takeIf { platform.caps.pageScreenshots }
+    fun sendScreenshot(): Boolean {
+        val sink = toChat ?: return false
+        findScope.launch {
+            val png = state.navigator.screenshot()?.let(::pagePng) ?: return@launch
+            sink.sendImage(png, "screenshot.png")
+        }
+        return true
+    }
     fun findStep(backwards: Boolean) {
         val q = find.query
         findScope.launch { find.said = findText(q, if (q.isEmpty()) null else state.navigator.find(q, backwards)) }
@@ -240,6 +258,8 @@ fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, mod
     RegisterCommand(AppCommands.FindNext) { finding = true; findStep(backwards = false); true }
     RegisterCommand(AppCommands.FindPrevious) { finding = true; findStep(backwards = true); true }
     RegisterCommand(AppCommands.BrowserInspect) { inspectKey() }
+    RegisterCommand(AppCommands.BrowserScreenshot, enabled = toChat != null) { sendScreenshot() }
+    val screenshotAction: (() -> Unit)? = if (toChat != null) { { sendScreenshot() } } else null
     // Esc stops a loading page; on a loaded one it declines, so the page keeps it.
     RegisterCommand(AppCommands.BrowserStop) {
         (state.loading is LoadingState.Loading).also { if (it) state.navigator.stop() }
@@ -265,6 +285,7 @@ fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, mod
             onFind = { finding = true },
             onZoom = ::zoomBy,
             onInspect = ::inspect,
+            onScreenshot = screenshotAction,
         )
         notice?.let { text ->
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp).testTag("browser-notice"), verticalAlignment = Alignment.CenterVertically) {

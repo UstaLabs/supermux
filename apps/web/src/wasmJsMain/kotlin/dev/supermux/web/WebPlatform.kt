@@ -51,7 +51,7 @@ val WEB_CAPS = Caps(
     localBroker = false, multiWindow = false, fileSystem = false,
     clipboardImages = true, saveAs = true, walkthrough = true, appearanceControls = true,
     dynamicColor = false, appUpdate = false, terminal = true, scrcpy = false,
-    setupWizard = true, linksInBrowserTabs = false,
+    setupWizard = true, linksInBrowserTabs = false, pageScreenshots = false,
 )
 
 /**

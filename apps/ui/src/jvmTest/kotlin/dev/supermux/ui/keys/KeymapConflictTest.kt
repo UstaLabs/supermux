@@ -106,7 +106,13 @@ class KeymapConflictTest {
 
     @Test fun noChordIsBoundTwice() {
         for (os in KeyOs.entries) {
-            val twice = DefaultKeymap.bindings.mapNotNull { it.chord(os) }.groupingBy { it }.eachCount().filterValues { it > 1 }
+            // ⌘T / Ctrl+T is New terminal, and a new Browser tab inside a Browser tab (#122, Q1): the deeper scope wins.
+            // Off Apple Ctrl+Shift+T is the reopen key, which makes New terminal's terminal itself where it should.
+            val byScope = setOfNotNull(
+                KeyChord.parse("Mod-t", apple = os == KeyOs.Apple),
+                KeyChord.parse("Ctrl-Shift-t", apple = false).takeIf { os == KeyOs.Other },
+            )
+            val twice = DefaultKeymap.bindings.mapNotNull { it.chord(os) }.groupingBy { it }.eachCount().filterValues { it > 1 } - byScope
             assertTrue(twice.isEmpty(), "$os: ${twice.keys}")
         }
     }

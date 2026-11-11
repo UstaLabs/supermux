@@ -61,6 +61,8 @@ val DefaultKeymap = Keymap(
         bind("Mod-n", AppCommands.NewSession),
         bind("Mod-Shift-n", AppCommands.MoveToNewWindow, overOwner = true),
         bind("Mod-t", AppCommands.NewTerminal),
+        // Before New terminal's Ctrl+Shift+T: the reopen key's handler makes the terminal itself where it should (#122).
+        bind("Mod-Shift-t", AppCommands.ReopenClosedTab, overOwner = true),
         bindOther("Ctrl-Shift-t", AppCommands.NewTerminal, overOwner = true),
         bind("Mod-b", AppCommands.ToggleSidebar),
         bind("Mod-p", AppCommands.GoToFile),
@@ -75,6 +77,14 @@ val DefaultKeymap = Keymap(
         bind("Mod-Alt-\\", AppCommands.SplitDown),
         bind("Mod-w", AppCommands.CloseTab),
         bindOther("Ctrl-Shift-w", AppCommands.CloseTab, overOwner = true),
+        // Chrome's tab keys (#122). Chrome's Ctrl+Tab on a Mac is left out: on Apple the app's keys are ⌘ only (#96).
+        bindApple("Mod-Shift-]", AppCommands.TabNext),
+        bindOther("Ctrl-Tab", AppCommands.TabNext),
+        bindOther("Ctrl-PageDown", AppCommands.TabNext),
+        bindApple("Mod-Shift-[", AppCommands.TabPrevious),
+        bindOther("Ctrl-Shift-Tab", AppCommands.TabPrevious),
+        bindOther("Ctrl-PageUp", AppCommands.TabPrevious),
+        *(1..9).map { bind("Mod-$it", AppCommands.tabNumber(it)) }.toTypedArray(),
         // The Browser tab's keys: only its pane registers them, so they never reach a chat, editor or terminal.
         bind("Mod-l", AppCommands.BrowserFocusAddress),
         bind("Mod-r", AppCommands.BrowserReload),
@@ -84,6 +94,9 @@ val DefaultKeymap = Keymap(
         bind("Mod--", AppCommands.BrowserZoomOut),
         bind("Mod-0", AppCommands.BrowserZoomReset),
         bind("Mod-Shift-o", AppCommands.BrowserOpenExternally),
+        // The one key with two meanings by scope (#122, Q1): in a Browser tab ⌘T is a new Browser tab (the deeper scope
+        // wins); everywhere else New terminal.
+        bind("Mod-t", AppCommands.BrowserNewTab),
         // Chrome's own keys for a tab (#122), as aliases: its Windows/Linux list off Apple, its ⌘ keys on Apple.
         bindOther("F5", AppCommands.BrowserReload),
         bindOther("Alt-ArrowLeft", AppCommands.BrowserBack),
@@ -96,6 +109,7 @@ val DefaultKeymap = Keymap(
         bindOther("Ctrl-Shift-i", AppCommands.BrowserInspect),
         bindApple("Mod-Alt-i", AppCommands.BrowserInspect),
         bind("Escape", AppCommands.BrowserStop),
+        bind("Mod-Shift-s", AppCommands.BrowserScreenshot),
         bind("Mod-g", AppCommands.FindNext),
         bindOther("F3", AppCommands.FindNext),
         bind("Mod-Shift-g", AppCommands.FindPrevious),

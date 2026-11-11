@@ -10,6 +10,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
@@ -104,6 +106,21 @@ class BrowserPaneTest {
         onNodeWithTag("browser-address").performTextReplacement("vitejs.dev")
         onNodeWithTag("browser-address").performKeyInput { pressKey(Key.Enter) }
         waitUntil(timeoutMillis = 5_000) { "https://vitejs.dev" in rig.loads() }
+    }
+
+    /** #122: a new tab (⌘T) waits with its address bar focused, as Chrome's does. A tab with a page doesn't take it. */
+    @Test fun aNewTabTakesTheFocusForItsAddress() = runComposeUiTest {
+        val rig = Rig()
+        show(rig, mutableStateOf(view(null)), rig.actions())
+        waitForIdle()
+        onNodeWithTag("browser-address").assertIsFocused()
+    }
+
+    @Test fun aTabWithAPageLeavesTheFocusAlone() = runComposeUiTest {
+        val rig = Rig()
+        show(rig, mutableStateOf(view("https://vitejs.dev/")), rig.actions())
+        waitUntil(timeoutMillis = 5_000) { "https://vitejs.dev/" in rig.loads() }
+        onNodeWithTag("browser-address").assertIsNotFocused()
     }
 
     @Test fun aPageAnotherClientStoredIsFollowed() = runComposeUiTest {
@@ -231,6 +248,61 @@ class BrowserPaneTest {
         onNodeWithTag("browser-address").performKeyInput { pressKey(Key.Escape) }
         waitForIdle()
         assertTrue("stop" !in rig.calls, "${rig.calls}")
+    }
+
+    private class ChatSink : BrowserToChat {
+        val sent = mutableListOf<Pair<ByteArray, String>>()
+        override fun sendImage(png: ByteArray, name: String): Boolean { sent += png to name; return true }
+    }
+
+    private fun ComposeUiTest.showWithChat(rig: Rig, v: MutableState<ViewDto>, sink: BrowserToChat?) {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        val runtime = WebViewRuntime(
+            RuntimeConfig(maxLive = 2, snapshotCacheBytes = 8L shl 20, factory = rig.engines, scope = scope, clock = { mainClock.currentTime }),
+        )
+        setPlatformContent {
+            CompositionLocalProvider(LocalAppWebViews provides AppWebViews(runtime), LocalBrowserToChat provides sink) {
+                ShortcutRoot(remember { ShortcutDispatcher() }, Modifier.size(800.dp, 600.dp)) {
+                    val paneScope = rememberKeyScope(KeyContext.Browser, "b1")
+                    ProvideKeyScope(paneScope) {
+                        BrowserPane(v.value, "w1", rig.actions(), Modifier.keyScope(paneScope))
+                    }
+                }
+            }
+        }
+        waitUntil(timeoutMillis = 5_000) { "https://vitejs.dev/" in rig.loads() }
+    }
+
+    private fun ByteArray.isPng() = size > 8 && this[0] == 0x89.toByte() && this[1] == 'P'.code.toByte() && this[2] == 'N'.code.toByte()
+
+    /** #122: ⌘⇧S / Ctrl+Shift+S sends the page's picture to the chat's composer (the chat adds it, unsent). */
+    @Test fun theScreenshotKeyHandsThePageToTheChat() = runComposeUiTest {
+        val rig = Rig()
+        val sink = ChatSink()
+        showWithChat(rig, mutableStateOf(view("https://vitejs.dev/")), sink)
+        onNodeWithTag("browser-address").performClick()
+        onNodeWithTag("browser-address").performKeyInput { withKeyDown(mod) { withKeyDown(Key.ShiftLeft) { pressKey(Key.S) } } }
+        waitUntil(timeoutMillis = 5_000) { sink.sent.isNotEmpty() }
+        assertTrue(sink.sent.single().first.isPng(), "a PNG")
+        assertTrue(sink.sent.single().second.endsWith(".png"))
+    }
+
+    @Test fun theMenuSendsAScreenshotToo() = runComposeUiTest {
+        val rig = Rig()
+        val sink = ChatSink()
+        showWithChat(rig, mutableStateOf(view("https://vitejs.dev/")), sink)
+        onNodeWithTag("browser-menu").performClick()
+        onNodeWithTag("browser-menu-screenshot").performClick()
+        waitUntil(timeoutMillis = 5_000) { sink.sent.isNotEmpty() }
+    }
+
+    /** Where no chat can take it (or the platform can't picture a page), the menu doesn't offer it. */
+    @Test fun withNowhereToSendItTheMenuHasNoScreenshot() = runComposeUiTest {
+        val rig = Rig()
+        showWithChat(rig, mutableStateOf(view("https://vitejs.dev/")), sink = null)
+        onNodeWithTag("browser-menu").performClick()
+        onNodeWithTag("browser-menu-find").assertExists()
+        onNodeWithTag("browser-menu-screenshot").assertDoesNotExist()
     }
 
     @Test fun noEngineHereSaysSoAndOffersTheSystemBrowser() = runComposeUiTest {
