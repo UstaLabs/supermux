@@ -198,7 +198,10 @@ internal class IosWebEngine private constructor(
     /** The epoch each navigation WebKit reported started in. */
     private val navigations = NavigationEpochs()
     private var lease: Job = SupervisorJob(scope.coroutineContext[Job])
-    /** A sideways drag past the page's edge goes to the views around it (the phone's tab swipe). */
+    /**
+     * A sideways drag past the page's edge goes to the views around it (the phone's tab swipe); in a pane, so does a
+     * vertical one the page doesn't claim.
+     */
     private val sideSwipe = PageSideSwipe(webView.scrollView) { script, done ->
         webView.evaluateJavaScript(script) { result, _ -> done((result as? Boolean)?.toString()) }
     }
@@ -620,11 +623,14 @@ internal class IosWebEngine private constructor(
         if (released) return
         val inList = LocalWebSurfaceHints.current.inScrollingList
         val dispatcher = remember { NestedScrollDispatcher() }
+        val parents = remember(dispatcher) { DispatcherParents(dispatcher) }
         val density = LocalDensity.current.density
-        DisposableEffect(dispatcher, density) {
-            sideSwipe.dispatcher = dispatcher
+        DisposableEffect(parents, density, inList) {
+            sideSwipe.parents = parents
             sideSwipe.density = density
-            onDispose { if (sideSwipe.dispatcher === dispatcher) sideSwipe.dispatcher = null }
+            // A pane gets every touch, so the list can't take a vertical drag itself: the page hands on what it doesn't claim.
+            sideSwipe.pane = !inList
+            onDispose { if (sideSwipe.parents === parents) sideSwipe.parents = null }
         }
         // UIKitView takes its properties when it creates its interop view, not after: a hint that changes (an embed
         // whose page turns out to take touches itself, made a pane) gets a new container, which adopts the web view.

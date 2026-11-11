@@ -1034,7 +1034,12 @@ no cut-outs.
 
 - **Touches.** In an embed in a list ([embeds and panes](#sizing)) Compose gets a drag that starts on the page first
   (`UIKitInteropInteractionMode.Cooperative`), so the list scrolls, and taps still reach the page. In a pane the page
-  gets every touch at once (`NonCooperative`), and scrolls itself.
+  gets every touch at once (`NonCooperative`), and scrolls itself. What it doesn't take goes to the scrolling parents
+  through Compose's nested scroll, as on Android: a pane's page that can't scroll further up or down hands a vertical
+  one-finger drag on (and its fling) unless what is under the finger claims it (a computed `touch-action` that keeps
+  the browser from panning vertically, such as a canvas's `none`, or an inner scroller with room that way), so a chat
+  scrolls by a drag over a card's buttons while its canvas keeps its own. The page is asked when the drag starts and
+  each way it turns; nothing is handed on before it answers.
 - **The user's gestures.** WebKit has no public user-gesture flag on navigations, so the relay reports what the page,
   or any of its frames, saw from the user in trusted events, which no page script can make: a tap, a click, or a key
   but Escape. A request of that document's to leave (a navigation the client is asked about, or a new window) within a
