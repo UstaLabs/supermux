@@ -1155,7 +1155,12 @@ reports `Unavailable(NotImplemented)`.
   or two later: WebKit is asked at once, and again while it keeps growing. A page that changed since its last snapshot
   jumps to its live state when the resize ends.
 - **Input.** Typing and input methods are WKWebView's own. ⌘C, ⌘X, ⌘V, ⌘A, ⌘Z and ⇧⌘Z reach the page while it has
-  focus (AWT would keep them); other ⌘ shortcuts are the app's. An embed in a list ([embeds and panes](#sizing))
+  focus (AWT would keep them). Every other ⌘ key is the page's first, as in Chrome (#122): WebKit gets it, and a key
+  script in the isolated world says after its dispatch whether the page used it (`preventDefault`); one it left unused
+  then reaches the app, as AWT would have delivered it (a page that never answers keeps it 300 ms at most). The keys
+  the app keeps go to it first, as before, on AppKit's route, so the menu bar still runs them: ⌘T, ⌘W, ⌘N (and with
+  ⇧), ⌘1–⌘9, ⌘, ⌘\\ and ⇧⌘[ / ⇧⌘], and AppKit's ⌘Q, ⌘H, ⌘M and ⌘`. Checked by `mac-command-keys-are-the-pages-first`
+  (⌘B kept by a page, an unused ⌘K reaching the app once, ⌘T the app's). An embed in a list ([embeds and panes](#sizing))
   leaves the wheel and trackpad gestures to its list, so a chat scrolls over its demos; a pane scrolls and zooms
   itself. Trackpad swipe navigation is off: a swipe would show WebKit's picture of the page before a lease's first,
   which no lease may reach. A press or a key in the page makes its next request to leave (a navigation the client is
