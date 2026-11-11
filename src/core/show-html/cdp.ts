@@ -9,6 +9,8 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { proc } from "@supermux/platform"
+import { spawnProcess } from "../process/launcher"
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Handler = (params: any) => void
@@ -131,12 +133,14 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 /** [sandbox] false launches with --no-sandbox: only where the host refuses Chrome's own sandbox (launchSandboxFirst). */
 export async function launchChrome(executable: string, o: { args?: string[]; env?: Record<string, string | undefined>; timeoutMs?: number; sandbox?: boolean } = {}): Promise<ChromeProcess> {
   const dir = await mkdtemp(join(tmpdir(), "supermux-check-"))
-  const proc = Bun.spawn([executable, "--headless=new", "--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1",
+  const child = spawnProcess([executable, "--headless=new", "--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1",
     `--user-data-dir=${dir}`, "--no-first-run", "--no-default-browser-check",
     ...(o.sandbox === false ? ["--no-sandbox"] : []), ...(o.args ?? []), "about:blank"],
   { stdin: "ignore", stdout: "ignore", stderr: "ignore", env: o.env as Record<string, string> | undefined })
   let exited = false
-  void proc.exited.then(() => { exited = true })
+  void child.exited.then(() => { exited = true })
+  // Windows has no signals: the platform layer ends the browser and what it started (taskkill /T there).
+  const end = () => { if (!exited && child.pid) proc.killTree(child.pid) }
   const cleanup = async () => { await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {}) }
   try {
     const deadline = Date.now() + (o.timeoutMs ?? 15_000)
@@ -151,9 +155,9 @@ export async function launchChrome(executable: string, o: { args?: string[]; env
     const client = await CdpClient.connect(url)
     // Gone however it went (Browser.close, a crash, a kill): the connection closing is the signal; reap and clean up.
     void client.closed.then(async () => {
-      if (!exited) await Promise.race([proc.exited, sleep(3000)])
-      if (!exited) proc.kill("SIGKILL")
-      await proc.exited
+      if (!exited) await Promise.race([child.exited, sleep(3000)])
+      end()
+      await child.exited
       await cleanup()
     })
     return {
@@ -162,13 +166,15 @@ export async function launchChrome(executable: string, o: { args?: string[]; env
         if (!client.isClosed) await client.send("Browser.close").catch(() => {})
         await Promise.race([client.closed, sleep(2000)])
         await client.close()
-        await proc.exited
+        if (!exited) await Promise.race([child.exited, sleep(3000)])
+        end()
+        await child.exited
         await cleanup()
       },
     }
   } catch (e) {
-    proc.kill("SIGKILL")
-    await proc.exited
+    end()
+    await child.exited
     await cleanup()
     throw e
   }
