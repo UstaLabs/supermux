@@ -728,8 +728,11 @@ fun ChatPanel(
             }
     }
     val density = LocalDensity.current
-    // #104: an html card caps itself at a share of the chat's visible height.
-    val chatViewportPx by remember(listState) { derivedStateOf { listState.layoutInfo.viewportSize.height } }
+    // #104: an html card caps itself at a share of the chat's RESTING visible height: the transcript's with the chrome
+    // shown, latched only while the chrome is at rest (below, where the chrome is). Not the height of the moment: the
+    // chrome auto-hide changes that every frame of its 200 ms slide, which resized every card at its cap each frame, and
+    // iOS re-lays out and repaints a WKWebView at each new size, so scrolling stuttered.
+    var chatViewportPx by remember(listState) { mutableIntStateOf(0) }
     val chatViewportHeight = if (chatViewportPx > 0) with(density) { chatViewportPx.toDp() } else androidx.compose.ui.unit.Dp.Unspecified
     // The find bar (open, its query, its scope) outlives this composition: a rotation or a width
     // change closed it and dropped what was typed (#89).
@@ -1065,6 +1068,16 @@ fun ChatPanel(
         label = "chatChrome",
     )
     LaunchedEffect(chromeCollapsed) { onChromeHiddenChange(chromeCollapsed) }
+    // The cards' cap ([chatViewportPx]): the transcript's height only while the chrome is shown and still. A wide view
+    // never hides it, so there the cap follows every resize as it always did.
+    LaunchedEffect(listState) {
+        snapshotFlow { if (chromeFraction >= 1f) listState.layoutInfo.viewportSize.height else 0 }
+            .collect { if (it > 0) chatViewportPx = it }
+    }
+    // The list's bottom inset follows the chrome: with the composer tucked away the last row would sit on the window's
+    // edge, so it gets the breathing room the composer's own padding gave it. Read as the list MEASURES (it asks for its
+    // padding then), so the slide relayouts the list each frame without recomposing the transcript.
+    val transcriptPadding = remember { ChromeFollowingPadding(top = Space.md) { Space.xl * (1f - chromeFraction) } }
     // Revealed at the end of the transcript: the composer growing back shrinks the viewport, which
     // would push the last lines out of view. Keep the bottom pinned while it animates in.
     LaunchedEffect(chromeCollapsed) {
@@ -1279,7 +1292,7 @@ fun ChatPanel(
             )
         }
 
-        val transcript: @Composable (bottomPadding: androidx.compose.ui.unit.Dp) -> Unit = { bottomPad ->
+        val transcript: @Composable () -> Unit = {
             androidx.compose.runtime.CompositionLocalProvider(
                 LocalCouncilActivity provides state.councilActivity,
                 LocalChatMediaViewer provides mediaOpener,
@@ -1300,7 +1313,7 @@ fun ChatPanel(
                 // Vertical inset as CONTENT padding, not a Modifier pad: a Modifier pad clips the
                 // scroll viewport so rows pop into view at a hard edge instead of scrolling under
                 // the scrim.
-                contentPadding = PaddingValues(top = Space.md, bottom = bottomPad),
+                contentPadding = transcriptPadding,
                 verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
                 itemsIndexed(timelineItems, key = { i, _ -> timelineKeys[i] }) { i, item ->
@@ -1439,9 +1452,7 @@ fun ChatPanel(
                 // A tap while the chrome is tucked away brings it back (the reading-app convention).
                 Column(Modifier.testTag("chat_body").pointerInput(chrome) { detectTapGestures(onTap = { focusManager.clearFocus(); chrome.show() }) }) {
                     Box(Modifier.fillMaxWidth().weight(1f).nestedScroll(chrome.connection), contentAlignment = Alignment.TopCenter) {
-                        // With the composer tucked away the last row would sit on the window's edge; give
-                        // it the breathing room the composer's own padding gave it.
-                        if (emptySession) starters() else transcript(Space.xl * (1f - chromeFraction))
+                        if (emptySession) starters() else transcript()
                         // Fade, not a rule: a short scrim of the panel's own background so a
                         // message scrolling up dissolves into the header. Non-interactive.
                         EdgeFade(cs.surfaceContainerLow, Modifier.align(Alignment.TopCenter))
@@ -1810,3 +1821,14 @@ private class RevealMark(val messageId: String)
 private const val REVEAL_ALPHA = 0.16f
 private const val REVEAL_HOLD_MS = 900L
 private const val REVEAL_FADE_MS = 1_200
+
+/**
+ * A lazy list's content padding: [top], and a [bottom] that follows the chrome's slide. A lazy list asks for its padding
+ * as it measures, so [bottom] is read in the layout phase and an animation drives it without recomposing the list.
+ */
+private class ChromeFollowingPadding(private val top: androidx.compose.ui.unit.Dp, private val bottom: () -> androidx.compose.ui.unit.Dp) : PaddingValues {
+    override fun calculateLeftPadding(layoutDirection: androidx.compose.ui.unit.LayoutDirection) = 0.dp
+    override fun calculateTopPadding() = top
+    override fun calculateRightPadding(layoutDirection: androidx.compose.ui.unit.LayoutDirection) = 0.dp
+    override fun calculateBottomPadding() = bottom()
+}
