@@ -87,6 +87,8 @@ internal fun BrowserToolbar(
     onFind: () -> Unit,
     onZoom: (direction: Int) -> Unit,
     onInspect: () -> Unit,
+    /** Null where the tab can't send a picture to a chat: then the menu doesn't offer it (#122). */
+    onScreenshot: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -154,6 +156,9 @@ internal fun BrowserToolbar(
                 DropdownMenuItem(text = { Text("Zoom in") }, onClick = { onZoom(+1) })
                 DropdownMenuItem(text = { Text("Zoom out") }, onClick = { onZoom(-1) })
                 DropdownMenuItem(text = { Text("Actual size ($zoomPercent%)") }, onClick = { onZoom(0) })
+                onScreenshot?.let { send ->
+                    DropdownMenuItem(text = { Text("Send screenshot to chat") }, onClick = { menu = false; send() }, modifier = Modifier.testTag("browser-menu-screenshot"))
+                }
                 DropdownMenuItem(text = { Text("Inspect") }, onClick = { menu = false; onInspect() })
                 DropdownMenuItem(text = { Text("Open in your browser") }, onClick = { menu = false; onOpenExternally() }, modifier = Modifier.testTag("browser-menu-external"))
             }

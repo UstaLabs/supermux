@@ -53,6 +53,8 @@ object AppCommands {
     val BrowserOpenExternally = AppCommand("browser.openExternally", "Open in your browser", CommandGroup.Browser)
     /** ⌘T in a Browser tab: a new Browser tab beside it, as in Chrome (#122, Q1). New terminal everywhere else. */
     val BrowserNewTab = AppCommand("browser.newTab", "New Browser tab", CommandGroup.Browser)
+    /** A picture of the page into the chat's composer, unsent (#122): only where a chat can take it. */
+    val BrowserScreenshot = AppCommand("browser.screenshot", "Send a screenshot to the chat", CommandGroup.Browser)
     val BrowserInspect = AppCommand("browser.inspect", "Inspect the page", CommandGroup.Browser)
     /** Stops a page while it loads; on a loaded page it declines, so Esc stays the page's. */
     val BrowserStop = AppCommand("browser.stop", "Stop loading", CommandGroup.Browser)
@@ -61,6 +63,6 @@ object AppCommands {
         NewSession, MoveToNewWindow, NewTerminal, ToggleSidebar, GoToFile, Find, FindNext, FindPrevious,
         OpenSettings, ShowShortcuts, PasteImage, SplitRight, SplitDown, CloseTab, TabNext, TabPrevious,
         BrowserFocusAddress, BrowserReload, BrowserBack, BrowserForward, BrowserZoomIn, BrowserZoomOut, BrowserZoomReset, BrowserOpenExternally,
-        BrowserInspect, BrowserStop, BrowserNewTab,
+        BrowserInspect, BrowserStop, BrowserNewTab, BrowserScreenshot,
     ) + tabNumbers
 }

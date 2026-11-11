@@ -256,6 +256,8 @@ data class Caps(
      * tab of the browser the app runs in (Ahmet's Q5).
      */
     val linksInBrowserTabs: Boolean = true,
+    /** A Browser tab can picture its page (#122's screenshot to chat). False on the web client, whose iframe can't. */
+    val pageScreenshots: Boolean = true,
 )
 
 /**

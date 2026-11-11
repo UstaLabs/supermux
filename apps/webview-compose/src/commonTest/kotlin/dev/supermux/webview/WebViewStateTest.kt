@@ -65,6 +65,17 @@ class WebViewStateTest {
         assertEquals(InspectorResult.Unsupported, s.navigator.openInspector())
     }
 
+    /** #122: a Browser tab's "send screenshot" takes the engine's own picture of the page; no engine, no picture. */
+    @Test fun screenshotIsTheEnginesSnapshot() = runTest {
+        val engine = FakeWebEngine(1)
+        val s = state()
+        s.owner = Owner(engine)
+        s.navigator.screenshot()
+        assertTrue("snapshot" in engine.calls, "${engine.calls}")
+        s.owner = Owner(null)
+        assertNull(s.navigator.screenshot())
+    }
+
     @Test fun faviconComesFromThePage() = runTest {
         val engine = FakeWebEngine(1)
         engine.evaluateAnswer = { script -> if ("rel~=\"icon\"" in script) "\"https://vitejs.dev/logo.svg\"" else null }

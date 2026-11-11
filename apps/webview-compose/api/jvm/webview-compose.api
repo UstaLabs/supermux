@@ -471,6 +471,7 @@ public final class dev/supermux/webview/WebNavigator {
 	public final fun load (Ljava/lang/String;)V
 	public final fun openInspector ()Ldev/supermux/webview/InspectorResult;
 	public final fun reload ()V
+	public final fun screenshot (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun setCookie (Ldev/supermux/webview/WebCookie;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun setZoom (F)Z
 	public final fun stop ()V

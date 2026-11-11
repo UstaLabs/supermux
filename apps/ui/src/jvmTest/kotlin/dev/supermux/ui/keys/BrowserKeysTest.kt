@@ -54,6 +54,11 @@ class BrowserKeysTest {
         assertEquals(setOf(keys("Mod-Alt-i", true)), apple(AppCommands.BrowserInspect))
     }
 
+    @Test fun screenshotIsModShiftS() {
+        assertEquals(setOf(keys("Ctrl-Shift-s", false)), other(AppCommands.BrowserScreenshot))
+        assertEquals(setOf(keys("Mod-Shift-s", true)), apple(AppCommands.BrowserScreenshot))
+    }
+
     @Test fun escapeStopsLoading() {
         assertEquals(setOf(keys("Escape", false)), other(AppCommands.BrowserStop))
         assertEquals(setOf(keys("Escape", true)), apple(AppCommands.BrowserStop))
@@ -61,7 +66,7 @@ class BrowserKeysTest {
 
     @Test fun everyBrowserCommandIsListedAndBound() {
         val browser = AppCommands.all.filter { it.group == CommandGroup.Browser }
-        assertEquals(11, browser.size)
+        assertEquals(12, browser.size)
         for (c in browser) assertTrue(DefaultKeymap.chordsFor(c, KeyOs.Other).isNotEmpty(), c.id)
     }
 

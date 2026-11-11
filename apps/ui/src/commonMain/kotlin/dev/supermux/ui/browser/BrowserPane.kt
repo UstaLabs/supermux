@@ -227,6 +227,17 @@ fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, mod
         is InspectorResult.Elsewhere -> { notice = r.hint; true }
         else -> false
     }
+    // A picture of the page into the workspace's chat, unsent (#122): only where a chat can take it and the platform can
+    // picture a page.
+    val toChat = LocalBrowserToChat.current?.takeIf { platform.caps.pageScreenshots }
+    fun sendScreenshot(): Boolean {
+        val sink = toChat ?: return false
+        findScope.launch {
+            val png = state.navigator.screenshot()?.let(::pagePng) ?: return@launch
+            sink.sendImage(png, "screenshot.png")
+        }
+        return true
+    }
     fun findStep(backwards: Boolean) {
         val q = find.query
         findScope.launch { find.said = findText(q, if (q.isEmpty()) null else state.navigator.find(q, backwards)) }
@@ -247,6 +258,8 @@ fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, mod
     RegisterCommand(AppCommands.FindNext) { finding = true; findStep(backwards = false); true }
     RegisterCommand(AppCommands.FindPrevious) { finding = true; findStep(backwards = true); true }
     RegisterCommand(AppCommands.BrowserInspect) { inspectKey() }
+    RegisterCommand(AppCommands.BrowserScreenshot, enabled = toChat != null) { sendScreenshot() }
+    val screenshotAction: (() -> Unit)? = if (toChat != null) { { sendScreenshot() } } else null
     // Esc stops a loading page; on a loaded one it declines, so the page keeps it.
     RegisterCommand(AppCommands.BrowserStop) {
         (state.loading is LoadingState.Loading).also { if (it) state.navigator.stop() }
@@ -272,6 +285,7 @@ fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, mod
             onFind = { finding = true },
             onZoom = ::zoomBy,
             onInspect = ::inspect,
+            onScreenshot = screenshotAction,
         )
         notice?.let { text ->
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp).testTag("browser-notice"), verticalAlignment = Alignment.CenterVertically) {
