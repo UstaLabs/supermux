@@ -372,7 +372,11 @@ private fun MessageMetaRow(text: String, ts: String?) {
  * Short text hugs content; long text wraps inside the cap. No gutter, no label.
  */
 @Composable
-fun UserMessage(text: String) {
+fun UserMessage(
+    text: String,
+    /** #104: the title of the html card a click in which sent this message; a small "from ‹title›" line above it. */
+    fromCard: String? = null,
+) {
     val cs = MaterialTheme.colorScheme
     // Tail sits on the bottom-end (right) so it reads as a sent bubble.
     val bubbleShape = RoundedCornerShape(
@@ -397,6 +401,16 @@ fun UserMessage(text: String) {
                     .border(1.dp, cs.outlineVariant, bubbleShape)
                     .padding(horizontal = Space.md, vertical = Space.sm),
             ) {
+                if (fromCard != null) {
+                    Text(
+                        "from $fromCard",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = cs.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("from-card"),
+                    )
+                }
                 LinkSelectionContainer {
                     MdText(
                         text = mdAnnotated(text),
@@ -837,7 +851,9 @@ fun TimelineItemRow(
             val inbox = item.entry.channel == "inbox"
             // An agent's reply carries its files between its text and its time row.
             val filesInReply = !text.isNullOrBlank() && !atts.isNullOrEmpty() && messageBody(item.entry) == MessageBody.AgentReply
-            if (!text.isNullOrBlank() || !atts.isNullOrEmpty()) {
+            // #104: an agent's html card (its message has no text of its own).
+            val card = item.entry.card?.takeIf { !isUser }
+            if (!text.isNullOrBlank() || !atts.isNullOrEmpty() || card != null) {
                 // Media drawn anywhere in this row (attachments, a reply's `![](…)`) name themselves
                 // in the chat's viewer by this entry.
                 CompositionLocalProvider(LocalChatMediaEntry provides item.entry.id) {
@@ -867,7 +883,7 @@ fun TimelineItemRow(
                                         onOpen = subagentUi?.let { ui -> { ui.open(toSubagent) } },
                                     )
                                 }
-                                MessageBody.User -> UserMessage(text)
+                                MessageBody.User -> UserMessage(text, fromCard = item.entry.fromCard?.title)
                                 MessageBody.AccountNotice -> dev.supermux.ui.accounts.AccountNoticeRow(text)
                                 MessageBody.AgentError ->
                                     AgentErrorMessage(item.entry.id, text, onOpenFile = onOpenFile, ts = item.entry.ts)
@@ -882,6 +898,7 @@ fun TimelineItemRow(
                                 )
                             }
                         }
+                        if (card != null) HtmlCardView(item.entry.id, card)
                         if (!atts.isNullOrEmpty() && !filesInReply) {
                             AttachmentList(atts, alignEnd = isUser && !inbox, media = media, entryId = item.entry.id)
                         }
