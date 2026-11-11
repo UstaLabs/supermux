@@ -80,4 +80,25 @@ class FleetStoreSnapshotTest {
         assertEquals(mapOf("a" to e("2")), snap.lastMessages)
         f.close()
     }
+
+    @Test fun aCachedChatKeepsItsReadMarkBeforeTheHostConnects() = runTest(UnconfinedTestDispatcher()) {
+        // Card #121 (iOS): without the read marks every saved chat showed unread until the snapshot.
+        val cache = HostSnapshotStore(FakeSnapshots(mutableListOf(
+            HostSnapshot("h1", listOf(s("a")), lastMessages = mapOf("a" to e("7")), lastRead = mapOf("a" to "7")),
+        )))
+        val f = fleet(this, cache)
+        assertEquals("7", f.lastRead.value["a"])
+        f.close()
+    }
+
+    @Test fun writeSnapshotsCachesTheReadMarks() = runTest(UnconfinedTestDispatcher()) {
+        val cache = HostSnapshotStore(FakeSnapshots())
+        val f = fleet(this, cache)
+        f.appForRecord("h1")!!.reduce(
+            ServerFrame.Snapshot(sessions = listOf(s("a")), logs = mapOf("a" to listOf(e("1"))), reads = mapOf("a" to "1")),
+        )
+        f.writeSnapshots()
+        assertEquals(mapOf("a" to "1"), cache.get("h1")!!.lastRead)
+        f.close()
+    }
 }

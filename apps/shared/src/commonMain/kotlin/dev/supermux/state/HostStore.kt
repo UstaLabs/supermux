@@ -2164,6 +2164,7 @@ class HostStore(
                     projects = snap.projects,
                     projectCatalogKnown = snap.projects.isNotEmpty(),
                     messages = snap.lastMessages.mapValues { listOf(it.value) } + snap.recentLogs,
+                    lastRead = snap.lastRead,
                 )
             }
         }
