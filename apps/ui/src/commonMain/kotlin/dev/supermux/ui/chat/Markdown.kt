@@ -48,6 +48,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -394,10 +395,12 @@ fun MarkdownBody(
     /** Card #76: the reveal this text is written under (a live reply): its text blocks draw the ink edge. */
     reveal: LiveRevealState? = null,
 ) {
+    LocalChatCompositionProbe.current?.let { probe -> SideEffect { probe("markdown") } }
     val cs = MaterialTheme.colorScheme
     val typography = MaterialTheme.typography
     // A document reads at a looser line height than a chat bubble.
     val body = if (document) typography.bodyLarge.copy(lineHeight = typography.bodyLarge.fontSize * 1.6f) else typography.bodyLarge
+    LocalChatCompositionProbe.current?.invoke("parse")
     val blocks = parseMarkdownBlocks(text)
     val inkEnds = reveal?.let { blockSourceEnds(text, blocks) }
     val palette = if (document) mdDocumentPalette() else mdPalette()
