@@ -176,25 +176,13 @@ private val EDGE_FADE = 28.dp
 /** How far short of the very end a reader may stop and still have the transcript follow new content. */
 private val FOLLOW_SLOP = 48.dp
 
-/** The transcript as its autoscroll reads it, one layout at a time. */
-private data class TranscriptTail(
-    val firstIndex: Int,
-    val firstOffset: Int,
-    /** The end of the transcript is on screen, give or take [FOLLOW_SLOP]. */
-    val atEnd: Boolean,
-    /** The last row that draws, and its height while it is on screen (-1 when it is not). */
-    val lastRow: Int,
-    val lastRowSize: Int,
-    /** Our own follow scroll is moving the transcript. */
-    val ours: Boolean,
-)
 
 /**
  * Whether the end of the transcript is on screen, within [slopPx]: the last item's bottom edge plus
  * the after-content padding, against the viewport's end (the measure [transcriptEdge] uses). Exactly
  * at the end always counts, even when the rows that end the list draw nothing.
  */
-private fun transcriptAtEnd(state: LazyListState, slopPx: Float): Boolean {
+internal fun transcriptAtEnd(state: LazyListState, slopPx: Float): Boolean {
     if (!state.canScrollForward) return true
     val info = state.layoutInfo
     val last = info.visibleItemsInfo.lastOrNull() ?: return true
@@ -203,7 +191,7 @@ private fun transcriptAtEnd(state: LazyListState, slopPx: Float): Boolean {
 }
 
 /** How far the transcript's end is below the viewport's end, in px: 0 at the end, MAX_VALUE when the last row is off screen. */
-private fun distanceToEnd(state: LazyListState): Float {
+internal fun distanceToEnd(state: LazyListState): Float {
     if (!state.canScrollForward) return 0f
     val info = state.layoutInfo
     val last = info.visibleItemsInfo.lastOrNull() ?: return Float.MAX_VALUE
@@ -219,7 +207,7 @@ private const val GLIDE_MAX_PX = 400f
  * Eases [state] to the transcript's end: each frame covers `1 - exp(-dt / GLIDE_TAU_MS)` of what is left, then it
  * settles exactly there. A reader's drag outranks it (their scroll cancels ours).
  */
-private suspend fun glideToEnd(state: LazyListState) {
+internal suspend fun glideToEnd(state: LazyListState) {
     var last = withFrameMillis { it }
     while (true) {
         val left = distanceToEnd(state)
@@ -723,13 +711,26 @@ fun ChatPanel(
     val unreadRows = remember(timelineItems, openMark) { unreadRowIndices(timelineItems, openMark) }
     val firstUnread = unreadRows.firstOrNull() ?: -1
     val openAt = if (firstUnread >= 0) firstUnread else timelineItems.lastIndex.coerceAtLeast(0)
+    // At the end, the offset is past any row: the list settles the last row's end at the viewport's end.
+    val openOffset = if (firstUnread >= 0) 0 else Int.MAX_VALUE / 4
     val listState = rememberLazyListState(
         if (!reopened) place.index else openAt,
-        if (!reopened) place.offset else 0,
+        if (!reopened) place.offset else openOffset,
     )
-    // Placed before the next frame draws, so the old place is never on screen.
-    if (cameBack && reopened) listState.requestScrollToItem(openAt)
-    var opening by opened::placing
+    val density = LocalDensity.current
+    val scroll = remember(listState, place) { TranscriptScroll(listState, place, with(density) { FOLLOW_SLOP.toPx() }) }
+    // An opening sets the mode, once: at its first unread message READING, else FOLLOWING. Placed before the next
+    // frame draws, so the old place is never on screen.
+    if (opened.placing && reopened) scroll.following = firstUnread < 0
+    if (cameBack && reopened) listState.requestScrollToItem(openAt, openOffset)
+    LaunchedEffect(opened, openMark, onScreen) {
+        if (!opened.placing || !onScreen) return@LaunchedEffect
+        // New messages that all fit leave the opening at the end: that is FOLLOWING.
+        snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > 0 }
+        withFrameNanos { }
+        if (scroll.atEnd()) scroll.following = true
+        opened.placing = false
+    }
     // The line fades a moment after every new message has been on screen (or was scrolled past), and the jump
     // button stops counting them: they are seen.
     val lastUnread = unreadRows.lastOrNull() ?: -1
@@ -746,7 +747,6 @@ fun ChatPanel(
                 place.offset = offset
             }
     }
-    val density = LocalDensity.current
     // #104: an html card caps itself at a share of the chat's RESTING visible height: the transcript's with the chrome
     // shown, latched only while the chrome is at rest (below, where the chrome is). Not the height of the moment: the
     // chrome auto-hide changes that every frame of its 200 ms slide, which resized every card at its cap each frame, and
@@ -791,7 +791,7 @@ fun ChatPanel(
     val openSubagentCard: (String) -> Unit = { id ->
         openSubagents = openSubagents + id
         val index = timelineItems.indexOfFirst { it is TimelineItem.SubagentCard && it.subagent.id == id }
-        if (index >= 0) scope.launch { listState.animateScrollToItem(index) }
+        if (index >= 0) scope.launch { scroll.jump { animateScrollToItem(index) } }
     }
     val subagentNames = remember(subagents) { subagents.associate { it.id to it.displayName } }
     // What the rows get stays the same object while what it does is the same: a host that recomposes hands this panel
@@ -821,162 +821,27 @@ fun ChatPanel(
     // Null where this client can't end one (the card shows no Stop): only that changing makes a new one.
     val rowEndCouncil = remember(endCouncilNow != null) { endCouncilNow?.let { { id: String -> currentEndCouncil?.invoke(id); Unit } } }
 
-    run {
-        // One rule on every host (was desktop's): instant jump to the end on the first content for a
-        // session, then follow new content only while the reader is AT the end — the transcript's
-        // bottom edge on screen, give or take [FOLLOW_SLOP]. Anywhere above stays put, inside a reply
-        // taller than the screen too: "one of the last two rows is on screen" used to count as the
-        // bottom, so scrolling back into a long last reply jumped the reader to its end.
-        // In [place], so a rebuilt panel knows the rows it already showed and whether the reader was
-        // following them: it does not jump a reader who had scrolled up back to the end.
-        var prevSize by place::rows
-        var autoFollow by place::autoFollow
-        // Our own follow scrolls moving the transcript (a new row's, the glide): the positions they pass are not the
-        // reader's. A count, not a flag (card #76): the glide takes the scroll from a new row's follow, and the follow
-        // that stops must not unmark the glide still moving, or its positions read as the reader leaving the end.
-        var followScrolls by remember(session.id) { mutableIntStateOf(0) }
-        // The tail below can see a follow scroll's last step only after that scroll has ended: a new row restarting
-        // the follow mid-scroll left the transcript short of the end, and that step read as the reader leaving, so
-        // nothing followed again (card #76, a slow web page). A follow that finished, or that this panel stopped,
-        // keeps its last positions ours for one more look; one the reader's scroll took over does not.
-        var followScrollEnded by remember(session.id) { mutableStateOf(false) }
-        // Medium folds a tool run into its first row and draws nothing for the rest, so "the last row"
-        // is the last row that draws, not the last index.
-        // Card #76: live rows come after the timeline, so the last one of them is the transcript's last row.
-        val lastShown by rememberUpdatedState(remember(timelineItems, toolRuns, liveRows.size) {
-            if (liveRows.isNotEmpty()) timelineItems.size + liveRows.size - 1 else shownTail(timelineItems.size, toolRuns).first
-        })
-        val panelActive by rememberUpdatedState(active)
-        val followSlop = with(density) { FOLLOW_SLOP.toPx() }
-        // Growth that lands mid-scroll is held, and applied when that scroll settles if the reader is
-        // still following then.
-        var pendingPin by remember(session.id) { mutableStateOf(false) }
-        // After the frame (a scroll from inside a layout pass throws), then past the end: scrollBy
-        // clamps there, the same way the jump-to-bottom button settles on a tall last row. A find hit
-        // picked during that frame holds the transcript: its scroll must not be cancelled by this one.
-        suspend fun pinToEnd() {
-            withFrameNanos { }
-            if (find.current < 0) listState.scrollBy(100_000f)
-        }
-        // Card #76: a revealing reply (the live row, or the stored row finishing its reveal) grows a word at a time;
-        // while following, the transcript eases after it instead of jumping a line at a time. Reduced motion jumps.
-        val reduceMotion = dev.supermux.ui.theme.LocalReduceMotion.current
-        val revealingTail = liveRows.lastOrNull()?.let { !it.thinking } == true ||
+    // ── The one scroll owner (card #121) ────────────────────────────────────────────────────────
+    // FOLLOWING holds the end through every change; READING is left alone (the list keeps its top row). See
+    // [TranscriptScroll]. A find hit on screen holds the transcript where it is.
+    // Card #76: live rows come after the timeline, so the last of them is the transcript's last row.
+    val rowCount = timelineItems.size + liveRows.size
+    // Card #76: a revealing reply (the live row, or the stored row finishing its reveal) grows a word at a time;
+    // while following, the transcript eases after it instead of jumping a line at a time. Reduced motion jumps.
+    val reduceMotion = dev.supermux.ui.theme.LocalReduceMotion.current
+    val revealingTail = !reduceMotion && (
+        liveRows.lastOrNull()?.let { !it.thinking } == true ||
             (liveRows.isEmpty() && (timelineItems.lastOrNull() as? TimelineItem.Msg)?.entry?.stream?.let { reveals.unfinished(it) } != null)
-        val glideTail by rememberUpdatedState(!reduceMotion && revealingTail)
-        val glides = remember(session.id) { Channel<Unit>(Channel.CONFLATED) }
-        LaunchedEffect(session.id, listState) {
-            for (request in glides) {
-                followScrolls++
-                var settled = false
-                try {
-                    glideToEnd(listState)
-                    settled = true
-                } catch (e: CancellationException) {
-                    // The reader took the scroll: theirs wins. Only a real cancellation ends this loop.
-                    currentCoroutineContext().ensureActive()
-                } finally {
-                    followScrolls--
-                    if (settled) followScrollEnded = true
-                }
-            }
-        }
-        LaunchedEffect(session.id, listState) {
-            var seen: TranscriptTail? = null
-            snapshotFlow {
-                TranscriptTail(
-                    firstIndex = listState.firstVisibleItemIndex,
-                    firstOffset = listState.firstVisibleItemScrollOffset,
-                    atEnd = transcriptAtEnd(listState, followSlop),
-                    lastRow = lastShown,
-                    lastRowSize = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == lastShown }?.size ?: -1,
-                    ours = followScrolls > 0 || followScrollEnded,
-                )
-            }.collect { now ->
-                val before = seen
-                seen = now
-                // That one look at a follow scroll that ended is used up.
-                if (followScrollEnded && followScrolls == 0) followScrollEnded = false
-                if (before == null) return@collect
-                // Following is decided by where the transcript is SCROLLED. Rows that grow or arrive
-                // under a still transcript leave it as it was: a new row below would otherwise read as
-                // "the reader left the end" before it could be followed.
-                if (!now.ours && (now.firstIndex != before.firstIndex || now.firstOffset != before.firstOffset)) {
-                    autoFollow = now.atEnd
-                }
-                // A tool group grows inside ONE row (calls arrive, rows spring open), which the
-                // item-count follow below never sees: while following, keep the end pinned as that
-                // last row grows. A row scrolling back into view has not grown.
-                val grew = now.lastRow == before.lastRow && before.lastRowSize >= 0 && now.lastRowSize > before.lastRowSize
-                if (grew && panelActive && autoFollow && find.current < 0 && listState.canScrollForward) {
-                    when {
-                        glideTail -> glides.trySend(Unit)
-                        listState.isScrollInProgress -> pendingPin = true
-                        else -> launch { pinToEnd() }
-                    }
-                }
-            }
-        }
-        LaunchedEffect(session.id, listState) {
-            snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
-                if (!scrolling && pendingPin) {
-                    pendingPin = false
-                    if (autoFollow && listState.canScrollForward) launch { pinToEnd() }
-                }
-            }
-        }
-        // Card #76: live rows count as rows: one appearing is followed like a new message, and the stored row
-        // taking a live row's place adds none.
-        val rowCount = timelineItems.size + liveRows.size
-        LaunchedEffect(session.id, rowCount, working, onScreen) {
-            if (!onScreen) return@LaunchedEffect
-            val target = rowCount - 1
-            if (target < 0) return@LaunchedEffect
-            if (opening) {
-                // Card #121: the opening is placed in one jump, never with a visible scroll.
-                opening = false
-                place.openMark = openMark
-                followScrolls++
-                try {
-                    when {
-                        reopened && firstUnread >= 0 -> {
-                            listState.scrollToItem(firstUnread)
-                            withFrameNanos { }
-                            autoFollow = transcriptAtEnd(listState, followSlop)
-                        }
-                        !reopened && prevSize >= 0 && !autoFollow -> Unit // a rebuild keeps a reader who scrolled up
-                        else -> {
-                            listState.scrollToItem(target)
-                            pinToEnd()
-                            autoFollow = true
-                        }
-                    }
-                } finally {
-                    followScrolls--
-                    followScrollEnded = true
-                }
-                prevSize = rowCount
-                return@LaunchedEffect
-            }
-            val first = prevSize < 0
-            // A find hit on screen holds the transcript where it is.
-            if (first || (rowCount > prevSize && autoFollow && find.current < 0)) {
-                followScrolls++
-                var settled = false
-                try {
-                    if (first) listState.scrollToItem(target) else listState.animateScrollToItem(target)
-                    // The last row may be taller than the screen: settle on its end, not its top.
-                    pinToEnd()
-                    settled = true
-                } finally {
-                    followScrolls--
-                    // Stopped by this effect restarting (a newer row): its last step is ours too.
-                    if (settled || !currentCoroutineContext().isActive) followScrollEnded = true
-                }
-            }
-            prevSize = rowCount
-        }
-}
+        )
+    val lastRow by rememberUpdatedState(rowCount - 1)
+    val glideNow by rememberUpdatedState(revealingTail)
+    val holding by rememberUpdatedState(onScreen && find.current < 0)
+    SideEffect {
+        if (onScreen) place.rows = rowCount
+        if (holding && !revealingTail) scroll.keepEnd(rowCount - 1)
+    }
+    LaunchedEffect(scroll) { scroll.watchReader() }
+    LaunchedEffect(scroll) { scroll.holdEnd({ if (holding) lastRow else -1 }, { glideNow }) }
 
     // ── Find ──────────────────────────────────────────────────────────────────────────────────
     // After the autoscroll above on purpose: a jump's scroll must land after the first-content one.
@@ -1032,7 +897,7 @@ fun ChatPanel(
         val index = timelineItems.indexOfFirst { (it as? TimelineItem.Msg)?.entry?.id == mark.messageId }
         if (index < 0) return@LaunchedEffect
         revealGlow.snapTo(1f)
-        listState.animateScrollToItem(index, scrollOffset = -with(density) { 96.dp.roundToPx() })
+        scroll.jump { animateScrollToItem(index, scrollOffset = -with(density) { 96.dp.roundToPx() }) }
         // A short tint that fades: the one place the transcript fades anything.
         delay(REVEAL_HOLD_MS)
         revealGlow.animateTo(0f, tween(REVEAL_FADE_MS))
@@ -1045,7 +910,7 @@ fun ChatPanel(
         if (findCurrentKey == null) return@LaunchedEffect
         val index = timelineKeys.indexOf(findCurrentKey)
         // Clear of the find bar floating over the transcript's top.
-        if (index >= 0) listState.animateScrollToItem(index, scrollOffset = -with(density) { 96.dp.roundToPx() })
+        if (index >= 0) scroll.jump { animateScrollToItem(index, scrollOffset = -with(density) { 96.dp.roundToPx() }) }
     }
 
     // ── Header status line ─────────────────────────────────────────────────────────────────────
@@ -1118,12 +983,7 @@ fun ChatPanel(
     // edge, so it gets the breathing room the composer's own padding gave it. Read as the list MEASURES (it asks for its
     // padding then), so the slide relayouts the list each frame without recomposing the transcript.
     val transcriptPadding = remember { ChromeFollowingPadding(top = Space.md) { Space.xl * (1f - chromeFraction) } }
-    // Revealed at the end of the transcript: the composer growing back shrinks the viewport, which
-    // would push the last lines out of view. Keep the bottom pinned while it animates in.
-    LaunchedEffect(chromeCollapsed) {
-        if (chromeCollapsed || listState.canScrollForward) return@LaunchedEffect
-        snapshotFlow { chromeFraction }.collect { if (it < 1f) listState.scrollBy(100_000f) }
-    }
+    // The composer growing back shrinks the viewport; FOLLOWING keeps the end on screen through it (TranscriptScroll).
 
     // The WHOLE panel accepts dropped files, not just the composer card: a drop on the transcript
     // stages into the composer through the same funnel (the card highlights while dragging).
@@ -1347,6 +1207,9 @@ fun ChatPanel(
                 state = listState,
                 // widthIn BEFORE fillMaxHeight: cap the reading width first, then fill the height.
                 modifier = Modifier
+                    // Card #121: the keyboard, the composer or the chrome changing the transcript's height keep a
+                    // FOLLOWING end on screen in the same layout pass (before the list measures), not a frame later.
+                    .then(scroll.holdEndThroughResize { if (holding) lastRow else -1 })
                     .timelineReadingWidth()
                     .fillMaxHeight()
                     .padding(horizontal = if (pointer) Space.lg else Space.md),
@@ -1523,6 +1386,7 @@ fun ChatPanel(
                         if (!emptySession) {
                             JumpToBottomButton(
                                 newCount = if (opened.seen) 0 else unreadRows.size,
+                                scroll = scroll,
                                 listState = listState,
                                 onJumped = { chrome.show() },
                                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = Space.md),
@@ -1614,6 +1478,7 @@ private fun WalkthroughUnreadChip(
 private fun JumpToBottomButton(
     /** Card #121: the messages that were new when the chat opened; shown on the button while there are any. */
     newCount: Int,
+    scroll: TranscriptScroll,
     listState: androidx.compose.foundation.lazy.LazyListState,
     onJumped: () -> Unit,
     modifier: Modifier = Modifier,
@@ -1644,9 +1509,11 @@ private fun JumpToBottomButton(
                 scope.launch {
                     val lastIndex = listState.layoutInfo.totalItemsCount - 1
                     if (lastIndex < 0) return@launch
-                    listState.animateScrollToItem(lastIndex)
-                    // The last row may be taller than the viewport: settle on its end, not its top.
-                    listState.scrollBy(100_000f)
+                    scroll.jump {
+                        animateScrollToItem(lastIndex)
+                        // The last row may be taller than the viewport: settle on its end, not its top.
+                        scrollBy(100_000f)
+                    }
                     onJumped()
                 }
             },
@@ -1835,7 +1702,7 @@ private fun StatusRow(label: String, color: androidx.compose.ui.graphics.Color, 
 }
 
 /** Where a reader is in one session's transcript, kept for a rebuilt [ChatPanel] (`rememberRetained`, #89). */
-private class TranscriptPlace {
+internal class TranscriptPlace {
     var index = 0
     var offset = 0
     /** Rows already shown; -1 before the first content, which jumps to the end. */
