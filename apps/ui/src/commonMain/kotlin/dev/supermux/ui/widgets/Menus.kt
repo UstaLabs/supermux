@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.theme.Stroke
+import dev.supermux.webview.webViewOverlay
 
 /**
  * One menu look for the whole app — the popup surface AND the rows in it.
@@ -141,7 +142,9 @@ fun DropdownMenu(
     androidx.compose.material3.DropdownMenu(
         expanded = expanded,
         onDismissRequest = onDismissRequest,
-        modifier = modifier,
+        // Over a live web page (a Browser tab, an HTML card) the menu is one of the page's overlays: on macOS a press
+        // goes to whatever is natively under the pointer, so an unmarked menu loses its clicks to the page (#122).
+        modifier = modifier.webViewOverlay(MenuStyle.Shape),
         offset = offset,
         shape = MenuStyle.Shape,
         containerColor = MenuStyle.containerColor,

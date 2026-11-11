@@ -59,6 +59,12 @@ class BrowserKeysTest {
         assertEquals(setOf(keys("Mod-Shift-s", true)), apple(AppCommands.BrowserScreenshot))
     }
 
+    /** #122 phase 2: DevTools' own chord for its device toolbar. */
+    @Test fun deviceModeIsModShiftM() {
+        assertEquals(setOf(keys("Ctrl-Shift-m", false)), other(AppCommands.BrowserDeviceMode))
+        assertEquals(setOf(keys("Mod-Shift-m", true)), apple(AppCommands.BrowserDeviceMode))
+    }
+
     @Test fun escapeStopsLoading() {
         assertEquals(setOf(keys("Escape", false)), other(AppCommands.BrowserStop))
         assertEquals(setOf(keys("Escape", true)), apple(AppCommands.BrowserStop))
@@ -66,7 +72,7 @@ class BrowserKeysTest {
 
     @Test fun everyBrowserCommandIsListedAndBound() {
         val browser = AppCommands.all.filter { it.group == CommandGroup.Browser }
-        assertEquals(12, browser.size)
+        assertEquals(13, browser.size)
         for (c in browser) assertTrue(DefaultKeymap.chordsFor(c, KeyOs.Other).isNotEmpty(), c.id)
     }
 

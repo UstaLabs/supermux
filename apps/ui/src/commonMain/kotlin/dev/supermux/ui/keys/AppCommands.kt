@@ -57,6 +57,8 @@ object AppCommands {
     val BrowserNewTab = AppCommand("browser.newTab", "New Browser tab", CommandGroup.Browser)
     /** A picture of the page into the chat's composer, unsent (#122): only where a chat can take it. */
     val BrowserScreenshot = AppCommand("browser.screenshot", "Send a screenshot to the chat", CommandGroup.Browser)
+    /** The page at a phone's or tablet's size (#122 phase 2), DevTools' device toolbar. */
+    val BrowserDeviceMode = AppCommand("browser.deviceMode", "Device mode", CommandGroup.Browser)
     val BrowserInspect = AppCommand("browser.inspect", "Inspect the page", CommandGroup.Browser)
     /** Stops a page while it loads; on a loaded page it declines, so Esc stays the page's. */
     val BrowserStop = AppCommand("browser.stop", "Stop loading", CommandGroup.Browser)
@@ -65,6 +67,6 @@ object AppCommands {
         NewSession, MoveToNewWindow, NewTerminal, ToggleSidebar, GoToFile, Find, FindNext, FindPrevious,
         OpenSettings, ShowShortcuts, PasteImage, SplitRight, SplitDown, CloseTab, ReopenClosedTab, TabNext, TabPrevious,
         BrowserFocusAddress, BrowserReload, BrowserBack, BrowserForward, BrowserZoomIn, BrowserZoomOut, BrowserZoomReset, BrowserOpenExternally,
-        BrowserInspect, BrowserStop, BrowserNewTab, BrowserScreenshot,
+        BrowserInspect, BrowserStop, BrowserNewTab, BrowserScreenshot, BrowserDeviceMode,
     ) + tabNumbers
 }

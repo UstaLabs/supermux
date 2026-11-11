@@ -72,6 +72,8 @@ class KeymapConflictTest {
         AppCommands.BrowserZoomReset.id to "Mod-0",
         AppCommands.BrowserZoomIn.id to "Mod-Shift-=",
         AppCommands.BrowserZoomIn.id to "Mod-+",
+        // DevTools' device-mode key (#122 phase 2): only the Browser pane registers it, where no editor is.
+        AppCommands.BrowserDeviceMode.id to "Mod-Shift-m",
     )
 
     /** ⌘/ and ⌘F stay the editor's (the deeper scope wins); paste-image is handled only by a composer. */
@@ -95,6 +97,8 @@ class KeymapConflictTest {
         AppCommands.FindPrevious.id to "Shift-F3",
         AppCommands.BrowserZoomIn.id to "Mod-Shift-=",
         AppCommands.BrowserZoomIn.id to "Mod-+",
+        // DevTools' device-mode key (#122 phase 2): only the Browser pane registers it, where no editor is.
+        AppCommands.BrowserDeviceMode.id to "Mod-Shift-m",
     )
 
     private fun isAllowed(b: AppBinding, os: KeyOs, allowed: Set<Pair<String, String>>) =
