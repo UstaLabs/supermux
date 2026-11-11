@@ -27,6 +27,11 @@ typedef NS_ENUM(int, WVQuestionKind) {
 @property(nonatomic, weak) WVPage *page;
 @end
 
+/** The key script's handler (#122): whether the page used the ⌘ key it was handed first. Holds its page weakly. */
+@interface WVKeyHandler : NSObject <WKScriptMessageHandler>
+@property(nonatomic, weak) WVPage *page;
+@end
+
 /**
  * Serves the lease's bundle through the engine (TASK_START, TASK_STOP), holding its page weakly; and the floor
  * (WebKitUrls.FLOOR_HTML) itself, at floorHost, a host no bundle has: on the bundles' scheme, so WebKit keeps the page in
@@ -47,6 +52,7 @@ typedef NS_ENUM(int, WVQuestionKind) {
                         world:(NSString *)worldName handler:(NSString *)handlerName bundleScheme:(NSString *)bundleScheme
                     floorHost:(NSString *)floorHost floorHtml:(NSString *)floorHtml;
 - (void)relayMessage:(WKScriptMessage *)message;
+- (void)keyMessage:(WKScriptMessage *)message;
 - (void)startTask:(id<WKURLSchemeTask>)task;
 - (void)stopTask:(id<WKURLSchemeTask>)task;
 @end
@@ -56,6 +62,21 @@ typedef NS_ENUM(int, WVQuestionKind) {
     [self.page relayMessage:message];
 }
 @end
+
+@implementation WVKeyHandler
+- (void)userContentController:(WKUserContentController *)controller didReceiveScriptMessage:(WKScriptMessage *)message {
+    [self.page keyMessage:message];
+}
+@end
+
+/**
+ * The key script (#122), in the isolated world of every frame: after a ⌘ key's dispatch, whether the page took it
+ * (preventDefault). It reads the shared event; the page can neither see the handler nor post to it.
+ */
+static NSString *const WVKeyScript =
+    @"(function(){var h=window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.wvKeys;if(!h)return;"
+    @"var post=h.postMessage.bind(h);window.addEventListener('keydown',function(e){if(!e.metaKey)return;"
+    @"setTimeout(function(){post(e.defaultPrevented?'used':'unused');},0);},true);})();";
 
 static NSError *WVUnknownHost(void) {
     return [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCannotFindHost userInfo:nil];
@@ -159,6 +180,7 @@ static CGImageRef WVLargestImage(NSImage *image) {
 @implementation WVPage {
     WKContentWorld *_world;
     WVRelayHandler *_relay;
+    WVKeyHandler *_keys;
     WVBundleHandler *_bundles;
     NSString *_bundleScheme;
     NSString *_floorHost;
@@ -209,6 +231,9 @@ static CGImageRef WVLargestImage(NSImage *image) {
     _relay = [[WVRelayHandler alloc] init];
     _relay.page = self;
     [configuration.userContentController addScriptMessageHandler:_relay contentWorld:_world name:handlerName];
+    _keys = [[WVKeyHandler alloc] init];
+    _keys.page = self;
+    [configuration.userContentController addScriptMessageHandler:_keys contentWorld:_world name:@"wvKeys"];
     // The main screen's size until a slot gives it its own, never none (D6).
     NSSize screen = NSScreen.mainScreen ? NSScreen.mainScreen.frame.size : NSMakeSize(1280, 800);
     _webView = [[WKWebView alloc] initWithFrame:NSMakeRect(0, 0, screen.width, screen.height) configuration:configuration];
@@ -495,6 +520,11 @@ static CGImageRef WVLargestImage(NSImage *image) {
            message.body, origin.protocol, origin.host, nil, nil);
 }
 
+- (void)keyMessage:(WKScriptMessage *)message {
+    if (_released || ![message.body isKindOfClass:[NSString class]]) return;
+    WVKeyVerdict(_view, [message.body isEqualToString:@"used"]);
+}
+
 - (void)startTask:(id<WKURLSchemeTask>)task {
     if (_released) {
         [task didFailWithError:WVUnknownHost()];
@@ -532,6 +562,8 @@ static CGImageRef WVLargestImage(NSImage *image) {
     _webView.inspectable = inspectable;
     WKUserContentController *controller = _webView.configuration.userContentController;
     [controller removeAllUserScripts];
+    [controller addUserScript:[[WKUserScript alloc] initWithSource:WVKeyScript injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                                  forMainFrameOnly:NO inContentWorld:_world]];
     if (relay) {
         [controller addUserScript:[[WKUserScript alloc] initWithSource:relay injectionTime:WKUserScriptInjectionTimeAtDocumentStart
                                                       forMainFrameOnly:YES inContentWorld:_world]];
@@ -836,6 +868,7 @@ static CGImageRef WVLargestImage(NSImage *image) {
     _webView.navigationDelegate = nil;
     _webView.UIDelegate = nil;
     _relay.page = nil;
+    _keys.page = nil;
     _bundles.page = nil;
     [_view removeFromSuperview];
     _view.owner = nil;

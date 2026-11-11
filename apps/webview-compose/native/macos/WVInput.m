@@ -38,6 +38,42 @@ static SEL WVEditAction(NSEvent *event) {
     return NULL;
 }
 
+/**
+ * The ⌘ keys the app keeps for itself before any page (#122), as Chrome keeps ⌘T/⌘W/⌘N from pages: new and closed tabs and
+ * windows, tab n, splits, settings, and AppKit's own quit, hide, minimize and window cycling. Unshifted characters, so
+ * ⌘⇧T is "t" with shift. Every other ⌘ key goes to the focused page first and reaches the app only if the page leaves
+ * it unused.
+ */
+static BOOL WVAppKeepsKey(NSEvent *event) {
+    NSEventModifierFlags mods = event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+    if (!(mods & NSEventModifierFlagCommand) || (mods & NSEventModifierFlagControl)) return YES;
+    NSString *key = [event charactersByApplyingModifiers:0].lowercaseString;
+    if (key.length != 1) return YES; // arrows, function keys: the app's, as before
+    BOOL shift = (mods & NSEventModifierFlagShift) != 0;
+    unichar c = [key characterAtIndex:0];
+    if (c >= '1' && c <= '9') return YES;
+    if ([@"twnqhm,`\\" rangeOfString:key].location != NSNotFound) return YES;
+    if (shift && (c == '[' || c == ']')) return YES; // next and previous tab
+    return NO;
+}
+
+/** The ⌘ key handed to the page first, until its page says whether it used it (WVKeyVerdict) or 300 ms pass. */
+static NSEvent *gPageFirst;
+static __weak WVPageView *gPageFirstPage;
+static NSUInteger gPageFirstSeq;
+
+/** A key the page left unused, to the app: what AWT's content view would have done with it (Java's KEY_PRESSED). */
+static void WVKeyToApp(NSEvent *event) {
+    [event.window.contentView performKeyEquivalent:event];
+}
+
+void WVKeyVerdict(WVPageView *page, BOOL used) {
+    NSEvent *event = gPageFirst;
+    if (!event || page != gPageFirstPage) return;
+    gPageFirst = nil;
+    if (!used) WVKeyToApp(event);
+}
+
 /** The page view whose frame holds locationInWindow in window, topmost first, or nil: what is under the pointer natively. */
 static WVPageView *WVPageViewUnder(NSWindow *window, NSPoint locationInWindow) {
     NSView *content = window.contentView;
@@ -97,7 +133,25 @@ void WVInstallInputMonitors(void) {
             if (!page) return event;
             [page.owner pageTookInputAtX:-1 y:-1];
             SEL action = WVEditAction(event);
-            if (!action) return event;
+            if (!action) {
+                // A ⌘ key the app doesn't keep: the page's first (#122). AWT would hand it to Java only, never the page.
+                if (WVAppKeepsKey(event)) return event;
+                // WebKit doesn't send a key the page left unused back: the page's key script says (WVKeyVerdict).
+                NSEvent *earlier = gPageFirst;
+                gPageFirst = nil;
+                if (earlier) WVKeyToApp(earlier);
+                if (![page.webView performKeyEquivalent:event]) return event;
+                gPageFirst = event;
+                gPageFirstPage = page;
+                NSUInteger seq = ++gPageFirstSeq;
+                // A page that never answers (no script ran: a blank or a crashed page) doesn't keep the key.
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 300 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                    if (gPageFirstSeq != seq || gPageFirst != event) return;
+                    gPageFirst = nil;
+                    WVKeyToApp(event);
+                });
+                return nil;
+            }
             // AWT's performKeyEquivalent: hands every key equivalent to Java only, never to the page (M2): send the
             // action down the responder chain from the page's first responder instead, and let the key go no further.
             [NSApp sendAction:action to:nil from:page];

@@ -145,6 +145,8 @@ CGMutablePathRef WVRegionPath(NSData *geometry, int holeCount, CGFloat density, 
 
 /** The process-wide key and mouse-down monitors (WVInput.m), installed once. */
 void WVInstallInputMonitors(void);
+/** The focused page's verdict on the ⌘ key handed to it first (#122): unused, it goes to the app. */
+void WVKeyVerdict(WVPageView *page, BOOL used);
 
 /** The accessibility bridge on window's content view (WVInput.m, M3), installed once per window. */
 void WVInstallAccessibilityBridge(NSWindow *window);
