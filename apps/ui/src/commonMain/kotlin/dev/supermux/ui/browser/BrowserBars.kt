@@ -35,7 +35,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -59,7 +58,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.supermux.browser.DisplayAddress
 import dev.supermux.webview.FindResult
-import kotlinx.coroutines.launch
 
 /** How the address bar shows a page: a preview as its port, never the scheme. */
 internal fun DisplayAddress.text(): String = when (this) {
@@ -174,37 +172,40 @@ internal fun findText(query: String, result: FindResult?): String = when {
 }
 
 /** Find in page: the query, what the engine found, previous, next and close. Enter is next, Shift+Enter previous. */
+/**
+ * The find bar's query and what the last search said. The pane holds it, so its find-next keys (#122) step the same
+ * search the bar shows.
+ */
+internal class FindState {
+    var query by mutableStateOf("")
+    var said by mutableStateOf("")
+}
+
+/** The find bar: [onStep] searches [find]'s query forwards or backwards and writes what it found into [find]. */
 @Composable
-internal fun FindBar(onFind: suspend (query: String, backwards: Boolean) -> FindResult?, onClose: () -> Unit, modifier: Modifier = Modifier) {
+internal fun FindBar(find: FindState, onStep: (backwards: Boolean) -> Unit, onClose: () -> Unit, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
-    var query by remember { mutableStateOf("") }
-    var said by remember { mutableStateOf("") }
-    val scope = rememberCoroutineScope()
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { focus.requestFocus() }
-    fun run(backwards: Boolean) {
-        val q = query
-        scope.launch { said = findText(q, if (q.isEmpty()) null else onFind(q, backwards)) }
-    }
     Row(modifier.fillMaxWidth().height(36.dp).padding(horizontal = 8.dp).testTag("browser-find"), verticalAlignment = Alignment.CenterVertically) {
         BasicTextField(
-            value = query,
-            onValueChange = { query = it; run(false) },
+            value = find.query,
+            onValueChange = { find.query = it; onStep(false) },
             singleLine = true,
             textStyle = MaterialTheme.typography.bodyMedium.copy(color = cs.onSurface),
             cursorBrush = SolidColor(cs.primary),
             modifier = Modifier.weight(1f).focusRequester(focus).testTag("browser-find-field").onPreviewKeyEvent { e ->
                 if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 when (e.key) {
-                    Key.Enter, Key.NumPadEnter -> { run(backwards = e.isShiftPressed); true }
+                    Key.Enter, Key.NumPadEnter -> { onStep(e.isShiftPressed); true }
                     Key.Escape -> { onClose(); true }
                     else -> false
                 }
             },
         )
-        Text(said, color = cs.onSurfaceVariant, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 8.dp).testTag("browser-find-count"))
-        IconButton(onClick = { run(true) }) { Icon(Icons.Filled.KeyboardArrowUp, contentDescription = "Previous") }
-        IconButton(onClick = { run(false) }) { Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Next") }
+        Text(find.said, color = cs.onSurfaceVariant, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 8.dp).testTag("browser-find-count"))
+        IconButton(onClick = { onStep(true) }) { Icon(Icons.Filled.KeyboardArrowUp, contentDescription = "Previous") }
+        IconButton(onClick = { onStep(false) }) { Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Next") }
         IconButton(onClick = onClose, modifier = Modifier.testTag("browser-find-close")) { Icon(Icons.Filled.Close, contentDescription = "Close find") }
     }
 }

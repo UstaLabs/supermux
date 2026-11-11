@@ -17,6 +17,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -55,6 +56,7 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.roundToInt
 import kotlin.time.TimeSource
@@ -113,6 +115,8 @@ fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, mod
     var byPort by remember { mutableStateOf<String?>(null) }
     var requested by remember(view.id) { mutableStateOf<String?>(null) }
     var finding by remember(view.id) { mutableStateOf(false) }
+    val find = remember(view.id) { FindState() }
+    val findScope = rememberCoroutineScope()
     var zoom by remember(view.id) { mutableFloatStateOf(1f) }
     var notice by remember(view.id) { mutableStateOf<String?>(null) }
 
@@ -209,6 +213,17 @@ fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, mod
             else -> "This engine has no inspector here"
         }
     }
+    // The inspect key opens what the engine has, and leaves the key alone where it has none (#122: never a note that
+    // something can't be done).
+    fun inspectKey(): Boolean = when (val r = state.navigator.openInspector()) {
+        InspectorResult.Opened -> { notice = null; true }
+        is InspectorResult.Elsewhere -> { notice = r.hint; true }
+        else -> false
+    }
+    fun findStep(backwards: Boolean) {
+        val q = find.query
+        findScope.launch { find.said = findText(q, if (q.isEmpty()) null else state.navigator.find(q, backwards)) }
+    }
 
     val shown = state.url.takeIf { state.content is WebContent.Url } ?: page
     // The tab's keys are #96's registry's: handlers in the pane's scope (KeyContext.Browser), which the platform's
@@ -222,6 +237,13 @@ fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, mod
     RegisterCommand(AppCommands.BrowserZoomReset) { zoomBy(0); true }
     RegisterCommand(AppCommands.BrowserOpenExternally) { (shown ?: page)?.let(platform::openUrl); true }
     RegisterCommand(AppCommands.Find) { finding = true; true }
+    RegisterCommand(AppCommands.FindNext) { finding = true; findStep(backwards = false); true }
+    RegisterCommand(AppCommands.FindPrevious) { finding = true; findStep(backwards = true); true }
+    RegisterCommand(AppCommands.BrowserInspect) { inspectKey() }
+    // Esc stops a loading page; on a loaded one it declines, so the page keeps it.
+    RegisterCommand(AppCommands.BrowserStop) {
+        (state.loading is LoadingState.Loading).also { if (it) state.navigator.stop() }
+    }
 
     Column(
         modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).testTag("browser-${view.id}"),
@@ -252,7 +274,8 @@ fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, mod
         }
         if (finding) {
             FindBar(
-                onFind = { query, backwards -> state.navigator.find(query, backwards) },
+                find = find,
+                onStep = ::findStep,
                 onClose = { finding = false; state.navigator.clearFind() },
             )
         }

@@ -175,6 +175,64 @@ class BrowserPaneTest {
         onNodeWithTag("browser-find-count").assertTextEquals("2 of 5")
     }
 
+    /** A Browser pane inside the app's key registry, as WorkspacePanes scopes it (#96). */
+    private fun ComposeUiTest.showWithKeys(rig: Rig, v: MutableState<ViewDto>) {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        val runtime = WebViewRuntime(
+            RuntimeConfig(maxLive = 2, snapshotCacheBytes = 8L shl 20, factory = rig.engines, scope = scope, clock = { mainClock.currentTime }),
+        )
+        setPlatformContent {
+            CompositionLocalProvider(LocalAppWebViews provides AppWebViews(runtime)) {
+                ShortcutRoot(remember { ShortcutDispatcher() }, Modifier.size(800.dp, 600.dp)) {
+                    val paneScope = rememberKeyScope(KeyContext.Browser, "b1")
+                    ProvideKeyScope(paneScope) {
+                        BrowserPane(v.value, "w1", rig.actions(), Modifier.keyScope(paneScope))
+                    }
+                }
+            }
+        }
+        waitUntil(timeoutMillis = 5_000) { v.value.state["url"].toString().trim('"') in rig.loads() }
+    }
+
+    private val mod = if (isApplePlatform) Key.MetaLeft else Key.CtrlLeft
+
+    /** #122: ⌘G / Ctrl+G is the next match and ⌘⇧G / Ctrl+Shift+G the previous one, with the find bar's query. */
+    @Test fun findNextAndPreviousKeysStepThroughTheMatches() = runComposeUiTest {
+        val rig = Rig()
+        showWithKeys(rig, mutableStateOf(view("https://vitejs.dev/")))
+        rig.engines.created.forEach { it.findAnswer = { _, _ -> FindResult(found = true, count = 5, current = 2) } }
+        onNodeWithTag("browser-address").performClick()
+        onNodeWithTag("browser-address").performKeyInput { withKeyDown(mod) { pressKey(Key.F) } }
+        onNodeWithTag("browser-find-field").performTextInput("vite")
+        waitUntil(timeoutMillis = 5_000) { "find:vite:false" in rig.calls }
+        val forward = rig.calls.count { it == "find:vite:false" }
+        onNodeWithTag("browser-find-field").performKeyInput { withKeyDown(mod) { pressKey(Key.G) } }
+        waitUntil(timeoutMillis = 5_000) { rig.calls.count { it == "find:vite:false" } == forward + 1 }
+        onNodeWithTag("browser-find-field").performKeyInput { withKeyDown(mod) { withKeyDown(Key.ShiftLeft) { pressKey(Key.G) } } }
+        waitUntil(timeoutMillis = 5_000) { "find:vite:true" in rig.calls }
+    }
+
+    /** #122: F12 off Apple, ⌘⌥I on Apple, open the engine's inspector, as Chrome's DevTools keys do. */
+    @Test fun theDevToolsKeyOpensTheInspector() = runComposeUiTest {
+        val rig = Rig()
+        showWithKeys(rig, mutableStateOf(view("https://vitejs.dev/")))
+        onNodeWithTag("browser-address").performClick()
+        onNodeWithTag("browser-address").performKeyInput {
+            if (isApplePlatform) withKeyDown(Key.MetaLeft) { withKeyDown(Key.AltLeft) { pressKey(Key.I) } } else pressKey(Key.F12)
+        }
+        waitUntil(timeoutMillis = 5_000) { "inspector" in rig.calls }
+    }
+
+    /** #122: Esc stops a page only while it loads; on a loaded page the key is left alone (it's the page's). */
+    @Test fun escapeOnALoadedPageDoesNotStop() = runComposeUiTest {
+        val rig = Rig()
+        showWithKeys(rig, mutableStateOf(view("https://vitejs.dev/")))
+        onNodeWithTag("browser-address").performClick()
+        onNodeWithTag("browser-address").performKeyInput { pressKey(Key.Escape) }
+        waitForIdle()
+        assertTrue("stop" !in rig.calls, "${rig.calls}")
+    }
+
     @Test fun noEngineHereSaysSoAndOffersTheSystemBrowser() = runComposeUiTest {
         val rig = Rig().apply { engines.unavailable = UnavailableReason.NotImplemented }
         val platform = FakePlatform()

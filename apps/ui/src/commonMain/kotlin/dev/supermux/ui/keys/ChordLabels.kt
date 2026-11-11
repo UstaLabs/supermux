@@ -49,6 +49,11 @@ private val NAMED_KEYS: Map<String, Key> = buildMap {
     put("Enter", Key.Enter); put("Escape", Key.Escape); put("Tab", Key.Tab); put("Space", Key.Spacebar)
     // The terminal's Ctrl+Plus and Shift/Ctrl+Insert ([terminalKeeps]).
     put("+", Key.Plus); put("Insert", Key.Insert)
+    // The Browser tab's Chrome keys (#122): F5, F6, F3, F12 and Alt+arrows.
+    val fn = listOf(Key.F1, Key.F2, Key.F3, Key.F4, Key.F5, Key.F6, Key.F7, Key.F8, Key.F9, Key.F10, Key.F11, Key.F12)
+    fn.forEachIndexed { i, k -> put("F${i + 1}", k) }
+    put("ArrowLeft", Key.DirectionLeft); put("ArrowRight", Key.DirectionRight)
+    put("ArrowUp", Key.DirectionUp); put("ArrowDown", Key.DirectionDown)
 }
 private val KEY_NAMES: Map<Key, String> = NAMED_KEYS.entries.associate { (name, key) -> key to name }
 
