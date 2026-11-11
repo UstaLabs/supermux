@@ -1,6 +1,6 @@
 // show_html over the web channel (#104): GET /html/<id> (authed, never text/html) and a `send` frame from a card.
 import { afterEach, expect, test } from "bun:test"
-import { mkdtempSync } from "fs"
+import { mkdirSync, mkdtempSync, writeFileSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
 import { WebChannel, type WebChannelOpts } from "./index"
@@ -13,8 +13,11 @@ afterEach(async () => { if (channel) { await channel.stop(); channel = undefined
 
 const PAGE = `<!doctype html><script>fetch('/me')</script><h1>hi</h1>`
 
-async function boot() {
+async function boot(o: { webApp?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "mux-show-html-"))
+  // A built web app beside the broker, as in production: its shell answers every path it doesn't own.
+  const staticDir = join(dir, "web")
+  if (o.webApp) { mkdirSync(staticDir); writeFileSync(join(staticDir, "index.html"), "<!doctype html><title>the app</title>") }
   const devicesFile = join(dir, "devices.json")
   const pages = new FsHtmlPageStore(join(dir, "html"))
   const id = pages.put(PAGE)
@@ -30,6 +33,7 @@ async function boot() {
     htmlPages: pages,
     findCard: (session, cardId) => (session === "a" && cardId === id ? { title: "Pick one" } : undefined),
     updateChecker: null,
+    ...(o.webApp ? { staticDir } : {}),
   }
   channel = new WebChannel(opts)
   channel.on("inbound", (m) => { sent.push(m) })
@@ -54,6 +58,16 @@ test("GET /html/<id> gives the page as a string in JSON, never as text/html", as
   expect(res.headers.get("content-security-policy")).toContain("sandbox")
   expect(res.headers.get("content-disposition")).toBeNull()
   expect(await res.json()).toEqual({ id, html: PAGE })
+})
+
+// Live on 2026-11-11: with the web app built, /html/<id> got the app's index.html, and every card said its page wasn't there.
+test("GET /html/<id> is the page's JSON even with the web app beside the broker, not the app's shell", async () => {
+  const { base, id, token } = await boot({ webApp: true })
+  const res = await fetch(`${base}/html/${id}`, { headers: { authorization: `Bearer ${token}` } })
+  expect(res.status).toBe(200)
+  expect(res.headers.get("content-type")!).toStartWith("application/json")
+  expect(await res.json()).toEqual({ id, html: PAGE })
+  expect((await fetch(`${base}/html/${id}`)).status).toBe(401)
 })
 
 test("GET /html/<id>: an unknown or malformed id is 404, a path never reaches the file system", async () => {
