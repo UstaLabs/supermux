@@ -157,6 +157,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import dev.supermux.ui.keys.LocalKeyScopeActive
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -707,19 +709,36 @@ fun ChatPanel(
     val place = rememberRetained("chat.place:${session.id}") { TranscriptPlace() }
     // Card #121: where this chat opens. Its read mark from the opening, kept while it stays open, so the
     // "N new messages" line does not vanish when viewing marks the chat read.
-    val openMark = remember(session.id) { state.readMarkAtOpen }
-    val unreadRows = remember(timelineItems, openMark) { unreadRowIndices(timelineItems, openMark) }
-    val firstUnread = unreadRows.firstOrNull() ?: -1
     // The place is kept for the life of the app (#89), so a rebuilt panel (a rotation, a width change) keeps the
     // reader where they were. A new opening (a different read mark) is placed afresh: at its first unread message,
     // or at its end. Starting it at the old place made the follow below scroll down through every new row on
-    // screen (card #121, Agents chats on iOS).
-    val reopened = remember(session.id) { place.rows < 0 || place.openMark != openMark }
+    // screen (card #121, Agents chats on iOS). A kept-alive panel coming back on screen is a new opening too: it
+    // kept its first opening's line until the app restarted.
+    val onScreen = active && LocalKeyScopeActive.current
+    val opened = remember(session.id) { ChatOpening(state.readMarkAtOpen, place.rows < 0 || place.openMark != state.readMarkAtOpen) }
+    val cameBack = opened.track(onScreen)
+    if (cameBack) opened.restart(state.readMarkAtOpen, place.openMark)
+    val openMark = opened.mark
+    val reopened = opened.reopened
+    val unreadRows = remember(timelineItems, openMark) { unreadRowIndices(timelineItems, openMark) }
+    val firstUnread = unreadRows.firstOrNull() ?: -1
+    val openAt = if (firstUnread >= 0) firstUnread else timelineItems.lastIndex.coerceAtLeast(0)
     val listState = rememberLazyListState(
-        if (!reopened) place.index else if (firstUnread >= 0) firstUnread else timelineItems.lastIndex.coerceAtLeast(0),
+        if (!reopened) place.index else openAt,
         if (!reopened) place.offset else 0,
     )
-    var opening by remember(session.id) { mutableStateOf(true) }
+    // Placed before the next frame draws, so the old place is never on screen.
+    if (cameBack && reopened) listState.requestScrollToItem(openAt)
+    var opening by opened::placing
+    // The line fades a moment after every new message has been on screen (or was scrolled past), and the jump
+    // button stops counting them: they are seen.
+    val lastUnread = unreadRows.lastOrNull() ?: -1
+    LaunchedEffect(session.id, lastUnread, openMark, onScreen) {
+        if (lastUnread < 0 || opened.seen || !onScreen) return@LaunchedEffect
+        snapshotFlow { listState.layoutInfo.visibleItemsInfo.any { it.index >= lastUnread } }.first { it }
+        delay(NEW_LINE_SEEN_MS)
+        opened.seen = true
+    }
     LaunchedEffect(listState, place) {
         snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
             .collect { (index, offset) ->
@@ -909,8 +928,8 @@ fun ChatPanel(
         // Card #76: live rows count as rows: one appearing is followed like a new message, and the stored row
         // taking a live row's place adds none.
         val rowCount = timelineItems.size + liveRows.size
-        LaunchedEffect(session.id, rowCount, working, active) {
-            if (!active) return@LaunchedEffect
+        LaunchedEffect(session.id, rowCount, working, onScreen) {
+            if (!onScreen) return@LaunchedEffect
             val target = rowCount - 1
             if (target < 0) return@LaunchedEffect
             if (opening) {
@@ -1346,7 +1365,12 @@ fun ChatPanel(
                     val isRevealed = revealedId != null && (item as? TimelineItem.Msg)?.entry?.id == revealedId
                     val revealTint = cs.primary
                     Column {
-                    if (i == firstUnread) NewMessagesLine(unreadRows.size)
+                    if (i == firstUnread) {
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = !opened.seen,
+                            exit = fadeOut() + androidx.compose.animation.shrinkVertically(),
+                        ) { NewMessagesLine(unreadRows.size) }
+                    }
                     Box(
                         Modifier
                             .then(
@@ -1498,7 +1522,7 @@ fun ChatPanel(
                         }
                         if (!emptySession) {
                             JumpToBottomButton(
-                                newCount = unreadRows.size,
+                                newCount = if (opened.seen) 0 else unreadRows.size,
                                 listState = listState,
                                 onJumped = { chrome.show() },
                                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = Space.md),
@@ -1819,6 +1843,36 @@ private class TranscriptPlace {
     var autoFollow by mutableStateOf(true)
     /** Card #121: the read mark the chat was last opened with; a different one is a new opening. */
     var openMark: String? = null
+}
+
+/** Card #121: how long the "N new messages" line stays once every new message has been on screen. */
+private const val NEW_LINE_SEEN_MS = 2_000L
+
+/**
+ * Card #121: one opening of a chat: the read mark it opened with, whether it is placed afresh ([reopened]: at its
+ * first unread message or its end) or keeps a rebuilt panel's place, and whether its new messages were [seen].
+ */
+private class ChatOpening(mark: String?, reopened: Boolean) {
+    var mark by mutableStateOf(mark)
+    var reopened by mutableStateOf(reopened)
+    /** The follow effect has yet to place this opening. */
+    var placing by mutableStateOf(true)
+    var seen by mutableStateOf(false)
+    private var wasOnScreen = true
+
+    /** True once, when a kept-alive panel comes back on screen. */
+    fun track(onScreen: Boolean): Boolean {
+        val back = onScreen && !wasOnScreen
+        wasOnScreen = onScreen
+        return back
+    }
+
+    fun restart(mark: String?, lastOpenMark: String?) {
+        this.mark = mark
+        reopened = mark != lastOpenMark
+        placing = true
+        seen = false
+    }
 }
 
 /** One session's open media viewer, kept for a rebuilt [ChatPanel] (`rememberRetained`, #89). */
