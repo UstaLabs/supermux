@@ -159,6 +159,8 @@ export type SessionManagerPorts = {
       ev: { text: string; reply_to?: string; files?: string[]; format?: "text" | "markdownv2"; keyboard?: string[] },
     ): Promise<{ ok: true; delivered: number } | { ok: false; error: string }>
     getChannel(name: string): Channel | undefined
+    /** show_html (#104): check the page and post its card for session `sessionId`. Unset: the tool says it is unavailable. */
+    showHtml?(sessionId: string, args: Record<string, unknown>): Promise<{ ok: true; value?: unknown } | { ok: false; error: string }>
     /** Boot-time constant: telegram token/getFile when telegram is configured. */
     telegramApi: DownloadableApi | undefined
   }
@@ -533,7 +535,7 @@ export class SessionManager {
   }
 
   /**
-   * An outbound tool call (attach, react, edit_message, download_attachment) from session
+   * An outbound tool call (attach, show_html, react, edit_message, download_attachment) from session
    * `fromSession`. Shared by the external shim's socket and the broker's host MCP server
    * (src/core/mux-tools): the caller's identity is the socket's bound session id or the host
    * server's ctx.sessionId, never anything the agent says.
@@ -569,6 +571,9 @@ export class SessionManager {
         } catch (err) {
           return { ok: false, error: String(err instanceof Error ? err.message : err) }
         }
+      } else if (op.name === "show_html") {
+        if (!this.ports.outbound.showHtml) return { ok: false, error: "show_html is not available on this broker" }
+        return await this.ports.outbound.showHtml(fromSession, op.args)
       } else if (op.name === "react") {
         const rawChatId = stringArg(op.args, "chat_id")
         const messageId = stringArg(op.args, "message_id")

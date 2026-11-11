@@ -865,6 +865,28 @@ describe("SessionManager.handleOutbound attach", () => {
   })
 })
 
+describe("SessionManager.outbound show_html", () => {
+  test("goes to the show_html port with the CALLING session's id, never one the agent names", async () => {
+    const db = openDb(":memory:")
+    runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+    const calls: any[] = []
+    const ports = fakePorts(db)
+    ports.outbound = { ...ports.outbound, showHtml: async (id, args) => { calls.push([id, args]); return { ok: true as const, value: "shown" } } }
+    const m = new SessionManager(new Registry(db), ports)
+    const s = m.registry.register({ name: "cl5", workdir: "/tmp", pid: 0, agent: "claude", connected: true })
+    const r = await m.handleOutbound({ session_id: s.id, op: { name: "show_html", args: { title: "T", html: "<p/>", session_id: "other" } } } as any)
+    expect(r).toEqual({ ok: true, value: "shown" })
+    expect(calls).toEqual([[s.id, { title: "T", html: "<p/>", session_id: "other" }]])
+  })
+  test("a broker without the port says so", async () => {
+    const db = openDb(":memory:")
+    runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+    const m = new SessionManager(new Registry(db), fakePorts(db))
+    const s = m.registry.register({ name: "cl6", workdir: "/tmp", pid: 0, agent: "claude", connected: true })
+    expect((await m.handleOutbound({ session_id: s.id, op: { name: "show_html", args: {} } } as any)).ok).toBe(false)
+  })
+})
+
 describe("SessionManager.isDeliverable / waitDeliverable", () => {
   test("claude readiness is the connected flag", () => {
     const { m } = managerForDeliver()

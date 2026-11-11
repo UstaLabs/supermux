@@ -45,6 +45,10 @@ export interface Message {
   council_id?: string
   council_round?: number
   council_letter?: string
+  /** #104: an html card the agent showed (show_html); GET /html/<id> serves the page. */
+  card?: { id: string; title: string; height?: number; desktop_height?: number }
+  /** #104: set on the user's message that a click in an html card sent. */
+  from_card?: { id: string; title: string }
   /** Card #76: the live stream this reply replaces in the app. Sent with the live frame only; never stored. */
   stream?: string
 }
@@ -78,8 +82,8 @@ export class MessageStore {
     // file was stored. In place: the channels send this same `entry` right after the append.
     if (this.fileStore && entry.attachments?.length) entry.attachments = this.fileStore.withMediaMeta(entry.attachments)
     this.db.prepare(`
-      INSERT INTO messages (id, session, session_id, ts, direction, channel, chat_id, message_id, op, text, edited_at, attachments, reactions, error, subagent_id, from_session_id, from_session_name, from_agent, council_id, council_round, council_letter)
-      VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO messages (id, session, session_id, ts, direction, channel, chat_id, message_id, op, text, edited_at, attachments, reactions, error, subagent_id, from_session_id, from_session_name, from_agent, council_id, council_round, council_letter, card, from_card)
+      VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       entry.id,
       sessionId,
@@ -101,6 +105,8 @@ export class MessageStore {
       entry.council_id ?? null,
       entry.council_round ?? null,
       entry.council_letter ?? null,
+      entry.card ? JSON.stringify(entry.card) : null,
+      entry.from_card ? JSON.stringify(entry.from_card) : null,
     )
     // Bump ref_count for each attachment so the hourly GC sweep doesn't reap a
     // file that's still referenced by this row. fileStore is optional (tests
@@ -234,6 +240,12 @@ export class MessageStore {
     return row?.ts ?? undefined
   }
 
+  /** The html card with this id in this session's log (#104), for a click that sends from it. */
+  findCard(sessionId: string, cardId: string): { id: string; title: string } | undefined {
+    const row = this.db.prepare("SELECT card FROM messages WHERE session_id = ? AND json_extract(card, '$.id') = ? LIMIT 1").get(sessionId, cardId) as { card: string } | undefined
+    return row ? JSON.parse(row.card) : undefined
+  }
+
   /** ISO timestamp of the newest message the user sent the session (web, telegram), if any. */
   lastUserInbound(sessionId: string): string | undefined {
     const row = this.db.prepare(
@@ -293,5 +305,7 @@ function rowToMessage(row: any): Message {
     council_id: row.council_id ?? undefined,
     council_round: row.council_round ?? undefined,
     council_letter: row.council_letter ?? undefined,
+    card: row.card ? JSON.parse(row.card) : undefined,
+    from_card: row.from_card ? JSON.parse(row.from_card) : undefined,
   }
 }

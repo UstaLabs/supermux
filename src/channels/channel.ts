@@ -67,6 +67,8 @@ export interface InboundMessage {
   reply_to_message_id?: string
   target_session_id?: string       // set by channels with multiplexesSessions=false
   attachments?: InboundAttachment[]
+  /** #104: a click in an html card sent this text; the card is one of the target session's. */
+  from_card?: { id: string; title: string }
 }
 
 export interface Channel {
