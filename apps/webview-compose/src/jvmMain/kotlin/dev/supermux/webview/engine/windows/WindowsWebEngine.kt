@@ -222,6 +222,11 @@ internal class WindowsWebEngine(
         page.devtools(NO_ANSWER, "Page.enable", "{}")
         page.devtools(NO_ANSWER, "Page.setInterceptFileChooserDialog", "{\"enabled\":true}")
         page.subscribe("Page.fileChooserOpened")
+        // Page-first keys (#122): the page's verdict on a key, from its isolated key script through a binding only it has.
+        page.devtools(NO_ANSWER, "Runtime.enable", "{}")
+        page.devtools(NO_ANSWER, "Runtime.addBinding", Wv2Keys.bindingParams)
+        page.devtools(NO_ANSWER, "Page.addScriptToEvaluateOnNewDocument", Wv2Keys.scriptParams)
+        page.subscribe("Runtime.bindingCalled")
         if (config.profile == WebProfile.Ephemeral && !wipeData()) return false
         queue.advance(reset = true)
         return !released && !crashed
@@ -562,6 +567,13 @@ internal class WindowsWebEngine(
 
     /** CDP's file chooser (V8): the element's `accept`, the client's files, `DOM.setFileInputFiles`; nothing to cancel. */
     private fun onDevToolsEvent(event: WinEvent.DevToolsEvent) {
+        if (event.name == "Runtime.bindingCalled") {
+            val params = event.json?.let { runCatching { Json.parseToJsonElement(it).jsonObject }.getOrNull() } ?: return
+            if (params["name"]?.jsonPrimitive?.contentOrNull != Wv2Keys.BINDING) return
+            val (used, vk) = params["payload"]?.jsonPrimitive?.contentOrNull?.let(Wv2Keys::verdict) ?: return
+            keyRouter.verdict(used, vk)
+            return
+        }
         if (!ofDocument(event.epoch) || event.name != "Page.fileChooserOpened") return
         val params = event.json?.let { runCatching { Json.parseToJsonElement(it).jsonObject }.getOrNull() } ?: return
         val node = params["backendNodeId"]?.jsonPrimitive?.longOrNull ?: return
@@ -992,7 +1004,7 @@ internal class WindowsWebEngine(
     )
 
     /** The app's shortcuts while the page has the keyboard: offered to Compose first (D15). */
-    private val keyRouter = KeyRouter(target = { if (surfaceFocused) canvasForKeys else null })
+    private val keyRouter = KeyRouter(target = { if (surfaceFocused) canvasForKeys else null }, pageFirst = Wv2Keys::pageFirst)
 
     @Volatile private var surfaceFocused = false
     @Volatile private var canvasForKeys: java.awt.Component? = null

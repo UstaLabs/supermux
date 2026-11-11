@@ -129,4 +129,16 @@ class WindowsWebEngineRequestsTest {
         assertEquals("{\"files\":[\"C:\\\\Users\\\\t\\\\a.txt\",\"C:\\\\Users\\\\t\\\\b.png\"],\"backendNodeId\":42}", set.third)
         rig.close()
     }
+
+    /** #122: the page's verdict on a key it was given first comes from a binding only the isolated key script can call. */
+    @Test fun aWarmEngineAsksForThePagesKeyVerdicts() = runTest {
+        val rig = WinRig(this)
+        rig.warm()
+        val script = rig.page.devtools.single { it.second == "Page.addScriptToEvaluateOnNewDocument" }.third
+        assertTrue("\"worldName\":\"wvKeys\"" in script, script)
+        val binding = rig.page.devtools.single { it.second == "Runtime.addBinding" }.third
+        assertTrue("\"executionContextName\":\"wvKeys\"" in binding, binding)
+        assertTrue("subscribe Runtime.bindingCalled" in rig.page.calls)
+        rig.close()
+    }
 }

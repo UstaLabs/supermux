@@ -1506,6 +1506,11 @@ ephemeral slot, and the slots are few.
   calls the pool's `onBackgroundTrim()`; an app may, for a long minimize.
 - A page can't take the keyboard by itself: only a press, a Tab into it, or `requestFocus()` moves it there.
 - Browser shortcuts are off (no F5, Ctrl+R, Ctrl+P, zoom keys); F12 and Ctrl+Shift+I open DevTools when `inspectable`.
+- Accelerators (Ctrl, Alt or a function key) are the page's first, as in Chrome (#122): the page gets the key, and a
+  key script in an isolated world reports through a CDP binding only it has (`Runtime.addBinding`) whether the page
+  used it; one it left unused then goes to the app (`KeyRouter`), or after 300 ms with no answer. The app keeps, before
+  any page: Ctrl+T/W/N (and with Shift), Ctrl+1–9, Ctrl+Tab, Ctrl+PgUp/PgDn, Ctrl+\\ and Ctrl+Alt+\\, Ctrl+, Alt+F4 and
+  every Windows-key chord (`Wv2Keys`).
   An app's own shortcuts (`onPreviewKeyEvent` around the `WebView`) reach the app first.
 - The context menu keeps editing items only.
 - Downloads are refused, and the client told; new windows are the client's to open.
