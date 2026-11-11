@@ -1039,7 +1039,9 @@ no cut-outs.
   one-finger drag on (and its fling) unless what is under the finger claims it (a computed `touch-action` that keeps
   the browser from panning vertically, such as a canvas's `none`, or an inner scroller with room that way), so a chat
   scrolls by a drag over a card's buttons while its canvas keeps its own. The page is asked when the drag starts and
-  each way it turns; nothing is handed on before it answers.
+  each way it turns; nothing is handed on before it answers. A pane's vertical drag is read by a one-finger pan of the
+  engine's own on the web view, which recognizes with every other and holds back no touch: the scroll view's pan never
+  begins over a page that fits and doesn't bounce, as a card's doesn't. The sideways swipe rides the scroll view's pan.
 - **The user's gestures.** WebKit has no public user-gesture flag on navigations, so the relay reports what the page,
   or any of its frames, saw from the user in trusted events, which no page script can make: a tap, a click, or a key
   but Escape. A request of that document's to leave (a navigation the client is asked about, or a new window) within a

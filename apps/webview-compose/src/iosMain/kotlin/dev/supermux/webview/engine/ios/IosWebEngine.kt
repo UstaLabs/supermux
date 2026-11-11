@@ -202,7 +202,7 @@ internal class IosWebEngine private constructor(
      * A sideways drag past the page's edge goes to the views around it (the phone's tab swipe); in a pane, so does a
      * vertical one the page doesn't claim.
      */
-    private val sideSwipe = PageSideSwipe(webView.scrollView) { script, done ->
+    private val sideSwipe = PageSideSwipe(webView, webView.scrollView) { script, done ->
         webView.evaluateJavaScript(script) { result, _ -> done((result as? Boolean)?.toString()) }
     }
 
