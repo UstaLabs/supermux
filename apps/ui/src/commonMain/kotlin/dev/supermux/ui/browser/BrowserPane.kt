@@ -1,5 +1,7 @@
 package dev.supermux.ui.browser
 
+import dev.supermux.webview.runtime.LocalWebViewOverlays
+import dev.supermux.webview.runtime.ProvideWebViewOverlays
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -266,6 +268,10 @@ fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, mod
         (state.loading is LoadingState.Loading).also { if (it) state.navigator.stop() }
     }
 
+    // The page and what floats over it (the ⋯ menu, the find bar) share one overlay registry: the window's, or the
+    // pane's own where none is provided, so the page never takes their clicks (on macOS a press goes to what is natively
+    // under the pointer).
+    OverlaysOfThisWindow {
     Column(
         modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).testTag("browser-${view.id}"),
     ) {
@@ -323,4 +329,11 @@ fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, mod
             }
         }
     }
+    }
+}
+
+/** [content] with the window's overlay registry, or one of its own where the window provides none. */
+@Composable
+private fun OverlaysOfThisWindow(content: @Composable () -> Unit) {
+    if (LocalWebViewOverlays.current != null) content() else ProvideWebViewOverlays(content)
 }

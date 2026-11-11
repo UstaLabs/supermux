@@ -306,6 +306,42 @@ class BrowserPaneTest {
         waitUntil(timeoutMillis = 5_000) { sink.sent.isNotEmpty() }
     }
 
+    /**
+     * The ⋯ menu opens over the page. On macOS a press goes to whatever is natively under the pointer, so a menu the
+     * page isn't told about loses every click to the page (Ahmet's hot run, 2026-11-11): the open menu must be one of
+     * the page's overlays.
+     */
+    @Test fun theOpenMenuIsAnOverlayOfThePage() = runComposeUiTest {
+        val rig = Rig()
+        showWithKeys(rig, mutableStateOf(view("https://vitejs.dev/")))
+        waitForIdle()
+        fun holes() = rig.calls.filter { it.startsWith("overlays:") }.lastOrNull()?.substringAfter(':')?.toInt() ?: 0
+        assertEquals(0, holes())
+        onNodeWithTag("browser-menu").performClick()
+        waitUntil(timeoutMillis = 5_000) { holes() > 0 }
+    }
+
+    /** Every row of the ⋯ menu does what it says. */
+    @Test fun eachMenuRowRunsItsCommand() = runComposeUiTest {
+        val rig = Rig()
+        val platform = FakePlatform()
+        show(rig, mutableStateOf(view("https://vitejs.dev/")), rig.actions(), platform)
+        waitUntil(timeoutMillis = 5_000) { "https://vitejs.dev/" in rig.loads() }
+        onNodeWithTag("browser-menu").performClick()
+        onNodeWithTag("browser-zoom-in").performClick()
+        waitUntil(timeoutMillis = 5_000) { "zoom:1.1" in rig.calls }
+        onNodeWithTag("browser-zoom-out").performClick()
+        waitUntil(timeoutMillis = 5_000) { rig.calls.count { it == "zoom:1.0" } >= 1 }
+        onNodeWithTag("browser-menu-inspect").performClick()
+        waitUntil(timeoutMillis = 5_000) { "inspector" in rig.calls }
+        onNodeWithTag("browser-menu").performClick()
+        onNodeWithTag("browser-menu-external").performClick()
+        assertEquals(listOf("https://vitejs.dev/"), platform.openedUrls)
+        onNodeWithTag("browser-menu").performClick()
+        onNodeWithTag("browser-menu-find").performClick()
+        onNodeWithTag("browser-find").assertExists()
+    }
+
     /** Where no chat can take it (or the platform can't picture a page), the menu doesn't offer it. */
     @Test fun withNowhereToSendItTheMenuHasNoScreenshot() = runComposeUiTest {
         val rig = Rig()

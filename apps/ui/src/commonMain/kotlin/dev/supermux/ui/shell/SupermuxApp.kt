@@ -21,6 +21,7 @@
 // session-only chat for a session that belongs to no workspace ([chatFallback]).
 package dev.supermux.ui.shell
 
+import dev.supermux.webview.runtime.ProvideWebViewOverlays
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.animation.AnimatedContent
@@ -855,6 +856,10 @@ fun SupermuxApp(
         // Card #121: the offline / reconnecting strip above the chat list and the composer.
         LocalConnectionStatus provides rememberConnectionStatus(hostViews, fleet::retryNow),
     ) {
+    // This window's one overlay registry (webview-compose): a menu, the find bar or a popup anywhere in the shell is an
+    // overlay of every page under it, so on macOS, where a press goes to what is natively under the pointer, the page
+    // doesn't take its clicks (#122: the Browser tab's ⋯ menu did nothing on Ahmet's Mac).
+    ProvideWebViewOverlays {
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         // The web's player element, unseen, at the root: what plays outlives every screen change.
         dev.supermux.ui.work.AudioSurfaceHost(fleet.audio, audioOutputs)
@@ -1347,6 +1352,7 @@ fun SupermuxApp(
                 }
             }
         }
+    }
     }
     }
     // Last, so that it is added after every handler above even when the keyboard is already up
