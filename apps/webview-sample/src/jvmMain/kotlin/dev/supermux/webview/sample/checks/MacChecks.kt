@@ -81,12 +81,35 @@ hostBridge.handle('state', function () {
 </script></body></html>""",
     )
 
+    /**
+     * A page with the same field that records the ⌘ keys it sees and keeps ⌘B for itself (`preventDefault`), as a web
+     * editor's bold does (#122, page-first keys).
+     */
+    private val KEYS_PAGE = WebContent.Html(
+        """<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>keys</title>
+<style>html,body{margin:0;height:100%;background:#e8f0fe;font:16px system-ui}
+#field{position:absolute;left:8px;top:8px;width:150px;height:40px;box-sizing:border-box;font:16px system-ui}</style></head>
+<body><input id="field" autocomplete="off" spellcheck="false"><script>
+var keys = '';
+document.addEventListener('keydown', function (e) {
+  if (!e.metaKey) return;
+  var k = e.key.toLowerCase();
+  keys += k;
+  if (k === 'b') e.preventDefault();
+});
+hostBridge.handle('state', function () {
+  var f = document.getElementById('field');
+  return { presses: 0, value: f.value, focused: document.activeElement === f, keys: keys };
+});
+</script></body></html>""",
+    )
+
     /** What a check's scene shows, and where its parts are in the window (px). */
     /** [profile]: a view that loads local content and then a page needs one pinned, or each runs in its own (Html: Ephemeral). */
-    private class Stage(withEmbed: Boolean = false, val profile: WebProfile? = null) {
+    private class Stage(withEmbed: Boolean = false, val profile: WebProfile? = null, content: WebContent = INPUT_PAGE) {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         val runtime = WebViewRuntime(RuntimeConfig(maxLive = 2, maxIdle = 0, snapshotCacheBytes = 16L shl 20, scope = scope))
-        val state = WebViewState(INPUT_PAGE)
+        val state = WebViewState(content)
         val embedState = if (withEmbed) WebViewState(WebContent.Html("<!doctype html><title>embed</title><p>An embed</p>")) else null
         var page: Rect? = null
         var overlay: Rect? = null
@@ -308,6 +331,37 @@ setTimeout(report, 50);
                 MacEngineTesting.type(mac.window, "q")
                 waitFor("⌘A selecting all, so q replaces it") { pageState(stage)["value"]!!.jsonPrimitive.content == "q" }
                 assertEquals("", stage.text, "no key reached Compose's field")
+            }
+        },
+        // #122: a ⌘ key goes to the page first, as in Chrome: one the page uses (⌘B, preventDefault) stays the page's; one
+        // it leaves unused (⌘K) reaches the app after it; one the app reserves (⌘T) is the app's alone.
+        Check("mac-command-keys-are-the-pages-first") {
+            val stage = Stage(content = KEYS_PAGE)
+            val app = StringBuffer()
+            val listener = java.awt.KeyEventDispatcher { e ->
+                if (e.id == java.awt.event.KeyEvent.KEY_PRESSED && e.isMetaDown) app.append(java.awt.event.KeyEvent.getKeyText(e.keyCode).lowercase())
+                false
+            }
+            java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(listener)
+            try {
+                withPage(stage) { mac ->
+                    val page = assertNotNull(stage.page)
+                    pressAt(mac, page, 83f, 28f)
+                    waitFor("the field focused") { pageState(stage)["focused"]!!.jsonPrimitive.boolean }
+                    suspend fun pageKeys() = pageState(stage)["keys"]!!.jsonPrimitive.content
+                    MacEngineTesting.command(mac.window, 'b')
+                    waitFor("⌘B reaching the page") { "b" in pageKeys() }
+                    delay(500)
+                    assertTrue("b" !in app.toString(), "the page kept ⌘B, but the app got it too: $app")
+                    MacEngineTesting.command(mac.window, 'k')
+                    waitFor("⌘K reaching the page") { "k" in pageKeys() }
+                    waitFor("⌘K, unused by the page, reaching the app after it") { "k" in app.toString() }
+                    MacEngineTesting.command(mac.window, 't')
+                    waitFor("⌘T, the app's own, reaching the app") { "t" in app.toString() }
+                    assertTrue("t" !in pageKeys(), "⌘T is the app's alone, but the page saw it: ${pageKeys()}")
+                }
+            } finally {
+                java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().removeKeyEventDispatcher(listener)
             }
         },
         Check("mac-focus-follows-the-press") {
