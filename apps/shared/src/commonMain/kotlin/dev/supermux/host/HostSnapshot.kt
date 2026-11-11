@@ -39,4 +39,6 @@ data class HostSnapshot(
      * entry until its history loads.
      */
     val recentLogs: Map<String, List<LogEntry>> = emptyMap(),
+    /** Card #121: each chat's read mark (ISO), so a saved chat does not show unread until the snapshot says so. */
+    val lastRead: Map<String, String> = emptyMap(),
 )

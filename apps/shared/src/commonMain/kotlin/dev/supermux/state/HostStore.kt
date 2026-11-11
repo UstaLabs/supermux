@@ -155,6 +155,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.flow.stateIn
@@ -921,6 +922,7 @@ class HostStore(
      * keep-alive heartbeat.
      */
     fun updateViewing(session: String?, visible: Boolean) {
+        noteOpenings(if (visible && session != null) listOf(session) else emptyList())
         viewingSessionIds = if (visible && session != null) listOf(session) else emptyList()
         viewingOnList = visible && session == null
         viewingVisible = visible
@@ -938,6 +940,7 @@ class HostStore(
      * empty + [visible]=false means the window is backgrounded.
      */
     fun updateViewingSessions(sessionIds: List<String>, visible: Boolean) {
+        noteOpenings(if (visible) sessionIds.distinct() else emptyList())
         viewingSessionIds = if (visible) sessionIds.distinct() else emptyList()
         viewingOnList = visible && viewingSessionIds.isEmpty()
         viewingVisible = visible
@@ -946,6 +949,29 @@ class HostStore(
         }
         sendViewingIfChanged()
         ensureViewingHeartbeat()
+    }
+
+    /** Card #121: each chat on screen → its read mark from just before it came on screen. */
+    private val _openedAt = MutableStateFlow<Map<String, String>>(emptyMap())
+
+    /**
+     * Card #121: the read mark a chat opens with: for a chat on screen, its mark from just before it came on
+     * screen (viewing moves the mark to now at once); for any other chat, its mark now, which is what it will
+     * open with. The chat opens at its first message newer than this.
+     */
+    val readMarksAtOpen: StateFlow<Map<String, String>> =
+        combine(_state.map { it.lastRead }, _openedAt) { read, opened -> read + opened }
+            .stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
+
+    /** Record the read mark of each chat in [onScreen] that was not on screen before; forget the rest. */
+    private fun noteOpenings(onScreen: List<String>) {
+        val before = viewingSessionIds.toSet()
+        val read = _state.value.lastRead
+        _openedAt.update { held ->
+            onScreen.mapNotNull { id ->
+                (if (id in before) held[id] else read[id])?.let { id to it }
+            }.toMap()
+        }
     }
 
     /** Optimistically advance this session's read pointer to now so the list un-bolds immediately. */
@@ -2164,6 +2190,7 @@ class HostStore(
                     projects = snap.projects,
                     projectCatalogKnown = snap.projects.isNotEmpty(),
                     messages = snap.lastMessages.mapValues { listOf(it.value) } + snap.recentLogs,
+                    lastRead = snap.lastRead,
                 )
             }
         }

@@ -711,7 +711,7 @@ class FleetStore(
      */
     @OptIn(kotlinx.coroutines.FlowPreview::class)
     suspend fun keepSnapshots(periodMs: Long = 20_000) {
-        combine(sessions, workspaces, projects, messages) { _, _, _, _ -> }
+        combine(sessions, workspaces, projects, messages, lastRead) { _, _, _, _, _ -> }
             .sample(periodMs)
             .collect { writeSnapshots() }
     }
@@ -742,13 +742,14 @@ class FleetStore(
                     projects = projectsByHost[host.recordId].orEmpty().filter { it.id !in archivedOnly },
                     lastMessages = mine.mapNotNull { s -> logs[s.id]?.lastOrNull()?.let { s.id to it } }.toMap(),
                     recentLogs = recentLogs(mine, logs),
+                    lastRead = lastReadByHost[host.recordId].orEmpty().filterKeys { id -> mine.any { it.id == id } },
                 )
             }
         }
         snapshotWrites.withLock {
             withContext(Dispatchers.Default) {
                 cache.retainOnly(records.map { it.recordId })
-                rows.forEach { cache.replace(it.recordId, it.sessions, it.fetchedAt, it.brokerVersion, it.workspaces, it.projects, it.lastMessages, it.recentLogs) }
+                rows.forEach { cache.replace(it.recordId, it.sessions, it.fetchedAt, it.brokerVersion, it.workspaces, it.projects, it.lastMessages, it.recentLogs, it.lastRead) }
             }
         }
     }
