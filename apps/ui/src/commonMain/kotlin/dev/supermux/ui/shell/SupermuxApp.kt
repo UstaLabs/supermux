@@ -164,9 +164,6 @@ import dev.supermux.ui.session.rememberArchivedActions
 import dev.supermux.ui.session.rememberLauncherActions
 import dev.supermux.ui.session.rememberSessionListActions
 import dev.supermux.ui.session.withWorkspaceOps
-import dev.supermux.ui.settings.DevicesSettingsScreen
-import dev.supermux.ui.settings.ProxiesSettingsScreen
-import dev.supermux.ui.settings.MachineSub
 import dev.supermux.ui.settings.SettingsHub
 import dev.supermux.ui.settings.SettingsPlace
 import dev.supermux.ui.settings.SettingsSlotScope
@@ -174,8 +171,6 @@ import dev.supermux.ui.settings.kit.KitMachine
 import dev.supermux.ui.settings.kit.SettingsMachines
 import dev.supermux.ui.settings.kit.THIS_COMPUTER_ID
 import dev.supermux.host.formatLastSeen
-import dev.supermux.ui.settings.rememberDevicesSettingsActions
-import dev.supermux.ui.settings.rememberProxiesSettingsActions
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.update.AppUpdateCard
 import dev.supermux.ui.update.announceUpdate
@@ -447,6 +442,11 @@ fun SupermuxApp(
     val notices = LocalPlatform.current.notices
 
     val listActions = rememberSessionListActions(fleet)
+    // The host pill's "Open ‹machine›": that machine's page in Settings, with it the one Settings is about (#97).
+    val openHostPage: (String) -> Unit = { id ->
+        fleet.setActiveHost(id)
+        ui.openMachine()
+    }
 
     // Persistent projects, host-qualified by recordId — the same id space [workspaceHostOf] and
     // sessionHost use, so a workspace's projectId only ever matches its own broker's catalog.
@@ -1022,7 +1022,7 @@ fun SupermuxApp(
                                             appearance = appearance,
                                             onToggleTheme = onToggleTheme,
                                             onUsage = { ui.openUsage() },
-                                            onDevices = { ui.openSettings(SettingsSection.Machine, sub = MachineSub.DEVICES) },
+                                            onDevices = { ui.openMachine() },
                                             onSettings = { ui.openSettings() },
                                             usageOpen = ui.usageOpen,
                                             onUsageDismiss = { ui.closeUsage() },
@@ -1042,6 +1042,7 @@ fun SupermuxApp(
                                                     onAddHost = { ui.openAddHost() },
                                                     onRenameHost = listActions.renameHost,
                                                     onForgetHost = listActions.forgetHost,
+                                                    onOpenHost = openHostPage,
                                                 )
                                             },
                                             // The update card sits on the footer rail, not across the
@@ -1098,13 +1099,14 @@ fun SupermuxApp(
                                     onAddHost = { ui.openAddHost() },
                                     onRenameHost = listActions.renameHost,
                                     onForgetHost = listActions.forgetHost,
+                                    onOpenHost = openHostPage,
                                     compact = true,
                                 )
                                 RailSettingsButton(
                                     appearance = appearance,
                                     onToggleTheme = onToggleTheme,
                                     onUsage = { ui.openUsage() },
-                                    onDevices = { ui.openSettings(SettingsSection.Machine, sub = MachineSub.DEVICES) },
+                                    onDevices = { ui.openMachine() },
                                     onSettings = { ui.openSettings() },
                                     usageOpen = ui.usageOpen,
                                     onUsageDismiss = { ui.closeUsage() },
@@ -1252,6 +1254,7 @@ fun SupermuxApp(
                                         onRegisterCloseHandler = { settingsTryClose = it },
                                         machines = settingsMachines,
                                         searchShortcut = settingsSearchShortcut,
+                                        onOpenUsage = { ui.openUsage() },
                                         content = settingsSection,
                                     )
                                 }
@@ -1317,45 +1320,6 @@ fun SupermuxApp(
                                             RetainedPage {
                                                 DisplaysScreen(
                                                     actions = rememberDisplayActions(fleet),
-                                                    onBack = { ui.goBack() },
-                                                    standalone = true,
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            entry<Route.Devices>(
-                                metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
-                            ) {
-                                EscapeBox("devices_overlay", onEscape = { ui.goBack() }) {
-                                    HostScopedPage(hostViews, activeHostId, fleet::setActiveHost) {
-                                        key(activeHostId) {
-                                            // The same page as the hub's Devices section, so its
-                                            // dialogs and a minted link survive a rotation (#89).
-                                            RetainedPage {
-                                                DevicesSettingsScreen(
-                                                    actions = rememberDevicesSettingsActions(fleet),
-                                                    onBack = { ui.goBack() },
-                                                    standalone = true,
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            entry<Route.Proxies>(
-                                metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
-                            ) {
-                                EscapeBox("proxies_overlay", onEscape = { ui.goBack() }) {
-                                    HostScopedPage(hostViews, activeHostId, fleet::setActiveHost) {
-                                        key(activeHostId) {
-                                            // As Devices above: the page keeps its dialogs (#89).
-                                            RetainedPage {
-                                                ProxiesSettingsScreen(
-                                                    actions = rememberProxiesSettingsActions(fleet),
                                                     onBack = { ui.goBack() },
                                                     standalone = true,
                                                 )

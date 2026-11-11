@@ -120,6 +120,7 @@ import dev.supermux.ui.widgets.rememberIosBackSwipe
  *   swaps in place and keeps what the page retains. Honors the dirty guard.
  * @property onAnchorShown the page has scrolled to and flashed the place's anchor: the hub forgets it, so a
  *   recreation or a Compact↔wide swap does not land on it again.
+ * @property onOpenUsage the machine page's "Open full usage": the app's Usage screen.
  */
 @Immutable
 class SettingsSlotScope internal constructor(
@@ -128,6 +129,7 @@ class SettingsSlotScope internal constructor(
     val topBarShown: Boolean,
     val onOpen: (SettingsPlace) -> Unit = {},
     val onAnchorShown: () -> Unit = {},
+    val onOpenUsage: () -> Unit = {},
 ) {
     /** Move the hub to [section]'s page (Accounts' "Sign in again" opens Providers). */
     fun onOpenSection(section: SettingsSection) = onOpen(SettingsPlace(section))
@@ -244,6 +246,8 @@ fun SettingsHub(
     searchShortcut: String? = null,
     onPlaceChange: ((SettingsSection, String?) -> Unit)? = null,
     searchIndex: List<SettingsSearchEntry> = SettingsSearchIndex,
+    /** The machine page's "Open full usage". */
+    onOpenUsage: () -> Unit = {},
     content: @Composable (SettingsPlace, SettingsSlotScope) -> Unit,
 ) {
     val c = kitColors()
@@ -459,12 +463,12 @@ fun SettingsHub(
     /** A search result: its page at its row. A wide rail goes back to its rows; a phone keeps the results for Back. */
     fun pickResult(e: SettingsSearchEntry) {
         if (compact) {
-            open(HubTarget.Sec(e.section), anchor = e.anchor)
+            open(HubTarget.Sec(e.section), sub = e.sub, anchor = e.anchor.takeIf { e.sub == null })
             return
         }
         // Only once the page is really left: "Keep editing" stays on the results.
         guard {
-            open(HubTarget.Sec(e.section), anchor = e.anchor)
+            open(HubTarget.Sec(e.section), sub = e.sub, anchor = e.anchor.takeIf { e.sub == null })
             query = ""
         }
     }
@@ -558,6 +562,7 @@ fun SettingsHub(
     val dirtyNow = rememberUpdatedState<(Boolean) -> Unit> { identityDirty = it }
     val openNow = rememberUpdatedState<(SettingsPlace) -> Unit> { open(HubTarget.Sec(it.section), it.sub, it.anchor) }
     val anchorShownNow = rememberUpdatedState<() -> Unit> { place.anchor = null }
+    val usageNow = rememberUpdatedState(onOpenUsage)
     val scope = remember(compact) {
         SettingsSlotScope(
             onClose = { leaveNow.value() },
@@ -565,6 +570,7 @@ fun SettingsHub(
             topBarShown = compact,
             onOpen = { openNow.value(it) },
             onAnchorShown = { anchorShownNow.value() },
+            onOpenUsage = { usageNow.value() },
         )
     }
     // The pages' scope lines switch machines through the same guard as the cards.

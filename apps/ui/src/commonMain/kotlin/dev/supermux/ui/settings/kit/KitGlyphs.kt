@@ -62,6 +62,13 @@ object KitGlyphs {
     val Flask by lazy {
         glyph("flask", "M9.5 3.5h5M10.5 3.5v5.5L5 18.5a1.5 1.5 0 0 0 1.3 2h11.4a1.5 1.5 0 0 0 1.3-2L13.5 9V3.5", "M7.5 14.5h9")
     }
+    val Warn by lazy { glyph("warn", "M12 4.5l8.5 15h-17z", "M12 10v4.5M12 17.2h.01") }
+    val Copy by lazy {
+        glyph(
+            "copy", rect(8.5f, 8.5f, 11f, 11f, 1.5f),
+            "M15.5 8.5V5.5A1.5 1.5 0 0 0 14 4H5.5A1.5 1.5 0 0 0 4 5.5V14a1.5 1.5 0 0 0 1.5 1.5h3",
+        )
+    }
     val Restart by lazy { glyph("restart", "M19.5 12a7.5 7.5 0 1 1-2.2-5.3", "M19.5 4.5v4h-4") }
     val Disk by lazy {
         glyph(
@@ -83,6 +90,8 @@ object KitGlyphs {
     val User by lazy { glyph("user", circle(12f, 8.5f, 3.5f), "M5 19.5c1.2-3.3 3.8-5 7-5s5.8 1.7 7 5") }
     val Key by lazy { glyph("key", circle(8f, 14f, 4f), "M11 11l8.5-8.5M16 6l2.5 2.5") }
     val Phone by lazy { glyph("phone", rect(7f, 3f, 10f, 18f, 2f), "M11 17.5h2") }
+    val More by lazy { glyph("more", circle(6f, 12f, 1f), circle(12f, 12f, 1f), circle(18f, 12f, 1f)) }
+    val Lock by lazy { glyph("lock", rect(5.5f, 10.5f, 13f, 9.5f, 1.5f), "M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5") }
     val Qr by lazy {
         glyph(
             "qr", rect(4f, 4f, 6f, 6f, 1f), rect(14f, 4f, 6f, 6f, 1f), rect(4f, 14f, 6f, 6f, 1f),
@@ -95,7 +104,7 @@ object KitGlyphs {
         listOf(
             Back, Chevron, ChevronDown, Close, Plus, Check, Search, Sliders, Keyboard, Mic, Terminal, Download,
             Laptop, Server, Bot, Memory, Branch, Code, Devices, Link, Tree, Shield, Flask, Restart, Disk, Gauge,
-            Trash, External, Globe, User, Key, Phone, Qr,
+            Trash, External, Globe, User, Key, Phone, Qr, Warn, Copy, More, Lock,
         )
     }
 

@@ -21,15 +21,8 @@ class SettingsLookGuardTest {
         "../desktop/src/main/kotlin/dev/supermux/desktop/overlay/DesktopOverlaySettings.kt",
     )
 
-    /** Deleted in Step 2 (the machine page): untouched until then. Never add to this list. */
-    private val step2 = setOf(
-        "settings/SystemSettingsScreen.kt",
-        "settings/HostingSettingsScreen.kt",
-        "settings/DevicesSettingsScreen.kt",
-        "settings/ProxiesSettingsScreen.kt",
-        "settings/WorktreesSettingsScreen.kt",
-        "desktop/settings/DesktopHostingSettings.kt",
-    )
+    /** Deleted in Step 2 (the machine page): empty since S2-4. Never add to this list. */
+    private val step2 = emptySet<String>()
 
     /** Converted by this plan, one page task at a time. Remove a file the moment it is clean; never add to it. */
     private val pending = emptySet<String>()

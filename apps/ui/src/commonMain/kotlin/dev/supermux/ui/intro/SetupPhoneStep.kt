@@ -6,8 +6,8 @@
 // using it. A pairing link is a bearer credential for the whole host, so an abandoned one must not
 // outlive the step that showed it.
 //
-// Deliberately NOT `DevicesSettingsScreen`'s `AddDeviceDialog`: that one is name-FIRST (type a
-// name, then get a link) and lives inside a settings list. Here the name is fixed, the mint is
+// Deliberately NOT the machine page's Pair sheet: that one lives inside a settings list, behind a
+// button. Here the name is fixed, the mint is
 // automatic, and the QR is the hero — same visual vocabulary (white plate, mono URL), different
 // flow.
 package dev.supermux.ui.intro

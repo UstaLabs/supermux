@@ -21,6 +21,7 @@ import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -500,10 +501,10 @@ class SupermuxAppNavTest {
     }
 
     /**
-     * The footer's Devices icon opens the active machine's Devices screen (#97: Devices lives on the machine
-     * page now), and the hub lands on it rather than on General.
+     * The footer's Devices icon opens the active machine's page (#97 Step 2: Devices is a part of it), and the hub
+     * lands on it rather than on General.
      */
-    @Test fun wide_the_footers_devices_icon_opens_the_machines_devices_screen() = runComposeUiTest {
+    @Test fun wide_the_footers_devices_icon_opens_the_machine_page() = runComposeUiTest {
         val ui = ShellUiState()
         val app = testHostStore()
         setPlatformContent(pointer = true, widthClass = WindowWidthClass.Expanded) {
@@ -516,8 +517,34 @@ class SupermuxAppNavTest {
         waitForIdle()
         onNodeWithTag("sidebar_footer_devices").performClick()
         waitForIdle()
-        assertEquals(Route.Settings(SettingsSection.Machine, sub = "devices"), ui.currentRoute)
-        onNodeWithText("body:Machine/devices").assertIsDisplayed()
+        assertEquals(Route.Settings(SettingsSection.Machine), ui.currentRoute)
+        onNodeWithText("body:Machine/null").assertIsDisplayed()
+    }
+
+    /** The host pill's "Open ‹machine›": that machine's page, with it the machine Settings is about (#97 Step 2). */
+    @Test fun the_host_pills_open_opens_that_machines_page() = runComposeUiTest {
+        val ui = ShellUiState()
+        val app = testHostStore()
+        lateinit var fleet: FleetStore
+        setPlatformContent(pointer = true, widthClass = WindowWidthClass.Expanded) {
+            fleet = remember(app) { twoHostFleet(app) }
+            SupermuxApp(
+                fleet = fleet,
+                ui = ui,
+                settingsSection = { place, _ -> Text("body:" + place.section.name + "/" + place.sub) },
+            )
+        }
+        waitForIdle()
+        onNodeWithTag("host_switcher").performClick()
+        onNodeWithTag("host_switcher_h2").performClick()
+        waitForIdle()
+        onNodeWithTag("host_switcher").performClick()
+        onNodeWithTag("host_switcher_open").assertTextEquals("Open studio-mini")
+        onNodeWithTag("host_switcher_open").performClick()
+        waitForIdle()
+        assertEquals(Route.Settings(SettingsSection.Machine), ui.currentRoute)
+        assertEquals("h2", fleet.activeHost.value)
+        onNodeWithText("body:Machine/null").assertIsDisplayed()
     }
 
     /** A fleet of two paired hosts, both served by [app]. */

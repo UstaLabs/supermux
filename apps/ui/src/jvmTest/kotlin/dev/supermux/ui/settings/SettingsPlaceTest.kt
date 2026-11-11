@@ -11,8 +11,9 @@ class SettingsPlaceTest {
     @Test fun titles() {
         assertEquals("Claude Code", settingsTitle(SettingsPlace(SettingsSection.Providers, sub = "claude")))
         assertEquals("Words to spell your way", settingsTitle(SettingsPlace(SettingsSection.Voice, sub = GLOSSARY_SUB)))
-        assertEquals("Shared links", settingsTitle(SettingsPlace(SettingsSection.Machine, sub = MachineSub.LINKS)))
+        assertEquals("This computer", settingsTitle(SettingsPlace(SettingsSection.Machine, sub = MachineSub.COMPUTER), machineName = "studio-mini"))
         assertEquals("studio-mini", settingsTitle(SettingsPlace(SettingsSection.Machine), machineName = "studio-mini"))
+        assertEquals("Chat worktrees", settingsTitle(SettingsPlace(SettingsSection.Machine, sub = MachineSub.WORKTREES), machineName = "studio-mini"))
         assertEquals("Privacy", settingsTitle(SettingsPlace(SettingsSection.PrivacyLabs), labs = false))
     }
 
@@ -20,7 +21,10 @@ class SettingsPlaceTest {
         assertEquals("codex", settingsSubOrNull(SettingsSection.Providers, "codex"))
         assertNull(settingsSubOrNull(SettingsSection.Providers, "glossary"))
         assertEquals(GLOSSARY_SUB, settingsSubOrNull(SettingsSection.Voice, GLOSSARY_SUB))
-        for (sub in listOf("status", "computer", "devices", "links", "worktrees")) assertEquals(sub, settingsSubOrNull(SettingsSection.Machine, sub))
+        assertEquals("computer", settingsSubOrNull(SettingsSection.Machine, "computer"))
+        // The Worktrees page is the machine page's sub-page (#97 Step 2); Step 1's other machine screens are parts of it.
+        assertEquals("worktrees", settingsSubOrNull(SettingsSection.Machine, MachineSub.WORKTREES))
+        for (sub in listOf("status", "devices", "links")) assertNull(settingsSubOrNull(SettingsSection.Machine, sub))
         assertNull(settingsSubOrNull(SettingsSection.Machine, "nope"))
         assertNull(settingsSubOrNull(SettingsSection.General, "theme"))
         assertNull(settingsSubOrNull(SettingsSection.Voice, null))
@@ -59,5 +63,58 @@ class SettingsPlaceTest {
         val ui = ShellUiState()
         ui.navigateByName("settings")
         assertEquals(Route.Settings(), ui.currentRoute)
+    }
+
+    @Test fun the_old_machine_screens_land_on_the_machine_page_at_their_part() {
+        val machine = SettingsSection.Machine
+        assertEquals(Route.Settings(machine, anchor = "updates"), canonicalRoute(Route.Settings(machine, sub = "status")))
+        assertEquals(Route.Settings(machine, anchor = "devices"), canonicalRoute(Route.Settings(machine, sub = "devices")))
+        assertEquals(Route.Settings(machine, anchor = "links"), canonicalRoute(Route.Settings(machine, sub = "links")))
+        // Worktrees is a sub-page of its own now: its old screen is itself, and its old anchor opens it.
+        assertEquals(Route.Settings(machine, sub = "worktrees"), canonicalRoute(Route.Settings(machine, sub = "worktrees")))
+        assertEquals(Route.Settings(machine, sub = "worktrees"), canonicalRoute(Route.Settings(machine, anchor = "worktrees")))
+        // An explicit anchor wins over the old screen's.
+        assertEquals(Route.Settings(machine, anchor = "pair"), canonicalRoute(Route.Settings(machine, sub = "devices", anchor = "pair")))
+        // "This computer" is the card's own page, not an old screen.
+        assertEquals(Route.Settings(machine, sub = "computer"), canonicalRoute(Route.Settings(machine, sub = "computer")))
+        // The standalone pages are the machine page's parts too.
+        assertEquals(Route.Settings(machine, anchor = "devices"), canonicalRoute(Route.Devices))
+        assertEquals(Route.Settings(machine, anchor = "links"), canonicalRoute(Route.Proxies))
+        // Everything else is itself.
+        assertEquals(Route.Settings(SettingsSection.Providers, sub = "claude"), canonicalRoute(Route.Settings(SettingsSection.Providers, sub = "claude")))
+        assertEquals(Route.Usage, canonicalRoute(Route.Usage))
+    }
+
+    @Test fun every_way_to_the_old_screens_opens_the_machine_page() {
+        val ui = ShellUiState()
+        ui.navigate(Route.Devices)
+        assertEquals(listOf(Route.Home, Route.Settings(SettingsSection.Machine, anchor = "devices")), ui.backStack.toList())
+        ui.navigate(Route.Proxies)
+        assertEquals(Route.Settings(SettingsSection.Machine, anchor = "links"), ui.currentRoute)
+        ui.navigateByName("devices")
+        assertEquals(Route.Settings(SettingsSection.Machine, anchor = "devices"), ui.currentRoute)
+        ui.navigateByName("proxies")
+        assertEquals(Route.Settings(SettingsSection.Machine, anchor = "links"), ui.currentRoute)
+        ui.openSettings(SettingsSection.Machine, sub = "worktrees")
+        assertEquals(Route.Settings(SettingsSection.Machine, sub = "worktrees"), ui.currentRoute)
+        ui.openMachine("worktrees")
+        assertEquals(Route.Settings(SettingsSection.Machine, sub = "worktrees"), ui.currentRoute)
+        assertEquals("worktrees", ui.settingsSub)
+        ui.openMachine()
+        assertEquals(Route.Settings(SettingsSection.Machine), ui.currentRoute)
+    }
+
+    @Test fun a_saved_stack_with_an_old_screen_restores_on_the_machine_page() {
+        val scope = object : androidx.compose.runtime.saveable.SaverScope { override fun canBeSaved(value: Any) = true }
+        for ((old, anchor) in listOf("devices" to "devices", "proxies" to "links")) {
+            val ui = ShellUiState().apply { openUsage() }
+            val saved = with(ShellUiState.Saver) { scope.save(ui) } as List<*>
+            val tampered = listOf((saved[0] as String).replace("\"usage\"", "\"$old\"")) + saved.drop(1)
+            val restored = ShellUiState.Saver.restore(tampered)!!
+            assertEquals(listOf(Route.Home, Route.Settings(SettingsSection.Machine, anchor = anchor)), restored.backStack.toList(), old)
+        }
+        val ui = ShellUiState().apply { backStack.add(Route.Settings(SettingsSection.Machine, sub = "status")) }
+        val saved = with(ShellUiState.Saver) { scope.save(ui) } as List<*>
+        assertEquals(Route.Settings(SettingsSection.Machine, anchor = "updates"), ShellUiState.Saver.restore(saved)!!.currentRoute)
     }
 }

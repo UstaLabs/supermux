@@ -1,7 +1,6 @@
-// Cluster E4 moved [dev.supermux.ui.settings.DevicesSettingsScreen] and its screen-level suite into
-// `:ui` (`DevicesSettingsScreenTest`). What stays here is what only desktop can drive: the
-// `AppShell` settings overlay — the hub opening on the Devices section, the rail switching to it,
-// and per-host keying across two paired hosts.
+// The machine page's Devices (#97 Step 2) through desktop's `AppShell` settings overlay: the hub opening the
+// machine page at its Devices, the page listing them after another page, and per-host keying across two paired
+// hosts. The page's own behaviour is `:ui`'s `MachinePartsTest`.
 package dev.supermux.desktop.settings
 
 import dev.supermux.desktop.testDeps
@@ -17,7 +16,6 @@ import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.nav.Route
-import dev.supermux.ui.settings.MachineSub
 import dev.supermux.desktop.shell.TestAppShell
 import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.host.HostPersistence
@@ -113,21 +111,21 @@ class DevicesSettingsHubTest {
     }
 
     @Test fun settings_hub_opens_devices_section_and_loads() = runComposeUiTest {
-        // #97: Devices is a screen of the machine page.
-        val ui = ShellUiState().apply { openSettings(SettingsSection.Machine, sub = MachineSub.DEVICES) }
+        // #97 Step 2: Devices is a part of the machine page; the old address lands there.
+        val ui = ShellUiState().apply { openSettings(SettingsSection.Machine, sub = "devices") }
         val harness = appForDevices()
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                TestAppShell(harness.app, ui)
+                TestAppShell(harness.app, ui, online = true)
             }
         }
         waitForIdle()
         onNodeWithTag("settings_overlay").assertIsDisplayed()
         onNodeWithTag("settings_hub").assertIsDisplayed()
-        onNodeWithTag("devices_settings_screen").assertIsDisplayed()
+        onNodeWithTag("machine_page").assertIsDisplayed()
         waitUntil(timeoutMillis = 5_000) {
             try {
-                onNodeWithTag("device_row_pixel-8").assertIsDisplayed()
+                onNodeWithTag("device_row_pixel-8").assertExists()
                 true
             } catch (_: Throwable) {
                 false
@@ -139,7 +137,7 @@ class DevicesSettingsHubTest {
         harness.client.close()
     }
 
-    @Test fun the_machine_page_opens_devices_from_agents() = runComposeUiTest {
+    @Test fun the_machine_page_lists_the_devices_after_agents() = runComposeUiTest {
         val ui = ShellUiState().apply { openSettings(SettingsSection.Providers) }
         val engine = MockEngine { req ->
             val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
@@ -181,16 +179,14 @@ class DevicesSettingsHubTest {
                 false
             }
         }
-        // What a machine card does; then the machine page's Devices row.
+        // What a machine card does: the machine page lists the devices itself.
         ui.openSettings(SettingsSection.Machine)
         waitForIdle()
         onNodeWithTag("machine_page").assertIsDisplayed()
-        onNodeWithTag("machine_row_devices").performClick()
-        waitForIdle()
         assertEquals(SettingsSection.Machine, ui.settingsSection)
         waitUntil(timeoutMillis = 5_000) {
             try {
-                onNodeWithTag("device_row_pixel-8").assertIsDisplayed()
+                onNodeWithTag("device_row_pixel-8").assertExists()
                 true
             } catch (_: Throwable) {
                 false
@@ -204,6 +200,7 @@ class DevicesSettingsHubTest {
         val devicesA = """[{"name":"host-a-phone"}]"""
         val devicesB = """[{"name":"host-b-tablet"}]"""
         val scope = TestScope(UnconfinedTestDispatcher())
+        val conns = mutableListOf<(Boolean) -> Unit>()
         val store = PairedHostStore(
             object : HostPersistence {
                 var hosts = mutableListOf(
@@ -233,6 +230,7 @@ class DevicesSettingsHubTest {
             scope = scope,
             deps = testDeps(),
             appFactory = { url, token, onConn ->
+                conns += onConn
                 val devicesJson = when {
                     url.contains("a.relay") -> devicesA
                     else -> devicesB
@@ -257,7 +255,9 @@ class DevicesSettingsHubTest {
                 )
             },
         )
-        val ui = ShellUiState().apply { openSettings(SettingsSection.Machine, sub = MachineSub.DEVICES) }
+        // The machine page loads a machine's parts only while it is online.
+        conns.forEach { it(true) }
+        val ui = ShellUiState().apply { openMachine("devices") }
         val primary = fleet.appForRecord("h1")!!
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
@@ -267,7 +267,7 @@ class DevicesSettingsHubTest {
         waitForIdle()
         waitUntil(timeoutMillis = 5_000) {
             try {
-                onNodeWithTag("device_row_host-a-phone").assertIsDisplayed()
+                onNodeWithTag("device_row_host-a-phone").assertExists()
                 true
             } catch (_: Throwable) {
                 false
@@ -276,7 +276,7 @@ class DevicesSettingsHubTest {
         fleet.setActiveHost("h2")
         waitUntil(timeoutMillis = 5_000) {
             try {
-                onNodeWithTag("device_row_host-b-tablet").assertIsDisplayed()
+                onNodeWithTag("device_row_host-b-tablet").assertExists()
                 true
             } catch (_: Throwable) {
                 false
@@ -288,10 +288,10 @@ class DevicesSettingsHubTest {
 
     @Test fun open_settings_devices_selects_section() {
         val ui = ShellUiState()
-        ui.openSettings(SettingsSection.Machine, sub = MachineSub.DEVICES)
+        ui.openSettings(SettingsSection.Machine, sub = "devices")
         assertTrue(ui.settingsOpen)
         assertEquals(SettingsSection.Machine, ui.settingsSection)
-        assertEquals(Route.Settings(SettingsSection.Machine, sub = MachineSub.DEVICES), ui.currentRoute)
+        assertEquals(Route.Settings(SettingsSection.Machine, anchor = "devices"), ui.currentRoute)
         assertTrue(ui.overlayOpen)
         assertFalse(ui.launcherOpen)
     }

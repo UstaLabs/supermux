@@ -280,6 +280,8 @@ data class DeviceDto(
     val name: String,
     val created_at: String? = null,
     val last_seen_at: String? = null,
+    /** True on the device whose token made the request ("This device"); an older broker leaves it out → false. */
+    val current: Boolean = false,
 )
 
 @Serializable
@@ -1597,6 +1599,14 @@ data class UpdateStatus(
     val disabled: Boolean = false,
 )
 
+/** What came of asking a broker to restart (`POST /system/restart`). */
+enum class BrokerRestart {
+    Accepted,
+    /** 409: no service manager runs it, so it can't bring itself back. */
+    CantRestartItself,
+    Failed,
+}
+
 /** Result of POST /api/update/run. `started=true` (HTTP 202) means the broker
  *  began self-updating — poll [UpdateStatus] for progress. `error="busy"` (409)
  *  means an update is already in flight. For source/docker/disabled installs the
@@ -2745,6 +2755,20 @@ class BrokerApi(
         )
     }
 
+    /**
+     * POST /system/restart, read for the machine page: a 409 is a broker no service manager runs, which refuses
+     * rather than stop for good ([BrokerRestart.CantRestartItself]); any other non-2xx is [BrokerRestart.Failed].
+     * Transport failures throw, as every call here does.
+     */
+    suspend fun restartBrokerResult(): BrokerRestart {
+        val resp = http.post("$httpBase/system/restart") { authHeader() }
+        return when {
+            resp.status.isSuccess() -> BrokerRestart.Accepted
+            resp.status.value == 409 -> BrokerRestart.CantRestartItself
+            else -> BrokerRestart.Failed
+        }
+    }
+
 
     /**
      * POST /system/install-git — start the OS's own git installer ON THE HOST (macOS:
@@ -2884,6 +2908,17 @@ class BrokerApi(
             authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(AddDeviceBody(name)))
+        })
+
+    /**
+     * PATCH /devices/<urlencoded name> {name} → the renamed device (#97). Non-2xx throws: 409 `name_taken`
+     * (another device has it), 404 (not paired any more), 400 `name_invalid` (blank or too long).
+     */
+    suspend fun renameDevice(name: String, newName: String): DeviceDto =
+        decode(http.patch("$httpBase/devices/${urlEncode(name)}") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(AddDeviceBody(newName)))
         })
 
     /** DELETE /devices/<urlencoded name> — non-2xx throws (same contract as postJson/putJson). */

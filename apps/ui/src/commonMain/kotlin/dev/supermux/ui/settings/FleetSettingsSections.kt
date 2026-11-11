@@ -20,27 +20,29 @@ package dev.supermux.ui.settings
 import androidx.compose.runtime.Composable
 import dev.supermux.state.FleetStore
 import dev.supermux.ui.nav.SettingsSection
-import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.settings.pages.CodingPage
 import dev.supermux.ui.settings.pages.GeneralPage
 import dev.supermux.ui.settings.pages.GlossaryPage
-import dev.supermux.ui.settings.pages.InterimMachinePage
+import dev.supermux.ui.settings.pages.MachinePage
+import dev.supermux.ui.settings.pages.rememberMachineChats
 import dev.supermux.ui.settings.pages.KeyboardShortcutsPage
 import dev.supermux.ui.settings.pages.MemoryPage
 import dev.supermux.ui.settings.pages.rememberCuratorSettingsActions
 import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.ui.usage.rememberUsageActions
 import dev.supermux.ui.settings.pages.PrivacyLabsPage
 import dev.supermux.ui.settings.pages.ProviderDetailPage
 import dev.supermux.ui.settings.pages.ProvidersPage
 import dev.supermux.ui.settings.pages.rememberProvidersState
 import dev.supermux.ui.accounts.rememberAccountsActions
 import dev.supermux.ui.settings.pages.VoicePage
+import dev.supermux.ui.settings.pages.WorktreesPage
 import dev.supermux.ui.settings.pages.rememberVoiceSettingsActions
 
 /**
  * Renders [place] against the fleet's active host. Called from the hub's `content` slot.
  *
- * #97: every section is its page; the machine's own screens stay on the interim machine page until Step 2. Accounts
+ * #97: every section is its page; the machine page holds the machine's own parts. Accounts
  * live on each provider's page (`Providers/‹agent›`, where Usage's and the composer's "Sign in again" land) and Git
  * hosting is Coding's `github` anchor.
  */
@@ -106,35 +108,19 @@ fun FleetSettingsSection(
             anchor = place.anchor,
             onAnchorShown = scope.onAnchorShown,
         )
-        SettingsSection.Machine -> when (place.sub) {
-            MachineSub.STATUS -> SystemSettingsScreen(
-                actions = rememberSystemSettingsActions(fleet),
-                onBack = scope.onClose,
-                topBarShown = scope.topBarShown,
-            )
-            // Hosting is desktop-only (`Caps.localBroker` hides its row everywhere this renderer is used), so a
-            // `Machine/computer` link lands on the machine page below rather than on a blank one.
-            // Devices and Proxies are standalone routes too (Route.Devices / Route.Proxies) — the same
-            // screens, which paint their own chrome there via `standalone = true`.
-            MachineSub.DEVICES -> DevicesSettingsScreen(
-                actions = rememberDevicesSettingsActions(fleet),
-                onBack = scope.onClose,
-                topBarShown = scope.topBarShown,
-            )
-            MachineSub.LINKS -> ProxiesSettingsScreen(
-                actions = rememberProxiesSettingsActions(fleet),
-                onBack = scope.onClose,
-                topBarShown = scope.topBarShown,
-            )
-            MachineSub.WORKTREES -> WorktreesSettingsScreen(
-                actions = rememberWorktreesSettingsActions(fleet),
-                onBack = scope.onClose,
-                // Always: the hub (phone) or the rail (wide) owns the title, never this screen (inventory bug 7).
-                topBarShown = true,
-            )
-            else -> InterimMachinePage(
-                onOpen = { scope.onOpen(SettingsPlace(SettingsSection.Machine, it)) },
-                showComputer = LocalPlatform.current.caps.localBroker,
+        // Hosting is desktop-only, so a `Machine/computer` link lands on the machine page here too.
+        SettingsSection.Machine -> if (place.sub == MachineSub.WORKTREES) {
+            WorktreesPage(rememberWorktreesSettingsActions(fleet), onBack = scope.onClose)
+        } else {
+            MachinePage(
+                system = rememberSystemSettingsActions(fleet),
+                chats = rememberMachineChats(fleet),
+                devices = rememberDevicesSettingsActions(fleet),
+                links = rememberProxiesSettingsActions(fleet),
+                worktrees = rememberWorktreesSettingsActions(fleet),
+                usage = rememberUsageActions(fleet),
+                onOpenUsage = scope.onOpenUsage,
+                onOpenWorktrees = { scope.onOpen(SettingsPlace(SettingsSection.Machine, MachineSub.WORKTREES)) },
                 anchor = place.anchor,
                 onAnchorShown = scope.onAnchorShown,
             )

@@ -42,7 +42,14 @@ import dev.supermux.ui.settings.kit.KitAnchorKey
 import dev.supermux.ui.settings.pages.CodingPage
 import dev.supermux.ui.settings.pages.CuratorSettingsActions
 import dev.supermux.ui.settings.pages.GeneralPage
-import dev.supermux.ui.settings.pages.InterimMachinePage
+import dev.supermux.ui.settings.pages.MachinePage
+import dev.supermux.ui.settings.pages.ThisComputerHosting
+import dev.supermux.ui.settings.HostingActions
+import dev.supermux.ui.settings.HostingPowerUi
+import dev.supermux.ui.settings.HostingUiState
+import dev.supermux.ui.settings.KeepAwakeUi
+import dev.supermux.net.UpdateStatus
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.settings.pages.KeyboardShortcutsPage
 import dev.supermux.ui.settings.pages.MemoryPage
 import dev.supermux.ui.settings.pages.PrivacyLabsPage
@@ -126,6 +133,25 @@ class SettingsSearchAnchorsTest {
     )
     private val system = SystemSettingsActions(getTelemetry = { TelemetryState(enabled = true) })
 
+    private val hosting = ThisComputerHosting(
+        HostingUiState(
+            hosting = true, statusDot = "", statusText = "", readOnly = false, localUrl = "http://192.168.1.24:9898",
+            relayUrl = "https://h.relay.supermux.dev", relay = true, background = true, sessions = 0, logTail = emptyList(),
+            power = HostingPowerUi(keepAwake = KeepAwakeUi(enabled = true, onBattery = false)),
+        ),
+        object : HostingActions {
+            override fun setHosting(on: Boolean) {}
+            override fun setBackground(on: Boolean) {}
+            override fun setRelay(on: Boolean) {}
+            override fun restart() {}
+            override fun retry() {}
+            override fun showLog() {}
+            override fun pairDevice() {}
+            override fun manageIt() {}
+            override suspend fun installGit() = false
+        },
+    )
+
     /** The page for [place], as the hub's slot would draw it. */
     @Composable
     private fun Page(place: SettingsPlace) {
@@ -138,12 +164,17 @@ class SettingsSearchAnchorsTest {
             SettingsSection.Coding -> CodingPage(forges = forges, lsp = lsp, anchor = a)
             SettingsSection.Memory -> MemoryPage(curator, anchor = a)
             SettingsSection.PrivacyLabs -> PrivacyLabsPage(system, anchor = a)
-            SettingsSection.Machine -> InterimMachinePage(onOpen = {}, showComputer = true, anchor = a)
+            SettingsSection.Machine -> MachinePage(
+                SystemSettingsActions(updateStatus = { UpdateStatus(current = "0.17.5", mode = "binary") }),
+                hosting = hosting.takeIf { LocalPlatform.current.caps.localBroker },
+                anchor = a,
+            )
         }
     }
 
     private fun ComposeUiTest.everyAnchorLands(d: Device) {
-        val entries = SettingsSearchIndex.filter { it.anchor != null && it.shownWhen(d.ctx) }
+        // A sub-page's result opens that sub-page at its top (SettingsSearchTest checks it has one).
+        val entries = SettingsSearchIndex.filter { it.anchor != null && it.sub == null && it.shownWhen(d.ctx) }
         assertTrue(entries.isNotEmpty())
         var current by mutableStateOf(entries.first())
         setPlatformContent(

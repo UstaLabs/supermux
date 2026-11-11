@@ -27,10 +27,10 @@ class UrlSyncTest {
         "/new?draft=d1",
         "/add-host",
         "/usage",
-        "/devices",
         "/archived",
-        "/proxies",
         "/displays",
+        // Not "/devices" or "/proxies": the machine page's parts since #97 Step 2, they land on /settings/machine
+        // (UrlSyncTest.anOldSlugLandsWithItsAnchor…).
         // Not "/agents": that page was removed and lands Home (UrlRoutesTest.theRemovedAgentsPagesHaveNoRoute),
         // so it cannot round-trip.
         "/settings",
@@ -43,10 +43,9 @@ class UrlSyncTest {
         "/settings/memory",
         "/settings/privacy",
         "/settings/machine",
-        "/settings/machine/status",
-        "/settings/machine/devices",
-        "/settings/machine/links",
+        "/settings/machine/computer",
         "/settings/machine/worktrees",
+        // Not Step 1's /settings/machine/status|devices|links: parts of the machine page now (as above).
         // Not "/settings/appearance" or "/settings/updates": old slugs, they land on General (below).
     )
 
@@ -117,8 +116,10 @@ class UrlSyncTest {
         assertEquals(listOf(Route.Home), ui.backStack.toList())
         assertEquals("abc", ui.selectedId)
         // Every old slug canonicalises by replacing.
-        for (old in listOf("accounts", "agents", "curator", "editor", "git-hosting", "system", "devices", "proxies", "worktrees")) {
-            val path = "/settings/$old"
+        val olds = listOf("accounts", "agents", "curator", "editor", "git-hosting", "system", "devices", "proxies", "worktrees")
+            .map { "/settings/$it" } +
+            listOf("/settings/machine/status", "/settings/machine/devices", "/settings/machine/links", "/devices", "/proxies")
+        for (path in olds) {
             val ui2 = ShellUiState()
             applyTarget(ui2, parsePath(path))
             assertTrue(replacesHistoryEntry(path, pathFor(ui2.currentRoute, null)), path)

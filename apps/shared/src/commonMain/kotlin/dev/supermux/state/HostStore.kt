@@ -2405,6 +2405,10 @@ class HostStore(
     suspend fun addDevice(name: String): AddDeviceResponse? =
         runApi("addDevice") { api.addDevice(name) }
 
+    /** PATCH /devices/<name> {name} — rename a paired device (#97); a refusal keeps the broker's status and code. */
+    suspend fun renameDevice(name: String, newName: String): AccountResult<DeviceDto> =
+        accountCall { api.renameDevice(name, newName) }
+
     /** DELETE /devices/<name> — revoke a paired device. False on failure. */
     suspend fun revokeDevice(name: String): Boolean =
         runApi("revokeDevice") { api.revokeDevice(name); true } ?: false
@@ -2477,6 +2481,10 @@ class HostStore(
      */
     suspend fun restartBroker(): Boolean =
         runApi("restartBroker") { api.restartBroker(); true } ?: false
+
+    /** POST /system/restart, telling a broker that can't restart itself (409) from one that failed. */
+    suspend fun restartBrokerResult(): dev.supermux.net.BrokerRestart =
+        runApi("restartBroker") { api.restartBrokerResult() } ?: dev.supermux.net.BrokerRestart.Failed
 
 
     // ── LSP settings (M4g-4 Task 1) ────────────────────────────────────────────────────

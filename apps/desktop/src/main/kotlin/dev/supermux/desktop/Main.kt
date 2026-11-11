@@ -298,19 +298,19 @@ private val desktopBindTts: (
 //                                  ui.openSettings(): General on a wide window) on start, loading
 //                                  real app.agentStatuses() (GET /agents/status, read-only)      [main]
 //   SM_DEVICES=1                  — open the Settings hub on the machine page's Devices via
-//                                  ui.openSettings(Machine, sub = "devices") on start, loading real
+//                                  ui.openMachine("devices") on start, loading real
 //                                  app.devices() (GET /devices, read-only) from the active host. Off
 //                                  by default; never mints/revokes.                              [main]
 //   SM_GIT_HOSTING=1              — open the Settings hub on Coding's GitHub row via
 //                                  ui.openSettings(Coding, anchor = "github"), loading real
 //                                  app.forgesLoad() (GET /forge/connections, read-only).        [main]
-//   SM_SYSTEM=1                   — open the Settings hub on the machine page's Status & updates via
-//                                  ui.openSettings(Machine, sub = "status") on start, loading real
+//   SM_SYSTEM=1                   — open the Settings hub on the machine page's updates via
+//                                  ui.openMachine("updates") on start, loading real
 //                                  app.updateStatus() (GET /api/update/status,
 //                                  read-only) from the active host. Off by default; never calls
 //                                  runUpdate/restartBroker (those kill/update the live broker).  [main]
 //   SM_PROXIES=1                  — open the Settings hub on the machine page's Shared links via
-//                                  ui.openSettings(Machine, sub = "links") on start, loading real app.proxiesForSettings() (GET /proxies,
+//                                  ui.openMachine("links") on start, loading real app.proxiesForSettings() (GET /proxies,
 //                                  read-only). Never creates/removes/toggles. Off by default.    [main]
 //   SM_VOICE=1                    — open the Settings hub on Voice via ui.openSettings(Voice) on
 //                                  start, loading real app.appConfig() + fetchGlossary() (GET
@@ -1781,16 +1781,16 @@ fun main() {
                     }
 
                     // Headless Devices verification hook (desktop-parity Task 2): SM_DEVICES=1 opens
-                    // the machine page's Devices via `ui.openSettings(Machine, sub = "devices")`, the path the
-                    // machine page's row uses, so DevicesSettingsScreen loads real `app.devices()` (GET /devices)
+                    // the machine page at its Devices via `ui.openMachine("devices")`, so the Devices part loads
+                    // real `app.devices()` (GET /devices)
                     // under Xvfb. Read-only by construction — never calls addDevice/revokeDevice.
                     // Off by default; harmless in prod.
                     val devicesHook = System.getenv("SM_DEVICES") == "1"
                     if (devicesHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Machine, sub = "devices")
-                            println("[devices] opened the Settings hub (machine page › Devices)")
+                            ui.openMachine("devices")
+                            println("[devices] opened the machine page at Devices")
                             val devices = app.devices()
                             println(
                                 "[devices] devices count=${devices?.size ?: "null"} " +
@@ -1822,14 +1822,13 @@ fun main() {
                     }
 
                     // Headless Proxies verification hook (desktop-parity Task 5): SM_PROXIES=1 opens
-                    // the machine page's Shared links via ui.openSettings(Machine, sub = "links"), the path the
-                    // machine page's row uses. Read-only — never createProxy/setProxyPublic/removeProxy.
+                    // the machine page at its Shared links via ui.openMachine("links"). Read-only — never createProxy/setProxyPublic/removeProxy.
                     val proxiesHook = System.getenv("SM_PROXIES") == "1"
                     if (proxiesHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Machine, sub = "links")
-                            println("[proxies] opened the Settings hub (machine page › Shared links)")
+                            ui.openMachine("links")
+                            println("[proxies] opened the machine page at Shared links")
                             val proxies = app.proxiesForSettings()
                             println(
                                 "[proxies] proxies count=${proxies?.size ?: "null"} " +
@@ -1839,7 +1838,7 @@ fun main() {
                     }
 
                     // Headless System verification hook (desktop-parity Task 3): SM_SYSTEM=1 opens
-                    // the machine page's Status & updates (ui.openSettings(Machine, sub = "status")) so SystemSettingsScreen
+                    // the machine page at its updates (ui.openMachine("updates")) so its header
                     // loads real `app.updateStatus()` (GET /api/update/status) under Xvfb.
                     // Read-only by construction — never calls runUpdate/restartBroker (those mutate
                     // the live broker). Distinct from File ▸ "Check for Updates…" (desktop app).
@@ -1848,8 +1847,8 @@ fun main() {
                     if (systemHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Machine, sub = "status")
-                            println("[system] opened the Settings hub (machine page › Status & updates)")
+                            ui.openMachine("updates")
+                            println("[system] opened the machine page at its updates")
                             val st = app.updateStatus()
                             println(
                                 "[system] updateStatus current=${st?.current ?: "null"} " +

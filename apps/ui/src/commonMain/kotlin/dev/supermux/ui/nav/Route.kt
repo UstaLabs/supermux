@@ -51,7 +51,7 @@ sealed interface Route {
 
     /**
      * Settings. [section] null = "just Settings" (the phone's index; General on a wide window). [sub] is a
-     * second-level page inside the section (a provider, the glossary, a machine screen); [anchor] a row to scroll
+     * second-level page inside the section (a provider, the glossary, This computer's page); [anchor] a row to scroll
      * to and flash once. See `ui/settings/SettingsPlace.kt`.
      */
     @Serializable
@@ -66,6 +66,10 @@ sealed interface Route {
     @SerialName("usage")
     data object Usage : Route
 
+    /**
+     * The machine page's Devices (#97 Step 2). Kept so callers, links and saved stacks that name it still land:
+     * the shell pushes it as `Settings(Machine, anchor = "devices")` (`canonicalRoute`), never as itself.
+     */
     @Serializable
     @SerialName("devices")
     data object Devices : Route
@@ -74,6 +78,7 @@ sealed interface Route {
     @SerialName("archived")
     data object Archived : Route
 
+    /** The machine page's Shared links, as [Devices] is its Devices: pushed as `Settings(Machine, anchor = "links")`. */
     @Serializable
     @SerialName("proxies")
     data object Proxies : Route

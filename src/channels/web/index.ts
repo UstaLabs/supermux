@@ -1,6 +1,6 @@
 import type { Channel, ChannelCapabilities, InboundAttachment, InboundMessage, OutboundAction, OutboundContext, OutboundResult } from "../channel"
 import { checkAvatar, readAvatar, writeAvatar } from "../../core/agents/avatar"
-import { DeviceStore } from "./device-store"
+import { DeviceStore, DEVICE_NAME_MAX } from "./device-store"
 import { timingSafeEqual } from "node:crypto"
 import { LiveReplies, type LiveKind, type LiveSocket } from "./live-replies"
 import { watchRowExtras } from "./watch-session-row"
@@ -808,7 +808,11 @@ export class WebChannel implements Channel {
     }
     if (this.deviceTokenStore) {
       this.store.addRevokeListener((name) => { this.deviceTokenStore!.remove(name) })
+      this.store.addRenameListener((from, to) => { this.deviceTokenStore!.rename(from, to) })
     }
+    if (this.pushStore) this.store.addRenameListener((from, to) => { this.pushStore!.rename(from, to) })
+    if (this.fileStore) this.store.addRenameListener((from, to) => { this.fileStore!.renameDevice(from, to) })
+    this.store.addRenameListener((from, to) => this.onDeviceRenamed(from, to))
     auditPushTargets({ paired: new Set(this.store.list().map((d) => d.name)), deviceTokenStore: this.deviceTokenStore, pushStore: this.pushStore, log })
     this.server = Bun.serve<WSData>(this.buildServeOptions())
     this.heartbeatTimer = setInterval(() => this.pingAll(), HEARTBEAT_MS)
@@ -1372,6 +1376,21 @@ export class WebChannel implements Channel {
     if (!t) return
     t.record("client.connected", client)
     if (this.newlyPairedTokens.delete(dev.token)) t.record("feature.used", { feature: "pair.device", variant: client.surface })
+  }
+
+  /**
+   * A renamed device's open sockets still carry its old name, which its next upload would no longer match:
+   * they reconnect as the new name (#97). Terminal and display sockets keep their old name until they close.
+   */
+  private onDeviceRenamed(from: string, to: string): void {
+    const surface = this.surfaceByDeviceName.get(from)
+    if (surface) { this.surfaceByDeviceName.delete(from); this.surfaceByDeviceName.set(to, surface) }
+    for (const c of [...this.wsConnections]) {
+      if (c.deviceName !== from) continue
+      const d = c.ws.data
+      if (d.terminal || d.display || d.scrcpy) continue
+      try { c.ws.close(WS_CLOSE_RESYNC, "device renamed") } catch { /* already closing */ }
+    }
   }
 
   /** The app a device last connected from, for turn.requested. Undefined when it never said. */
@@ -4746,7 +4765,8 @@ export class WebChannel implements Channel {
       }
     }
     if (method === "GET" && path === "/devices") {
-      return this.json(this.store.list().map((d) => ({ name: d.name, created_at: d.created_at, last_seen_at: d.last_seen_at })))
+      // `current` marks the device whose token made this request, so a client can label its own row and keep it unrevocable.
+      return this.json(this.store.list().map((d) => ({ name: d.name, created_at: d.created_at, last_seen_at: d.last_seen_at, current: d.name === auth.device.name })))
     }
     if (method === "POST" && path === "/devices") {
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
@@ -4769,6 +4789,20 @@ export class WebChannel implements Channel {
       const linksBase = previewLinksBase(this.opts, req)
       if (!linksBase) return this.json({ error: "this broker has no address its previews are served on" }, 503)
       return this.json({ token, cookie: previewCookieSpec(token, { publicUrl: linksBase, proxyBaseDomain: this.opts.proxyBaseDomain }) })
+    }
+    if (method === "PATCH" && path.startsWith("/devices/")) {
+      let name: string
+      try { name = decodeURIComponent(path.slice("/devices/".length)) } catch { return this.json({ error: "unknown device" }, 404) }
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      if (typeof body.name !== "string") return this.json({ error: "name required", code: "name_invalid" }, 400)
+      const r = this.store.rename(name, body.name)
+      if (!r.ok) {
+        if (r.reason === "unknown") return this.json({ error: "unknown device" }, 404)
+        if (r.reason === "taken") return this.json({ error: "Another device already has that name.", code: "name_taken" }, 409)
+        return this.json({ error: body.name.trim() ? `Use a name of ${DEVICE_NAME_MAX} characters or fewer.` : "name required", code: "name_invalid" }, 400)
+      }
+      const d = r.device
+      return this.json({ name: d.name, created_at: d.created_at, last_seen_at: d.last_seen_at, current: name === auth.device.name })
     }
     if (method === "DELETE" && path.startsWith("/devices/")) {
       const name = decodeURIComponent(path.slice("/devices/".length))

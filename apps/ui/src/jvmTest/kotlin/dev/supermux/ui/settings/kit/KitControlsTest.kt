@@ -192,6 +192,82 @@ class KitControlsTest {
         assertTrue(ringPixels() > 0, "the focused button shows its ring")
     }
 
+    // ── KitCheckbox (#97 Step 2: the Worktrees page) ──
+
+    @Test fun a_checkbox_is_a_checkbox_named_by_its_label_that_flips() = runComposeUiTest {
+        var on by mutableStateOf(false)
+        setPlatformContent { KitCheckbox(on, onCheckedChange = { on = it }, label = "Select docs-0-18", modifier = Modifier.testTag("c")) }
+        onNodeWithTag("c").assertIsOff().assert(role(Role.Checkbox))
+        onNodeWithTag("c").assertContentDescriptionEquals("Select docs-0-18")
+        onNodeWithTag("c").performClick()
+        onNodeWithTag("c").assertIsOn()
+        assertEquals(true, on)
+        onNodeWithTag("c").performClick()
+        assertEquals(false, on)
+    }
+
+    @Test fun a_disabled_checkbox_does_not_flip() = runComposeUiTest {
+        var on by mutableStateOf(false)
+        setPlatformContent {
+            KitCheckbox(on, onCheckedChange = { on = it }, label = "Select it", modifier = Modifier.testTag("c"), enabled = false)
+        }
+        onNodeWithTag("c").assertIsNotEnabled()
+        onNodeWithTag("c").performClick()
+        assertEquals(false, on)
+    }
+
+    @Test fun a_checkbox_is_a_16_dp_square_with_a_pointer_and_48_dp_on_touch() = runComposeUiTest {
+        var pointer by mutableStateOf(true)
+        setPlatformContent {
+            androidx.compose.runtime.CompositionLocalProvider(dev.supermux.ui.adaptive.LocalPointerAvailable provides pointer) {
+                KitCheckbox(false, {}, label = "Select it", modifier = Modifier.testTag("c"))
+            }
+        }
+        val b = onNodeWithTag("c").getBoundsInRoot()
+        assertEquals(16f, (b.right - b.left).value, 0.01f)
+        assertEquals(16f, (b.bottom - b.top).value, 0.01f)
+        pointer = false
+        waitForIdle()
+        val t = onNodeWithTag("c").getBoundsInRoot()
+        assertTrue((t.right - t.left).value >= 48f, "a touch target of 48 dp")
+    }
+
+    @Test fun a_checked_checkbox_is_filled_with_the_accent() = runComposeUiTest {
+        var accent = Color.Unspecified
+        var on by mutableStateOf(false)
+        setPlatformContent {
+            accent = kitColors().accent
+            Box(Modifier.padding(8.dp)) { KitCheckbox(on, { on = it }, label = "Select it", modifier = Modifier.testTag("c")) }
+        }
+        // Just inside the corner: the fill, not the border or the check.
+        fun inside() = onNodeWithTag("c").captureToImage().toPixelMap().let { px -> px[px.width / 5, px.height / 2] }
+        assertTrue(!inside().closeTo(accent), "an unchecked box is empty")
+        on = true
+        waitForIdle()
+        assertTrue(inside().closeTo(accent), "a checked box is filled with the accent")
+    }
+
+    @Test fun keyboard_focus_shows_the_checkbox_ring_and_space_flips_it() = runComposeUiTest {
+        var accent = Color.Unspecified
+        var on by mutableStateOf(false)
+        setPlatformContent {
+            accent = kitColors().accent
+            Box(Modifier.padding(8.dp).testTag("box")) { KitCheckbox(on, { on = it }, label = "Select it", modifier = Modifier.testTag("c")) }
+        }
+        fun ringPixels(): Int {
+            val px = onNodeWithTag("box").captureToImage().toPixelMap()
+            // The ring is drawn 2 dp outside the square: count accent pixels on the row just above it.
+            return (0 until px.width).count { x -> (0 until px.height / 4).any { y -> px[x, y].closeTo(accent) } }
+        }
+        assertEquals(0, ringPixels(), "no ring before focus")
+        onNodeWithTag("c").requestFocus()
+        waitForIdle()
+        assertTrue(ringPixels() > 0, "the focused checkbox shows its ring")
+        onNodeWithTag("c").performKeyInput { pressKey(Key.Spacebar) }
+        waitForIdle()
+        assertEquals(true, on)
+    }
+
     private fun Color.closeTo(o: Color) =
         kotlin.math.abs(red - o.red) < 0.08f && kotlin.math.abs(green - o.green) < 0.08f && kotlin.math.abs(blue - o.blue) < 0.08f
 }
