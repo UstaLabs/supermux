@@ -48,6 +48,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
@@ -282,6 +283,12 @@ data class ChatState(
     val historyLoaded: Boolean = true,
     /** Card #76: this chat's reply / thinking being written now (thinking first). */
     val live: List<dev.supermux.state.LiveReply> = emptyList(),
+    /**
+     * Card #121: the chat's read mark from when it was opened (ISO; [HostStore.readMarksAtOpen]). It opens at its
+     * first agent message newer than this, under a "N new messages" line. Null: nothing is known, so it opens at
+     * the end.
+     */
+    val readMarkAtOpen: String? = null,
 )
 
 /**
@@ -416,6 +423,7 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
     val loadedChats by app.loadedChats.collectAsState()
     val historyLoaded = sessionId in loadedChats
     val liveMap by app.liveReplies.collectAsState()
+    val openMarks by app.readMarksAtOpen.collectAsState()
     return ChatState(
         messages = messagesMap[sessionId].orEmpty(),
         activity = activityMap[sessionId].orEmpty(),
@@ -436,6 +444,7 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
         listedSessions = listedSessions,
         historyLoaded = historyLoaded,
         live = liveMap[sessionId].orEmpty(),
+        readMarkAtOpen = openMarks[sessionId],
     )
 }
 
@@ -696,7 +705,21 @@ fun ChatPanel(
     // and a width-class change rebuilds it somewhere else in the tree, and either one used to put a
     // reader who had scrolled up back at the end (#89).
     val place = rememberRetained("chat.place:${session.id}") { TranscriptPlace() }
-    val listState = rememberLazyListState(place.index, place.offset)
+    // Card #121: where this chat opens. Its read mark from the opening, kept while it stays open, so the
+    // "N new messages" line does not vanish when viewing marks the chat read.
+    val openMark = remember(session.id) { state.readMarkAtOpen }
+    val unreadRows = remember(timelineItems, openMark) { unreadRowIndices(timelineItems, openMark) }
+    val firstUnread = unreadRows.firstOrNull() ?: -1
+    // The place is kept for the life of the app (#89), so a rebuilt panel (a rotation, a width change) keeps the
+    // reader where they were. A new opening (a different read mark) is placed afresh: at its first unread message,
+    // or at its end. Starting it at the old place made the follow below scroll down through every new row on
+    // screen (card #121, Agents chats on iOS).
+    val reopened = remember(session.id) { place.rows < 0 || place.openMark != openMark }
+    val listState = rememberLazyListState(
+        if (!reopened) place.index else if (firstUnread >= 0) firstUnread else timelineItems.lastIndex.coerceAtLeast(0),
+        if (!reopened) place.offset else 0,
+    )
+    var opening by remember(session.id) { mutableStateOf(true) }
     LaunchedEffect(listState, place) {
         snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
             .collect { (index, offset) ->
@@ -866,6 +889,32 @@ fun ChatPanel(
             if (!active) return@LaunchedEffect
             val target = rowCount - 1
             if (target < 0) return@LaunchedEffect
+            if (opening) {
+                // Card #121: the opening is placed in one jump, never with a visible scroll.
+                opening = false
+                place.openMark = openMark
+                followScrolls++
+                try {
+                    when {
+                        reopened && firstUnread >= 0 -> {
+                            listState.scrollToItem(firstUnread)
+                            withFrameNanos { }
+                            autoFollow = transcriptAtEnd(listState, followSlop)
+                        }
+                        !reopened && prevSize >= 0 && !autoFollow -> Unit // a rebuild keeps a reader who scrolled up
+                        else -> {
+                            listState.scrollToItem(target)
+                            pinToEnd()
+                            autoFollow = true
+                        }
+                    }
+                } finally {
+                    followScrolls--
+                    followScrollEnded = true
+                }
+                prevSize = rowCount
+                return@LaunchedEffect
+            }
             val first = prevSize < 0
             // A find hit on screen holds the transcript where it is.
             if (first || (rowCount > prevSize && autoFollow && find.current < 0)) {
@@ -1261,6 +1310,8 @@ fun ChatPanel(
                     }
                     val isRevealed = revealedId != null && (item as? TimelineItem.Msg)?.entry?.id == revealedId
                     val revealTint = cs.primary
+                    Column {
+                    if (i == firstUnread) NewMessagesLine(unreadRows.size)
                     Box(
                         Modifier
                             .then(
@@ -1290,6 +1341,7 @@ fun ChatPanel(
                                 endCouncil = actions.endCouncil,
                             )
                         }
+                    }
                     }
                 }
                 // Card #76: what the agent is writing right now, keyed like the stored rows that replace it.
@@ -1413,6 +1465,7 @@ fun ChatPanel(
                         }
                         if (!emptySession) {
                             JumpToBottomButton(
+                                newCount = unreadRows.size,
                                 listState = listState,
                                 onJumped = { chrome.show() },
                                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = Space.md),
@@ -1502,6 +1555,8 @@ private fun WalkthroughUnreadChip(
  */
 @Composable
 private fun JumpToBottomButton(
+    /** Card #121: the messages that were new when the chat opened; shown on the button while there are any. */
+    newCount: Int,
     listState: androidx.compose.foundation.lazy.LazyListState,
     onJumped: () -> Unit,
     modifier: Modifier = Modifier,
@@ -1525,6 +1580,7 @@ private fun JumpToBottomButton(
         exit = fadeOut() + scaleOut(targetScale = 0.8f),
         modifier = modifier,
     ) {
+        Box {
         Surface(
             onClick = {
                 haptic.perform(HapticKind.Confirm)
@@ -1552,6 +1608,53 @@ private fun JumpToBottomButton(
                 Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Scroll to bottom", modifier = Modifier.size(22.dp))
             }
         }
+        if (newCount > 0) {
+            Text(
+                newCount.toString(),
+                color = cs.onPrimary,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .offset(x = 6.dp, y = (-6).dp)
+                    .background(cs.primary, RoundedCornerShape(9.dp))
+                    .padding(horizontal = 6.dp)
+                    .testTag("chat_jump_new_count"),
+            )
+        }
+        }
+    }
+}
+
+/** Card #121: the line above a chat's first unread message when it opened. */
+@Composable
+private fun NewMessagesLine(count: Int) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = Space.sm).testTag("chat_new_messages_line"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.weight(1f).height(1.dp).background(cs.primary.copy(alpha = 0.45f)))
+        Text(
+            if (count == 1) "1 new message" else "$count new messages",
+            color = cs.primary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = Space.md),
+        )
+        Box(Modifier.weight(1f).height(1.dp).background(cs.primary.copy(alpha = 0.45f)))
+    }
+}
+
+/**
+ * Card #121: the rows of [items] that are new since [mark]: the agent's messages newer than it. The user's own
+ * messages and unsent local copies never count. Empty when [mark] is null.
+ */
+internal fun unreadRowIndices(items: List<TimelineItem>, mark: String?): List<Int> {
+    if (mark.isNullOrEmpty()) return emptyList()
+    return items.indices.filter { i ->
+        val e = (items[i] as? TimelineItem.Msg)?.entry ?: return@filter false
+        e.direction == "outbound" && !e.id.startsWith("local-") && e.ts > mark
     }
 }
 
@@ -1681,6 +1784,8 @@ private class TranscriptPlace {
     /** Rows already shown; -1 before the first content, which jumps to the end. */
     var rows by mutableIntStateOf(-1)
     var autoFollow by mutableStateOf(true)
+    /** Card #121: the read mark the chat was last opened with; a different one is a new opening. */
+    var openMark: String? = null
 }
 
 /** One session's open media viewer, kept for a rebuilt [ChatPanel] (`rememberRetained`, #89). */

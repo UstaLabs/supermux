@@ -382,6 +382,86 @@ class ChatAutoscrollTest {
         assertFalse(onScreen("Another message."), "a reader who left the end is not followed")
     }
 
+    private fun ComposeUiTest.content() {
+        setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact, inputMode = InputMode.Touch) {
+            SupermuxTheme(appearance = AppearanceMode.LIGHT) {
+                Box(Modifier.requiredSize(width = 400.dp, height = 600.dp)) {
+                    ChatPanel(session = session, state = state, actions = ChatActions(), draft = "", onDraftChange = {}, showHeader = false)
+                }
+            }
+        }
+    }
+
+    @Test fun a_chat_draws_its_end_on_its_first_frame() = runComposeUiTest {
+        // Card #121 (iOS): an opening chat showed its first messages, then scrolled to the end.
+        val many = (1..40).map { entry(it, "message number $it of the chat") }
+        state = ChatState(messages = many)
+        mainClock.autoAdvance = false
+        content()
+        mainClock.advanceTimeByFrame()
+        assertFalse(onScreen("message number 1 of"), "the first frame drew the top of the chat")
+        mainClock.autoAdvance = true
+        waitForIdle()
+        assertTrue(onScreen("message number 40 of"), "the chat settles at its end")
+    }
+
+    @Test fun history_landing_under_a_saved_chat_reaches_the_end_without_a_visible_scroll() = runComposeUiTest {
+        // Card #121 (iOS): the saved tail opens at the end; the loaded history then put rows between it (the tool
+        // rows), and the follow scrolled down through all of them on screen.
+        val saved = listOf(entry(50, "saved one"), entry(52, "saved two"), entry(54, "saved three $END"))
+        state = ChatState(messages = saved, historyLoaded = false)
+        content()
+        waitForIdle()
+        assertTrue(onScreen(END), "the saved chat opens at its end")
+        val between = (1..30).map { LogEntry(id = "b$it", ts = "2026-01-01T00:00:50.%03dZ".format(it), direction = "outbound", text = "row loaded between $it") }
+        val older = (1..20).map { entry(it, "older message $it") }
+        mainClock.autoAdvance = false
+        state = ChatState(messages = older + saved.take(1) + between + saved.drop(1), historyLoaded = true)
+        var framesOffEnd = 0
+        repeat(60) {
+            mainClock.advanceTimeByFrame()
+            if (!onScreen(END)) framesOffEnd++
+        }
+        mainClock.autoAdvance = true
+        waitForIdle()
+        assertTrue(onScreen(END), "the chat ends at its end")
+        assertTrue(framesOffEnd <= 1, "the end was off screen for $framesOffEnd frames: a visible scroll")
+    }
+
+    @Test fun reopening_a_chat_that_got_new_messages_opens_at_the_end_without_a_visible_scroll() = runComposeUiTest {
+        // Card #121 (iOS, Agents chats): the transcript's place is retained per chat for the life of the app (#89).
+        // Reopened after new messages, the chat started at the old place and the follow animated down through them.
+        val retained = dev.supermux.state.RetainedUiState(kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Job()))
+        var shown by mutableStateOf(true)
+        val first = (1..30).map { entry(it, "message number $it of the chat") }
+        state = ChatState(messages = first)
+        setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact, inputMode = InputMode.Touch) {
+            androidx.compose.runtime.CompositionLocalProvider(dev.supermux.ui.retain.LocalRetainedUiState provides retained) {
+                SupermuxTheme(appearance = AppearanceMode.LIGHT) {
+                    Box(Modifier.requiredSize(width = 400.dp, height = 600.dp)) {
+                        if (shown) ChatPanel(session = session, state = state, actions = ChatActions(), draft = "", onDraftChange = {}, showHeader = false)
+                    }
+                }
+            }
+        }
+        waitForIdle()
+        assertTrue(onScreen("message number 30 of"), "the chat opens at its end")
+        shown = false
+        waitForIdle()
+        state = ChatState(messages = first + (31..55).map { entry(it, "message number $it of the chat") })
+        mainClock.autoAdvance = false
+        shown = true
+        var framesOffEnd = 0
+        repeat(60) {
+            mainClock.advanceTimeByFrame()
+            if (!onScreen("message number 55 of")) framesOffEnd++
+        }
+        mainClock.autoAdvance = true
+        waitForIdle()
+        assertTrue(onScreen("message number 55 of"), "the chat ends at its end")
+        assertTrue(framesOffEnd <= 1, "the end was off screen for $framesOffEnd frames: a visible scroll on opening")
+    }
+
     /** The first paragraph of [label] on screen now. */
     private fun ComposeUiTest.readingAnchorIn(label: String, count: Int): String =
         (1..count).map { "$label paragraph $it:" }.firstOrNull { onScreen(it) } ?: "Live paragraph one."
