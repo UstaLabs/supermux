@@ -12,6 +12,12 @@ import androidx.compose.ui.unit.dp
 
 object KitGlyphs {
     val Back by lazy { glyph("back", "M19 12H5", "M11 18l-6-6 6-6") }
+    val Forward by lazy { glyph("fwd", "M5 12h14", "M13 6l6 6-6 6") }
+    val ChevronUp by lazy { glyph("chevU", "M6.5 14.5l5.5-5.5 5.5 5.5") }
+    val Minus by lazy { glyph("minus", "M5 12h14") }
+    val Camera by lazy {
+        glyph("camera", "M4 8.5A1.5 1.5 0 0 1 5.5 7h2.2l1.5-2h5.6l1.5 2h2.2A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z", circle(12f, 12.8f, 3.3f))
+    }
     val Chevron by lazy { glyph("chev", "M9.5 6.5l5.5 5.5-5.5 5.5") }
     val ChevronDown by lazy { glyph("chevD", "M6.5 9.5l5.5 5.5 5.5-5.5") }
     val Close by lazy { glyph("x", "M6.5 6.5l11 11M17.5 6.5l-11 11") }
@@ -104,7 +110,7 @@ object KitGlyphs {
         listOf(
             Back, Chevron, ChevronDown, Close, Plus, Check, Search, Sliders, Keyboard, Mic, Terminal, Download,
             Laptop, Server, Bot, Memory, Branch, Code, Devices, Link, Tree, Shield, Flask, Restart, Disk, Gauge,
-            Trash, External, Globe, User, Key, Phone, Qr, Warn, Copy, More, Lock,
+            Trash, External, Globe, User, Key, Phone, Qr, Warn, Copy, More, Lock, Forward, ChevronUp, Minus, Camera,
         )
     }
 

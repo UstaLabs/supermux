@@ -65,7 +65,16 @@ class BrowserPaneTest {
     private class Rig {
         val engines = FakeWebEngineFactory(behavior = FakeEngineBehavior())
         val writes = mutableListOf<Pair<JsonObject, String?>>()
-        val calls: List<String> get() = engines.created.flatMap { it.calls }
+        // The engines append from their own threads: a read that meets a write tries again.
+        val calls: List<String>
+            get() {
+                while (true) {
+                    try {
+                        return engines.created.toList().flatMap { it.calls.toList() }
+                    } catch (_: ConcurrentModificationException) {
+                    }
+                }
+            }
         fun loads(): List<String> = calls.filter { it.startsWith("load:") && "url:" in it }.map { it.substringAfter("url:") }
     }
 
@@ -143,6 +152,7 @@ class BrowserPaneTest {
         show(rig, mutableStateOf(view("http://localhost:3000/app")), rig.actions(byPort = "https://relay.test/p/{port}/", cookie = cookie))
         waitUntil(timeoutMillis = 5_000) { "https://relay.test/p/3000/app" in rig.loads() }
         onNodeWithTag("browser-address").assertTextEquals("port 3000/app")
+        onNodeWithTag("browser-address-preview", useUnmergedTree = true).assertExists() // #122: a preview's green dot, as the prototype's
     }
 
     @Test fun aPortWithNoRouteSaysSoInsteadOfLoading() = runComposeUiTest {
@@ -303,6 +313,45 @@ class BrowserPaneTest {
         onNodeWithTag("browser-menu").performClick()
         onNodeWithTag("browser-menu-find").assertExists()
         onNodeWithTag("browser-menu-screenshot").assertDoesNotExist()
+    }
+
+    /** #122: a zoom other than 100 % shows inside the address; the menu is the app's own (Find with its key). */
+    @Test fun theZoomShowsInTheAddressAndTheMenuIsTheApps() = runComposeUiTest {
+        val rig = Rig()
+        showWithKeys(rig, mutableStateOf(view("https://vitejs.dev/")))
+        onNodeWithTag("browser-zoom", useUnmergedTree = true).assertDoesNotExist()
+        onNodeWithTag("browser-address").performClick()
+        onNodeWithTag("browser-address").performKeyInput { withKeyDown(mod) { pressKey(Key.Equals) } }
+        onNodeWithTag("browser-menu").performClick() // takes the focus off the address, which hides the chip while editing
+        waitForIdle()
+        onNodeWithTag("browser-zoom", useUnmergedTree = true).assertExists()
+        onNodeWithTag("browser-menu-find").assertExists()
+        onNodeWithTag("browser-menu-zoom").assertExists()
+    }
+
+    /** #122: on a phone (compact, touch) the menu is a sheet from the bottom, with Back and Forward in it. */
+    @Test fun aPhonesMenuIsASheet() = runComposeUiTest {
+        val rig = Rig()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        val runtime = WebViewRuntime(
+            RuntimeConfig(maxLive = 2, snapshotCacheBytes = 8L shl 20, factory = rig.engines, scope = scope, clock = { mainClock.currentTime }),
+        )
+        setPlatformContent {
+            CompositionLocalProvider(
+                LocalAppWebViews provides AppWebViews(runtime),
+                dev.supermux.ui.adaptive.LocalWindowWidthClass provides dev.supermux.ui.adaptive.WindowWidthClass.Compact,
+                dev.supermux.ui.adaptive.LocalPointerAvailable provides false,
+            ) {
+                BrowserPane(view("https://vitejs.dev/"), "w1", rig.actions(), Modifier.size(390.dp, 700.dp))
+            }
+        }
+        waitUntil(timeoutMillis = 5_000) { "https://vitejs.dev/" in rig.loads() }
+        onNodeWithTag("browser-menu").performClick()
+        onNodeWithTag("browser-sheet").assertExists()
+        onNodeWithTag("browser-menu-back").assertExists()
+        onNodeWithTag("browser-menu-find").performClick()
+        onNodeWithTag("browser-sheet").assertDoesNotExist()
+        onNodeWithTag("browser-find").assertExists()
     }
 
     @Test fun noEngineHereSaysSoAndOffersTheSystemBrowser() = runComposeUiTest {

@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -53,6 +52,8 @@ import dev.supermux.webview.WebSettings
 import dev.supermux.webview.WebView
 import dev.supermux.webview.WebViewPhase
 import dev.supermux.webview.WebViewState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import dev.supermux.webview.webViewOverlay
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
@@ -271,6 +272,7 @@ fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, mod
         val loading = state.loading is LoadingState.Loading
         BrowserToolbar(
             shown = shown?.let { displayAddress(it, previews.orEmpty(), byPort).text() }.orEmpty(),
+            preview = shown?.let { displayAddress(it, previews.orEmpty(), byPort) } is DisplayAddress.Preview,
             full = shown,
             canGoBack = state.canGoBack,
             canGoForward = state.canGoForward,
@@ -290,15 +292,8 @@ fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, mod
         notice?.let { text ->
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp).testTag("browser-notice"), verticalAlignment = Alignment.CenterVertically) {
                 Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                TextButton(onClick = { notice = null }) { Text("OK") }
+                dev.supermux.ui.settings.kit.KitTextAction("OK", { notice = null })
             }
-        }
-        if (finding) {
-            FindBar(
-                find = find,
-                onStep = ::findStep,
-                onClose = { finding = false; state.navigator.clearFind() },
-            )
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (val b = body) {
@@ -316,6 +311,15 @@ fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, mod
                         )
                     }
                 }
+            }
+            if (finding) {
+                // Floats over the page's corner: an overlay the page leaves room for where it sits above Compose (#122).
+                FindBar(
+                    find = find,
+                    onStep = ::findStep,
+                    onClose = { finding = false; state.navigator.clearFind() },
+                    modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).webViewOverlay(RoundedCornerShape(8.dp)),
+                )
             }
         }
     }
