@@ -1,6 +1,16 @@
 package dev.supermux.ui.browser
 
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import dev.supermux.proto.ViewDto
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
+import dev.supermux.browser.BrowserTabSync
+import dev.supermux.webview.WebViewState
 import dev.supermux.webview.runtime.RuntimeConfig
 import dev.supermux.webview.WebProfile
 import dev.supermux.webview.runtime.WebViewRuntime
@@ -10,6 +20,26 @@ import dev.supermux.webview.runtime.WebViewRuntime
  * that never opens one loads no web engine. Tests provide their own, on the fake engine, through [LocalAppWebViews].
  */
 class AppWebViews(val runtime: WebViewRuntime) {
+    /**
+     * Each Browser tab's page while the tab exists, by view id: its [WebViewState] and what the pane asked of it. A tab
+     * that leaves the composition (another tab in front) keeps them, so coming back is the same state and the pool
+     * hands it its parked page, live: no reload, its scroll, forms and scripts as they were. Past the pool's own limits
+     * (time parked, memory) the page comes back from its saved state instead. The oldest beyond [MAX_TABS] go.
+     */
+    private val tabs = LinkedHashMap<String, BrowserTabPage>()
+
+    internal fun tab(viewId: String): BrowserTabPage {
+        val page = tabs.remove(viewId) ?: BrowserTabPage()
+        tabs[viewId] = page
+        while (tabs.size > MAX_TABS) tabs.remove(tabs.keys.first())
+        return page
+    }
+
+    /** The tab [viewId] was closed: its page goes with it. */
+    fun closeTab(viewId: String) {
+        tabs.remove(viewId)
+    }
+
     /** The preview token this run has put in [BROWSER_PROFILE] for each host (by the cookie's URL). */
     internal val previewCookies: MutableMap<String, String> = mutableMapOf()
 
@@ -24,7 +54,19 @@ class AppWebViews(val runtime: WebViewRuntime) {
     }
 
     companion object {
-        val app: AppWebViews by lazy { AppWebViews(WebViewRuntime(RuntimeConfig.platformDefault().copy(maxLive = 4))) }
+        private const val MAX_TABS = 32
+
+        /**
+         * How many live engines the app's runtime allows, read when it is first made: 4 on phones. A desktop keeps every
+         * open Browser tab live ([BrowserTabKeeper]), so its platform raises it before then.
+         */
+        var liveBudget: Int = 4
+
+        private val made = lazy { AppWebViews(WebViewRuntime(RuntimeConfig.platformDefault().copy(maxLive = liveBudget))) }
+        val app: AppWebViews get() = made.value
+
+        /** The app's web views if a Browser tab has made them, without making them. */
+        internal val appIfMade: AppWebViews? get() = if (made.isInitialized()) made.value else null
     }
 }
 
@@ -36,3 +78,29 @@ val BROWSER_PROFILE: WebProfile = WebProfile.Named("supermux-browser")
 
 /** Each Browser tab's page icon, by view id: the workspace's, so its tab strip can draw them (#105). Not synced. */
 val LocalBrowserIcons = staticCompositionLocalOf<androidx.compose.runtime.snapshots.SnapshotStateMap<String, String>?> { null }
+
+/** A Browser tab's page and the pane's hold on it, kept while the tab exists ([AppWebViews.tab]). */
+internal class BrowserTabPage {
+    val state: WebViewState = WebViewState(BLANK)
+    val sync: BrowserTabSync = BrowserTabSync()
+    var body: BrowserBody by mutableStateOf(BrowserBody.NewTab)
+    var requested: String? by mutableStateOf(null)
+    var zoom: Float by mutableFloatStateOf(1f)
+}
+
+/**
+ * While a workspace shows, a Browser tab that leaves its [views] (closed, here or on another device) lets its page go
+ * ([AppWebViews.closeTab]). Tabs of workspaces not shown go when the app's tab memory is full, oldest first.
+ */
+@Composable
+fun ReleaseClosedBrowserTabs(views: Collection<ViewDto>) {
+    val provided = LocalAppWebViews.current
+    val ids = views.filter { it.kind == "browser" }.map { it.id }.toSet()
+    val seen = remember { mutableSetOf<String>() }
+    LaunchedEffect(ids) {
+        val webViews = provided ?: AppWebViews.appIfMade
+        if (webViews != null) (seen - ids).forEach(webViews::closeTab)
+        seen.clear()
+        seen += ids
+    }
+}

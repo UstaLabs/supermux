@@ -87,6 +87,13 @@ private val DEFAULT_ACTIVATION: Activation = Activation.WhenVisible()
  * @param activation when the view goes live. By default once it is on screen and has stopped moving
  *   ([Activation.WhenVisible]), as views in lists, the main use, need: never mid-scroll. Give a pane that should be live
  *   whenever it shows [Activation.Eager].
+ * @param keepRunningWhileHidden keeps the page running while the view is composed but not shown, as a browser's tab
+ *   behind another: for as long as it is composed, it keeps its engine (no
+ *   [dev.supermux.webview.runtime.RuntimeConfig.hiddenReleaseMillis]), ranks with visible views in the pool (a visible
+ *   view that needs a slot takes hidden views' engines first; memory pressure may still take it, least recently used
+ *   first), its engine is never told it is hidden (which stops a page's media on macOS and iOS), and shown again with
+ *   its page still painted, it shows that page live at once, with no cover. Off by default: such a view costs a live
+ *   page the whole time.
  * @param placeholder covers the page while there is no snapshot to show. The default is opaque, in the theme
  *   [settings] resolve to. A custom one should be opaque too, or the engine's unpainted surface may show through.
  */
@@ -98,6 +105,7 @@ public fun WebView(
     client: WebClient = WebClient.Default,
     activation: Activation = DEFAULT_ACTIVATION,
     sizing: WebSizing = WebSizing.Fill,
+    keepRunningWhileHidden: Boolean = false,
     placeholder: @Composable (WebViewState) -> Unit = { DefaultPlaceholder(it, dark = settings.darkMode.isDark()) },
 ) {
     val runtime = LocalWebViewRuntime.current
@@ -108,7 +116,7 @@ public fun WebView(
     val uriHandler = LocalUriHandler.current
     val dark = settings.darkMode.isDark()
     val density = LocalDensity.current.density
-    SideEffect { host.update(settings, client, activation, uriHandler, dark, density, overlays) }
+    SideEffect { host.update(settings, client, activation, keepRunningWhileHidden, uriHandler, dark, density, overlays) }
     LaunchedEffect(host) { host.run() }
     DisposableEffect(host) { onDispose { host.dispose() } }
     val sized = when (sizing) {

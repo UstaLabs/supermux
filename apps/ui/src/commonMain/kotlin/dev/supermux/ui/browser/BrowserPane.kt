@@ -78,7 +78,7 @@ internal sealed interface BrowserBody {
 }
 
 /** A blank page in the tabs' profile: what a tab holds before its first page, so its engine can take a cookie first. */
-private val BLANK = WebContent.Html("<!doctype html><title></title>")
+internal val BLANK = WebContent.Html("<!doctype html><title></title>")
 
 /** The tabs' settings: their own profile, and inspectable (they're a developer's browser). */
 private val BROWSER_SETTINGS = WebSettings(profile = BROWSER_PROFILE, inspectable = true)
@@ -107,23 +107,32 @@ private class BrowserClient(private val newWindow: (String) -> Unit) : WebClient
  */
 @OptIn(FlowPreview::class)
 @Composable
-fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, modifier: Modifier = Modifier) {
+fun BrowserPane(
+    view: ViewDto,
+    workspaceId: String,
+    actions: BrowserActions,
+    modifier: Modifier = Modifier,
+    /** Desktop ([BrowserTabKeeper]): the page keeps running while its tab is in the back. */
+    keepRunning: Boolean = false,
+) {
     val platform = LocalPlatform.current
     val provided = LocalAppWebViews.current
     // The app's runtime is made on first use: a tab with no page makes no engine, nor loads one.
     val webViews by remember(provided) { derivedStateOf { provided ?: AppWebViews.app } }
     val links by rememberUpdatedState(LocalLinkOpener.current)
-    val sync = remember(view.id) { BrowserTabSync() }
-    val state = remember(view.id) { WebViewState(BLANK) }
+    // The tab's page outlives the pane: another tab in front leaves it alive in the pool ([AppWebViews.tab]).
+    val tab = remember(view.id, webViews) { webViews.tab(view.id) }
+    val sync = tab.sync
+    val state = tab.state
     val address = remember { FocusRequester() }
-    var body by remember(view.id) { mutableStateOf<BrowserBody>(BrowserBody.NewTab) }
+    var body by tab::body
     var previews by remember { mutableStateOf<List<ProxyDto>?>(null) }
     var byPort by remember { mutableStateOf<String?>(null) }
-    var requested by remember(view.id) { mutableStateOf<String?>(null) }
+    var requested by tab::requested
     var finding by remember(view.id) { mutableStateOf(false) }
     val find = remember(view.id) { FindState() }
     val findScope = rememberCoroutineScope()
-    var zoom by remember(view.id) { mutableFloatStateOf(1f) }
+    var zoom by tab::zoom
     var notice by remember(view.id) { mutableStateOf<String?>(null) }
     // Device mode (#122 phase 2) is this client's, per tab, never synced: an iPhone on the Mac means nothing on the
     // phone. Off, it keeps the device it had for next time. A phone has none (§3.2).
@@ -280,7 +289,7 @@ fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, mod
     val livePage = remember(view.id) {
         movableContentOf {
             ProvideWebViewRuntime(webViews.runtime) {
-                WebView(state, Modifier.fillMaxSize(), settings = BROWSER_SETTINGS, client = client, activation = Activation.Eager)
+                WebView(state, Modifier.fillMaxSize(), settings = BROWSER_SETTINGS, client = client, activation = Activation.Eager, keepRunningWhileHidden = keepRunning)
             }
         }
     }

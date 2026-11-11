@@ -328,7 +328,12 @@ fun ViewHost(
             DisplayPanelForStream(actions, view.stateString("displayId").orEmpty(), "$workspaceId:${view.id}", modifier)
         }
         // A web page (#105): its view's state is the page, synced to every client.
-        "browser" -> dev.supermux.ui.browser.BrowserPane(view, workspaceId, actions.browser, modifier)
+        "browser" -> {
+            // Desktop: the tab's page stays live while it's in the back ([BrowserTabKeeper]); elsewhere the pool parks it.
+            val keeper = dev.supermux.ui.browser.LocalBrowserTabKeeper.current
+            if (keeper != null) keeper.Show(view, workspaceId, actions.browser, modifier)
+            else dev.supermux.ui.browser.BrowserPane(view, workspaceId, actions.browser, modifier)
+        }
         else -> UnknownViewHint(view.kind, modifier)
     }
 }

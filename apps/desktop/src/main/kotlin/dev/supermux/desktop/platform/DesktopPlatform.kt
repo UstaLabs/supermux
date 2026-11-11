@@ -97,6 +97,13 @@ class DesktopPlatform : Platform {
     /** Detached workspace windows — the shell binds the live registry into this. */
     override val windows: WindowHostController = DesktopWindowHostController
 
+    // #105: a desktop browser's tabs never freeze: room for every kept tab plus what shows.
+    override val keepsBrowserTabsLive: Boolean = true
+
+    init {
+        dev.supermux.ui.browser.AppWebViews.liveBudget = dev.supermux.ui.browser.BrowserTabKeeper.MAX_LIVE_TABS + 8
+    }
+
     /** No FCM off Android; desktop's own tray notifications cover the live process. */
     override val push: PushRegistrar? = null
 

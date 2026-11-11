@@ -609,7 +609,7 @@ public final class dev/supermux/webview/WebSurfaceHintsKt {
 }
 
 public final class dev/supermux/webview/WebViewKt {
-	public static final fun WebView (Ldev/supermux/webview/WebViewState;Landroidx/compose/ui/Modifier;Ldev/supermux/webview/WebSettings;Ldev/supermux/webview/WebClient;Ldev/supermux/webview/Activation;Ldev/supermux/webview/WebSizing;Lkotlin/jvm/functions/Function3;Landroidx/compose/runtime/Composer;II)V
+	public static final fun WebView (Ldev/supermux/webview/WebViewState;Landroidx/compose/ui/Modifier;Ldev/supermux/webview/WebSettings;Ldev/supermux/webview/WebClient;Ldev/supermux/webview/Activation;Ldev/supermux/webview/WebSizing;ZLkotlin/jvm/functions/Function3;Landroidx/compose/runtime/Composer;II)V
 }
 
 public final class dev/supermux/webview/WebViewOverlayKt {
