@@ -728,8 +728,11 @@ fun ChatPanel(
             }
     }
     val density = LocalDensity.current
-    // #104: an html card caps itself at a share of the chat's visible height.
-    val chatViewportPx by remember(listState) { derivedStateOf { listState.layoutInfo.viewportSize.height } }
+    // #104: an html card caps itself at a share of the chat's RESTING visible height: the transcript's with the chrome
+    // shown, latched only while the chrome is at rest (below, where the chrome is). Not the height of the moment: the
+    // chrome auto-hide changes that every frame of its 200 ms slide, which resized every card at its cap each frame, and
+    // iOS re-lays out and repaints a WKWebView at each new size, so scrolling stuttered.
+    var chatViewportPx by remember(listState) { mutableIntStateOf(0) }
     val chatViewportHeight = if (chatViewportPx > 0) with(density) { chatViewportPx.toDp() } else androidx.compose.ui.unit.Dp.Unspecified
     // The find bar (open, its query, its scope) outlives this composition: a rotation or a width
     // change closed it and dropped what was typed (#89).
@@ -745,8 +748,14 @@ fun ChatPanel(
     // rebuilt panel (a rotation, a width change) closed every card and marked every reply read (#89).
     val cards = rememberRetained("chat.subagents:${session.id}") { SubagentCards() }
     var openSubagents by cards::open
-    val subagentActions = remember(actions, session.id) {
-        SubagentActions(message = actions.messageSubagent, stop = actions.stopSubagent, sessionId = session.id)
+    // The latest actions, so a host's new ChatActions (each time it recomposes) give the subagent cards nothing new.
+    val currentActions by rememberUpdatedState(actions)
+    val subagentActions = remember(session.id) {
+        SubagentActions(
+            message = { id, text -> currentActions.messageSubagent(id, text) },
+            stop = { id -> currentActions.stopSubagent(id) },
+            sessionId = session.id,
+        )
     }
     // Unread replies are client-side: the reply count the user has "seen" per subagent. A subagent
     // first seen counts as read (a reload does not light every card up); an OPEN card keeps up with
@@ -766,17 +775,32 @@ fun ChatPanel(
         if (index >= 0) scope.launch { listState.animateScrollToItem(index) }
     }
     val subagentNames = remember(subagents) { subagents.associate { it.id to it.displayName } }
-    val subagentUi = SubagentUi(
-        isExpanded = { it in openSubagents },
-        onToggle = { id -> openSubagents = if (id in openSubagents) openSubagents - id else openSubagents + id },
-        actions = subagentActions,
-        unread = { s -> s.unreadReplies(seenReplies[s.id] ?: (s.replies ?: 0)) },
-        open = openSubagentCard,
-        nameOf = { subagentNames[it] },
-    )
+    // What the rows get stays the same object while what it does is the same: a host that recomposes hands this panel
+    // new lambdas and new actions each time (ViewHost's ChatViewPane does), and a row given a new one recomposes, its
+    // markdown with it. Each reads the latest one when called; state they read (the open cards, the replies seen) is
+    // read as they run, in the composition that calls them, so it still updates the rows that show it.
+    val currentOpenSubagentCard by rememberUpdatedState(openSubagentCard)
+    val currentSubagentNames by rememberUpdatedState(subagentNames)
+    val subagentUi = remember(cards, subagentActions) {
+        SubagentUi(
+            isExpanded = { it in cards.open },
+            onToggle = { id -> cards.open = if (id in cards.open) cards.open - id else cards.open + id },
+            actions = subagentActions,
+            unread = { s -> s.unreadReplies(cards.seen[s.id] ?: (s.replies ?: 0)) },
+            open = { id -> currentOpenSubagentCard(id) },
+            nameOf = { currentSubagentNames[it] },
+        )
+    }
     // An inbox sender's chat opens from its card only when this host lists it.
     val listedSessions = state.listedSessions
     val canOpenChat = remember(listedSessions) { { id: String -> id in listedSessions } }
+    val rowOpenFile = rememberLatest(onOpenFile)
+    val currentOpenWalkthrough by rememberUpdatedState(onOpenWalkthrough)
+    val rowOpenWalkthrough = remember { { currentOpenWalkthrough(null) } }
+    val endCouncilNow = actions.endCouncil
+    val currentEndCouncil by rememberUpdatedState(endCouncilNow)
+    // Null where this client can't end one (the card shows no Stop): only that changing makes a new one.
+    val rowEndCouncil = remember(endCouncilNow != null) { endCouncilNow?.let { { id: String -> currentEndCouncil?.invoke(id); Unit } } }
 
     run {
         // One rule on every host (was desktop's): instant jump to the end on the first content for a
@@ -1065,6 +1089,16 @@ fun ChatPanel(
         label = "chatChrome",
     )
     LaunchedEffect(chromeCollapsed) { onChromeHiddenChange(chromeCollapsed) }
+    // The cards' cap ([chatViewportPx]): the transcript's height only while the chrome is shown and still. A wide view
+    // never hides it, so there the cap follows every resize as it always did.
+    LaunchedEffect(listState) {
+        snapshotFlow { if (chromeFraction >= 1f) listState.layoutInfo.viewportSize.height else 0 }
+            .collect { if (it > 0) chatViewportPx = it }
+    }
+    // The list's bottom inset follows the chrome: with the composer tucked away the last row would sit on the window's
+    // edge, so it gets the breathing room the composer's own padding gave it. Read as the list MEASURES (it asks for its
+    // padding then), so the slide relayouts the list each frame without recomposing the transcript.
+    val transcriptPadding = remember { ChromeFollowingPadding(top = Space.md) { Space.xl * (1f - chromeFraction) } }
     // Revealed at the end of the transcript: the composer growing back shrinks the viewport, which
     // would push the last lines out of view. Keep the bottom pinned while it animates in.
     LaunchedEffect(chromeCollapsed) {
@@ -1279,7 +1313,7 @@ fun ChatPanel(
             )
         }
 
-        val transcript: @Composable (bottomPadding: androidx.compose.ui.unit.Dp) -> Unit = { bottomPad ->
+        val transcript: @Composable () -> Unit = {
             androidx.compose.runtime.CompositionLocalProvider(
                 LocalCouncilActivity provides state.councilActivity,
                 LocalChatMediaViewer provides mediaOpener,
@@ -1289,6 +1323,7 @@ fun ChatPanel(
                 LocalHtmlCards provides actions.htmlCards,
                 LocalChatViewportHeight provides chatViewportHeight,
             ) {
+            LocalChatCompositionProbe.current?.let { probe -> androidx.compose.runtime.SideEffect { probe("transcript") } }
             LazyColumn(
                 state = listState,
                 // widthIn BEFORE fillMaxHeight: cap the reading width first, then fill the height.
@@ -1299,7 +1334,7 @@ fun ChatPanel(
                 // Vertical inset as CONTENT padding, not a Modifier pad: a Modifier pad clips the
                 // scroll viewport so rows pop into view at a hard edge instead of scrolling under
                 // the scrim.
-                contentPadding = PaddingValues(top = Space.md, bottom = bottomPad),
+                contentPadding = transcriptPadding,
                 verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
                 itemsIndexed(timelineItems, key = { i, _ -> timelineKeys[i] }) { i, item ->
@@ -1333,12 +1368,12 @@ fun ChatPanel(
                             else -> TimelineItemRow(
                                 item = item,
                                 media = actions.media,
-                                onOpenFile = onOpenFile,
+                                onOpenFile = rowOpenFile,
                                 highDetail = highDetail,
-                                onOpenWalkthrough = { onOpenWalkthrough(null) },
+                                onOpenWalkthrough = rowOpenWalkthrough,
                                 subagentUi = subagentUi,
                                 canOpenChat = canOpenChat,
-                                endCouncil = actions.endCouncil,
+                                endCouncil = rowEndCouncil,
                             )
                         }
                     }
@@ -1347,7 +1382,7 @@ fun ChatPanel(
                 // Card #76: what the agent is writing right now, keyed like the stored rows that replace it.
                 items(liveRows, key = ::liveRowKey) { row ->
                     if (row.thinking) LiveThinkingRow(row, folded = liveRows.any { !it.thinking })
-                    else LiveReplyRow(row, reveals.of(row.stream), onOpenFile)
+                    else LiveReplyRow(row, reveals.of(row.stream), rowOpenFile)
                 }
                 // Running background tasks live in the strip over the composer (with the running
                 // subagents), not as chips in the transcript: one place for "still going".
@@ -1438,9 +1473,7 @@ fun ChatPanel(
                 // A tap while the chrome is tucked away brings it back (the reading-app convention).
                 Column(Modifier.testTag("chat_body").pointerInput(chrome) { detectTapGestures(onTap = { focusManager.clearFocus(); chrome.show() }) }) {
                     Box(Modifier.fillMaxWidth().weight(1f).nestedScroll(chrome.connection), contentAlignment = Alignment.TopCenter) {
-                        // With the composer tucked away the last row would sit on the window's edge; give
-                        // it the breathing room the composer's own padding gave it.
-                        if (emptySession) starters() else transcript(Space.xl * (1f - chromeFraction))
+                        if (emptySession) starters() else transcript()
                         // Fade, not a rule: a short scrim of the panel's own background so a
                         // message scrolling up dissolves into the header. Non-interactive.
                         EdgeFade(cs.surfaceContainerLow, Modifier.align(Alignment.TopCenter))
@@ -1809,3 +1842,21 @@ private class RevealMark(val messageId: String)
 private const val REVEAL_ALPHA = 0.16f
 private const val REVEAL_HOLD_MS = 900L
 private const val REVEAL_FADE_MS = 1_200
+
+/**
+ * A lazy list's content padding: [top], and a [bottom] that follows the chrome's slide. A lazy list asks for its padding
+ * as it measures, so [bottom] is read in the layout phase and an animation drives it without recomposing the list.
+ */
+private class ChromeFollowingPadding(private val top: androidx.compose.ui.unit.Dp, private val bottom: () -> androidx.compose.ui.unit.Dp) : PaddingValues {
+    override fun calculateLeftPadding(layoutDirection: androidx.compose.ui.unit.LayoutDirection) = 0.dp
+    override fun calculateTopPadding() = top
+    override fun calculateRightPadding(layoutDirection: androidx.compose.ui.unit.LayoutDirection) = 0.dp
+    override fun calculateBottomPadding() = bottom()
+}
+
+/** [f] as one lambda for the life of this composition, which calls the latest [f]: a caller's new lambda recomposes nothing. */
+@Composable
+private fun <T> rememberLatest(f: (T) -> Unit): (T) -> Unit {
+    val current by rememberUpdatedState(f)
+    return remember { { t: T -> current(t) } }
+}

@@ -73,6 +73,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -842,6 +843,7 @@ fun TimelineItemRow(
     /** Ends a council (the council card's Stop); null = no Stop. */
     endCouncil: ((councilId: String) -> Unit)? = null,
 ) {
+    LocalChatCompositionProbe.current?.let { probe -> SideEffect { probe("row") } }
     when (item) {
         is TimelineItem.Msg -> {
             val text = item.entry.text
