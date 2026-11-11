@@ -862,6 +862,13 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      # Kotlin/Native compiles and links the app's framework inside the Gradle daemon, which apps/gradle.properties
+      # caps at 2 GB: the iOS link ran out there (#122, train 3). The runner's own ~/.gradle/gradle.properties wins
+      # over the project's, so this job gets 4 GB and the box's default stays as it is.
+      - name: Give the Gradle daemon 4 GB for the Kotlin/Native link
+        run: |
+          mkdir -p ~/.gradle
+          echo "org.gradle.jvmargs=-Xmx4g" >> ~/.gradle/gradle.properties
       - uses: gradle/actions/setup-gradle@v4
       - name: Install XcodeGen
         run: brew install xcodegen
