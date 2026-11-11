@@ -29,3 +29,16 @@ internal fun tabNumbered(tree: LayoutNode, focusedViewId: String?, n: Int): Pair
     val id = if (n == 9) group.viewIds.lastOrNull() else group.viewIds.getOrNull(n - 1)
     return id?.let { group.id to it }
 }
+
+/** What ⌘⇧T / Ctrl+Shift+T does (#122). */
+internal enum class ReopenKeyAction { Reopen, NewTerminal, Nothing }
+
+/**
+ * On Apple it reopens the last closed Browser tab, if any. Off Apple the key was New terminal, and stays so inside a
+ * terminal and whenever there is nothing to reopen.
+ */
+internal fun reopenKeyAction(os: dev.supermux.ui.keys.KeyOs, terminalFocused: Boolean, hasClosed: Boolean): ReopenKeyAction = when {
+    os == dev.supermux.ui.keys.KeyOs.Apple -> if (hasClosed) ReopenKeyAction.Reopen else ReopenKeyAction.Nothing
+    terminalFocused || !hasClosed -> ReopenKeyAction.NewTerminal
+    else -> ReopenKeyAction.Reopen
+}

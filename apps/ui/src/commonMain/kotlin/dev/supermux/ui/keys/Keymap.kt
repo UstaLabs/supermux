@@ -61,6 +61,8 @@ val DefaultKeymap = Keymap(
         bind("Mod-n", AppCommands.NewSession),
         bind("Mod-Shift-n", AppCommands.MoveToNewWindow, overOwner = true),
         bind("Mod-t", AppCommands.NewTerminal),
+        // Before New terminal's Ctrl+Shift+T: the reopen key's handler makes the terminal itself where it should (#122).
+        bind("Mod-Shift-t", AppCommands.ReopenClosedTab, overOwner = true),
         bindOther("Ctrl-Shift-t", AppCommands.NewTerminal, overOwner = true),
         bind("Mod-b", AppCommands.ToggleSidebar),
         bind("Mod-p", AppCommands.GoToFile),

@@ -1925,6 +1925,35 @@ private fun WorkspacePanel(
         }
     }
 
+    // ⌘⇧T / Ctrl+Shift+T (#122): the workspace's last closed Browser tab back, in the pane it left. The workspace's
+    // Browser tabs are watched on every composition, so a tab closed anywhere (its ×, another device) is remembered.
+    val closedTabs = remember(current.id) { dev.supermux.workspace.ClosedBrowserTabs() }
+    val browserPages = ws.viewsById.values.filter { it.kind == "browser" }.associate { v ->
+        v.id to (dev.supermux.browser.BrowserViewState.from(v.state) as? dev.supermux.browser.BrowserViewState.Page)?.url
+    }
+    val layoutNow = ws.layoutSync.tree
+    SideEffect { closedTabs.update(browserPages) { dev.supermux.workspace.groupIdOf(layoutNow, it) } }
+    if (isActive) {
+        val tracker = dev.supermux.ui.keys.LocalKeyScopeTracker.current
+        val reopenTerminal by rememberUpdatedState {
+            if (compact) addPhoneView(current, ws, wsApp, NewViewKind.TERMINAL) else addTerminalInWindow(ui, ui.windows.mainHostId, ws, wsApp, current.id)
+        }
+        RegisterCommand(AppCommands.ReopenClosedTab, enabled = !ui.overlayOpen, scope = LocalKeyScope.current?.root) {
+            when (reopenKeyAction(dev.supermux.ui.keys.currentKeyOs, tracker?.focusIsOpaque == true, !closedTabs.isEmpty)) {
+                ReopenKeyAction.Reopen -> {
+                    val tab = closedTabs.pop()
+                    val opener = ws.browserOpener
+                    if (tab != null && opener != null) {
+                        opener.reopen(tab.url, tab.groupId, onPlaced = { id -> if (compact) wsApp.setActiveView(current.id, id) })
+                    }
+                    tab != null && opener != null
+                }
+                ReopenKeyAction.NewTerminal -> { reopenTerminal(); true }
+                ReopenKeyAction.Nothing -> false
+            }
+        }
+    }
+
     // Chat links open in this workspace's Browser tabs (#105). The opener is rebuilt every composition, so the
     // LinkOpener reads the latest one: a new LinkOpener each time would recompose every chat under it.
     val browserOpener by rememberUpdatedState(ws.browserOpener)

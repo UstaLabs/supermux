@@ -35,6 +35,8 @@ object AppCommands {
     val SplitDown = AppCommand("workspace.splitDown", "Split down (a new row)", CommandGroup.Workspace)
     val CloseTab = AppCommand("tab.close", "Close tab", CommandGroup.Workspace)
     /** Chrome's tab keys (#122): the next or previous tab of the pane last worked in, and its tab 1–8 or last (9). */
+    /** The last closed Browser tab back, as Chrome's ⌘⇧T (#122). Off Apple its key stays New terminal in a terminal. */
+    val ReopenClosedTab = AppCommand("tab.reopenClosed", "Reopen closed tab", CommandGroup.Workspace)
     val TabNext = AppCommand("tab.next", "Next tab", CommandGroup.Workspace)
     val TabPrevious = AppCommand("tab.previous", "Previous tab", CommandGroup.Workspace)
     private val tabNumbers = (1..9).map { n ->
@@ -61,7 +63,7 @@ object AppCommands {
 
     val all: List<AppCommand> = listOf(
         NewSession, MoveToNewWindow, NewTerminal, ToggleSidebar, GoToFile, Find, FindNext, FindPrevious,
-        OpenSettings, ShowShortcuts, PasteImage, SplitRight, SplitDown, CloseTab, TabNext, TabPrevious,
+        OpenSettings, ShowShortcuts, PasteImage, SplitRight, SplitDown, CloseTab, ReopenClosedTab, TabNext, TabPrevious,
         BrowserFocusAddress, BrowserReload, BrowserBack, BrowserForward, BrowserZoomIn, BrowserZoomOut, BrowserZoomReset, BrowserOpenExternally,
         BrowserInspect, BrowserStop, BrowserNewTab, BrowserScreenshot,
     ) + tabNumbers
