@@ -10,7 +10,7 @@ const drift = compare(countHits(hits), readBaseline())
 
 function explain(change: Change): string {
   const lines = hits.filter(h => h.file === change.file).map(h => `    ${h.file}:${h.line}  ${h.text}`)
-  return [`${change.file} ${change.was} → ${change.now}: move the text into composeResources/files/i18n/values/ (and values-tr/)`, ...lines].join("\n")
+  return [`${change.file} ${change.was} → ${change.now}: move the text into apps/ui/i18n/values/ (and values-tr/)`, ...lines].join("\n")
 }
 
 test("no new hard-coded UI text", () => {
@@ -78,7 +78,7 @@ test("paths use / on every OS, as the baseline's keys do (Bun's Glob answers wit
 })
 
 test("the ui module ships Turkish", () => {
-  expect(catalogs().find(c => c.dir === "apps/ui/src/commonMain/composeResources/files/i18n")?.translations.tr).toBeDefined()
+  expect(catalogs().find(c => c.dir === "apps/ui/i18n")?.translations.tr).toBeDefined()
 })
 
 test("UI literals are found; tags, templates and marked lines are not", () => {

@@ -1,5 +1,5 @@
-// #123: the app's language. Strings live in composeResources/files/i18n/values (English, the source) and
-// values-<tag> (Catalog.kt); the system's language picks among them unless this device chose one in Settings › General.
+// #123: the app's language. Strings live in apps/ui/i18n/values (English, the source) and values-<tag>, compiled to
+// compact catalogs (Catalog.kt); the system's language picks among them unless this device chose one in Settings › General.
 package dev.supermux.ui.i18n
 
 import androidx.compose.runtime.Composable
@@ -93,7 +93,7 @@ private fun loadedLanguage(): LoadedLanguage =
 @ReadOnlyComposable
 fun localized(key: StringKey): String {
     val l = loadedLanguage()
-    return lookup(key.name, l.chosen, l.english)
+    return lookup(key, l.chosen, l.english)
 }
 
 /** [localized] with `%1$s` / `%1$d` placeholders filled from [args]. */
@@ -101,7 +101,7 @@ fun localized(key: StringKey): String {
 @ReadOnlyComposable
 fun localized(key: StringKey, vararg args: Any): String {
     val l = loadedLanguage()
-    return formatCatalogText(lookup(key.name, l.chosen, l.english), args)
+    return formatCatalogText(lookup(key, l.chosen, l.english), args)
 }
 
 /** A count's string in the app's language, with that language's plural rules. */
@@ -109,19 +109,17 @@ fun localized(key: StringKey, vararg args: Any): String {
 @ReadOnlyComposable
 fun localizedPlural(key: PluralKey, count: Int, vararg args: Any): String {
     val l = loadedLanguage()
-    return formatCatalogText(lookupPlural(key.name, l.language, count, l.chosen, l.english), args)
+    return formatCatalogText(lookupPlural(key, l.language, count, l.chosen, l.english), args)
 }
 
-/** A key looked up by name (Settings search's entries), or null when English has no such key. */
+/** A Settings search label (a `search_` key) looked up by name, or null when there is no such key. */
 @Composable
 @ReadOnlyComposable
 fun localizedOrNull(name: String): String? {
+    val id = I18nFiles.searchKey(name)
+    if (id < 0) return null
     val l = loadedLanguage()
-    return if (l.english?.strings?.containsKey(name) == true || l.chosen?.strings?.containsKey(name) == true) {
-        lookup(name, l.chosen, l.english)
-    } else {
-        null
-    }
+    return lookup(StringKey(id), l.chosen, l.english)
 }
 
 /** Each option's label in the app's language, looked up once so a plain `(T) -> String` (a kit's optionLabel) can read it. */

@@ -1122,4 +1122,4 @@ private class TestBackInput : NavigationEventInput() {
 }
 
 /** A key's English text (the tests' JVM runs in English). */
-private fun en(key: dev.supermux.ui.i18n.StringKey): String = dev.supermux.ui.i18n.Catalogs.now("en")!!.strings.getValue(key.name)
+private fun en(key: dev.supermux.ui.i18n.StringKey): String = dev.supermux.ui.i18n.Catalogs.now("en")!!.text(key)!!

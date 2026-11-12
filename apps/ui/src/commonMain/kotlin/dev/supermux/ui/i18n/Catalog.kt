@@ -1,72 +1,67 @@
-// #123: the string catalogs. Compose resources' generated accessors cost ~150 B of wasm per key (a lazy delegate
-// each), which put the web bundle over its ceiling at 675 keys. So keys are generated as inline getters that compile
-// to a string literal ([Str], [Plurals] — no code per key), and each language is a set of plain XML files under
-// composeResources/files/i18n/, read once: English at start, another language only when it is chosen.
+// #123: the string catalogs. Compose resources' generated accessors cost ~150 B of wasm per key, which put the web
+// bundle over its ceiling at 675 keys; even a key's name carried as a string costs ~5 B gzipped. So :ui:generateI18n
+// numbers every key: `Str.<key>` / `Plurals.<key>` are inline getters returning that number (no code per key), and
+// each language is ONE compact file, files/i18n/<lang>.txt, compiled from the XML in apps/ui/i18n.
 package dev.supermux.ui.i18n
 
 import kotlin.jvm.JvmInline
 
-/** A string's key in the catalogs. Made only by the generated [Str]: a key always exists in English. */
+/** A string's number in the catalogs. Made only by the generated [Str]: a key always exists in English. */
 @JvmInline
-value class StringKey(val name: String)
+value class StringKey(val id: Int)
 
-/** A count's key in the catalogs. Made only by the generated [Plurals]. */
+/** A count's number in the catalogs. Made only by the generated [Plurals]. */
 @JvmInline
-value class PluralKey(val name: String)
+value class PluralKey(val id: Int)
 
-/** One language's strings: plain ones by key, plurals by key then CLDR quantity ("one", "other"). */
-class Catalog(val strings: Map<String, String>, val plurals: Map<String, Map<String, String>>) {
-    operator fun plus(other: Catalog) = Catalog(strings + other.strings, plurals + other.plurals)
-
-    companion object {
-        val EMPTY = Catalog(emptyMap(), emptyMap())
-    }
+/** One language's strings by number; plurals by number, then CLDR quantity ("one", "other"). Gaps are null. */
+class Catalog(val strings: Array<String?>, val plurals: Array<Map<String, String>?>) {
+    fun text(key: StringKey): String? = strings.getOrNull(key.id)
 }
 
 /**
- * Reads one catalog file: `<string name="k">text</string>` and `<plurals name="k"><item quantity="one">…</item>…`.
- * Text is unescaped as Compose resources did: XML entities, then `\n`, `\t`, `\uXXXX` and a backslash before any
- * other character.
+ * Reads a compact catalog: one entry per line, tab-separated — `s <id> <text>` or `p <id> <quantity> <text>` — with
+ * `\\`, `\n` and `\t` escaped in the text.
  */
-fun parseCatalog(xml: String): Catalog {
-    val body = xml.replace(COMMENT, "")
-    val strings = STRING.findAll(body).associate { it.groupValues[1] to unescape(it.groupValues[2]) }
-    val plurals = PLURALS.findAll(body).associate { p ->
-        p.groupValues[1] to ITEM.findAll(p.groupValues[2]).associate { it.groupValues[1] to unescape(it.groupValues[2]) }
-    }
-    return Catalog(strings, plurals)
-}
-
-private val COMMENT = Regex("<!--[\\s\\S]*?-->")
-private val STRING = Regex("<string\\s+name=\"([^\"]+)\"[^>]*>([\\s\\S]*?)</string>")
-private val PLURALS = Regex("<plurals\\s+name=\"([^\"]+)\"[^>]*>([\\s\\S]*?)</plurals>")
-private val ITEM = Regex("<item\\s+quantity=\"([^\"]+)\"[^>]*>([\\s\\S]*?)</item>")
-private val ENTITY = Regex("&(#x[0-9a-fA-F]+|#[0-9]+|amp|lt|gt|quot|apos);")
-
-internal fun unescape(raw: String): String {
-    val xml = ENTITY.replace(raw) { m ->
-        when (val e = m.groupValues[1]) {
-            "amp" -> "&"
-            "lt" -> "<"
-            "gt" -> ">"
-            "quot" -> "\""
-            "apos" -> "'"
-            else -> if (e.startsWith("#x")) e.drop(2).toInt(16).toChar().toString() else e.drop(1).toInt().toChar().toString()
+fun parseCatalog(text: String, strings: Int = I18nFiles.STRINGS, plurals: Int = I18nFiles.PLURALS): Catalog {
+    val s = arrayOfNulls<String>(strings)
+    val p = arrayOfNulls<MutableMap<String, String>>(plurals)
+    for (line in text.lineSequence()) {
+        if (line.length < 4) continue
+        val a = line.indexOf('\t')
+        val b = line.indexOf('\t', a + 1)
+        if (a < 0 || b < 0) continue
+        val id = line.substring(a + 1, b).toIntOrNull() ?: continue
+        when (line[0]) {
+            's' -> if (id in s.indices) s[id] = unescapeCompact(line.substring(b + 1))
+            'p' -> {
+                val c = line.indexOf('\t', b + 1)
+                if (c > 0 && id in p.indices) {
+                    (p[id] ?: mutableMapOf<String, String>().also { p[id] = it })[line.substring(b + 1, c)] =
+                        unescapeCompact(line.substring(c + 1))
+                }
+            }
         }
     }
-    if ('\\' !in xml) return xml
-    val out = StringBuilder(xml.length)
+    @Suppress("UNCHECKED_CAST")
+    return Catalog(s, p as Array<Map<String, String>?>)
+}
+
+internal fun unescapeCompact(raw: String): String {
+    if ('\\' !in raw) return raw
+    val out = StringBuilder(raw.length)
     var i = 0
-    while (i < xml.length) {
-        val c = xml[i]
-        if (c == '\\' && i + 1 < xml.length) {
-            val n = xml[i + 1]
-            when {
-                n == 'n' -> { out.append('\n'); i += 2 }
-                n == 't' -> { out.append('\t'); i += 2 }
-                n == 'u' && i + 5 < xml.length -> { out.append(xml.substring(i + 2, i + 6).toInt(16).toChar()); i += 6 }
-                else -> { out.append(n); i += 2 }
-            }
+    while (i < raw.length) {
+        val c = raw[i]
+        if (c == '\\' && i + 1 < raw.length) {
+            out.append(
+                when (val n = raw[i + 1]) {
+                    'n' -> '\n'
+                    't' -> '\t'
+                    else -> n
+                },
+            )
+            i += 2
         } else {
             out.append(c)
             i++
@@ -93,24 +88,27 @@ private val PLACEHOLDER = Regex("%(\\d+)\\$[ds]")
 @Suppress("UNUSED_PARAMETER")
 fun pluralCategory(language: String, count: Int): String = if (count == 1) "one" else "other"
 
-/**
- * What a key reads as: [chosen] first, then English. English always has the key (the keys are generated from it),
- * so neither a blank nor a raw key is ever shown; [humanized] is the last resort if even English failed to load.
- */
-fun lookup(name: String, chosen: Catalog?, english: Catalog?): String =
-    chosen?.strings?.get(name)?.takeIf { it.isNotEmpty() || english?.strings?.get(name).isNullOrEmpty() }
-        ?: english?.strings?.get(name)
-        ?: humanized(name)
+/** Shown only if even English could not be read: never a blank, never a raw key. */
+internal const val UNREADABLE = "…"
 
-/** A count's text: [chosen]'s form for its category, then English's form, then English's "other". */
-fun lookupPlural(name: String, language: String, count: Int, chosen: Catalog?, english: Catalog?): String {
-    val forms = chosen?.plurals?.get(name)
-    val category = pluralCategory(language, count)
-    return forms?.get(category) ?: forms?.get("other")
-        ?: english?.plurals?.get(name)?.let { it[pluralCategory("en", count)] ?: it["other"] }
-        ?: humanized(name)
+/**
+ * What a key reads as: [chosen] first, then English. English always has the key (the keys are generated from it), so
+ * neither a blank nor a raw key is ever shown. An empty translation of a non-empty English text falls back too.
+ */
+fun lookup(key: StringKey, chosen: Catalog?, english: Catalog?): String {
+    val en = english?.text(key)
+    val own = chosen?.text(key)
+    return when {
+        own != null && (own.isNotEmpty() || en.isNullOrEmpty()) -> own
+        en != null -> en
+        else -> UNREADABLE
+    }
 }
 
-/** "settings_title" → "Settings title": readable if every catalog failed, never a raw snake_case key. */
-internal fun humanized(name: String): String =
-    name.substringAfter('_').replace('_', ' ').replaceFirstChar { it.uppercaseChar() }
+/** A count's text: [chosen]'s form for its category, then English's form, then English's "other". */
+fun lookupPlural(key: PluralKey, language: String, count: Int, chosen: Catalog?, english: Catalog?): String {
+    val forms = chosen?.plurals?.getOrNull(key.id)
+    return forms?.get(pluralCategory(language, count)) ?: forms?.get("other")
+        ?: english?.plurals?.getOrNull(key.id)?.let { it[pluralCategory("en", count)] ?: it["other"] }
+        ?: UNREADABLE
+}

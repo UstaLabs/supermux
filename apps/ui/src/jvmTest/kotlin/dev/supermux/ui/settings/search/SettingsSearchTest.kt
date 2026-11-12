@@ -195,8 +195,8 @@ class SettingsSearchTest {
         val keyed = SettingsSearchIndex.filter {
             it.anchor != null && it.section != SettingsSection.KeyboardShortcuts && !it.anchor!!.startsWith("provider-")
         }
-        val english = dev.supermux.ui.i18n.Catalogs.now("en")!!.strings
-        val missing = keyed.map(::searchKey).filter { it !in english || "${it}_kw" !in english }
+        val known = dev.supermux.ui.i18n.I18nFiles::searchKey
+        val missing = keyed.map(::searchKey).filter { known(it) < 0 || known("${it}_kw") < 0 }
         assertEquals(emptyList(), missing)
     }
 

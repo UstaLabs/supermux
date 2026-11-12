@@ -19,59 +19,123 @@ plugins {
 //
 // jvm() + androidTarget() + the two iOS targets. Desktop consumes the JVM artifact, Android the
 // android one, and `:ios` (SupermuxKit.framework) the iOS ones.
-// #123: the string catalogs' keys. Compose resources' generated accessors cost ~150 B of wasm per key, so the keys
-// are generated here instead as inline getters that compile to a string literal: no code per key, still checked by
-// the compiler. English (files/i18n/values) defines the keys; VERSION changes with any catalog's content, so the
-// web can cache the files forever under a URL that carries it.
-val i18nCatalogDir = layout.projectDirectory.dir("src/commonMain/composeResources/files/i18n")
-val generateI18nKeys = tasks.register("generateI18nKeys") {
-    val source = i18nCatalogDir
-    val out = layout.buildDirectory.dir("generated/i18n/kotlin")
+// #123: the string catalogs. Compose resources' generated accessors cost ~150 B of wasm per key, and even a key's
+// NAME carried as a string literal costs ~5 B gzipped (1,174 names ≈ 6 KB), so the source XML (apps/ui/i18n,
+// values/ = English, values-<tag>/) is compiled here: every key gets a small number, `Str.<key>` / `Plurals.<key>`
+// are inline getters returning it (no code per key, still checked by the compiler), and each language becomes ONE
+// compact file, files/i18n/<lang>.txt, that the app reads once (the web fetches it, cached under VERSION).
+val i18nSourceDir = layout.projectDirectory.dir("i18n")
+val i18nCatalogOut = layout.projectDirectory.dir("src/commonMain/composeResources/files/i18n")
+val generateI18n = tasks.register("generateI18n") {
+    val source = i18nSourceDir
+    val keysOut = layout.buildDirectory.dir("generated/i18n/kotlin")
+    val catalogsOut = i18nCatalogOut
     inputs.dir(source)
-    outputs.dir(out)
+    outputs.dir(keysOut)
+    outputs.dir(catalogsOut)
     doLast {
         val root = source.asFile
-        val english = root.resolve("values").listFiles { f -> f.extension == "xml" }!!.sortedBy { it.name }
-        val strings = sortedSetOf<String>()
-        val plurals = sortedSetOf<String>()
-        for (f in english) {
-            val xml = f.readText().replace(Regex("<!--[\\s\\S]*?-->"), "")
-            Regex("<string\\s+name=\"([^\"]+)\"").findAll(xml).forEach { strings += it.groupValues[1] }
-            Regex("<plurals\\s+name=\"([^\"]+)\"").findAll(xml).forEach { plurals += it.groupValues[1] }
+        val comment = Regex("<!--[\\s\\S]*?-->")
+        val stringRe = Regex("<string\\s+name=\"([^\"]+)\"[^>]*>([\\s\\S]*?)</string>")
+        val pluralsRe = Regex("<plurals\\s+name=\"([^\"]+)\"[^>]*>([\\s\\S]*?)</plurals>")
+        val itemRe = Regex("<item\\s+quantity=\"([^\"]+)\"[^>]*>([\\s\\S]*?)</item>")
+        val entity = Regex("&(#x[0-9a-fA-F]+|#[0-9]+|amp|lt|gt|quot|apos);")
+        // As Compose resources read them: XML entities, then \n, \t, \uXXXX, and a backslash before anything else.
+        fun unescape(raw: String): String {
+            val xml = entity.replace(raw) { m ->
+                when (val e = m.groupValues[1]) {
+                    "amp" -> "&"; "lt" -> "<"; "gt" -> ">"; "quot" -> "\""; "apos" -> "'"
+                    else -> (if (e.startsWith("#x")) e.drop(2).toInt(16) else e.drop(1).toInt()).toChar().toString()
+                }
+            }
+            val out = StringBuilder()
+            var i = 0
+            while (i < xml.length) {
+                val c = xml[i]
+                if (c == '\\' && i + 1 < xml.length) {
+                    val n = xml[i + 1]
+                    when {
+                        n == 'n' -> { out.append('\n'); i += 2 }
+                        n == 't' -> { out.append('\t'); i += 2 }
+                        n == 'u' && i + 5 < xml.length -> { out.append(xml.substring(i + 2, i + 6).toInt(16).toChar()); i += 6 }
+                        else -> { out.append(n); i += 2 }
+                    }
+                } else { out.append(c); i++ }
+            }
+            return out.toString()
         }
-        val languages = listOf("en") + root.listFiles { f -> f.isDirectory && f.name.startsWith("values-") }!!
-            .map { it.name.removePrefix("values-") }.sorted()
+        // The compact file's own escaping: one entry per line, fields split by tabs.
+        fun compact(text: String) = text.replace("\\", "\\\\").replace("\n", "\\n").replace("\t", "\\t")
+        class Lang(val strings: Map<String, String>, val plurals: Map<String, Map<String, String>>)
+        fun read(dir: java.io.File): Lang {
+            val strings = linkedMapOf<String, String>()
+            val plurals = linkedMapOf<String, Map<String, String>>()
+            dir.listFiles { f -> f.extension == "xml" }!!.sortedBy { it.name }.forEach { f ->
+                val xml = comment.replace(f.readText(), "")
+                stringRe.findAll(xml).forEach { strings[it.groupValues[1]] = unescape(it.groupValues[2]) }
+                pluralsRe.findAll(xml).forEach { p ->
+                    plurals[p.groupValues[1]] = itemRe.findAll(p.groupValues[2]).associate { it.groupValues[1] to unescape(it.groupValues[2]) }
+                }
+            }
+            return Lang(strings, plurals)
+        }
+        val english = read(root.resolve("values"))
+        val stringKeys = english.strings.keys.sorted()
+        val pluralKeys = english.plurals.keys.sorted()
+        val sIndex = stringKeys.withIndex().associate { it.value to it.index }
+        val pIndex = pluralKeys.withIndex().associate { it.value to it.index }
+        val langs = linkedMapOf("en" to english)
+        root.listFiles { f -> f.isDirectory && f.name.startsWith("values-") }!!.sortedBy { it.name }
+            .forEach { langs[it.name.removePrefix("values-")] = read(it) }
+        val outDir = catalogsOut.asFile
+        outDir.deleteRecursively()
+        outDir.mkdirs()
         val digest = MessageDigest.getInstance("SHA-256")
-        root.walkTopDown().filter { it.isFile }.sortedBy { it.relativeTo(root).path }.forEach {
-            digest.update(it.relativeTo(root).path.toByteArray()); digest.update(it.readBytes())
+        for ((tag, lang) in langs) {
+            val text = buildString {
+                lang.strings.forEach { (k, v) -> sIndex[k]?.let { appendLine("s\t$it\t${compact(v)}") } }
+                lang.plurals.forEach { (k, forms) ->
+                    pIndex[k]?.let { i -> forms.forEach { (q, v) -> appendLine("p\t$i\t$q\t${compact(v)}") } }
+                }
+            }
+            outDir.resolve("$tag.txt").writeText(text)
+            digest.update(tag.toByteArray()); digest.update(text.toByteArray())
         }
         val version = digest.digest().joinToString("") { b -> "%02x".format(b) }.take(12)
         fun q(s: String) = "\"" + s + "\""
         val kt = buildString {
-            appendLine("// Generated by :ui:generateI18nKeys from composeResources/files/i18n/values. Do not edit.")
+            appendLine("// Generated by :ui:generateI18n from apps/ui/i18n/values. Do not edit.")
             appendLine("package dev.supermux.ui.i18n")
             appendLine()
-            appendLine("@Suppress(\"NOTHING_TO_INLINE\", \"ObjectPropertyName\")")
+            appendLine("@Suppress(\"ObjectPropertyName\")")
             appendLine("object Str {")
-            strings.forEach { appendLine("    inline val `$it`: StringKey get() = StringKey(${q(it)})") }
+            stringKeys.forEachIndexed { i, k -> appendLine("    inline val `$k`: StringKey get() = StringKey($i)") }
             appendLine("}")
             appendLine()
-            appendLine("@Suppress(\"NOTHING_TO_INLINE\", \"ObjectPropertyName\")")
+            appendLine("@Suppress(\"ObjectPropertyName\")")
             appendLine("object Plurals {")
-            plurals.forEach { appendLine("    inline val `$it`: PluralKey get() = PluralKey(${q(it)})") }
+            pluralKeys.forEachIndexed { i, k -> appendLine("    inline val `$k`: PluralKey get() = PluralKey($i)") }
             appendLine("}")
             appendLine()
             appendLine("internal object I18nFiles {")
             appendLine("    const val VERSION = ${q(version)}")
-            appendLine("    val NAMES: List<String> = listOf(${english.joinToString { q(it.nameWithoutExtension) }})")
-            appendLine("    val LANGUAGES: List<String> = listOf(${languages.joinToString { q(it) }})")
+            appendLine("    const val STRINGS = ${stringKeys.size}")
+            appendLine("    const val PLURALS = ${pluralKeys.size}")
+            appendLine("    val LANGUAGES: List<String> = listOf(${langs.keys.joinToString { q(it) }})")
+            appendLine("    /** Settings search finds its rows' labels by name; only `search_` keys can be looked up so. */")
+            appendLine("    fun searchKey(name: String): Int = when (name) {")
+            stringKeys.filter { it.startsWith("search_") }.forEach { appendLine("        ${q(it)} -> ${sIndex.getValue(it)}") }
+            appendLine("        else -> -1")
+            appendLine("    }")
             appendLine("}")
         }
-        val file = out.get().asFile.resolve("dev/supermux/ui/i18n/Keys.kt")
+        val file = keysOut.get().asFile.resolve("dev/supermux/ui/i18n/Keys.kt")
         file.parentFile.mkdirs()
         file.writeText(kt)
     }
 }
+// Every resources task (Compose resources, Android assets, the JVM classpath) must see the compact catalogs.
+tasks.configureEach { if (name != "generateI18n" && name.contains("Resources", ignoreCase = true)) dependsOn(generateI18n) }
 
 kotlin {
     jvmToolchain(17)
@@ -99,7 +163,7 @@ kotlin {
 
     sourceSets {
         // #123: the catalog keys (Str, Plurals) and file list, generated from the English catalog.
-        commonMain { kotlin.srcDir(generateI18nKeys) }
+        commonMain { kotlin.srcDir(generateI18n.map { layout.buildDirectory.dir("generated/i18n/kotlin").get() }) }
         commonMain.dependencies {
             // Native Mermaid rendering for ```mermaid fences (vendored cmp-mermaid, see mermaid-compose/README.md).
             implementation(project(":mermaid-compose"))

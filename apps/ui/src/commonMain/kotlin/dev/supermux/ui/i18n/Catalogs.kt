@@ -1,5 +1,4 @@
-// #123: loading the catalogs. Each language is the files I18nFiles.NAMES under files/i18n/values[-tag]/, read
-// once and kept. Desktop, Android and iOS read English synchronously the first time a string is asked for (bundled
+// #123: loading the catalogs. Each language is one compact file, files/i18n/<lang>.txt, read once and kept. Desktop, Android and iOS read English synchronously the first time a string is asked for (bundled
 // files, a few ms); the web reads everything it needs before its first frame (Main.kt), in parallel with the probe.
 package dev.supermux.ui.i18n
 
@@ -19,17 +18,12 @@ object Catalogs {
     /** [language]'s catalog if it has been read. */
     fun cached(language: String): Catalog? = loaded[language]
 
-    /** Reads [language]'s files (in parallel) once; a file that fails to read is left out, so English fills in. */
+    /** Reads [language]'s one compact file once; a failed read leaves it null, so English fills in. */
     suspend fun load(language: String): Catalog {
         loaded[language]?.let { return it }
-        val dir = if (language == "en") "values" else "values-$language"
-        val parts = coroutineScope {
-            I18nFiles.NAMES.map { name ->
-                async { runCatching { Res.readBytes("files/i18n/$dir/$name.xml").decodeToString() }.getOrNull() }
-            }.awaitAll()
-        }
-        val catalog = parts.filterNotNull().map(::parseCatalog).fold(Catalog.EMPTY) { a, b -> a + b }
-        loaded = loaded + (language to catalog)
+        val text = runCatching { Res.readBytes("files/i18n/$language.txt").decodeToString() }.getOrNull()
+        val catalog = parseCatalog(text.orEmpty())
+        if (text != null) loaded = loaded + (language to catalog)
         return catalog
     }
 
