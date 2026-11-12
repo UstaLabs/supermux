@@ -13,7 +13,7 @@
     <string name="settings_section_privacy_labs">Gizlilik ve deneyler</string>
     <string name="settings_section_privacy">Gizlilik</string>
     <string name="settings_section_machine">Makine</string>
-    <string name="settings_title_glossary">Sizin yazdığınız gibi yazılacak kelimeler</string>
+    <string name="settings_title_glossary">Yazdığınız gibi kalan kelimeler</string>
     <string name="settings_title_this_computer">Bu bilgisayar</string>
     <string name="settings_title_chat_worktrees">Sohbet worktree'leri</string>
     <string name="settings_title_this_machine">Bu makine</string>

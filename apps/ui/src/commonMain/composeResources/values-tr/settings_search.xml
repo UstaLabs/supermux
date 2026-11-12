@@ -25,7 +25,7 @@
     <string name="search_voice_speech_engine_kw">dikte yazıya dökme motor</string>
     <string name="search_voice_languages">Diller</string>
     <string name="search_voice_languages_kw">dil algıla</string>
-    <string name="search_voice_glossary">Sizin yazdığınız gibi yazılacak kelimeler</string>
+    <string name="search_voice_glossary">Yazdığınız gibi kalan kelimeler</string>
     <string name="search_voice_glossary_kw">sözlük terimler yazım</string>
     <string name="search_voice_read_aloud">Yanıtları sesli oku</string>
     <string name="search_voice_read_aloud_kw">seslendir konuş ses önizleme</string>
