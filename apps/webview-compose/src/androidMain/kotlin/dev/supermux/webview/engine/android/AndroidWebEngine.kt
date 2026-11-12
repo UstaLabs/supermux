@@ -1405,6 +1405,13 @@ internal class AndroidWebEngine(
         override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
             localResponse(request.url.toString(), request.method)
 
+        /** A key the page left unused (#122 page-first keys): the client's, else WebView's default (the window's). */
+        override fun onUnhandledKeyEvent(view: WebView, event: android.view.KeyEvent) {
+            val taken = view === webView && usableNow() &&
+                runCatching { client?.onUnusedKey(androidx.compose.ui.input.key.KeyEvent(event)) == true }.getOrDefault(false)
+            if (!taken) super.onUnhandledKeyEvent(view, event)
+        }
+
         /**
          * A navigation the page started, or a server redirect of any navigation (WebView asks for no other: not for
          * loadUrl, reload or history themselves).

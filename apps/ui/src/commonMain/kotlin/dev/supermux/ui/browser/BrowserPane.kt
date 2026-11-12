@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import dev.supermux.ui.keys.LocalShortcutDispatcher
+import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -93,11 +95,14 @@ internal fun PreviewCookieDto.toWebCookie(): WebCookie = WebCookie(
 )
 
 /** A tab's answers to its page: a new window asked for with the user's press opens as a link does. */
-private class BrowserClient(private val newWindow: (String) -> Unit) : WebClient {
+private class BrowserClient(private val newWindow: (String) -> Unit, private val unusedKey: (KeyEvent) -> Boolean = { false }) : WebClient {
     override fun onNewWindow(request: NewWindowRequest): NewWindowDecision {
         if (request.isUserGesture) newWindow(request.url)
         return NewWindowDecision.Block
     }
+
+    /** A key the page had first and left unused (Android, #122 page-first keys): the app's shortcuts, as after Compose. */
+    override fun onUnusedKey(event: KeyEvent): Boolean = unusedKey(event)
 }
 
 /**
@@ -248,7 +253,8 @@ fun BrowserPane(
     // A new window the page opens on the user's press: the workspace's link rule, at most one a second (a page that
     // answers one press with a burst opens one).
     val windows = remember { Channel<String>(capacity = 4, onBufferOverflow = BufferOverflow.DROP_LATEST) }
-    val client = remember { BrowserClient { windows.trySend(it) } }
+    val shortcuts by rememberUpdatedState(LocalShortcutDispatcher.current)
+    val client = remember { BrowserClient(newWindow = { windows.trySend(it) }, unusedKey = { shortcuts?.onBubble(it) == true }) }
     LaunchedEffect(Unit) {
         var last: TimeSource.Monotonic.ValueTimeMark? = null
         for (url in windows) {

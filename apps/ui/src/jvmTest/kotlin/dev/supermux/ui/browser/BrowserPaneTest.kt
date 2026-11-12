@@ -332,6 +332,26 @@ class BrowserPaneTest {
         waitUntil(timeoutMillis = 5_000) { "find:vite:true" in rig.calls }
     }
 
+    /**
+     * #122 page-first keys on Android: WebView keeps every key and tells of the unused ones after; one it tells of runs
+     * the app's shortcut as if the page had left it in Compose (here ⌘R / Ctrl+R reloads).
+     */
+    @OptIn(androidx.compose.ui.InternalComposeUiApi::class)
+    @Test fun aKeyThePageLeftUnusedRunsTheAppsShortcut() = runComposeUiTest {
+        val rig = Rig()
+        showWithKeys(rig, mutableStateOf(view("https://vitejs.dev/")))
+        val engine = rig.live()!!
+        // The focus in the pane, as the page holds it on Android (here its address: the same scope).
+        onNodeWithTag("browser-address").performClick()
+        val event = androidx.compose.ui.input.key.KeyEvent(
+            key = Key.R, type = androidx.compose.ui.input.key.KeyEventType.KeyDown, codePoint = 'r'.code,
+            isCtrlPressed = !isApplePlatform, isMetaPressed = isApplePlatform,
+        )
+        val taken = runOnIdle { engine.client?.onUnusedKey(event) }
+        assertEquals(true, taken)
+        waitUntil(timeoutMillis = 5_000) { "reload" in rig.calls }
+    }
+
     /** #122: F12 off Apple, ⌘⌥I on Apple, open the engine's inspector, as Chrome's DevTools keys do. */
     @Test fun theDevToolsKeyOpensTheInspector() = runComposeUiTest {
         val rig = Rig()

@@ -306,6 +306,7 @@ public abstract interface class dev/supermux/webview/WebClient {
 	public fun onNavigation (Ldev/supermux/webview/NavigationRequest;Ldev/supermux/webview/WebContent;)Ldev/supermux/webview/NavigationDecision;
 	public fun onNewWindow (Ldev/supermux/webview/NewWindowRequest;)Ldev/supermux/webview/NewWindowDecision;
 	public fun onPermission (Ldev/supermux/webview/PermissionRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun onUnusedKey-ZmokQxo (Landroid/view/KeyEvent;)Z
 }
 
 public final class dev/supermux/webview/WebClient$Companion {
@@ -319,6 +320,7 @@ public final class dev/supermux/webview/WebClient$DefaultImpls {
 	public static fun onNavigation (Ldev/supermux/webview/WebClient;Ldev/supermux/webview/NavigationRequest;Ldev/supermux/webview/WebContent;)Ldev/supermux/webview/NavigationDecision;
 	public static fun onNewWindow (Ldev/supermux/webview/WebClient;Ldev/supermux/webview/NewWindowRequest;)Ldev/supermux/webview/NewWindowDecision;
 	public static fun onPermission (Ldev/supermux/webview/WebClient;Ldev/supermux/webview/PermissionRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static fun onUnusedKey-ZmokQxo (Ldev/supermux/webview/WebClient;Landroid/view/KeyEvent;)Z
 }
 
 public final class dev/supermux/webview/WebClientKt {
@@ -807,6 +809,11 @@ public abstract interface class dev/supermux/webview/engine/EngineClient {
 	public abstract fun onNavigation (Ldev/supermux/webview/NavigationRequest;)Ldev/supermux/webview/NavigationDecision;
 	public abstract fun onNewWindow (Ldev/supermux/webview/NewWindowRequest;)Ldev/supermux/webview/NewWindowDecision;
 	public abstract fun onPermission (Ldev/supermux/webview/PermissionRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun onUnusedKey-ZmokQxo (Landroid/view/KeyEvent;)Z
+}
+
+public final class dev/supermux/webview/engine/EngineClient$DefaultImpls {
+	public static fun onUnusedKey-ZmokQxo (Ldev/supermux/webview/engine/EngineClient;Landroid/view/KeyEvent;)Z
 }
 
 public final class dev/supermux/webview/engine/EngineConfig {
