@@ -2004,6 +2004,14 @@ private fun WorkspacePanel(
             override fun sendMessage(text: String, images: List<Pair<String, ByteArray>>, send: Boolean): Boolean = deliver(images, text, send)
 
             override fun recipient(): String? = chat()?.chatSessionId()?.let { id -> latestNames[id] }
+
+            // Phase 4: stored in the chat's session on its host, which tells every client how the agent answers.
+            override suspend fun storeComments(body: dev.supermux.net.BrowserCommentsBody): List<dev.supermux.net.BrowserCommentDto>? {
+                val sessionId = chat()?.chatSessionId() ?: return null
+                return runCatching { wsApp.api.addBrowserComments(sessionId, body) }.getOrNull()?.also(wsApp::rememberBrowserComments)
+            }
+
+            override fun commentStates() = wsApp.browserComments
         }
     }
     CompositionLocalProvider(

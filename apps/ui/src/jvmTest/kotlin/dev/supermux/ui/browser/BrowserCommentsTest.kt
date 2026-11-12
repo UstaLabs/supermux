@@ -53,4 +53,15 @@ class BrowserCommentsTest {
         val message = commentsMessage(null, null, listOf(CommentOut(1, "x", "button[aria-label='Close']", "Close", null)))
         assertEquals("**1 browser comment**\n\n### ① \"x\"\n- element: `button[aria-label='Close']`", message)
     }
+
+    /** #122 phase 4: stored comments carry their ids, and the message says how the agent answers them. */
+    @Test fun storedCommentsNameTheirIdsAndTheTools() {
+        val message = commentsMessage(null, null, listOf(CommentOut(1, "x", "a.b", "", null)), ids = mapOf(1 to "c1"))
+        assertEquals(
+            "**1 browser comment**\n\n### ① \"x\" · id c1\n- element: `a.b`\n\n" +
+                "Answer each with your mux tools: resolve_browser_comment (done, with what you changed), reply_browser_comment " +
+                "or dismiss_browser_comment, by its id.",
+            message,
+        )
+    }
 }
