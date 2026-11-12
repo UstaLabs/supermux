@@ -41,11 +41,16 @@ export function buildFragment(sha: string, read: Read): string {
     `<style>\n${fonts}\n</style>\n${styles}\n${scripts}\n`
 }
 
+/** The pin's hash: of the fragment's text with its lines ended by LF, so a Windows checkout (CRLF) checks the same. */
+export function kitHash(text: string): string {
+  return createHash("sha256").update(text.replaceAll("\r\n", "\n")).digest("hex")
+}
+
 if (import.meta.main) {
   const args = process.argv.slice(2)
-  const sha = args[0]
+  const sha = args[0] ?? ""
   const repoAt = args.indexOf("--repo")
-  const repo = repoAt >= 0 ? args[repoAt + 1] : resolve(homedir(), "projects/supermux-website")
+  const repo = (repoAt >= 0 ? args[repoAt + 1] : undefined) ?? resolve(homedir(), "projects/supermux-website")
   if (!sha) {
     console.error("usage: bun scripts/sync-site-kit.ts <website sha> [--repo <supermux-website checkout>]")
     process.exit(2)
@@ -56,7 +61,7 @@ if (import.meta.main) {
   const fragment = buildFragment(full, read)
   const root = resolve(import.meta.dir, "..")
   writeFileSync(resolve(root, FRAGMENT_PATH), fragment)
-  const pin = { repo: "UstaLabs/supermux-website", sha: full, sha256: createHash("sha256").update(fragment).digest("hex"), files: KIT_FILES }
+  const pin = { repo: "UstaLabs/supermux-website", sha: full, sha256: kitHash(fragment), files: KIT_FILES }
   writeFileSync(resolve(root, PIN_PATH), JSON.stringify(pin, null, 2) + "\n")
   console.log(`kit @ ${full.slice(0, 9)}: ${(fragment.length / 1024).toFixed(0)} KiB → ${FRAGMENT_PATH}`)
 }

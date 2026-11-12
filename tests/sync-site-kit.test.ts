@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { createHash } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
-import { KIT_FILES, PIN_PATH, FRAGMENT_PATH, buildFragment } from "../scripts/sync-site-kit"
+import { KIT_FILES, PIN_PATH, FRAGMENT_PATH, buildFragment, kitHash } from "../scripts/sync-site-kit"
 
 // What's new (#90): the website's real-app kit (UstaLabs/supermux-website app/) is the source of the editions' scenes.
 // The app bundles one copy of it, pinned to a website commit, as a single fragment the edition pages inline.
@@ -36,7 +36,13 @@ test("the bundled kit is exactly what its pin says: nobody edited it by hand", (
   const pin = JSON.parse(readFileSync(resolve(root, PIN_PATH), "utf8"))
   expect(pin.repo).toBe("UstaLabs/supermux-website")
   expect(pin.sha).toMatch(/^[0-9a-f]{40}$/)
-  const fragment = readFileSync(resolve(root, FRAGMENT_PATH))
-  expect(createHash("sha256").update(fragment).digest("hex")).toBe(pin.sha256)
-  expect(fragment.toString("utf8")).toContain(pin.sha)
+  const fragment = readFileSync(resolve(root, FRAGMENT_PATH), "utf8")
+  expect(kitHash(fragment)).toBe(pin.sha256)
+  expect(fragment).toContain(pin.sha)
+})
+
+// A Windows checkout (autocrlf) hands the file back with CRLF: the pin is of its text, not of one checkout's bytes.
+test("the pin's hash is the same however the checkout ends its lines", () => {
+  expect(kitHash("a\r\nb\r\n")).toBe(kitHash("a\nb\n"))
+  expect(kitHash("a\nb\n")).toBe(createHash("sha256").update("a\nb\n").digest("hex"))
 })
