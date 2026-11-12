@@ -218,8 +218,9 @@ static NSArray<NSString *> *WVTrailModes(void) {
     WVInstallAccessibilityBridge(window);
 }
 
-- (void)detachFrom:(NSWindow *)window {
-    if (self.window == window) [self removeFromSuperview];
+- (void)detachFromWindowAt:(jlong)window {
+    // A window that has gone took its content view with it, and this view is in no window now.
+    if ((intptr_t)(__bridge void *)self.window == (intptr_t)window) [self removeFromSuperview];
 }
 
 - (void)viewDidMoveToSuperview {

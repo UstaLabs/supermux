@@ -11,6 +11,7 @@
 #   that scripted run of the chat with its probe on, then exits; WINDOW=<width>x<height> (dp) sizes the window, a
 #   phone's width (393x900) putting the previews at a phone's card width.
 #   APP=<path to a packaged .app> runs that app's own launcher instead of java on the classpath (the release check).
+#   SCRIBBLE=1 has malloc overwrite freed memory (MallocScribble): a use after free crashes on its first run.
 #   OUT=<dir> for the log and frames (default: this run's own directory, <copy>/runs/checks-<time>-<pid>/).
 # An SSH session has no window server (AWT throws HeadlessException): the app starts in the logged-in user's GUI
 # session as a transient Aqua LaunchAgent, which runs java itself, never a shell. Its label names this copy of the tree
@@ -58,6 +59,11 @@ if [[ -n "$APP" ]]; then
   echo "mac-engine-checks.sh: the packaged app $APP" >&2
 else
   ARGS="$(java_args "$EXTRA")"
+fi
+# SCRIBBLE=1: freed memory is overwritten at once (malloc's MallocScribble), so a use after free crashes every run instead
+# of only once the memory is reused, as in a long-running app.
+if [[ -n "${SCRIBBLE:-}" && -z "$APP" ]]; then
+  MORE="<key>EnvironmentVariables</key><dict><key>MallocScribble</key><string>1</string></dict>"
 fi
 PLIST="$RUN_DIR/agent.plist"
 write_plist "$PLIST" "$LABEL" "$LOG" "$ARGS" "$MORE" || { echo "mac-engine-checks.sh: bad plist $PLIST" >&2; exit 1; }

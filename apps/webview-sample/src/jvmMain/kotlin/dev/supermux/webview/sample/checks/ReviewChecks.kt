@@ -27,12 +27,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.awt.ComposeWindow
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
@@ -447,6 +450,70 @@ $script
                 val marker = markerIn(pixels, page)
                 assertTrue(marker != null && near(marker, expectedMarker(mac, page)), "the page's marker at $marker, its slot's at ${expectedMarker(mac, page)}")
                 assertEquals(0, backing(mac.copy(page.inset(2f))?.pixels() ?: pixels), "the window's backing in the hole: the page doesn't fill it")
+            }
+        },
+        // #122: a Browser tab in a window of its own, that window closed. The tab goes back to the main window, which
+        // keeps a tab in the back composed but never placed (BrowserTabKeeper), so the page stays live. Its view leaves
+        // the closed window a turn after the composition lets it go; in the app that window has been collected and
+        // AppKit has freed it by then, and the glue made its address an object again: the app crashed (objc_retain in
+        // MacGlue.detach). The page lives on, and shows when its tab comes to the front. Run with SCRIBBLE=1: a use
+        // after free then crashes every time, not only once the memory is reused.
+        Check("mac-review-a-page-whose-window-closed-lives-on") {
+            val stage = Stage()
+            val state = WebViewState(markerPage("closed"))
+            var kept by mutableStateOf(false)
+            compose {
+                ProvideWebViewRuntime(stage.runtime) {
+                    ProvideWebViewOverlays {
+                        if (kept) {
+                            // As the keeper does: measured at a pane's size, never placed.
+                            Layout(content = { WebView(state, Modifier.fillMaxSize(), light, activation = Activation.Eager) }) { measurables, _ ->
+                                measurables.forEach { it.measure(Constraints.fixed(640, 480)) }
+                                layout(0, 0) {}
+                            }
+                        }
+                    }
+                }
+            }
+            var other: ComposeWindow? = ComposeWindow()
+            try {
+                val window = other!!
+                window.setSize(480, 360)
+                window.setContent {
+                    ProvideWebViewRuntime(stage.runtime) {
+                        ProvideWebViewOverlays { WebView(state, Modifier.fillMaxSize(), light, activation = Activation.Eager) }
+                    }
+                }
+                window.isVisible = true
+                waitFor("the page live in its own window") { state.phase == WebViewPhase.Live && state.bridge.isReady }
+                delay(600)
+                // Its window closes, and the main window keeps the tab, in one go.
+                kept = true
+            } finally {
+                other?.dispose()
+                other = null
+                // The closed window collected and its NSWindow freed now, on the event queue, before the view's leaving
+                // gets its turn, as a long-running app's is.
+                repeat(3) {
+                    System.gc()
+                    Thread.sleep(500)
+                }
+            }
+            delay(1_000)
+            // The tab comes to the front: the kept page goes, and shows in a pane.
+            kept = false
+            compose(null)
+            delay(300)
+            var slot: Rect? = null
+            within(stage, listOf(state), scene = {
+                Box(Modifier.fillMaxSize().background(Color(0xFF202124)).padding(start = 40.dp, top = 40.dp)) {
+                    WebView(state, Modifier.size(320.dp, 240.dp).onGloballyPositioned { slot = it.boundsInWindow() }, light, activation = Activation.Eager)
+                }
+            }) { mac ->
+                val page = assertNotNull(slot)
+                val pixels = assertNotNull(mac.copy(page)?.pixels(), "a copy of the hole")
+                val marker = markerIn(pixels, page)
+                assertTrue(marker != null && near(marker, expectedMarker(mac, page)), "the page's marker at $marker, its slot's at ${expectedMarker(mac, page)}")
             }
         },
     )

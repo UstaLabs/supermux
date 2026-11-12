@@ -567,12 +567,13 @@ BOOL WVFrameSyncEnqueue(jlong window, dispatch_block_t placement) {
 
 /** AppKit's thread: puts window in sync (or out of it); its status. */
 static int WVSyncWindow(jlong handle, BOOL on) {
-    NSWindow *window = WVWindow(handle);
     WVFrameSync *sync = WVSyncOf(handle);
     if (!on) {
+        // Turned off, a window may have gone: its handle is never made an object here.
         [sync setWanted:NO];
         return 0;
     }
+    NSWindow *window = WVWindow(handle);
     WVSyncStatus status = WVHookSkiko();
     if (status != WVSyncOn) return status;
     NSArray<CAMetalLayer *> *layers = WVSkikoLayers(window);
