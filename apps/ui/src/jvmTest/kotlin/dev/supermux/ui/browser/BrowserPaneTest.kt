@@ -350,7 +350,13 @@ class BrowserPaneTest {
 
     private class ChatSink : BrowserToChat {
         val sent = mutableListOf<Pair<ByteArray, String>>()
+        val messages = mutableListOf<Triple<String, List<Pair<String, ByteArray>>, Boolean>>()
         override fun sendImage(png: ByteArray, name: String): Boolean { sent += png to name; return true }
+        override fun sendMessage(text: String, images: List<Pair<String, ByteArray>>, send: Boolean): Boolean {
+            messages += Triple(text, images, send)
+            return true
+        }
+        override fun recipient(): String = "Checkout agent"
     }
 
     private fun ComposeUiTest.showWithChat(rig: Rig, v: MutableState<ViewDto>, sink: BrowserToChat?) {
@@ -706,6 +712,61 @@ class BrowserPaneTest {
         onNodeWithTag("browser-pick-clear").performClick()
         onNodeWithTag("browser-pin-1-gone", useUnmergedTree = true).assertDoesNotExist()
         onNodeWithTag("browser-pick-sendbar").assertDoesNotExist()
+    }
+
+    /** Picks a Pay button and comments [words] on it. */
+    private fun ComposeUiTest.pickPay(rig: Rig, words: String) {
+        rig.answerPicks()
+        onNodeWithTag("browser-pick").performClick()
+        onNodeWithTag("browser-pick-layer").performMouseInput { click(center) }
+        onNodeWithTag("browser-pick-comment").performTextInput(words)
+        onNodeWithTag("browser-pick-comment").performKeyInput { pressKey(Key.Enter) }
+    }
+
+    /**
+     * #122 3b: Send posts the comments to the workspace's chat at once (Q4): one message in the design's words with each
+     * element's picture; the pins are done with then, and pick mode ends.
+     */
+    @Test fun sendPostsTheCommentsWithTheirPictures() = runComposeUiTest {
+        val rig = Rig()
+        val sink = ChatSink()
+        showWithChat(rig, mutableStateOf(view("https://vitejs.dev/")), sink)
+        pickPay(rig, "the Pay button is cut off")
+        onNodeWithText("1 comment → Checkout agent", useUnmergedTree = true).assertExists()
+        onNodeWithTag("browser-pick-send").performClick()
+        waitUntil(timeoutMillis = 5_000) { sink.messages.isNotEmpty() }
+        val (text, images, send) = sink.messages.single()
+        assertTrue(send, "posted at once")
+        assertTrue(text.startsWith("**1 browser comment** · https://vitejs.dev/"), text)
+        assertTrue("### ① \"the Pay button is cut off\"" in text && "- element: `button.buy` · text \"Pay €42\"" in text, text)
+        assertTrue("- picture: comment-1.png" in text, text)
+        assertEquals(listOf("comment-1.png"), images.map { it.first })
+        assertTrue(images.single().second.isPng(), "a PNG")
+        waitForIdle()
+        onNodeWithTag("browser-pick-sendbar").assertDoesNotExist()
+        onNodeWithTag("browser-pin-1", useUnmergedTree = true).assertDoesNotExist()
+        onNodeWithTag("browser-pick-layer").assertDoesNotExist()
+    }
+
+    /** "Add to message" (⌥Send in the design) leaves them in the chat's composer, unsent. */
+    @Test fun addToMessageLeavesThemInTheComposer() = runComposeUiTest {
+        val rig = Rig()
+        val sink = ChatSink()
+        showWithChat(rig, mutableStateOf(view("https://vitejs.dev/")), sink)
+        pickPay(rig, "x")
+        onNodeWithTag("browser-pick-compose").performClick()
+        waitUntil(timeoutMillis = 5_000) { sink.messages.isNotEmpty() }
+        assertEquals(false, sink.messages.single().third)
+    }
+
+    /** With no chat to take them, there's no Send at all, only the count and Clear. */
+    @Test fun withNoChatThereIsNoSend() = runComposeUiTest {
+        val rig = Rig()
+        showWithChat(rig, mutableStateOf(view("https://vitejs.dev/")), sink = null)
+        pickPay(rig, "x")
+        onNodeWithTag("browser-pick-sendbar").assertExists()
+        onNodeWithTag("browser-pick-send").assertDoesNotExist()
+        onNodeWithTag("browser-pick-compose").assertDoesNotExist()
     }
 
     /** No scripts into the page (the web client's iframe): no pick mode at all. */

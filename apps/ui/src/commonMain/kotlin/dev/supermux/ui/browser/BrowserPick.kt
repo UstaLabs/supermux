@@ -319,11 +319,15 @@ internal fun PickStrip(modifier: Modifier = Modifier) {
     }
 }
 
-/** While comments wait: how many, and Clear. (Sending them to an agent is the next car.) */
+/**
+ * While comments wait: how many and to whom, Send (posted at once, Q4), Add to message (left in the chat's composer)
+ * and Clear. [onSend] is null where no chat can take them: then only the count and Clear.
+ */
 @Composable
-internal fun PickSendBar(pick: PickState, modifier: Modifier = Modifier) {
+internal fun PickSendBar(pick: PickState, recipient: String?, onSend: ((send: Boolean) -> Unit)?, modifier: Modifier = Modifier) {
     val c = kitColors()
     val n = pick.commented.size
+    val count = if (n == 1) "1 comment" else "$n comments"
     Column(modifier.fillMaxWidth().testTag("browser-pick-sendbar")) {
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.line))
         Row(
@@ -331,9 +335,31 @@ internal fun PickSendBar(pick: PickState, modifier: Modifier = Modifier) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(if (n == 1) "1 comment" else "$n comments", fontSize = 12.5.sp, color = c.text, modifier = Modifier.weight(1f))
+            Text(if (onSend != null && recipient != null) "$count → $recipient" else count, fontSize = 12.5.sp, color = c.text, maxLines = 1, modifier = Modifier.weight(1f))
             KitTextAction("Clear", { pick.clear() }, Modifier.testTag("browser-pick-clear"))
+            onSend?.let { send ->
+                KitTextAction("Add to message", { send(false) }, Modifier.testTag("browser-pick-compose"))
+                SendButton { send(true) }
+            }
         }
+    }
+}
+
+/** The bar's one filled button: Send, in the accent. */
+@Composable
+private fun SendButton(onClick: () -> Unit) {
+    val c = kitColors()
+    Box(
+        Modifier
+            .height(26.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(c.accent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp)
+            .testTag("browser-pick-send"),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("Send", fontSize = 12.5.sp, color = c.onAccent)
     }
 }
 

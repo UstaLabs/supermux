@@ -299,6 +299,39 @@ fun BrowserPane(
     }
 
     val shown = state.url.takeIf { state.content is WebContent.Url } ?: page
+    // Its comments go to the workspace's chat (3b): one message, each element's picture where the engine can picture
+    // the page. Send posts it; Add to message leaves it in the composer.
+    val chat = LocalBrowserToChat.current
+    val accent = dev.supermux.ui.settings.kit.kitColors().accent
+    val sendScope = rememberCoroutineScope()
+    fun sendComments(send: Boolean) {
+        val sink = chat ?: return
+        val comments = pick.commented
+        if (comments.isEmpty()) return
+        val pictures = platform.caps.pageScreenshots
+        val address = shown?.let { displayAddress(it, previews.orEmpty(), byPort) }
+        val url = when (address) {
+            is DisplayAddress.Preview -> "http://localhost:${address.port}${address.path}"
+            is DisplayAddress.Local -> "http://localhost:${address.port}${address.path}"
+            else -> shown
+        }
+        val viewedAs = if (deviceOn && !phone) "${device.preset?.name ?: "Responsive"} · ${device.width}×${device.height}" else null
+        sendScope.launch {
+            val page = if (pictures) state.navigator.screenshot() else null
+            val images = mutableListOf<Pair<String, ByteArray>>()
+            val outs = comments.map { p ->
+                val name = "comment-${p.number}.png"
+                val png = page?.let { pagePng(cropWithPin(it, p.box, accent)) }
+                if (png != null) images += name to png
+                CommentOut(p.number, p.comment, p.element.selector, p.element.text, name.takeIf { png != null })
+            }
+            if (sink.sendMessage(commentsMessage(url, viewedAs, outs), images, send)) {
+                pick.clear()
+                pick.on = false
+            }
+        }
+    }
+    val commentsAction: ((Boolean) -> Unit)? = if (chat != null) { send -> sendComments(send) } else null
     // The tab's keys are #96's registry's: handlers in the pane's scope (KeyContext.Browser), which the platform's
     // modifier reaches through the keymap.
     RegisterCommand(AppCommands.BrowserFocusAddress) { address.requestFocus(); true }
@@ -418,7 +451,7 @@ fun BrowserPane(
                 )
             }
         }
-        if (pick.commented.isNotEmpty()) PickSendBar(pick)
+        if (pick.commented.isNotEmpty()) PickSendBar(pick, chat?.recipient(), commentsAction)
     }
     }
 }

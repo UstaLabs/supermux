@@ -214,7 +214,10 @@ data class ComposerAttachment(
  * file is only staged, as if picked: the user writes the message and sends it (the assistant
  * overlay's "Share what's on screen").
  */
-data class ComposerExternalAttach(val file: PickedFile?, val text: String, val send: Boolean = true)
+data class ComposerExternalAttach(val files: List<PickedFile>, val text: String, val send: Boolean = true) {
+    /** One file, or none (a path that wasn't a file). */
+    constructor(file: PickedFile?, text: String, send: Boolean = true) : this(listOfNotNull(file), text, send)
+}
 
 /** One-shot "transcribe these bytes and append the cleaned text to the draft" request — the
  *  `SM_DICTATE` headless hook, which proves the real POST→append round-trip under Xvfb where there
@@ -1067,26 +1070,26 @@ fun Composer(
     // the recomposition that updates it.
     LaunchedEffect(externalAttach) {
         val request = externalAttach ?: return@LaunchedEffect
-        val file = request.file
-        if (onUpload == null || file == null) {
+        if (onUpload == null || request.files.isEmpty()) {
             onExternalAttachConsumed()
             return@LaunchedEffect
         }
-        val newId = stage(file)
+        val newIds = request.files.map { stage(it) }
         if (!request.send) {
+            // Staged, and its text in the draft after what is there (#122's ⌥Send): the user sends it with theirs.
+            if (request.text.isNotEmpty()) setText(if (text.isBlank()) request.text else text + "\n\n" + request.text)
             onExternalAttachConsumed()
             return@LaunchedEffect
         }
-        // Poll (200ms) for the new chip to leave Uploading — up to 60s (a resumable chunk loop, not
+        // Poll (200ms) for the new chips to leave Uploading — up to 60s (a resumable chunk loop, not
         // a single request; generous so a slow/large file doesn't false-time-out).
         var waited = 0L
-        var current = attachments.firstOrNull { it.id == newId }
-        while (current != null && current.state is UploadState.Uploading && waited < 60_000) {
+        fun current() = newIds.map { id -> attachments.firstOrNull { it.id == id } }
+        while (current().any { it != null && it.state is UploadState.Uploading } && waited < 60_000) {
             delay(200)
             waited += 200
-            current = attachments.firstOrNull { it.id == newId }
         }
-        if (current?.state is UploadState.Done) sendWith(request.text)
+        if (current().all { it?.state is UploadState.Done }) sendWith(request.text)
         onExternalAttachConsumed()
     }
 
