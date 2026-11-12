@@ -181,6 +181,16 @@ class AppUpdateRowsTest {
         notes.forEach { onNodeWithText(it).assertIsDisplayed() }
     }
 
+    @Test fun the_page_lists_only_this_platforms_highlights_without_their_tags() = runComposeUiTest {
+        val notes = listOf("Updates are one click (desktop)", "Read-aloud on the lock screen (Android, iPhone)")
+        val updater = FakeAppUpdater(release = release().copy(highlights = notes))
+        val mac = platform(updater).also { it.releasePlatform = dev.supermux.ui.whatsnew.ReleasePlatform.Mac }
+        setPlatformContent(mac) { AppUpdateRows() }
+        waitForIdle()
+        onNodeWithText("Updates are one click").assertIsDisplayed()
+        onNodeWithText("Read-aloud on the lock screen", substring = true).assertDoesNotExist()
+    }
+
     @Test fun the_download_shows_its_progress_in_words() = runComposeUiTest {
         val gate = CompletableDeferred<Unit>()
         val updater = FakeAppUpdater(release = release(), midDownload = gate)

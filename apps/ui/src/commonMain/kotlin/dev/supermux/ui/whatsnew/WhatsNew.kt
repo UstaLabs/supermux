@@ -51,6 +51,28 @@ fun editionFor(currentVersion: String, editions: List<String> = EDITIONS): Strin
     return editions.filter { local || compareVersions(it, currentVersion) <= 0 }.maxWithOrNull(::compareVersions)
 }
 
+private val PLATFORM_TAG = Regex("""\s*\(([^()]*)\)$""")
+private val TAG_NAMES: Map<String, Set<ReleasePlatform>> = mapOf(
+    "mac" to setOf(ReleasePlatform.Mac), "windows" to setOf(ReleasePlatform.Windows), "linux" to setOf(ReleasePlatform.Linux),
+    "web" to setOf(ReleasePlatform.Web), "android" to setOf(ReleasePlatform.Android), "iphone" to setOf(ReleasePlatform.IPhone),
+    "desktop" to setOf(ReleasePlatform.Mac, ReleasePlatform.Windows, ReleasePlatform.Linux),
+)
+
+/**
+ * A release's highlights as [platform] reads them: a line GitHub's notes tag for other platforms ("… (Mac, Windows)",
+ * scripts/whatsnew-notes.ts) is left out, and this platform's own lines lose the tag. A parenthesis that names no
+ * platform is the line's own words. Where the platform is unknown, every line stays as written.
+ */
+fun highlightsFor(lines: List<String>, platform: ReleasePlatform?): List<String> {
+    if (platform == null) return lines
+    return lines.mapNotNull { line ->
+        val tag = PLATFORM_TAG.find(line) ?: return@mapNotNull line
+        val names = tag.groupValues[1].split(',').map { it.trim().lowercase() }
+        if (names.any { it !in TAG_NAMES }) return@mapNotNull line
+        if (names.none { platform in TAG_NAMES.getValue(it) }) null else line.substring(0, tag.range.first)
+    }
+}
+
 /** Opens What's new at an edition, where the shell provides it (Settings' App version row reopens from it). */
 val LocalOpenWhatsNew = staticCompositionLocalOf<((String) -> Unit)?> { null }
 

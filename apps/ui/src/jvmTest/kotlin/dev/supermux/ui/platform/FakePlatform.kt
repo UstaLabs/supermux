@@ -96,6 +96,7 @@ internal open class FakePlatform(
     override fun videoDecoder(): VideoSurfaceFactory? = video
 
     override var updates: AppUpdater = FakeAppUpdater()
+    override var releasePlatform: dev.supermux.ui.whatsnew.ReleasePlatform? = null
     override var notifications: NotificationManager = FakeNotifications()
     override var windows: WindowHostController? = null
     override var push: PushRegistrar? = null

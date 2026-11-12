@@ -47,6 +47,35 @@ class WhatsNewTest {
         assertEquals(listOf("cards"), parseEdition(page)!!.chaptersFor(null).map { it.id })
     }
 
+    // ── the update card's highlights, as GitHub's notes tag them (scripts/whatsnew-notes.ts) ──
+
+    private val notes = listOf(
+        "Open your app right next to the chat (Mac, Windows, Android, iPhone)",
+        "Agents can answer with a live page",
+        "Updates are one click (desktop)",
+        "A signed installer for Windows (Windows)",
+        "Fixed a crash (rare)",
+    )
+
+    @Test fun a_device_sees_only_the_highlights_it_has_without_their_tags() {
+        assertEquals(
+            listOf("Open your app right next to the chat", "Agents can answer with a live page", "Fixed a crash (rare)"),
+            highlightsFor(notes, ReleasePlatform.IPhone),
+        )
+        assertEquals(
+            listOf("Open your app right next to the chat", "Agents can answer with a live page", "Updates are one click", "A signed installer for Windows", "Fixed a crash (rare)"),
+            highlightsFor(notes, ReleasePlatform.Windows),
+        )
+        assertEquals(
+            listOf("Agents can answer with a live page", "Updates are one click", "Fixed a crash (rare)"),
+            highlightsFor(notes, ReleasePlatform.Linux),
+        )
+    }
+
+    @Test fun an_unknown_platform_sees_every_highlight_as_written() {
+        assertEquals(notes, highlightsFor(notes, null))
+    }
+
     // ── which edition Settings reopens ──────────────────────────────────────────────────────────
 
     @Test fun settings_reopens_the_newest_edition_this_build_has() {
