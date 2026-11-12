@@ -21,7 +21,7 @@
   "apps/ui/src/commonMain/kotlin/dev/supermux/ui/browser/BrowserBars.kt": 5,
   "apps/ui/src/commonMain/kotlin/dev/supermux/ui/browser/BrowserDevice.kt": 1,
   "apps/ui/src/commonMain/kotlin/dev/supermux/ui/browser/BrowserPane.kt": 1,
-  "apps/ui/src/commonMain/kotlin/dev/supermux/ui/browser/BrowserPick.kt": 9,
+  "apps/ui/src/commonMain/kotlin/dev/supermux/ui/browser/BrowserPick.kt": 11,
   "apps/ui/src/commonMain/kotlin/dev/supermux/ui/chat/ChatMediaViewer.kt": 3,
   "apps/ui/src/commonMain/kotlin/dev/supermux/ui/chat/ChatPanel.kt": 9,
   "apps/ui/src/commonMain/kotlin/dev/supermux/ui/chat/Composer.kt": 14,
