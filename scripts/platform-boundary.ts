@@ -125,7 +125,8 @@ export const RULES: Rule[] = [
   {
     id: "os-check-kt",
     lang: "kt",
-    patterns: [/System\.getProperty\(\s*"os\.name"\s*\)/, /File\.separatorChar\s*==/, /\bnavigator\.platform\b/, /\buserAgent\b/],
+    // Sniffing is reading the browser's own navigator.userAgent; a user agent a library sets or a setting names is not.
+    patterns: [/System\.getProperty\(\s*"os\.name"\s*\)/, /File\.separatorChar\s*==/, /\bnavigator\.platform\b/, /\bnavigator\.userAgent\b/],
     allowed: [
       `${DESKTOP}/platform/DesktopOs.kt`,
       "apps/editor-compose/src/jvmMain/kotlin/dev/supermux/editor/compose/Platform.jvm.kt",
