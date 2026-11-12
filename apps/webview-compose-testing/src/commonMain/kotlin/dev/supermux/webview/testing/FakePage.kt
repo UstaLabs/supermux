@@ -14,8 +14,8 @@ import kotlinx.serialization.json.put
  * The page's side of the bridge's wire format, which [FakeWebEngine]'s pages speak as the shim does
  * (`dev.supermux.webview.bridge.BridgeShim`'s JavaScript). The library keeps its own codec internal; this is the format
  * the shim and the host share, from the page's end:
- * - an event is `{"t":"event","n":…,"d":…}`, a reply `{"t":"reply","id":…,"r":…}`, and a call from the host
- *   `{"t":"call","id":…,"m":…,"p":…}`;
+ * - an event is `{"t":"event","n":…,"d":…}`, a reply `{"t":"reply","id":…,"r":…}`, and a call
+ *   `{"t":"call","id":…,"m":…,"p":…}`, which a page's `callAfterClick` sends with its click verdict, `"c":true|false`;
  * - what a page sends ends with `"from":<its document's nonce>`, and what the host sends a document with
  *   `"to":<its nonce>`, but for the host's `$hello`.
  *
@@ -46,6 +46,23 @@ internal object FakePageWire {
             put("t", "reply")
             put("id", id)
             put("r", result)
+            if (from != null) put("from", from)
+        }.toString()
+    }
+
+    /**
+     * The page's document [from] calls the host's [method]: `hostBridge.call` when [clicked] is null, else
+     * `hostBridge.callAfterClick` with the shim's verdict ([clicked], written `c`).
+     * @throws IllegalArgumentException if [params] isn't strict JSON.
+     */
+    fun call(id: Long, method: String, params: JsonElement, clicked: Boolean?, from: String?): String {
+        require(params.isStrictJson()) { "bridge payload is not strict JSON" }
+        return buildJsonObject {
+            put("t", "call")
+            put("id", id)
+            put("m", method)
+            put("p", params)
+            if (clicked != null) put("c", clicked)
             if (from != null) put("from", from)
         }.toString()
     }

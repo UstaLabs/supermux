@@ -135,10 +135,10 @@ Focus is never trusted: a page can move focus itself, and a window that wasn't f
 
 The frame's transient user activation (`navigator.userActivation.isActive`) must hold at call time.
 
-**Native** (WKWebView on macOS and iOS, Android WebView, WebView2, WPE):
-- The same shim runs through the library's document-start bridge. On Apple's engines it runs in its own `WKContentWorld`, out of the page's reach.
-- The host also records the real pointer, touch and key input delivered to that card's view. A send is accepted only within 1 s of that input, consumed by the send. On Windows this works in webview-compose's visual hosting, where the library forwards the input itself.
-- Open decision 4: assistive input (VoiceOver, TalkBack, Voice Control, Switch Access, Narrator) reaches the page as a click but delivers no input to the view.
+**Native** (WKWebView on macOS and iOS, Android WebView, WebView2, WPE), decided by open decision 4, option (c):
+- The card sends with the library's `hostBridge.callAfterClick`, and the host registers it with `bridge.handleAfterButtonClick`. The call carries the click verdict: a trusted click on a button in that card within 1 s, unused, with the engine's transient activation (`navigator.userActivation.isActive`, where the engine has it).
+- The verdict is made out of the page's reach. On WebKit (iOS, macOS, Linux) the library's shim runs in the page's world, but its relay runs in the engine's own content world: the relay records trusted button clicks there and replaces the verdict on every `callAfterClick` it forwards. On Android and Windows the shim shares the page's world, so, as on the web, the accessors it captured before any page script ran are the defence, and its messages have no prototype a page could hook.
+- The host's input stamp no longer gates cards, so a screen reader's activation (VoiceOver, TalkBack, Narrator: a click in the page, no input to the view) sends, as on the web. The stamp stays in the library (`handleWithUserInput`).
 
 **Built and tested for the web already,** in the eval harness:
 - the shim is `evals/show-html/page-api.ts` and the host is `click.ts`;
@@ -348,7 +348,7 @@ TDD, cars to Muxie, real checks on his Mac, Fold and iPhone.
 1. A page with a problem: **not shown, the agent re-calls** · or shown with a warning.
 2. Keyboard on the web, while a page has focus: **the page becomes unfocusable while you type in the app** · or accept the residual (webview's pending choice).
 3. The check without a browser on the host: **shown, said in the result** · or offer to download a headless Chromium (~150 MB) once.
-4. **Screen readers and click-to-send on native platforms.**
+4. **Screen readers and click-to-send on native platforms.** Decided (Ahmet): **(c)**, built in webview-compose (`callAfterClick` / `handleAfterButtonClick`).
    - VoiceOver and TalkBack activate a button as a click inside the page, but deliver no input to the view. So the host's input stamp (your rule for native platforms) refuses their sends.
    - **(a) accept the shim's trusted button click alone while assistive input is on.** The app asks the OS (`UIAccessibility.isVoiceOverRunning`, `isSwitchControlRunning`, Android's `AccessibilityManager.isTouchExplorationEnabled`, Windows' screen-reader flag). That leaves gaps: Voice Control and Android's Voice Access have no reliable flag.
    - (b) keep the host stamp strict: no click-to-send with assistive input.

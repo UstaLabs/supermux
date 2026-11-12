@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.toSize
 import dev.supermux.webview.bridge.PageAnswer
 import dev.supermux.webview.bridge.WebBridge
+import dev.supermux.webview.bridge.clickRecheckOf
 import dev.supermux.webview.bridge.userInputOf
 import dev.supermux.webview.engine.EngineClient
 import dev.supermux.webview.engine.EngineConfig
@@ -1081,7 +1082,7 @@ internal class WebViewHost(
         if (!usable(engine)) return false
         // A fresh connection, for this document only. After a load() the bridge already waits for it, parked, with what
         // the app sent since: the connection takes that over, and delivers it once this document announces itself.
-        state.bridge.connect(engine::postMessage, ::originAllowed, scope, userInputOf(engine))
+        state.bridge.connect(engine::postMessage, ::originAllowed, scope, userInputOf(engine), clickRecheckOf(engine))
         return safely {
             engine.configure(setup)
             // The load or restore starts this document's events: the engine drops what it still holds of the one before.
@@ -1136,7 +1137,7 @@ internal class WebViewHost(
         eventsJob?.cancel()
         // Connected first: the engine kept what the page did while parked, and the collector, undispatched, hears it
         // right here. A commit among it asks the page to announce itself, which needs the connection.
-        state.bridge.connect(engine::postMessage, ::originAllowed, scope, userInputOf(engine))
+        state.bridge.connect(engine::postMessage, ::originAllowed, scope, userInputOf(engine), clickRecheckOf(engine))
         // Subscribed before the replay. What is heard before it is the page's past: a first paint there was drawn in no
         // place of this view's, and only the replay's, once the page is drawn here, lifts the cover; and what the page
         // said meanwhile (its messages, its console, but not its $ready) was said while nobody listened, and reaches no
@@ -1391,7 +1392,7 @@ internal class WebViewHost(
         val scope = leaseScope
         if (origin != null && origin !in allowedOrigins && scope != null) {
             state.bridge.disconnect()
-            state.bridge.connect(engine::postMessage, ::originAllowed, scope, userInputOf(engine))
+            state.bridge.connect(engine::postMessage, ::originAllowed, scope, userInputOf(engine), clickRecheckOf(engine))
         }
     }
 
@@ -2014,7 +2015,7 @@ private class ParkedView(
             // Connected first, as an adopting view's: what the page did while parked is heard right here, undispatched,
             // and a commit among it tells the connected bridge which origin to ask. What the page said meanwhile reaches
             // no one, as for an adopting view: this bridge hears the page from the replay on (its $ready, its state).
-            bridge.connect(engine::postMessage, { it in setup.bridgeOrigins }, scope, userInputOf(engine))
+            bridge.connect(engine::postMessage, { it in setup.bridgeOrigins }, scope, userInputOf(engine), clickRecheckOf(engine))
             var replayed = false
             scope.launch(start = CoroutineStart.UNDISPATCHED) {
                 engine.events.collect { event ->

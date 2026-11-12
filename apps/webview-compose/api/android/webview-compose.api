@@ -775,6 +775,7 @@ public final class dev/supermux/webview/bridge/WebBridge {
 	public final fun getDroppedMessages ()J
 	public final fun getOnError ()Lkotlin/jvm/functions/Function1;
 	public final fun handle (Ljava/lang/String;Lkotlin/jvm/functions/Function2;)Lkotlin/jvm/functions/Function0;
+	public final fun handleAfterButtonClick (Ljava/lang/String;Lkotlin/jvm/functions/Function3;)Lkotlin/jvm/functions/Function0;
 	public final fun handleWithUserInput (Ljava/lang/String;Lkotlin/jvm/functions/Function3;)Lkotlin/jvm/functions/Function0;
 	public final fun isConnected ()Z
 	public final fun isReady ()Z

@@ -102,6 +102,7 @@ final class dev.supermux.webview.testing/FakeWebEngine : dev.supermux.webview.en
 
     final fun Surface(androidx.compose.ui/Modifier, androidx.compose.runtime/Composer?, kotlin/Int) // dev.supermux.webview.testing/FakeWebEngine.Surface|Surface(androidx.compose.ui.Modifier;androidx.compose.runtime.Composer?;kotlin.Int){}[0]
     final fun applyOverlays(dev.supermux.webview.runtime/OverlayCutouts) // dev.supermux.webview.testing/FakeWebEngine.applyOverlays|applyOverlays(dev.supermux.webview.runtime.OverlayCutouts){}[0]
+    final fun callFromPage(kotlin/Long, kotlin/String, kotlinx.serialization.json/JsonElement = ..., kotlin/Boolean? = ...): kotlin/Boolean // dev.supermux.webview.testing/FakeWebEngine.callFromPage|callFromPage(kotlin.Long;kotlin.String;kotlinx.serialization.json.JsonElement;kotlin.Boolean?){}[0]
     final fun clearFind() // dev.supermux.webview.testing/FakeWebEngine.clearFind|clearFind(){}[0]
     final fun configure(dev.supermux.webview.engine/PageSetup) // dev.supermux.webview.testing/FakeWebEngine.configure|configure(dev.supermux.webview.engine.PageSetup){}[0]
     final fun emit(dev.supermux.webview.engine/EngineEvent) // dev.supermux.webview.testing/FakeWebEngine.emit|emit(dev.supermux.webview.engine.EngineEvent){}[0]

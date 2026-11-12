@@ -285,6 +285,21 @@ public class FakeWebEngine(
         return true
     }
 
+    /**
+     * The page calls the host's [method] as the shim sends it, signed by the current document: `hostBridge.call` when
+     * [clicked] is null, else `hostBridge.callAfterClick`, with the verdict the shim made ([clicked]: a trusted click on a
+     * button in the page within the last second, unused). The host's reply is recorded in [calls] as `post:`. False,
+     * and nothing is sent, when the document runs no shim or the engine was released.
+     * @throws IllegalArgumentException if [params] isn't strict JSON.
+     */
+    public fun callFromPage(id: Long, method: String, params: JsonElement = JsonNull, clicked: Boolean? = null): Boolean {
+        val content = current ?: return false
+        val document = nonce ?: return false
+        if (released) return false
+        emit(EngineEvent.PageMessage(originOf(content), FakePageWire.call(id, method, params, clicked, from = document)), document)
+        return true
+    }
+
     override fun configure(setup: PageSetup) {
         record("configure")
         if (!allowed("configure", lease = true)) return

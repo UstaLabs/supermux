@@ -26,6 +26,10 @@ import kotlin.random.Random
  *     main thread: a burst of [PAGE_MESSAGE_BURST], then [PAGE_MESSAGES_PER_SECOND]. A `$ready` passes apart from that,
  *     once for the document and once for each `$hello` the host delivers: a page asking itself to announce in a loop
  *     mints none.
+ *   - It makes the click verdict of every `hostBridge.callAfterClick` itself, from the trusted clicks on buttons it saw
+ *     in its own world and that world's `navigator.userActivation`, and replaces the one the page's world put on the call
+ *     (`c`): the page can redefine nothing the relay reads (WebBridge.handleAfterButtonClick). It forwards each page
+ *     message but a `$ready`, up to the calls' cap, as it parsed it, so the host reads exactly what the relay judged.
  *   - An engine that can't observe the document's title and same-document URL asks it for hints of their changes; one
  *     that can't tell the user's navigations from a page's own asks it for the user's input, and puts [frameInput] in
  *     the page's other frames.
@@ -53,6 +57,7 @@ internal class WebKitScripts(val handlerName: String, val outEvent: String, val 
         .replace("__UP__", jsString(upEvent))
         .replace("__ORIGINS__", jsArray(pageOrigins))
         .replace("__MAX__", BridgeCodec.DEFAULT_MAX_REPLY_CHARS.toString())
+        .replace("__MAX_CALL__", BridgeCodec.DEFAULT_MAX_MESSAGE_CHARS.toString())
         .replace("__INPUT__", if (input) INPUT else "")
         .replace("__HINTS__", if (hints) HINTS else "")
         .replace("__READY__", jsString(WebBridge.READY_PREFIX))
@@ -196,10 +201,36 @@ internal class WebKitScripts(val handlerName: String, val outEvent: String, val 
     budget -= 1;
     return true;
   }
+  // Click-to-send: a trusted click on a button, as this world sees it, allows one callAfterClick within a second, while
+  // the engine reports the user's transient activation (where it has userActivation). This verdict replaces the page
+  // world's. A message up to the calls' cap is forwarded as parsed here, so the host reads what was judged (one key
+  // each, whatever duplicates the text had); a longer one can only be a reply, which the host takes for nothing else.
+  var MAX_CALL = __MAX_CALL__, BUTTON = 'button, input[type="button"], input[type="submit"]', clickAt = -1e9, clicked = false;
+  var parse = JSON.parse, stringify = JSON.stringify, hasOwn = Object.prototype.hasOwnProperty, nav = navigator;
+  window.addEventListener('click', function (e) {
+    if (!e.isTrusted) return;
+    var t = e.target;
+    if (t && t.nodeType === 1 && t.closest(BUTTON)) { clickAt = clock(); clicked = true; }
+  }, true);
+  function takeClick() {
+    var was = clicked, age = clock() - clickAt, ua = nav.userActivation;
+    clicked = false;
+    return was && age >= 0 && age <= 1000 && (!ua || ua.isActive === true);
+  }
+  function judged(text) {
+    if (text.length > MAX_CALL) return text;
+    var m;
+    try { m = parse(text); } catch (x) { return null; }
+    if (!m || typeof m !== 'object') return null;
+    if (m.t === 'call' && hasOwn.call(m, 'c')) m.c = takeClick();
+    return stringify(m);
+  }
   document.addEventListener(__ASK__, function (e) { e.preventDefault(); });
   document.addEventListener(__OUT__, function (e) {
     var text = e.detail;
-    if (typeof text === 'string' && text.length <= MAX && allowed(text)) send('msg ' + text);
+    if (typeof text !== 'string' || text.length > MAX || !allowed(text)) return;
+    if (!(text.length <= READY_MAX && text.indexOf(READY) === 0)) text = judged(text);
+    if (text !== null && text.length <= MAX) send('msg ' + text);
   });
   // WebKit may run the page world's scripts first: the shim then keeps what it said (its announcement) until now.
   document.dispatchEvent(new CustomEvent(__UP__));
