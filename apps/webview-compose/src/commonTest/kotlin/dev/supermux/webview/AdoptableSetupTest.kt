@@ -23,6 +23,8 @@ class AdoptableSetupTest {
 
     @Test fun theUserAgentAndTheBackgroundAreTheDocuments() {
         assertFalse(started.adoptableBy(started.copy(userAgentSuffix = "demo/2")))
+        assertFalse(started.adoptableBy(started.copy(userAgent = "Phone/1")))
+        assertFalse(started.adoptableBy(started.copy(desktopSite = true)))
         assertFalse(started.adoptableBy(started.copy(transparentBackground = true)))
     }
 

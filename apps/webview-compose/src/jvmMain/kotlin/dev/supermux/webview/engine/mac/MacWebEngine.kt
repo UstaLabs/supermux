@@ -304,7 +304,7 @@ internal class MacWebEngine(
             dark = setup.dark,
             transparent = setup.transparentBackground,
             // platform-ok: WebKit's user-agent setting; not an OS check
-            userAgent = setup.userAgentSuffix?.let { suffix -> listOfNotNull(baseUserAgent, suffix).joinToString(" ") },
+            userAgent = setup.agent(baseUserAgent),
             inspectable = setup.inspectable,
             relay = scripts.relay(origins),
             shim = if (setup.javaScriptEnabled) scripts.shim(origins) else null,

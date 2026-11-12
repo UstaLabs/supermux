@@ -50,6 +50,8 @@ public data class EngineConfig(val profile: WebProfile, val mediaPlaybackRequire
  * @property transparentBackground whether the engine leaves the page's background transparent.
  * @property userAgentSuffix appended to the engine's user agent, or null.
  * @property bridgeOrigins the origins whose documents get the bridge shim.
+ * @property userAgent a whole user agent in place of the engine's own, or null ([agent]).
+ * @property desktopSite the desktop site, as a phone browser's "Desktop site" ([WebSettings.desktopSite]).
  */
 @WebEngineSpi
 public data class PageSetup(
@@ -59,7 +61,13 @@ public data class PageSetup(
     val transparentBackground: Boolean,
     val userAgentSuffix: String?,
     val bridgeOrigins: Set<String>,
-)
+    val userAgent: String? = null,
+    val desktopSite: Boolean = false,
+) {
+    /** The agent to set on an engine whose own is [base]: [userAgent] or [base], then the suffix; null to leave it alone. */
+    public fun agent(base: String?): String? =
+        if (userAgent == null && userAgentSuffix == null) null else listOfNotNull(userAgent ?: base, userAgentSuffix).joinToString(" ")
+}
 
 /**
  * The per-lease part of these settings, with the values the runtime resolved: [dark] from [WebSettings.darkMode] and
@@ -72,7 +80,26 @@ internal fun WebSettings.pageSetup(dark: Boolean, bridgeOrigins: Set<String>): P
     transparentBackground = transparentBackground,
     userAgentSuffix = userAgentSuffix,
     bridgeOrigins = bridgeOrigins,
+    userAgent = userAgent,
+    desktopSite = desktopSite,
 )
+
+/**
+ * A phone engine's "Desktop site" ([WebSettings.desktopSite]) where the platform has no such mode of its own (Android):
+ * Chrome's desktop agent on Linux, as Chrome Android sends for it, and a 1280 px layout viewport in place of the page's
+ * own, set at document start and kept as the page adds or changes its viewport tag.
+ */
+@WebEngineSpi
+public object DesktopSite {
+    public const val AGENT: String =
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
+    public const val VIEWPORT_SCRIPT: String = "(function(){var want='width=1280';" +
+        "function fix(m){if(m&&m.getAttribute('content')!==want)m.setAttribute('content',want);}" +
+        "function all(){var ms=document.querySelectorAll('meta[name=viewport]');for(var i=0;i<ms.length;i++)fix(ms[i]);" +
+        "if(!ms.length&&document.head){var m=document.createElement('meta');m.name='viewport';m.content=want;document.head.appendChild(m);}}" +
+        "new MutationObserver(all).observe(document,{subtree:true,childList:true,attributes:true,attributeFilter:['content']});" +
+        "document.addEventListener('DOMContentLoaded',all);})();"
+}
 
 @WebEngineSpi
 public sealed interface WebEngineResult {

@@ -76,6 +76,8 @@ class DesktopPlatform : Platform {
         // AWT turns a Mac trackpad's two-finger scroll into wheel events that run on into the
         // system's momentum, with no "fingers lifted" in between.
         trackpadMomentum = isMacOs(),
+        // WKWebView's pageZoom: device mode's fit (#122). WebView2 and WPE have no page zoom in the engine yet.
+        pageFit = isMacOs(),
         // The assistant overlay (#62): the Agent in always-on-top windows over every app, behind its
         // Appearance switch. macOS and Windows; a Linux compositor may not keep it on top.
         assistantOverlay = dev.supermux.desktop.overlay.desktopOverlaySupported,

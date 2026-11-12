@@ -2,7 +2,7 @@
 // that rises is a new OS decision made in place; a count that falls means the baseline should be lowered:
 //   bun scripts/platform-boundary.ts --write
 import { expect, test } from "bun:test"
-import { compare, countHits, readBaseline, RULES, scanRepo, type Change, type Hit } from "../scripts/platform-boundary"
+import { compare, countHits, readBaseline, RULES, scanRepo, scanText, type Change, type Hit } from "../scripts/platform-boundary"
 
 const hits = scanRepo()
 const drift = compare(countHits(hits), readBaseline())
@@ -23,4 +23,11 @@ test("the baseline only shrinks: lower it when a count falls (bun scripts/platfo
 
 test("every platform-ok marker gives its reason", () => {
   expect(hits.filter(h => h.rule === "platform-ok").map(h => `${h.file}:${h.line}  ${h.text}`)).toEqual([])
+})
+
+test("a user agent a library sets is no OS check; reading navigator.userAgent is (#122)", () => {
+  const kt = RULES.filter(rule => rule.id === "os-check-kt")
+  expect(scanText("apps/x/A.kt", "    public val userAgent: String? = null,", kt)).toEqual([])
+  expect(scanText("apps/x/A.kt", "        userAgent = setup.agent(baseUserAgent),", kt)).toEqual([])
+  expect(scanText("apps/x/A.kt", '    js("/Mac/.test(navigator.userAgent)")', kt).map(h => h.rule)).toEqual(["os-check-kt"])
 })

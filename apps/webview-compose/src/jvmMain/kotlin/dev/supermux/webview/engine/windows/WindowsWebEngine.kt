@@ -239,6 +239,11 @@ internal class WindowsWebEngine(
         val before = this.setup
         this.setup = setup
         page.configure(flagsOf(setup), backgroundOf(setup), setup.userAgentSuffix)
+        // A whole agent (#122's device mode) through CDP: the glue only appends a suffix to WebView2's. "" clears it.
+        if (setup.userAgent != before?.userAgent || setup.userAgent != null && setup.userAgentSuffix != before?.userAgentSuffix) {
+            val agent = setup.userAgent?.let { listOfNotNull(it, setup.userAgentSuffix).joinToString(" ") }.orEmpty()
+            page.devtools(NO_ANSWER, "Emulation.setUserAgentOverride", buildJsonObject { put("userAgent", JsonPrimitive(agent)) }.toString())
+        }
         // Origins or scripts changed mid-lease: documents from now on get them, in the same epoch, with the same secret.
         if (content != null && (before == null || before.bridgeOrigins != setup.bridgeOrigins || before.javaScriptEnabled != setup.javaScriptEnabled)) {
             page.setScript(queue.epoch, secret, documentScript())

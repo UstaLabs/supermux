@@ -261,6 +261,8 @@ val IOS_CAPS: Caps = Caps(
     // description beside it.
     terminal = true,
     scrcpy = false,
+    // WKWebView's pageZoom: device mode's fit on an iPad (#122).
+    pageFit = true,
 )
 
 /**

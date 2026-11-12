@@ -27,6 +27,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -54,6 +55,7 @@ import androidx.compose.ui.unit.sp
 import dev.supermux.browser.DeviceGroup
 import dev.supermux.browser.DeviceMode
 import dev.supermux.browser.DevicePresets
+import dev.supermux.browser.PageAppearance
 import dev.supermux.ui.settings.kit.KitGlyphs
 import dev.supermux.ui.settings.kit.kitColors
 import dev.supermux.ui.widgets.DropdownMenu
@@ -64,7 +66,16 @@ import dev.supermux.ui.widgets.DropdownMenuItem
  * its size to type, rotate, and close. [onChange] gets every new mode; [onClose] turns device mode off.
  */
 @Composable
-internal fun DeviceBar(mode: DeviceMode, onChange: (DeviceMode) -> Unit, onClose: () -> Unit, modifier: Modifier = Modifier) {
+internal fun DeviceBar(
+    mode: DeviceMode,
+    onChange: (DeviceMode) -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+    /** Whether the page's agent and appearance can change here: without it, no Mobile/Desktop and no ◐ at all. */
+    emulation: Boolean = true,
+    /** The scale the device is drawn at now, or null where the page can't be fitted: then no Fit at all. */
+    scale: Float? = null,
+) {
     val c = kitColors()
     var menu by remember { mutableStateOf(false) }
     Column(modifier.fillMaxWidth().testTag("browser-device-bar")) {
@@ -109,10 +120,63 @@ internal fun DeviceBar(mode: DeviceMode, onChange: (DeviceMode) -> Unit, onClose
             Text("×", color = c.faint, fontSize = 12.sp)
             SideField(mode.height, "Height", "browser-device-height") { onChange(mode.resized(height = it)) }
             BarButton(KitGlyphs.Rotate, "Rotate", "browser-device-rotate", { onChange(mode.rotated()) }, on = mode.rotated)
+            scale?.let { now ->
+                BarChoice(
+                    label = mode.fit?.let { "$it%" } ?: "Fit ${(now * 100).toInt()}%",
+                    tag = "browser-device-fit",
+                    choices = listOf(Triple("Fit to pane", "browser-device-fit-auto", mode.fit == null)) +
+                        DeviceMode.FITS.map { Triple("$it%", "browser-device-fit-$it", mode.fit == it) },
+                ) { i -> onChange(mode.copy(fit = if (i == 0) null else DeviceMode.FITS[i - 1])) }
+            }
+            if (emulation) {
+                BarDivider()
+                BarChoice(
+                    label = if (mode.mobile) "Mobile" else "Desktop",
+                    tag = "browser-device-agent",
+                    choices = listOf(Triple("Mobile", "browser-device-agent-mobile", mode.mobile), Triple("Desktop", "browser-device-agent-desktop", !mode.mobile)),
+                ) { i -> onChange(mode.withMobile(i == 0)) }
+                BarChoice(
+                    label = "◐ " + mode.appearance.label,
+                    tag = "browser-device-appearance",
+                    choices = PageAppearance.entries.map { Triple(it.label, "browser-device-appearance-${it.name.lowercase()}", it == mode.appearance) },
+                ) { i -> onChange(mode.copy(appearance = PageAppearance.entries[i])) }
+            }
             Spacer(Modifier.weight(1f))
             BarButton(KitGlyphs.Close, "Close device mode", "browser-device-close", onClose)
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.line))
+    }
+}
+
+/** A hairline between the bar's groups. */
+@Composable
+private fun BarDivider() {
+    Box(Modifier.padding(horizontal = 2.dp).size(1.dp, 16.dp).background(kitColors().line))
+}
+
+/** A label that opens a menu of [choices] (label, tag, chosen); [onChoose] gets the index chosen. */
+@Composable
+private fun BarChoice(label: String, tag: String, choices: List<Triple<String, String, Boolean>>, onChoose: (Int) -> Unit) {
+    val c = kitColors()
+    var open by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .clickable(role = Role.DropdownList) { open = true }
+                .padding(horizontal = 8.dp, vertical = 4.dp)
+                .testTag(tag),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(label, color = c.dim, fontSize = 12.sp, maxLines = 1)
+            Icon(KitGlyphs.ChevronDown, contentDescription = null, tint = c.faint, modifier = Modifier.size(12.dp))
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            choices.forEachIndexed { i, (name, rowTag, chosen) ->
+                DeviceRow(name, null, chosen, rowTag) { open = false; onChoose(i) }
+            }
+        }
     }
 }
 
@@ -166,21 +230,25 @@ private fun SideField(value: Int, label: String, tag: String, onValue: (Int) -> 
 }
 
 /**
- * The page at [mode]'s size, centred on the pane's backdrop with a hairline round it; a device bigger than the pane
- * keeps its size and the pane pans (fit-to-pane scaling is a later car). [page] fills the viewport.
+ * The page at [mode]'s size, centred on the pane's backdrop with a hairline round it. With [fit] the device is drawn at
+ * its scale for the pane ([DeviceMode.scaleIn], told through [onScale]): the view is the device's size times it, and the
+ * pane zooms the page by the same, so its CSS size stays the device's. Without, or above the pane, the pane pans.
  */
 @Composable
-internal fun DeviceStage(mode: DeviceMode, page: @Composable () -> Unit) {
+internal fun DeviceStage(mode: DeviceMode, fit: Boolean = false, onScale: (Float) -> Unit = {}, page: @Composable () -> Unit) {
     val c = kitColors()
     BoxWithConstraints(Modifier.fillMaxSize().background(c.pane)) {
         val pane = this
+        val margin = 34.dp // the stage's padding and hairline, both sides
+        val scale = if (fit) mode.scaleIn((maxWidth - margin).value, (maxHeight - margin).value) else 1f
+        LaunchedEffect(scale) { onScale(scale) }
         Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).horizontalScroll(rememberScrollState())) {
             Box(
                 Modifier.widthIn(min = pane.maxWidth).heightIn(min = pane.maxHeight).padding(16.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Box(Modifier.border(1.dp, c.line).padding(1.dp)) {
-                    Box(Modifier.size(mode.width.dp, mode.height.dp).testTag("browser-viewport")) { page() }
+                    Box(Modifier.size((mode.width * scale).dp, (mode.height * scale).dp).testTag("browser-viewport")) { page() }
                 }
             }
         }

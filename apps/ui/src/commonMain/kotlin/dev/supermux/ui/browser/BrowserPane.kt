@@ -30,6 +30,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import dev.supermux.browser.DeviceMode
+import dev.supermux.browser.PageAppearance
 import dev.supermux.browser.AddressAction
 import dev.supermux.browser.BrowserTabSync
 import dev.supermux.browser.BrowserViewState
@@ -51,6 +52,7 @@ import dev.supermux.webview.NewWindowRequest
 import dev.supermux.webview.runtime.ProvideWebViewRuntime
 import dev.supermux.webview.WebClient
 import dev.supermux.webview.WebContent
+import dev.supermux.webview.DarkMode
 import dev.supermux.webview.WebCookie
 import dev.supermux.webview.WebSettings
 import dev.supermux.webview.WebView
@@ -139,6 +141,8 @@ fun BrowserPane(
     val phone = phoneChrome()
     var deviceOn by remember(view.id) { mutableStateOf(false) }
     var device by remember(view.id) { mutableStateOf(DeviceMode.Default) }
+    // A phone's "Desktop site" (#122 2c), per tab and per client, where the engine can do it.
+    var desktopSite by remember(view.id) { mutableStateOf(false) }
 
     // A port resolves through the by-port route or the previews, so the first page waits for them: three seconds at
     // most, then none.
@@ -190,7 +194,17 @@ fun BrowserPane(
         state.load(WebContent.Url(url))
     }
     // A zoom outlives the engine: a new lease gets it again.
-    LaunchedEffect(live, zoom) { if (live && zoom != 1f) state.navigator.setZoom(zoom) }
+    // Device mode's fit (#122 2b) zooms the page by the stage's scale on top of the user's zoom; leaving it zooms back.
+    var stageScale by remember(view.id) { mutableFloatStateOf(1f) }
+    val fitting = deviceOn && !phone && platform.caps.pageFit
+    val pageZoom = zoom * (if (fitting) stageScale else 1f)
+    var appliedZoom by remember(view.id) { mutableFloatStateOf(1f) }
+    LaunchedEffect(live, pageZoom) {
+        if (live && (pageZoom != 1f || appliedZoom != 1f)) {
+            state.navigator.setZoom(pageZoom)
+            appliedZoom = pageZoom
+        }
+    }
 
     // The page's icon for its tab, after each page it commits.
     val icons = LocalBrowserIcons.current
@@ -230,7 +244,7 @@ fun BrowserPane(
     }
     fun zoomBy(direction: Int) {
         val next = if (direction == 0) 1f else nextZoom(zoom, direction)
-        if (state.navigator.setZoom(next)) zoom = next else notice = "Zoom isn't available here yet"
+        if (state.navigator.setZoom(next * (if (fitting) stageScale else 1f))) zoom = next else notice = "Zoom isn't available here yet"
     }
     fun inspect() {
         notice = when (val r = state.navigator.openInspector()) {
@@ -285,14 +299,27 @@ fun BrowserPane(
         (state.loading is LoadingState.Loading).also { if (it) state.navigator.stop() }
     }
 
-    // One page, moved (not rebuilt) between the pane and device mode's stage, so turning it on keeps the live page.
-    val livePage = remember(view.id) {
-        movableContentOf {
+    // One page, moved (not rebuilt) between the pane and device mode's stage, so turning it on keeps the live page. What
+    // changes while it lives (its settings, keeping it running) are its parameters: a remembered lambda would keep the
+    // values it was made with.
+    val livePage = remember(view.id, state) {
+        movableContentOf { settings: WebSettings, keep: Boolean ->
             ProvideWebViewRuntime(webViews.runtime) {
-                WebView(state, Modifier.fillMaxSize(), settings = BROWSER_SETTINGS, client = client, activation = Activation.Eager, keepRunningWhileHidden = keepRunning)
+                WebView(state, Modifier.fillMaxSize(), settings = settings, client = client, activation = Activation.Eager, keepRunningWhileHidden = keep)
             }
         }
     }
+    // Device mode's agent and appearance (#122 2a2), where the engine can change them.
+    val emulating = deviceOn && !phone && platform.caps.pageEmulation
+    val desktopSiteOffered = phone && platform.caps.pageEmulation
+    val pageSettings = if (desktopSiteOffered && desktopSite) BROWSER_SETTINGS.copy(desktopSite = true) else if (!emulating) BROWSER_SETTINGS else BROWSER_SETTINGS.copy(
+        userAgent = device.userAgent(),
+        darkMode = when (device.appearance) {
+            PageAppearance.System -> BROWSER_SETTINGS.darkMode
+            PageAppearance.Light -> DarkMode.Light
+            PageAppearance.Dark -> DarkMode.Dark
+        },
+    )
 
     // The page and what floats over it (the ⋯ menu, the find bar) share one overlay registry: the window's, or the
     // pane's own where none is provided, so the page never takes their clicks (on macOS a press goes to what is natively
@@ -322,8 +349,13 @@ fun BrowserPane(
             onScreenshot = screenshotAction,
             device = deviceOn.takeUnless { phone },
             onDevice = { deviceOn = !deviceOn },
+            desktopSite = desktopSite.takeIf { desktopSiteOffered },
+            onDesktopSite = { desktopSite = !desktopSite },
         )
-        if (deviceOn && !phone) DeviceBar(device, onChange = { device = it }, onClose = { deviceOn = false })
+        if (deviceOn && !phone) DeviceBar(
+            device, emulation = platform.caps.pageEmulation, scale = stageScale.takeIf { fitting },
+            onChange = { device = it }, onClose = { deviceOn = false },
+        )
         notice?.let { text ->
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp).testTag("browser-notice"), verticalAlignment = Alignment.CenterVertically) {
                 Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
@@ -335,8 +367,8 @@ fun BrowserPane(
                 BrowserBody.NewTab -> BrowserMessage("Type a site, or a port such as 5173.", "browser-new-tab")
                 is BrowserBody.Said -> BrowserMessage(b.message, "browser-said")
                 is BrowserBody.Page -> {
-                    if (deviceOn && !phone) DeviceStage(device, livePage)
-                    else Box(Modifier.fillMaxSize().testTag("browser-viewport")) { livePage() }
+                    if (deviceOn && !phone) DeviceStage(device, fit = fitting, onScale = { stageScale = it }) { livePage(pageSettings, keepRunning) }
+                    else Box(Modifier.fillMaxSize().testTag("browser-viewport")) { livePage(pageSettings, keepRunning) }
                     (state.phase as? WebViewPhase.Unavailable)?.let { unavailable ->
                         BrowserMessage(
                             "This device can't show web pages in a tab" + (unavailable.detail?.let { ": $it" } ?: "."),

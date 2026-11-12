@@ -2096,5 +2096,5 @@ private fun earliest(a: Long?, b: Long?): Long? = if (a == null) b else if (b ==
  * bridge origins at least the page's. Another theme or inspector a page takes on mid-lease ([WebEngine.configure]).
  */
 internal fun PageSetup.adoptableBy(wanted: PageSetup): Boolean =
-    javaScriptEnabled == wanted.javaScriptEnabled && userAgentSuffix == wanted.userAgentSuffix &&
+    javaScriptEnabled == wanted.javaScriptEnabled && userAgentSuffix == wanted.userAgentSuffix && userAgent == wanted.userAgent && desktopSite == wanted.desktopSite &&
         transparentBackground == wanted.transparentBackground && wanted.bridgeOrigins.containsAll(bridgeOrigins)

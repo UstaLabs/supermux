@@ -264,6 +264,16 @@ data class Caps(
     val linksInBrowserTabs: Boolean = true,
     /** A Browser tab can picture its page (#122's screenshot to chat). False on the web client, whose iframe can't. */
     val pageScreenshots: Boolean = true,
+    /**
+     * A Browser tab can give its page another user agent and colour scheme (#122's device mode). False on the web
+     * client, whose iframe has the browser's own.
+     */
+    val pageEmulation: Boolean = true,
+    /**
+     * A Browser tab's engine has a page zoom, so device mode can fit a big device in the pane at its own CSS size (#122
+     * 2b). macOS and iOS (WebKit's pageZoom); not Android, whose zoom is text zoom, nor Windows, Linux or the web yet.
+     */
+    val pageFit: Boolean = false,
 )
 
 /**

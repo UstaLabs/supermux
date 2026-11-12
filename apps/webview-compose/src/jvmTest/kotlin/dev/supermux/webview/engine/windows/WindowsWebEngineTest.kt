@@ -327,6 +327,20 @@ class WindowsWebEngineTest {
         light.close()
     }
 
+    /** #122's device mode: a whole agent in place of WebView2's, through CDP (the glue only appends a suffix); none clears it. */
+    @Test fun aUserAgentReplacesWebView2sThroughCdpAndGoesAgain() = runTest {
+        val rig = WinRig(this, WebProfile.Default)
+        rig.warm()
+        fun overrides() = rig.page.devtools.filter { it.second == "Emulation.setUserAgentOverride" }.map { it.third }
+        rig.engine.configure(WebSettings.Default.pageSetup(dark = false, bridgeOrigins = emptySet()))
+        assertTrue(overrides().isEmpty(), "no override asked for, none sent")
+        rig.engine.configure(WebSettings(userAgent = "Phone/1", userAgentSuffix = "demo/1").pageSetup(dark = false, bridgeOrigins = emptySet()))
+        assertEquals("{\"userAgent\":\"Phone/1 demo/1\"}", overrides().last())
+        rig.engine.configure(WebSettings(userAgentSuffix = "demo/1").pageSetup(dark = false, bridgeOrigins = emptySet()))
+        assertEquals("{\"userAgent\":\"\"}", overrides().last(), "back to WebView2's own")
+        rig.close()
+    }
+
     @Test fun aHugePageControlledTitleOrUrlCostsNoBacktracking() = runTest {
         // L20: no regex with nested quantifiers on what a page controls.
         val rig = WinRig(this)

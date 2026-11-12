@@ -91,6 +91,7 @@ import dev.supermux.webview.engine.EngineClient
 import dev.supermux.webview.engine.EngineConfig
 import dev.supermux.webview.engine.EngineEvent
 import dev.supermux.webview.engine.EngineEventQueue
+import dev.supermux.webview.engine.DesktopSite
 import dev.supermux.webview.engine.PageSetup
 import dev.supermux.webview.engine.WebEngine
 import dev.supermux.webview.engine.cookieHeader
@@ -260,6 +261,9 @@ internal class AndroidWebEngine(
     private var listening = false
     private var shim: ScriptHandler? = null
 
+    /** The desktop site's viewport script (#122), while a lease asks for the desktop site. */
+    private var desktopScript: ScriptHandler? = null
+
     /**
      * The reply proxy of the last message the main frame's document sent, that document's origin and the token it signs
      * with: [postMessage] uses it while [gate] hears that token, so a fragment-only load keeps it with its document.
@@ -419,7 +423,17 @@ internal class AndroidWebEngine(
         this.setup = setup
         val settings = webView.settings
         settings.javaScriptEnabled = setup.javaScriptEnabled
-        settings.userAgentString = setup.userAgentSuffix?.let { "${WebSettings.getDefaultUserAgent(context)} $it" }
+        val wanted = if (setup.desktopSite && setup.userAgent == null) setup.copy(userAgent = DesktopSite.AGENT) else setup
+        settings.userAgentString = wanted.agent(WebSettings.getDefaultUserAgent(context))
+        // "Desktop site" (#122): a wide layout viewport, the page overviewed to fit, its viewport tag made 1280 px.
+        settings.useWideViewPort = setup.desktopSite
+        settings.loadWithOverviewMode = setup.desktopSite
+        if (setup.desktopSite != (desktopScript != null)) {
+            desktopScript?.remove()
+            desktopScript = if (setup.desktopSite) {
+                WebViewCompat.addDocumentStartJavaScript(webView, DesktopSite.VIEWPORT_SCRIPT, setOf("*"))
+            } else null
+        }
         webView.setBackgroundColor(if (setup.transparentBackground) Color.TRANSPARENT else Color.WHITE)
         Inspector.want(this, setup.inspectable)
         if (before?.dark != setup.dark) applyTheme(setup.dark)

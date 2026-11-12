@@ -146,6 +146,9 @@ internal fun BrowserToolbar(
     /** Device mode is on (lit), off, or null where it isn't offered (a phone, #122 §3.2). */
     device: Boolean? = null,
     onDevice: () -> Unit = {},
+    /** A phone's "Desktop site" is on (checked), off, or null where it isn't offered (#122 2c). */
+    desktopSite: Boolean? = null,
+    onDesktopSite: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val c = kitColors()
@@ -246,6 +249,7 @@ internal fun BrowserToolbar(
             SheetRow(KitGlyphs.Search, "Find in page", "browser-menu-find") { menu = false; onFind() }
             SheetZoomRow(zoomPercent, onZoom)
             onScreenshot?.let { send -> SheetRow(KitGlyphs.Camera, "Screenshot to chat", "browser-menu-screenshot") { menu = false; send() } }
+            desktopSite?.let { on -> SheetRow(KitGlyphs.Laptop, "Desktop site", "browser-menu-desktop-site", checked = on) { menu = false; onDesktopSite() } }
             SheetRow(KitGlyphs.Back, "Back", "browser-menu-back", enabled = canGoBack) { menu = false; onBack() }
             SheetRow(KitGlyphs.Forward, "Forward", "browser-menu-forward", enabled = canGoForward) { menu = false; onForward() }
             SheetRow(KitGlyphs.External, "Open in your browser", "browser-menu-external") { menu = false; onOpenExternally() }
@@ -317,7 +321,7 @@ private fun BrowserSheet(onDismiss: () -> Unit, content: @Composable ColumnScope
 }
 
 @Composable
-private fun SheetRow(glyph: ImageVector, label: String, tag: String, enabled: Boolean = true, onClick: () -> Unit) {
+private fun SheetRow(glyph: ImageVector, label: String, tag: String, enabled: Boolean = true, checked: Boolean? = null, onClick: () -> Unit) {
     val c = kitColors()
     Row(
         Modifier
@@ -330,7 +334,8 @@ private fun SheetRow(glyph: ImageVector, label: String, tag: String, enabled: Bo
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Icon(glyph, contentDescription = null, tint = if (enabled) c.dim else c.faint, modifier = Modifier.size(18.dp))
-        Text(label, fontSize = 15.sp, color = if (enabled) c.text else c.faint)
+        Text(label, fontSize = 15.sp, color = if (enabled) c.text else c.faint, modifier = Modifier.weight(1f))
+        if (checked == true) Icon(KitGlyphs.Check, contentDescription = "On", tint = c.accent, modifier = Modifier.size(18.dp))
     }
 }
 

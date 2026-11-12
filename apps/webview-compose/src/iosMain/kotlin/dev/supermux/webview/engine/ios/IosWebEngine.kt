@@ -105,6 +105,7 @@ import platform.WebKit.WKUserScript
 import platform.WebKit.WKUserScriptInjectionTime
 import platform.WebKit.WKWebView
 import platform.WebKit.WKWebViewConfiguration
+import platform.WebKit.WKContentMode
 import platform.WebKit.WKWebpagePreferences
 import platform.WebKit.WKFindConfiguration
 import platform.WebKit.WKWebsiteDataStore
@@ -368,7 +369,7 @@ internal class IosWebEngine private constructor(
         // The scroll view is WebKit's to paint: an opaque page's own background (clear for a transparent one). It shows
         // where WebKit hasn't drawn the page yet, as in the strip a wider view gains until the page is laid out at its
         // new width: painted white, that strip flashed light over a dark page for a frame.
-        webView.customUserAgent = setup.userAgentSuffix?.let { suffix -> listOfNotNull(baseUserAgent, suffix).joinToString(" ") }
+        webView.customUserAgent = setup.agent(baseUserAgent)
         if (osAtLeast(16, 4)) webView.setInspectable(setup.inspectable)
         val controller = webView.configuration.userContentController
         controller.removeAllUserScripts()
@@ -882,6 +883,8 @@ internal class IosWebEngine private constructor(
         val cancel = WKNavigationActionPolicy.WKNavigationActionPolicyCancel
         if (released) return decisionHandler(cancel, preferences)
         preferences.allowsContentJavaScript = setup?.javaScriptEnabled ?: true
+        // "Desktop site" (#122): WebKit's own desktop content mode, as Safari's "Request Desktop Website".
+        preferences.preferredContentMode = if (setup?.desktopSite == true) WKContentMode.WKContentModeDesktop else WKContentMode.WKContentModeRecommended
         val url = action.request.URL?.absoluteString
         val target = action.targetFrame
         val isMainFrame = target?.isMainFrame ?: true

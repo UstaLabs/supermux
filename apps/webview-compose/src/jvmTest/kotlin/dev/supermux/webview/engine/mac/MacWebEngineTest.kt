@@ -308,6 +308,8 @@ class MacWebEngineTest {
             "configure dark=false transparent=false ua=Mozilla/5.0 Test Sample/1 inspectable=false shim=true",
             rig.glue.last("configure"),
         )
+        rig.engine.configure(setup.copy(userAgent = "Phone/1"))
+        assertEquals("configure dark=false transparent=false ua=Phone/1 inspectable=false shim=true", rig.glue.last("configure"))
     }
 
     @Test fun aStaleCommitChangesNothingBeforeItIsDropped() = runTest {

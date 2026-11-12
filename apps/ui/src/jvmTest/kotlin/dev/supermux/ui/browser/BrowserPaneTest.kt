@@ -55,7 +55,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-@OptIn(ExperimentalTestApi::class)
+@OptIn(ExperimentalTestApi::class, dev.supermux.webview.engine.WebEngineSpi::class)
 class BrowserPaneTest {
     private fun view(url: String?) = ViewDto(
         id = "b1", workspaceId = "w1", kind = "browser",
@@ -526,6 +526,90 @@ class BrowserPaneTest {
         onNodeWithTag("browser-device-preset").assertTextEquals("Responsive")
     }
 
+    /** The engine showing the page now: the last one leased (a released one has no setup). */
+    private fun Rig.live() = engines.created.toList().lastOrNull { it.lastSetup != null }
+
+    /** #122 2a2: device mode gives the page its device's browser agent; Desktop gives it the engine's own again. */
+    @Test fun deviceModeGivesThePageItsDevicesAgent() = runComposeUiTest {
+        val rig = Rig()
+        showWithKeys(rig, mutableStateOf(view("https://vitejs.dev/")))
+        assertEquals(null, rig.live()?.lastSetup?.userAgent)
+        onNodeWithTag("browser-device").performClick()
+        waitUntil(timeoutMillis = 5_000) { rig.live()?.lastSetup?.userAgent?.contains("iPhone") == true }
+        onNodeWithTag("browser-device-agent").assertTextEquals("Mobile")
+        onNodeWithTag("browser-device-agent").performClick()
+        onNodeWithTag("browser-device-agent-desktop").performClick()
+        waitUntil(timeoutMillis = 5_000) { rig.live()?.lastSetup?.let { it.userAgent == null } == true }
+        onNodeWithTag("browser-device-agent").assertTextEquals("Desktop")
+        onNodeWithTag("browser-device-agent").performClick()
+        onNodeWithTag("browser-device-agent-mobile").performClick()
+        waitUntil(timeoutMillis = 5_000) { rig.live()?.lastSetup?.userAgent?.contains("iPhone") == true }
+        onNodeWithTag("browser-device-close").performClick()
+        waitUntil(timeoutMillis = 5_000) { rig.live()?.lastSetup?.let { it.userAgent == null } == true }
+    }
+
+    /** ◐ in the device bar: the page told light or dark whatever the system is (prefers-color-scheme). */
+    @Test fun theDeviceBarSetsThePagesAppearance() = runComposeUiTest {
+        val rig = Rig()
+        showWithKeys(rig, mutableStateOf(view("https://vitejs.dev/")))
+        onNodeWithTag("browser-device").performClick()
+        onNodeWithTag("browser-device-appearance").performClick()
+        onNodeWithTag("browser-device-appearance-dark").performClick()
+        waitUntil(timeoutMillis = 5_000) { rig.live()?.lastSetup?.dark == true }
+        onNodeWithTag("browser-device-appearance").performClick()
+        onNodeWithTag("browser-device-appearance-light").performClick()
+        waitUntil(timeoutMillis = 5_000) { rig.live()?.lastSetup?.dark == false }
+    }
+
+    /** Where the engine can't change them (the web client's iframe), there is no agent or appearance control at all. */
+    @Test fun withoutPageEmulationTheBarHasNoAgentOrAppearance() = runComposeUiTest {
+        val rig = Rig()
+        show(rig, mutableStateOf(view("https://vitejs.dev/")), rig.actions(), FakePlatform(caps = dev.supermux.ui.platform.NO_CAPS.copy(pageEmulation = false)))
+        waitUntil(timeoutMillis = 5_000) { "https://vitejs.dev/" in rig.loads() }
+        onNodeWithTag("browser-device").performClick()
+        onNodeWithTag("browser-device-bar").assertExists()
+        onNodeWithTag("browser-device-agent").assertDoesNotExist()
+        onNodeWithTag("browser-device-appearance").assertDoesNotExist()
+    }
+
+    private fun Rig.lastZoom(): Float? = calls.lastOrNull { it.startsWith("zoom:") }?.substringAfter(':')?.toFloat()
+
+    /**
+     * #122 2b: where the engine has a page zoom, a device bigger than the pane fits it: the page's view is the device's
+     * size times the scale and the page is zoomed by the same, so its CSS width stays the device's.
+     */
+    @Test fun aBigDeviceFitsThePaneAtItsOwnCssSize() = runComposeUiTest {
+        val rig = Rig()
+        show(rig, mutableStateOf(view("https://vitejs.dev/")), rig.actions(), FakePlatform(caps = dev.supermux.ui.platform.NO_CAPS.copy(pageFit = true)))
+        waitUntil(timeoutMillis = 5_000) { "https://vitejs.dev/" in rig.loads() }
+        onNodeWithTag("browser-device").performClick()
+        onNodeWithTag("browser-device-preset").performClick()
+        onNodeWithTag("browser-device-ipad-mini").performClick()
+        waitUntil(timeoutMillis = 5_000) { (rig.lastZoom() ?: 1f) < 1f }
+        val shown = onNodeWithTag("browser-viewport").fetchSemanticsNode().size.width / density.density
+        assertTrue(shown < 768f, "drawn smaller than the pane: $shown")
+        assertEquals(768f, shown / rig.lastZoom()!!, 2f)
+        onNodeWithTag("browser-device-fit").performClick()
+        onNodeWithTag("browser-device-fit-100").performClick()
+        onNodeWithTag("browser-viewport").assertWidthIsEqualTo(768.dp)
+        waitUntil(timeoutMillis = 5_000) { rig.lastZoom() == 1f }
+        onNodeWithTag("browser-device-close").performClick()
+        onNodeWithTag("browser-viewport").assertWidthIsEqualTo(800.dp)
+    }
+
+    /** No page zoom (Android's is text zoom; Windows, Linux and the web have none yet): no Fit, and the device pans at 100 %. */
+    @Test fun withoutAPageZoomThereIsNoFitAndTheDevicePans() = runComposeUiTest {
+        val rig = Rig()
+        show(rig, mutableStateOf(view("https://vitejs.dev/")), rig.actions(), FakePlatform())
+        waitUntil(timeoutMillis = 5_000) { "https://vitejs.dev/" in rig.loads() }
+        onNodeWithTag("browser-device").performClick()
+        onNodeWithTag("browser-device-preset").performClick()
+        onNodeWithTag("browser-device-ipad-mini").performClick()
+        onNodeWithTag("browser-device-fit").assertDoesNotExist()
+        onNodeWithTag("browser-viewport").assertWidthIsEqualTo(768.dp)
+        assertEquals(null, rig.lastZoom())
+    }
+
     /** On a phone a phone-sized page inside it is pointless: no device button and no menu row (#122 §3.2). */
     @Test fun aPhoneHasNoDeviceMode() = runComposeUiTest {
         val rig = Rig()
@@ -546,6 +630,41 @@ class BrowserPaneTest {
         onNodeWithTag("browser-device").assertDoesNotExist()
         onNodeWithTag("browser-menu").performClick()
         onNodeWithTag("browser-menu-device").assertDoesNotExist()
+    }
+
+    /** #122 2c: on a phone the sheet's "Desktop site" asks the page for its desktop site, and again for the phone's. */
+    @Test fun aPhoneAsksForTheDesktopSite() = runComposeUiTest {
+        val rig = Rig()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        val runtime = WebViewRuntime(
+            RuntimeConfig(maxLive = 2, snapshotCacheBytes = 8L shl 20, factory = rig.engines, scope = scope, clock = { mainClock.currentTime }),
+        )
+        setPlatformContent {
+            CompositionLocalProvider(
+                LocalAppWebViews provides AppWebViews(runtime),
+                dev.supermux.ui.adaptive.LocalWindowWidthClass provides dev.supermux.ui.adaptive.WindowWidthClass.Compact,
+                dev.supermux.ui.adaptive.LocalPointerAvailable provides false,
+            ) {
+                BrowserPane(view("https://vitejs.dev/"), "w1", rig.actions(), Modifier.size(390.dp, 700.dp))
+            }
+        }
+        waitUntil(timeoutMillis = 5_000) { "https://vitejs.dev/" in rig.loads() }
+        assertEquals(false, rig.live()?.lastSetup?.desktopSite)
+        onNodeWithTag("browser-menu").performClick()
+        onNodeWithTag("browser-menu-desktop-site").performClick()
+        waitUntil(timeoutMillis = 5_000) { rig.live()?.lastSetup?.desktopSite == true }
+        onNodeWithTag("browser-menu").performClick()
+        onNodeWithTag("browser-menu-desktop-site").performClick()
+        waitUntil(timeoutMillis = 5_000) { rig.live()?.lastSetup?.desktopSite == false }
+    }
+
+    /** A desktop is a desktop already: no "Desktop site" in its menu. */
+    @Test fun aDesktopHasNoDesktopSiteRow() = runComposeUiTest {
+        val rig = Rig()
+        showWithKeys(rig, mutableStateOf(view("https://vitejs.dev/")))
+        onNodeWithTag("browser-menu").performClick()
+        onNodeWithTag("browser-menu-find").assertExists()
+        onNodeWithTag("browser-menu-desktop-site").assertDoesNotExist()
     }
 
     @Test fun noEngineHereSaysSoAndOffersTheSystemBrowser() = runComposeUiTest {
