@@ -247,7 +247,7 @@ internal class LinuxWebEngine(
             setup.dark -> 0xFF000000.toInt()
             else -> 0xFFFFFFFF.toInt()
         }
-        val agent = setup.userAgentSuffix?.let { suffix -> listOfNotNull(baseUserAgent, suffix).joinToString(" ") }
+        val agent = setup.agent(baseUserAgent)
         view.configure(
             scripts.relay(origins), if (setup.javaScriptEnabled) scripts.shim(origins) else null, WebEngineWorld.WORLD,
             scripts.handlerName, setup.javaScriptEnabled, setup.inspectable, background, agent,

@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.sp
 import dev.supermux.browser.DeviceGroup
 import dev.supermux.browser.DeviceMode
 import dev.supermux.browser.DevicePresets
+import dev.supermux.browser.PageAppearance
 import dev.supermux.ui.settings.kit.KitGlyphs
 import dev.supermux.ui.settings.kit.kitColors
 import dev.supermux.ui.widgets.DropdownMenu
@@ -64,7 +65,14 @@ import dev.supermux.ui.widgets.DropdownMenuItem
  * its size to type, rotate, and close. [onChange] gets every new mode; [onClose] turns device mode off.
  */
 @Composable
-internal fun DeviceBar(mode: DeviceMode, onChange: (DeviceMode) -> Unit, onClose: () -> Unit, modifier: Modifier = Modifier) {
+internal fun DeviceBar(
+    mode: DeviceMode,
+    onChange: (DeviceMode) -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+    /** Whether the page's agent and appearance can change here: without it, no Mobile/Desktop and no ◐ at all. */
+    emulation: Boolean = true,
+) {
     val c = kitColors()
     var menu by remember { mutableStateOf(false) }
     Column(modifier.fillMaxWidth().testTag("browser-device-bar")) {
@@ -109,10 +117,55 @@ internal fun DeviceBar(mode: DeviceMode, onChange: (DeviceMode) -> Unit, onClose
             Text("×", color = c.faint, fontSize = 12.sp)
             SideField(mode.height, "Height", "browser-device-height") { onChange(mode.resized(height = it)) }
             BarButton(KitGlyphs.Rotate, "Rotate", "browser-device-rotate", { onChange(mode.rotated()) }, on = mode.rotated)
+            if (emulation) {
+                BarDivider()
+                BarChoice(
+                    label = if (mode.mobile) "Mobile" else "Desktop",
+                    tag = "browser-device-agent",
+                    choices = listOf(Triple("Mobile", "browser-device-agent-mobile", mode.mobile), Triple("Desktop", "browser-device-agent-desktop", !mode.mobile)),
+                ) { i -> onChange(mode.withMobile(i == 0)) }
+                BarChoice(
+                    label = "◐ " + mode.appearance.label,
+                    tag = "browser-device-appearance",
+                    choices = PageAppearance.entries.map { Triple(it.label, "browser-device-appearance-${it.name.lowercase()}", it == mode.appearance) },
+                ) { i -> onChange(mode.copy(appearance = PageAppearance.entries[i])) }
+            }
             Spacer(Modifier.weight(1f))
             BarButton(KitGlyphs.Close, "Close device mode", "browser-device-close", onClose)
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.line))
+    }
+}
+
+/** A hairline between the bar's groups. */
+@Composable
+private fun BarDivider() {
+    Box(Modifier.padding(horizontal = 2.dp).size(1.dp, 16.dp).background(kitColors().line))
+}
+
+/** A label that opens a menu of [choices] (label, tag, chosen); [onChoose] gets the index chosen. */
+@Composable
+private fun BarChoice(label: String, tag: String, choices: List<Triple<String, String, Boolean>>, onChoose: (Int) -> Unit) {
+    val c = kitColors()
+    var open by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .clickable(role = Role.DropdownList) { open = true }
+                .padding(horizontal = 8.dp, vertical = 4.dp)
+                .testTag(tag),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(label, color = c.dim, fontSize = 12.sp, maxLines = 1)
+            Icon(KitGlyphs.ChevronDown, contentDescription = null, tint = c.faint, modifier = Modifier.size(12.dp))
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            choices.forEachIndexed { i, (name, rowTag, chosen) ->
+                DeviceRow(name, null, chosen, rowTag) { open = false; onChoose(i) }
+            }
+        }
     }
 }
 

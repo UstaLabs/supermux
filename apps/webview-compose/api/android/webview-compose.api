@@ -546,10 +546,14 @@ public final class dev/supermux/webview/WebSettings {
 	public static final field $stable I
 	public static final field Companion Ldev/supermux/webview/WebSettings$Companion;
 	public fun <init> ()V
-	public fun <init> (ZZLdev/supermux/webview/DarkMode;ZLjava/lang/String;Ldev/supermux/webview/WebProfile;ZLjava/util/Set;)V
+	public synthetic fun <init> (ZZLdev/supermux/webview/DarkMode;ZLjava/lang/String;Ldev/supermux/webview/WebProfile;ZLjava/util/Set;)V
 	public synthetic fun <init> (ZZLdev/supermux/webview/DarkMode;ZLjava/lang/String;Ldev/supermux/webview/WebProfile;ZLjava/util/Set;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun copy (ZZLdev/supermux/webview/DarkMode;ZLjava/lang/String;Ldev/supermux/webview/WebProfile;ZLjava/util/Set;)Ldev/supermux/webview/WebSettings;
+	public fun <init> (ZZLdev/supermux/webview/DarkMode;ZLjava/lang/String;Ldev/supermux/webview/WebProfile;ZLjava/util/Set;Ljava/lang/String;)V
+	public synthetic fun <init> (ZZLdev/supermux/webview/DarkMode;ZLjava/lang/String;Ldev/supermux/webview/WebProfile;ZLjava/util/Set;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final synthetic fun copy (ZZLdev/supermux/webview/DarkMode;ZLjava/lang/String;Ldev/supermux/webview/WebProfile;ZLjava/util/Set;)Ldev/supermux/webview/WebSettings;
+	public final fun copy (ZZLdev/supermux/webview/DarkMode;ZLjava/lang/String;Ldev/supermux/webview/WebProfile;ZLjava/util/Set;Ljava/lang/String;)Ldev/supermux/webview/WebSettings;
 	public static synthetic fun copy$default (Ldev/supermux/webview/WebSettings;ZZLdev/supermux/webview/DarkMode;ZLjava/lang/String;Ldev/supermux/webview/WebProfile;ZLjava/util/Set;ILjava/lang/Object;)Ldev/supermux/webview/WebSettings;
+	public static synthetic fun copy$default (Ldev/supermux/webview/WebSettings;ZZLdev/supermux/webview/DarkMode;ZLjava/lang/String;Ldev/supermux/webview/WebProfile;ZLjava/util/Set;Ljava/lang/String;ILjava/lang/Object;)Ldev/supermux/webview/WebSettings;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getBridgeOrigins ()Ljava/util/Set;
 	public final fun getDarkMode ()Ldev/supermux/webview/DarkMode;
@@ -558,6 +562,7 @@ public final class dev/supermux/webview/WebSettings {
 	public final fun getMediaPlaybackRequiresGesture ()Z
 	public final fun getProfile ()Ldev/supermux/webview/WebProfile;
 	public final fun getTransparentBackground ()Z
+	public final fun getUserAgent ()Ljava/lang/String;
 	public final fun getUserAgentSuffix ()Ljava/lang/String;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
@@ -924,21 +929,25 @@ public final class dev/supermux/webview/engine/EngineEventQueue {
 
 public final class dev/supermux/webview/engine/PageSetup {
 	public static final field $stable I
-	public fun <init> (ZZZZLjava/lang/String;Ljava/util/Set;)V
+	public fun <init> (ZZZZLjava/lang/String;Ljava/util/Set;Ljava/lang/String;)V
+	public synthetic fun <init> (ZZZZLjava/lang/String;Ljava/util/Set;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun agent (Ljava/lang/String;)Ljava/lang/String;
 	public final fun component1 ()Z
 	public final fun component2 ()Z
 	public final fun component3 ()Z
 	public final fun component4 ()Z
 	public final fun component5 ()Ljava/lang/String;
 	public final fun component6 ()Ljava/util/Set;
-	public final fun copy (ZZZZLjava/lang/String;Ljava/util/Set;)Ldev/supermux/webview/engine/PageSetup;
-	public static synthetic fun copy$default (Ldev/supermux/webview/engine/PageSetup;ZZZZLjava/lang/String;Ljava/util/Set;ILjava/lang/Object;)Ldev/supermux/webview/engine/PageSetup;
+	public final fun component7 ()Ljava/lang/String;
+	public final fun copy (ZZZZLjava/lang/String;Ljava/util/Set;Ljava/lang/String;)Ldev/supermux/webview/engine/PageSetup;
+	public static synthetic fun copy$default (Ldev/supermux/webview/engine/PageSetup;ZZZZLjava/lang/String;Ljava/util/Set;Ljava/lang/String;ILjava/lang/Object;)Ldev/supermux/webview/engine/PageSetup;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getBridgeOrigins ()Ljava/util/Set;
 	public final fun getDark ()Z
 	public final fun getInspectable ()Z
 	public final fun getJavaScriptEnabled ()Z
 	public final fun getTransparentBackground ()Z
+	public final fun getUserAgent ()Ljava/lang/String;
 	public final fun getUserAgentSuffix ()Ljava/lang/String;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;

@@ -419,7 +419,7 @@ internal class AndroidWebEngine(
         this.setup = setup
         val settings = webView.settings
         settings.javaScriptEnabled = setup.javaScriptEnabled
-        settings.userAgentString = setup.userAgentSuffix?.let { "${WebSettings.getDefaultUserAgent(context)} $it" }
+        settings.userAgentString = setup.agent(WebSettings.getDefaultUserAgent(context))
         webView.setBackgroundColor(if (setup.transparentBackground) Color.TRANSPARENT else Color.WHITE)
         Inspector.want(this, setup.inspectable)
         if (before?.dark != setup.dark) applyTheme(setup.dark)

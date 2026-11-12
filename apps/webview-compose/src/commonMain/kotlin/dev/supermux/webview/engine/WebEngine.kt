@@ -50,6 +50,7 @@ public data class EngineConfig(val profile: WebProfile, val mediaPlaybackRequire
  * @property transparentBackground whether the engine leaves the page's background transparent.
  * @property userAgentSuffix appended to the engine's user agent, or null.
  * @property bridgeOrigins the origins whose documents get the bridge shim.
+ * @property userAgent a whole user agent in place of the engine's own, or null ([agent]).
  */
 @WebEngineSpi
 public data class PageSetup(
@@ -59,7 +60,12 @@ public data class PageSetup(
     val transparentBackground: Boolean,
     val userAgentSuffix: String?,
     val bridgeOrigins: Set<String>,
-)
+    val userAgent: String? = null,
+) {
+    /** The agent to set on an engine whose own is [base]: [userAgent] or [base], then the suffix; null to leave it alone. */
+    public fun agent(base: String?): String? =
+        if (userAgent == null && userAgentSuffix == null) null else listOfNotNull(userAgent ?: base, userAgentSuffix).joinToString(" ")
+}
 
 /**
  * The per-lease part of these settings, with the values the runtime resolved: [dark] from [WebSettings.darkMode] and
@@ -72,6 +78,7 @@ internal fun WebSettings.pageSetup(dark: Boolean, bridgeOrigins: Set<String>): P
     transparentBackground = transparentBackground,
     userAgentSuffix = userAgentSuffix,
     bridgeOrigins = bridgeOrigins,
+    userAgent = userAgent,
 )
 
 @WebEngineSpi

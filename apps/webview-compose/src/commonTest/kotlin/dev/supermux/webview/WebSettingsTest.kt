@@ -28,6 +28,7 @@ class WebSettingsTest {
             profile = WebProfile.Named("x"),
             mediaPlaybackRequiresGesture = false,
             bridgeOrigins = setOf("https://ignored.test"),
+            userAgent = "Phone/1",
         )
         assertEquals(
             PageSetup(
@@ -37,6 +38,7 @@ class WebSettingsTest {
                 transparentBackground = true,
                 userAgentSuffix = "demo/1",
                 bridgeOrigins = setOf("https://p.invalid"),
+                userAgent = "Phone/1",
             ),
             settings.pageSetup(dark = true, bridgeOrigins = setOf("https://p.invalid")),
         )
@@ -69,5 +71,20 @@ class WebSettingsTest {
         assertFailsWith<IllegalArgumentException> { Activation.WhenVisible(settleMillis = -1) }
         assertFailsWith<IllegalArgumentException> { WebSizing.WrapContentHeight(max = 0.dp) }
         assertFailsWith<IllegalArgumentException> { WebSizing.WrapContentHeight(max = 100.dp, initial = (-1).dp) }
+    }
+
+    /** #122's device mode: a whole user agent in place of the engine's, the suffix still after it. */
+    @Test fun aUserAgentReplacesTheEnginesAndKeepsTheSuffix() {
+        val base = "Mozilla/5.0 Engine"
+        assertEquals(null, WebSettings.Default.pageSetup(dark = false, bridgeOrigins = emptySet()).agent(base))
+        assertEquals("Mozilla/5.0 Engine demo/1", WebSettings(userAgentSuffix = "demo/1").pageSetup(false, emptySet()).agent(base))
+        assertEquals("Phone/1", WebSettings(userAgent = "Phone/1").pageSetup(false, emptySet()).agent(base))
+        assertEquals("Phone/1 demo/1", WebSettings(userAgent = "Phone/1", userAgentSuffix = "demo/1").pageSetup(false, emptySet()).agent(base))
+        assertEquals("demo/1", WebSettings(userAgentSuffix = "demo/1").pageSetup(false, emptySet()).agent(null))
+    }
+
+    @Test fun theUserAgentIsPartOfEqualityAndCopy() {
+        assertEquals(WebSettings(userAgent = "a"), WebSettings.Default.copy(userAgent = "a"))
+        assertTrue(WebSettings(userAgent = "a") != WebSettings(userAgent = "b"))
     }
 }

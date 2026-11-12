@@ -30,6 +30,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import dev.supermux.browser.DeviceMode
+import dev.supermux.browser.PageAppearance
 import dev.supermux.browser.AddressAction
 import dev.supermux.browser.BrowserTabSync
 import dev.supermux.browser.BrowserViewState
@@ -51,6 +52,7 @@ import dev.supermux.webview.NewWindowRequest
 import dev.supermux.webview.runtime.ProvideWebViewRuntime
 import dev.supermux.webview.WebClient
 import dev.supermux.webview.WebContent
+import dev.supermux.webview.DarkMode
 import dev.supermux.webview.WebCookie
 import dev.supermux.webview.WebSettings
 import dev.supermux.webview.WebView
@@ -285,14 +287,26 @@ fun BrowserPane(
         (state.loading is LoadingState.Loading).also { if (it) state.navigator.stop() }
     }
 
-    // One page, moved (not rebuilt) between the pane and device mode's stage, so turning it on keeps the live page.
-    val livePage = remember(view.id) {
-        movableContentOf {
+    // One page, moved (not rebuilt) between the pane and device mode's stage, so turning it on keeps the live page. What
+    // changes while it lives (its settings, keeping it running) are its parameters: a remembered lambda would keep the
+    // values it was made with.
+    val livePage = remember(view.id, state) {
+        movableContentOf { settings: WebSettings, keep: Boolean ->
             ProvideWebViewRuntime(webViews.runtime) {
-                WebView(state, Modifier.fillMaxSize(), settings = BROWSER_SETTINGS, client = client, activation = Activation.Eager, keepRunningWhileHidden = keepRunning)
+                WebView(state, Modifier.fillMaxSize(), settings = settings, client = client, activation = Activation.Eager, keepRunningWhileHidden = keep)
             }
         }
     }
+    // Device mode's agent and appearance (#122 2a2), where the engine can change them.
+    val emulating = deviceOn && !phone && platform.caps.pageEmulation
+    val pageSettings = if (!emulating) BROWSER_SETTINGS else BROWSER_SETTINGS.copy(
+        userAgent = device.userAgent(),
+        darkMode = when (device.appearance) {
+            PageAppearance.System -> BROWSER_SETTINGS.darkMode
+            PageAppearance.Light -> DarkMode.Light
+            PageAppearance.Dark -> DarkMode.Dark
+        },
+    )
 
     // The page and what floats over it (the ⋯ menu, the find bar) share one overlay registry: the window's, or the
     // pane's own where none is provided, so the page never takes their clicks (on macOS a press goes to what is natively
@@ -323,7 +337,7 @@ fun BrowserPane(
             device = deviceOn.takeUnless { phone },
             onDevice = { deviceOn = !deviceOn },
         )
-        if (deviceOn && !phone) DeviceBar(device, onChange = { device = it }, onClose = { deviceOn = false })
+        if (deviceOn && !phone) DeviceBar(device, emulation = platform.caps.pageEmulation, onChange = { device = it }, onClose = { deviceOn = false })
         notice?.let { text ->
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp).testTag("browser-notice"), verticalAlignment = Alignment.CenterVertically) {
                 Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
@@ -335,8 +349,8 @@ fun BrowserPane(
                 BrowserBody.NewTab -> BrowserMessage("Type a site, or a port such as 5173.", "browser-new-tab")
                 is BrowserBody.Said -> BrowserMessage(b.message, "browser-said")
                 is BrowserBody.Page -> {
-                    if (deviceOn && !phone) DeviceStage(device, livePage)
-                    else Box(Modifier.fillMaxSize().testTag("browser-viewport")) { livePage() }
+                    if (deviceOn && !phone) DeviceStage(device) { livePage(pageSettings, keepRunning) }
+                    else Box(Modifier.fillMaxSize().testTag("browser-viewport")) { livePage(pageSettings, keepRunning) }
                     (state.phase as? WebViewPhase.Unavailable)?.let { unavailable ->
                         BrowserMessage(
                             "This device can't show web pages in a tab" + (unavailable.detail?.let { ": $it" } ?: "."),
