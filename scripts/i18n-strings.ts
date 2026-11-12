@@ -53,9 +53,15 @@ export function scanText(file: string, source: string): Hit[] {
   return hits
 }
 
+/** A repository path with "/" on every OS: Bun's Glob answers with "\\" on Windows, and the baseline's keys use "/". */
+export function repoPath(path: string): string {
+  return path.replace(/\\/g, "/")
+}
+
 export function kotlinSources(root: string = ROOT): string[] {
   const files: string[] = []
-  for (const file of new Glob("apps/*/src/*/kotlin/**/*.kt").scanSync({ cwd: root })) {
+  for (const found of new Glob("apps/*/src/*/kotlin/**/*.kt").scanSync({ cwd: root })) {
+    const file = repoPath(found)
     const set = file.split("/")[3]!
     if (/test/i.test(set)) continue
     if (NOT_SHIPPED.some(prefix => file.startsWith(prefix))) continue
@@ -119,11 +125,13 @@ function placeholders(text: string): string[] {
 /** Each module's English catalog with its translations: `{ dir, english, translations: { lang: path } }`. */
 export function catalogs(root: string = ROOT): { dir: string; english: string; translations: Record<string, string> }[] {
   const out = []
-  for (const english of new Glob("apps/*/src/*/composeResources/values/*.xml").scanSync({ cwd: root })) {
+  for (const found of new Glob("apps/*/src/*/composeResources/values/*.xml").scanSync({ cwd: root })) {
+    const english = repoPath(found)
     const dir = english.slice(0, english.indexOf("/values/"))
     const name = english.slice(english.lastIndexOf("/") + 1)
     const translations: Record<string, string> = {}
-    for (const t of new Glob(`${dir}/values-*/${name}`).scanSync({ cwd: root })) {
+    for (const found of new Glob(`${dir}/values-*/${name}`).scanSync({ cwd: root })) {
+      const t = repoPath(found)
       const lang = t.slice(dir.length + "/values-".length, t.lastIndexOf("/"))
       translations[lang] = t
     }

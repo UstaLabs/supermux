@@ -3,7 +3,7 @@
 //   bun scripts/i18n-strings.ts --write
 import { expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
-import { catalogs, kotlinSources, compare, countHits, parityProblems, parseCatalog, readBaseline, scanRepo, scanText, type Change } from "../scripts/i18n-strings"
+import { catalogs, kotlinSources, repoPath, compare, countHits, parityProblems, parseCatalog, readBaseline, scanRepo, scanText, type Change } from "../scripts/i18n-strings"
 
 const hits = scanRepo()
 const drift = compare(countHits(hits), readBaseline())
@@ -40,6 +40,11 @@ test("strings go through localized(), which follows the language picked in Setti
     .filter(({ t }) => /\b(?:plural)?[sS]tringResource\(/.test(t) && !/^\s*(\/\/|\*)/.test(t))
     .map(({ f, i, t }) => `${f}:${i + 1}  ${t.trim()}`)
   expect(direct).toEqual([])
+})
+
+test("paths use / on every OS, as the baseline's keys do (Bun's Glob answers with \\ on Windows)", () => {
+  expect(repoPath("apps\\ui\\src\\commonMain\\kotlin\\A.kt")).toBe("apps/ui/src/commonMain/kotlin/A.kt")
+  expect(kotlinSources().every(f => !f.includes("\\"))).toBe(true)
 })
 
 test("the ui module ships Turkish", () => {
