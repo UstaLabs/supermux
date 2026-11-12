@@ -10,14 +10,14 @@
  * `authed` for the status badge only.
  */
 import { existsSync } from "fs"
-import { join, win32 } from "path"
+import { host, paths } from "@supermux/platform"
 import type { AgentAuthResult } from "../auth-result"
 import type { LoginSpawnCommand } from "../login/spawn-command"
 import { browserlessScratch } from "../antigravity/auth"
 import { resolveCommand } from "../../process/launcher"
 
 /** The host OS, the default of every OS parameter in this module; callers and tests pass their own. */
-const HOST_PLATFORM: NodeJS.Platform = process.platform
+const HOST_PLATFORM: NodeJS.Platform = host.os()
 
 export type OpenCodeAuthResult = AgentAuthResult<"shared_auth" | "provider_key" | "none"> & {
   dataDir: string
@@ -34,7 +34,7 @@ export function openCodeDataDir(opts: {
   platform?: NodeJS.Platform
 }): string {
   const env = opts.env ?? process.env
-  const pathJoin = (opts.platform ?? HOST_PLATFORM) === "win32" ? win32.join : join
+  const pathJoin = paths.flavor(opts.platform ?? HOST_PLATFORM).join
   return pathJoin(opts.xdgDataHome || env.XDG_DATA_HOME || pathJoin(opts.home, ".local", "share"), "opencode")
 }
 
@@ -58,8 +58,7 @@ export async function resolveOpenCodeAuth(opts: {
   const exists = opts.fileExists ?? ((p: string) => existsSync(p))
   const env = opts.env ?? process.env
   const dataDir = openCodeDataDir(opts)
-  const authPath = (opts.platform ?? HOST_PLATFORM) === "win32"
-    ? win32.join(dataDir, "auth.json") : join(dataDir, "auth.json")
+  const authPath = paths.flavor(opts.platform ?? HOST_PLATFORM).join(dataDir, "auth.json")
   const hasProviderKey = PROVIDER_KEY_ENV.some((k) => !!env[k])
   const mode = exists(authPath) ? "shared_auth" : hasProviderKey ? "provider_key" : "none"
   return { mode, env: {}, dataDir, authPath, authed: mode !== "none" }

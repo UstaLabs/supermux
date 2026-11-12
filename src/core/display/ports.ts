@@ -14,6 +14,7 @@ export async function allocateFreePort(): Promise<number> {
 // X sockets live at /tmp/.X11-unix/X<n>. Start at 99 to avoid real displays.
 export function allocateDisplayNumber(): number {
   for (let n = 99; n < 1000; n++) {
+    // platform-ok: X11's display sockets, for the Xvfb displays (Linux; no X server elsewhere)
     if (!existsSync(`/tmp/.X11-unix/X${n}`)) return n
   }
   throw new Error("no free X display number in range 99-999")

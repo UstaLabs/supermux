@@ -51,7 +51,7 @@ import { chmodSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmdirSync,
 import { basename, isAbsolute, join, resolve } from "path"
 import { STATE_DIR } from "../../../shared/paths"
 import { WorkspaceTerminalError, type WorkspaceTerminalKey } from "../workspace-backend"
-import { proc } from "@supermux/platform"
+import { files, proc } from "@supermux/platform"
 
 const PREFIX = "muxterm_"
 
@@ -180,7 +180,7 @@ export function zmxSocketDir(
  */
 export function ensureSocketDir(dir: string): string {
   try {
-    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    files.mkdirPrivate(dir)
   } catch (error) {
     throw new WorkspaceTerminalError(
       "socket-dir-unsafe",
@@ -201,7 +201,7 @@ export function ensureSocketDir(dir: string): string {
   // Ours, and a real directory. Tightening it now cannot touch anything else.
   if ((owned.mode & 0o077) !== 0) {
     try {
-      chmodSync(dir, 0o700)
+      files.makePrivate(dir)
     } catch (error) {
       throw new WorkspaceTerminalError(
         "socket-dir-unsafe",
@@ -488,11 +488,11 @@ export function claimSocketDir(dir: string): string {
     // process allowed to be judging it.
     try {
       try {
-        writeFileSync(path, mine, { flag: "wx", mode: 0o600 })
+        files.writePrivate(path, mine, { flag: "wx" })
       } catch (error) {
         if ((error as NodeJS.ErrnoException)?.code !== "EEXIST") throw error
         unlinkSync(path)
-        writeFileSync(path, mine, { flag: "wx", mode: 0o600 })
+        files.writePrivate(path, mine, { flag: "wx" })
       }
     } catch (error) {
       throw new WorkspaceTerminalError(
@@ -549,7 +549,7 @@ function withClaimLock<T>(dir: string, claim: () => T): T {
   const deadline = Date.now() + CLAIM_LOCK_WAIT_MS
   for (;;) {
     try {
-      mkdirSync(lock, { mode: 0o700 })
+      files.mkdirPrivate(lock, { recursive: false })
       break
     } catch (error) {
       const code = (error as NodeJS.ErrnoException)?.code

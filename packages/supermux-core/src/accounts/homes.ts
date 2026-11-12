@@ -51,8 +51,8 @@ export function homePath(homesDirectory: string, account: Pick<Account, "id" | "
  */
 export async function ensureHome(homesDirectory: string, account: Pick<Account, "id" | "agent" | "isolated">, layout?: HomeLayout): Promise<string> {
   const home = homePath(homesDirectory, account)
-  await mkdir(home, { recursive: true, mode: 0o700 })
-  await chmod(home, 0o700)
+  await files.mkdirPrivateAsync(home)
+  files.makePrivate(home)
   if (account.isolated || !layout) return home
   const root = resolve(layout.root())
   if (!isAbsolute(root) || paths.isInside(resolve(home), root)) throw new CoreError("invalid_options", "Account history root must be absolute and outside the account home")
@@ -66,8 +66,8 @@ export async function ensureHome(homesDirectory: string, account: Pick<Account, 
 }
 
 async function ensureRootEntry(root: string, target: string, type: "dir" | "file", initial?: string): Promise<void> {
-  await mkdir(root, { recursive: true, mode: 0o700 })
-  if (type === "dir") { await mkdir(target, { recursive: true, mode: 0o700 }); return }
+  await files.mkdirPrivateAsync(root)
+  if (type === "dir") { await files.mkdirPrivateAsync(target); return }
   try {
     const file = await open(target, "wx", 0o600)
     try { if (initial) await file.writeFile(initial) } finally { await file.close() }

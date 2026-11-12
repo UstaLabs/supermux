@@ -57,7 +57,7 @@ export function parseStatusZ(out: string): Map<string, GitLetter> {
 
 function ancestorsOf(rel: string): string[] {
   const out: string[] = [""]
-  const parts = rel.split("/")
+  const parts = rel.split("/") // platform-ok: a git repo-relative path, which git writes with / on every OS
   for (let i = 1; i < parts.length; i++) out.push(parts.slice(0, i).join("/"))
   return out
 }
@@ -216,6 +216,7 @@ export class RepoInfoCache {
       gitAsync(root, [...GIT_READ, "status", "--porcelain=v2", "-z", "--untracked-files=all"], { timeoutMs: GIT_TIMEOUT_MS, trim: false }),
     ])
     const ignored = new Set<string>()
+    // platform-ok: a git repo-relative path, which git writes with / on every OS
     for (const p of ign.split("\0")) if (p) ignored.add(p.endsWith("/") ? p.slice(0, -1) : p)
     const status = parseStatusZ(stat)
     const dirty = new Set<string>()
@@ -245,7 +246,7 @@ export class RepoInfoCache {
 
 function isIgnored(set: Set<string>, rel: string): boolean {
   if (set.has(rel)) return true
-  const parts = rel.split("/")
+  const parts = rel.split("/") // platform-ok: a git repo-relative path, which git writes with / on every OS
   for (let i = 1; i < parts.length; i++) if (set.has(parts.slice(0, i).join("/"))) return true
   return false
 }

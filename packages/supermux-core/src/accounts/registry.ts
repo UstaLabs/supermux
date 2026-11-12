@@ -1,6 +1,6 @@
 import { chmod, lstat, mkdir, open, readdir, readFile, rename, rm, unlink } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
-import { dirname, isAbsolute, join, relative, resolve } from "node:path"
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path"
 import { CoreError } from "../errors.js"
 import { adapterFor } from "./adapters/index.js"
 import { ensureHome, homePath } from "./homes.js"
@@ -113,9 +113,10 @@ export class AccountRegistry {
       // Entries the login run left under shared names (CLI defaults, never user data) would block the links.
       const layout = account.isolated ? undefined : adapter.layout?.(this.roots)
       for (const entry of layout?.shared ?? []) {
-        if (entry.name && !entry.name.includes("/") && entry.name !== "." && entry.name !== "..") await rm(join(source, entry.name), { recursive: true, force: true })
+        // One name in the source folder, by the host's own rule (on Windows a \ would leave it as much as a /).
+        if (entry.name && basename(entry.name) === entry.name && entry.name !== "." && entry.name !== "..") await rm(join(source, entry.name), { recursive: true, force: true })
       }
-      await mkdir(dirname(home), { recursive: true, mode: 0o700 })
+      await files.mkdirPrivateAsync(dirname(home))
       await rename(source, home)
       try {
         await ensureHome(this.homesDirectory, account, adapter.layout?.(this.roots))
@@ -280,8 +281,8 @@ export class AccountRegistry {
   }
 
   private async save(accounts: Map<string, Account>): Promise<void> {
-    await mkdir(this.directory, { recursive: true, mode: 0o700 })
-    await chmod(this.directory, 0o700)
+    await files.mkdirPrivateAsync(this.directory)
+    files.makePrivate(this.directory)
     const temp = `${this.file}.${randomUUID()}.tmp`
     try {
       const file = await open(temp, "wx", 0o600)

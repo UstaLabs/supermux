@@ -259,7 +259,7 @@ import { deriveName, ensureUnique } from "./core/session-manager/naming"
 import { InboxStore } from "./core/inbox/store"
 import { InboxCursorStore } from "./core/inbox/cursor"
 import { InboxDelivery } from "./core/inbox/delivery"
-import { paths, proc } from "@supermux/platform"
+import { dirs, files as platformFiles, host, paths, proc } from "@supermux/platform"
 
 const log = makeLogger("main")
 // Under the desktop app's Windows Scheduled Task loop? Captured once and removed from the env so
@@ -305,9 +305,9 @@ process.env.PATH = withAgentBinDirs(process.env.PATH, home())
 // broker and every session it starts get a plain error. While missing it is re-checked every 10 s;
 // once found, the shim leaves PATH and git features turn on (no restart).
 const gitRequirement = new GitRequirementMonitor({
-  platform: process.platform,
+  platform: host.os(),
   // Windows: the one-click install is MinGit, per user (core/git/mingit.ts).
-  minGit: process.platform === "win32",
+  minGit: host.windows(),
   which: bunWhich,
   // Synchronous only for the boot check (before listen); every re-check is async.
   runXcodeSelectSync: () => {
@@ -328,7 +328,7 @@ const gitRequirement = new GitRequirementMonitor({
 })
 /** POST /system/install-git, debounced (60 s cooldown; a running winget blocks a second one). */
 const gitInstaller = new GitInstaller({
-  platform: process.platform,
+  platform: host.os(),
   requirement: () => gitRequirement.git,
   hasWinget: () => bunWhich("winget", process.env.PATH ?? "") !== null,
   spawn: (cmd) => {
@@ -336,7 +336,7 @@ const gitInstaller = new GitInstaller({
     return spawnDetached(cmd, (event, data) => log.warn(event, data))
   },
   onStatus: (status) => gitRequirement.setInstallStatus(status),
-  installMinGit: process.platform === "win32"
+  installMinGit: host.windows()
     ? async () => {
         log.info("install_git_started", { cmd: "mingit" })
         try {
@@ -362,7 +362,7 @@ const gitInstaller = new GitInstaller({
 // of thing a user should learn from the log, not from a terminal that will not
 // open half an hour later.
 const workspaceTerminals = workspaceTerminalReadiness()
-const preflight = checkPreflight(hasBinary, process.platform, workspaceTerminals)
+const preflight = checkPreflight(hasBinary, host.os(), workspaceTerminals)
 if (workspaceTerminals.ok) log.info("preflight", { workspaceTerminals: workspaceTerminals.detail })
 for (const w of preflight.warnings) log.warn("preflight", { warning: w })
 if (preflight.fatal.length) {
@@ -378,8 +378,8 @@ if (preflight.fatal.length) {
 // only when it is wrong, so the common path does no syscall it does not need.
 const tighten = (dir: string): void => {
   try {
-    mkdirSync(dir, { recursive: true, mode: 0o700 })
-    if ((statSync(dir).mode & 0o077) !== 0) chmodSync(dir, 0o700)
+    platformFiles.mkdirPrivate(dir)
+    if ((statSync(dir).mode & 0o077) !== 0) platformFiles.makePrivate(dir)
   } catch (error) {
     log.warn("state_dir_mode", { dir, error: error instanceof Error ? error.message : String(error) })
   }
@@ -503,7 +503,7 @@ const telemetry = new TelemetryService({
   settings,
   url: process.env.MUX_TELEMETRY_URL ?? "https://telemetry.supermux.dev/v1/batch",
   isEnabled: () => telemetryState().enabled,
-  common: { version: BUILD_VERSION, commit: BUILD_COMMIT, installMode: detectUpdateMode(), env: telemetryEnv(BUILD_VERSION, process.env.MUX_TELEMETRY_ENV), os: process.platform, arch: process.arch },
+  common: { version: BUILD_VERSION, commit: BUILD_COMMIT, installMode: detectUpdateMode(), env: telemetryEnv(BUILD_VERSION, process.env.MUX_TELEMETRY_ENV), os: host.os(), arch: process.arch },
   heartbeat: () => {
     const since = Date.now() - 24 * 3600 * 1000
     return { ...brokerTelemetryProps(), activeSessions24h: [...lastTurnAt.values()].filter((t) => t >= since).length }
@@ -589,12 +589,12 @@ async function withModelSwitchTelemetry<T extends { ok: boolean }>(sessionId: st
 // battery" is off). Default on for a desktop-managed broker; MUX_KEEP_AWAKE=1|0 overrides that.
 const keepAwakeLog = makeLogger("core/power/keep-awake")
 const keepAwake = new KeepAwake({
-  platform: process.platform,
+  platform: host.os(),
   spawn: spawnInhibitor,
   which: (bin) => bunWhich(bin, process.env.PATH ?? ""),
-  onBattery: batteryProbe(process.platform),
+  onBattery: batteryProbe(host.os()),
   // Linux: a denial at boot (no active session yet) is re-tried once loginctl shows one.
-  ...(process.platform === "linux" ? { sessionActive: loginSessionProbe(process.getuid?.()) } : {}),
+  ...(host.os() === "linux" ? { sessionActive: loginSessionProbe(process.getuid?.()) } : {}),
   log: (event, data) => keepAwakeLog.info(event, data),
 }, settings.getKeepAwake(process.env))
 keepAwake.start()
@@ -736,16 +736,15 @@ function sessionAccountFields(s: { agent?: string; account?: string | null }): {
 /** Every agent kind's install/auth status — GET /agents/status and the /agents/models catalog. A login
  *  its provider refused reads as signed out (`signInExpired`), whatever credential file is still on disk. */
 const detectAgentStatuses = () => applySignInExpiry(detectAllAgents(
-  { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, process.platform), fileExists: existsSync, hasCredential: agentHasCredential },
+  { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, host.os()), fileExists: existsSync, hasCredential: agentHasCredential },
   {
-    home: home(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME,
-    appData: process.env.APPDATA, platform: process.platform,
+    home: home(), ...dirs.baseDirs(), platform: host.os(),
     env: process.env,
   },
 ), (kind) => systemSignInExpired(sharedAccounts().usage, kind))
 /** Throws [AgentNotInstalledError] when [kind]'s CLI is not on PATH. Every agent spawn calls it. */
 function assertAgentInstalled(kind: AgentKind): void {
-  const probes = { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, process.platform), fileExists: existsSync }
+  const probes = { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, host.os()), fileExists: existsSync }
   if (!detectAgent(kind, probes, { home: home() }).installed) throw new AgentNotInstalledError(kind)
 }
 const TG_TOKEN = appConfig.telegramBotToken || undefined
@@ -1199,7 +1198,7 @@ const channels: Record<string, Channel> = {
 // Session inboxes (inbox spec §1). Created up front: Antigravity gets it as --add-dir (agy has no
 // read-only flag), Claude a read-only --allowedTools Read rule and OpenCode an external_directory
 // allow, so it must exist before any session launches.
-mkdirSync(SESSION_INBOX_DIR, { recursive: true, mode: 0o700 })
+platformFiles.mkdirPrivate(SESSION_INBOX_DIR)
 // Assigned right after the SessionManager below (its deps need the manager); the getInbox port is a lazy thunk.
 let inboxDelivery: InboxDelivery | undefined
 const inboxStore = new InboxStore(SESSION_INBOX_DIR)
@@ -2208,7 +2207,7 @@ function announceAgentAvatar(id: string): void {
 // Hand edits (an editor, git pull) are picked up too: watch agent-memory/ for *.avatar.json.
 try {
   const dir = join(getMuxHome(), "agent-memory")
-  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  platformFiles.mkdirPrivate(dir)
   const pending = new Map<string, ReturnType<typeof setTimeout>>()
   watchDir(dir, (file) => {
     const m = file ? /^([A-Za-z0-9_-]+)\.avatar\.json$/.exec(file) : null
@@ -2587,7 +2586,7 @@ const advanceRead = makeReadAdvancer({
 const hostIdentity = loadOrCreateHostKey(HOST_KEY_FILE)
 const claimStore = new ClaimStore()
 setInterval(() => claimStore.sweep(), 60_000).unref()
-const hostPlatform = process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : "linux"
+const hostPlatform = host.os() === "darwin" ? "macos" : host.windows() ? "windows" : "linux"
 const advertisedHostName = process.env.MUX_HOST_NAME?.trim() || hostname()
 
 // Relay data plane (frp, in-process). Fresh native CLI + desktop setups enable the hosted
@@ -2626,7 +2625,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   // One install job per agent; "installed" is re-probed (binary on PATH) after
   // the installer exits. Referenced lazily by the startAgentInstall closures.
   const installManager = createInstallManager({
-    isInstalled: (kind) => detectAgent(kind, { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, process.platform), fileExists: existsSync }, { home: home() }).installed,
+    isInstalled: (kind) => detectAgent(kind, { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, host.os()), fileExists: existsSync }, { home: home() }).installed,
     // Windows: an installer that set the user PATH (codex, cursor, …) changed only the registry —
     // fold its dirs into ours so detection and new sessions/terminals see the agent, no restart.
     refreshPath: async () => {
@@ -3495,7 +3494,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         mkdirSync(dir, { recursive: true })
         const p = join(dir, "verify.sh")
         writeFileSync(p, content.endsWith("\n") ? content : content + "\n")
-        chmodSync(p, 0o755)
+        platformFiles.makeExecutable(p)
         return { ok: true }
       } catch (err: any) { return { ok: false, reason: err?.message ?? String(err) } }
     },
@@ -3685,8 +3684,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   // (the `let` binding) — they run at request time, by which point loginManager is assigned.
   loginManager = new LoginManager({
     paths: {
-      home: home(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME,
-      appData: process.env.APPDATA, platform: process.platform,
+      home: home(), ...dirs.baseDirs(), platform: host.os(),
     },
     fileExists: existsSync,
     // Every kind answers with the stored-settings oracle, so a stored

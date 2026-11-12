@@ -12,6 +12,7 @@ import type { ConnectCtx, TunnelProvider, TunnelResult } from "./types"
 import { resolveMode } from "./types"
 import { which, extractFirstUrl } from "./run"
 import { username } from "../../shared/home"
+import { host } from "@supermux/platform"
 
 /** Pull the tailnet host out of `tailscale status --json`, trailing dot stripped. */
 function parseDnsName(stdout: string): string | undefined {
@@ -60,7 +61,7 @@ export const tailscaleProvider: TunnelProvider = {
       return false
     }
 
-    if (process.platform === "darwin") {
+    if (host.os() === "darwin") {
       const r = await ctx.run(["brew", "install", "tailscale"])
       if (r.code === 0) return true
       ctx.println("Could not install Tailscale via Homebrew. Install it yourself:")
@@ -68,7 +69,7 @@ export const tailscaleProvider: TunnelProvider = {
       return false
     }
 
-    if (process.platform === "linux") {
+    if (host.os() === "linux") {
       const r = await ctx.run(["sh", "-c", "curl -fsSL https://tailscale.com/install.sh | sh"])
       if (r.code === 0) return true
       ctx.println("Could not run the Tailscale install script. Install it yourself:")

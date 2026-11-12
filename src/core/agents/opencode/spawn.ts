@@ -33,6 +33,7 @@ export interface OpenCodeClientLike {
 }
 import { makeLogger } from "../../../shared/log"
 import { resolveCommand, spawnCommand, type FileExists } from "../../process/launcher"
+import { host } from "@supermux/platform"
 
 const log = makeLogger("agents/opencode/spawn")
 
@@ -139,7 +140,7 @@ export async function spawnOpenCodeServer(opts: {
   const port = opts.port ?? (await freePort())
   const baseUrl = `http://127.0.0.1:${port}`
   const configDir = resolve(opts.configHome, "opencode")
-  const platform = opts.platform ?? process.platform
+  const platform = opts.platform ?? host.os()
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
     ...opts.authEnv,

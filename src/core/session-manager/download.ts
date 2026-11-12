@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "fs"
 import { extname, basename, join, normalize, sep } from "path"
 import { randomBytes } from "crypto"
 import type { FileStore } from "../files/store"
+import { files } from "@supermux/platform"
 
 export type DownloadableApi = {
   token?: string
@@ -50,7 +51,7 @@ export async function downloadAttachment(api: DownloadableApi, file_id: string, 
   // Telegram's file_path is server-controlled but should be a relative subpath.
   // Reject traversal attempts — defense in depth.
   const fp = meta.file_path
-  if (fp.startsWith("/") || fp.includes("..") || normalize(fp) !== fp.split("/").join(sep)) {
+  if (fp.startsWith("/") || fp.includes("..") || normalize(fp) !== fp.split("/").join(sep)) { // platform-ok: Telegram's file_path, a URL path (/ by definition)
     throw new Error(`invalid file_path from telegram: ${JSON.stringify(fp)}`)
   }
 
@@ -65,10 +66,10 @@ export async function downloadAttachment(api: DownloadableApi, file_id: string, 
     bytes = Buffer.from(await res.arrayBuffer())
   }
 
-  mkdirSync(inboxDir, { recursive: true, mode: 0o700 })
+  files.mkdirPrivate(inboxDir)
   const ext = extname(basename(fp)) || ""
   const unique = `${Date.now()}-${randomBytes(4).toString("hex")}${ext}`
   const outPath = join(inboxDir, unique)
-  writeFileSync(outPath, bytes, { mode: 0o600 })
+  files.writePrivate(outPath, bytes)
   return outPath
 }

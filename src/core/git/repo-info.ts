@@ -43,7 +43,7 @@ export async function getRepoInfo(path: string, opts?: { fetch?: boolean }): Pro
   // %(refname:short) renders the origin/HEAD symref as "origin/HEAD" or bare
   // "origin" depending on git version — drop those, matching listBranches.
   const remote = (await safeLines(real, ["for-each-ref", "--format=%(refname:short)", "refs/remotes"]))
-    .filter((n) => n.includes("/") && !n.endsWith("/HEAD"))
+    .filter((n) => n.includes("/") && !n.endsWith("/HEAD")) // platform-ok: a git ref name, /-separated on every OS
 
   return {
     isGitRepo: true,

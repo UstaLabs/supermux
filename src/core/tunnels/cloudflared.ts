@@ -16,6 +16,7 @@ import { home } from "../../shared/home"
 import { readLog, startBackground, stopBackground } from "./background"
 import { which, extractFirstUrl } from "./run"
 import { resolveMode, type TunnelProvider, type ConnectCtx, type TunnelResult } from "./types"
+import { host } from "@supermux/platform"
 
 const TUNNEL_NAME = "supermux"
 // Working, self-updating install pages. The old
@@ -178,7 +179,7 @@ export const cloudflaredProvider: TunnelProvider = {
     const ok = ctx.yes || (await ctx.confirm("Install cloudflared? (Cloudflare Tunnel client)", true))
     if (!ok) return false
 
-    if (process.platform === "darwin") {
+    if (host.os() === "darwin") {
       try {
         await ctx.run(["brew", "install", "cloudflared"])
       } catch {

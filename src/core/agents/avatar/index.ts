@@ -131,9 +131,9 @@ export function readAvatar(agentId: string, home?: string): string | null {
 /** Atomically replaces the Agent's avatar file. Caller validates first. */
 export function writeAvatar(agentId: string, text: string, home?: string): void {
   const p = avatarPath(agentId, home)
-  mkdirSync(agentMemoryPaths(agentId, home).dir, { recursive: true, mode: 0o700 })
+  files.mkdirPrivate(agentMemoryPaths(agentId, home).dir)
   const tmp = `${p}.tmp-${process.pid}`
-  writeFileSync(tmp, text, { encoding: "utf8", mode: 0o600 })
+  files.writePrivate(tmp, text, { encoding: "utf8" })
   files.replaceSync(tmp, p)
 }
 

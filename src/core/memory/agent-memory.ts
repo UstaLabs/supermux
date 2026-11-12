@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs"
 import { join } from "path"
 import { getMuxHome } from "./init"
+import { files } from "@supermux/platform"
 
 /** An Agent's own memory (spec §4): dated history + curator digest, keyed by the Agent's session id.
  *  `agent-memory/`, not `agents/`: `~/.mux/agents.md` is already the domain index. */
@@ -20,8 +21,8 @@ export function agentMemoryPaths(id: string, home: string = getMuxHome()): Agent
 /** Both files exist from the Agent's creation on, so its fixed preamble can name them. Never clobbers. */
 export function ensureAgentMemoryFiles(id: string, home?: string): AgentMemoryPaths {
   const p = agentMemoryPaths(id, home)
-  mkdirSync(p.dir, { recursive: true, mode: 0o700 })
-  for (const file of [p.history, p.digest]) if (!existsSync(file)) writeFileSync(file, "", { encoding: "utf8", mode: 0o600 })
+  files.mkdirPrivate(p.dir)
+  for (const file of [p.history, p.digest]) if (!existsSync(file)) files.writePrivate(file, "", { encoding: "utf8" })
   return p
 }
 

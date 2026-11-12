@@ -17,6 +17,7 @@ import { join } from "path"
 import { startBackground, stopBackground } from "./background"
 import { which, extractFirstUrl } from "./run"
 import { resolveMode, type TunnelProvider, type ConnectCtx, type TunnelResult } from "./types"
+import { host } from "@supermux/platform"
 
 const DOWNLOAD_URL = "https://ngrok.com/download"
 const AUTHTOKEN_URL = "dashboard.ngrok.com/get-started/your-authtoken"
@@ -70,7 +71,7 @@ export const ngrokProvider: TunnelProvider = {
     const ok = ctx.yes || (await ctx.confirm("Install ngrok? (public https tunnel client)", true))
     if (!ok) return false
 
-    if (process.platform === "darwin") {
+    if (host.os() === "darwin") {
       try {
         await ctx.run(["brew", "install", "ngrok"])
       } catch {

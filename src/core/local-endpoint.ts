@@ -1,10 +1,12 @@
+// platform-ok: a POSIX socket path is /-spelled on any host, so Windows test hosts match Linux
 import { posix } from "path"
+import { host } from "@supermux/platform"
 
 export function safePipeComponent(value: string): string {
   return value.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120)
 }
 
-export function usesFilesystemEndpoint(platform: NodeJS.Platform = process.platform): boolean {
+export function usesFilesystemEndpoint(platform: NodeJS.Platform = host.os()): boolean {
   return platform !== "win32"
 }
 

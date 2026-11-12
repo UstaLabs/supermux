@@ -5,6 +5,7 @@ export type AcpClient = {
 }
 import { makeLogger } from "../../../shared/log"
 import { resolveCommand, spawnCommand, type FileExists } from "../../process/launcher"
+import { host } from "@supermux/platform"
 
 const log = makeLogger("agents/grok/runner")
 
@@ -48,7 +49,7 @@ export function makeRealGrokRunner(deps: {
     "stdio",
   ]
   const childEnv = { ...process.env, ...env } as Record<string, string>
-  const platform = deps.platform ?? process.platform
+  const platform = deps.platform ?? host.os()
   const shouldResolve = !deps.spawn || deps.platform !== undefined || deps.fileExists !== undefined
   const command = shouldResolve ? (resolveCommand(["grok"], childEnv, platform, { fileExists: deps.fileExists }) ?? "grok") : "grok"
   const child = spawnCommand(command, args, {

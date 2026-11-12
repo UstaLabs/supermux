@@ -1,4 +1,5 @@
 import { dlopen } from "bun:ffi"
+import { host } from "@supermux/platform"
 
 export interface ProcessJob {
   assign(pid: number): void
@@ -80,7 +81,7 @@ export function createProcessJobFromApi(api: JobObjectApi): ProcessJob {
 
 function loadWindowsApi(): JobObjectApi {
   if (windowsApi) return windowsApi
-  if (process.platform !== "win32") {
+  if (!host.windows()) {
     throw new Error("Windows Job Objects are only available on win32")
   }
 

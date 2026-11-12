@@ -26,11 +26,11 @@ export class ProjectImages {
   write(bytes: Uint8Array, mime: string): string {
     const ext = EXT[mime]
     if (!ext) throw new Error(`unsupported image type: ${mime}`)
-    mkdirSync(this.dir, { recursive: true, mode: 0o700 })
+    files.mkdirPrivate(this.dir)
     const id = `${randomUUID()}.${ext}`
     const tmp = join(this.dir, `.${id}.tmp`)
     try {
-      writeFileSync(tmp, bytes, { mode: 0o600 })
+      files.writePrivate(tmp, bytes)
       files.replaceSync(tmp, join(this.dir, id))
     } catch (e) {
       rmSync(tmp, { force: true })

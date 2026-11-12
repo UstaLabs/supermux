@@ -6,6 +6,7 @@ import { home } from "../../shared/home"
 import { join } from "path"
 import { claudeModelSupportsFast, CODEX_FAST_SERVICE_TIER } from "./fast-mode"
 import { readClaudeStoredLogin } from "../agents/claude/stored-login"
+import { host } from "@supermux/platform"
 
 /**
  * An added account's launch env (the registry's `materialize`): discovery runs with it in place of
@@ -107,7 +108,7 @@ export async function runCli(names: readonly string[], args: string[], timeoutMs
   for (const key of launch?.unset ?? []) delete env[key]
   // An account's args are global flags (Codex's `-c` provider config), so they go before the subcommand.
   args = [...(launch?.args ?? []), ...args]
-  const command = resolveCommand(names, env, process.platform)
+  const command = resolveCommand(names, env, host.os())
   if (!command) throw new Error(`${names.join(" or ")} not found`)
   return await new Promise<string>((resolve, reject) => {
     const child = spawnCommand(command, args, { env, stdio: ["ignore", "pipe", "pipe"] })
@@ -209,7 +210,7 @@ export async function discoverOpenCodeModels(opts?: {
     const models: ModelInfo[] = []
     for (const line of raw.split("\n")) {
       const id = line.trim()
-      if (!id || !id.includes("/")) continue
+      if (!id || !id.includes("/")) continue // platform-ok: an opencode model id, "provider/model"
       models.push({ id, displayName: id, agent: Agent.OpenCode })
     }
     return models

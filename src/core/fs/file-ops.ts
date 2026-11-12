@@ -4,7 +4,7 @@ import { basename, dirname, join } from "path"
 import { FsError, toFsError } from "./errors"
 import type { FsEntry, FsOp } from "./types"
 import { home as userHome } from "../../shared/home"
-import { files } from "@supermux/platform"
+import { files, host } from "@supermux/platform"
 
 export const MAX_READ_BYTES = 1024 * 1024
 const BINARY_SCAN_BYTES = 8 * 1024
@@ -162,7 +162,7 @@ function localDeletionDate(): string {
 }
 
 async function moveToTrash(path: string, opts: OpOptions): Promise<void> {
-  const platform = opts.platform ?? process.platform
+  const platform = opts.platform ?? host.os()
   const trash = opts.trashDir ?? defaultTrashDir(platform)
   const filesDir = platform === "darwin" ? trash : join(trash, "files")
   await mkdir(filesDir, { recursive: true })

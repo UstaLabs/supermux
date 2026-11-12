@@ -1,10 +1,11 @@
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs"
-import { join, posix, win32 } from "node:path"
+import { join } from "node:path"
+import { files as platformFiles, host, paths } from "@supermux/platform"
 import { ENVIRONMENT_FIELDS, requireSpec, validateMcpServerNames } from "./spec.js"
 import type { OpenCodeEnvironmentSpec, PreparedEnvironment } from "./types.js"
 
 function ensureHome(home: string): void {
-  mkdirSync(home, { recursive: true, mode: 0o700 })
+  platformFiles.mkdirPrivate(home)
 }
 
 /**
@@ -18,9 +19,9 @@ function ensureHome(home: string): void {
  *   name another folder. On Windows `\` is the separator and OpenCode reads it the same way: the pattern is written with `/`.
  * `platform` is a test seam.
  */
-export function readableFolderPattern(dir: unknown, platform: NodeJS.Platform = process.platform): string {
+export function readableFolderPattern(dir: unknown, platform: NodeJS.Platform = host.os()): string {
   const windows = platform === "win32"
-  const path = windows ? win32 : posix
+  const path = paths.flavor(platform)
   const folder = typeof dir === "string" ? dir.replace(windows ? /[\\/]+$/ : /\/+$/, "") : ""
   if (!folder || !path.isAbsolute(folder) || path.resolve(folder) !== folder || /[*?]/.test(folder) || (!windows && folder.includes("\\"))) {
     const got = typeof dir === "string" ? JSON.stringify(dir) : typeof dir
@@ -81,14 +82,14 @@ export async function prepareOpenCodeEnvironment(spec: OpenCodeEnvironmentSpec):
   validateMcpServerNames(spec.mcpServers)
   validateReadableDirs(spec.readableDirs)
   ensureHome(spec.home)
-  mkdirSync(spec.configHome, { recursive: true, mode: 0o700 })
+  platformFiles.mkdirPrivate(spec.configHome)
   const files: string[] = []
 
   const dir = join(spec.configHome, "opencode")
-  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  platformFiles.mkdirPrivate(dir)
   const configPath = join(dir, "opencode.json")
-  writeFileSync(configPath, renderOpenCodeConfig(spec), { encoding: "utf8", mode: 0o600 })
-  chmodSync(configPath, 0o600)
+  platformFiles.writePrivate(configPath, renderOpenCodeConfig(spec), { encoding: "utf8" })
+  platformFiles.makePrivate(configPath)
   files.push(configPath)
 
   return {

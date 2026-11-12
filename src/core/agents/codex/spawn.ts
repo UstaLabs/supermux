@@ -1,6 +1,7 @@
 import type { ChildProcess } from "child_process"
 import { JsonRpcClient } from "./jsonrpc"
 import { resolveCommand, spawnCommand, type FileExists } from "../../process/launcher"
+import { host } from "@supermux/platform"
 
 export type CodexSpawnHandle = {
   pid: number
@@ -49,7 +50,7 @@ export function spawnCodexAppServer(opts: {
     ...(opts.reasoningLevel ? ["-c", `model_reasoning_effort="${opts.reasoningLevel}"`] : []),
     ...(opts.pluginConfigArgs ?? []),
   ]
-  const platform = opts.platform ?? process.platform
+  const platform = opts.platform ?? host.os()
   const shouldResolve = !opts.spawn || opts.platform !== undefined || opts.fileExists !== undefined
   const command = shouldResolve ? (resolveCommand(["codex"], env, platform, { fileExists: opts.fileExists }) ?? "codex") : "codex"
   const child = spawnCommand(command, args, {
