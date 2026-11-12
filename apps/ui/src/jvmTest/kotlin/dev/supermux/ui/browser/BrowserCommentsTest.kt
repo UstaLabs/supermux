@@ -47,4 +47,10 @@ class BrowserCommentsTest {
         val corner = cropWithPin(page, PageBox(0f, 0f, 0.1f, 0.1f), Color.Red)
         assertEquals(40 + 24, corner.width, "cut at the page's edge")
     }
+
+    /** The element's text only when it helps: not when its selector already says it. */
+    @Test fun theTextIsLeftOutWhenTheSelectorSaysIt() {
+        val message = commentsMessage(null, null, listOf(CommentOut(1, "x", "button[aria-label='Close']", "Close", null)))
+        assertEquals("**1 browser comment**\n\n### ① \"x\"\n- element: `button[aria-label='Close']`", message)
+    }
 }

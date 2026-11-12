@@ -32,7 +32,8 @@ internal fun commentsMessage(url: String?, viewedAs: String?, comments: List<Com
     for (c in comments) {
         append("\n### ").append(pinMark(c.number)).append(" \"").append(c.comment.trim().replace("\n", " ")).append("\"\n")
         append("- element: `").append(c.selector).append('`')
-        if (c.text.isNotBlank()) append(" · text \"").append(c.text).append('"')
+        // The text when it helps tell the element apart: not when empty or already in the selector.
+        if (c.text.isNotBlank() && !c.selector.contains(c.text, ignoreCase = true)) append(" · text \"").append(c.text).append('"')
         append('\n')
         c.picture?.let { append("- picture: ").append(it).append('\n') }
     }

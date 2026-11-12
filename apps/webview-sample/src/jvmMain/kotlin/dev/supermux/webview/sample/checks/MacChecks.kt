@@ -247,6 +247,8 @@ report();
 li{list-style:none;height:20vh}aside{position:absolute;left:0;right:0;top:60vh;height:30vh}
 button{display:block;width:100%;height:15vh;margin-top:8vh}</style></head>
 <body><h1 id="title">Your cart</h1><ul><li class="row">Shoes</li><li class="row">Socks</li></ul>
+<section class="cart" style="position:absolute;left:0;width:50%;top:50vh;height:10vh"><h3 style="margin:0;height:10vh">Cart</h3></section>
+<input placeholder="you@example.com" style="position:absolute;left:50%;width:50%;top:50vh;height:10vh;box-sizing:border-box">
 <aside class="summary"><h2 style="margin:0;height:8vh">Order summary</h2><button class="buy">Pay €42</button></aside></body></html>""",
     )
 
@@ -320,7 +322,11 @@ button{display:block;width:100%;height:15vh;margin-top:8vh}</style></head>
                 assertEquals("aside.summary", nav.elementAt(0.5f, 0.83f, up = 1)?.selector)
                 val second = assertNotNull(nav.elementAt(0.5f, 0.35f), "the second of two alike")
                 assertEquals("li.row:nth-of-type(2)", second.selector)
-                assertEquals("#title", nav.elementAt(0.5f, 0.05f)?.selector?.removePrefix("h1"))
+                assertEquals("#title", nav.elementAt(0.5f, 0.05f)?.selector, "an id says it all")
+                // Never a bare tag (Tally, 2026-11-12: "h3" and "input" can't be acted on): the nearest classed
+                // ancestor, or the element's own placeholder.
+                assertEquals("section.cart > h3", nav.elementAt(0.25f, 0.55f)?.selector)
+                assertEquals("input[placeholder='you@example.com']", nav.elementAt(0.75f, 0.55f)?.selector)
                 val boxes = nav.boxesOf(listOf(pay.selector, "section.gone"))
                 assertEquals(pay.box, boxes[0])
                 assertEquals(null, boxes[1])
