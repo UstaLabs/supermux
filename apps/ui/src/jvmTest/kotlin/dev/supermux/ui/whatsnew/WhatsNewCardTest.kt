@@ -49,6 +49,17 @@ class WhatsNewCardTest {
         onNodeWithText("1 new thing you can do on this iPhone.").assertExists()
     }
 
+    @Test fun in_turkish_the_place_leads_the_sentence() = runComposeUiTest {
+        setPlatformContent {
+            dev.supermux.ui.i18n.ProvideAppLanguage(dev.supermux.ui.i18n.AppLanguage.TURKISH) {
+                WhatsNewCard(WhatsNewOffer("0.17.7", 7, ReleasePlatform.Mac), onExplore = {}, onDismiss = {})
+            }
+        }
+        onNodeWithText("v0.17.7 sürümüne güncellendi").assertExists()
+        onNodeWithText("Bu Mac'te yapabileceğiniz 7 yeni şey var.").assertExists()
+        onNodeWithText("Yeniliklere göz at").assertExists()
+    }
+
     @Test fun explore_and_dismiss_each_answer_once() = runComposeUiTest {
         var explored = 0
         var dismissed = 0

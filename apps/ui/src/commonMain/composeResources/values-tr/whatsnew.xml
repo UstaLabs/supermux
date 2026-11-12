@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What's new (#90): the card after an update and its page. -->
+<resources>
+    <string name="whatsnew_card_title">v%1$s sürümüne güncellendi</string>
+    <plurals name="whatsnew_card_count">
+        <item quantity="one">%2$s yapabileceğiniz %1$d yeni şey var.</item>
+        <item quantity="other">%2$s yapabileceğiniz %1$d yeni şey var.</item>
+    </plurals>
+    <plurals name="whatsnew_card_count_anywhere">
+        <item quantity="one">Yapabileceğiniz %1$d yeni şey var.</item>
+        <item quantity="other">Yapabileceğiniz %1$d yeni şey var.</item>
+    </plurals>
+    <string name="whatsnew_place_mac">Bu Mac'te</string>
+    <string name="whatsnew_place_win">Bu bilgisayarda</string>
+    <string name="whatsnew_place_linux">Bu bilgisayarda</string>
+    <string name="whatsnew_place_web">Web uygulamasında</string>
+    <string name="whatsnew_place_android">Bu telefonda</string>
+    <string name="whatsnew_place_iphone">Bu iPhone'da</string>
+    <string name="whatsnew_card_explore">Yeniliklere göz at</string>
+    <string name="whatsnew_dismiss">Kapat</string>
+    <string name="whatsnew_page_title">Yenilikler</string>
+    <string name="whatsnew_back">Geri</string>
+</resources>

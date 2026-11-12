@@ -61,8 +61,9 @@ import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.Stroke
 import org.jetbrains.compose.resources.StringResource
-import org.jetbrains.compose.resources.pluralStringResource
-import org.jetbrains.compose.resources.stringResource
+
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.localizedPlural
 
 /** What the card offers: the newest edition's [version] and how many of its chapters [platform] has. */
 data class WhatsNewOffer(val version: String, val chapters: Int, val platform: ReleasePlatform?)
@@ -111,7 +112,7 @@ private fun WhatsNewCardBody(offer: WhatsNewOffer, onExplore: () -> Unit, onDism
             Icon(Icons.Outlined.Redeem, contentDescription = null, tint = cs.onSurface, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(10.dp))
             Text(
-                stringResource(Res.string.whatsnew_card_title, offer.version),
+                localized(Res.string.whatsnew_card_title, offer.version),
                 color = cs.onSurface,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Medium,
@@ -122,15 +123,15 @@ private fun WhatsNewCardBody(offer: WhatsNewOffer, onExplore: () -> Unit, onDism
             IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp).testTag("whats_new_card_dismiss")) {
                 Icon(
                     Icons.Default.Close,
-                    contentDescription = stringResource(Res.string.whatsnew_dismiss),
+                    contentDescription = localized(Res.string.whatsnew_dismiss),
                     tint = cs.onSurfaceVariant,
                     modifier = Modifier.size(18.dp),
                 )
             }
         }
         Spacer(Modifier.height(Space.sm))
-        val count = offer.platform?.let { pluralStringResource(Res.plurals.whatsnew_card_count, offer.chapters, offer.chapters, stringResource(it.place())) }
-            ?: pluralStringResource(Res.plurals.whatsnew_card_count_anywhere, offer.chapters, offer.chapters)
+        val count = offer.platform?.let { localizedPlural(Res.plurals.whatsnew_card_count, offer.chapters, offer.chapters, localized(it.place())) }
+            ?: localizedPlural(Res.plurals.whatsnew_card_count_anywhere, offer.chapters, offer.chapters)
         Text(
             count,
             color = cs.onSurfaceVariant,
@@ -148,7 +149,7 @@ private fun WhatsNewCardBody(offer: WhatsNewOffer, onExplore: () -> Unit, onDism
             contentPadding = PaddingValues(horizontal = Space.sm),
             modifier = Modifier.fillMaxWidth().padding(end = Space.sm).height(36.dp).testTag("whats_new_card_explore"),
         ) {
-            Text(stringResource(Res.string.whatsnew_card_explore), fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+            Text(localized(Res.string.whatsnew_card_explore), fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
         }
     }
 }

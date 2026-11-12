@@ -43,7 +43,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import org.jetbrains.compose.resources.stringResource
+import dev.supermux.ui.i18n.localized
 
 /** What the page can ask the app for, by the name it uses (`data-actions`, `hostBridge.call('whatsnew', {action})`). */
 enum class WhatsNewAction(val id: String) {
@@ -93,7 +93,7 @@ fun WhatsNewPage(
     val page by produceState<String?>(null, version) { value = runCatching { loadEdition(version) }.getOrNull() }
     Column(modifier.fillMaxSize().background(c.pane).testTag("whats_new_page")) {
         KitTopBar(
-            stringResource(Res.string.whatsnew_page_title),
+            localized(Res.string.whatsnew_page_title),
             onBack = onBack,
             modifier = Modifier.padding(start = controls.start, end = controls.end, top = if (controls.band > 48.dp) controls.band - 48.dp else 0.dp),
             backTag = "whats_new_back",
