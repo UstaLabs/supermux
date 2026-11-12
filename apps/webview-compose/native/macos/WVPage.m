@@ -75,7 +75,7 @@ typedef NS_ENUM(int, WVQuestionKind) {
  */
 static NSString *const WVKeyScript =
     @"(function(){var h=window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.wvKeys;if(!h)return;"
-    @"var post=h.postMessage.bind(h);window.addEventListener('keydown',function(e){if(!e.metaKey)return;"
+    @"var post=h.postMessage.bind(h);window.addEventListener('keydown',function(e){if(!e.metaKey||/^(Meta|Shift|Control|Alt)$/.test(e.key))return;"
     @"setTimeout(function(){post(e.defaultPrevented?'used':'unused');},0);},true);})();";
 
 static NSError *WVUnknownHost(void) {

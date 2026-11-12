@@ -32,6 +32,14 @@ static void WVPostKey(NSWindow *window, NSString *characters, unsigned short key
     }
 }
 
+/** A modifier key going down (flags set) or up (flags 0) on its own: a flagsChanged event, as AppKit gets one. */
+static void WVPostFlags(NSWindow *window, unsigned short keyCode, NSEventModifierFlags flags) {
+    NSEvent *event = [NSEvent keyEventWithType:NSEventTypeFlagsChanged location:NSZeroPoint modifierFlags:flags
+                                     timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:window.windowNumber
+                                       context:nil characters:@"" charactersIgnoringModifiers:@"" isARepeat:NO keyCode:keyCode];
+    [NSApp postEvent:event atStart:NO];
+}
+
 /** The ANSI key codes of a…z. */
 static const unsigned short WVLetterKeys[26] = {
     kVK_ANSI_A, kVK_ANSI_B, kVK_ANSI_C, kVK_ANSI_D, kVK_ANSI_E, kVK_ANSI_F, kVK_ANSI_G, kVK_ANSI_H, kVK_ANSI_I,
@@ -113,7 +121,10 @@ JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_testKeys(
         for (NSUInteger i = 0; i < keys.length; i++) {
             unichar c = [keys characterAtIndex:i];
             if (c < 'a' || c > 'z') continue; // lowercase ASCII letters only: their key codes need no layout table
+            // As a keyboard does: ⌘ goes down on its own first (the page sees a keydown for Meta), the letter right after.
+            if (flags) WVPostFlags(w, kVK_Command, flags);
             WVPostKey(w, [NSString stringWithCharacters:&c length:1], WVLetterKeys[c - 'a'], flags);
+            if (flags) WVPostFlags(w, kVK_Command, 0);
         }
     });
 }
