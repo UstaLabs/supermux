@@ -39,4 +39,10 @@
     <string name="browser_comment_done">Tamamlandı</string>
     <string name="browser_comment_answered">Yanıtlandı</string>
     <string name="browser_comment_dismissed">Yok sayıldı</string>
+
+    <!-- After a phone saves an attachment (#95): where it went. -->
+    <string name="saved_to_photos">Fotoğraflar'a kaydedildi</string>
+    <string name="saved_to_gallery">Galeri'ye kaydedildi</string>
+    <string name="saved_to_downloads">İndirilenler'e kaydedildi</string>
+    <string name="saved_file">%1$s kaydedildi</string>
 </resources>
