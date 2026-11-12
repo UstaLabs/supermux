@@ -8,6 +8,7 @@
 // through `:shared`'s `formatChatTime`.
 package dev.supermux.ui.chat
 
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -134,6 +135,15 @@ import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.Platform
 import dev.supermux.ui.work.handOverAsTapped
+import dev.supermux.ui.work.saveDownload
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.saved_file
+import dev.supermux.ui.resources.saved_to_downloads
+import dev.supermux.ui.resources.saved_to_gallery
+import dev.supermux.ui.resources.saved_to_photos
+import dev.supermux.ui.platform.SavedFile
+import dev.supermux.ui.platform.SavedPlace
 import dev.supermux.ui.work.DownloadItemRing
 import dev.supermux.ui.work.rememberDownloads
 import dev.supermux.ui.work.AudioToggleButton
@@ -1400,6 +1410,7 @@ internal fun ImageLightbox(
     val platform = LocalPlatform.current
     val pointer = LocalPointerAvailable.current
     val scope = rememberCoroutineScope()
+    val savedWords = rememberSavedWords()
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -1462,7 +1473,14 @@ internal fun ImageLightbox(
                         icon = MediaIcons.Save,
                         label = "Download",
                         tag = "image_lightbox_download",
-                        onClick = { scope.launch { saveOrOpenAttachment(platform, pointer, name, mime, bytes) } },
+                        // Save, as the viewer's does (#95): on a phone it ran "open with".
+                        onClick = {
+                            scope.launch {
+                                saveAttachment(platform, pointer, name, mime, bytes)
+                                    ?.let { savedNotice(it, pointer, savedWords) }
+                                    ?.let(platform.notices::show)
+                            }
+                        },
                     )
                 }
                 LightboxButton(
@@ -1873,7 +1891,16 @@ internal fun MountedVideoPlayer(
                 drawLayer(frameLayer)
             }
         }
-        VideoPlayerSurface(playerState = player, modifier = surface)
+        val aspect = liveVideoAspect(player)
+        if (aspect == null) {
+            VideoPlayerSurface(playerState = player, modifier = surface)
+        } else {
+            // iOS: the library frames every clip at 16:9 (liveVideoAspect), so the frame is sized here at the clip's
+            // real ratio, as large as the space allows, and the picture fills it exactly.
+            Box(surface.fillMaxHeight(), contentAlignment = Alignment.Center) {
+                VideoPlayerSurface(playerState = player, modifier = Modifier.aspectRatio(aspect), contentScale = ContentScale.FillBounds)
+            }
+        }
     }
 }
 
@@ -2182,48 +2209,64 @@ private fun AttachmentFileCard(
     val badge = remember(att.name, label) { fileBadgeLabel(att.name ?: label) }
     val family = remember(att.name, att.mime, label) { fileFamily(fileExtension(att.name ?: label), att.mime) }
     val meta = remember(att.name, att.mime, att.size, label) { fileMetaLine(att.name ?: label, att.mime, att.size) }
+    val savedWords = rememberSavedWords()
+    // What the phone says after a save; true when something was saved.
+    fun saved(file: SavedFile?): Boolean {
+        file?.let { savedNotice(it, pointer, savedWords) }?.let(platform.notices::show)
+        return file != null
+    }
+    val canAct = !busy && !waiting && running == null
+    // A tap does what a tap does (R1: on a phone, Open; on iOS, Share). The ↓ SAVES (#95): it looked like Save and
+    // opened the chooser or the share sheet.
+    fun act(save: Boolean) {
+        if (key != null && download == null && stored != null) {
+            waiting = true
+            scope.launch {
+                try {
+                    val item = Download(key, stored.name, stored.mime, DownloadPurpose.File, DownloadState.Done(stored), origin)
+                    val done = if (save) saved(saveDownload(platform, pointer, downloads, item)) else handOverAsTapped(platform, pointer, downloads, item)
+                    if (!done && !stored.isAvailable()) storeLost = true
+                } finally {
+                    waiting = false
+                }
+            }
+            return
+        }
+        if (key != null) {
+            // The card's scope holds only the claim: leaving lets go, the download goes on.
+            waiting = true
+            scope.launch {
+                try {
+                    if (save) {
+                        startDownload(downloads, media, att, platform, pointer, origin = origin, then = { saved(saveDownload(platform, pointer, downloads, it)) })
+                    } else {
+                        startDownload(downloads, media, att, platform, pointer, origin = origin)
+                    }
+                } finally {
+                    waiting = false
+                }
+            }
+            return
+        }
+        busy = true
+        failed = false
+        scope.launch {
+            val bytes = runCatching { media.bytes(att) }.getOrNull()
+            busy = false
+            if (bytes == null) {
+                failed = true
+                return@launch
+            }
+            if (save) saved(saveAttachment(platform, pointer, att.name ?: att.file_id, att.mime, bytes))
+            else saveOrOpenAttachment(platform, pointer, att.name ?: att.file_id, att.mime, bytes)
+        }
+    }
     Row(
         modifier = Modifier
             .mediaColumnWidth()
             .clip(RoundedCornerShape(Radii.md))
             .background(cs.surfaceContainerHigh)
-            .clickable(enabled = !busy && !waiting && running == null) {
-                if (key != null && download == null && stored != null) {
-                    waiting = true
-                    scope.launch {
-                        try {
-                            val item = Download(key, stored.name, stored.mime, DownloadPurpose.File, DownloadState.Done(stored), origin)
-                            if (!handOverAsTapped(platform, pointer, downloads, item) && !stored.isAvailable()) storeLost = true
-                        } finally {
-                            waiting = false
-                        }
-                    }
-                    return@clickable
-                }
-                if (key != null) {
-                    // The card's scope holds only the claim: leaving lets go, the download goes on.
-                    waiting = true
-                    scope.launch {
-                        try {
-                            startDownload(downloads, media, att, platform, pointer, origin = origin)
-                        } finally {
-                            waiting = false
-                        }
-                    }
-                    return@clickable
-                }
-                busy = true
-                failed = false
-                scope.launch {
-                    val bytes = runCatching { media.bytes(att) }.getOrNull()
-                    busy = false
-                    if (bytes == null) {
-                        failed = true
-                        return@launch
-                    }
-                    saveOrOpenAttachment(platform, pointer, att.name ?: att.file_id, att.mime, bytes)
-                }
-            }
+            .clickable(enabled = canAct) { act(save = false) }
             .padding(Space.sm)
             .testTag("attachment_chip"),
         verticalAlignment = Alignment.CenterVertically,
@@ -2270,13 +2313,16 @@ private fun AttachmentFileCard(
         }
         val shown = download
             ?: stored?.let { Download(key.orEmpty(), it.name, it.mime, DownloadPurpose.File, DownloadState.Done(it), origin) }
-        DownloadItemRing(item = shown, tag = "attachment_ring", busy = busy) {
-            Icon(
-                imageVector = MediaIcons.Save,
-                contentDescription = "Download",
-                tint = cs.onSurfaceVariant,
-                modifier = Modifier.size(20.dp),
-            )
+        // The ↓ is Save of its own (#95); the ring inside it stays what it shows.
+        Box(Modifier.clip(CircleShape).clickable(enabled = canAct) { act(save = true) }.testTag("attachment_chip_save")) {
+            DownloadItemRing(item = shown, tag = "attachment_ring", busy = busy) {
+                Icon(
+                    imageVector = MediaIcons.Save,
+                    contentDescription = "Download",
+                    tint = cs.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
         }
     }
 }
@@ -2365,6 +2411,8 @@ internal suspend fun startDownload(
     pointer: Boolean,
     onFailed: () -> Unit = {},
     origin: DownloadOrigin? = null,
+    /** What to do with it once it is done: what a tap does, unless the caller is a Save button ([saveDownload]). */
+    then: suspend (Download) -> Unit = { handOverAsTapped(platform, pointer, downloads, it) },
 ): Boolean {
     val key = media.downloadKey(att) ?: return false
     val name = att.name ?: att.file_id
@@ -2374,7 +2422,7 @@ internal suspend fun startDownload(
         val item = downloads.items.value.firstOrNull { it.key == key }
         when {
             file == null -> if (item?.state is DownloadState.Failed) onFailed()
-            item != null -> handOverAsTapped(platform, pointer, downloads, item)
+            item != null -> then(item)
         }
     } finally {
         claim.release()
@@ -2390,6 +2438,43 @@ private class AttachmentDownload(private val media: AttachmentMedia, private val
     override suspend fun fetch(progress: (received: Long, total: Long?) -> Unit): DownloadedFile? = media.download(att, progress)
 
     override fun cancel() = media.cancelDownload(att)
+}
+
+/**
+ * The viewer's Save with [bytes] in hand: save them (on a phone the platform picks the gallery or its files,
+ * [SavedFile.place]); a pointer host then opens what it saved. Never the tap's "open with" ([saveOrOpenAttachment]),
+ * which is what Save ran on a phone before. Null: cancelled or failed.
+ */
+internal suspend fun saveAttachment(platform: Platform, pointer: Boolean, name: String, mime: String?, bytes: ByteArray): SavedFile? {
+    val safeName = previewFilename(fileNameOf(name), mime)
+    val type = mime?.ifBlank { null } ?: platform.files.probeMime(safeName)
+    val saved = platform.files.saveAs(safeName, type, bytes) ?: return null
+    if (pointer) platform.files.openSaved(saved)
+    return saved
+}
+
+/** What a phone says after a save, in the app's language: resolved in composition, used after the save returns. */
+internal class SavedWords(val photos: String, val gallery: String, val downloads: String, val chosen: (String) -> String)
+
+/** The phone's word for where [saved] went; null on a pointer host, which opens the file instead. */
+internal fun savedNotice(saved: SavedFile, pointer: Boolean, words: SavedWords): String? = when {
+    pointer -> null
+    saved.place == SavedPlace.Photos -> words.photos
+    saved.place == SavedPlace.Gallery -> words.gallery
+    saved.place == SavedPlace.Downloads -> words.downloads
+    else -> words.chosen(saved.name)
+}
+
+/** [SavedWords] in the app's language. */
+@Composable
+internal fun rememberSavedWords(): SavedWords {
+    val photos = localized(Res.string.saved_to_photos)
+    val gallery = localized(Res.string.saved_to_gallery)
+    val downloads = localized(Res.string.saved_to_downloads)
+    val chosen = localized(Res.string.saved_file, "%1\$s")
+    return remember(photos, gallery, downloads, chosen) {
+        SavedWords(photos, gallery, downloads) { name -> chosen.replace("%1\$s", name) }
+    }
 }
 
 /**

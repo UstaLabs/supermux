@@ -115,7 +115,7 @@ class ImageLightboxTest {
         assertTrue(t.offset.x < 0f, "a leftward drag must move the picture left; got ${t.offset}")
     }
 
-    // ── The download button uses the host's own save/open rule ────────────────────────
+    // ── The download button saves; a pointer host then opens what it saved ────────────────
 
     @Test fun download_under_a_pointer_saves_then_opens_what_was_saved() = runComposeUiTest {
         val platform = FakePlatform()
@@ -127,13 +127,16 @@ class ImageLightboxTest {
         assertTrue(platform.files.opened.isEmpty())
     }
 
-    @Test fun download_under_touch_opens_externally() = runComposeUiTest {
+    // #95: on a phone the button SAVES (it ran "open with" before) and says where it went.
+    @Test fun download_under_touch_saves_and_says_so() = runComposeUiTest {
         val platform = FakePlatform()
         setPlatformContent(platform, pointer = false) { lightbox(LightboxTransform()) }
         onNodeWithTag("image_lightbox_download").performClick()
-        waitUntil(timeoutMillis = 5_000L) { platform.files.opened.isNotEmpty() }
-        assertEquals(listOf("shot.png|image/png|3"), platform.files.opened)
-        assertTrue(platform.files.saved.isEmpty())
+        waitUntil(timeoutMillis = 5_000L) { platform.notices.shown.isNotEmpty() }
+        assertEquals(listOf("shot.png|image/png|3"), platform.files.saved)
+        assertTrue(platform.files.opened.isEmpty(), "Save never opens")
+        assertTrue(platform.files.openedSaved.isEmpty(), "a phone says where it went instead")
+        assertEquals(listOf("Saved shot.png"), platform.notices.shown)
     }
 
     @androidx.compose.runtime.Composable

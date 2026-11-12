@@ -193,6 +193,34 @@ class FileCardDownloadTest {
         assertEquals(0, media.byteReads.get(), "the FILE is handed over, never read into memory")
     }
 
+    // #95: the card's ↓ looked like Save and ran the tap's Open (Android's chooser, iOS's share sheet). It saves.
+    @Test fun onAPhoneTheCardsDownArrowSavesAndSaysSo() = runDesktopComposeUiTest {
+        val platform = FakePlatform()
+        val center = DownloadCenter(scope)
+        val media = HostMedia()
+        card(platform, center, media, pointer = false)
+        onNodeWithTag("attachment_chip_save", useUnmergedTree = true).performClick()
+        settle { center.items.value.isNotEmpty() }
+        media.gate.complete(Unit)
+        settle { platform.files.savedFiles.isNotEmpty() }
+
+        assertEquals(listOf("report.pdf"), platform.files.savedFiles)
+        assertEquals(emptyList(), platform.files.openedFiles + platform.files.sharedFiles, "Save neither opens nor shares")
+        settle { platform.notices.shown.isNotEmpty() }
+        assertEquals(listOf("Saved report.pdf"), platform.notices.shown)
+        assertEquals(0, media.byteReads.get(), "the FILE is saved, never read into memory")
+    }
+
+    @Test fun onAPhoneAPreviewsDownArrowSavesItsBytes() = runDesktopComposeUiTest {
+        val platform = FakePlatform()
+        card(platform, DownloadCenter(scope), AttachmentMedia.fromBytes { byteArrayOf(1, 2, 3) }, pointer = false)
+        onNodeWithTag("attachment_chip_save", useUnmergedTree = true).performClick()
+        settle { platform.files.saved.isNotEmpty() }
+
+        assertEquals(listOf("report.pdf|application/pdf|3"), platform.files.saved)
+        assertEquals(emptyList(), platform.files.opened)
+    }
+
     @Test fun comingBackToTheChatShowsTheSameDownload() = runDesktopComposeUiTest {
         val center = DownloadCenter(scope)
         val media = HostMedia()

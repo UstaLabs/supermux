@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import Photos
 import Speech
 import SwiftUI
 import UIKit
@@ -136,21 +137,6 @@ final class SwiftBridge: NSObject, IosBridge {
         presenter.present(picker, animated: true)
     }
 
-    /// "Save as…" and "Open with…" are the same sheet on iOS: the share sheet, which offers both
-    /// "Save to Files" and every app that can open the type. iOS has no separate save dialog.
-    ///
-    /// The result is the destination the shared caller shows in its "Saved to …" notice. iOS only
-    /// tells us WHICH activity ran (`UIActivity.ActivityType`, e.g. `com.apple.CopyToPasteboard`),
-    /// never where a file landed, so the last path component of that identifier is the most honest
-    /// label available; "Files" is the fallback when iOS reports nothing. A dismissed sheet is a
-    /// cancelled save and returns nil, which is what `completed == false` means here.
-    func saveAs(name: String, mime: String, bytes: KotlinByteArray, onResult: @escaping (String?) -> Void) {
-        share(name: name, bytes: bytes) { _, completed, activity in
-            guard completed else { return onResult(nil) }
-            onResult(activity?.rawValue.components(separatedBy: ".").last ?? "Files")
-        }
-    }
-
     /// True when the sheet was PRESENTED, per the Kotlin contract — deliberately not the activity's
     /// `completed` flag. iOS does not report what the user did with a shared file, and a plain
     /// dismissal sets `completed = false`; returning that would make the shared caller announce
@@ -161,11 +147,10 @@ final class SwiftBridge: NSObject, IosBridge {
         }
     }
 
-    /// "Save to Files" for a finished download (#95): the file at `path`, already staged under its
-    /// real name by the Kotlin side (`stageNamed`), exported by the document picker as a COPY to the
-    /// folder the user picks — nothing passes through memory. The picker and not the share sheet,
-    /// unlike `saveAs`: a download offers Share as an action of its own, so Save is the file system
-    /// alone.
+    /// "Save to Files" (#95): the file at `path`, already staged under its real name by the Kotlin side,
+    /// exported by the document picker as a COPY to the folder the user picks — nothing passes through
+    /// memory. The picker and not the share sheet: Share is an action of its own, so Save is the file
+    /// system alone (pictures and clips go to Photos instead, `saveToPhotos`).
     ///
     /// The result is the name the copy was saved under ("Keep Both" can make it `report 2.pdf`), or
     /// nil when the picker was dismissed — `DocumentPickDelegate` resolves both ways out.
@@ -179,6 +164,12 @@ final class SwiftBridge: NSObject, IosBridge {
         retain(delegate)
         delegate.onFinish = { [weak self] in self?.release(delegate) }
         presenter.present(picker, animated: true)
+    }
+
+    /// Save a picture or a clip to Photos (#95): add-only access, asked for the first time; no dialog after that.
+    /// `false` when access is refused or Photos won't take the file, and Kotlin exports it to Files instead.
+    func saveToPhotos(path: String, video: Bool, onResult: @escaping (KotlinBoolean) -> Void) {
+        PhotoSaver.save(URL(fileURLWithPath: path), video: video) { ok in onResult(KotlinBoolean(bool: ok)) }
     }
 
     /// The share sheet over a finished download (#95), already staged under its real name by the
@@ -658,6 +649,36 @@ struct ExtraWindowView: UIViewControllerRepresentable {
     static func dismantleUIViewController(_ controller: UIViewController, coordinator: Coordinator) {
         if let claim = coordinator.initialClaim {
             ExtraWindowViewControllerKt.releaseExtraWindow(claim: claim)
+        }
+    }
+}
+
+/// Adding a file to Photos (#95), main-thread result. The library is a parameter so a test drives the logic with a
+/// fake one: a simulator's Photos permission is a system prompt nobody answers on CI.
+enum PhotoSaver {
+    /// What PhotoSaver needs from Photos: add-only access, and adding one file.
+    struct Library {
+        var authorize: (@escaping (PHAuthorizationStatus) -> Void) -> Void
+        var add: (_ url: URL, _ video: Bool, _ done: @escaping (Bool) -> Void) -> Void
+
+        static let system = Library(
+            authorize: { PHPhotoLibrary.requestAuthorization(for: .addOnly, handler: $0) },
+            add: { url, video, done in
+                PHPhotoLibrary.shared().performChanges({
+                    let request = PHAssetCreationRequest.forAsset()
+                    let options = PHAssetResourceCreationOptions()
+                    options.originalFilename = url.lastPathComponent
+                    request.addResource(with: video ? .video : .photo, fileURL: url, options: options)
+                }, completionHandler: { ok, _ in done(ok) })
+            }
+        )
+    }
+
+    static func save(_ url: URL, video: Bool, library: Library = .system, done: @escaping (Bool) -> Void) {
+        let finish: (Bool) -> Void = { ok in DispatchQueue.main.async { done(ok) } }
+        library.authorize { status in
+            guard status == .authorized || status == .limited else { return finish(false) }
+            library.add(url, video, finish)
         }
     }
 }
