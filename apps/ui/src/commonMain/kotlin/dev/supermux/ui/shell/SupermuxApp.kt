@@ -1981,9 +1981,14 @@ private fun WorkspacePanel(
         object : dev.supermux.ui.browser.BrowserToChat {
             fun chat() = dev.supermux.ui.browser.screenshotChat(latestWs.viewsById.values, ui.selectedId, latestCurrent.primarySessionId)
 
-            fun deliver(images: List<Pair<String, ByteArray>>, text: String, send: Boolean): Boolean {
+            /** The chat view of [sessionId] in this workspace, or the default chat. */
+            fun chatFor(sessionId: String?) = sessionId
+                ?.let { id -> latestWs.viewsById.values.firstOrNull { it.kind == "chat" && it.chatSessionId() == id } }
+                ?: chat()
+
+            fun deliver(images: List<Pair<String, ByteArray>>, text: String, send: Boolean, sessionId: String? = null): Boolean {
                 val w = latestWs
-                val chat = chat()
+                val chat = chatFor(sessionId)
                 val sessionId = chat?.chatSessionId() ?: return false
                 if (compact) {
                     wsApp.setActiveView(current.id, chat.id)
@@ -2001,17 +2006,22 @@ private fun WorkspacePanel(
 
             override fun sendImage(png: ByteArray, name: String): Boolean = deliver(listOf(name to png), "", send = false)
 
-            override fun sendMessage(text: String, images: List<Pair<String, ByteArray>>, send: Boolean): Boolean = deliver(images, text, send)
+            override fun sendMessage(text: String, images: List<Pair<String, ByteArray>>, send: Boolean, sessionId: String?): Boolean =
+                deliver(images, text, send, sessionId)
 
             override fun recipient(): String? = chat()?.chatSessionId()?.let { id -> latestNames[id] }
 
             // Phase 4: stored in the chat's session on its host, which tells every client how the agent answers.
-            override suspend fun storeComments(body: dev.supermux.net.BrowserCommentsBody): List<dev.supermux.net.BrowserCommentDto>? {
-                val sessionId = chat()?.chatSessionId() ?: return null
+            override suspend fun storeComments(body: dev.supermux.net.BrowserCommentsBody, sessionId: String?): List<dev.supermux.net.BrowserCommentDto>? {
+                val sessionId = chatFor(sessionId)?.chatSessionId() ?: return null
                 return runCatching { wsApp.api.addBrowserComments(sessionId, body) }.getOrNull()?.also(wsApp::rememberBrowserComments)
             }
 
             override fun commentStates() = wsApp.browserComments
+
+            override fun chats(): List<Pair<String, String>> =
+                latestWs.viewsById.values.filter { it.kind == "chat" }.mapNotNull { v -> v.chatSessionId()?.let { id -> id to (latestNames[id] ?: id) } }
+                    .distinctBy { it.first }
         }
     }
     CompositionLocalProvider(

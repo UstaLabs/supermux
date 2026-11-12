@@ -65,6 +65,7 @@ import androidx.compose.ui.unit.sp
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.resources.Res
 import dev.supermux.ui.resources.browser_comment_remove
+import dev.supermux.ui.resources.browser_comment_to
 import dev.supermux.ui.resources.browser_comment_close
 import dev.supermux.ui.resources.browser_comment_sent
 import dev.supermux.ui.resources.browser_comment_seen
@@ -577,7 +578,16 @@ private fun CommentPanel(open: Pick, pick: PickState, modifier: Modifier = Modif
  * and Clear. [onSend] is null where no chat can take them: then only the count and Clear.
  */
 @Composable
-internal fun PickSendBar(pick: PickState, recipient: String?, onSend: ((send: Boolean) -> Unit)?, modifier: Modifier = Modifier, touch: Boolean = false) {
+internal fun PickSendBar(
+    pick: PickState,
+    recipient: String?,
+    onSend: ((send: Boolean) -> Unit)?,
+    modifier: Modifier = Modifier,
+    touch: Boolean = false,
+    /** The workspace's chats (id, name) to choose from (#122 4a-3); one or none: no choice to make. */
+    chats: List<Pair<String, String>> = emptyList(),
+    onChooseChat: (String) -> Unit = {},
+) {
     val c = kitColors()
     val n = pick.commented.size
     val count = if (n == 1) "1 comment" else "$n comments"
@@ -588,14 +598,40 @@ internal fun PickSendBar(pick: PickState, recipient: String?, onSend: ((send: Bo
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            val choose = onSend != null && n > 0 && chats.size > 1
             Text(
                 when {
                     n == 0 -> "Comment deleted"
+                    choose -> count
                     onSend != null && recipient != null -> "$count → $recipient"
                     else -> count
                 },
-                fontSize = 12.5.sp, color = c.text, maxLines = 1, modifier = Modifier.weight(1f),
+                fontSize = 12.5.sp, color = c.text, maxLines = 1, modifier = if (choose) Modifier else Modifier.weight(1f),
             )
+            // To whom (4a-3): the chat's name, a menu of the workspace's chats; the choice stays with the tab.
+            if (choose) {
+                var open by remember { mutableStateOf(false) }
+                Box(Modifier.weight(1f)) {
+                    Row(
+                        Modifier.clip(RoundedCornerShape(6.dp)).clickable { open = true }.padding(horizontal = 6.dp, vertical = 3.dp)
+                            .testTag("browser-pick-recipient"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(localized(Res.string.browser_comment_to, recipient.orEmpty()), fontSize = 12.5.sp, color = c.accent, maxLines = 1)
+                        androidx.compose.material3.Icon(KitGlyphs.ChevronDown, contentDescription = null, tint = c.dim, modifier = Modifier.size(12.dp))
+                    }
+                    dev.supermux.ui.widgets.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                        for ((id, name) in chats) {
+                            dev.supermux.ui.widgets.DropdownMenuItem(
+                                text = { Text(name) },
+                                onClick = { open = false; onChooseChat(id) },
+                                modifier = Modifier.testTag("browser-pick-recipient-$id"),
+                            )
+                        }
+                    }
+                }
+            }
             // Undo, for a few seconds after the trash.
             pick.removed?.let { removed ->
                 LaunchedEffect(removed) { delay(UNDO_MILLIS); if (pick.removed === removed) pick.removed = null }

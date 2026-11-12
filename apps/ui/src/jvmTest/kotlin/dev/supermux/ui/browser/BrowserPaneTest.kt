@@ -15,6 +15,7 @@ import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertWidthIsEqualTo
 import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
@@ -376,8 +377,13 @@ class BrowserPaneTest {
     private class ChatSink(private val stores: Boolean = false) : BrowserToChat {
         val sent = mutableListOf<Pair<ByteArray, String>>()
         val messages = mutableListOf<Triple<String, List<Pair<String, ByteArray>>, Boolean>>()
+        /** Which session each message and each stored batch went to (null: the default chat). */
+        val sentTo = mutableListOf<String?>()
+        val storedIn = mutableListOf<String?>()
+        override fun chats() = listOf("s1" to "Checkout agent", "s2" to "Docs agent")
         val states = kotlinx.coroutines.flow.MutableStateFlow<Map<String, dev.supermux.net.BrowserCommentDto>>(emptyMap())
-        override suspend fun storeComments(body: dev.supermux.net.BrowserCommentsBody): List<dev.supermux.net.BrowserCommentDto>? {
+        override suspend fun storeComments(body: dev.supermux.net.BrowserCommentsBody, sessionId: String?): List<dev.supermux.net.BrowserCommentDto>? {
+            storedIn += sessionId
             if (!stores) return null
             val stored = body.comments.map { c ->
                 dev.supermux.net.BrowserCommentDto(
@@ -390,14 +396,15 @@ class BrowserPaneTest {
         }
         override fun commentStates() = states
         override fun sendImage(png: ByteArray, name: String): Boolean { sent += png to name; return true }
-        override fun sendMessage(text: String, images: List<Pair<String, ByteArray>>, send: Boolean): Boolean {
+        override fun sendMessage(text: String, images: List<Pair<String, ByteArray>>, send: Boolean, sessionId: String?): Boolean {
             messages += Triple(text, images, send)
+            sentTo += sessionId
             return true
         }
         override fun recipient(): String = "Checkout agent"
     }
 
-    private fun ComposeUiTest.showWithChat(rig: Rig, v: MutableState<ViewDto>, sink: BrowserToChat?) {
+    private fun ComposeUiTest.showWithChat(rig: Rig, v: MutableState<ViewDto>, sink: BrowserToChat?, actions: BrowserActions = rig.actions()) {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         val runtime = WebViewRuntime(
             RuntimeConfig(maxLive = 2, snapshotCacheBytes = 8L shl 20, factory = rig.engines, scope = scope, clock = { mainClock.currentTime }),
@@ -407,12 +414,12 @@ class BrowserPaneTest {
                 ShortcutRoot(remember { ShortcutDispatcher() }, Modifier.size(800.dp, 600.dp)) {
                     val paneScope = rememberKeyScope(KeyContext.Browser, "b1")
                     ProvideKeyScope(paneScope) {
-                        BrowserPane(v.value, "w1", rig.actions(), Modifier.keyScope(paneScope))
+                        BrowserPane(v.value, "w1", actions, Modifier.keyScope(paneScope))
                     }
                 }
             }
         }
-        waitUntil(timeoutMillis = 5_000) { "https://vitejs.dev/" in rig.loads() }
+        waitUntil(timeoutMillis = 5_000) { rig.loads().isNotEmpty() }
     }
 
     private fun ByteArray.isPng() = size > 8 && this[0] == 0x89.toByte() && this[1] == 'P'.code.toByte() && this[2] == 'N'.code.toByte()
@@ -772,7 +779,8 @@ class BrowserPaneTest {
         val sink = ChatSink()
         showWithChat(rig, mutableStateOf(view("https://vitejs.dev/")), sink)
         pickPay(rig, "the Pay button is cut off")
-        onNodeWithText("1 comment → Checkout agent", useUnmergedTree = true).assertExists()
+        onNodeWithText("1 comment", useUnmergedTree = true).assertExists()
+        onNodeWithTag("browser-pick-recipient").assertTextContains("Checkout agent", substring = true) // the workspace has two chats
         onNodeWithTag("browser-pick-send").performClick()
         waitUntil(timeoutMillis = 5_000) { sink.messages.isNotEmpty() }
         val (text, images, send) = sink.messages.single()
@@ -809,6 +817,35 @@ class BrowserPaneTest {
         waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag("browser-pin-1-done", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
         onNodeWithTag("browser-pin-1-done", useUnmergedTree = true).performClick()
         onNodeWithText("Done · padding fixed", useUnmergedTree = true).assertExists()
+    }
+
+    /** #122 4a-3: the bar's recipient is a choice of the workspace's chats; the comments go to the one chosen, and it sticks. */
+    @Test fun theCommentsGoToTheChatChosenInTheBar() = runComposeUiTest {
+        val rig = Rig()
+        val sink = ChatSink(stores = true)
+        showWithChat(rig, mutableStateOf(view("https://vitejs.dev/")), sink)
+        pickPay(rig, "x")
+        onNodeWithTag("browser-pick-recipient").assertTextContains("Checkout agent", substring = true)
+        onNodeWithTag("browser-pick-recipient").performClick()
+        onNodeWithTag("browser-pick-recipient-s2").performClick()
+        onNodeWithTag("browser-pick-recipient").assertTextContains("Docs agent", substring = true)
+        onNodeWithTag("browser-pick-send").performClick()
+        waitUntil(timeoutMillis = 5_000) { sink.messages.isNotEmpty() }
+        assertEquals(listOf<String?>("s2"), sink.sentTo)
+        assertEquals(listOf<String?>("s2"), sink.storedIn)
+    }
+
+    /** A named preview's page goes to the session that owns its port by default (design §5.6, first match). */
+    @Test fun aPreviewsCommentsGoToItsPortsOwnerByDefault() = runComposeUiTest {
+        val rig = Rig()
+        val sink = ChatSink(stores = true)
+        val owned = ProxyDto(domain = "p-5173", sessionName = "Docs agent", port = 5173, url = "https://relay.test/p/p-5173/")
+        showWithChat(rig, mutableStateOf(view("https://relay.test/p/p-5173/")), sink, rig.actions(previews = listOf(owned), cookie = cookie))
+        pickPay(rig, "x")
+        onNodeWithTag("browser-pick-recipient").assertTextContains("Docs agent", substring = true)
+        onNodeWithTag("browser-pick-send").performClick()
+        waitUntil(timeoutMillis = 5_000) { sink.messages.isNotEmpty() }
+        assertEquals(listOf<String?>("s2"), sink.sentTo)
     }
 
     /** "Add to message" (⌥Send in the design) leaves them in the chat's composer, unsent. */
