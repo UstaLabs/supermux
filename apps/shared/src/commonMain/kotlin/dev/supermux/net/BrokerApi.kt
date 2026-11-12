@@ -1215,6 +1215,8 @@ data class DiffFile(
     val baseBlob: String? = null,
     val size: Long? = null,
     val lazy: Boolean = false,
+    /** #72: how much of it is in the next commit (all | partial | none); null: nothing uncommitted. */
+    val staged: String? = null,
 )
 
 /** GET …/changes — the Changes pane's list (spec 2026-09-29 §2.1): no file text. */
@@ -1244,7 +1246,12 @@ data class ChangedFile(
     val oldPath: String? = null,
     val baseBlob: String? = null,
     val size: Long? = null,
+    val staged: String? = null,
 )
+
+/** POST …/git/stage (#72): whole files into the next commit, or out of it. */
+@Serializable
+data class StageRequest(val repo: String, val paths: List<String>, val staged: Boolean)
 
 /** The list in the shape the pane already renders: every file [DiffFile.lazy], no patch. */
 fun ChangesResult.toFsDiffResult(): FsDiffResult = FsDiffResult(
@@ -1255,7 +1262,7 @@ fun ChangesResult.toFsDiffResult(): FsDiffResult = FsDiffResult(
                 DiffFile(
                     path = f.path, status = f.status, binary = f.binary,
                     added = f.added, removed = f.removed, oldPath = f.oldPath,
-                    baseBlob = f.baseBlob, size = f.size, lazy = true,
+                    baseBlob = f.baseBlob, size = f.size, lazy = true, staged = f.staged,
                 )
             },
             baseSha = r.baseSha, truncated = r.truncated, total = r.total, error = r.error,
@@ -3660,6 +3667,10 @@ class BrokerApi(
     /** GET /workspaces/<id>/fs/diff?base=<spec> */
     suspend fun workspaceFsDiff(workspaceId: String, base: String? = null): FsDiffResult =
         getJson("$httpBase/workspaces/$workspaceId/fs/diff" + if (base != null) "?base=${urlEncode(base)}" else "")
+
+    /** POST /workspaces/<id>/git/stage — throws when the broker refuses. */
+    suspend fun workspaceStage(workspaceId: String, repo: String, paths: List<String>, staged: Boolean) =
+        postJson("$httpBase/workspaces/$workspaceId/git/stage", StageRequest(repo, paths, staged))
 
     /** GET /workspaces/<id>/changes?base=<spec>; null when the broker predates it (404). */
     suspend fun workspaceChanges(workspaceId: String, base: String? = null): ChangesResult? =

@@ -1617,6 +1617,8 @@ class FleetStore(
             ?: Result.failure(IllegalStateException("host offline"))
     suspend fun workspaceFsWrite(workspaceId: String, path: String, content: String): Boolean =
         appForWorkspace(workspaceId)?.workspaceFsWrite(workspaceId, path, content) == true
+    suspend fun workspaceStage(workspaceId: String, repo: String, paths: List<String>, staged: Boolean): Boolean =
+        appForWorkspace(workspaceId)?.workspaceStage(workspaceId, repo, paths, staged) == true
     suspend fun workspaceFsDiff(workspaceId: String, base: String? = null): FsDiffResult? =
         appForWorkspace(workspaceId)?.workspaceFsDiff(workspaceId, base)
 

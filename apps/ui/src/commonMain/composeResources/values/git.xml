@@ -21,4 +21,9 @@
         <item quantity="one">%1$d to pull</item>
         <item quantity="other">%1$d to pull</item>
     </plurals>
+    <plurals name="git_in_next_commit">
+        <item quantity="one">%1$d of %2$d in the next commit</item>
+        <item quantity="other">%1$d of %2$d in the next commit</item>
+    </plurals>
+    <string name="git_include_in_commit">In the next commit</string>
 </resources>
