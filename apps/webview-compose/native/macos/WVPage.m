@@ -1180,9 +1180,10 @@ JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_attach(JNIEn
 
 JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_detach(JNIEnv *env, jclass type, jlong handle, jlong window) {
     WVPage *page = WVPageOf(handle);
-    NSWindow *from = WVWindow(window);
+    // Only the window's address: the view leaves its window once the composition has let it go, and by then a closed
+    // window may be gone. Made an object, it would be retained, and a window freed is a crash.
     WVOnMain(NO, ^{
-        if (from) [page.view detachFrom:from];
+        if (window) [page.view detachFromWindowAt:window];
     });
 }
 

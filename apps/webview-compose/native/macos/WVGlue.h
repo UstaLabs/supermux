@@ -101,9 +101,10 @@ static inline NSWindow *WVWindow(jlong handle) {
 /** Wheel and gesture events are the page's (a pane), or Compose's (an embed) (D7). */
 @property(nonatomic) BOOL wheelToPage;
 - (instancetype)initWithWebView:(WKWebView *)webView;
-/** Into window's content view, under the canvas; out of window, if it is still there. */
+/** Into window's content view, under the canvas. */
 - (void)attachTo:(NSWindow *)window;
-- (void)detachFrom:(NSWindow *)window;
+/** Out of the window at that address, if it is still in it; the address is never made an object: it may be gone. */
+- (void)detachFromWindowAt:(jlong)window;
 /**
  * The slot and the part of it that shows (I2), window px from the content's top-left, at the window's backing scale
  * (window px a point, I3); hidden while not placed. The view is the part that shows, clipped; the web view inside it is
