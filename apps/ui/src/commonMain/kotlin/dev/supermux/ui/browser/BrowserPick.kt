@@ -3,6 +3,7 @@ package dev.supermux.ui.browser
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -67,7 +69,12 @@ import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 /** One pinned element and what the person said about it (#122 pick and comment). Its [box] follows the element. */
-internal class Pick(val number: Int, val element: PageElement) {
+internal class Pick(val number: Int, element: PageElement) {
+    /** The element it is on: on touch, tapping it again takes its container ([level] ancestors above what was tapped). */
+    var element by mutableStateOf(element)
+    var level = 0
+    /** What the first tap named, so a second tap on it is "its container", not a new comment. */
+    val tapped = element.selector
     var comment by mutableStateOf("")
     var box by mutableStateOf(element.box)
 
@@ -84,6 +91,22 @@ internal class PickState {
     var up by mutableIntStateOf(0)
     val picks = mutableStateListOf<Pick>()
     var editing by mutableStateOf<Pick?>(null)
+
+    /**
+     * On touch, what a tap selected (shown as hover is on a desktop), before it's commented: what was tapped, and how
+     * many containers up a second tap went.
+     */
+    var selectedTapped: String? = null
+    var selectedLevel = 0
+
+    /** On touch: comment the selection. */
+    fun commentSelection() {
+        val element = hover ?: return
+        closeComment()
+        editing = add(element)
+        hover = null
+        selectedTapped = null
+    }
     private var next = 1
 
     val commented: List<Pick> get() = picks.filter { it.comment.isNotBlank() }
@@ -93,7 +116,22 @@ internal class PickState {
     fun remove(pick: Pick) {
         picks.remove(pick)
         if (editing === pick) editing = null
-        if (picks.isEmpty()) next = 1
+        if (picks.isEmpty() && removed == null) next = 1
+    }
+
+    /** The comment the trash took last, and where it was, for a few seconds' Undo. */
+    var removed by mutableStateOf<Pair<Int, Pick>?>(null)
+
+    fun removeWithUndo(pick: Pick) {
+        val at = picks.indexOf(pick).takeIf { it >= 0 } ?: return
+        removed = at to pick
+        remove(pick)
+    }
+
+    fun undo() {
+        val (at, pick) = removed ?: return
+        removed = null
+        picks.add(at.coerceAtMost(picks.size), pick)
     }
 
     /** Closes the open comment, keeping it if it says something. */
@@ -104,6 +142,7 @@ internal class PickState {
     }
 
     fun clear() {
+        removed = null
         picks.clear()
         editing = null
         hover = null
@@ -123,7 +162,7 @@ internal class PickState {
  * overlay, so a macOS page doesn't), the hover box and its label; always, the pins and the open comment.
  */
 @Composable
-internal fun PickLayers(pick: PickState, navigator: WebNavigator) {
+internal fun PickLayers(pick: PickState, navigator: WebNavigator, touch: Boolean = false) {
     val c = kitColors()
     val scope = rememberCoroutineScope()
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -179,7 +218,7 @@ internal fun PickLayers(pick: PickState, navigator: WebNavigator) {
                                 val event = awaitPointerEvent()
                                 val at = event.changes.firstOrNull()?.position ?: continue
                                 when (event.type) {
-                                    PointerEventType.Move, PointerEventType.Enter -> {
+                                    PointerEventType.Move, PointerEventType.Enter -> if (!touch) {
                                         // A new place is a new element: back to it, not its ancestor.
                                         if (last != at) pick.up = 0
                                         last = at
@@ -189,7 +228,21 @@ internal fun PickLayers(pick: PickState, navigator: WebNavigator) {
                                         event.changes.forEach { it.consume() }
                                         val (fx, fy) = fractions(at)
                                         scope.launch {
-                                            val element = navigator.elementAt(fx, fy, pick.up) ?: return@launch
+                                            val element = navigator.elementAt(fx, fy, if (touch) 0 else pick.up) ?: return@launch
+                                            if (touch) {
+                                                // A tap selects, as hover does on a desktop; the same element again is its
+                                                // container (§5.2); "Add comment" comments it (Ahmet, 2026-11-12).
+                                                if (pick.selectedTapped == element.selector && pick.hover != null) {
+                                                    val container = navigator.elementAt(fx, fy, pick.selectedLevel + 1) ?: return@launch
+                                                    pick.selectedLevel++
+                                                    pick.hover = container
+                                                } else {
+                                                    pick.selectedTapped = element.selector
+                                                    pick.selectedLevel = 0
+                                                    pick.hover = element
+                                                }
+                                                return@launch
+                                            }
                                             pick.closeComment()
                                             pick.editing = pick.add(element)
                                         }
@@ -220,6 +273,26 @@ internal fun PickLayers(pick: PickState, navigator: WebNavigator) {
                         .background(c.accent)
                         .padding(horizontal = 6.dp, vertical = 2.dp),
                 )
+                if (touch) {
+                    // Under the selection (above it when it reaches the bottom): comment what's outlined.
+                    Box(
+                        Modifier
+                            .offset {
+                                val below = ((hover.box.y + hover.box.height) * h.toPx()) + 6.dp.toPx()
+                                val y = if (below + 44.dp.toPx() < h.toPx()) below else ((hover.box.y * h.toPx()) - 72.dp.toPx()).coerceAtLeast(0f)
+                                IntOffset((hover.box.x * w.toPx()).coerceIn(0f, (w - 140.dp).toPx().coerceAtLeast(0f)).roundToInt(), y.roundToInt())
+                            }
+                            .height(38.dp)
+                            .webViewOverlay(RoundedCornerShape(19.dp))
+                            .shadow(6.dp, RoundedCornerShape(19.dp))
+                            .clip(RoundedCornerShape(19.dp))
+                            .background(c.accent)
+                            .clickable { pick.commentSelection() }
+                            .padding(horizontal = 16.dp)
+                            .testTag("browser-pick-add"),
+                        contentAlignment = Alignment.Center,
+                    ) { Text("Add comment", fontSize = 14.sp, color = c.onAccent) }
+                }
             }
         }
 
@@ -233,7 +306,11 @@ internal fun PickLayers(pick: PickState, navigator: WebNavigator) {
                     .shadow(3.dp, CircleShape)
                     .clip(CircleShape)
                     .background(if (p.gone) c.faint else c.accent)
-                    .clickable { pick.closeComment(); pick.editing = p }
+                    .combinedClickable(
+                        onClick = { pick.closeComment(); pick.editing = p },
+                        // An invisible shortcut on touch: a long press deletes, as the trash does (§5.2).
+                        onLongClick = { pick.removeWithUndo(p) },
+                    )
                     .testTag(tag),
                 contentAlignment = Alignment.Center,
             ) {
@@ -241,7 +318,7 @@ internal fun PickLayers(pick: PickState, navigator: WebNavigator) {
             }
         }
 
-        pick.editing?.let { open -> CommentPopover(open, pick, w, h) }
+        pick.editing?.let { open -> if (touch) CommentSheet(open, pick) else CommentPopover(open, pick, w, h) }
     }
 }
 
@@ -274,7 +351,7 @@ private fun CommentPopover(open: Pick, pick: PickState, w: Dp, h: Dp) {
             Text("${open.number}", fontSize = 11.sp, color = c.onAccent, modifier = Modifier.clip(CircleShape).background(c.accent).padding(horizontal = 6.dp))
             Spacer(Modifier.width(6.dp))
             Text(open.element.label, fontSize = 11.5.sp, color = c.dim, maxLines = 1, modifier = Modifier.weight(1f))
-            BarButton(KitGlyphs.Trash, "Delete this comment", "browser-pick-delete", { pick.remove(open) }, size = 22.dp)
+            BarButton(KitGlyphs.Trash, "Delete this comment", "browser-pick-delete", { pick.removeWithUndo(open) }, size = 22.dp)
         }
         BasicTextField(
             value = open.comment,
@@ -307,15 +384,85 @@ private fun CommentPopover(open: Pick, pick: PickState, w: Dp, h: Dp) {
     }
 }
 
-/** While picking: what to do, across the top of the page. */
+/** While picking: what to do, across the top of the page. On touch: "Tap what you mean" and Done (no keys there). */
 @Composable
-internal fun PickStrip(modifier: Modifier = Modifier) {
+internal fun PickStrip(touch: Boolean = false, onDone: () -> Unit = {}, modifier: Modifier = Modifier) {
     val c = kitColors()
     Row(
-        modifier.fillMaxWidth().height(28.dp).background(c.accent.copy(alpha = 0.12f)).padding(horizontal = 12.dp).testTag("browser-pick-strip"),
+        modifier.fillMaxWidth().height(if (touch) 40.dp else 28.dp).background(c.accent.copy(alpha = 0.12f)).padding(horizontal = 12.dp).testTag("browser-pick-strip"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("Pick an element · ↑↓ parent / child · Esc to finish", fontSize = 12.sp, color = c.text, maxLines = 1)
+        Text(if (touch) "Tap what you mean" else "Pick an element · ↑↓ parent / child · Esc to finish", fontSize = if (touch) 14.sp else 12.sp, color = c.text, maxLines = 1, modifier = Modifier.weight(1f))
+        if (touch) KitTextAction("Done", onDone, Modifier.testTag("browser-pick-done"))
+    }
+}
+
+/**
+ * On touch, the comment in a small sheet from the bottom, in a window of its own so it rises above the keyboard (the
+ * iPhone's covered Save, 2026-11-12): its name, the field, a trash and Save (§5.2). A tap outside keeps it, as Save.
+ */
+@Composable
+private fun CommentSheet(open: Pick, pick: PickState) {
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = { pick.closeComment() },
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null) { pick.closeComment() }
+                .imePadding(),
+            contentAlignment = Alignment.BottomCenter,
+        ) {
+            CommentPanel(open, pick, Modifier.clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null) {})
+        }
+    }
+}
+
+@Composable
+private fun CommentPanel(open: Pick, pick: PickState, modifier: Modifier = Modifier) {
+    val c = kitColors()
+    val focus = remember(open) { FocusRequester() }
+    LaunchedEffect(open) { focus.requestFocus() }
+    val shape = RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp)
+    Column(
+        modifier
+            .fillMaxWidth()
+            .webViewOverlay(shape)
+            .shadow(12.dp, shape)
+            .clip(shape)
+            .background(c.chrome)
+            .padding(14.dp)
+            .testTag("browser-pick-panel"),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("${open.number}", fontSize = 12.sp, color = c.onAccent, modifier = Modifier.clip(CircleShape).background(c.accent).padding(horizontal = 7.dp, vertical = 1.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(open.element.label, fontSize = 13.sp, color = c.dim, maxLines = 1, modifier = Modifier.weight(1f))
+            BarButton(KitGlyphs.Trash, "Delete this comment", "browser-pick-delete", { pick.removeWithUndo(open) }, size = 36.dp)
+        }
+        BasicTextField(
+            value = open.comment,
+            onValueChange = { open.comment = it },
+            textStyle = TextStyle(color = c.text, fontSize = 15.sp),
+            cursorBrush = SolidColor(c.accent),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(8.dp)).background(c.wash).padding(10.dp)
+                .focusRequester(focus).testTag("browser-pick-comment"),
+            decorationBox = { inner ->
+                Box {
+                    if (open.comment.isEmpty()) Text("What should change here?", color = c.faint, fontSize = 15.sp)
+                    inner()
+                }
+            },
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            Box(
+                Modifier.height(36.dp).clip(RoundedCornerShape(8.dp)).background(c.accent).clickable { pick.closeComment() }
+                    .padding(horizontal = 18.dp).testTag("browser-pick-save"),
+                contentAlignment = Alignment.Center,
+            ) { Text("Save", fontSize = 14.sp, color = c.onAccent) }
+        }
     }
 }
 
@@ -324,7 +471,7 @@ internal fun PickStrip(modifier: Modifier = Modifier) {
  * and Clear. [onSend] is null where no chat can take them: then only the count and Clear.
  */
 @Composable
-internal fun PickSendBar(pick: PickState, recipient: String?, onSend: ((send: Boolean) -> Unit)?, modifier: Modifier = Modifier) {
+internal fun PickSendBar(pick: PickState, recipient: String?, onSend: ((send: Boolean) -> Unit)?, modifier: Modifier = Modifier, touch: Boolean = false) {
     val c = kitColors()
     val n = pick.commented.size
     val count = if (n == 1) "1 comment" else "$n comments"
@@ -335,10 +482,23 @@ internal fun PickSendBar(pick: PickState, recipient: String?, onSend: ((send: Bo
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(if (onSend != null && recipient != null) "$count → $recipient" else count, fontSize = 12.5.sp, color = c.text, maxLines = 1, modifier = Modifier.weight(1f))
-            KitTextAction("Clear", { pick.clear() }, Modifier.testTag("browser-pick-clear"))
-            onSend?.let { send ->
-                KitTextAction("Add to message", { send(false) }, Modifier.testTag("browser-pick-compose"))
+            Text(
+                when {
+                    n == 0 -> "Comment deleted"
+                    onSend != null && recipient != null -> "$count → $recipient"
+                    else -> count
+                },
+                fontSize = 12.5.sp, color = c.text, maxLines = 1, modifier = Modifier.weight(1f),
+            )
+            // Undo, for a few seconds after the trash.
+            pick.removed?.let { removed ->
+                LaunchedEffect(removed) { delay(UNDO_MILLIS); if (pick.removed === removed) pick.removed = null }
+                KitTextAction("Undo", { pick.undo() }, Modifier.testTag("browser-pick-undo"))
+            }
+            // On touch one bar and one way: Send. Clear and Add to message are the desktop's.
+            if (!touch && n > 0) KitTextAction("Clear", { pick.clear() }, Modifier.testTag("browser-pick-clear"))
+            if (n > 0) onSend?.let { send ->
+                if (!touch) KitTextAction("Add to message", { send(false) }, Modifier.testTag("browser-pick-compose"))
                 SendButton { send(true) }
             }
         }
@@ -368,4 +528,5 @@ private fun Modifier.boxAt(box: PageBox, w: Dp, h: Dp): Modifier =
     this.offset(w * box.x, h * box.y).size(w * box.width, h * box.height)
 
 private val PIN = 18.dp
+private const val UNDO_MILLIS = 4_000L
 private const val PIN_REFRESH_MILLIS = 300L

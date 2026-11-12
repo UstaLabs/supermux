@@ -144,7 +144,7 @@ fun BrowserPane(
     var device by remember(view.id) { mutableStateOf(DeviceMode.Default) }
     // Pick and comment (#122 phase 3): pick mode and its pins, per tab and per client. Desktop first (3c brings touch).
     val pick = remember(view.id) { PickState() }
-    val pickOffered = !phone && platform.caps.pagePick
+    val pickOffered = platform.caps.pagePick
     // A phone's "Desktop site" (#122 2c), per tab and per client, where the engine can do it.
     var desktopSite by remember(view.id) { mutableStateOf(false) }
 
@@ -414,7 +414,7 @@ fun BrowserPane(
             device, emulation = platform.caps.pageEmulation, scale = stageScale.takeIf { fitting }, ratioAndTouch = emulates,
             onChange = { device = it }, onClose = { deviceOn = false },
         )
-        if (pick.on) PickStrip()
+        if (pick.on) PickStrip(touch = phone, onDone = { pick.on = false; pick.closeComment() })
         notice?.let { text ->
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp).testTag("browser-notice"), verticalAlignment = Alignment.CenterVertically) {
                 Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
@@ -428,7 +428,7 @@ fun BrowserPane(
                 is BrowserBody.Page -> {
                     val pageAndPicks = @Composable {
                         livePage(pageSettings, keepRunning)
-                        if (pickOffered) PickLayers(pick, state.navigator)
+                        if (pickOffered) PickLayers(pick, state.navigator, touch = phone)
                     }
                     if (deviceOn && !phone) DeviceStage(device, fit = fitting, onScale = { stageScale = it }) { pageAndPicks() }
                     else Box(Modifier.fillMaxSize().testTag("browser-viewport")) { pageAndPicks() }
@@ -451,7 +451,7 @@ fun BrowserPane(
                 )
             }
         }
-        if (pick.commented.isNotEmpty()) PickSendBar(pick, chat?.recipient(), commentsAction)
+        if (pick.commented.isNotEmpty() || pick.removed != null) PickSendBar(pick, chat?.recipient(), commentsAction, touch = phone)
     }
     }
 }

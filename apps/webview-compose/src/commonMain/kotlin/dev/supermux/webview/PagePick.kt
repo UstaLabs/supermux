@@ -55,20 +55,46 @@ internal object PickScripts {
         "(function(){$COMMON var s=${Json.encodeToString(JsonArray.serializer(), JsonArray(selectors.map { kotlinx.serialization.json.JsonPrimitive(it) }))};" +
             "return s.map(function(q){var el=null;try{el=document.querySelector(q);}catch(e){}return el?box(el):null;});})()"
 
-    // A path from the element up, each step tag[.two classes][:nth-of-type only when needed], stopping as soon as it is
-    // unique in the document; verified to resolve back to the element (supercomment's rule), else the full path.
-    private const val COMMON = "function esc(s){return window.CSS&&CSS.escape?CSS.escape(s):String(s).replace(/([^\\w-])/g,'\\\\\$1');}" +
-        "function step(n){var s=n.nodeName.toLowerCase();if(n.id)return s+'#'+esc(n.id);" +
-        "var c=(n.getAttribute('class')||'').trim().split(/\\s+/).filter(function(k){return k&&k.length<30&&!/^(sc-|css-)/.test(k);}).slice(0,2);" +
-        "if(c.length)s+='.'+c.map(esc).join('.');var p=n.parentElement;if(p){var amb=true;try{amb=p.querySelectorAll(':scope > '+s).length>1;}catch(e){}" +
-        "if(amb){var k=n,i=1;while((k=k.previousElementSibling))if(k.nodeName===n.nodeName)i++;s+=':nth-of-type('+i+')';}}return s;}" +
-        "function unique(q,el){try{var all=document.querySelectorAll(q);return all.length===1&&all[0]===el;}catch(e){return false;}}" +
-        "function path(el){var parts=[],n=el;while(n&&n.nodeType===1&&parts.length<8){var s=step(n);parts.unshift(s);" +
-        "if(unique(parts.join(' > '),el))return parts.join(' > ');if(n.id)break;n=n.parentElement;}var q=parts.join(' > ');return q;}" +
-        "function box(el){var r=el.getBoundingClientRect();return {x:r.left/innerWidth,y:r.top/innerHeight,w:r.width/innerWidth,h:r.height/innerHeight};}" +
-        "function describe(el){var r=el.getBoundingClientRect();var t=(el.innerText||el.value||el.getAttribute('aria-label')||el.getAttribute('alt')||'').replace(/\\s+/g,' ').trim().slice(0,60);" +
-        "var c=(el.getAttribute('class')||'').trim().split(/\\s+/).filter(function(k){return k;}).slice(0,1);" +
-        "return {selector:path(el),tag:el.nodeName.toLowerCase(),text:t,label:el.nodeName.toLowerCase()+(c.length?'.'+c[0]:'')+' · '+Math.round(r.width)+'×'+Math.round(r.height),box:box(el)};}"
+    /**
+     * The picker's functions (#122): what a person pointed at, named as Chrome's "Copy selector" would, but meant to be
+     * acted on: never a bare tag. Unique (querySelectorAll matches exactly that element) and stable: an id, then
+     * data-testid / aria-label / name / placeholder / title, then meaningful classes (not generated ones:
+     * `css-1x2y3z`, `Card_root__3xK9a`), and where the element alone doesn't say it, the nearest ancestor that does
+     * (`section.cart > h3`), with :nth-of-type only when alike siblings need it. Kept plain JS: the test harness reads it.
+     */
+    internal const val PICK_JS = """
+function esc(s){return window.CSS&&CSS.escape?CSS.escape(s):String(s).replace(/([^\w-])/g,function(m){return '\\'+m;});}
+function quote(v){return "'"+String(v).replace(/\\/g,'\\\\').replace(/'/g,"\\'")+"'";}
+function unique(q,el){try{var all=document.querySelectorAll(q);return all.length===1&&all[0]===el;}catch(e){return false;}}
+function meaningful(c){return !!c&&c.length<30&&!/^(sc-|css-|jsx-|_)/.test(c)&&!/__[A-Za-z0-9]{4,}/.test(c)&&!/(?=[A-Za-z0-9]*[0-9])(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{5,}/.test(c);}
+function classes(n){return (n.getAttribute('class')||'').trim().split(/\s+/).filter(meaningful).slice(0,2);}
+var ATTRS=['data-testid','data-test','data-qa','data-cy','aria-label','name','placeholder','title','alt'];
+function goodId(n){return n.id&&n.id.length<40&&!/^[0-9]/.test(n.id)&&!/[0-9]{4,}/.test(n.id)&&!/:/.test(n.id);}
+function own(n){var t=n.nodeName.toLowerCase(),out=[];if(goodId(n))out.push('#'+esc(n.id));
+for(var i=0;i<ATTRS.length;i++){var v=n.getAttribute(ATTRS[i]);if(v&&v.length<60)out.push(t+'['+ATTRS[i]+'='+quote(v)+']');}
+var c=classes(n);if(c.length)out.push(t+'.'+c.map(esc).join('.'));return out;}
+function nth(n){var p=n.parentElement;if(!p)return '';var t=n.nodeName,i=1,alike=0,k;for(k=p.firstElementChild;k;k=k.nextElementSibling){if(k.nodeName===t){alike++;if(k===n)i=alike;}}
+return alike>1?':nth-of-type('+i+')':'';}
+function path(el){var mine=own(el),i,t=el.nodeName.toLowerCase();
+for(i=0;i<mine.length;i++)if(unique(mine[i],el))return mine[i];
+var base=mine.length?mine[mine.length-1]:t;
+var a=el.parentElement,direct=true;
+while(a&&a!==document.body&&a!==document.documentElement){var anc=own(a);
+for(var j=0;j<anc.length;j++){var sep=direct?' > ':' ';
+var q=anc[j]+sep+base;if(unique(q,el))return q;
+q=anc[j]+sep+base+nth(el);if(unique(q,el))return q;}
+a=a.parentElement;direct=false;}
+var parts=[],n=el;while(n&&n!==document.body&&n!==document.documentElement){var s=n===el?base:n.nodeName.toLowerCase();
+parts.unshift(s+nth(n));var q2=parts.join(' > ');if((parts.length>1||mine.length)&&unique(q2,el))return q2;n=n.parentElement;}
+return parts.join(' > ');}
+function box(el){var r=el.getBoundingClientRect();return {x:r.left/innerWidth,y:r.top/innerHeight,w:r.width/innerWidth,h:r.height/innerHeight};}
+function describe(el){var r=el.getBoundingClientRect();
+var t=(el.innerText||el.textContent||el.value||el.getAttribute('aria-label')||el.getAttribute('alt')||'').replace(/\s+/g,' ').trim().slice(0,60);
+var c=classes(el);
+return {selector:path(el),tag:el.nodeName.toLowerCase(),text:t,label:el.nodeName.toLowerCase()+(c.length?'.'+c[0]:'')+' · '+Math.round(r.width)+'×'+Math.round(r.height),box:box(el)};}
+"""
+
+    private const val COMMON = PICK_JS
 
     fun parseElement(json: String?): PageElement? {
         val o = runCatching { Json.parseToJsonElement(json ?: return null) as? JsonObject }.getOrNull() ?: return null
