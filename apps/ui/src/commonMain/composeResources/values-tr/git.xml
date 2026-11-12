@@ -21,4 +21,9 @@
         <item quantity="one">%1$d çekilecek</item>
         <item quantity="other">%1$d çekilecek</item>
     </plurals>
+    <plurals name="git_in_next_commit">
+        <item quantity="one">%2$d dosyadan %1$d tanesi sonraki commit'te</item>
+        <item quantity="other">%2$d dosyadan %1$d tanesi sonraki commit'te</item>
+    </plurals>
+    <string name="git_include_in_commit">Sonraki commit'te</string>
 </resources>

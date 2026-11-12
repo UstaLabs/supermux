@@ -820,6 +820,7 @@ private fun DiffPaneForWorkspace(
         baseText = actions.workspaceChangesBlob?.let { f -> { repo, sha, force -> f(workspaceId, repo, sha, force) } },
         // The review drafts outlive the workspace's composition, which a rotation rebuilds (#89).
         retainKey = "diff:$workspaceId:$viewId",
+        stageFiles = actions.workspaceStage?.let { f -> { repo, paths, on -> f(workspaceId, repo, paths, on) } },
         modifier = modifier.fillMaxSize(),
     )
 }
