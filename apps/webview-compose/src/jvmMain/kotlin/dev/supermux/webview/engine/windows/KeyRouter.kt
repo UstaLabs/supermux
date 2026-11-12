@@ -18,10 +18,25 @@ internal class KeyRouter(
     private val onEdt: (Runnable) -> Unit = EventQueue::invokeLater,
     private val dispatch: (Component, KeyEvent) -> Unit = { component, event -> component.dispatchEvent(event) },
     private val waitMillis: Long = WinDefaults.KEY_OFFER_MILLIS,
+    /** Whether a key goes to the page first (#122): then the app gets it only on the page's [verdict] that it was unused. */
+    private val pageFirst: (vk: Int, flags: Int) -> Boolean = { _, _ -> false },
+    /** Runs [Runnable] after the given milliseconds: a page that never answers doesn't keep the key. */
+    private val later: (Long, Runnable) -> Unit = { millis, run -> javax.swing.Timer(millis.toInt(), { run.run() }).apply { isRepeats = false }.start() },
 ) {
+    private class Pending(val vk: Int, val flags: Int)
+
+    private var pending: Pending? = null
+
     /** [flags]: 1 Ctrl, 2 Shift, 4 Alt, 8 Win, 16 a repeat (the glue's). True if the app took the key. Any thread. */
     fun offer(vk: Int, scan: Int, flags: Int): Boolean {
         val component = target() ?: return false
+        if (pageFirst(vk, flags)) {
+            val key = Pending(vk, flags)
+            val earlier = swap(key)
+            if (earlier != null) onEdt { runCatching { press(component, earlier.vk, earlier.flags) } }
+            later(PAGE_VERDICT_MILLIS, Runnable { if (take(key)) onEdt { runCatching { press(component, vk, flags) } } })
+            return false
+        }
         val answer = CompletableFuture<Boolean>()
         onEdt { answer.complete(runCatching { press(component, vk, flags) }.getOrDefault(false)) }
         return try {
@@ -30,6 +45,21 @@ internal class KeyRouter(
             false
         }
     }
+
+    /**
+     * The page's word on key [vk] it was given first: one it left unused goes to the app now. An answer about any other
+     * key (a modifier's own keydown, a key already settled) leaves the pending one alone. Any thread.
+     */
+    fun verdict(used: Boolean, vk: Int) {
+        val key = synchronized(this) { pending?.takeIf { it.vk == vk }.also { if (it != null) pending = null } } ?: return
+        if (used) return
+        val component = target() ?: return
+        onEdt { runCatching { press(component, key.vk, key.flags) } }
+    }
+
+    @Synchronized private fun swap(key: Pending): Pending? = pending.also { pending = key }
+
+    @Synchronized private fun take(key: Pending): Boolean = (pending === key).also { if (it) pending = null }
 
     private fun press(component: Component, vk: Int, flags: Int): Boolean {
         val modifiers = (if (flags and 1 != 0) InputEvent.CTRL_DOWN_MASK else 0) or (if (flags and 2 != 0) InputEvent.SHIFT_DOWN_MASK else 0) or
@@ -43,6 +73,9 @@ internal class KeyRouter(
     }
 
     companion object {
+        /** How long a page has to say whether it used a key it was given first. */
+        const val PAGE_VERDICT_MILLIS = 300L
+
         /** A Win32 virtual key as AWT's key code: the same for letters, digits, arrows and F1–F12; mapped otherwise. */
         fun awtKeyCode(vk: Int): Int = when (vk) {
             0x0D -> KeyEvent.VK_ENTER

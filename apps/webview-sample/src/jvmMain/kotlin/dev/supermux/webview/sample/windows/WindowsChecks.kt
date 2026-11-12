@@ -241,15 +241,26 @@ object WindowsChecks {
             keys("ctrl+v")
             eventually("pasted") { scene.b == "copyme" }
         },
-        Check("an-app-shortcut-reaches-the-app-and-not-the-page") {
-            // F8b and D15: Ctrl+Shift+K is the app's (an onPreviewKeyEvent around the WebView); the page never sees it.
+        Check("an-app-shortcut-the-page-leaves-unused-reaches-the-app") {
+            // #122 (page-first keys, as in Chrome): Ctrl+Shift+K goes to the page first; unused there, the app gets it.
             val scene = focusScene(engine())
             compose { scene.Content() }
             scene.typeIntoPage(this, "x")
             scene.engine.evaluate("window.__k = 0; addEventListener('keydown', function (e) { if (e.key === 'K' || e.key === 'k') window.__k++; }); 1")
             keys("ctrl+shift+k")
-            eventually("the app took it") { scene.shortcuts == 1 }
-            assertEquals("0", scene.engine.evaluate("window.__k"))
+            eventually("the app took it after the page") { scene.shortcuts == 1 }
+            assertEquals("1", scene.engine.evaluate("window.__k"))
+        },
+        Check("a-shortcut-the-page-uses-stays-the-pages") {
+            // #122: a page that takes Ctrl+Shift+K (preventDefault) keeps it, as a web editor keeps Ctrl+B.
+            val scene = focusScene(engine())
+            compose { scene.Content() }
+            scene.typeIntoPage(this, "x")
+            scene.engine.evaluate("window.__k = 0; addEventListener('keydown', function (e) { if (e.key === 'K' || e.key === 'k') { window.__k++; e.preventDefault(); } }); 1")
+            keys("ctrl+shift+k")
+            eventually("the page took it") { scene.engine.evaluate("window.__k") == "1" }
+            Thread.sleep(600)
+            assertEquals(0, scene.shortcuts, "the page kept it")
         },
         Check("a-demo-cannot-take-the-keyboard-from-the-app") {
             // L32: a page focusing its input on a timer while the user types in Compose.
