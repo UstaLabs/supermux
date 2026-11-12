@@ -198,7 +198,7 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
         val kept = if (echo == null) prev else prev.filterNot { it.id == echo }
         // An entry that is already there (the same frame twice) is replaced where it is, not shown twice.
         val at = kept.indexOfFirst { it.id == entry.id }
-        val next = if (at < 0) kept + entry else kept.toMutableList().also { it[at] = entry }
+        val next = if (at < 0) kept + entry else kept.toMutableList().also { it[at] = entry.keepingStreamOf(it[at]) }
         // The transcript moved on, so the just-answered receipts have served their purpose;
         // the "answered: …" line the close wrote is the record that stays.
         state.copy(
@@ -435,7 +435,7 @@ private fun withTail(held: List<LogEntry>, tail: List<LogEntry>): List<LogEntry>
     val byId = tail.associateBy { it.id }
     val newestTs = held.last().ts
     val known = held.mapTo(HashSet()) { it.id }
-    return held.map { byId[it.id] ?: it } + tail.filter { it.id !in known && it.ts > newestTs }
+    return held.map { h -> byId[h.id]?.keepingStreamOf(h) ?: h } + tail.filter { it.id !in known && it.ts > newestTs }
 }
 
 private fun snapshotCompleteLogs(state: HostState, frame: ServerFrame.Snapshot): Set<String> {
@@ -496,8 +496,18 @@ fun newClientMessageId(): String = CLIENT_MESSAGE_ID_PREFIX + Uuid.random().toSt
 fun mergeFetchedLog(fetched: List<LogEntry>, current: List<LogEntry>): List<LogEntry> {
     val newestTs = fetched.lastOrNull()?.ts ?: return current
     val known = fetched.mapTo(HashSet()) { it.id }
-    return fetched + current.filter { it.id !in known && (it.ts > newestTs || it.id.startsWith("local-")) }
+    val held = current.filter { it.stream != null }.associateBy { it.id }
+    val page = if (held.isEmpty()) fetched else fetched.map { f -> held[f.id]?.let { f.keepingStreamOf(it) } ?: f }
+    return page + current.filter { it.id !in known && (it.ts > newestTs || it.id.startsWith("local-")) }
 }
+
+/**
+ * Card #121: a copy of a row we hold (the history page's, a snapshot's) keeps the held row's live stream. The stream
+ * is the row's key in the transcript (#76) and is never stored, so a copy without it changed the key: the
+ * transcript lost its row and kept only its index, near the top of a longer list (bottom → top → bottom).
+ */
+internal fun LogEntry.keepingStreamOf(held: LogEntry): LogEntry =
+    if (stream == null && held.stream != null) copy(stream = held.stream) else this
 
 /** What a broker answers a frame it doesn't know with (`src/channels/web/index.ts`). */
 internal const val UNKNOWN_FRAME_TYPE = "unknown frame type"

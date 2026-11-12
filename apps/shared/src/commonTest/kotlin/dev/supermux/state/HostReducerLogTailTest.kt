@@ -94,6 +94,19 @@ class HostReducerLogTailTest {
         assertEquals(listOf(e("1"), e("2"), e("3"), e("local-0", ts = "4")), mergeFetchedLog(fetched, current))
     }
 
+    @Test fun fetchedLogKeepsTheStreamOfTheRowItReplaces() {
+        // Card #121: the stream is a live row's key and is never stored; a fetched copy without it changed the key, and
+        // the transcript lost its place (bottom → top → bottom).
+        val held = listOf(e("1"), e("2").copy(stream = "s2"))
+        assertEquals(listOf(e("1"), e("2").copy(stream = "s2")), mergeFetchedLog(listOf(e("1"), e("2")), held))
+    }
+
+    @Test fun aSnapshotTailKeepsTheStreamOfTheRowItPatches() {
+        val held = HostState(messages = mapOf("a" to listOf(e("1"), e("2").copy(stream = "s2"))))
+        val out = reduceHostFrame(held, snapshot(mapOf("a" to listOf(e("2", text = "edited"))), partial = listOf("a")))
+        assertEquals(listOf(e("1"), e("2", text = "edited").copy(stream = "s2")), out.messages["a"])
+    }
+
     @Test fun fetchedLogDropsCurrentEntriesOlderThanItsNewest() {
         // The tail entry the snapshot seeded is inside the fetched page; nothing is duplicated.
         assertEquals(listOf(e("1"), e("2")), mergeFetchedLog(listOf(e("1"), e("2")), listOf(e("2"))))
