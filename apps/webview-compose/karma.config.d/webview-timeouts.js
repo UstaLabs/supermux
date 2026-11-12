@@ -18,8 +18,10 @@
   config.client.mocha = mocha
   config.browserNoActivityTimeout = 600000
   config.browserDisconnectTimeout = 60000
+  // Keeps the flags another snippet added to this launcher first (webview-trusted-input.js), whichever runs first.
+  var earlier = ((config.customLaunchers || {}).ChromeHeadlessWebview || {}).flags || []
   config.customLaunchers = Object.assign({}, config.customLaunchers, {
-    ChromeHeadlessWebview: { base: 'ChromeHeadless', flags: ['--window-size=1280,1024', '--enable-unsafe-swiftshader'] },
+    ChromeHeadlessWebview: { base: 'ChromeHeadless', flags: ['--window-size=1280,1024', '--enable-unsafe-swiftshader'].concat(earlier) },
   })
   config.browsers = (config.browsers || []).map(function (b) { return b === 'ChromeHeadless' ? 'ChromeHeadlessWebview' : b })
 })();

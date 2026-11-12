@@ -64,6 +64,14 @@ internal val inputClock: () -> Long = monotonicClock()
 internal interface UserInputSource {
     /** Takes the user's last input if it is recent enough: true at most once per input. Main thread. */
     fun consumeUserInput(): Boolean
+
+    /**
+     * Whether a page's click verdict ([WebBridge.handleAfterButtonClick]) is also re-checked against [consumeUserInput]:
+     * the web, whose host keeps its own checks (the user's press reached this frame, nothing in the app since, and the
+     * frame's transient activation) on top of the page's (spec, Click-to-send). Native engines take the verdict alone,
+     * so a screen reader's activation, which delivers no input to the view, still counts (open decision 4, option c).
+     */
+    val rechecksClicks: Boolean get() = false
 }
 
 /** What a bridge asks of [engine] for [WebBridge.handleWithUserInput], or never. */
@@ -73,3 +81,11 @@ internal fun userInputOf(engine: WebEngine): () -> Boolean {
 }
 
 private val NO_USER_INPUT: () -> Boolean = { false }
+
+/** What a bridge asks of [engine] on top of a page's click verdict: its own input check if it re-checks clicks. */
+internal fun clickRecheckOf(engine: Any): () -> Boolean {
+    val source = engine as? UserInputSource
+    return if (source != null && source.rechecksClicks) source::consumeUserInput else NO_RECHECK
+}
+
+private val NO_RECHECK: () -> Boolean = { true }

@@ -700,6 +700,10 @@ internal class IframeWebEngine(
      */
     override fun consumeUserInput(): Boolean = inputStamp.consume(inputClock()) && userActivation()
 
+    /** The web keeps its own checks on a card's click too (spec, Click-to-send): the press reached this frame, nothing in the
+     *  app since, and the frame's transient activation. A screen reader's click on the web is a trusted DOM click. */
+    override val rechecksClicks: Boolean get() = true
+
     override fun appInput() {
         inputStamp.clear()
     }
