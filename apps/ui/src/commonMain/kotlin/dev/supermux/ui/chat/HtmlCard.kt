@@ -1,6 +1,7 @@
 // #104 car A: an agent's html card (show_html) in the chat. The page is fetched as text (GET /html/<id>), never loaded
 // from the broker's origin, and shown live through webview-compose: its own opaque origin in an ephemeral profile, the
-// theme as --sm-* variables, and window.supermux, whose send() is the user's message only after a real click or tap.
+// theme as --sm-* variables, and window.supermux, whose send() is the user's message only right after a real click on
+// a button in it.
 //
 // TODO(#104 car B): full screen (a Browser tab on wide screens, a view over the chat on a phone) and the ⋯ menu (Open
 // in a Browser tab, View source, Save as .html, Copy source); Telegram gets the page as a document.
@@ -162,8 +163,9 @@ internal fun cardDocument(page: String, theme: CardTheme): String {
 }
 
 /**
- * The theme sheet and the page API. `supermux.send(text)` calls the host's `send` over the library's bridge, whose host
- * side decides whether the call followed the user's own input ([cardSendAnswer]); `theme` events restyle the page live.
+ * The theme sheet and the page API. `supermux.send(text)` calls the host's `send` over the library's bridge with
+ * `callAfterClick`, which carries whether the user just clicked a button in the card ([cardSendAnswer]); `theme` events
+ * restyle the page live.
  */
 private fun cardPrelude(theme: CardTheme): String {
     val scheme = if (theme.dark) "dark" else "light"
@@ -211,7 +213,9 @@ internal val CARD_API_SCRIPT = """
   if (bridge) bridge.on('theme', restyle);
   function send(text) {
     if (!bridge) return Promise.resolve({ ok: false, reason: 'this card cannot send' });
-    return bridge.call('send', { text: String(text) }).then(function (r) {
+    // The library's shim (or WebKit's relay, in its own world) puts its click verdict on the call: a trusted click on a
+    // button in this card within the last second, unused, with the engine's user activation.
+    return bridge.callAfterClick('send', { text: String(text) }).then(function (r) {
       return r && r.ok === true ? { ok: true } : { ok: false, reason: String((r && r.reason) || 'refused') };
     }, function (e) {
       return { ok: false, reason: String((e && e.message) || e) };
@@ -265,14 +269,16 @@ private fun refused(reason: String): JsonObject {
 }
 
 /**
- * The host's answer to a page's `supermux.send(text)`: [send] runs only for a call that followed the user's own click
- * or tap in this card ([fromUserInput], from the bridge's `handleWithUserInput`) with 1 to [CARD_SEND_MAX] characters,
- * and answers what became of it: sent only once the broker took the message, else its reason.
+ * The host's answer to a page's `supermux.send(text)`: [send] runs only for a call right after the user's trusted click
+ * on a button in this card ([clicked], the verdict the bridge's `handleAfterButtonClick` gets from the page side, spec
+ * open decision 4 option c) with 1 to [CARD_SEND_MAX] characters, and answers what became of it: sent only once the
+ * broker took the message, else its reason. The host's input stamp plays no part, so a screen reader's activation, which
+ * clicks the button but delivers no input to the view, sends as a tap does.
  */
-internal suspend fun cardSendAnswer(params: JsonElement, fromUserInput: Boolean, send: suspend (String) -> String?): JsonObject {
+internal suspend fun cardSendAnswer(params: JsonElement, clicked: Boolean, send: suspend (String) -> String?): JsonObject {
     val text = ((params as? JsonObject)?.get("text") as? JsonPrimitive)?.takeIf { it.isString }?.content
     return when {
-        !fromUserInput -> refused("no click or tap in the card")
+        !clicked -> refused("no click on a button in the card")
         text.isNullOrEmpty() -> refused("the text is empty")
         text.length > CARD_SEND_MAX -> refused("the text is over $CARD_SEND_MAX characters")
         else -> send(text)?.let(::refused) ?: SENT
@@ -341,8 +347,9 @@ private fun CardPageView(entryId: String, content: WebContent.Html, card: HtmlCa
     val currentHost by rememberUpdatedState(host)
     DisposableEffect(state, card.id, card.title) {
         val from = FromCardDto(card.id, card.title)
-        val off = state.bridge.handleWithUserInput("send") { params, fromUserInput ->
-            cardSendAnswer(params, fromUserInput) { text -> currentHost?.send?.invoke(from, text) ?: "this card cannot send" }
+        val off = state.bridge.handleAfterButtonClick("send") { params, clicked ->
+            // The host's send answers null once the broker took the message, else why not: a null is a send, never a refusal.
+            cardSendAnswer(params, clicked) { text -> currentHost.let { h -> if (h == null) "this card cannot send" else h.send(from, text) } }
         }
         onDispose { off() }
     }

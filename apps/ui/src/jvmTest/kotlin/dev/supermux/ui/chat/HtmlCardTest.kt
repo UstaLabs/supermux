@@ -112,35 +112,42 @@ class HtmlCardTest {
 
     // --- supermux.send's answer ---
 
-    @Test fun aSendWithoutTheUsersInputIsRefused() = runTest {
+    @Test fun aSendWithoutAClickOnAButtonIsRefused() = runTest {
         val sent = mutableListOf<String>()
-        val answer = cardSendAnswer(JsonObject(mapOf("text" to JsonPrimitive("Use B"))), fromUserInput = false) { sent += it; null }
+        val answer = cardSendAnswer(JsonObject(mapOf("text" to JsonPrimitive("Use B"))), clicked = false) { sent += it; null }
         assertFalse(answer["ok"]!!.jsonPrimitive.boolean)
-        assertTrue(answer["reason"]!!.jsonPrimitive.content.isNotEmpty())
+        assertEquals("no click on a button in the card", answer["reason"]!!.jsonPrimitive.content)
         assertEquals(emptyList(), sent)
     }
 
     @Test fun anEmptyOrTooLongTextIsRefused() = runTest {
         val sent = mutableListOf<String>()
         for (params in listOf(JsonObject(mapOf("text" to JsonPrimitive(""))), JsonObject(mapOf("text" to JsonPrimitive("x".repeat(2001)))), JsonNull)) {
-            val answer = cardSendAnswer(params, fromUserInput = true) { sent += it; null }
+            val answer = cardSendAnswer(params, clicked = true) { sent += it; null }
             assertFalse(answer["ok"]!!.jsonPrimitive.boolean, "$params")
             assertTrue(answer["reason"]!!.jsonPrimitive.content.isNotEmpty())
         }
+        assertEquals("the text is empty", cardSendAnswer(JsonObject(mapOf("text" to JsonPrimitive(""))), clicked = true) { null }["reason"]!!.jsonPrimitive.content)
         assertEquals(emptyList(), sent)
     }
 
     @Test fun aClickedSendGoesOut() = runTest {
         val sent = mutableListOf<String>()
-        val answer = cardSendAnswer(JsonObject(mapOf("text" to JsonPrimitive("x".repeat(2000)))), fromUserInput = true) { sent += it; null }
+        val answer = cardSendAnswer(JsonObject(mapOf("text" to JsonPrimitive("x".repeat(2000)))), clicked = true) { sent += it; null }
         assertEquals(JsonObject(mapOf("ok" to JsonPrimitive(true))), answer)
         assertEquals(listOf("x".repeat(2000)), sent)
     }
 
     @Test fun theHostsRefusalIsThePagesAnswer() = runTest {
-        val answer = cardSendAnswer(JsonObject(mapOf("text" to JsonPrimitive("Use B"))), fromUserInput = true) { "one send a second" }
+        val answer = cardSendAnswer(JsonObject(mapOf("text" to JsonPrimitive("Use B"))), clicked = true) { "one send a second" }
         assertFalse(answer["ok"]!!.jsonPrimitive.boolean)
         assertEquals("one send a second", answer["reason"]!!.jsonPrimitive.content)
+    }
+
+    /** The page API sends through the bridge's click-proven call, which carries the shim's verdict, not a plain call. */
+    @Test fun thePagesSendIsACallAfterAClick() {
+        assertTrue("bridge.callAfterClick('send', " in CARD_API_SCRIPT, CARD_API_SCRIPT)
+        assertFalse("bridge.call('send'" in CARD_API_SCRIPT)
     }
 
     // --- The card in the chat ---
@@ -227,5 +234,33 @@ class HtmlCardTest {
         setPlatformContent { SupermuxTheme(appearance = AppearanceMode.DARK) { TimelineItemRow(TimelineItem.Msg(entry)) } }
         onNodeWithText("Use B").assertExists()
         onNodeWithText("from Sales by region").assertExists()
+    }
+
+    /**
+     * The card gates its send on the shim's click verdict (handleAfterButtonClick), not on the host's input stamp: the
+     * fake engine tells of no input at all, as a view a screen reader activated gets none, and a clicked send still goes.
+     */
+    @OptIn(WebEngineSpi::class)
+    @Test fun aCardSendsOnTheShimsClickVerdictWithNoHostInput() = runComposeUiTest {
+        val rig = Rig()
+        show(rig) { SupermuxTheme(appearance = AppearanceMode.DARK) { HtmlCardView("o1", card, Modifier.width(600.dp)) } }
+        waitUntil(timeoutMillis = 5_000) { runOnUiThread { rig.calls.any { it.startsWith("post:") && "\"n\":\"theme\"" in it } } }
+        val engine = runOnUiThread { rig.engines.created.single { e -> e.calls.any { it.startsWith("load:html:") } } }
+        fun reply(id: Long): String? = runOnUiThread { engine.calls.firstOrNull { it.startsWith("post:") && "\"t\":\"reply\"" in it && "\"id\":$id," in it } }
+        val text = JsonObject(mapOf("text" to JsonPrimitive("Use B")))
+
+        assertTrue(runOnUiThread { engine.callFromPage(1, "send", text, clicked = false) })
+        waitUntil(timeoutMillis = 5_000) { reply(1) != null }
+        assertTrue("no click on a button in the card" in reply(1)!!, reply(1))
+
+        runOnUiThread { engine.callFromPage(2, "send", text, clicked = null) }
+        waitUntil(timeoutMillis = 5_000) { reply(2) != null }
+        assertTrue("no click on a button in the card" in reply(2)!!, "a plain call is no click: ${reply(2)}")
+        assertEquals(emptyList(), runOnUiThread { rig.sends.toList() })
+
+        runOnUiThread { engine.callFromPage(3, "send", text, clicked = true) }
+        waitUntil(timeoutMillis = 5_000) { reply(3) != null }
+        assertTrue("\"ok\":true" in reply(3)!!, reply(3))
+        assertEquals(listOf(FromCardDto("abc", "Sales by region") to "Use B"), runOnUiThread { rig.sends.toList() })
     }
 }
