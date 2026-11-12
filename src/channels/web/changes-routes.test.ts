@@ -237,3 +237,14 @@ test("get latest needs the chat's own base; resolve and abort refuse bad input",
   expect((await post(token, "/workspaces/ws-1/git/resolve", { repo: "", path: "../a.txt", side: "mine" })).status).toBe(400)
   expect((await post(token, "/workspaces/ws-1/git/abort", { repo: "" })).status).toBe(409)   // no merge in progress
 })
+
+test("history lists commits; revert/branch/tag refuse bad input", async () => {
+  const { token } = await setup()
+  const h = await (await get(token, "/workspaces/ws-1/git/history?repo=")).json() as any
+  expect(h.chat[0].subject).toBe("base")
+  expect(h.base).toBeNull()
+  expect((await get(token, "/workspaces/ws-1/git/history?repo=nope")).status).toBe(404)
+  expect((await post(token, "/workspaces/ws-1/git/revert", { repo: "", sha: "zzz" })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/branch", { repo: "", sha: h.chat[0].sha, name: "-bad" })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/tag", { repo: "", sha: h.chat[0].sha, name: "v1" })).status).toBe(200)
+})
