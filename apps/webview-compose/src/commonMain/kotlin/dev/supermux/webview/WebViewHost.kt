@@ -1872,6 +1872,8 @@ internal class WebViewHost(
             return decision
         }
 
+        override fun onUnusedKey(event: androidx.compose.ui.input.key.KeyEvent): Boolean = client.onUnusedKey(event)
+
         /** "Open here" loads the URL here where the policy allows it here, and opens it outside where it says to. */
         override fun onNewWindow(request: NewWindowRequest): NewWindowDecision {
             val client = client

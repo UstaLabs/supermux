@@ -113,6 +113,7 @@ abstract interface dev.supermux.webview.engine/EngineClient { // dev.supermux.we
     abstract suspend fun onDownload(dev.supermux.webview/DownloadRequest): kotlin/Boolean // dev.supermux.webview.engine/EngineClient.onDownload|onDownload(dev.supermux.webview.DownloadRequest){}[0]
     abstract suspend fun onFileChooser(dev.supermux.webview/FileChooserRequest): kotlin.collections/List<kotlin/String>? // dev.supermux.webview.engine/EngineClient.onFileChooser|onFileChooser(dev.supermux.webview.FileChooserRequest){}[0]
     abstract suspend fun onPermission(dev.supermux.webview/PermissionRequest): kotlin/Boolean // dev.supermux.webview.engine/EngineClient.onPermission|onPermission(dev.supermux.webview.PermissionRequest){}[0]
+    open fun onUnusedKey(androidx.compose.ui.input.key/KeyEvent): kotlin/Boolean // dev.supermux.webview.engine/EngineClient.onUnusedKey|onUnusedKey(androidx.compose.ui.input.key.KeyEvent){}[0]
 }
 
 abstract interface dev.supermux.webview.engine/WebEngine { // dev.supermux.webview.engine/WebEngine|null[0]
@@ -169,6 +170,7 @@ abstract interface dev.supermux.webview.engine/WebEngineFactory { // dev.supermu
 abstract interface dev.supermux.webview/WebClient { // dev.supermux.webview/WebClient|null[0]
     open fun onNavigation(dev.supermux.webview/NavigationRequest, dev.supermux.webview/WebContent): dev.supermux.webview/NavigationDecision // dev.supermux.webview/WebClient.onNavigation|onNavigation(dev.supermux.webview.NavigationRequest;dev.supermux.webview.WebContent){}[0]
     open fun onNewWindow(dev.supermux.webview/NewWindowRequest): dev.supermux.webview/NewWindowDecision // dev.supermux.webview/WebClient.onNewWindow|onNewWindow(dev.supermux.webview.NewWindowRequest){}[0]
+    open fun onUnusedKey(androidx.compose.ui.input.key/KeyEvent): kotlin/Boolean // dev.supermux.webview/WebClient.onUnusedKey|onUnusedKey(androidx.compose.ui.input.key.KeyEvent){}[0]
     open suspend fun onDialog(dev.supermux.webview/WebDialog): dev.supermux.webview/DialogResult // dev.supermux.webview/WebClient.onDialog|onDialog(dev.supermux.webview.WebDialog){}[0]
     open suspend fun onDownload(dev.supermux.webview/DownloadRequest): kotlin/Boolean // dev.supermux.webview/WebClient.onDownload|onDownload(dev.supermux.webview.DownloadRequest){}[0]
     open suspend fun onFileChooser(dev.supermux.webview/FileChooserRequest): kotlin.collections/List<kotlin/String>? // dev.supermux.webview/WebClient.onFileChooser|onFileChooser(dev.supermux.webview.FileChooserRequest){}[0]

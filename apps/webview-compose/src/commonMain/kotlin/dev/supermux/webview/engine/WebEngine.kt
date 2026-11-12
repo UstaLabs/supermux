@@ -154,6 +154,9 @@ public interface EngineClient {
     public suspend fun onPermission(request: PermissionRequest): Boolean
     public suspend fun onDownload(request: DownloadRequest): Boolean
     public fun onNewWindow(request: NewWindowRequest): NewWindowDecision
+
+    /** A key the page left unused, for the app's shortcuts ([dev.supermux.webview.WebClient.onUnusedKey]). Main thread. */
+    public fun onUnusedKey(event: androidx.compose.ui.input.key.KeyEvent): Boolean = false
 }
 
 @WebEngineSpi

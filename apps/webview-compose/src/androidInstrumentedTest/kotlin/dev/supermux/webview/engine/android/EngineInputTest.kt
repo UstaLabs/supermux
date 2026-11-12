@@ -185,6 +185,44 @@ class EngineInputTest {
         assertTrue(after < before * 0.75f, "the visual viewport shrank: $before → $after")
     }
 
+    /**
+     * #122 page-first keys, as in Chrome: a shortcut the page leaves unused reaches the app (WebClient.onUnusedKey);
+     * one the page takes (preventDefault) stays the page's.
+     */
+    @Test fun aShortcutThePageLeavesUnusedReachesTheClientAndOneItTakesDoesNot() = EngineHarness.run {
+        val unused = java.util.concurrent.CopyOnWriteArrayList<Int>()
+        main {
+            client = object : dev.supermux.webview.engine.EngineClient by RecordingClient() {
+                override fun onUnusedKey(event: androidx.compose.ui.input.key.KeyEvent): Boolean {
+                    val native = event.nativeKeyEvent
+                    if (native.action == KeyEvent.ACTION_DOWN && native.isCtrlPressed) unused += native.keyCode
+                    return true
+                }
+            }
+        }
+        val page = dev.supermux.webview.WebContent.Html(
+            "<!doctype html><title>keys</title><body style='margin:0;height:100vh'><script>" +
+                "addEventListener('keydown', function (e) { if (e.ctrlKey && e.key === 'b') e.preventDefault(); });</script></body>",
+            dev.supermux.webview.WebOrigin("keys"),
+        )
+        loadAndPaint(page)
+        val (x, top, height) = onScreen()
+        tap(x, top + height / 2f)
+        await("focus") { it == EngineEvent.FocusChanged(true) }
+        fun ctrl(code: Int) {
+            val now = SystemClock.uptimeMillis()
+            instrumentation.sendKeySync(KeyEvent(now, now, KeyEvent.ACTION_DOWN, code, 0, KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON))
+            instrumentation.sendKeySync(KeyEvent(now, now + 20, KeyEvent.ACTION_UP, code, 0, KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON))
+        }
+        ctrl(KeyEvent.KEYCODE_K)
+        val until = SystemClock.uptimeMillis() + 3_000
+        while (KeyEvent.KEYCODE_K !in unused && SystemClock.uptimeMillis() < until) delay(50)
+        assertTrue(KeyEvent.KEYCODE_K in unused, "Ctrl+K, unused by the page, reached the client: $unused")
+        ctrl(KeyEvent.KEYCODE_B)
+        delay(1_000)
+        assertTrue(KeyEvent.KEYCODE_B !in unused, "Ctrl+B, the page's, never reached the client: $unused")
+    }
+
     @Test fun backGoesBackInAPageTheUserIsIn() = EngineHarness.run {
         val page = TestPages.solid("#ffffff")
         loadAndPaint(page)
