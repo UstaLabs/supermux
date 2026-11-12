@@ -179,3 +179,32 @@ test("a repo created after the cache warmed is found by a rescan on miss", async
   expect(res.status).toBe(200)
   expect(await res.text()).toBe("late\n")
 })
+
+// #72: what goes into the next commit.
+async function post(token: string, path: string, body: unknown) {
+  return fetch(`http://127.0.0.1:${channel!.boundPort}${path}`, {
+    method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body),
+  })
+}
+
+test("a changed file says it is not in the next commit, then is put in and taken out again", async () => {
+  const { dir, token } = await setup()
+  let files = ((await (await get(token, "/workspaces/ws-1/changes")).json()) as any).repos[0].files
+  expect(files[0]).toMatchObject({ path: "a.txt", staged: "none" })
+  expect((await post(token, "/workspaces/ws-1/git/stage", { repo: "", paths: ["a.txt"], staged: true })).status).toBe(200)
+  files = ((await (await get(token, "/workspaces/ws-1/changes")).json()) as any).repos[0].files
+  expect(files[0].staged).toBe("all")
+  expect(git(dir, "diff", "--cached", "--name-only")).toBe("a.txt")
+  expect((await post(token, "/sessions/s-1/git/stage", { repo: "", paths: ["a.txt"], staged: false })).status).toBe(200)
+  expect(git(dir, "diff", "--cached", "--name-only")).toBe("")
+})
+
+test("staging refuses paths outside the repo, unknown repos and bad bodies", async () => {
+  const { token } = await setup()
+  expect((await post(token, "/workspaces/ws-1/git/stage", { repo: "", paths: ["../x"], staged: true })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/stage", { repo: "", paths: ["/etc/passwd"], staged: true })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/stage", { repo: "", paths: [], staged: true })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/stage", { repo: "", paths: ["a.txt"] })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/stage", { repo: "nope", paths: ["a.txt"], staged: true })).status).toBe(404)
+  expect((await post(token, "/workspaces/ws-x/git/stage", { repo: "", paths: ["a.txt"], staged: true })).status).toBe(404)
+})

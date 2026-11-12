@@ -26,6 +26,7 @@ import { WorkdirFs } from "../../core/fs/legacy"
 import { UnsupportedAudioError } from "../../core/transcription/wav"
 import { computeWorkdirDiff, listRepoRefs } from "../../core/editor/workdir-diff"
 import { listChanges, readBaseBlob, discoverReposCached } from "../../core/editor/changes"
+import { safeRepoPath, setStaged } from "../../core/git/stage"
 import { reanchor } from "../../core/review/anchor"
 import { formatInstantComment, matchingStep, toWalkthroughDto } from "../../core/walkthrough/author"
 import { LspConnection } from "../../core/lsp/bridge"
@@ -2349,6 +2350,27 @@ export class WebChannel implements Channel {
     }
   }
 
+  /** POST …/git/stage {repo, paths, staged} (#72): whole files into the next commit, or out of it. */
+  private async stageFiles(workdir: string, req: Request): Promise<Response> {
+    let body: { repo?: unknown; paths?: unknown; staged?: unknown }
+    try { body = (await req.json()) as typeof body } catch { return this.json({ error: "bad json" }, 400) }
+    if (!body || typeof body !== "object") return this.json({ error: "bad request" }, 400)
+    const repo = typeof body.repo === "string" ? body.repo : ""
+    const paths = Array.isArray(body.paths) ? body.paths : []
+    if (!paths.length || paths.length > 5000 || !paths.every(safeRepoPath) || typeof body.staged !== "boolean") {
+      return this.json({ error: "bad request" }, 400)
+    }
+    const found = (await discoverReposCached(workdir)).find((r) => r.relPath === repo)
+      ?? (await discoverReposCached(workdir, { fresh: true })).find((r) => r.relPath === repo)
+    if (!found) return this.json({ error: "repo not found" }, 404)
+    try {
+      await setStaged(found.absPath, paths as string[], body.staged)
+      return this.json({ ok: true })
+    } catch (err) {
+      return this.json({ error: err instanceof Error ? err.message : String(err) }, 409)
+    }
+  }
+
   /** GET …/changes/blob for a resolved workdir (spec §2.2). */
   private async changesBlob(workdir: string, url: URL, req: Request): Promise<Response> {
     const repo = url.searchParams.get("repo") ?? ""
@@ -3700,6 +3722,11 @@ export class WebChannel implements Channel {
       }))
       return this.json({ repos, comments })
     }
+    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/stage$/)) {
+      const workdir = this.opts.getSessionWorkdir?.(decodeURIComponent(path.split("/")[2]!))
+      if (!workdir) return this.json({ error: "session not found" }, 404)
+      return this.stageFiles(workdir, req)
+    }
     if (method === "GET" && path.match(/^\/sessions\/[^/]+\/changes\/blob$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
@@ -3800,6 +3827,11 @@ export class WebChannel implements Channel {
       const base = this.opts.getWorkspaceDiffBase?.(id)
       const { repos } = await listChanges(workdir, base?.baseCommits ?? {}, base?.createdAt, url.searchParams.get("base") ?? undefined)
       return this.json({ repos, comments: [] })
+    }
+    if (method === "POST" && path.match(/^\/workspaces\/[^/]+\/git\/stage$/)) {
+      const workdir = this.opts.getWorkspaceWorkdir?.(decodeURIComponent(path.split("/")[2]!))
+      if (!workdir) return this.json({ error: "workspace not found" }, 404)
+      return this.stageFiles(workdir, req)
     }
     if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/changes\/blob$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
