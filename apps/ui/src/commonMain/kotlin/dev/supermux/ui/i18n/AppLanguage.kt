@@ -10,7 +10,9 @@ import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.text.intl.Locale
 import androidx.compose.ui.text.toUpperCase
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 
 /**
@@ -73,9 +75,12 @@ fun ProvideAppLanguage(language: AppLanguage, content: @Composable () -> Unit) {
 }
 
 /** [language]'s catalog: at once where it can be read synchronously or was preloaded, else when its read finishes. */
+// Not produceState: its state is remembered without the key, so a new language would keep the old catalog.
 @Composable
-private fun catalogState(language: String) = produceState(remember(language) { Catalogs.now(language) }, language) {
-    if (value == null) value = Catalogs.load(language)
+private fun catalogState(language: String): State<Catalog?> {
+    val state = remember(language) { mutableStateOf(Catalogs.now(language)) }
+    if (state.value == null) LaunchedEffect(language) { state.value = Catalogs.load(language) }
+    return state
 }
 
 /** Outside any provider (a test, a preview): English, read once and kept by [Catalogs]. */
