@@ -104,6 +104,7 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         NSCameraUsageDescription: supermux scans the pairing QR code printed by your broker.
         NSMicrophoneUsageDescription: supermux records voice messages you send to your agents.
+        NSPhotoLibraryAddUsageDescription: supermux saves the pictures and videos you choose to save into Photos.
         NSSpeechRecognitionUsageDescription: supermux uses on-device speech recognition to turn your voice into editable text.
         NSLocalNetworkUsageDescription: Supermux connects to the broker server running on your own computer when you reach it by its LAN address (for example 192.168.1.50). It does not scan or collect information about other devices on your network.
         ITSAppUsesNonExemptEncryption: false

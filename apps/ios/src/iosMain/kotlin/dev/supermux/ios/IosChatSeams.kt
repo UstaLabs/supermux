@@ -4,6 +4,8 @@
 // `DesktopChatSeams.kt` and `AndroidChatSeams.kt` already make.
 package dev.supermux.ios
 
+import dev.supermux.ui.platform.isGalleryMedia
+import dev.supermux.ui.platform.SavedPlace
 import dev.supermux.chat.mimeForFileName
 import dev.supermux.net.ByteArrayChunkSource
 import dev.supermux.ui.platform.CapturedAudio
@@ -135,11 +137,36 @@ class IosClipboardAccess : ClipboardAccess {
 @OptIn(ExperimentalForeignApi::class)
 class IosFileAccess(private val bridge: IosBridge) : FileAccess {
 
+    /**
+     * Save [bytes] as a phone does (#95), the way [saveFile] saves a download: written to a temp file under its name,
+     * then [savePath]. It used to present the share sheet as its "save".
+     */
     override suspend fun saveAs(name: String, mime: String, bytes: ByteArray): SavedFile? {
         val leaf = safeFileName(name)
-        val location = awaitCallback<String?> { done -> bridge.saveAs(leaf, mime, bytes, done) }
-            ?: return null
-        return SavedFile(leaf, location)
+        val path = withContext(Dispatchers.Default) {
+            val dir = NSTemporaryDirectory() + "supermux-save"
+            NSFileManager.defaultManager.createDirectoryAtPath(dir, withIntermediateDirectories = true, attributes = null, error = null)
+            "$dir/$leaf".takeIf { bytes.toNSData().writeToFile(it, atomically = true) }
+        } ?: return null
+        return savePath(path, leaf, mime)
+    }
+
+    /**
+     * A picture or a video goes into Photos, with no dialog (add-only access, asked for once); any other file is
+     * exported to Files by the document picker. A refused or failed Photos save falls back to Files, so Save always
+     * saves somewhere. Null: the user dismissed the picker.
+     */
+    private suspend fun savePath(path: String, name: String, mime: String): SavedFile? {
+        if (isGalleryMedia(mime)) {
+            val video = mime.lowercase().startsWith("video/")
+            if (awaitCallback<Boolean> { done -> bridge.saveToPhotos(path, video, done) }) {
+                return SavedFile(name, "photos", SavedPlace.Photos)
+            }
+        }
+        // What iOS reports is the name the copy got ("Keep Both" can make it "report 2.pdf"), never
+        // a location we may open again — [openSaved] is false here — so it is both.
+        val saved = awaitCallback<String?> { done -> bridge.saveFileAt(path, done) } ?: return null
+        return SavedFile(name = saved, location = saved)
     }
 
     /**
@@ -192,21 +219,18 @@ class IosFileAccess(private val bridge: IosBridge) : FileAccess {
             NSURL.fileURLWithPath(path).absoluteString
         }
 
-    /** Save (to Files) and Share. iOS's "Open in…" IS the share sheet, so there is no Open (R3). */
+    /** Save (to Photos or Files) and Share. iOS's "Open in…" IS the share sheet, so there is no Open (R3). */
     override val fileActions: Set<FileAction> = setOf(FileAction.Save, FileAction.Share)
 
     /**
-     * The downloaded file under its real name ([stageNamed]), exported by the document picker to
-     * where the user chooses in Files — the picker copies it, so nothing is read into memory. Null:
-     * no file on disk to save (a browser handle, or one cleared since), the staging failed, or the
-     * user dismissed the picker.
+     * The downloaded file under its real name ([stageNamed]), saved by [savePath]: into Photos when it is a picture
+     * or a video, else exported by the document picker to where the user chooses in Files. Both copy it, so nothing
+     * is read into memory. Null: no file on disk to save (a browser handle, or one cleared since), the staging
+     * failed, or the user dismissed the picker.
      */
     override suspend fun saveFile(file: DownloadedFile): SavedFile? {
         val staged = staged(file) ?: return null
-        // What iOS reports is the name the copy got ("Keep Both" can make it "report 2.pdf"), never
-        // a location we may open again — [openSaved] is false here — so it is both.
-        val saved = awaitCallback<String?> { done -> bridge.saveFileAt(staged, done) } ?: return null
-        return SavedFile(name = saved, location = saved)
+        return savePath(staged, safeFileName(file.name), file.mime)
     }
 
     /**

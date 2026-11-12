@@ -122,6 +122,50 @@ class HandOverTest {
         platform.handedOverNothing()
     }
 
+    // ── the Save button: Save, never the tap's Open or Share ───────────────────────────────────────
+
+    // Ahmet's phones opened the chooser / share sheet from Save: the button ran the tap's rule (R1).
+    @Test fun theSaveButtonOnATouchHostSavesAndNeitherOpensNorShares() = runTest {
+        val platform = FakePlatform()
+        val (center, item) = finished()
+        assertEquals(SavedFile("report.pdf", "/fake/report.pdf"), saveDownload(platform, pointer = false, center, item))
+        assertEquals(listOf("report.pdf"), platform.files.savedFiles)
+        assertEquals(emptyList(), platform.files.openedFiles + platform.files.sharedFiles)
+        assertEquals(emptyList(), platform.files.openedSaved)
+    }
+
+    // iOS has no Open: the tap's rule fell through to Share there. Save still saves.
+    @Test fun theSaveButtonOnAHostWithoutOpenStillSaves() = runTest {
+        val platform = FakePlatform().apply { files.fileActions = setOf(FileAction.Save, FileAction.Share) }
+        val (center, item) = finished()
+        assertEquals("report.pdf", saveDownload(platform, pointer = false, center, item)?.name)
+        assertEquals(emptyList(), platform.files.sharedFiles)
+    }
+
+    // The desktop's Save is unchanged: save as, then open what was saved.
+    @Test fun theSaveButtonOnAPointerHostOpensWhatItSaved() = runTest {
+        val platform = FakePlatform()
+        val (center, item) = finished()
+        saveDownload(platform, pointer = true, center, item)
+        assertEquals(listOf(SavedFile("report.pdf", "/fake/report.pdf")), platform.files.openedSaved)
+    }
+
+    @Test fun aCancelledSaveButtonIsNoError() = runTest {
+        val platform = FakePlatform().apply { files.saveResult = false }
+        val (center, item) = finished()
+        assertEquals(null, saveDownload(platform, pointer = false, center, item))
+        assertEquals(emptyList(), platform.notices.shown)
+        assertEquals(emptyList(), platform.files.openedFiles + platform.files.sharedFiles)
+    }
+
+    @Test fun theSaveButtonChecksTheFileFirst() = runTest {
+        val platform = FakePlatform()
+        val (center, item) = finished(removedFile())
+        assertEquals(null, saveDownload(platform, pointer = false, center, item))
+        assertIs<DownloadState.Failed>(center.items.value.single().state)
+        platform.handedOverNothing()
+    }
+
     // ── the bar's actions (R3) ─────────────────────────────────────────────────────────────────
 
     @Test fun theBarsOpenOpensIt() = runTest {
