@@ -55,23 +55,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.supermux.net.AddDeviceResponse
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.platform.LocalPlatform
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.setup_phone_another
-import dev.supermux.ui.resources.setup_phone_connected_text
-import dev.supermux.ui.resources.setup_phone_connected_title
-import dev.supermux.ui.resources.setup_phone_copied
-import dev.supermux.ui.resources.setup_phone_copy
-import dev.supermux.ui.resources.setup_phone_creating
-import dev.supermux.ui.resources.setup_phone_link_warning
-import dev.supermux.ui.resources.setup_phone_mint_failed
-import dev.supermux.ui.resources.setup_phone_qr_description
-import dev.supermux.ui.resources.setup_phone_qr_failed
-import dev.supermux.ui.resources.setup_phone_refresh
-import dev.supermux.ui.resources.setup_phone_text
-import dev.supermux.ui.resources.setup_phone_title
-import dev.supermux.ui.resources.setup_phone_try_again
 import dev.supermux.ui.settings.DevicesSettingsActions
 import dev.supermux.ui.theme.IconSize
 import dev.supermux.ui.theme.MonoFontFamily
@@ -245,13 +231,13 @@ fun SetupPhoneStep(
                     modifier = Modifier.size(48.dp),
                 )
                 Text(
-                    localized(Res.string.setup_phone_connected_title),
+                    localized(Str.setup_phone_connected_title),
                     style = MaterialTheme.typography.headlineSmall,
                     color = cs.onSurface,
                     textAlign = TextAlign.Center,
                 )
                 Text(
-                    localized(Res.string.setup_phone_connected_text),
+                    localized(Str.setup_phone_connected_text),
                     style = MaterialTheme.typography.bodyMedium,
                     color = cs.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -261,7 +247,7 @@ fun SetupPhoneStep(
                     onClick = { minting.job = scope.launch { mint(refresh = true) } },
                     enabled = !busy,
                     modifier = Modifier.testTag("setup_phone_another"),
-                ) { Text(localized(Res.string.setup_phone_another)) }
+                ) { Text(localized(Str.setup_phone_another)) }
             } else {
                 Icon(
                     Icons.Filled.PhoneIphone,
@@ -270,13 +256,13 @@ fun SetupPhoneStep(
                     modifier = Modifier.size(40.dp),
                 )
                 Text(
-                    localized(Res.string.setup_phone_title),
+                    localized(Str.setup_phone_title),
                     style = MaterialTheme.typography.headlineSmall,
                     color = cs.onSurface,
                     textAlign = TextAlign.Center,
                 )
                 Text(
-                    localized(Res.string.setup_phone_text),
+                    localized(Str.setup_phone_text),
                     style = MaterialTheme.typography.bodyMedium,
                     color = cs.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -291,7 +277,7 @@ fun SetupPhoneStep(
                             modifier = Modifier.testTag("setup_phone_loading"),
                         )
                         Text(
-                            localized(Res.string.setup_phone_creating),
+                            localized(Str.setup_phone_creating),
                             style = MaterialTheme.typography.bodyMedium,
                             color = cs.onSurfaceVariant,
                             textAlign = TextAlign.Center,
@@ -307,7 +293,7 @@ fun SetupPhoneStep(
                         Spacer(Modifier.height(Space.sm))
                         if (qr == null) {
                             Text(
-                                localized(Res.string.setup_phone_qr_failed),
+                                localized(Str.setup_phone_qr_failed),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = cs.onSurfaceVariant,
                                 textAlign = TextAlign.Center,
@@ -316,7 +302,7 @@ fun SetupPhoneStep(
                         } else {
                             Image(
                                 bitmap = qr,
-                                contentDescription = localized(Res.string.setup_phone_qr_description),
+                                contentDescription = localized(Str.setup_phone_qr_description),
                                 modifier = Modifier
                                     .size(PhoneQrSize)
                                     .clip(RoundedCornerShape(Radii.lg))
@@ -350,7 +336,7 @@ fun SetupPhoneStep(
                                     modifier = Modifier.size(IconSize.md),
                                 )
                                 Spacer(Modifier.size(Space.sm))
-                                Text(localized(if (copied > 0) Res.string.setup_phone_copied else Res.string.setup_phone_copy))
+                                Text(localized(if (copied > 0) Str.setup_phone_copied else Str.setup_phone_copy))
                             }
                             TextButton(
                                 onClick = { minting.job = scope.launch { mint(refresh = true) } },
@@ -363,11 +349,11 @@ fun SetupPhoneStep(
                                     modifier = Modifier.size(IconSize.md),
                                 )
                                 Spacer(Modifier.size(Space.sm))
-                                Text(localized(Res.string.setup_phone_refresh))
+                                Text(localized(Str.setup_phone_refresh))
                             }
                         }
                         Text(
-                            localized(Res.string.setup_phone_link_warning),
+                            localized(Str.setup_phone_link_warning),
                             style = MaterialTheme.typography.labelSmall,
                             color = cs.onSurfaceVariant,
                             textAlign = TextAlign.Center,
@@ -377,7 +363,7 @@ fun SetupPhoneStep(
 
                 if (mintFailed) {
                     Text(
-                        localized(Res.string.setup_phone_mint_failed),
+                        localized(Str.setup_phone_mint_failed),
                         style = MaterialTheme.typography.labelMedium,
                         color = cs.error,
                         textAlign = TextAlign.Center,
@@ -388,7 +374,7 @@ fun SetupPhoneStep(
                             onClick = { minting.job = scope.launch { mint(refresh = false) } },
                             enabled = !busy,
                             modifier = Modifier.testTag("setup_phone_retry"),
-                        ) { Text(localized(Res.string.setup_phone_try_again)) }
+                        ) { Text(localized(Str.setup_phone_try_again)) }
                     }
                 }
             }

@@ -24,6 +24,7 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import dev.supermux.ui.editor.isMarkdownPath
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.panes.TabChipRow
 import dev.supermux.ui.panes.TabClose
 import dev.supermux.ui.panes.TabIcon
@@ -33,12 +34,6 @@ import dev.supermux.ui.panes.TabSlotState
 import dev.supermux.ui.session.RowContextMenu
 import dev.supermux.ui.session.RowContextMenuEntry
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.shell_move_to_new_window
-import dev.supermux.ui.resources.shell_edit
-import dev.supermux.ui.resources.shell_preview
-import dev.supermux.ui.resources.shell_save
-import dev.supermux.ui.resources.shell_close_view
 
 /**
  * A tab for a `file` pane: the per-file controls, on the file's own tab.
@@ -69,7 +64,7 @@ fun WorkspaceFileTab(
     val cs = MaterialTheme.colorScheme
     val hover = remember { MutableInteractionSource() }
     val hovered by hover.collectIsHoveredAsState()
-    val moveToNewWindow = localized(Res.string.shell_move_to_new_window)
+    val moveToNewWindow = localized(Str.shell_move_to_new_window)
 
     // Cluster G8: the shared right-click wrapper (F3's `RowContextMenu`), so this tab compiles on
     // a host with no `ContextMenuArea`. Inert under touch — the file tab's save / preview / close
@@ -102,7 +97,7 @@ fun WorkspaceFileTab(
             ) {
                 Icon(
                     imageVector = if (previewMode) Icons.Filled.Edit else Icons.Filled.Visibility,
-                    contentDescription = localized(if (previewMode) Res.string.shell_edit else Res.string.shell_preview),
+                    contentDescription = localized(if (previewMode) Str.shell_edit else Str.shell_preview),
                     tint = if (previewMode) cs.primary else cs.onSurfaceVariant,
                     modifier = Modifier.size(12.dp),
                 )
@@ -126,7 +121,7 @@ fun WorkspaceFileTab(
             ) {
                 Icon(
                     Icons.Filled.Check,
-                    contentDescription = localized(Res.string.shell_save),
+                    contentDescription = localized(Str.shell_save),
                     tint = cs.primary,
                     modifier = Modifier.size(12.dp),
                 )
@@ -136,7 +131,7 @@ fun WorkspaceFileTab(
         TabClose(
             visible = state.selected || hovered,
             onClick = { onClose(itemId) },
-            label = localized(Res.string.shell_close_view),
+            label = localized(Str.shell_close_view),
             modifier = Modifier.testTag("tab-close-$itemId"),
         )
     }

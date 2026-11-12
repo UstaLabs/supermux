@@ -8,6 +8,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.settings.CodeIntelligenceActions
 import dev.supermux.ui.settings.CodeIntelligenceSection
@@ -24,16 +25,6 @@ import dev.supermux.ui.settings.kit.currentMachineOnline
 import dev.supermux.ui.settings.kit.kitAnchor
 import dev.supermux.ui.settings.kit.kitDeviceNoun
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.settings_coding_code_intelligence
-import dev.supermux.ui.resources.settings_coding_editor
-import dev.supermux.ui.resources.settings_pages_couldnt_reach
-import dev.supermux.ui.resources.settings_pages_couldnt_reach_this_machine
-import dev.supermux.ui.resources.settings_pages_on_machine
-import dev.supermux.ui.resources.settings_pages_on_this_computer
-import dev.supermux.ui.resources.settings_pages_on_this_device
-import dev.supermux.ui.resources.settings_pages_on_this_machine
-import dev.supermux.ui.resources.settings_pages_on_this_phone
 import dev.supermux.ui.settings.localizedSettingsTitle
 
 @Composable
@@ -64,11 +55,11 @@ fun CodingPage(
         )
         if (!online) KitOfflineNote() else key(machineId) { GitHubSection(forges) }
 
-        KitSectionHead(localized(Res.string.settings_coding_editor), note = pagesDeviceNote())
+        KitSectionHead(localized(Str.settings_coding_editor), note = pagesDeviceNote())
         EditorSection()
 
         KitSectionHead(
-            localized(Res.string.settings_coding_code_intelligence),
+            localized(Str.settings_coding_code_intelligence),
             Modifier.kitAnchor("code-intelligence").testTag("coding_code-intelligence"),
             note = machineNote,
         )
@@ -80,16 +71,16 @@ fun CodingPage(
 @Composable
 internal fun pagesMachineNote(): String {
     val name = LocalSettingsMachines.current?.current?.name
-    return if (name != null) localized(Res.string.settings_pages_on_machine, name) else localized(Res.string.settings_pages_on_this_machine)
+    return if (name != null) localized(Str.settings_pages_on_machine, name) else localized(Str.settings_pages_on_this_machine)
 }
 
 /** A section head's note for this device's rows: "on this computer", "on this phone" or "on this device". */
 @Composable
 internal fun pagesDeviceNote(): String = localized(
     when (kitDeviceNoun()) {
-        "computer" -> Res.string.settings_pages_on_this_computer
-        "phone" -> Res.string.settings_pages_on_this_phone
-        else -> Res.string.settings_pages_on_this_device
+        "computer" -> Str.settings_pages_on_this_computer
+        "phone" -> Str.settings_pages_on_this_phone
+        else -> Str.settings_pages_on_this_device
     },
 )
 
@@ -97,5 +88,5 @@ internal fun pagesDeviceNote(): String = localized(
 @Composable
 internal fun pagesCouldntReach(): String {
     val name = LocalSettingsMachines.current?.current?.name
-    return if (name != null) localized(Res.string.settings_pages_couldnt_reach, name) else localized(Res.string.settings_pages_couldnt_reach_this_machine)
+    return if (name != null) localized(Str.settings_pages_couldnt_reach, name) else localized(Str.settings_pages_couldnt_reach_this_machine)
 }

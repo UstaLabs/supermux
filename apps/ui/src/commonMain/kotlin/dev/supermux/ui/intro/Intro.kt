@@ -130,6 +130,7 @@ import dev.supermux.pairing.PairingUiState
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.prefs.LocalUiPrefs
@@ -139,44 +140,6 @@ import dev.supermux.ui.resources.agent_codex
 import dev.supermux.ui.resources.agent_cursor
 import dev.supermux.ui.resources.agent_grok
 import dev.supermux.ui.resources.agent_antigravity
-import dev.supermux.ui.resources.intro_agents_stamp
-import dev.supermux.ui.resources.intro_agents_text
-import dev.supermux.ui.resources.intro_agents_title_1
-import dev.supermux.ui.resources.intro_agents_title_2
-import dev.supermux.ui.resources.intro_always_on_stamp
-import dev.supermux.ui.resources.intro_always_on_text
-import dev.supermux.ui.resources.intro_always_on_title_1
-import dev.supermux.ui.resources.intro_always_on_title_2
-import dev.supermux.ui.resources.intro_connect_accent
-import dev.supermux.ui.resources.intro_connect_stamp
-import dev.supermux.ui.resources.intro_connect_text_paste
-import dev.supermux.ui.resources.intro_connect_text_scan
-import dev.supermux.ui.resources.intro_connect_title_1
-import dev.supermux.ui.resources.intro_connect_title_2
-import dev.supermux.ui.resources.intro_hook_no_account
-import dev.supermux.ui.resources.intro_hook_no_vendor_cloud
-import dev.supermux.ui.resources.intro_hook_self_hosted
-import dev.supermux.ui.resources.intro_hook_stamp
-import dev.supermux.ui.resources.intro_hook_text
-import dev.supermux.ui.resources.intro_hook_title_1
-import dev.supermux.ui.resources.intro_hook_title_2
-import dev.supermux.ui.resources.intro_manual_hide
-import dev.supermux.ui.resources.intro_manual_show
-import dev.supermux.ui.resources.intro_next_connect
-import dev.supermux.ui.resources.intro_next_never_sleeps
-import dev.supermux.ui.resources.intro_next_see
-import dev.supermux.ui.resources.intro_or_paste
-import dev.supermux.ui.resources.intro_pairing
-import dev.supermux.ui.resources.intro_scan
-import dev.supermux.ui.resources.intro_scan_sub
-import dev.supermux.ui.resources.intro_skip_click
-import dev.supermux.ui.resources.intro_skip_tap
-import dev.supermux.ui.resources.intro_tagline
-import dev.supermux.ui.resources.intro_ticker_title
-import dev.supermux.ui.resources.intro_ticker_waiting
-import dev.supermux.ui.resources.onboarding_broker_host
-import dev.supermux.ui.resources.onboarding_device_token
-import dev.supermux.ui.resources.onboarding_pair
 import dev.supermux.ui.theme.GeistFontFamily
 import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.MonoFontFamily
@@ -398,9 +361,9 @@ fun OnboardingFlow(
                     Text(
                         localized(
                             when (page) {
-                                0 -> Res.string.intro_next_see
-                                1 -> Res.string.intro_next_never_sleeps
-                                else -> Res.string.intro_next_connect
+                                0 -> Str.intro_next_see
+                                1 -> Str.intro_next_never_sleeps
+                                else -> Str.intro_next_connect
                             },
                         ),
                         fontFamily = GeistFontFamily,
@@ -612,13 +575,13 @@ private fun HookPage(ink: Color, inkSoft: Color) {
     val trustA by animateFloatAsState(if (appeared) 1f else 0f, tween(500, delayMillis = 850), label = "trust") // i18n-ok: animation label
 
     PageColumn("intro_page_hook") {
-        Stamp(localized(Res.string.intro_hook_stamp), inkSoft, appeared)
+        Stamp(localized(Str.intro_hook_stamp), inkSoft, appeared)
         Spacer(Modifier.height(22.dp))
-        val hookAccent = localized(Res.string.intro_hook_title_2)
-        WordReveal(listOf(localized(Res.string.intro_hook_title_1), hookAccent), appeared, ink, hookAccent)
+        val hookAccent = localized(Str.intro_hook_title_2)
+        WordReveal(listOf(localized(Str.intro_hook_title_1), hookAccent), appeared, ink, hookAccent)
         Spacer(Modifier.height(22.dp))
         Text(
-            localized(Res.string.intro_hook_text),
+            localized(Str.intro_hook_text),
             fontFamily = GeistFontFamily,
             fontSize = 17.sp,
             lineHeight = 26.sp,
@@ -632,9 +595,9 @@ private fun HookPage(ink: Color, inkSoft: Color) {
         ) {
             listOf(
                 "MIT", // i18n-ok: licence name
-                localized(Res.string.intro_hook_self_hosted),
-                localized(Res.string.intro_hook_no_vendor_cloud),
-                localized(Res.string.intro_hook_no_account),
+                localized(Str.intro_hook_self_hosted),
+                localized(Str.intro_hook_no_vendor_cloud),
+                localized(Str.intro_hook_no_account),
             ).forEachIndexed { i, item ->
                 if (i > 0) {
                     Box(Modifier.size(2.5.dp).clip(CircleShape).background(inkSoft.copy(alpha = 0.5f)))
@@ -669,10 +632,10 @@ private fun AgentsPage(ink: Color, inkSoft: Color) {
     val subA by animateFloatAsState(if (appeared) 1f else 0f, tween(550, delayMillis = 750), label = "agentsub") // i18n-ok: animation label
 
     PageColumn("intro_page_agents") {
-        Stamp(localized(Res.string.intro_agents_stamp), inkSoft, appeared)
+        Stamp(localized(Str.intro_agents_stamp), inkSoft, appeared)
         Spacer(Modifier.height(22.dp))
-        val agentsAccent = localized(Res.string.intro_agents_title_2)
-        WordReveal(listOf(localized(Res.string.intro_agents_title_1), agentsAccent), appeared, ink, agentsAccent)
+        val agentsAccent = localized(Str.intro_agents_title_2)
+        WordReveal(listOf(localized(Str.intro_agents_title_1), agentsAccent), appeared, ink, agentsAccent)
         Spacer(Modifier.height(24.dp))
 
         Row(horizontalArrangement = Arrangement.spacedBy((-8).dp)) {
@@ -707,7 +670,7 @@ private fun AgentsPage(ink: Color, inkSoft: Color) {
         }
         Spacer(Modifier.height(24.dp))
         Text(
-            localized(Res.string.intro_agents_text),
+            localized(Str.intro_agents_text),
             fontFamily = GeistFontFamily,
             fontSize = 17.sp,
             lineHeight = 26.sp,
@@ -726,15 +689,15 @@ private fun AlwaysOnPage(ink: Color, inkSoft: Color) {
     val subA by animateFloatAsState(if (appeared) 1f else 0f, tween(550, delayMillis = 700), label = "alwayssub") // i18n-ok: animation label
 
     PageColumn("intro_page_always_on") {
-        Stamp(localized(Res.string.intro_always_on_stamp), inkSoft, appeared)
+        Stamp(localized(Str.intro_always_on_stamp), inkSoft, appeared)
         Spacer(Modifier.height(22.dp))
-        val alwaysOnAccent = localized(Res.string.intro_always_on_title_2)
-        WordReveal(listOf(localized(Res.string.intro_always_on_title_1), alwaysOnAccent), appeared, ink, alwaysOnAccent)
+        val alwaysOnAccent = localized(Str.intro_always_on_title_2)
+        WordReveal(listOf(localized(Str.intro_always_on_title_1), alwaysOnAccent), appeared, ink, alwaysOnAccent)
         Spacer(Modifier.height(24.dp))
         MeanwhileTicker(appeared)
         Spacer(Modifier.height(24.dp))
         Text(
-            localized(Res.string.intro_always_on_text),
+            localized(Str.intro_always_on_text),
             fontFamily = GeistFontFamily,
             fontSize = 17.sp,
             lineHeight = 26.sp,
@@ -768,7 +731,7 @@ private fun MeanwhileTicker(appeared: Boolean) {
         "▸ bun test — 212 passed" to LeafGreen, // i18n-ok: mock terminal output
         "▸ edit src/channels/web/session.ts" to Color(0xFFD1DBE8), // i18n-ok: mock terminal output
         "▸ commit \"wire session resume\"" to Color(0xFFD1DBE8), // i18n-ok: mock terminal output
-        localized(Res.string.intro_ticker_waiting) to Amber,
+        localized(Str.intro_ticker_waiting) to Amber,
     )
 
     val cardA by animateFloatAsState(if (appeared) 1f else 0f, tween(550, delayMillis = 400), label = "ticker") // i18n-ok: animation label
@@ -791,7 +754,7 @@ private fun MeanwhileTicker(appeared: Boolean) {
             )
             Spacer(Modifier.width(8.dp))
             Text(
-                localized(Res.string.intro_ticker_title),
+                localized(Str.intro_ticker_title),
                 fontFamily = MonoFontFamily,
                 fontWeight = FontWeight.Medium,
                 fontSize = 11.sp,
@@ -866,19 +829,19 @@ private fun ConnectPage(
             .padding(top = 48.dp, bottom = 20.dp)
             .testTag("intro_page_connect"),
     ) {
-        Stamp(localized(Res.string.intro_connect_stamp), inkSoft, appeared)
+        Stamp(localized(Str.intro_connect_stamp), inkSoft, appeared)
         Spacer(Modifier.height(22.dp))
         // The accent is whichever line names the computer: the second in English, the first in Turkish.
         WordReveal(
-            listOf(localized(Res.string.intro_connect_title_1), localized(Res.string.intro_connect_title_2)),
+            listOf(localized(Str.intro_connect_title_1), localized(Str.intro_connect_title_2)),
             appeared,
             ink,
-            localized(Res.string.intro_connect_accent),
+            localized(Str.intro_connect_accent),
             size = 36,
         )
         Spacer(Modifier.height(18.dp))
         Text(
-            localized(if (canScan) Res.string.intro_connect_text_scan else Res.string.intro_connect_text_paste),
+            localized(if (canScan) Str.intro_connect_text_scan else Str.intro_connect_text_paste),
             fontFamily = GeistFontFamily,
             fontSize = 16.sp,
             lineHeight = 24.sp,
@@ -911,13 +874,13 @@ private fun ConnectPage(
                     Icon(Icons.Filled.QrCodeScanner, contentDescription = null, modifier = Modifier.size(26.dp))
                     Column(Modifier.weight(1f), horizontalAlignment = Alignment.Start) {
                         Text(
-                            localized(Res.string.intro_scan),
+                            localized(Str.intro_scan),
                             fontFamily = GeistFontFamily,
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 17.sp,
                         )
                         Text(
-                            localized(Res.string.intro_scan_sub),
+                            localized(Str.intro_scan_sub),
                             fontFamily = GeistFontFamily,
                             fontSize = 12.sp,
                             color = Color.White.copy(alpha = 0.7f),
@@ -933,7 +896,7 @@ private fun ConnectPage(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.weight(1f).height(1.dp).background(ink.copy(alpha = 0.12f)))
                     Text(
-                        "  ${localized(Res.string.intro_or_paste)}  ",
+                        "  ${localized(Str.intro_or_paste)}  ",
                         fontFamily = MonoFontFamily,
                         fontSize = 11.sp,
                         letterSpacing = 0.6.sp,
@@ -964,14 +927,14 @@ private fun ConnectPage(
                 modifier = Modifier.fillMaxWidth().height(48.dp).testTag("intro_paste_submit"),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = TealDeep, contentColor = Color.White),
-            ) { Text(localized(Res.string.onboarding_pair), fontFamily = GeistFontFamily, fontWeight = FontWeight.SemiBold) }
+            ) { Text(localized(Str.onboarding_pair), fontFamily = GeistFontFamily, fontWeight = FontWeight.SemiBold) }
 
             TextButton(
                 onClick = { showManual = !showManual },
                 modifier = Modifier.align(Alignment.CenterHorizontally).testTag("intro_manual_toggle"),
             ) {
                 Text(
-                    localized(if (showManual) Res.string.intro_manual_hide else Res.string.intro_manual_show),
+                    localized(if (showManual) Str.intro_manual_hide else Str.intro_manual_show),
                     fontFamily = MonoFontFamily,
                     fontSize = 12.sp,
                     color = inkSoft,
@@ -982,7 +945,7 @@ private fun ConnectPage(
                 OutlinedTextField(
                     value = manualHost,
                     onValueChange = { manualHost = it; pairing.resetError() },
-                    label = { Text(localized(Res.string.onboarding_broker_host)) },
+                    label = { Text(localized(Str.onboarding_broker_host)) },
                     placeholder = {
                         Text(
                             if (pointer) "ws://127.0.0.1:9898" else "ws://10.0.2.2:9898", // i18n-ok: sample URLs
@@ -999,7 +962,7 @@ private fun ConnectPage(
                 OutlinedTextField(
                     value = manualToken,
                     onValueChange = { manualToken = it; pairing.resetError() },
-                    label = { Text(localized(Res.string.onboarding_device_token)) },
+                    label = { Text(localized(Str.onboarding_device_token)) },
                     singleLine = true,
                     enabled = !validating,
                     keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
@@ -1012,7 +975,7 @@ private fun ConnectPage(
                     modifier = Modifier.fillMaxWidth().height(48.dp).testTag("intro_manual_submit"),
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = TealDeep, contentColor = Color.White),
-                ) { Text(localized(Res.string.onboarding_pair), fontFamily = GeistFontFamily, fontWeight = FontWeight.SemiBold) }
+                ) { Text(localized(Str.onboarding_pair), fontFamily = GeistFontFamily, fontWeight = FontWeight.SemiBold) }
             }
         }
 
@@ -1020,7 +983,7 @@ private fun ConnectPage(
             Spacer(Modifier.height(16.dp))
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 CircularProgressIndicator(color = Teal, strokeWidth = 2.5.dp)
-                Text(localized(Res.string.intro_pairing), fontFamily = GeistFontFamily, fontSize = 14.sp, color = inkSoft)
+                Text(localized(Str.intro_pairing), fontFamily = GeistFontFamily, fontSize = 14.sp, color = inkSoft)
             }
         }
         (state as? PairingUiState.Error)?.let { err ->
@@ -1494,7 +1457,7 @@ fun FirstRunIntroOverlay(
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    localized(Res.string.intro_tagline),
+                    localized(Str.intro_tagline),
                     fontFamily = MonoFontFamily, fontSize = 13.sp, color = TaglineDim,
                     modifier = Modifier.graphicsLayer { alpha = tgA },
                 )
@@ -1504,7 +1467,7 @@ fun FirstRunIntroOverlay(
         // --- skip hint ---------------------------------------------------------------------------
         Text(
             // A finger taps; only a mouse clicks.
-            localized(if (LocalPointerAvailable.current) Res.string.intro_skip_click else Res.string.intro_skip_tap),
+            localized(if (LocalPointerAvailable.current) Str.intro_skip_click else Str.intro_skip_tap),
             fontFamily = MonoFontFamily, fontSize = 11.sp, color = Dim,
             modifier = Modifier
                 .align(Alignment.BottomEnd)

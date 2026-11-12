@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.sp
 import dev.supermux.net.AccountDto
 import dev.supermux.net.AccountRemovalPlanDto
 import dev.supermux.state.AccountResult
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.retain.rememberRetainedOnPage
 import dev.supermux.ui.settings.kit.KitGhostButton
@@ -30,20 +31,6 @@ import dev.supermux.ui.settings.kit.KitSheet
 import dev.supermux.ui.settings.kit.KitToggleRow
 import dev.supermux.ui.settings.kit.kitColors
 import kotlinx.coroutines.launch
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.accounts_add_a_login
-import dev.supermux.ui.resources.accounts_cancel
-import dev.supermux.ui.resources.accounts_delete_folder
-import dev.supermux.ui.resources.accounts_expired_description
-import dev.supermux.ui.resources.accounts_isolated
-import dev.supermux.ui.resources.accounts_remove
-import dev.supermux.ui.resources.accounts_remove_failed
-import dev.supermux.ui.resources.accounts_remove_forgets
-import dev.supermux.ui.resources.accounts_remove_title
-import dev.supermux.ui.resources.accounts_sign_in_again
-import dev.supermux.ui.resources.accounts_sign_in_expired
-import dev.supermux.ui.resources.accounts_this_machines_login
-import dev.supermux.ui.resources.accounts_your_login
 
 /**
  * A provider page's logins (#97's layout): "Your login" (the provider's own, never removable; its "Sign in again"
@@ -79,18 +66,18 @@ fun ProviderLogins(
         if (system != null || own != null) {
             val expired = system != null && signInExpired(system)
             KitItem(
-                title = localized(Res.string.accounts_your_login),
+                title = localized(Str.accounts_your_login),
                 modifier = Modifier.testTag("provider_login_${system?.id ?: "$agent:system"}"),
                 subtitle = own?.subtitle
-                    ?: if (expired) localized(Res.string.accounts_sign_in_expired)
-                    else system?.identity?.email?.takeIf { it.isNotBlank() } ?: localized(Res.string.accounts_this_machines_login),
+                    ?: if (expired) localized(Str.accounts_sign_in_expired)
+                    else system?.identity?.email?.takeIf { it.isNotBlank() } ?: localized(Str.accounts_this_machines_login),
                 subtitleWarn = own?.warn ?: expired,
                 mark = KitMark.Letters(system?.let(::initials) ?: agentDisplayName(agent).take(2).uppercase()),
             ) {
                 when {
                     own != null -> own.trailing(this)
                     expired && system != null ->
-                        KitGhostButton(localized(Res.string.accounts_sign_in_again), onClick = onSignInSystem, modifier = Modifier.testTag("provider_login_${system.id}_sign_in"))
+                        KitGhostButton(localized(Str.accounts_sign_in_again), onClick = onSignInSystem, modifier = Modifier.testTag("provider_login_${system.id}_sign_in"))
                 }
             }
         }
@@ -100,13 +87,13 @@ fun ProviderLogins(
             KitItem(
                 title = localizedAccountDisplayName(account),
                 modifier = Modifier.testTag("provider_login_${account.id}"),
-                subtitle = if (expired) localized(Res.string.accounts_sign_in_expired) else localizedAccountUnavailableText(account) ?: loginDetail(account),
+                subtitle = if (expired) localized(Str.accounts_sign_in_expired) else localizedAccountUnavailableText(account) ?: loginDetail(account),
                 subtitleWarn = account.unavailable != null,
                 mark = KitMark.Letters(initials(account)),
                 onClick = { opened = account },
                 below = if (account.isolated || account.usage.isNotEmpty()) {
                     {
-                        if (account.isolated) Text(localized(Res.string.accounts_isolated), fontSize = 12.sp, color = kitColors().dim)
+                        if (account.isolated) Text(localized(Str.accounts_isolated), fontSize = 12.sp, color = kitColors().dim)
                         if (account.usage.isNotEmpty()) {
                             // Its own node: the item merges what it holds, and the meters read as one group.
                             Column(Modifier.semantics(mergeDescendants = true) {}.testTag("provider_login_usage_${account.id}")) {
@@ -120,7 +107,7 @@ fun ProviderLogins(
             ) {
                 if (expired) {
                     KitGhostButton(
-                        localized(Res.string.accounts_sign_in_again),
+                        localized(Str.accounts_sign_in_again),
                         onClick = { signingIn = account },
                         modifier = Modifier.testTag("provider_login_${account.id}_sign_in"),
                     )
@@ -128,7 +115,7 @@ fun ProviderLogins(
             }
         }
         // OpenCode's guided login is broken today (#97 spec §11).
-        if (agent != "opencode" && showAddLogin) KitItem(localized(Res.string.accounts_add_a_login), Modifier.testTag("provider_login_add"), mark = KitMark.Add, onClick = { adding.open = true })
+        if (agent != "opencode" && showAddLogin) KitItem(localized(Str.accounts_add_a_login), Modifier.testTag("provider_login_add"), mark = KitMark.Add, onClick = { adding.open = true })
     }
 
     if (adding.open) AddAccountSheet(agent, actions, existing = mine, onDismiss = { adding.open = false }, retainKey = "accounts:add:$agent")
@@ -139,12 +126,12 @@ fun ProviderLogins(
         KitSheet(
             title = localizedAccountDisplayName(account),
             onDismiss = { opened = null },
-            description = if (signInExpired(account)) localized(Res.string.accounts_expired_description) else loginDetail(account),
+            description = if (signInExpired(account)) localized(Str.accounts_expired_description) else loginDetail(account),
             tag = "provider_login_sheet",
             buttons = {
-                KitGhostButton(localized(Res.string.accounts_remove), onClick = { opened = null; removing = account }, destructive = true,
+                KitGhostButton(localized(Str.accounts_remove), onClick = { opened = null; removing = account }, destructive = true,
                     modifier = Modifier.testTag("provider_login_${account.id}_remove"))
-                KitGhostButton(localized(Res.string.accounts_sign_in_again), onClick = { opened = null; signingIn = account })
+                KitGhostButton(localized(Str.accounts_sign_in_again), onClick = { opened = null; signingIn = account })
             },
         )
     }
@@ -162,17 +149,17 @@ fun RemoveLoginSheet(account: AccountDto, actions: AccountsActions, onDone: () -
     // Only a subscription has a sign-in folder of its own.
     val subscription = account.method == "subscription"
     LaunchedEffect(account.id) { plan = actions.removalPlan(account.id) }
-    val removeFailed = localized(Res.string.accounts_remove_failed)
+    val removeFailed = localized(Str.accounts_remove_failed)
     KitSheet(
-        title = localized(Res.string.accounts_remove_title, localizedAccountDisplayName(account)),
+        title = localized(Str.accounts_remove_title, localizedAccountDisplayName(account)),
         onDismiss = { if (!busy) onDone() },
-        description = listOfNotNull(localized(Res.string.accounts_remove_forgets), localizedRemovalSentence(plan)).joinToString(" "),
+        description = listOfNotNull(localized(Str.accounts_remove_forgets), localizedRemovalSentence(plan)).joinToString(" "),
         tag = "provider_login_remove_sheet",
         dismissOnOutside = false,
         buttons = {
-            KitGhostButton(localized(Res.string.accounts_cancel), onClick = onDone, enabled = !busy)
+            KitGhostButton(localized(Str.accounts_cancel), onClick = onDone, enabled = !busy)
             KitGhostButton(
-                localized(Res.string.accounts_remove),
+                localized(Str.accounts_remove),
                 onClick = {
                     busy = true
                     scope.launch {
@@ -190,7 +177,7 @@ fun RemoveLoginSheet(account: AccountDto, actions: AccountsActions, onDone: () -
     ) {
         if (subscription) {
             KitToggleRow(
-                localized(Res.string.accounts_delete_folder),
+                localized(Str.accounts_delete_folder),
                 checked = deleteHome,
                 onCheckedChange = { deleteHome = it },
                 modifier = Modifier.padding(top = 8.dp).testTag("account-remove-delete-home"),

@@ -13,19 +13,12 @@ import dev.supermux.net.WorktreeForWorkdirDto
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.chatSessionId
 import dev.supermux.proto.stateString
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.worktree.WorktreeCleanupSection
 import dev.supermux.ui.worktree.WorktreeCleanupTick
 import dev.supermux.workspace.viewTitle
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.shell_close_and_delete
-import dev.supermux.ui.resources.shell_close
-import dev.supermux.ui.resources.shell_cancel
-import dev.supermux.ui.resources.shell_close_chat_confirm
-import dev.supermux.ui.resources.shell_close_terminal_confirm
-import dev.supermux.ui.resources.shell_close_display_confirm
-import dev.supermux.ui.resources.shell_close_view_confirm
 
 /**
  * Spec §9.3 — a close ends the work behind the view, so the user is asked first.
@@ -83,19 +76,19 @@ fun CloseViewDialog(
                 } else {
                     onConfirm()
                 }
-            }) { Text(localized(if (deleteWt) Res.string.shell_close_and_delete else Res.string.shell_close)) }
+            }) { Text(localized(if (deleteWt) Str.shell_close_and_delete else Str.shell_close)) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(localized(Res.string.shell_cancel)) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(localized(Str.shell_cancel)) } },
     )
 }
 
 /** [closeConfirmText] in the app's language: what the dialog shows. */
 @Composable
 fun localizedCloseConfirmText(view: ViewDto, sessionName: String?): String = when (view.kind) {
-    "chat" -> localized(Res.string.shell_close_chat_confirm, sessionName?.takeIf { it.isNotBlank() } ?: viewTitle(view))
-    "terminal" -> localized(Res.string.shell_close_terminal_confirm, view.stateString("terminalId") ?: "?")
-    "display" -> localized(Res.string.shell_close_display_confirm)
-    else -> localized(Res.string.shell_close_view_confirm)
+    "chat" -> localized(Str.shell_close_chat_confirm, sessionName?.takeIf { it.isNotBlank() } ?: viewTitle(view))
+    "terminal" -> localized(Str.shell_close_terminal_confirm, view.stateString("terminalId") ?: "?")
+    "display" -> localized(Str.shell_close_display_confirm)
+    else -> localized(Str.shell_close_view_confirm)
 }
 
 /**

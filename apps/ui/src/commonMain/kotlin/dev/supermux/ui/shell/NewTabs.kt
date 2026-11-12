@@ -15,20 +15,8 @@ import dev.supermux.workspace.groupIdOf
 import dev.supermux.workspace.normalizeLayout
 import dev.supermux.workspace.openSingletonView
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.shell_kind_chat
-import dev.supermux.ui.resources.shell_kind_terminal
-import dev.supermux.ui.resources.shell_kind_files
-import dev.supermux.ui.resources.shell_kind_changes
-import dev.supermux.ui.resources.shell_kind_display
-import dev.supermux.ui.resources.shell_kind_browser
-import dev.supermux.ui.resources.shell_kind_chat_detail
-import dev.supermux.ui.resources.shell_kind_terminal_detail
-import dev.supermux.ui.resources.shell_kind_files_detail
-import dev.supermux.ui.resources.shell_kind_changes_detail
-import dev.supermux.ui.resources.shell_kind_display_detail
-import dev.supermux.ui.resources.shell_kind_browser_detail
 import androidx.compose.runtime.Composable
+import dev.supermux.ui.i18n.Str
 
 /** The view kind of a New tab. Apps that don't know it draw their UnknownViewHint. */
 const val NEW_TAB_KIND = "new"
@@ -128,24 +116,24 @@ internal data class NewTabChoice(
 @Composable
 internal fun localizedKindLabel(kind: NewViewKind): String = localized(
     when (kind) {
-        NewViewKind.CHAT -> Res.string.shell_kind_chat
-        NewViewKind.TERMINAL -> Res.string.shell_kind_terminal
-        NewViewKind.EDITOR -> Res.string.shell_kind_files
-        NewViewKind.DIFF -> Res.string.shell_kind_changes
-        NewViewKind.DISPLAY -> Res.string.shell_kind_display
-        NewViewKind.BROWSER -> Res.string.shell_kind_browser
+        NewViewKind.CHAT -> Str.shell_kind_chat
+        NewViewKind.TERMINAL -> Str.shell_kind_terminal
+        NewViewKind.EDITOR -> Str.shell_kind_files
+        NewViewKind.DIFF -> Str.shell_kind_changes
+        NewViewKind.DISPLAY -> Str.shell_kind_display
+        NewViewKind.BROWSER -> Str.shell_kind_browser
     },
 )
 
 /** What [kind]'s row is for, in the app's language: what the page shows ([NewTabChoice.detail] is the English twin). */
 @Composable
 internal fun localizedKindDetail(kind: NewViewKind, folder: String): String = when (kind) {
-    NewViewKind.CHAT -> localized(Res.string.shell_kind_chat_detail)
-    NewViewKind.TERMINAL -> localized(Res.string.shell_kind_terminal_detail, folder)
-    NewViewKind.EDITOR -> localized(Res.string.shell_kind_files_detail)
-    NewViewKind.DIFF -> localized(Res.string.shell_kind_changes_detail)
-    NewViewKind.DISPLAY -> localized(Res.string.shell_kind_display_detail)
-    NewViewKind.BROWSER -> localized(Res.string.shell_kind_browser_detail)
+    NewViewKind.CHAT -> localized(Str.shell_kind_chat_detail)
+    NewViewKind.TERMINAL -> localized(Str.shell_kind_terminal_detail, folder)
+    NewViewKind.EDITOR -> localized(Str.shell_kind_files_detail)
+    NewViewKind.DIFF -> localized(Str.shell_kind_changes_detail)
+    NewViewKind.DISPLAY -> localized(Str.shell_kind_display_detail)
+    NewViewKind.BROWSER -> localized(Str.shell_kind_browser_detail)
 }
 
 /** A row per kind the "+" offers ([kinds]: the phone's are [phoneAddKinds]). */

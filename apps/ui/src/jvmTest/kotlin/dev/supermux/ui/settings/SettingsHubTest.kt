@@ -49,6 +49,7 @@ import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.setPlatformContent
+import dev.supermux.ui.i18n.StringKey
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.platform.Caps
 import dev.supermux.ui.platform.FakePlatform
@@ -1120,6 +1121,5 @@ private class TestBackInput : NavigationEventInput() {
     }
 }
 
-/** A resource's English text (the tests' JVM runs in English). */
-private fun en(res: org.jetbrains.compose.resources.StringResource): String =
-    kotlinx.coroutines.runBlocking { org.jetbrains.compose.resources.getString(res) }
+/** A key's English text (the tests' JVM runs in English). */
+private fun en(key: dev.supermux.ui.i18n.StringKey): String = dev.supermux.ui.i18n.Catalogs.now("en")!!.strings.getValue(key.name)

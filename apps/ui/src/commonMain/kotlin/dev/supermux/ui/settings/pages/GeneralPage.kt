@@ -24,6 +24,7 @@ import androidx.compose.ui.platform.testTag
 import dev.supermux.media.MediaCache
 import dev.supermux.ui.ChatDetailLevel
 import dev.supermux.ui.i18n.AppLanguage
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.i18n.localizedLabels
 import dev.supermux.ui.platform.AppUpdater
@@ -43,35 +44,6 @@ import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.TEXT_SCALE_MAX
 import dev.supermux.ui.theme.TEXT_SCALE_MIN
 import dev.supermux.ui.worktree.formatBytes
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.common_clear
-import dev.supermux.ui.resources.common_dark
-import dev.supermux.ui.resources.common_light
-import dev.supermux.ui.resources.common_system
-import dev.supermux.ui.resources.general_cache
-import dev.supermux.ui.resources.general_cache_calculating
-import dev.supermux.ui.resources.general_cache_clearing
-import dev.supermux.ui.resources.general_cache_empty
-import dev.supermux.ui.resources.general_cache_empty_session
-import dev.supermux.ui.resources.general_cache_size_kept
-import dev.supermux.ui.resources.general_cache_size_session
-import dev.supermux.ui.resources.general_chat_detail
-import dev.supermux.ui.resources.general_chat_detail_description
-import dev.supermux.ui.resources.general_chat_detail_high
-import dev.supermux.ui.resources.general_chat_detail_low
-import dev.supermux.ui.resources.general_chat_detail_medium
-import dev.supermux.ui.resources.general_language
-import dev.supermux.ui.resources.general_language_description
-import dev.supermux.ui.resources.general_live_replies
-import dev.supermux.ui.resources.general_live_replies_description
-import dev.supermux.ui.resources.general_terminal_colours
-import dev.supermux.ui.resources.general_terminal_colours_description
-import dev.supermux.ui.resources.general_terminal_match_app
-import dev.supermux.ui.resources.general_text_size
-import dev.supermux.ui.resources.general_text_size_description
-import dev.supermux.ui.resources.general_theme
-import dev.supermux.ui.resources.general_this_app
-import dev.supermux.ui.resources.general_title
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -93,7 +65,7 @@ fun GeneralPage(
     updater: AppUpdater = LocalPlatform.current.updates,
 ) {
     KitPage(
-        localized(Res.string.general_title),
+        localized(Str.general_title),
         modifier,
         scope = { KitDeviceScope() },
         anchor = anchor,
@@ -101,7 +73,7 @@ fun GeneralPage(
         tag = "appearance_settings_screen",
     ) {
         LookRows(defaultAppearance)
-        KitSectionHead(localized(Res.string.general_this_app))
+        KitSectionHead(localized(Str.general_this_app))
         AppUpdateRows(updater = updater)
         if (cache != null) CacheRow(cache)
     }
@@ -123,21 +95,21 @@ private fun terminalId(mode: TerminalAppearance) = when (mode) {
 }
 
 private fun themeRes(mode: AppearanceMode) = when (mode) {
-    AppearanceMode.SYSTEM -> Res.string.common_system
-    AppearanceMode.LIGHT -> Res.string.common_light
-    AppearanceMode.DARK -> Res.string.common_dark
+    AppearanceMode.SYSTEM -> Str.common_system
+    AppearanceMode.LIGHT -> Str.common_light
+    AppearanceMode.DARK -> Str.common_dark
 }
 
 private fun terminalRes(mode: TerminalAppearance) = when (mode) {
-    TerminalAppearance.FOLLOW_APP -> Res.string.general_terminal_match_app
-    TerminalAppearance.DARK -> Res.string.common_dark
-    TerminalAppearance.LIGHT -> Res.string.common_light
+    TerminalAppearance.FOLLOW_APP -> Str.general_terminal_match_app
+    TerminalAppearance.DARK -> Str.common_dark
+    TerminalAppearance.LIGHT -> Str.common_light
 }
 
 private fun chatDetailRes(level: ChatDetailLevel) = when (level) {
-    ChatDetailLevel.LOW -> Res.string.general_chat_detail_low
-    ChatDetailLevel.MEDIUM -> Res.string.general_chat_detail_medium
-    ChatDetailLevel.HIGH -> Res.string.general_chat_detail_high
+    ChatDetailLevel.LOW -> Str.general_chat_detail_low
+    ChatDetailLevel.MEDIUM -> Str.general_chat_detail_medium
+    ChatDetailLevel.HIGH -> Str.general_chat_detail_high
 }
 
 
@@ -163,7 +135,7 @@ private fun LookRows(defaultAppearance: AppearanceMode) {
 
     val themeNames = localizedLabels(AppearanceMode.entries, ::themeRes)
     KitOptionsRow(
-        localized(Res.string.general_theme),
+        localized(Str.general_theme),
         AppearanceMode.entries,
         appearance,
         onSelect = { scope.launch { prefs.putAppearance(it) } },
@@ -171,19 +143,19 @@ private fun LookRows(defaultAppearance: AppearanceMode) {
         modifier = Modifier.kitAnchor("theme").testTag("general_theme"),
         optionTag = { optionTag("theme")(themeId(it)) },
     )
-    val systemName = localized(Res.string.common_system)
+    val systemName = localized(Str.common_system)
     KitOptionsRow(
-        localized(Res.string.general_language),
+        localized(Str.general_language),
         AppLanguage.entries,
         language,
         onSelect = { scope.launch { prefs.putLanguage(it) } },
         optionLabel = { if (it == AppLanguage.SYSTEM) systemName else it.endonym },
         modifier = Modifier.kitAnchor("language").testTag("general_language"),
-        description = localized(Res.string.general_language_description),
+        description = localized(Str.general_language_description),
         optionTag = { "general_language_${it.tag ?: "system"}" },
     )
     KitSliderRow(
-        localized(Res.string.general_text_size),
+        localized(Str.general_text_size),
         value = textScale,
         // Snapped to whole 5 % steps here too, so the stored value stays clean ("1.2", not "1.2000000476").
         onChange = { draggedTextScale = (it * 20).roundToInt() / 20f },
@@ -191,7 +163,7 @@ private fun LookRows(defaultAppearance: AppearanceMode) {
         step = 0.05f,
         valueText = "${(textScale * 100).roundToInt()}%",
         modifier = Modifier.kitAnchor("text-size").testTag("general_text-size"),
-        description = localized(Res.string.general_text_size_description),
+        description = localized(Str.general_text_size_description),
         sliderTag = "appearance_text_scale_slider",
         onChangeFinished = {
             val picked = draggedTextScale
@@ -206,32 +178,32 @@ private fun LookRows(defaultAppearance: AppearanceMode) {
     )
     // Card #76: replies stream in under the ink edge by default; off, they appear once finished.
     KitToggleRow(
-        localized(Res.string.general_live_replies),
+        localized(Str.general_live_replies),
         checked = liveReplies,
         onCheckedChange = { on -> scope.launch { prefs.putLiveReplies(on) } },
         modifier = Modifier.kitAnchor("live-replies").testTag("appearance_live_replies_switch"),
-        description = localized(Res.string.general_live_replies_description),
+        description = localized(Str.general_live_replies_description),
     )
     val detailNames = localizedLabels(ChatDetailLevel.entries, ::chatDetailRes)
     KitOptionsRow(
-        localized(Res.string.general_chat_detail),
+        localized(Str.general_chat_detail),
         ChatDetailLevel.entries,
         chatDetail,
         onSelect = { scope.launch { prefs.putChatDetailLevel(it) } },
         optionLabel = { detailNames.getValue(it) },
         modifier = Modifier.kitAnchor("chat-detail").testTag("general_chat-detail"),
-        description = localized(Res.string.general_chat_detail_description),
+        description = localized(Str.general_chat_detail_description),
         optionTag = { optionTag("chat-detail")(it.label) },
     )
     val terminalNames = localizedLabels(TerminalAppearance.entries, ::terminalRes)
     KitOptionsRow(
-        localized(Res.string.general_terminal_colours),
+        localized(Str.general_terminal_colours),
         TerminalAppearance.entries,
         terminalAppearance,
         onSelect = { scope.launch { prefs.putTerminalAppearance(it) } },
         optionLabel = { terminalNames.getValue(it) },
         modifier = Modifier.kitAnchor("terminal-colours").testTag("general_terminal-colours"),
-        description = localized(Res.string.general_terminal_colours_description),
+        description = localized(Str.general_terminal_colours_description),
         optionTag = { optionTag("terminal-colours")(terminalId(it)) },
     )
 }
@@ -244,10 +216,10 @@ private fun CacheRow(cache: MediaCache) {
     var clearing by remember { mutableStateOf(false) }
     LaunchedEffect(cache) { size = cache.sizeBytes() }
     val current = size
-    val sized = if (cache.persistent) Res.string.general_cache_size_kept else Res.string.general_cache_size_session
+    val sized = if (cache.persistent) Str.general_cache_size_kept else Str.general_cache_size_session
     KitActionRow(
-        localized(Res.string.general_cache),
-        button = localized(Res.string.common_clear),
+        localized(Str.general_cache),
+        button = localized(Str.common_clear),
         onClick = {
             clearing = true
             scope.launch {
@@ -258,10 +230,10 @@ private fun CacheRow(cache: MediaCache) {
         },
         modifier = Modifier.kitAnchor("cache").testTag("general_cache"),
         description = when {
-            clearing -> localized(Res.string.general_cache_clearing)
-            current == null -> localized(Res.string.general_cache_calculating)
+            clearing -> localized(Str.general_cache_clearing)
+            current == null -> localized(Str.general_cache_calculating)
             current == 0L -> localized(
-                if (cache.persistent) Res.string.general_cache_empty else Res.string.general_cache_empty_session,
+                if (cache.persistent) Str.general_cache_empty else Str.general_cache_empty_session,
             )
             else -> localized(sized, formatBytes(current))
         },

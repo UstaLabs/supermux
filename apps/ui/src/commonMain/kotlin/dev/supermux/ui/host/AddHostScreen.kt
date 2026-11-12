@@ -51,27 +51,11 @@ import dev.supermux.pairing.PairingCode
 import dev.supermux.state.AddHostResult
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.retain.rememberRetainedOnPage
 import dev.supermux.ui.retain.rememberRetainedScope
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.host_add
-import dev.supermux.ui.resources.host_add_intro
-import dev.supermux.ui.resources.host_back
-import dev.supermux.ui.resources.host_connect
-import dev.supermux.ui.resources.host_device_name
-import dev.supermux.ui.resources.host_found_set_up
-import dev.supermux.ui.resources.host_found_set_up_unnamed
-import dev.supermux.ui.resources.host_insecure_optin
-import dev.supermux.ui.resources.host_invalid_link
-import dev.supermux.ui.resources.host_mode_paste
-import dev.supermux.ui.resources.host_mode_scan
-import dev.supermux.ui.resources.host_mode_url
-import dev.supermux.ui.resources.host_pairing_link
-import dev.supermux.ui.resources.host_paste_placeholder
-import dev.supermux.ui.resources.host_scan_qr
-import dev.supermux.ui.resources.host_url
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
@@ -134,7 +118,7 @@ fun AddHostScreen(
     var busy by claim::busy
     var error by claim::error
     var info by claim::info
-    val invalidLink = localized(Res.string.host_invalid_link)
+    val invalidLink = localized(Str.host_invalid_link)
 
     fun handle(result: AddHostResult) {
         busy = false
@@ -174,12 +158,12 @@ fun AddHostScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(localized(Res.string.host_add), color = cs.onSurface) },
+                title = { Text(localized(Str.host_add), color = cs.onSurface) },
                 navigationIcon = {
                     IconButton(onClick = onBack, modifier = Modifier.testTag("add_host_back")) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = localized(Res.string.host_back),
+                            contentDescription = localized(Str.host_back),
                             tint = cs.onSurface,
                             modifier = Modifier.size(18.dp),
                         )
@@ -201,7 +185,7 @@ fun AddHostScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Text(
-                localized(Res.string.host_add_intro),
+                localized(Str.host_add_intro),
                 style = MaterialTheme.typography.bodyMedium,
                 color = cs.onSurfaceVariant,
                 textAlign = TextAlign.Center,
@@ -224,9 +208,9 @@ fun AddHostScreen(
                         Text(
                             localized(
                                 when (m) {
-                                    AddMode.Scan -> Res.string.host_mode_scan
-                                    AddMode.Paste -> Res.string.host_mode_paste
-                                    AddMode.Url -> Res.string.host_mode_url
+                                    AddMode.Scan -> Str.host_mode_scan
+                                    AddMode.Paste -> Str.host_mode_paste
+                                    AddMode.Url -> Str.host_mode_url
                                 },
                             ),
                         )
@@ -237,7 +221,7 @@ fun AddHostScreen(
             OutlinedTextField(
                 value = deviceName,
                 onValueChange = { deviceName = it },
-                label = { Text(localized(Res.string.host_device_name)) },
+                label = { Text(localized(Str.host_device_name)) },
                 singleLine = true,
                 enabled = !busy,
                 modifier = Modifier.fillMaxWidth().testTag("add_host_device_name"),
@@ -254,15 +238,15 @@ fun AddHostScreen(
                 ) {
                     Icon(Icons.Filled.QrCodeScanner, contentDescription = null)
                     Spacer(Modifier.size(8.dp))
-                    Text(localized(Res.string.host_scan_qr))
+                    Text(localized(Str.host_scan_qr))
                 }
 
                 AddMode.Paste -> {
                     OutlinedTextField(
                         value = pasteInput,
                         onValueChange = { pasteInput = it; error = null },
-                        label = { Text(localized(Res.string.host_pairing_link)) },
-                        placeholder = { Text(localized(Res.string.host_paste_placeholder)) },
+                        label = { Text(localized(Str.host_pairing_link)) },
+                        placeholder = { Text(localized(Str.host_paste_placeholder)) },
                         minLines = 1,
                         maxLines = 4,
                         enabled = !busy,
@@ -273,14 +257,14 @@ fun AddHostScreen(
                         onClick = { claimInput(pasteInput) },
                         enabled = !busy && pasteInput.isNotBlank(),
                         modifier = Modifier.fillMaxWidth().testTag("add_host_paste_submit"),
-                    ) { Text(localized(Res.string.host_add)) }
+                    ) { Text(localized(Str.host_add)) }
                 }
 
                 AddMode.Url -> {
                     OutlinedTextField(
                         value = urlInput,
                         onValueChange = { urlInput = it; error = null; info = null },
-                        label = { Text(localized(Res.string.host_url)) },
+                        label = { Text(localized(Str.host_url)) },
                         // i18n-ok: sample URL
                         placeholder = { Text("https://my-mac.tailnet.ts.net") },
                         singleLine = true,
@@ -305,7 +289,7 @@ fun AddHostScreen(
                             )
                             Spacer(Modifier.width(4.dp))
                             Text(
-                                localized(Res.string.host_insecure_optin),
+                                localized(Str.host_insecure_optin),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = cs.onSurfaceVariant,
                             )
@@ -321,7 +305,7 @@ fun AddHostScreen(
                         },
                         enabled = !busy && urlInput.isNotBlank() && (!needsOptIn || insecureAck),
                         modifier = Modifier.fillMaxWidth().testTag("add_host_url_submit"),
-                    ) { Text(localized(Res.string.host_connect)) }
+                    ) { Text(localized(Str.host_connect)) }
                 }
             }
 
@@ -334,7 +318,7 @@ fun AddHostScreen(
             }
             info?.let { name ->
                 Text(
-                    if (name.isBlank()) localized(Res.string.host_found_set_up_unnamed) else localized(Res.string.host_found_set_up, name),
+                    if (name.isBlank()) localized(Str.host_found_set_up_unnamed) else localized(Str.host_found_set_up, name),
                     style = MaterialTheme.typography.bodyMedium,
                     color = cs.onSurfaceVariant,
                     textAlign = TextAlign.Center,

@@ -49,14 +49,13 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.panes.ColResizeIcon
 import dev.supermux.ui.panes.SplitSeamCenterOffset
 import dev.supermux.ui.panes.SplitSeamHairline
 import dev.supermux.ui.panes.seamDrag
 import dev.supermux.ui.panes.SplitSeamHitWidth
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.shell_collapse_sidebar
 
 /**
  * Overlay on the sidebar↔detail seam: 1dp hairline + drag hit strip (resize only).
@@ -213,7 +212,7 @@ fun CompactSidebarDivider(
             ) {
                 Icon(
                     Icons.Filled.ChevronRight,
-                    contentDescription = localized(Res.string.shell_collapse_sidebar),
+                    contentDescription = localized(Str.shell_collapse_sidebar),
                     tint = cs.onSurfaceVariant,
                     modifier = Modifier
                         .size(16.dp)

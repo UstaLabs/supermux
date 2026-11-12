@@ -22,6 +22,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import dev.supermux.net.OpenCodeOAuthStart
 import dev.supermux.net.OpenCodeProvider
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.retain.rememberRetainedOnPage
 import dev.supermux.ui.retain.rememberRetainedScope
@@ -40,33 +41,6 @@ import dev.supermux.ui.settings.kit.KitTextAction
 import dev.supermux.ui.settings.kit.KitTextField
 import dev.supermux.ui.settings.prettyProviderName
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.providers_api_key
-import dev.supermux.ui.resources.providers_browser_opened
-import dev.supermux.ui.resources.providers_connected
-import dev.supermux.ui.resources.providers_finish
-import dev.supermux.ui.resources.providers_finishing
-import dev.supermux.ui.resources.providers_get_key
-import dev.supermux.ui.resources.providers_key_save_failed
-import dev.supermux.ui.resources.providers_loading
-import dev.supermux.ui.resources.providers_login_via_browser
-import dev.supermux.ui.resources.providers_oauth_finish_failed
-import dev.supermux.ui.resources.providers_oauth_start_failed
-import dev.supermux.ui.resources.providers_opencode_free_note
-import dev.supermux.ui.resources.providers_opencode_key
-import dev.supermux.ui.resources.providers_opencode_key_description
-import dev.supermux.ui.resources.providers_opencode_key_placeholder
-import dev.supermux.ui.resources.providers_opencode_load_failed
-import dev.supermux.ui.resources.providers_opencode_model_providers
-import dev.supermux.ui.resources.providers_opencode_none
-import dev.supermux.ui.resources.providers_opencode_plan
-import dev.supermux.ui.resources.providers_opencode_plan_description
-import dev.supermux.ui.resources.providers_opencode_sign_in
-import dev.supermux.ui.resources.providers_paste_code
-import dev.supermux.ui.resources.providers_refresh
-import dev.supermux.ui.resources.providers_reopen_sign_in
-import dev.supermux.ui.resources.providers_save
-import dev.supermux.ui.resources.providers_saving
 import kotlinx.coroutines.launch
 
 /** The subscription's sign-in (the machine's OpenCode login, so every OpenCode chat gets those models), then the rest. */
@@ -74,12 +48,12 @@ import kotlinx.coroutines.launch
 internal fun OpenCodeSection(p: ProviderState, agents: AgentSettingsActions) {
     KitItemList {
         KitItem(
-            localized(Res.string.providers_opencode_plan),
-            subtitle = localized(Res.string.providers_opencode_plan_description),
+            localized(Str.providers_opencode_plan),
+            subtitle = localized(Str.providers_opencode_plan_description),
             mark = KitMark.Letters("O"),
         ) {
             if (!p.loginActive) {
-                KitGhostButton(localized(Res.string.providers_opencode_sign_in), onClick = p::startLogin, modifier = Modifier.testTag("agent_login_start_opencode"))
+                KitGhostButton(localized(Str.providers_opencode_sign_in), onClick = p::startLogin, modifier = Modifier.testTag("agent_login_start_opencode"))
             }
         }
     }
@@ -117,21 +91,21 @@ private fun OpenCodeProvidersSection(
             OpenCodeZenKeyRow(setKey = setKey, onChanged = { reloadKey++ })
         }
         KitSectionHead(
-            localized(Res.string.providers_opencode_model_providers),
-            noteContent = { KitTextAction(localized(Res.string.providers_refresh), { if (!loading) reloadKey++ }, enabled = !loading) },
+            localized(Str.providers_opencode_model_providers),
+            noteContent = { KitTextAction(localized(Str.providers_refresh), { if (!loading) reloadKey++ }, enabled = !loading) },
         )
-        KitNote(localized(Res.string.providers_opencode_free_note))
+        KitNote(localized(Str.providers_opencode_free_note))
         when {
-            loading && providers.isEmpty() -> KitNote(localized(Res.string.providers_loading))
+            loading && providers.isEmpty() -> KitNote(localized(Str.providers_loading))
             else -> {
                 if (providers.isNotEmpty()) KitHairline(Modifier.padding(top = 10.dp))
                 providers.forEach { provider ->
                     OpenCodeProviderRow(provider, setKey, startOAuth, finishOAuth, onChanged = { reloadKey++ })
                 }
                 if (loadFailed) {
-                    WarnLine(localized(Res.string.providers_opencode_load_failed), "opencode_providers_error")
+                    WarnLine(localized(Str.providers_opencode_load_failed), "opencode_providers_error")
                 } else if (providers.isEmpty()) {
-                    KitNote(localized(Res.string.providers_opencode_none))
+                    KitNote(localized(Str.providers_opencode_none))
                 }
             }
         }
@@ -144,7 +118,7 @@ private fun OpenCodeZenKeyRow(setKey: suspend (String, String) -> Boolean, onCha
     // Kept for the page on display, with its save (#89).
     val form = rememberRetainedOnPage("agents:opencode-zen") { SecretForm() }
     val saves = rememberRetainedScope()
-    val failure = localized(Res.string.providers_key_save_failed)
+    val failure = localized(Str.providers_key_save_failed)
 
     fun submit() {
         val k = form.value.trim()
@@ -159,11 +133,11 @@ private fun OpenCodeZenKeyRow(setKey: suspend (String, String) -> Boolean, onCha
 
     Column(Modifier.fillMaxWidth().testTag("opencode_zen_key_row")) {
         KitRow(
-            localized(Res.string.providers_opencode_key),
-            description = localized(Res.string.providers_opencode_key_description),
+            localized(Str.providers_opencode_key),
+            description = localized(Str.providers_opencode_key_description),
             divider = false,
         ) {
-            KitTextAction(localized(Res.string.providers_get_key), { platform.openUrl("https://opencode.ai/auth") })
+            KitTextAction(localized(Str.providers_get_key), { platform.openUrl("https://opencode.ai/auth") })
         }
         KeyField(
             value = form.value,
@@ -171,7 +145,7 @@ private fun OpenCodeZenKeyRow(setKey: suspend (String, String) -> Boolean, onCha
                 form.value = it
                 form.error = null
             },
-            placeholder = localized(Res.string.providers_opencode_key_placeholder),
+            placeholder = localized(Str.providers_opencode_key_placeholder),
             saving = form.saving,
             onSubmit = ::submit,
             fieldTag = "opencode_zen_key_field",
@@ -200,7 +174,7 @@ private fun KeyField(
     ) {
         KitTextField(value, onValueChange, Modifier.weight(1f), placeholder = placeholder, secret = true, onSubmit = onSubmit, fieldTag = fieldTag)
         KitGhostButton(
-            if (saving) localized(Res.string.providers_saving) else localized(Res.string.providers_save),
+            if (saving) localized(Str.providers_saving) else localized(Str.providers_save),
             onClick = onSubmit,
             enabled = value.isNotBlank() && !saving,
             modifier = Modifier.testTag(saveTag),
@@ -224,10 +198,10 @@ private fun OpenCodeProviderRow(
     val scope = rememberRetainedScope()
     val oauthMethod = provider.methods.firstOrNull { it.type == "oauth" }
     val apiMethod = provider.methods.firstOrNull { it.type == "api" }
-    val keySaveFailed = localized(Res.string.providers_key_save_failed)
-    val finishFailed = localized(Res.string.providers_oauth_finish_failed)
-    val startFailed = localized(Res.string.providers_oauth_start_failed)
-    val apiKeyLabel = localized(Res.string.providers_api_key)
+    val keySaveFailed = localized(Str.providers_key_save_failed)
+    val finishFailed = localized(Str.providers_oauth_finish_failed)
+    val startFailed = localized(Str.providers_oauth_start_failed)
+    val apiKeyLabel = localized(Str.providers_api_key)
 
     fun submitKey() {
         val k = form.key.value.trim()
@@ -268,12 +242,12 @@ private fun OpenCodeProviderRow(
 
     Column(Modifier.fillMaxWidth().testTag("opencode_provider_${provider.id}")) {
         KitRow(prettyProviderName(provider.id), divider = false) {
-            if (provider.configured) KitItemStatus(localized(Res.string.providers_connected), dot = KitDot.Ok)
+            if (provider.configured) KitItemStatus(localized(Str.providers_connected), dot = KitDot.Ok)
         }
         val url = form.oauthUrl
         if (url != null) {
-            KitNote(localized(Res.string.providers_browser_opened))
-            KitTextAction(localized(Res.string.providers_reopen_sign_in), { platform.openUrl(url) })
+            KitNote(localized(Str.providers_browser_opened))
+            KitTextAction(localized(Str.providers_reopen_sign_in), { platform.openUrl(url) })
             Row(
                 Modifier.fillMaxWidth().padding(vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -286,13 +260,13 @@ private fun OpenCodeProviderRow(
                         form.oauthError = null
                     },
                     Modifier.weight(1f),
-                    placeholder = localized(Res.string.providers_paste_code),
+                    placeholder = localized(Str.providers_paste_code),
                     mono = true,
                     onSubmit = ::finishOauth,
                     fieldTag = "opencode_oauth_code_${provider.id}",
                 )
                 KitGhostButton(
-                    if (form.finishing) localized(Res.string.providers_finishing) else localized(Res.string.providers_finish),
+                    if (form.finishing) localized(Str.providers_finishing) else localized(Str.providers_finish),
                     onClick = ::finishOauth,
                     enabled = form.oauthCode.isNotBlank() && !form.finishing,
                     modifier = Modifier.testTag("opencode_oauth_finish_${provider.id}"),
@@ -302,7 +276,7 @@ private fun OpenCodeProviderRow(
         } else {
             if (oauthMethod != null) {
                 KitGhostButton(
-                    localized(Res.string.providers_login_via_browser),
+                    localized(Str.providers_login_via_browser),
                     onClick = {
                         form.oauthCode = ""
                         form.oauthError = null

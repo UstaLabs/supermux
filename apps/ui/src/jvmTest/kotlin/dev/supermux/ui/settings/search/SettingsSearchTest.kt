@@ -2,8 +2,6 @@ package dev.supermux.ui.settings.search
 
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.platform.NO_CAPS
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.allStringResources
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -197,7 +195,8 @@ class SettingsSearchTest {
         val keyed = SettingsSearchIndex.filter {
             it.anchor != null && it.section != SettingsSection.KeyboardShortcuts && !it.anchor!!.startsWith("provider-")
         }
-        val missing = keyed.map(::searchKey).filter { it !in Res.allStringResources || "${it}_kw" !in Res.allStringResources }
+        val english = dev.supermux.ui.i18n.Catalogs.now("en")!!.strings
+        val missing = keyed.map(::searchKey).filter { it !in english || "${it}_kw" !in english }
         assertEquals(emptyList(), missing)
     }
 

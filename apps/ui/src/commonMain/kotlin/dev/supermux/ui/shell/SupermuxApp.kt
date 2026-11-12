@@ -172,6 +172,7 @@ import dev.supermux.ui.settings.kit.KitMachine
 import dev.supermux.ui.settings.kit.SettingsMachines
 import dev.supermux.ui.settings.kit.THIS_COMPUTER_ID
 import dev.supermux.host.formatLastSeen
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.update.AppUpdateCard
 import dev.supermux.ui.update.announceUpdate
@@ -212,21 +213,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.shell_this_device
-import dev.supermux.ui.resources.shell_machine_running
-import dev.supermux.ui.resources.shell_machine_offline
-import dev.supermux.ui.resources.shell_machine_not_hosting
-import dev.supermux.ui.resources.shell_this_computer
-import dev.supermux.ui.resources.shell_machine_offline_seen
-import dev.supermux.ui.resources.shell_downloaded
-import dev.supermux.ui.resources.shell_no_host_connected
-import dev.supermux.ui.resources.shell_workspace_archived_named
-import dev.supermux.ui.resources.shell_workspace_archived
-import dev.supermux.ui.resources.shell_select_session
-import dev.supermux.ui.resources.shell_select_workspace
-import dev.supermux.ui.resources.shell_back
-import dev.supermux.ui.resources.shell_session_unavailable
 import dev.supermux.ui.notify.localizedNotifyWords
 
 /**
@@ -367,11 +353,11 @@ fun SupermuxApp(
     val localBrokerCap = LocalPlatform.current.caps.localBroker
     // "last seen 2h ago" moves on with the clock, nudged once a minute.
     val settingsClock = rememberRailClock()
-    val runningWord = localized(Res.string.shell_machine_running)
-    val offlineWord = localized(Res.string.shell_machine_offline)
-    val notHostingWord = localized(Res.string.shell_machine_not_hosting)
-    val thisComputerWord = localized(Res.string.shell_this_computer)
-    val offlineSeen = localizedTemplate(Res.string.shell_machine_offline_seen)
+    val runningWord = localized(Str.shell_machine_running)
+    val offlineWord = localized(Str.shell_machine_offline)
+    val notHostingWord = localized(Str.shell_machine_not_hosting)
+    val thisComputerWord = localized(Str.shell_this_computer)
+    val offlineSeen = localizedTemplate(Str.shell_machine_offline_seen)
     val settingsMachines = remember(hostViews, activeHostId, localBrokerCap, settingsClock, runningWord, offlineWord, notHostingWord, thisComputerWord) {
         val now = settingsClock
         val paired = hostViews.map { h ->
@@ -602,7 +588,7 @@ fun SupermuxApp(
 
     // A download that finished with nobody waiting for it (#95, decision 2a) opens nothing: it waits in the activity
     // bar, and a small notice says so.
-    val downloadedNotice by rememberUpdatedState(localizedTemplate(Res.string.shell_downloaded))
+    val downloadedNotice by rememberUpdatedState(localizedTemplate(Str.shell_downloaded))
     LaunchedEffect(fleet) {
         fleet.downloads.unclaimedCompletions.collect { notices.show(downloadedNotice(it.name)) }
     }
@@ -794,7 +780,7 @@ fun SupermuxApp(
         )
     }
 
-    val noHostConnected = localized(Res.string.shell_no_host_connected)
+    val noHostConnected = localized(Str.shell_no_host_connected)
     val onNewChatInWorkspace: (WorkspaceDto) -> Unit = { w ->
         overlayScope.launch {
             val recordId = fleet.activeHost.value
@@ -1237,7 +1223,7 @@ fun SupermuxApp(
                                     RetainedPage {
                                         AddHostScreen(
                                             onBack = { ui.goBack() },
-                                            defaultDeviceName = defaultDeviceName ?: localized(Res.string.shell_this_device),
+                                            defaultDeviceName = defaultDeviceName ?: localized(Str.shell_this_device),
                                             onClaim = { payload, name -> fleet.addHost(payload, name) },
                                             onClaimLegacy = { pair -> fleet.addLegacyHost(pair) },
                                             onClaimByUrl = { url, name, allow -> fleet.addHostByUrl(url, name, allow) },
@@ -1795,9 +1781,9 @@ private fun ShellDetailForeground(
             ) {
                 Text(
                     if (archived != null) {
-                        localized(Res.string.shell_workspace_archived_named, archived.name)
+                        localized(Str.shell_workspace_archived_named, archived.name)
                     } else {
-                        localized(Res.string.shell_workspace_archived)
+                        localized(Str.shell_workspace_archived)
                     },
                     color = cs.onSurfaceVariant,
                 )
@@ -1807,7 +1793,7 @@ private fun ShellDetailForeground(
             Box(
                 Modifier.fillMaxSize().zIndex(2f).background(cs.surfaceContainerLow),
                 contentAlignment = Alignment.Center,
-            ) { Text(localized(Res.string.shell_select_session), color = cs.onSurfaceVariant) }
+            ) { Text(localized(Str.shell_select_session), color = cs.onSurfaceVariant) }
         }
         activeWorkspace == null -> {
             // The session belongs to no workspace (an old broker, or a settled row). A host with a
@@ -1824,7 +1810,7 @@ private fun ShellDetailForeground(
                         .background(cs.surfaceContainerLow)
                         .testTag("workspace_welcome"),
                     contentAlignment = Alignment.Center,
-                ) { Text(localized(Res.string.shell_select_workspace), color = cs.onSurfaceVariant) }
+                ) { Text(localized(Str.shell_select_workspace), color = cs.onSurfaceVariant) }
             }
         }
         else -> Unit
@@ -2137,14 +2123,14 @@ private fun UnavailableSessionPane(onBack: () -> Unit) {
                 IconButton(onClick = onBack, modifier = Modifier.testTag("session_unavailable_back")) {
                     Icon(
                         Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = localized(Res.string.shell_back),
+                        contentDescription = localized(Str.shell_back),
                         tint = cs.onSurface,
                         modifier = Modifier.size(18.dp),
                     )
                 }
             }
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(localized(Res.string.shell_session_unavailable), color = cs.onSurfaceVariant)
+                Text(localized(Str.shell_session_unavailable), color = cs.onSurfaceVariant)
             }
         }
     }

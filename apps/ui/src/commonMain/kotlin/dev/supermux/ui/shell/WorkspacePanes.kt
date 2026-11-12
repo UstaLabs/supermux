@@ -157,6 +157,7 @@ import dev.supermux.workspace.openSingletonView
 import dev.supermux.workspace.setActiveViewInGroup
 import dev.supermux.ui.panes.PaneStripEnd
 import androidx.compose.material.icons.outlined.Tab
+import dev.supermux.ui.i18n.Str
 import dev.supermux.workspace.toDomainOrNull
 import dev.supermux.ui.terminal.liveViewTitle
 import dev.supermux.ui.retain.newRetainedPageOpening
@@ -166,12 +167,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.shell_new_tab
-import dev.supermux.ui.resources.shell_close_tab
-import dev.supermux.ui.resources.shell_view
-import dev.supermux.ui.resources.shell_move_to_new_window
-import dev.supermux.ui.resources.shell_no_views
 import dev.supermux.ui.i18n.localizedLabels
 
 
@@ -378,10 +373,10 @@ private fun WorkspacePanesBody(
     val notices = LocalPlatform.current.notices
     TrackFocusedFileView(ws)
     val bulkLabels = localizedLabels(BulkClose.entries) { it.labelRes }
-    val newTabWord = localized(Res.string.shell_new_tab)
-    val closeTabWord = localized(Res.string.shell_close_tab)
-    val viewWord = localized(Res.string.shell_view)
-    val moveToNewWindowWord = localized(Res.string.shell_move_to_new_window)
+    val newTabWord = localized(Str.shell_new_tab)
+    val closeTabWord = localized(Str.shell_close_tab)
+    val viewWord = localized(Str.shell_view)
+    val moveToNewWindowWord = localized(Str.shell_move_to_new_window)
     // Tabs a bulk close (tab menu ▸ Close to the Right / Left / All) still has to close, fed one at
     // a time to the tab's own close action (see nextBulkClose).
     val bulkQueue = remember(current.id) { mutableStateListOf<String>() }
@@ -648,7 +643,7 @@ fun PhoneWorkspacePanes(
     dev.supermux.ui.browser.ReleaseClosedBrowserTabs(viewsById.values)
     val kept = rememberWorkspacePanesKept(current.id)
     val bulkLabels = localizedLabels(BulkClose.entries) { it.labelRes }
-    val viewWord = localized(Res.string.shell_view)
+    val viewWord = localized(Str.shell_view)
     var showAdd by kept::addViewOpen
     val closeCandidate = kept.closingViewId?.let { viewsById[it] }
     var walkthroughSessionId by kept::walkthroughSessionId
@@ -958,7 +953,7 @@ fun PhoneWorkspacePanes(
         Box(Modifier.weight(1f).fillMaxWidth().onGloballyPositioned { page = it }.then(swipeShift).nestedScroll(swipeNested)) {
             if (retained.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(localized(Res.string.shell_no_views), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(localized(Str.shell_no_views), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             } else {
                 retained.forEach { id ->
@@ -1481,7 +1476,7 @@ internal fun TabLongPressMenu(
         ) {
             if (onMoveToNewWindow != null) {
                 DropdownMenuItem(
-                    text = { Text(localized(Res.string.shell_move_to_new_window)) },
+                    text = { Text(localized(Str.shell_move_to_new_window)) },
                     leadingIcon = { Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null) },
                     onClick = {
                         open = false

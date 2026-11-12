@@ -34,25 +34,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import dev.supermux.net.GitRequirement
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.host_git_failed
-import dev.supermux.ui.resources.host_git_install
-import dev.supermux.ui.resources.host_git_install_failed
-import dev.supermux.ui.resources.host_git_optional
-import dev.supermux.ui.resources.host_git_optional_mac
-import dev.supermux.ui.resources.host_git_retry
-import dev.supermux.ui.resources.host_git_started_browser
-import dev.supermux.ui.resources.host_git_started_mingit
-import dev.supermux.ui.resources.host_git_started_other
-import dev.supermux.ui.resources.host_git_started_winget
-import dev.supermux.ui.resources.host_git_started_xcode
-import dev.supermux.ui.resources.host_git_starting
-import dev.supermux.ui.resources.host_git_this_computer
-import dev.supermux.ui.resources.host_git_title
-import dev.supermux.ui.resources.host_git_title_mac
-import dev.supermux.ui.resources.host_git_title_mac_on
-import dev.supermux.ui.resources.host_git_title_on
 import dev.supermux.ui.theme.Space
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -106,26 +89,26 @@ private object GitBannerText {
     fun title(hostName: String?, install: String): String {
         val mac = install == GitRequirement.INSTALL_XCODE_SELECT
         return when {
-            hostName == null -> localized(if (mac) Res.string.host_git_title_mac else Res.string.host_git_title)
-            else -> localized(if (mac) Res.string.host_git_title_mac_on else Res.string.host_git_title_on, hostName)
+            hostName == null -> localized(if (mac) Str.host_git_title_mac else Str.host_git_title)
+            else -> localized(if (mac) Str.host_git_title_mac_on else Str.host_git_title_on, hostName)
         }
     }
 
     @Composable
     fun optional(install: String): String = localized(
-        if (install == GitRequirement.INSTALL_XCODE_SELECT) Res.string.host_git_optional_mac else Res.string.host_git_optional,
+        if (install == GitRequirement.INSTALL_XCODE_SELECT) Str.host_git_optional_mac else Str.host_git_optional,
     )
 
     @Composable
     fun started(install: String, hostName: String?): String {
-        val host = hostName ?: localized(Res.string.host_git_this_computer)
+        val host = hostName ?: localized(Str.host_git_this_computer)
         return localized(
             when (install) {
-                GitRequirement.INSTALL_XCODE_SELECT -> Res.string.host_git_started_xcode
-                GitRequirement.INSTALL_WINGET -> Res.string.host_git_started_winget
-                GitRequirement.INSTALL_MINGIT -> Res.string.host_git_started_mingit
-                GitRequirement.INSTALL_BROWSER -> Res.string.host_git_started_browser
-                else -> Res.string.host_git_started_other
+                GitRequirement.INSTALL_XCODE_SELECT -> Str.host_git_started_xcode
+                GitRequirement.INSTALL_WINGET -> Str.host_git_started_winget
+                GitRequirement.INSTALL_MINGIT -> Str.host_git_started_mingit
+                GitRequirement.INSTALL_BROWSER -> Str.host_git_started_browser
+                else -> Str.host_git_started_other
             },
             host,
         )
@@ -171,9 +154,9 @@ fun GitRequirementBanner(
     // declined or failed must not leave "Installing…" up forever.
     LaunchedEffect(requirement.installError) { if (requirement.installError != null) status = null }
     val startedText = GitBannerText.started(requirement.install, hostName)
-    val shown = requirement.installError?.let { localized(Res.string.host_git_install_failed, it) }
+    val shown = requirement.installError?.let { localized(Str.host_git_install_failed, it) }
         ?: (if (requirement.installing) requirement.installNote ?: startedText else null)
-        ?: status?.let { started -> if (started) startedText else localized(Res.string.host_git_failed) }
+        ?: status?.let { started -> if (started) startedText else localized(Str.host_git_failed) }
 
     Row(
         modifier
@@ -245,9 +228,9 @@ fun GitRequirementBanner(
                 Text(
                     localized(
                         when {
-                            busy -> Res.string.host_git_starting
-                            requirement.installError != null -> Res.string.host_git_retry
-                            else -> Res.string.host_git_install
+                            busy -> Str.host_git_starting
+                            requirement.installError != null -> Str.host_git_retry
+                            else -> Str.host_git_install
                         },
                     ),
                 )

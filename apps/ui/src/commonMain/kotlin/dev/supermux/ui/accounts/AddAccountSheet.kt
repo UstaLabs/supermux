@@ -35,6 +35,7 @@ import dev.supermux.net.AccountDto
 import dev.supermux.net.AccountLoginStateDto
 import dev.supermux.state.AccountResult
 import dev.supermux.state.accountLoginPhaseRank
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.retain.rememberRetainedOnPage
@@ -54,41 +55,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.accounts_add_failed
-import dev.supermux.ui.resources.accounts_add_login
-import dev.supermux.ui.resources.accounts_add_title
-import dev.supermux.ui.resources.accounts_added
-import dev.supermux.ui.resources.accounts_adding
-import dev.supermux.ui.resources.accounts_back
-import dev.supermux.ui.resources.accounts_cancel
-import dev.supermux.ui.resources.accounts_checking_sign_in
-import dev.supermux.ui.resources.accounts_code_sent
-import dev.supermux.ui.resources.accounts_copied
-import dev.supermux.ui.resources.accounts_copy
-import dev.supermux.ui.resources.accounts_copy_link
-import dev.supermux.ui.resources.accounts_enter_code
-import dev.supermux.ui.resources.accounts_generating_link
-import dev.supermux.ui.resources.accounts_name_optional
-import dev.supermux.ui.resources.accounts_name_placeholder
-import dev.supermux.ui.resources.accounts_open_page_step
-import dev.supermux.ui.resources.accounts_open_sign_in_page
-import dev.supermux.ui.resources.accounts_paste_code
-import dev.supermux.ui.resources.accounts_paste_code_step
-import dev.supermux.ui.resources.accounts_send_code_failed
-import dev.supermux.ui.resources.accounts_sending
-import dev.supermux.ui.resources.accounts_sign_in_again_title
-import dev.supermux.ui.resources.accounts_sign_in_cancelled
-import dev.supermux.ui.resources.accounts_sign_in_to
-import dev.supermux.ui.resources.accounts_sign_in_with
-import dev.supermux.ui.resources.accounts_start_failed
-import dev.supermux.ui.resources.accounts_starting_sign_in
-import dev.supermux.ui.resources.accounts_submit
-import dev.supermux.ui.resources.accounts_the_account
-import dev.supermux.ui.resources.accounts_token_description
-import dev.supermux.ui.resources.accounts_try_again
-import dev.supermux.ui.resources.accounts_waiting_approval
-import dev.supermux.ui.resources.accounts_waiting_for_page
 
 
 private const val LOGIN_POLL_MS = 4_000L
@@ -306,7 +272,7 @@ fun AddAccountSheet(
         )
         AddStep.Login -> LoginStep(
             agent = agent,
-            title = signInAgain?.let { localized(Res.string.accounts_sign_in_again_title, localizedAccountDisplayName(it)) },
+            title = signInAgain?.let { localized(Str.accounts_sign_in_again_title, localizedAccountDisplayName(it)) },
             flow = flow,
             existing = existing,
             form = form,
@@ -333,10 +299,10 @@ private fun ChooseStep(
     onCancel: () -> Unit,
 ) {
     KitSheet(
-        title = localized(Res.string.accounts_add_title, agentDisplayName(agent)),
+        title = localized(Str.accounts_add_title, agentDisplayName(agent)),
         onDismiss = onCancel,
         tag = "account-add-sheet",
-        buttons = { KitGhostButton(localized(Res.string.accounts_cancel), onClick = onCancel, modifier = Modifier.testTag("account-add-cancel")) },
+        buttons = { KitGhostButton(localized(Str.accounts_cancel), onClick = onCancel, modifier = Modifier.testTag("account-add-cancel")) },
     ) {
         KitItemList(Modifier.padding(top = 12.dp)) {
             options.forEach { option ->
@@ -394,19 +360,19 @@ private fun SecretStep(
         onAdded()
     }
 
-    val addFailed = localized(Res.string.accounts_add_failed)
+    val addFailed = localized(Str.accounts_add_failed)
     KitSheet(
         title = localizedAddOptionTitle(agent, method),
         onDismiss = { if (!saving) onCancel() },
-        description = if (token) localized(Res.string.accounts_token_description) else localizedAddOptionHint(agent, method),
+        description = if (token) localized(Str.accounts_token_description) else localizedAddOptionHint(agent, method),
         tag = "account-add-sheet",
         // A half-typed key is not thrown away by a stray tap.
         dismissOnOutside = false,
         buttons = {
-            if (canGoBack) KitGhostButton(localized(Res.string.accounts_back), onClick = onBack, enabled = !saving, modifier = Modifier.testTag("account-add-back"))
-            KitGhostButton(localized(Res.string.accounts_cancel), onClick = onCancel, enabled = !saving, modifier = Modifier.testTag("account-add-cancel"))
+            if (canGoBack) KitGhostButton(localized(Str.accounts_back), onClick = onBack, enabled = !saving, modifier = Modifier.testTag("account-add-back"))
+            KitGhostButton(localized(Str.accounts_cancel), onClick = onCancel, enabled = !saving, modifier = Modifier.testTag("account-add-cancel"))
             KitGhostButton(
-                localized(if (saving) Res.string.accounts_adding else Res.string.accounts_add_login),
+                localized(if (saving) Str.accounts_adding else Str.accounts_add_login),
                 onClick = ::save,
                 enabled = canSave,
                 modifier = Modifier.testTag("account-secret-save"),
@@ -429,8 +395,8 @@ private fun SecretStep(
             KitTextField(
                 label,
                 { label = it },
-                label = localized(Res.string.accounts_name_optional),
-                placeholder = localized(Res.string.accounts_name_placeholder),
+                label = localized(Str.accounts_name_optional),
+                placeholder = localized(Str.accounts_name_placeholder),
                 onSubmit = ::save,
                 fieldTag = "account-label-field",
             )
@@ -474,19 +440,19 @@ private fun LoginStep(
             onDone()
         }
     }
-    val startFailed = localized(Res.string.accounts_start_failed)
+    val startFailed = localized(Str.accounts_start_failed)
     val startError = flow.startError?.ifBlank { startFailed }
     KitSheet(
-        title = title ?: if (agent == "codex") localized(Res.string.accounts_sign_in_with, "ChatGPT") else localized(Res.string.accounts_sign_in_to, agentDisplayName(agent)),
+        title = title ?: if (agent == "codex") localized(Str.accounts_sign_in_with, "ChatGPT") else localized(Str.accounts_sign_in_to, agentDisplayName(agent)),
         onDismiss = onCancel,
         tag = "account-add-sheet",
         // A sign-in under way is cancelled on purpose, not by a stray tap.
         dismissOnOutside = false,
         buttons = {
             if (view !is LoginView.Done) {
-                KitGhostButton(localized(Res.string.accounts_cancel), onClick = onCancel, modifier = Modifier.testTag("account-login-cancel"))
+                KitGhostButton(localized(Str.accounts_cancel), onClick = onCancel, modifier = Modifier.testTag("account-login-cancel"))
                 if (startError != null || view is LoginView.Failed || view is LoginView.Cancelled) {
-                    KitGhostButton(localized(Res.string.accounts_try_again), onClick = onRetry, enabled = !flow.starting, modifier = Modifier.testTag("account-login-retry"))
+                    KitGhostButton(localized(Str.accounts_try_again), onClick = onRetry, enabled = !flow.starting, modifier = Modifier.testTag("account-login-retry"))
                 }
             }
         },
@@ -498,13 +464,13 @@ private fun LoginStep(
             when {
                 startError != null -> SheetLine(startError, warn = true, tag = "account-login-failed")
                 else -> when (view) {
-                    LoginView.Starting -> SheetLine(localized(Res.string.accounts_starting_sign_in), tag = "account-login-starting")
+                    LoginView.Starting -> SheetLine(localized(Str.accounts_starting_sign_in), tag = "account-login-starting")
                     is LoginView.AwaitingUser -> AwaitingBlock(view, form, scope, onSubmitCode)
-                    LoginView.Verifying -> SheetLine(localized(Res.string.accounts_checking_sign_in), tag = "account-login-verifying")
+                    LoginView.Verifying -> SheetLine(localized(Str.accounts_checking_sign_in), tag = "account-login-verifying")
                     is LoginView.Done -> Text(
                         localized(
-                            Res.string.accounts_added,
-                            flow.state?.account?.let { localizedAccountShortLabel(it) } ?: localized(Res.string.accounts_the_account),
+                            Str.accounts_added,
+                            flow.state?.account?.let { localizedAccountShortLabel(it) } ?: localized(Str.accounts_the_account),
                         ),
                         fontSize = 13.5.sp,
                         fontWeight = FontWeight.SemiBold,
@@ -516,7 +482,7 @@ private fun LoginStep(
                         warn = true,
                         tag = "account-login-failed",
                     )
-                    LoginView.Cancelled -> SheetLine(localized(Res.string.accounts_sign_in_cancelled))
+                    LoginView.Cancelled -> SheetLine(localized(Str.accounts_sign_in_cancelled))
                 }
             }
         }
@@ -567,20 +533,20 @@ private fun AwaitingBlock(
         }
     }
 
-    val sendFailed = localized(Res.string.accounts_send_code_failed)
+    val sendFailed = localized(Str.accounts_send_code_failed)
     var n = 1
-    StepItem(n++, localized(if (url != null) Res.string.accounts_open_page_step else Res.string.accounts_waiting_for_page)) {
+    StepItem(n++, localized(if (url != null) Str.accounts_open_page_step else Str.accounts_waiting_for_page)) {
         if (url != null) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                KitGhostButton(localized(Res.string.accounts_open_sign_in_page), onClick = { platform.openUrl(url) }, modifier = Modifier.testTag("account-login-open"))
-                KitTextAction(localized(Res.string.accounts_copy_link), { platform.copyToClipboard(url) }, Modifier.testTag("account-login-copy-url"))
+                KitGhostButton(localized(Str.accounts_open_sign_in_page), onClick = { platform.openUrl(url) }, modifier = Modifier.testTag("account-login-open"))
+                KitTextAction(localized(Str.accounts_copy_link), { platform.copyToClipboard(url) }, Modifier.testTag("account-login-copy-url"))
             }
         } else {
-            SheetLine(localized(Res.string.accounts_generating_link), tag = "account-login-generating")
+            SheetLine(localized(Str.accounts_generating_link), tag = "account-login-generating")
         }
     }
     view.code?.let { device ->
-        StepItem(n++, localized(Res.string.accounts_enter_code)) {
+        StepItem(n++, localized(Str.accounts_enter_code)) {
             val src = remember { MutableInteractionSource() }
             Row(
                 Modifier
@@ -596,12 +562,12 @@ private fun AwaitingBlock(
                 SelectionContainer {
                     Text(device, fontFamily = MonoFontFamily, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 2.sp, color = c.text)
                 }
-                Text(localized(if (copied) Res.string.accounts_copied else Res.string.accounts_copy), fontSize = 12.5.sp, color = c.accent)
+                Text(localized(if (copied) Str.accounts_copied else Str.accounts_copy), fontSize = 12.5.sp, color = c.accent)
             }
         }
     }
     if (view.needsCode) {
-        StepItem(n, localized(Res.string.accounts_paste_code_step)) {
+        StepItem(n, localized(Str.accounts_paste_code_step)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 KitTextField(
                     code,
@@ -611,13 +577,13 @@ private fun AwaitingBlock(
                         submitted = false
                     },
                     Modifier.weight(1f),
-                    placeholder = localized(Res.string.accounts_paste_code),
+                    placeholder = localized(Str.accounts_paste_code),
                     mono = true,
                     onSubmit = ::submit,
                     fieldTag = "account-login-code",
                 )
                 KitGhostButton(
-                    localized(if (submitting) Res.string.accounts_sending else Res.string.accounts_submit),
+                    localized(if (submitting) Str.accounts_sending else Str.accounts_submit),
                     onClick = ::submit,
                     enabled = code.isNotBlank() && !submitting,
                     modifier = Modifier.testTag("account-login-submit"),
@@ -625,10 +591,10 @@ private fun AwaitingBlock(
             }
             when {
                 error != null -> SheetLine(error!!.ifBlank { sendFailed }, warn = true)
-                submitted -> SheetLine(localized(Res.string.accounts_code_sent))
+                submitted -> SheetLine(localized(Str.accounts_code_sent))
             }
         }
     } else if (url != null) {
-        SheetLine(localized(Res.string.accounts_waiting_approval), modifier = Modifier.padding(start = 22.dp))
+        SheetLine(localized(Str.accounts_waiting_approval), modifier = Modifier.padding(start = 22.dp))
     }
 }

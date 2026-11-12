@@ -1,7 +1,7 @@
 // The language guards (card #123). Two checks over the Kotlin apps:
 //
 // 1. Hard-coded UI text. A string literal the user reads (Text("…"), label = "…", a Kit row's title) belongs in
-//    composeResources/values/strings.xml. Today's code has many, so tests/i18n-hardcoded.baseline.json records how
+//    composeResources/files/i18n/values/*.xml. Today's code has many, so tests/i18n-hardcoded.baseline.json records how
 //    many each file has, and tests/i18n-strings.test.ts fails when a count RISES (new hard-coded text) or FALLS
 //    (lower the baseline: it only shrinks). Rewrite it from the current tree with:
 //      bun scripts/i18n-strings.ts --write
@@ -51,7 +51,13 @@ function blankComments(source: string): string {
   return source.replace(/"(?:[^"\\\n]|\\.)*"|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, m => (m.startsWith('"') ? m : m.replace(/[^\n]/g, " ")))
 }
 
-export function scanText(file: string, source: string): Hit[] {
+/** One line per "\n": a Windows checkout's "\r\n" would leave a "\r" no `.` in a regex matches (the i18n-ok marker). */
+export function lf(text: string): string {
+  return text.replace(/\r\n?/g, "\n")
+}
+
+export function scanText(file: string, text: string): Hit[] {
+  const source = lf(text)
   const lines = source.split("\n")
   const code = blankComments(source)
   const lineAt = (offset: number) => code.slice(0, offset).split("\n").length
@@ -131,7 +137,7 @@ export function readBaseline(path: string = BASELINE): Counts {
 /** key → its placeholders (sorted); a plural's key is `name#quantity`. */
 export function parseCatalog(xml: string): Catalog {
   const catalog: Catalog = new Map()
-  const body = xml.replace(/<!--[\s\S]*?-->/g, "")
+  const body = lf(xml).replace(/<!--[\s\S]*?-->/g, "")
   for (const m of body.matchAll(/<string\s+name="([^"]+)"[^>]*>([\s\S]*?)<\/string>/g)) {
     catalog.set(m[1]!, placeholders(m[2]!))
   }
@@ -150,7 +156,7 @@ function placeholders(text: string): string[] {
 /** Each module's English catalog with its translations: `{ dir, english, translations: { lang: path } }`. */
 export function catalogs(root: string = ROOT): { dir: string; english: string; translations: Record<string, string> }[] {
   const out = []
-  for (const found of new Glob("apps/*/src/*/composeResources/values/*.xml").scanSync({ cwd: root })) {
+  for (const found of new Glob("apps/*/src/*/composeResources/files/i18n/values/*.xml").scanSync({ cwd: root })) {
     const english = repoPath(found)
     const dir = english.slice(0, english.indexOf("/values/"))
     const name = english.slice(english.lastIndexOf("/") + 1)

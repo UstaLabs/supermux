@@ -31,6 +31,7 @@ import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.showReasoningPicker
 import dev.supermux.state.FleetStore
 import dev.supermux.state.HostStore
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.retain.rememberRetainedOnPage
 import dev.supermux.ui.settings.SettingsPlace
@@ -51,26 +52,6 @@ import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
 import dev.supermux.util.curatorNextRunLabel
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.settings_pages_advanced
-import dev.supermux.ui.resources.settings_pages_couldnt_save
-import dev.supermux.ui.resources.settings_pages_default
-import dev.supermux.ui.resources.settings_memory_at
-import dev.supermux.ui.resources.settings_memory_done_by
-import dev.supermux.ui.resources.settings_memory_done_by_description
-import dev.supermux.ui.resources.settings_memory_effort
-import dev.supermux.ui.resources.settings_memory_local_time
-import dev.supermux.ui.resources.settings_memory_local_time_this_machine
-import dev.supermux.ui.resources.settings_memory_model
-import dev.supermux.ui.resources.settings_memory_next
-import dev.supermux.ui.resources.settings_memory_nightly
-import dev.supermux.ui.resources.settings_memory_nightly_description
-import dev.supermux.ui.resources.settings_memory_run_failed
-import dev.supermux.ui.resources.settings_memory_run_now
-import dev.supermux.ui.resources.settings_memory_running
-import dev.supermux.ui.resources.settings_memory_shared
-import dev.supermux.ui.resources.settings_memory_shared_this_machine
-import dev.supermux.ui.resources.settings_pages_try_again
 import dev.supermux.ui.settings.localizedSettingsTitle
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -148,9 +129,9 @@ fun MemoryPage(
         val machine = LocalSettingsMachines.current?.current?.name
         KitNote(
             if (machine != null) {
-                localized(Res.string.settings_memory_shared, machine)
+                localized(Str.settings_memory_shared, machine)
             } else {
-                localized(Res.string.settings_memory_shared_this_machine)
+                localized(Str.settings_memory_shared_this_machine)
             },
         )
     }
@@ -169,8 +150,8 @@ private object Field {
 private fun MemoryRows(actions: CuratorSettingsActions) {
     val scope = rememberCoroutineScope()
     val couldntReach = pagesCouldntReach()
-    val runFailed = localized(Res.string.settings_memory_run_failed)
-    val defaultLabel = localized(Res.string.settings_pages_default)
+    val runFailed = localized(Str.settings_memory_run_failed)
+    val defaultLabel = localized(Str.settings_pages_default)
     // What was loaded and what is shown, kept for the page on display (#89): a rotation must not reload it.
     val form = rememberRetainedOnPage("curator") { CuratorForm() }
     var models by remember { mutableStateOf<List<ModelInfo>>(emptyList()) }
@@ -243,18 +224,18 @@ private fun MemoryRows(actions: CuratorSettingsActions) {
         form.loadFailed -> {
             KitNote(couldntReach, Modifier.testTag("assistant_curator_error"))
             KitTextAction(
-                localized(Res.string.settings_pages_try_again),
+                localized(Str.settings_pages_try_again),
                 onClick = { form.reloadKey++ },
                 modifier = Modifier.padding(top = 4.dp).testTag("assistant_curator_retry"),
             )
         }
         else -> {
             KitToggleRow(
-                label = localized(Res.string.settings_memory_nightly),
+                label = localized(Str.settings_memory_nightly),
                 checked = shown.enabled,
                 onCheckedChange = { change(Field.NIGHTLY, form.shown.copy(enabled = it)) },
                 modifier = Modifier.kitAnchor("memory-nightly").testTag("memory_memory-nightly"),
-                description = localized(Res.string.settings_memory_nightly_description),
+                description = localized(Str.settings_memory_nightly_description),
             )
             SaveError(form.saveErrorAt == Field.NIGHTLY)
 
@@ -262,8 +243,8 @@ private fun MemoryRows(actions: CuratorSettingsActions) {
             SaveError(form.saveErrorAt == Field.TIME)
 
             KitActionRow(
-                label = localized(Res.string.settings_memory_next),
-                button = localized(if (running) Res.string.settings_memory_running else Res.string.settings_memory_run_now),
+                label = localized(Str.settings_memory_next),
+                button = localized(if (running) Str.settings_memory_running else Str.settings_memory_run_now),
                 onClick = {
                     scope.launch {
                         running = true
@@ -281,9 +262,9 @@ private fun MemoryRows(actions: CuratorSettingsActions) {
             )
             runError?.let { ErrorLine(it, "assistant_curator_run_error") }
 
-            KitFold(localized(Res.string.settings_pages_advanced), anchors = setOf("memory-agent"), tag = "memory_advanced") {
+            KitFold(localized(Str.settings_pages_advanced), anchors = setOf("memory-agent"), tag = "memory_advanced") {
                 PickerRow(
-                    label = localized(Res.string.settings_memory_done_by),
+                    label = localized(Str.settings_memory_done_by),
                     value = agentLabel(shown.agent),
                     options = CURATOR_AGENTS.map { it to agentLabel(it) },
                     onPick = { a ->
@@ -291,11 +272,11 @@ private fun MemoryRows(actions: CuratorSettingsActions) {
                         if (a != form.shown.agent) change(Field.AGENT, form.shown.copy(agent = a, model = null, reasoningLevel = null))
                     },
                     modifier = Modifier.kitAnchor("memory-agent").testTag("assistant_curator_agent"),
-                    description = localized(Res.string.settings_memory_done_by_description),
+                    description = localized(Str.settings_memory_done_by_description),
                 )
                 SaveError(form.saveErrorAt == Field.AGENT)
                 PickerRow(
-                    label = localized(Res.string.settings_memory_model),
+                    label = localized(Str.settings_memory_model),
                     value = shown.model?.let { id -> models.firstOrNull { it.id == id }?.displayName ?: id } ?: defaultLabel,
                     options = listOf<Pair<String?, String>>(null to defaultLabel) + models.map { it.id to it.displayName },
                     onPick = { m -> if (m != form.shown.model) change(Field.MODEL, form.shown.copy(model = m)) },
@@ -305,7 +286,7 @@ private fun MemoryRows(actions: CuratorSettingsActions) {
                 SaveError(form.saveErrorAt == Field.MODEL)
                 if (reasoningVisible) {
                     PickerRow(
-                        label = localized(Res.string.settings_memory_effort),
+                        label = localized(Str.settings_memory_effort),
                         value = shown.reasoningLevel?.let { id -> reasoningOptions.firstOrNull { it.first == id }?.second ?: id } ?: defaultLabel,
                         options = reasoningOptions,
                         onPick = { l -> if (l != form.shown.reasoningLevel) change(Field.EFFORT, form.shown.copy(reasoningLevel = l)) },
@@ -333,12 +314,12 @@ private fun TimeRow(shown: CuratorConfig, onPick: (hour: Int, minute: Int) -> Un
     }
     Box {
         KitValueRow(
-            label = localized(Res.string.settings_memory_at),
+            label = localized(Str.settings_memory_at),
             value = "${pad2(shown.hour.coerceIn(0, 23))}:${pad2(shown.minute.coerceIn(0, 59))}",
             modifier = Modifier.kitAnchor("memory-time").testTag("memory_memory-time"),
             description = LocalSettingsMachines.current?.current?.name
-                ?.let { localized(Res.string.settings_memory_local_time, it) }
-                ?: localized(Res.string.settings_memory_local_time_this_machine),
+                ?.let { localized(Str.settings_memory_local_time, it) }
+                ?: localized(Str.settings_memory_local_time_this_machine),
             onClick = {
                 hour = null
                 open = true
@@ -401,7 +382,7 @@ private fun <T> PickerRow(
 
 @Composable
 private fun SaveError(shown: Boolean) {
-    if (shown) ErrorLine(localized(Res.string.settings_pages_couldnt_save), "assistant_curator_save_error")
+    if (shown) ErrorLine(localized(Str.settings_pages_couldnt_save), "assistant_curator_save_error")
 }
 
 @Composable

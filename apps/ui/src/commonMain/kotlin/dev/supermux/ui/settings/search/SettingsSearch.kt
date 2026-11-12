@@ -4,15 +4,13 @@
 package dev.supermux.ui.settings.search
 
 import androidx.compose.runtime.Composable
-import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.localizedOrNull
 import dev.supermux.ui.keys.AppCommands
 import dev.supermux.ui.keys.DefaultKeymap
 import dev.supermux.ui.keys.currentKeyOs
 import dev.supermux.ui.keys.localizedTitle
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.platform.Caps
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.allStringResources
 import dev.supermux.ui.settings.MachineSub
 import dev.supermux.ui.settings.SettingsPlace
 import dev.supermux.ui.settings.pages.shortcutAnchor
@@ -52,7 +50,7 @@ fun settingsPageTitle(section: SettingsSection, ctx: SettingsSearchContext): Str
 /** An entry in the app's language (#123): what a result shows, and more words it is found by. */
 data class LocalizedSearchEntry(val label: String, val keywords: String = "")
 
-/** The resource key of an entry's label in the app's language: `search_‹section›_‹anchor›` (its keywords: + `_kw`). */
+/** The catalog key of an entry's label in the app's language: `search_‹section›_‹anchor›` (its keywords: + `_kw`). */
 fun searchKey(entry: SettingsSearchEntry): String =
     "search_${entry.section.name.lowercase()}_${(entry.anchor ?: "page").replace('-', '_')}"
 
@@ -66,7 +64,6 @@ fun localizedSearchEntries(
     entries: List<SettingsSearchEntry>,
     pageTitles: Map<SettingsSection, String>,
 ): Map<SettingsSearchEntry, LocalizedSearchEntry> {
-    val all = Res.allStringResources
     return entries.associateWith { e ->
         val key = searchKey(e)
         LocalizedSearchEntry(
@@ -75,9 +72,9 @@ fun localizedSearchEntries(
                 // A shortcut's row is its command: its title in the app's language.
                 e.section == SettingsSection.KeyboardShortcuts ->
                     AppCommands.all.firstOrNull { shortcutAnchor(it) == e.anchor }?.let { localizedTitle(it) } ?: e.label
-                else -> all[key]?.let { localized(it) } ?: e.label
+                else -> localizedOrNull(key) ?: e.label
             },
-            keywords = all["${key}_kw"]?.let { localized(it) }.orEmpty(),
+            keywords = localizedOrNull("${key}_kw").orEmpty(),
         )
     }
 }

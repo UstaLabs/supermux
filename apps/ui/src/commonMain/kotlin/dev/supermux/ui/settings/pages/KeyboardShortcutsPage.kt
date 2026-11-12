@@ -6,6 +6,7 @@ package dev.supermux.ui.settings.pages
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.keys.AppCommand
 import dev.supermux.ui.keys.AppCommands
 import dev.supermux.ui.keys.CommandGroup
@@ -24,8 +25,6 @@ import dev.supermux.ui.settings.kit.KitValueRow
 import dev.supermux.ui.settings.kit.kitAnchor
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.keys.localizedTitle
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.settings_shortcuts_or
 import dev.supermux.ui.settings.localizedSettingsTitle
 
 /** A command row's search anchor (the search index declares the same one). */
@@ -45,7 +44,7 @@ fun KeyboardShortcutsPage(
     os: KeyOs = currentKeyOs,
     keymap: Keymap = DefaultKeymap,
 ) {
-    val orWord = localized(Res.string.settings_shortcuts_or)
+    val orWord = localized(Str.settings_shortcuts_or)
     KitPage(
         localizedSettingsTitle(SettingsPlace(SettingsSection.KeyboardShortcuts)),
         modifier,

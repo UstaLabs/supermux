@@ -80,11 +80,9 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.ui.adaptive.LocalPointerAvailable
+import dev.supermux.ui.i18n.Str
 import kotlin.math.roundToInt
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.machine_kit_decrease
-import dev.supermux.ui.resources.machine_kit_increase
 
 /**
  * On touch (no pointer) a standalone control's hit target grows to 48 dp without changing how it looks. Rows are
@@ -430,8 +428,8 @@ fun KitStepper(
 ) {
     val c = kitColors()
     val m = kitMetrics()
-    val decrease = localized(Res.string.machine_kit_decrease, label)
-    val increase = localized(Res.string.machine_kit_increase, label)
+    val decrease = localized(Str.machine_kit_decrease, label)
+    val increase = localized(Str.machine_kit_increase, label)
     Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         StepButton("−", decrease, value > range.first, { onChange((value - 1).coerceIn(range)) }, "${tag}_minus")
         Text(

@@ -102,6 +102,7 @@ import dev.supermux.session.sectionKey
 import dev.supermux.session.sessionListShowsUnread
 import dev.supermux.ui.TestIds
 import dev.supermux.ui.adaptive.LocalPointerAvailable
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.session.AgentAvatar
 import dev.supermux.ui.session.AvatarRig
 import dev.supermux.ui.session.AvatarRigView
@@ -117,24 +118,6 @@ import kotlinx.coroutines.delay
 import kotlin.math.floor
 import kotlin.time.Clock
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.shell_new_session
-import dev.supermux.ui.resources.shell_all_projects
-import dev.supermux.ui.resources.shell_agent_working
-import dev.supermux.ui.resources.shell_agent_has_something
-import dev.supermux.ui.resources.shell_agent_asleep
-import dev.supermux.ui.resources.shell_agent_always_on
-import dev.supermux.ui.resources.shell_settings
-import dev.supermux.ui.resources.shell_light_theme
-import dev.supermux.ui.resources.shell_dark_theme
-import dev.supermux.ui.resources.shell_usage
-import dev.supermux.ui.resources.shell_devices
-import dev.supermux.ui.resources.shell_settings_ellipsis
-import dev.supermux.ui.resources.shell_unread_new
-import dev.supermux.ui.resources.shell_show_in_sidebar
-import dev.supermux.ui.resources.shell_settled
-import dev.supermux.ui.resources.shell_show_sidebar
-import dev.supermux.ui.resources.shell_hide_sidebar
 
 /** The rail's width. The tiles inside are [RAIL_TILE]; what is left is the gutter. */
 val RAIL_WIDTH = 52.dp
@@ -353,7 +336,7 @@ internal fun SidebarRail(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(RAIL_GAP),
             ) {
-                val newSession = localized(Res.string.shell_new_session)
+                val newSession = localized(Str.shell_new_session)
                 RailTile(onClick = onNewSession, tag = TestIds.NEW_SESSION, label = newSession) {
                     Icon(Icons.Filled.Add, contentDescription = newSession, tint = cs.primary, modifier = Modifier.size(18.dp))
                 }
@@ -366,7 +349,7 @@ internal fun SidebarRail(
                     }
                 }
                 if (shown.size < model.all.size) {
-                    val allProjects = localized(Res.string.shell_all_projects)
+                    val allProjects = localized(Str.shell_all_projects)
                     RailFlyoutTile(key = ALL_KEY, flyout = flyout, tag = "rail_all_projects", label = allProjects, tile = {
                         Icon(Icons.Filled.GridView, contentDescription = allProjects, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
                     }) {
@@ -521,16 +504,16 @@ private fun AgentCard(a: RailAgent) {
                 if (t.isNotEmpty()) Text(t, color = cs.onSurfaceVariant.copy(alpha = 0.6f), fontFamily = MonoFontFamily, fontSize = 10.5.sp)
             }
             val status = when {
-                a.working -> localized(Res.string.shell_agent_working)
-                a.unread -> localized(Res.string.shell_agent_has_something)
-                !a.online -> localized(Res.string.shell_agent_asleep)
+                a.working -> localized(Str.shell_agent_working)
+                a.unread -> localized(Str.shell_agent_has_something)
+                !a.online -> localized(Str.shell_agent_asleep)
                 else -> null
             }
             if (status != null) {
                 Text(status, color = if (a.working) cs.primary else cs.onSurfaceVariant, fontSize = 11.5.sp, modifier = Modifier.padding(top = 2.dp))
             }
             Text(
-                preview ?: localized(Res.string.shell_agent_always_on),
+                preview ?: localized(Str.shell_agent_always_on),
                 color = cs.onSurface.copy(alpha = 0.8f),
                 fontSize = 12.sp,
                 lineHeight = 17.sp,
@@ -712,32 +695,32 @@ internal fun RailSettingsButton(
     var open by remember { mutableStateOf(false) }
     val darkNow = appearance != AppearanceMode.LIGHT
     Box {
-        val settings = localized(Res.string.shell_settings)
+        val settings = localized(Str.shell_settings)
         RailTile(onClick = { open = true }, tag = "rail_settings", label = settings) {
             Icon(Icons.Filled.Settings, contentDescription = settings, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             DropdownMenuItem(
-                text = { Text(localized(if (darkNow) Res.string.shell_light_theme else Res.string.shell_dark_theme)) },
+                text = { Text(localized(if (darkNow) Str.shell_light_theme else Str.shell_dark_theme)) },
                 leadingIcon = { Icon(if (darkNow) Icons.Filled.LightMode else Icons.Filled.DarkMode, null, Modifier.size(16.dp)) },
                 onClick = { open = false; onToggleTheme() },
                 modifier = Modifier.testTag("rail_settings_theme"),
             )
             DropdownMenuItem(
-                text = { Text(localized(Res.string.shell_usage)) },
+                text = { Text(localized(Str.shell_usage)) },
                 leadingIcon = { Icon(Icons.Filled.DataUsage, null, Modifier.size(16.dp)) },
                 onClick = { open = false; onUsage() },
                 modifier = Modifier.testTag("rail_settings_usage"),
             )
             DropdownMenuItem(
-                text = { Text(localized(Res.string.shell_devices)) },
+                text = { Text(localized(Str.shell_devices)) },
                 leadingIcon = { Icon(Icons.Filled.Devices, null, Modifier.size(16.dp)) },
                 onClick = { open = false; onDevices() },
                 modifier = Modifier.testTag("rail_settings_devices"),
             )
             HorizontalDivider(Modifier.padding(vertical = 4.dp))
             DropdownMenuItem(
-                text = { Text(localized(Res.string.shell_settings_ellipsis)) },
+                text = { Text(localized(Str.shell_settings_ellipsis)) },
                 leadingIcon = { Icon(Icons.Filled.Settings, null, Modifier.size(16.dp)) },
                 onClick = { open = false; onSettings() },
                 modifier = Modifier.testTag("rail_settings_open"),
@@ -782,7 +765,7 @@ private fun ProjectFlyout(
                         Modifier.size(24.dp).clip(RoundedCornerShape(6.dp)).clickable(onClick = onBack),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = localized(Res.string.shell_all_projects), tint = cs.onSurfaceVariant, modifier = Modifier.size(14.dp))
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = localized(Str.shell_all_projects), tint = cs.onSurfaceVariant, modifier = Modifier.size(14.dp))
                     }
                     Spacer(Modifier.width(4.dp))
                 }
@@ -793,11 +776,11 @@ private fun ProjectFlyout(
                     Spacer(Modifier.width(8.dp))
                     Box(Modifier.size(6.dp).clip(CircleShape).background(UnreadGreen))
                     Spacer(Modifier.width(4.dp))
-                    Text(localized(Res.string.shell_unread_new, p.unread), color = cs.onSurface.copy(alpha = 0.8f), fontSize = 11.sp)
+                    Text(localized(Str.shell_unread_new, p.unread), color = cs.onSurface.copy(alpha = 0.8f), fontSize = 11.sp)
                 }
                 Spacer(Modifier.weight(1f))
                 Text(
-                    localized(Res.string.shell_show_in_sidebar),
+                    localized(Str.shell_show_in_sidebar),
                     color = cs.onSurfaceVariant,
                     fontSize = 11.5.sp,
                     modifier = Modifier
@@ -815,7 +798,7 @@ private fun ProjectFlyout(
             ) {
                 live.forEach { w -> FlyoutRow(w, onOpen) }
                 if (settled.isNotEmpty()) {
-                    Text(localized(Res.string.shell_settled), color = cs.onSurfaceVariant.copy(alpha = 0.6f), fontSize = 10.5.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 14.dp, top = 8.dp, bottom = 3.dp))
+                    Text(localized(Str.shell_settled), color = cs.onSurfaceVariant.copy(alpha = 0.6f), fontSize = 10.5.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 14.dp, top = 8.dp, bottom = 3.dp))
                     settled.forEach { w -> FlyoutRow(w, onOpen) }
                 }
             }
@@ -880,7 +863,7 @@ private fun AllProjectsFlyout(all: List<RailProject>, flyout: RailFlyout, onPick
     RailSurface(Modifier.width(280.dp).testTag("rail_flyout_all")) {
         Column {
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(localized(Res.string.shell_all_projects), color = cs.onSurface, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                Text(localized(Str.shell_all_projects), color = cs.onSurface, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                 Text("${all.size}", color = cs.onSurfaceVariant.copy(alpha = 0.6f), fontFamily = MonoFontFamily, fontSize = 11.sp)
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(cs.onSurface.copy(alpha = 0.07f)))
@@ -905,7 +888,7 @@ private fun AllProjectsFlyout(all: List<RailProject>, flyout: RailFlyout, onPick
                         if (p.unread > 0) {
                             Box(Modifier.size(6.dp).clip(CircleShape).background(UnreadGreen))
                             Spacer(Modifier.width(4.dp))
-                            Text(localized(Res.string.shell_unread_new, p.unread), color = cs.onSurface.copy(alpha = 0.8f), fontSize = 11.sp)
+                            Text(localized(Str.shell_unread_new, p.unread), color = cs.onSurface.copy(alpha = 0.8f), fontSize = 11.sp)
                         } else {
                             Text("${p.rows.size}", color = cs.onSurfaceVariant.copy(alpha = 0.55f), fontFamily = MonoFontFamily, fontSize = 11.sp)
                         }
@@ -929,7 +912,7 @@ val SIDEBAR_BAND = 44.dp
  */
 @Composable
 internal fun SidebarBandToggle(collapsed: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifier) {
-    val label = localized(if (collapsed) Res.string.shell_show_sidebar else Res.string.shell_hide_sidebar)
+    val label = localized(if (collapsed) Str.shell_show_sidebar else Str.shell_hide_sidebar)
     Box(modifier.width(RAIL_WIDTH).height(SIDEBAR_BAND), contentAlignment = Alignment.Center) {
         RailTile(onClick = onToggle, tag = "sidebar_toggle", label = label) {
             Icon(

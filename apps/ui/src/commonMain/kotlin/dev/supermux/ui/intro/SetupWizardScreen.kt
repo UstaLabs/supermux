@@ -50,28 +50,11 @@ import dev.supermux.ui.platform.LocalPlatform
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.supermux.net.AgentInstallStatus
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.StringKey
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.resources.Res
 import dev.supermux.ui.resources.mux_logo
-import dev.supermux.ui.resources.setup_back
-import dev.supermux.ui.resources.setup_create_first_session
-import dev.supermux.ui.resources.setup_done_text
-import dev.supermux.ui.resources.setup_done_title
-import dev.supermux.ui.resources.setup_finish_failed
-import dev.supermux.ui.resources.setup_header
-import dev.supermux.ui.resources.setup_next
-import dev.supermux.ui.resources.setup_privacy
-import dev.supermux.ui.resources.setup_privacy_and_labs
-import dev.supermux.ui.resources.setup_start
-import dev.supermux.ui.resources.setup_step_done
-import dev.supermux.ui.resources.setup_step_git_hosting
-import dev.supermux.ui.resources.setup_step_phone
-import dev.supermux.ui.resources.setup_step_providers
-import dev.supermux.ui.resources.setup_step_welcome
-import dev.supermux.ui.resources.setup_telemetry_notice
-import dev.supermux.ui.resources.setup_title
-import dev.supermux.ui.resources.setup_welcome_text
-import dev.supermux.ui.resources.setup_welcome_title
 import dev.supermux.ui.settings.AgentSettingsActions
 import dev.supermux.ui.settings.AgentSettingsScreen
 import dev.supermux.ui.settings.DevicesSettingsActions
@@ -81,16 +64,15 @@ import dev.supermux.ui.theme.IconSize
 import dev.supermux.ui.theme.Space
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
-import org.jetbrains.compose.resources.StringResource
 import org.jetbrains.compose.resources.painterResource
 
 /** The five steps' names, in order — Vue's `ONBOARDING_STEP_LABELS`. */
-val SetupStepLabels: List<StringResource> = listOf(
-    Res.string.setup_step_welcome,
-    Res.string.setup_step_providers,
-    Res.string.setup_step_git_hosting,
-    Res.string.setup_step_phone,
-    Res.string.setup_step_done,
+val SetupStepLabels: List<StringKey> = listOf(
+    Str.setup_step_welcome,
+    Str.setup_step_providers,
+    Str.setup_step_git_hosting,
+    Str.setup_step_phone,
+    Str.setup_step_done,
 )
 
 private const val STEP_WELCOME = 0
@@ -177,7 +159,7 @@ fun SetupWizardScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                localized(Res.string.setup_title),
+                localized(Str.setup_title),
                 style = MaterialTheme.typography.titleMedium,
                 color = cs.onSurface,
                 modifier = Modifier.weight(1f),
@@ -185,7 +167,7 @@ fun SetupWizardScreen(
             // ONE text node, not "Step N of 5" + a styled label: the header is what the browser
             // run (and these tests) match on, and two nodes cannot be matched as one string.
             Text(
-                localized(Res.string.setup_header, step + 1, SetupStepLabels.size, localized(SetupStepLabels[step])),
+                localized(Str.setup_header, step + 1, SetupStepLabels.size, localized(SetupStepLabels[step])),
                 style = MaterialTheme.typography.labelMedium,
                 color = cs.onSurfaceVariant,
                 modifier = Modifier.testTag("setup_header"),
@@ -238,7 +220,7 @@ fun SetupWizardScreen(
                             modifier = Modifier.size(IconSize.md),
                         )
                         Spacer(Modifier.size(Space.sm))
-                        Text(localized(Res.string.setup_back))
+                        Text(localized(Str.setup_back))
                     }
                 }
                 Button(
@@ -246,7 +228,7 @@ fun SetupWizardScreen(
                     enabled = step != STEP_AGENTS || agentsCanProceed,
                     modifier = Modifier.testTag("setup_next"),
                 ) {
-                    Text(localized(if (step == STEP_WELCOME) Res.string.setup_start else Res.string.setup_next))
+                    Text(localized(if (step == STEP_WELCOME) Str.setup_start else Str.setup_next))
                     if (step > STEP_WELCOME) {
                         Spacer(Modifier.size(Space.sm))
                         Icon(
@@ -272,13 +254,13 @@ private fun SetupWelcomeStep() {
             modifier = Modifier.size(56.dp),
         )
         Text(
-            localized(Res.string.setup_welcome_title),
+            localized(Str.setup_welcome_title),
             style = MaterialTheme.typography.headlineSmall,
             color = cs.onSurface,
             textAlign = TextAlign.Center,
         )
         Text(
-            localized(Res.string.setup_welcome_text),
+            localized(Str.setup_welcome_text),
             style = MaterialTheme.typography.bodyMedium,
             color = cs.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -311,13 +293,13 @@ private fun SetupDoneStep(
             modifier = Modifier.size(56.dp),
         )
         Text(
-            localized(Res.string.setup_done_title),
+            localized(Str.setup_done_title),
             style = MaterialTheme.typography.headlineSmall,
             color = cs.onSurface,
             textAlign = TextAlign.Center,
         )
         Text(
-            localized(Res.string.setup_done_text),
+            localized(Str.setup_done_text),
             style = MaterialTheme.typography.bodyMedium,
             color = cs.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -326,9 +308,9 @@ private fun SetupDoneStep(
         // (Settings → Privacy where the device has no assistant overlay).
         Text(
             localized(
-                Res.string.setup_telemetry_notice,
+                Str.setup_telemetry_notice,
                 localized(
-                    if (LocalPlatform.current.caps.assistantOverlay) Res.string.setup_privacy_and_labs else Res.string.setup_privacy,
+                    if (LocalPlatform.current.caps.assistantOverlay) Str.setup_privacy_and_labs else Str.setup_privacy,
                 ),
             ),
             style = MaterialTheme.typography.bodySmall,
@@ -363,11 +345,11 @@ private fun SetupDoneStep(
                 )
                 Spacer(Modifier.size(Space.sm))
             }
-            Text(localized(Res.string.setup_create_first_session))
+            Text(localized(Str.setup_create_first_session))
         }
         if (failed) {
             Text(
-                localized(Res.string.setup_finish_failed),
+                localized(Str.setup_finish_failed),
                 style = MaterialTheme.typography.labelMedium,
                 color = cs.error,
                 textAlign = TextAlign.Center,

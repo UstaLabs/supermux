@@ -20,18 +20,11 @@ import dev.supermux.net.OpenCodeProvider
 import dev.supermux.state.FleetStore
 import dev.supermux.state.HostStore
 import dev.supermux.ui.accounts.AccountsActions
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.settings.pages.ProviderDetailPage
 import dev.supermux.ui.settings.pages.ProvidersPage
 import dev.supermux.ui.settings.pages.rememberProvidersState
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.agent_settings_install_failed
-import dev.supermux.ui.resources.agent_settings_install_failed_code
-import dev.supermux.ui.resources.agent_settings_sign_in_expired
-import dev.supermux.ui.resources.agent_settings_authenticated
-import dev.supermux.ui.resources.agent_settings_not_installed
-import dev.supermux.ui.resources.agent_settings_ready_free_tier
-import dev.supermux.ui.resources.agent_settings_installed_not_authenticated
 
 /** The providers whose own sign-in runs a login flow (OpenCode's is its subscription's, on its page). */
 internal val LOGIN_KINDS = setOf("claude", "codex", "cursor", "grok", "antigravity")
@@ -51,7 +44,7 @@ internal fun installFailureMessage(job: AgentInstallJob?): String {
 @Composable
 internal fun localizedInstallFailureMessage(job: AgentInstallJob?): String {
     val code = job?.exitCode
-    val head = if (code != null) localized(Res.string.agent_settings_install_failed_code, code) else localized(Res.string.agent_settings_install_failed)
+    val head = if (code != null) localized(Str.agent_settings_install_failed_code, code) else localized(Str.agent_settings_install_failed)
     val why = job?.error?.trim().orEmpty().replaceFirstChar { it.uppercase() }
     return if (why.isEmpty()) head else "$head $why"
 }
@@ -82,11 +75,11 @@ internal fun statusLabel(status: AgentInstallStatus): String = when {
 @Composable
 internal fun localizedStatusLabel(status: AgentInstallStatus): String = localized(
     when {
-        status.signInExpired -> Res.string.agent_settings_sign_in_expired
-        status.authed -> Res.string.agent_settings_authenticated
-        !status.installed -> Res.string.agent_settings_not_installed
-        status.kind == "opencode" -> Res.string.agent_settings_ready_free_tier
-        else -> Res.string.agent_settings_installed_not_authenticated
+        status.signInExpired -> Str.agent_settings_sign_in_expired
+        status.authed -> Str.agent_settings_authenticated
+        !status.installed -> Str.agent_settings_not_installed
+        status.kind == "opencode" -> Str.agent_settings_ready_free_tier
+        else -> Str.agent_settings_installed_not_authenticated
     },
 )
 

@@ -27,6 +27,8 @@ import dev.supermux.net.AgentInstallStatus
 import dev.supermux.state.AccountResult
 import dev.supermux.ui.accounts.AccountsActions
 import dev.supermux.ui.accounts.accountsFor
+import dev.supermux.ui.i18n.Plurals
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.settings.AgentsLoadState
 import dev.supermux.ui.settings.SettingsPlace
@@ -53,28 +55,6 @@ import dev.supermux.ui.settings.settingsTitle
 import dev.supermux.ui.settings.statusLabel
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.i18n.localizedPlural
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.providers_auto_resume
-import dev.supermux.ui.resources.providers_auto_resume_description
-import dev.supermux.ui.resources.providers_auto_switch
-import dev.supermux.ui.resources.providers_auto_switch_description
-import dev.supermux.ui.resources.providers_composer_note
-import dev.supermux.ui.resources.providers_couldnt_reach
-import dev.supermux.ui.resources.providers_install
-import dev.supermux.ui.resources.providers_install_start_failed
-import dev.supermux.ui.resources.providers_install_timed_out
-import dev.supermux.ui.resources.providers_installing
-import dev.supermux.ui.resources.providers_lede
-import dev.supermux.ui.resources.providers_line_more
-import dev.supermux.ui.resources.providers_loading
-import dev.supermux.ui.resources.providers_no_agents
-import dev.supermux.ui.resources.providers_ready
-import dev.supermux.ui.resources.providers_setting_save_failed
-import dev.supermux.ui.resources.providers_sign_in_again
-import dev.supermux.ui.resources.providers_signing_in
-import dev.supermux.ui.resources.providers_this_machine
-import dev.supermux.ui.resources.providers_try_again
-import dev.supermux.ui.resources.providers_your_login_email
 import dev.supermux.ui.settings.localizedInstallFailureMessage
 import dev.supermux.ui.settings.localizedSettingsTitle
 import dev.supermux.ui.settings.localizedStatusLabel
@@ -98,7 +78,7 @@ fun ProvidersPage(
         localizedSettingsTitle(SettingsPlace(SettingsSection.Providers)),
         modifier,
         scope = { KitMachineScope() },
-        lede = localized(Res.string.providers_lede, providerMachine()),
+        lede = localized(Str.providers_lede, providerMachine()),
         anchor = anchor,
         onAnchorShown = onAnchorShown,
         tag = "agent_settings_screen",
@@ -116,14 +96,14 @@ fun ProvidersPage(
                 Spacer(Modifier.height(18.dp))
                 LimitRows(accounts)
             }
-            KitNote(localized(Res.string.providers_composer_note))
+            KitNote(localized(Str.providers_composer_note))
         }
     }
 }
 
 /** The machine as a sentence names it mid-way: its name, or "this machine" when Settings knows none. */
 @Composable
-internal fun providerMachine(): String = LocalSettingsMachines.current?.current?.name ?: localized(Res.string.providers_this_machine)
+internal fun providerMachine(): String = LocalSettingsMachines.current?.current?.name ?: localized(Str.providers_this_machine)
 
 /** A provider's name as the prototype writes it: Claude's agent is "Claude Code". */
 internal fun providerName(kind: String): String = settingsTitle(SettingsPlace(SettingsSection.Providers, kind))
@@ -143,14 +123,14 @@ internal fun providerMark(kind: String): String = when (kind) {
 @Composable
 private fun ProvidersList(providers: ProvidersState, accounts: List<AccountDto>, onOpen: (String) -> Unit) {
     when (val s = providers.load) {
-        AgentsLoadState.Loading -> KitNote(localized(Res.string.providers_loading), Modifier.testTag("agent_settings_loading"))
+        AgentsLoadState.Loading -> KitNote(localized(Str.providers_loading), Modifier.testTag("agent_settings_loading"))
         AgentsLoadState.Empty -> Column(Modifier.testTag("agent_settings_empty")) {
-            KitNote(localized(Res.string.providers_no_agents, currentMachineName()))
-            KitTextAction(localized(Res.string.providers_try_again), providers::reload, Modifier.testTag("agent_settings_retry"))
+            KitNote(localized(Str.providers_no_agents, currentMachineName()))
+            KitTextAction(localized(Str.providers_try_again), providers::reload, Modifier.testTag("agent_settings_retry"))
         }
         is AgentsLoadState.Error -> Column(Modifier.testTag("agent_settings_error")) {
-            KitNote(localized(Res.string.providers_couldnt_reach, providerMachine()))
-            KitTextAction(localized(Res.string.providers_try_again), providers::reload, Modifier.testTag("agent_settings_retry"))
+            KitNote(localized(Str.providers_couldnt_reach, providerMachine()))
+            KitTextAction(localized(Str.providers_try_again), providers::reload, Modifier.testTag("agent_settings_retry"))
         }
         is AgentsLoadState.Ready -> KitItemList {
             s.statuses.forEach { status -> ProviderItem(status, providers.holder(status.kind), accounts, onOpen) }
@@ -168,14 +148,14 @@ private fun ProviderItem(status: AgentInstallStatus, p: ProviderState, all: List
         (p.installRequestFailed || p.installTimedOut || normalizeInstallState(p.install?.state) == "failed")
     val base = when {
         installFailed -> when {
-            p.installRequestFailed -> localized(Res.string.providers_install_start_failed)
-            p.installTimedOut -> localized(Res.string.providers_install_timed_out)
+            p.installRequestFailed -> localized(Str.providers_install_start_failed)
+            p.installTimedOut -> localized(Str.providers_install_timed_out)
             else -> localizedInstallFailureMessage(p.install)
         }
-        status.authed && email != null -> localized(Res.string.providers_your_login_email, email)
+        status.authed && email != null -> localized(Str.providers_your_login_email, email)
         else -> localizedStatusLabel(status)
     }
-    val line = if (added > 0 && status.installed) localizedPlural(Res.plurals.providers_line_more, added, base, added) else base
+    val line = if (added > 0 && status.installed) localizedPlural(Plurals.providers_line_more, added, base, added) else base
     // `agent_row_‹kind›` is the tag the shell's tests have always found a provider by.
     Box(Modifier.testTag("agent_row_$kind")) {
         KitItem(
@@ -189,12 +169,12 @@ private fun ProviderItem(status: AgentInstallStatus, p: ProviderState, all: List
             when {
                 !status.installed && p.installActive ->
                     // Its own node (the item merges what it holds), so the running install can be found by its tag.
-                    KitItemStatus(localized(Res.string.providers_installing), modifier = Modifier.semantics(mergeDescendants = true) {}.testTag("agent_install_running_$kind"))
+                    KitItemStatus(localized(Str.providers_installing), modifier = Modifier.semantics(mergeDescendants = true) {}.testTag("agent_install_running_$kind"))
                 !status.installed ->
-                    KitGhostButton(localized(Res.string.providers_install), onClick = p::startInstall, modifier = Modifier.testTag("agent_install_start_$kind"))
-                p.loginActive -> KitItemStatus(localized(Res.string.providers_signing_in))
-                status.signInExpired -> KitItemStatus(localized(Res.string.providers_sign_in_again), warn = true)
-                status.authed || kind == "opencode" -> KitItemStatus(localized(Res.string.providers_ready), dot = KitDot.Ok)
+                    KitGhostButton(localized(Str.providers_install), onClick = p::startInstall, modifier = Modifier.testTag("agent_install_start_$kind"))
+                p.loginActive -> KitItemStatus(localized(Str.providers_signing_in))
+                status.signInExpired -> KitItemStatus(localized(Str.providers_sign_in_again), warn = true)
+                status.authed || kind == "opencode" -> KitItemStatus(localized(Str.providers_ready), dot = KitDot.Ok)
             }
         }
     }
@@ -209,7 +189,7 @@ private fun LimitRows(accounts: AccountsActions) {
     var pendingSwitch by remember { mutableStateOf<Boolean?>(null) }
     var pendingResume by remember { mutableStateOf<Boolean?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
-    val saveFailed = localized(Res.string.providers_setting_save_failed)
+    val saveFailed = localized(Str.providers_setting_save_failed)
 
     fun save(on: Boolean, pending: (Boolean?) -> Unit, call: suspend (Boolean) -> AccountResult<Boolean>) {
         pending(on)
@@ -222,19 +202,19 @@ private fun LimitRows(accounts: AccountsActions) {
     }
 
     KitToggleRow(
-        localized(Res.string.providers_auto_switch),
+        localized(Str.providers_auto_switch),
         checked = pendingSwitch ?: autoSwitch ?: false,
         onCheckedChange = { save(it, { v -> pendingSwitch = v }, accounts.setAutoSwitch) },
         modifier = Modifier.kitAnchor("auto-switch").testTag("accounts-autoswitch"),
-        description = localized(Res.string.providers_auto_switch_description),
+        description = localized(Str.providers_auto_switch_description),
     )
     KitToggleRow(
-        localized(Res.string.providers_auto_resume),
+        localized(Str.providers_auto_resume),
         // On unless turned off.
         checked = pendingResume ?: autoResume ?: true,
         onCheckedChange = { save(it, { v -> pendingResume = v }, accounts.setAutoResume) },
         modifier = Modifier.kitAnchor("limit-resume").testTag("accounts-autoresume"),
-        description = localized(Res.string.providers_auto_resume_description),
+        description = localized(Str.providers_auto_resume_description),
     )
     error?.let {
         Text(it, fontSize = 12.sp, color = kitColors().warn, modifier = Modifier.padding(top = 6.dp).testTag("accounts-autoswitch-error"))

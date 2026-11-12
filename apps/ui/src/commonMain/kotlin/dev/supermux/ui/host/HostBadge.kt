@@ -49,24 +49,8 @@ import dev.supermux.host.hostDotArgb
 import dev.supermux.proto.SessionInfo
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.host_add_item
-import dev.supermux.ui.resources.host_all
-import dev.supermux.ui.resources.host_cancel
-import dev.supermux.ui.resources.host_forget
-import dev.supermux.ui.resources.host_forget_item
-import dev.supermux.ui.resources.host_forget_text
-import dev.supermux.ui.resources.host_forget_title
-import dev.supermux.ui.resources.host_label
-import dev.supermux.ui.resources.host_offline
-import dev.supermux.ui.resources.host_offline_dot
-import dev.supermux.ui.resources.host_offline_paren
-import dev.supermux.ui.resources.host_open
-import dev.supermux.ui.resources.host_rename
-import dev.supermux.ui.resources.host_rename_item
-import dev.supermux.ui.resources.host_rename_title
-import dev.supermux.ui.resources.host_selected
 import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.widgets.AlertDialog
 import dev.supermux.ui.widgets.DropdownMenu
@@ -139,14 +123,14 @@ fun HostScopePicker(
     val cs = MaterialTheme.colorScheme
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
     var expanded by remember { mutableStateOf(false) }
-    val hostLabel = localized(Res.string.host_label)
+    val hostLabel = localized(Str.host_label)
 
     @Composable
     fun Menu() {
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             hosts.forEach { host ->
                 DropdownMenuItem(
-                    text = { Text(if (host.online) host.displayLabel else localized(Res.string.host_offline_paren, host.displayLabel)) },
+                    text = { Text(if (host.online) host.displayLabel else localized(Str.host_offline_paren, host.displayLabel)) },
                     leadingIcon = { HostDot(host.colorIndex, size = 10.dp) },
                     onClick = { expanded = false; onSelect(host.recordId) },
                 )
@@ -173,7 +157,7 @@ fun HostScopePicker(
             }
             HostDot(selected.colorIndex, size = 9.dp)
             Text(
-                if (selected.online) selected.displayLabel else localized(Res.string.host_offline_dot, selected.displayLabel),
+                if (selected.online) selected.displayLabel else localized(Str.host_offline_dot, selected.displayLabel),
                 modifier = Modifier.padding(start = 7.dp, end = 5.dp),
                 color = cs.onSurface,
                 fontSize = if (compact) 14.sp else TextUnit.Unspecified,
@@ -249,8 +233,8 @@ fun HostSwitcher(
     var renameTarget by dialogs::renameTarget
     var renameText by dialogs::renameText
     var forgetTarget by dialogs::forgetTarget
-    val allHosts = localized(Res.string.host_all)
-    val offlineWord = localized(Res.string.host_offline)
+    val allHosts = localized(Str.host_all)
+    val offlineWord = localized(Str.host_offline)
 
     Box(modifier) {
         if (compact) {
@@ -338,7 +322,7 @@ fun HostSwitcher(
             HorizontalDivider(Modifier.padding(vertical = 4.dp))
             if (current != null && onOpenHost != null) {
                 DropdownMenuItem(
-                    text = { Text(localized(Res.string.host_open, current.displayLabel)) },
+                    text = { Text(localized(Str.host_open, current.displayLabel)) },
                     leadingIcon = {
                         Icon(Icons.Filled.Dns, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(14.dp))
                     },
@@ -348,18 +332,18 @@ fun HostSwitcher(
             }
             if (current != null) {
                 DropdownMenuItem(
-                    text = { Text(localized(Res.string.host_rename_item, current.displayLabel)) },
+                    text = { Text(localized(Str.host_rename_item, current.displayLabel)) },
                     onClick = { expanded = false; renameText = current.displayLabel; renameTarget = current },
                     modifier = Modifier.testTag("host_switcher_rename"),
                 )
                 DropdownMenuItem(
-                    text = { Text(localized(Res.string.host_forget_item, current.displayLabel), color = cs.error) },
+                    text = { Text(localized(Str.host_forget_item, current.displayLabel), color = cs.error) },
                     onClick = { expanded = false; forgetTarget = current },
                     modifier = Modifier.testTag("host_switcher_forget"),
                 )
             }
             DropdownMenuItem(
-                text = { Text(localized(Res.string.host_add_item)) },
+                text = { Text(localized(Str.host_add_item)) },
                 leadingIcon = { Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp)) },
                 onClick = { expanded = false; onAddHost() },
                 modifier = Modifier.testTag("host_switcher_add"),
@@ -370,7 +354,7 @@ fun HostSwitcher(
     renameTarget?.let { target ->
         AlertDialog(
             onDismissRequest = { renameTarget = null },
-            title = { Text(localized(Res.string.host_rename_title)) },
+            title = { Text(localized(Str.host_rename_title)) },
             text = {
                 OutlinedTextField(
                     value = renameText,
@@ -384,23 +368,23 @@ fun HostSwitcher(
                     onClick = { onRenameHost(target.recordId, renameText.trim()); renameTarget = null },
                     enabled = renameText.trim().isNotBlank(),
                     modifier = Modifier.testTag("host_rename_confirm"),
-                ) { Text(localized(Res.string.host_rename)) }
+                ) { Text(localized(Str.host_rename)) }
             },
-            dismissButton = { TextButton(onClick = { renameTarget = null }) { Text(localized(Res.string.host_cancel)) } },
+            dismissButton = { TextButton(onClick = { renameTarget = null }) { Text(localized(Str.host_cancel)) } },
         )
     }
     forgetTarget?.let { target ->
         AlertDialog(
             onDismissRequest = { forgetTarget = null },
-            title = { Text(localized(Res.string.host_forget_title)) },
-            text = { Text(localized(Res.string.host_forget_text, target.displayLabel)) },
+            title = { Text(localized(Str.host_forget_title)) },
+            text = { Text(localized(Str.host_forget_text, target.displayLabel)) },
             confirmButton = {
                 TextButton(
                     onClick = { onForgetHost(target.recordId); forgetTarget = null },
                     modifier = Modifier.testTag("host_forget_confirm"),
-                ) { Text(localized(Res.string.host_forget), color = cs.error) }
+                ) { Text(localized(Str.host_forget), color = cs.error) }
             },
-            dismissButton = { TextButton(onClick = { forgetTarget = null }) { Text(localized(Res.string.host_cancel)) } },
+            dismissButton = { TextButton(onClick = { forgetTarget = null }) { Text(localized(Str.host_cancel)) } },
         )
     }
 }
@@ -419,7 +403,7 @@ private fun MenuTrailing(count: Int, checked: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         if (count > 0) Text("$count", color = cs.onSurfaceVariant, fontSize = 11.sp)
         Box(Modifier.size(14.dp)) {
-            if (checked) Icon(Icons.Filled.Check, contentDescription = localized(Res.string.host_selected), tint = cs.primary, modifier = Modifier.size(14.dp))
+            if (checked) Icon(Icons.Filled.Check, contentDescription = localized(Str.host_selected), tint = cs.primary, modifier = Modifier.size(14.dp))
         }
     }
 }

@@ -50,12 +50,10 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.i18n.uppercaseInAppLanguage
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.machine_kit_expanded
-import dev.supermux.ui.resources.machine_kit_collapsed
 
 /** The focus ring's shape on a whole row. */
 private val RowRing = RoundedCornerShape(4.dp)
@@ -396,8 +394,8 @@ fun KitFold(
     LaunchedEffect(target) { if (target != null && target in anchors) open = true }
     val turn by animateFloatAsState(if (open) 90f else 0f, tween(120), label = "kit-fold") // i18n-ok: animation debug label
     val src = remember { MutableInteractionSource() }
-    val expanded = localized(Res.string.machine_kit_expanded)
-    val collapsed = localized(Res.string.machine_kit_collapsed)
+    val expanded = localized(Str.machine_kit_expanded)
+    val collapsed = localized(Str.machine_kit_collapsed)
     Column(modifier.fillMaxWidth()) {
         Row(
             Modifier

@@ -66,76 +66,12 @@ import dev.supermux.fs.fileNameOf
 import dev.supermux.fs.hostParent
 import dev.supermux.net.WorktreeListDto
 import dev.supermux.net.WorktreeSummaryDto
+import dev.supermux.ui.i18n.Plurals
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.i18n.localizedPlural
 import dev.supermux.ui.i18n.uppercaseInAppLanguage
 import dev.supermux.ui.nav.SettingsSection
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.common_clear
-import dev.supermux.ui.resources.machine_fallback_name
-import dev.supermux.ui.resources.worktrees_ago_days
-import dev.supermux.ui.resources.worktrees_ago_months
-import dev.supermux.ui.resources.worktrees_ago_today
-import dev.supermux.ui.resources.worktrees_ago_weeks
-import dev.supermux.ui.resources.worktrees_ago_yesterday
-import dev.supermux.ui.resources.worktrees_cancel
-import dev.supermux.ui.resources.worktrees_cant_check
-import dev.supermux.ui.resources.worktrees_cant_delete
-import dev.supermux.ui.resources.worktrees_cant_delete_why
-import dev.supermux.ui.resources.worktrees_cant_look
-import dev.supermux.ui.resources.worktrees_cant_reach
-import dev.supermux.ui.resources.worktrees_cant_undo
-import dev.supermux.ui.resources.worktrees_changed_files
-import dev.supermux.ui.resources.worktrees_chat_worktrees
-import dev.supermux.ui.resources.worktrees_clean_count
-import dev.supermux.ui.resources.worktrees_clean_none
-import dev.supermux.ui.resources.worktrees_counting
-import dev.supermux.ui.resources.worktrees_delete
-import dev.supermux.ui.resources.worktrees_delete_all_gone
-import dev.supermux.ui.resources.worktrees_delete_head
-import dev.supermux.ui.resources.worktrees_delete_n
-import dev.supermux.ui.resources.worktrees_delete_none_changed
-import dev.supermux.ui.resources.worktrees_delete_some_gone
-import dev.supermux.ui.resources.worktrees_delete_title
-import dev.supermux.ui.resources.worktrees_deleted
-import dev.supermux.ui.resources.worktrees_deleting
-import dev.supermux.ui.resources.worktrees_disk
-import dev.supermux.ui.resources.worktrees_disk_failed
-import dev.supermux.ui.resources.worktrees_disk_note
-import dev.supermux.ui.resources.worktrees_disk_summary
-import dev.supermux.ui.resources.worktrees_empty
-import dev.supermux.ui.resources.worktrees_every_folder_changed
-import dev.supermux.ui.resources.worktrees_folders
-import dev.supermux.ui.resources.worktrees_gone_detail
-import dev.supermux.ui.resources.worktrees_gone_note
-import dev.supermux.ui.resources.worktrees_gone_text
-import dev.supermux.ui.resources.worktrees_gone_title
-import dev.supermux.ui.resources.worktrees_has_changes
-import dev.supermux.ui.resources.worktrees_in_use
-import dev.supermux.ui.resources.worktrees_in_use_by
-import dev.supermux.ui.resources.worktrees_last_used
-import dev.supermux.ui.resources.worktrees_more_gone
-import dev.supermux.ui.resources.worktrees_no_changes
-import dev.supermux.ui.resources.worktrees_no_chat
-import dev.supermux.ui.resources.worktrees_none
-import dev.supermux.ui.resources.worktrees_nothing_on_disk
-import dev.supermux.ui.resources.worktrees_paused
-import dev.supermux.ui.resources.worktrees_refresh
-import dev.supermux.ui.resources.worktrees_refreshing
-import dev.supermux.ui.resources.worktrees_repo_missing
-import dev.supermux.ui.resources.worktrees_row_last_used
-import dev.supermux.ui.resources.worktrees_select_clean
-import dev.supermux.ui.resources.worktrees_select_folder
-import dev.supermux.ui.resources.worktrees_select_it
-import dev.supermux.ui.resources.worktrees_show_more
-import dev.supermux.ui.resources.worktrees_showing
-import dev.supermux.ui.resources.worktrees_size
-import dev.supermux.ui.resources.worktrees_size_in
-import dev.supermux.ui.resources.worktrees_sort
-import dev.supermux.ui.resources.worktrees_try_again
-import dev.supermux.ui.resources.worktrees_unknown_location
-import dev.supermux.ui.resources.worktrees_unmerged_commits
-import dev.supermux.ui.resources.worktrees_updating
 import dev.supermux.ui.retain.rememberRetainedOnPage
 import dev.supermux.ui.retain.rememberRetainedScope
 import dev.supermux.ui.settings.HostingPhase
@@ -240,36 +176,36 @@ private sealed class RowError {
 // ─── The copy in the app's language ──────────────────────────────────────────────────────────────
 
 @Composable
-private fun foldersText(n: Int): String = localizedPlural(Res.plurals.worktrees_folders, n, n)
+private fun foldersText(n: Int): String = localizedPlural(Plurals.worktrees_folders, n, n)
 
 @Composable
 private fun cleanText(clean: Int): String =
-    if (clean == 0) localized(Res.string.worktrees_clean_none) else localizedPlural(Res.plurals.worktrees_clean_count, clean, clean)
+    if (clean == 0) localized(Str.worktrees_clean_none) else localizedPlural(Plurals.worktrees_clean_count, clean, clean)
 
 /** The machine page's Disk row: "18.4 GB in 212 folders · 140 have no changes". */
 @Composable
 private fun diskSummaryText(bytes: Long, folders: Int, clean: Int): String =
-    if (folders == 0) localized(Res.string.worktrees_none)
-    else localized(Res.string.worktrees_disk_summary, formatBytes(bytes), foldersText(folders), cleanText(clean))
+    if (folders == 0) localized(Str.worktrees_none)
+    else localized(Str.worktrees_disk_summary, formatBytes(bytes), foldersText(folders), cleanText(clean))
 
 /** The page's own totals: the clean count only when there is one. */
 @Composable
 private fun pageSummaryText(bytes: Long, folders: Int, clean: Int): String =
-    if (clean == 0) localized(Res.string.worktrees_size_in, formatBytes(bytes), foldersText(folders))
-    else localized(Res.string.worktrees_disk_summary, formatBytes(bytes), foldersText(folders), cleanText(clean))
+    if (clean == 0) localized(Str.worktrees_size_in, formatBytes(bytes), foldersText(folders))
+    else localized(Str.worktrees_disk_summary, formatBytes(bytes), foldersText(folders), cleanText(clean))
 
 @Composable
-private fun selectCleanText(n: Int): String = localized(Res.string.worktrees_select_clean, n)
+private fun selectCleanText(n: Int): String = localized(Str.worktrees_select_clean, n)
 
 @Composable
 private fun deleteTextLocalized(n: Int, bytes: Long, gone: Int): String {
-    val head = localizedPlural(Res.plurals.worktrees_delete_head, n, formatBytes(bytes))
+    val head = localizedPlural(Plurals.worktrees_delete_head, n, formatBytes(bytes))
     val mid = when {
-        gone == 0 -> localized(Res.string.worktrees_delete_none_changed)
-        gone == n -> localizedPlural(Res.plurals.worktrees_delete_all_gone, n)
-        else -> localizedPlural(Res.plurals.worktrees_delete_some_gone, gone, foldersText(gone))
+        gone == 0 -> localized(Str.worktrees_delete_none_changed)
+        gone == n -> localizedPlural(Plurals.worktrees_delete_all_gone, n)
+        else -> localizedPlural(Plurals.worktrees_delete_some_gone, gone, foldersText(gone))
     }
-    return "$head $mid ${localized(Res.string.worktrees_cant_undo)}"
+    return "$head $mid ${localized(Str.worktrees_cant_undo)}"
 }
 
 /** "today", "yesterday", "3 days ago", "3 weeks ago", "2 months ago". */
@@ -277,31 +213,31 @@ private fun deleteTextLocalized(n: Int, bytes: Long, gone: Int): String {
 private fun agoText(nowMs: Long, thenMs: Long): String {
     val d = WorktreesCopy.daysAgo(nowMs, thenMs)
     return when {
-        d == 0 -> localized(Res.string.worktrees_ago_today)
-        d == 1 -> localized(Res.string.worktrees_ago_yesterday)
-        d < 14 -> localizedPlural(Res.plurals.worktrees_ago_days, d, d)
-        d < 60 -> (d / 7.0).roundToInt().let { localizedPlural(Res.plurals.worktrees_ago_weeks, it, it) }
-        else -> (d / 30.0).roundToInt().let { localizedPlural(Res.plurals.worktrees_ago_months, it, it) }
+        d == 0 -> localized(Str.worktrees_ago_today)
+        d == 1 -> localized(Str.worktrees_ago_yesterday)
+        d < 14 -> localizedPlural(Plurals.worktrees_ago_days, d, d)
+        d < 60 -> (d / 7.0).roundToInt().let { localizedPlural(Plurals.worktrees_ago_weeks, it, it) }
+        else -> (d / 30.0).roundToInt().let { localizedPlural(Plurals.worktrees_ago_months, it, it) }
     }
 }
 
 @Composable
 private fun lockText(reason: LockReason): String = when (reason) {
-    LockReason.InUse -> localized(Res.string.worktrees_in_use)
-    LockReason.CantLook -> localized(Res.string.worktrees_cant_look)
+    LockReason.InUse -> localized(Str.worktrees_in_use)
+    LockReason.CantLook -> localized(Str.worktrees_cant_look)
     is LockReason.Changes -> {
-        val files = if (reason.uncommitted > 0) localizedPlural(Res.plurals.worktrees_changed_files, reason.uncommitted, reason.uncommitted) else null
-        val commits = if (reason.unmerged > 0) localizedPlural(Res.plurals.worktrees_unmerged_commits, reason.unmerged, reason.unmerged) else null
-        val hasChanges = localized(Res.string.worktrees_has_changes)
+        val files = if (reason.uncommitted > 0) localizedPlural(Plurals.worktrees_changed_files, reason.uncommitted, reason.uncommitted) else null
+        val commits = if (reason.unmerged > 0) localizedPlural(Plurals.worktrees_unmerged_commits, reason.unmerged, reason.unmerged) else null
+        val hasChanges = localized(Str.worktrees_has_changes)
         listOfNotNull(files, commits).joinToString(" · ").ifEmpty { hasChanges }
     }
 }
 
 @Composable
 private fun rowErrorText(error: RowError, machine: String): String = when (error) {
-    RowError.Unreachable -> localized(Res.string.worktrees_cant_reach, machine)
-    is RowError.InUse -> localized(Res.string.worktrees_in_use_by, error.by)
-    is RowError.Failed -> if (error.why == null) localized(Res.string.worktrees_cant_delete) else localized(Res.string.worktrees_cant_delete_why, error.why)
+    RowError.Unreachable -> localized(Str.worktrees_cant_reach, machine)
+    is RowError.InUse -> localized(Str.worktrees_in_use_by, error.by)
+    is RowError.Failed -> if (error.why == null) localized(Str.worktrees_cant_delete) else localized(Str.worktrees_cant_delete_why, error.why)
 }
 
 /** Rows the page draws at first, and how many more each Show more adds. */
@@ -366,7 +302,7 @@ internal fun DiskSection(actions: WorktreesSettingsActions, machine: String, qui
         }
     }
 
-    KitSectionHead(localized(Res.string.worktrees_disk), Modifier.kitAnchor("disk"))
+    KitSectionHead(localized(Str.worktrees_disk), Modifier.kitAnchor("disk"))
     if (!running) {
         KitNote(quiet!!, Modifier.testTag("machine_disk_quiet"))
         return
@@ -380,22 +316,22 @@ internal fun DiskSection(actions: WorktreesSettingsActions, machine: String, qui
     val c = kitColors()
     KitItemList {
         KitItem(
-            localized(Res.string.worktrees_chat_worktrees),
+            localized(Str.worktrees_chat_worktrees),
             Modifier.testTag("machine_worktrees"),
             subtitle = when {
-                state is Loaded.Failed -> localized(Res.string.worktrees_disk_failed, machine)
-                list == null || (list.scanning && folders == 0) -> localized(Res.string.worktrees_counting)
+                state is Loaded.Failed -> localized(Str.worktrees_disk_failed, machine)
+                list == null || (list.scanning && folders == 0) -> localized(Str.worktrees_counting)
                 else -> diskSummaryText(bytes, folders, clean)
             },
             subtitleWarn = state is Loaded.Failed,
             mark = KitMark.Glyph(KitGlyphs.Tree),
             onClick = onOpen,
         ) {
-            if (state is Loaded.Failed) KitTextAction(localized(Res.string.worktrees_try_again), { reload++ }, Modifier.testTag("wt_retry"))
+            if (state is Loaded.Failed) KitTextAction(localized(Str.worktrees_try_again), { reload++ }, Modifier.testTag("wt_retry"))
             Icon(KitGlyphs.Chevron, contentDescription = null, tint = c.faint, modifier = Modifier.size(14.dp))
         }
     }
-    KitNote(localized(Res.string.worktrees_disk_note))
+    KitNote(localized(Str.worktrees_disk_note))
 }
 
 // ─── The Worktrees page ──────────────────────────────────────────────────────────────────────────
@@ -441,7 +377,7 @@ fun WorktreesPage(
 ) {
     val machine = LocalSettingsMachines.current?.current
     val name = if (hosting != null) machine?.name?.takeIf { machine.local } ?: MachineCopy.THIS_COMPUTER
-    else machine?.name ?: localized(Res.string.machine_fallback_name)
+    else machine?.name ?: localized(Str.machine_fallback_name)
     val up = if (hosting != null) hosting.state.phase == HostingPhase.Running else machine?.online ?: true
     val offline = machineQuiet(hosting, up, name, machine?.lastSeen.orEmpty())
     val form = rememberRetainedOnPage("machine-worktrees") { WorktreesForm() }
@@ -549,11 +485,11 @@ private fun WorktreesList(actions: WorktreesSettingsActions, form: WorktreesForm
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Icon(KitGlyphs.Warn, contentDescription = null, tint = c.warn, modifier = Modifier.size(15.dp))
-                Text(localized(Res.string.worktrees_disk_failed, machine), fontSize = 12.5.sp, color = c.warn, modifier = Modifier.weight(1f))
-                KitTextAction(localized(Res.string.worktrees_try_again), { reload++ }, Modifier.testTag("wt_retry"))
+                Text(localized(Str.worktrees_disk_failed, machine), fontSize = 12.5.sp, color = c.warn, modifier = Modifier.weight(1f))
+                KitTextAction(localized(Str.worktrees_try_again), { reload++ }, Modifier.testTag("wt_retry"))
             }
         } else {
-            Text(localized(Res.string.worktrees_counting), fontSize = 13.sp, color = c.dim, modifier = Modifier.padding(top = 12.dp).testTag("wt_counting"))
+            Text(localized(Str.worktrees_counting), fontSize = 13.sp, color = c.dim, modifier = Modifier.padding(top = 12.dp).testTag("wt_counting"))
         }
         return
     }
@@ -572,26 +508,26 @@ private fun WorktreesList(actions: WorktreesSettingsActions, form: WorktreesForm
     // ── Totals and Refresh ──
     Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(
-            if (folders == 0) localized(Res.string.worktrees_nothing_on_disk) else pageSummaryText(bytes, folders, v.clean.size),
+            if (folders == 0) localized(Str.worktrees_nothing_on_disk) else pageSummaryText(bytes, folders, v.clean.size),
             fontSize = 13.sp,
             color = if (folders == 0) c.dim else c.text,
             modifier = Modifier.weight(1f).testTag("wt_summary"),
         )
         if (form.refreshing) {
-            Text(localized(Res.string.worktrees_refreshing), fontSize = 13.sp, color = c.dim, modifier = Modifier.testTag("wt_refreshing"))
+            Text(localized(Str.worktrees_refreshing), fontSize = 13.sp, color = c.dim, modifier = Modifier.testTag("wt_refreshing"))
         } else {
             val at = form.loadedAt
             if (at != null && folders > 0) {
                 val updated = key(tick, at) { MachinePartsCopy.updatedText(nowMs(), at) }
                 Text("$updated · ", fontSize = 13.sp, color = c.dim, modifier = Modifier.testTag("wt_updated"))
             }
-            KitTextAction(localized(Res.string.worktrees_refresh), ::doRefresh, Modifier.testTag("wt_refresh"))
+            KitTextAction(localized(Str.worktrees_refresh), ::doRefresh, Modifier.testTag("wt_refresh"))
         }
     }
 
     if (folders == 0) {
         Text(
-            localized(Res.string.worktrees_empty),
+            localized(Str.worktrees_empty),
             fontSize = 13.sp,
             color = c.faint,
             textAlign = TextAlign.Center,
@@ -605,15 +541,15 @@ private fun WorktreesList(actions: WorktreesSettingsActions, form: WorktreesForm
     Row(Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(14.dp), itemVerticalAlignment = Alignment.CenterVertically) {
             when {
-                busy -> Text(localized(Res.string.worktrees_paused), fontSize = 12.5.sp, color = c.dim, modifier = Modifier.testTag("wt_paused"))
-                v.clean.isEmpty() -> Text(localized(Res.string.worktrees_every_folder_changed), fontSize = 12.sp, color = c.dim, modifier = Modifier.testTag("wt_every_changed"))
-                allClean -> KitTextAction(localized(Res.string.common_clear), { form.selected = emptySet() }, Modifier.testTag("wt_select_clean"))
+                busy -> Text(localized(Str.worktrees_paused), fontSize = 12.5.sp, color = c.dim, modifier = Modifier.testTag("wt_paused"))
+                v.clean.isEmpty() -> Text(localized(Str.worktrees_every_folder_changed), fontSize = 12.sp, color = c.dim, modifier = Modifier.testTag("wt_every_changed"))
+                allClean -> KitTextAction(localized(Str.common_clear), { form.selected = emptySet() }, Modifier.testTag("wt_select_clean"))
                 else -> {
                     KitTextAction(selectCleanText(v.clean.size), {
                         // Every clean folder, below the fold too; a gone repository's folder picked by hand stays picked.
                         form.selected = form.selected + v.cleanIds
                     }, Modifier.testTag("wt_select_clean"))
-                    if (v.selectedRows.isNotEmpty()) DimAction(localized(Res.string.common_clear), "wt_clear") { form.selected = emptySet() }
+                    if (v.selectedRows.isNotEmpty()) DimAction(localized(Str.common_clear), "wt_clear") { form.selected = emptySet() }
                 }
             }
         }
@@ -625,7 +561,7 @@ private fun WorktreesList(actions: WorktreesSettingsActions, form: WorktreesForm
     val snapshot = remember(v.visible, list) { v.visible.associate { it.id to (it.bytes ?: 0L) } }
     val order = remember(v.visible, form.sort, snapshot) { sorted(v.visible, form.sort) { snapshot[it.id] ?: 0L } }
     val shown = order.take(form.shown)
-    val unknownLocation = localized(Res.string.worktrees_unknown_location)
+    val unknownLocation = localized(Str.worktrees_unknown_location)
     val labels = remember(v.visible, v.gone, unknownLocation) { repoLabels(v.visible + v.gone, unknownLocation) }
     val now = remember(tick, form.loadedAt) { nowMs() }
 
@@ -650,8 +586,8 @@ private fun WorktreesList(actions: WorktreesSettingsActions, form: WorktreesForm
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             itemVerticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(localized(Res.string.worktrees_showing, shown.size, order.size), fontSize = 12.sp, color = c.faint)
-            KitTextAction(localized(Res.string.worktrees_show_more), { form.shown += MORE_ROWS }, Modifier.testTag("wt_show_more"))
+            Text(localized(Str.worktrees_showing, shown.size, order.size), fontSize = 12.sp, color = c.faint)
+            KitTextAction(localized(Str.worktrees_show_more), { form.shown += MORE_ROWS }, Modifier.testTag("wt_show_more"))
         }
     }
 
@@ -659,7 +595,7 @@ private fun WorktreesList(actions: WorktreesSettingsActions, form: WorktreesForm
     list.orphans.takeIf { it.count > 0 }?.let { o ->
         Row(Modifier.padding(top = 26.dp, bottom = 6.dp).testTag("wt_orphans"), verticalAlignment = Alignment.Bottom) {
             Text(
-                localized(Res.string.worktrees_repo_missing).uppercaseInAppLanguage(),
+                localized(Str.worktrees_repo_missing).uppercaseInAppLanguage(),
                 fontSize = 10.5.sp,
                 fontWeight = FontWeight.SemiBold,
                 letterSpacing = 0.63.sp,
@@ -672,7 +608,7 @@ private fun WorktreesList(actions: WorktreesSettingsActions, form: WorktreesForm
             )
         }
         Text(
-            localized(Res.string.worktrees_gone_note, selectCleanText(v.clean.size)),
+            localized(Str.worktrees_gone_note, selectCleanText(v.clean.size)),
             fontSize = 12.sp,
             lineHeight = 18.sp,
             color = c.dim,
@@ -698,7 +634,7 @@ private fun WorktreesList(actions: WorktreesSettingsActions, form: WorktreesForm
         val left = form.goneTotal - form.gone.size
         if (form.gone.isNotEmpty() && left > 0) {
             KitTextAction(
-                localized(Res.string.worktrees_more_gone, left),
+                localized(Str.worktrees_more_gone, left),
                 {
                     calls.launch {
                         val page = actions.orphans(form.gone.size, ORPHAN_PAGE) ?: return@launch
@@ -713,14 +649,14 @@ private fun WorktreesList(actions: WorktreesSettingsActions, form: WorktreesForm
 
     form.confirmGone?.let { w ->
         KitSheet(
-            localized(Res.string.worktrees_gone_title, WorktreesCopy.folder(w)),
+            localized(Str.worktrees_gone_title, WorktreesCopy.folder(w)),
             onDismiss = { form.confirmGone = null },
-            description = localized(Res.string.worktrees_gone_text),
+            description = localized(Str.worktrees_gone_text),
             tag = "wt_gone_dialog",
             buttons = {
-                KitGhostButton(localized(Res.string.worktrees_cancel), { form.confirmGone = null }, Modifier.testTag("wt_gone_cancel"))
+                KitGhostButton(localized(Str.worktrees_cancel), { form.confirmGone = null }, Modifier.testTag("wt_gone_cancel"))
                 KitGhostButton(
-                    localized(Res.string.worktrees_select_it),
+                    localized(Str.worktrees_select_it),
                     {
                         form.selected = form.selected + w.id
                         form.confirmGone = null
@@ -730,7 +666,7 @@ private fun WorktreesList(actions: WorktreesSettingsActions, form: WorktreesForm
             },
         ) {
             Text(
-                localized(Res.string.worktrees_gone_detail, formatBytes(v.sizeOf(w)), agoText(now, w.mtime)),
+                localized(Str.worktrees_gone_detail, formatBytes(v.sizeOf(w)), agoText(now, w.mtime)),
                 fontSize = 12.5.sp,
                 lineHeight = 19.sp,
                 color = c.dim,
@@ -751,10 +687,10 @@ private fun sorted(rows: List<WorktreeSummaryDto>, sort: WorktreeSort, size: (Wo
 private fun SortControl(sort: WorktreeSort, onSort: (WorktreeSort) -> Unit) {
     val c = kitColors()
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(localized(Res.string.worktrees_sort), fontSize = 12.sp, color = c.faint)
-        SortOption(localized(Res.string.worktrees_size), sort == WorktreeSort.Size, "wt_sort_size") { onSort(WorktreeSort.Size) }
+        Text(localized(Str.worktrees_sort), fontSize = 12.sp, color = c.faint)
+        SortOption(localized(Str.worktrees_size), sort == WorktreeSort.Size, "wt_sort_size") { onSort(WorktreeSort.Size) }
         Text("·", fontSize = 12.sp, color = c.faint)
-        SortOption(localized(Res.string.worktrees_last_used), sort == WorktreeSort.LastUsed, "wt_sort_used") { onSort(WorktreeSort.LastUsed) }
+        SortOption(localized(Str.worktrees_last_used), sort == WorktreeSort.LastUsed, "wt_sort_used") { onSort(WorktreeSort.LastUsed) }
     }
 }
 
@@ -848,7 +784,7 @@ private fun WorktreeRow(
             KitCheckbox(
                 checked = picked && locked == null,
                 onCheckedChange = onPick,
-                label = localized(Res.string.worktrees_select_folder, folder),
+                label = localized(Str.worktrees_select_folder, folder),
                 modifier = Modifier.testTag("wt_check_${w.id}"),
                 enabled = pickable,
             )
@@ -881,11 +817,11 @@ private fun WorktreeRow(
                 modifier = Modifier.padding(top = 2.dp),
             )
             val chat = w.owners.firstOrNull()?.name
-            val noChat = localized(Res.string.worktrees_no_chat)
-            val lastUsed = localized(Res.string.worktrees_row_last_used, agoText(now, w.mtime))
+            val noChat = localized(Str.worktrees_no_chat)
+            val lastUsed = localized(Str.worktrees_row_last_used, agoText(now, w.mtime))
             val lockedText = if (locked != null) lockText(locked) else null
-            val cantCheck = localized(Res.string.worktrees_cant_check)
-            val noChanges = localized(Res.string.worktrees_no_changes)
+            val cantCheck = localized(Str.worktrees_cant_check)
+            val noChanges = localized(Str.worktrees_no_changes)
             Text(
                 buildAnnotatedString {
                     if (chat != null) append("“$chat”") else withStyle(SpanStyle(color = c.faint)) { append(noChat) }
@@ -971,9 +907,9 @@ private fun DeleteBar(actions: WorktreesSettingsActions, form: WorktreesForm, ma
     }
 
     val words = when {
-        progress != null -> localized(Res.string.worktrees_deleting, progress.first, progress.second)
-        form.updating -> localized(Res.string.worktrees_updating)
-        else -> form.done?.let { (n, freed) -> localized(Res.string.worktrees_deleted, foldersText(n), formatBytes(freed)) }
+        progress != null -> localized(Str.worktrees_deleting, progress.first, progress.second)
+        form.updating -> localized(Str.worktrees_updating)
+        else -> form.done?.let { (n, freed) -> localized(Str.worktrees_deleted, foldersText(n), formatBytes(freed)) }
     }
     val picked = v.selectedRows
     if (words == null && picked.isEmpty()) return
@@ -1003,10 +939,10 @@ private fun DeleteBar(actions: WorktreesSettingsActions, form: WorktreesForm, ma
                         .semantics { liveRegion = LiveRegionMode.Polite },
                 )
             } else {
-                DimAction(localized(Res.string.common_clear), "wt_bar_clear") { form.selected = emptySet() }
+                DimAction(localized(Str.common_clear), "wt_bar_clear") { form.selected = emptySet() }
                 Spacer(Modifier.weight(1f))
                 KitGhostButton(
-                    localized(Res.string.worktrees_delete_n, foldersText(picked.size), formatBytes(v.selectedBytes)),
+                    localized(Str.worktrees_delete_n, foldersText(picked.size), formatBytes(v.selectedBytes)),
                     { form.confirming = true },
                     Modifier.testTag("wt_delete"),
                     destructive = true,
@@ -1017,13 +953,13 @@ private fun DeleteBar(actions: WorktreesSettingsActions, form: WorktreesForm, ma
 
     if (form.confirming && picked.isNotEmpty()) {
         KitSheet(
-            localized(Res.string.worktrees_delete_title, foldersText(picked.size)),
+            localized(Str.worktrees_delete_title, foldersText(picked.size)),
             onDismiss = { form.confirming = false },
             description = deleteTextLocalized(picked.size, v.selectedBytes, v.selectedGone),
             tag = "wt_delete_dialog",
             buttons = {
-                KitGhostButton(localized(Res.string.worktrees_cancel), { form.confirming = false }, Modifier.testTag("wt_delete_cancel"))
-                KitGhostButton(localized(Res.string.worktrees_delete), ::delete, Modifier.testTag("wt_delete_confirm"), destructive = true)
+                KitGhostButton(localized(Str.worktrees_cancel), { form.confirming = false }, Modifier.testTag("wt_delete_cancel"))
+                KitGhostButton(localized(Str.worktrees_delete), ::delete, Modifier.testTag("wt_delete_confirm"), destructive = true)
             },
         )
     }

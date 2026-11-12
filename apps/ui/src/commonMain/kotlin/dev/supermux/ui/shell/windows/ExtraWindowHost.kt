@@ -32,14 +32,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.ui.shell.rememberHostWorkspaceSession
 import dev.supermux.workspace.subtreeCovering
 import kotlinx.coroutines.delay
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.shell_extra_window_main_closed
-import dev.supermux.ui.resources.shell_open_supermux
 
 /** How long a window waits for the main one before saying it is gone (a resize recreates it). */
 private const val MAIN_WINDOW_GRACE_MS = 1_500L
@@ -190,12 +188,12 @@ private fun MainWindowGone(onOpenMain: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Text(
-                localized(Res.string.shell_extra_window_main_closed),
+                localized(Str.shell_extra_window_main_closed),
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
             )
             Button(onClick = onOpenMain, modifier = Modifier.testTag("extra_window_open_main")) {
-                Text(localized(Res.string.shell_open_supermux))
+                Text(localized(Str.shell_open_supermux))
             }
         }
     }

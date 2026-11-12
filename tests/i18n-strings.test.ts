@@ -3,14 +3,14 @@
 //   bun scripts/i18n-strings.ts --write
 import { expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
-import { catalogs, kotlinSources, repoPath, compare, countHits, parityProblems, parseCatalog, readBaseline, scanRepo, scanText, type Change } from "../scripts/i18n-strings"
+import { catalogs, kotlinSources, lf, repoPath, compare, countHits, parityProblems, parseCatalog, readBaseline, scanRepo, scanText, type Change } from "../scripts/i18n-strings"
 
 const hits = scanRepo()
 const drift = compare(countHits(hits), readBaseline())
 
 function explain(change: Change): string {
   const lines = hits.filter(h => h.file === change.file).map(h => `    ${h.file}:${h.line}  ${h.text}`)
-  return [`${change.file} ${change.was} → ${change.now}: move the text into composeResources/values/strings.xml`, ...lines].join("\n")
+  return [`${change.file} ${change.was} → ${change.now}: move the text into composeResources/files/i18n/values/ (and values-tr/)`, ...lines].join("\n")
 }
 
 test("no new hard-coded UI text", () => {
@@ -33,10 +33,16 @@ test("every translation has exactly the English keys, with the same placeholders
   expect(problems).toEqual([])
 })
 
+test("no string sits in Compose's own values/ (its generated accessors cost ~150 B of wasm per key)", () => {
+  expect(catalogs().length).toBeGreaterThan(0)
+  const valuesDirs = [...new Bun.Glob("apps/*/src/*/composeResources/values*/*.xml").scanSync({ cwd: "." })]
+  expect(valuesDirs.map(repoPath)).toEqual([])
+})
+
 test("strings go through localized(), which follows the language picked in Settings", () => {
   const direct = kotlinSources()
     .filter(f => !f.includes("/ui/i18n/"))
-    .flatMap(f => readFileSync(f, "utf8").split("\n").map((t, i) => ({ f, i, t })))
+    .flatMap(f => lf(readFileSync(f, "utf8")).split("\n").map((t, i) => ({ f, i, t })))
     .filter(({ t }) => /\b(?:plural)?[sS]tringResource\(/.test(t) && !/^\s*(\/\/|\*)/.test(t))
     .map(({ f, i, t }) => `${f}:${i + 1}  ${t.trim()}`)
   expect(direct).toEqual([])
@@ -44,7 +50,7 @@ test("strings go through localized(), which follows the language picked in Setti
 
 test("translated text in capitals uses the app language's rules (Turkish İ), never uppercase()", () => {
   const plain = kotlinSources()
-    .flatMap(f => readFileSync(f, "utf8").split("\n").map((t, i) => ({ f, i, t })))
+    .flatMap(f => lf(readFileSync(f, "utf8")).split("\n").map((t, i) => ({ f, i, t })))
     .filter(({ t }) => /localized(?:Plural)?\([^)]*\)\)?\.uppercase\(\)/.test(t))
     .map(({ f, i, t }) => `${f}:${i + 1}  ${t.trim()}`)
   expect(plain).toEqual([])
@@ -53,10 +59,17 @@ test("translated text in capitals uses the app language's rules (Turkish İ), ne
 test("an i18n-ok comment never swallows the code after it on its line", () => {
   // `{ Text("…") // i18n-ok: x },` comments out the closing `},` — put the marker on the line above instead.
   const swallowed = kotlinSources()
-    .flatMap(f => readFileSync(f, "utf8").split("\n").map((t, i) => ({ f, i, t })))
+    .flatMap(f => lf(readFileSync(f, "utf8")).split("\n").map((t, i) => ({ f, i, t })))
     .filter(({ t }) => /\/\/\s*i18n-ok\b.*\s[})\]],?\s*$/.test(t) && /\{[^}]*\/\/\s*i18n-ok/.test(t))
     .map(({ f, i, t }) => `${f}:${i + 1}  ${t.trim()}`)
   expect(swallowed).toEqual([])
+})
+
+test("a Windows checkout (CRLF) reads the same: markers, multi-line titles and line numbers", () => {
+  const unix = '    Text("Supermux") // i18n-ok: the brand\n    KitToggleRow(\n        "Show replies",\n    )\n    Text("Hello there")\n'
+  const crlf = unix.replace(/\n/g, "\r\n")
+  expect(scanText("apps/x/A.kt", crlf)).toEqual(scanText("apps/x/A.kt", unix))
+  expect(scanText("apps/x/A.kt", crlf).map(h => h.line)).toEqual([3, 5])
 })
 
 test("paths use / on every OS, as the baseline's keys do (Bun's Glob answers with \\ on Windows)", () => {
@@ -65,7 +78,7 @@ test("paths use / on every OS, as the baseline's keys do (Bun's Glob answers wit
 })
 
 test("the ui module ships Turkish", () => {
-  expect(catalogs().find(c => c.dir === "apps/ui/src/commonMain/composeResources")?.translations.tr).toBeDefined()
+  expect(catalogs().find(c => c.dir === "apps/ui/src/commonMain/composeResources/files/i18n")?.translations.tr).toBeDefined()
 })
 
 test("UI literals are found; tags, templates and marked lines are not", () => {

@@ -36,6 +36,7 @@ import dev.supermux.ui.accounts.ProviderLogins
 import dev.supermux.ui.accounts.accountUnavailableText
 import dev.supermux.ui.accounts.accountsFor
 import dev.supermux.ui.accounts.signInExpired
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.retain.rememberRetainedOnPage
@@ -62,57 +63,6 @@ import dev.supermux.ui.settings.kit.kitMetrics
 import dev.supermux.ui.settings.normalizeInstallState
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.providers_api_key_hint
-import dev.supermux.ui.resources.providers_cancel
-import dev.supermux.ui.resources.providers_claude_token_hint
-import dev.supermux.ui.resources.providers_close
-import dev.supermux.ui.resources.providers_codex_hint
-import dev.supermux.ui.resources.providers_copy_link
-import dev.supermux.ui.resources.providers_couldnt_reach
-import dev.supermux.ui.resources.providers_cursor_key_hint
-import dev.supermux.ui.resources.providers_enter_code_there
-import dev.supermux.ui.resources.providers_gemini_key_hint
-import dev.supermux.ui.resources.providers_generating_link
-import dev.supermux.ui.resources.providers_install
-import dev.supermux.ui.resources.providers_install_start_failed
-import dev.supermux.ui.resources.providers_install_timed_out_machine
-import dev.supermux.ui.resources.providers_installed
-import dev.supermux.ui.resources.providers_installing
-import dev.supermux.ui.resources.providers_loading
-import dev.supermux.ui.resources.providers_not_installed
-import dev.supermux.ui.resources.providers_not_on_machine
-import dev.supermux.ui.resources.providers_not_signed_in
-import dev.supermux.ui.resources.providers_open_page_hint
-import dev.supermux.ui.resources.providers_open_sign_in_page
-import dev.supermux.ui.resources.providers_openai_key_hint
-import dev.supermux.ui.resources.providers_paste_api_key_title
-import dev.supermux.ui.resources.providers_paste_code
-import dev.supermux.ui.resources.providers_paste_code_hint
-import dev.supermux.ui.resources.providers_paste_token_title
-import dev.supermux.ui.resources.providers_retry_install
-import dev.supermux.ui.resources.providers_save
-import dev.supermux.ui.resources.providers_save_failed
-import dev.supermux.ui.resources.providers_saving
-import dev.supermux.ui.resources.providers_sign_in
-import dev.supermux.ui.resources.providers_sign_in_again
-import dev.supermux.ui.resources.providers_sign_in_cancelled
-import dev.supermux.ui.resources.providers_sign_in_expired
-import dev.supermux.ui.resources.providers_sign_in_failed
-import dev.supermux.ui.resources.providers_sign_in_start_failed
-import dev.supermux.ui.resources.providers_sign_in_timed_out
-import dev.supermux.ui.resources.providers_signed_in
-import dev.supermux.ui.resources.providers_stop_watching
-import dev.supermux.ui.resources.providers_stop_watching_hint
-import dev.supermux.ui.resources.providers_stopped_watching
-import dev.supermux.ui.resources.providers_submit
-import dev.supermux.ui.resources.providers_this_machines_login
-import dev.supermux.ui.resources.providers_token_description
-import dev.supermux.ui.resources.providers_try_again
-import dev.supermux.ui.resources.providers_unknown_error
-import dev.supermux.ui.resources.providers_use_token
-import dev.supermux.ui.resources.providers_waiting_approval
-import dev.supermux.ui.resources.providers_watch_progress
 import dev.supermux.ui.settings.SettingsPlace
 import dev.supermux.ui.settings.localizedInstallFailureMessage
 import dev.supermux.ui.settings.localizedSettingsTitle
@@ -153,15 +103,15 @@ fun ProviderDetailPage(
             val all by accounts.accounts.collectAsState(null)
             LaunchedEffect(accounts) { accounts.ensureAccounts() }
             when (val s = providers.load) {
-                AgentsLoadState.Loading -> KitNote(localized(Res.string.providers_loading))
+                AgentsLoadState.Loading -> KitNote(localized(Str.providers_loading))
                 AgentsLoadState.Empty, is AgentsLoadState.Error -> Column {
-                    KitNote(localized(Res.string.providers_couldnt_reach, providerMachine()))
-                    KitTextAction(localized(Res.string.providers_try_again), providers::reload, Modifier.testTag("provider_retry"))
+                    KitNote(localized(Str.providers_couldnt_reach, providerMachine()))
+                    KitTextAction(localized(Str.providers_try_again), providers::reload, Modifier.testTag("provider_retry"))
                 }
                 is AgentsLoadState.Ready -> {
                     val status = s.statuses.firstOrNull { it.kind == agent }
                     if (status == null) {
-                        KitNote(localized(Res.string.providers_not_on_machine, providerName(agent), providerMachine()))
+                        KitNote(localized(Str.providers_not_on_machine, providerName(agent), providerMachine()))
                     } else {
                         ProviderBody(status, providers.holder(agent), agents, accounts, accountsFor(all.orEmpty(), agent), providers::reload, showAddLogin)
                     }
@@ -217,15 +167,15 @@ private fun ownLogin(status: AgentInstallStatus, p: ProviderState, system: Accou
     val refused = system?.takeIf { !expired && it.unavailable != null }?.let(::accountUnavailableText)
     val email = system?.identity?.email?.takeIf { it.isNotBlank() }
     val subtitle = when {
-        expired -> localized(Res.string.providers_sign_in_expired)
+        expired -> localized(Str.providers_sign_in_expired)
         refused != null -> refused
-        status.authed -> email ?: localized(Res.string.providers_this_machines_login)
-        else -> localized(Res.string.providers_not_signed_in)
+        status.authed -> email ?: localized(Str.providers_this_machines_login)
+        else -> localized(Str.providers_not_signed_in)
     }
     return OwnLogin(subtitle, warn = expired || refused != null) {
         if (status.kind in LOGIN_KINDS && !p.loginActive) {
             KitGhostButton(
-                if (!status.authed && !expired) localized(Res.string.providers_sign_in) else localized(Res.string.providers_sign_in_again),
+                if (!status.authed && !expired) localized(Str.providers_sign_in) else localized(Str.providers_sign_in_again),
                 onClick = p::startLogin,
                 modifier = Modifier.testTag("agent_login_start_${status.kind}"),
             )
@@ -244,10 +194,10 @@ private fun YourLoginExtra(status: AgentInstallStatus, p: ProviderState, agents:
     Column(Modifier.fillMaxWidth().padding(start = 38.dp, top = 4.dp, bottom = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         LoginLines(p, agents)
         if (codexHint) {
-            KitNote(localized(Res.string.providers_codex_hint))
+            KitNote(localized(Str.providers_codex_hint))
         }
         // Grok has no token or key to paste.
-        if (kind != "grok") KitTextAction(localized(Res.string.providers_use_token), onUseToken, Modifier.testTag("provider_use_token"))
+        if (kind != "grok") KitTextAction(localized(Str.providers_use_token), onUseToken, Modifier.testTag("provider_use_token"))
     }
     KitHairline()
 }
@@ -257,8 +207,8 @@ private fun YourLoginExtra(status: AgentInstallStatus, p: ProviderState, agents:
 internal fun LoginLines(p: ProviderState, agents: AgentSettingsActions) {
     val kind = p.kind
     if (p.loginActive || p.login?.phase == "success") LoginFlow(p, agents)
-    if (p.loginStartFailed) WarnLine(localized(Res.string.providers_sign_in_start_failed), "agent_login_start_failed_$kind")
-    if (p.loginTimedOut) WarnLine(localized(Res.string.providers_sign_in_timed_out, providerMachine()), "agent_login_timeout_$kind")
+    if (p.loginStartFailed) WarnLine(localized(Str.providers_sign_in_start_failed), "agent_login_start_failed_$kind")
+    if (p.loginTimedOut) WarnLine(localized(Str.providers_sign_in_timed_out, providerMachine()), "agent_login_timeout_$kind")
 }
 
 @Composable
@@ -296,19 +246,19 @@ private fun LoginFlow(p: ProviderState, agents: AgentSettingsActions) {
         val login = p.login
         when (login?.phase) {
             null -> {
-                DimLine(localized(Res.string.providers_generating_link), Modifier.testTag("agent_login_generating"))
-                KitTextAction(localized(Res.string.providers_cancel), cancel, Modifier.testTag("agent_login_cancel"))
+                DimLine(localized(Str.providers_generating_link), Modifier.testTag("agent_login_generating"))
+                KitTextAction(localized(Str.providers_cancel), cancel, Modifier.testTag("agent_login_cancel"))
             }
-            "success" -> Text(localized(Res.string.providers_signed_in), fontSize = 12.5.sp, color = kitColors().ok, modifier = Modifier.testTag("agent_login_success_$kind"))
+            "success" -> Text(localized(Str.providers_signed_in), fontSize = 12.5.sp, color = kitColors().ok, modifier = Modifier.testTag("agent_login_success_$kind"))
             "failed", "cancelled" -> {
                 if (login.phase == "failed") {
-                    WarnLine(localized(Res.string.providers_sign_in_failed, login.error ?: localized(Res.string.providers_unknown_error)), "agent_login_failed_$kind")
+                    WarnLine(localized(Str.providers_sign_in_failed, login.error ?: localized(Str.providers_unknown_error)), "agent_login_failed_$kind")
                 } else {
-                    DimLine(localized(Res.string.providers_sign_in_cancelled))
+                    DimLine(localized(Str.providers_sign_in_cancelled))
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    KitTextAction(localized(Res.string.providers_try_again), p::startLogin, Modifier.testTag("agent_login_retry"))
-                    KitTextAction(localized(Res.string.providers_close), p::dismissLogin)
+                    KitTextAction(localized(Str.providers_try_again), p::startLogin, Modifier.testTag("agent_login_retry"))
+                    KitTextAction(localized(Str.providers_close), p::dismissLogin)
                 }
             }
             else -> AwaitingUser(login, form, onSubmit = { c -> scope.launch { agents.agentSendCode(kind, c) } }, onCancel = cancel)
@@ -328,16 +278,16 @@ private fun AwaitingUser(login: AgentLoginState, form: LoginCodeForm, onSubmit: 
         form.code = ""
     }
     if (url == null) {
-        DimLine(localized(Res.string.providers_generating_link), Modifier.testTag("agent_login_generating"))
+        DimLine(localized(Str.providers_generating_link), Modifier.testTag("agent_login_generating"))
     } else {
-        DimLine(localized(Res.string.providers_open_page_hint))
+        DimLine(localized(Str.providers_open_page_hint))
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            KitGhostButton(localized(Res.string.providers_open_sign_in_page), onClick = { platform.openUrl(url) }, modifier = Modifier.testTag("agent_login_open_url"))
-            KitTextAction(localized(Res.string.providers_copy_link), { platform.copyToClipboard(url) }, Modifier.testTag("agent_login_copy_url"))
+            KitGhostButton(localized(Str.providers_open_sign_in_page), onClick = { platform.openUrl(url) }, modifier = Modifier.testTag("agent_login_open_url"))
+            KitTextAction(localized(Str.providers_copy_link), { platform.copyToClipboard(url) }, Modifier.testTag("agent_login_copy_url"))
         }
         login.code?.let { code ->
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                DimLine(localized(Res.string.providers_enter_code_there))
+                DimLine(localized(Str.providers_enter_code_there))
                 SelectionContainer {
                     Text(
                         code,
@@ -350,24 +300,24 @@ private fun AwaitingUser(login: AgentLoginState, form: LoginCodeForm, onSubmit: 
                 }
             }
         }
-        DimLine(localized(Res.string.providers_waiting_approval))
+        DimLine(localized(Str.providers_waiting_approval))
         if (login.needsCode) {
-            DimLine(localized(Res.string.providers_paste_code_hint))
+            DimLine(localized(Str.providers_paste_code_hint))
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 KitTextField(
                     form.code,
                     { form.code = it },
                     Modifier.weight(1f),
-                    placeholder = localized(Res.string.providers_paste_code),
+                    placeholder = localized(Str.providers_paste_code),
                     mono = true,
                     onSubmit = ::submit,
                     fieldTag = "agent_login_code_field",
                 )
-                KitGhostButton(localized(Res.string.providers_submit), onClick = ::submit, enabled = form.code.isNotBlank(), modifier = Modifier.testTag("agent_login_code_submit"))
+                KitGhostButton(localized(Str.providers_submit), onClick = ::submit, enabled = form.code.isNotBlank(), modifier = Modifier.testTag("agent_login_code_submit"))
             }
         }
     }
-    KitTextAction(localized(Res.string.providers_cancel), onCancel, Modifier.testTag("agent_login_cancel"))
+    KitTextAction(localized(Str.providers_cancel), onCancel, Modifier.testTag("agent_login_cancel"))
 }
 
 /**
@@ -405,7 +355,7 @@ internal class SecretForm {
 @Composable
 private fun TokenSheet(kind: String, form: SecretForm, save: suspend (String) -> Boolean, onSaved: () -> Unit) {
     val saves = rememberRetainedScope()
-    val failure = localized(Res.string.providers_save_failed)
+    val failure = localized(Str.providers_save_failed)
     fun submit() {
         val v = form.value.trim()
         if (v.isEmpty() || form.saving) return
@@ -425,15 +375,15 @@ private fun TokenSheet(kind: String, form: SecretForm, save: suspend (String) ->
     }
     val claude = kind == "claude"
     KitSheet(
-        title = if (claude) localized(Res.string.providers_paste_token_title) else localized(Res.string.providers_paste_api_key_title),
+        title = if (claude) localized(Str.providers_paste_token_title) else localized(Str.providers_paste_api_key_title),
         onDismiss = { if (!form.saving) close() },
-        description = localized(Res.string.providers_token_description, providerMachine(), providerName(kind)),
+        description = localized(Str.providers_token_description, providerMachine(), providerName(kind)),
         tag = "provider_secret_sheet",
         dismissOnOutside = false,
         buttons = {
-            KitGhostButton(localized(Res.string.providers_cancel), onClick = close, enabled = !form.saving)
+            KitGhostButton(localized(Str.providers_cancel), onClick = close, enabled = !form.saving)
             KitGhostButton(
-                if (form.saving) localized(Res.string.providers_saving) else localized(Res.string.providers_save),
+                if (form.saving) localized(Str.providers_saving) else localized(Str.providers_save),
                 onClick = ::submit,
                 enabled = form.value.isNotBlank() && !form.saving,
                 modifier = Modifier.testTag("provider_secret_save"),
@@ -443,11 +393,11 @@ private fun TokenSheet(kind: String, form: SecretForm, save: suspend (String) ->
         Column(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             DimLine(
                 when (kind) {
-                    "claude" -> localized(Res.string.providers_claude_token_hint)
-                    "codex" -> localized(Res.string.providers_openai_key_hint)
-                    "cursor" -> localized(Res.string.providers_cursor_key_hint)
-                    "antigravity" -> localized(Res.string.providers_gemini_key_hint)
-                    else -> localized(Res.string.providers_api_key_hint)
+                    "claude" -> localized(Str.providers_claude_token_hint)
+                    "codex" -> localized(Str.providers_openai_key_hint)
+                    "cursor" -> localized(Str.providers_cursor_key_hint)
+                    "antigravity" -> localized(Str.providers_gemini_key_hint)
+                    else -> localized(Str.providers_api_key_hint)
                 },
             )
             if (claude) KitCopyCommand("claude setup-token") // i18n-ok: a command
@@ -474,7 +424,7 @@ private fun InstallSection(p: ProviderState, kind: String) {
     val machine = providerMachine()
     val state = normalizeInstallState(p.install?.state)
     Column(Modifier.fillMaxWidth().testTag("agent_install_$kind"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        KitNote(localized(Res.string.providers_not_installed, providerName(kind), machine))
+        KitNote(localized(Str.providers_not_installed, providerName(kind), machine))
         when {
             // Only installActive draws the running state: after Stop watching, the button is back even if the last
             // answer still said running.
@@ -484,25 +434,25 @@ private fun InstallSection(p: ProviderState, kind: String) {
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    DimLine(localized(Res.string.providers_installing))
-                    KitTextAction(localized(Res.string.providers_stop_watching), p::stopWatchingInstall, Modifier.testTag("agent_install_cancel_$kind"))
+                    DimLine(localized(Str.providers_installing))
+                    KitTextAction(localized(Str.providers_stop_watching), p::stopWatchingInstall, Modifier.testTag("agent_install_cancel_$kind"))
                 }
-                DimLine(localized(Res.string.providers_stop_watching_hint, machine), Modifier.testTag("agent_install_stop_hint_$kind"))
+                DimLine(localized(Str.providers_stop_watching_hint, machine), Modifier.testTag("agent_install_stop_hint_$kind"))
             }
             state == "done" && !p.installTimedOut && !p.installStoppedWatching ->
-                Text(localized(Res.string.providers_installed), fontSize = 12.5.sp, color = c.ok, modifier = Modifier.testTag("agent_install_done_$kind"))
+                Text(localized(Str.providers_installed), fontSize = 12.5.sp, color = c.ok, modifier = Modifier.testTag("agent_install_done_$kind"))
             else -> {
                 if (p.installStoppedWatching) {
                     DimLine(
-                        localized(Res.string.providers_stopped_watching, machine),
+                        localized(Str.providers_stopped_watching, machine),
                         Modifier.testTag("agent_install_stopped_watching_$kind"),
                     )
                 }
                 KitGhostButton(
                     when {
-                        p.installStoppedWatching -> localized(Res.string.providers_watch_progress)
-                        state == "failed" || p.installTimedOut -> localized(Res.string.providers_retry_install)
-                        else -> localized(Res.string.providers_install)
+                        p.installStoppedWatching -> localized(Str.providers_watch_progress)
+                        state == "failed" || p.installTimedOut -> localized(Str.providers_retry_install)
+                        else -> localized(Str.providers_install)
                     },
                     onClick = p::startInstall,
                     modifier = Modifier.testTag("agent_install_start_$kind"),
@@ -512,8 +462,8 @@ private fun InstallSection(p: ProviderState, kind: String) {
         if (state == "failed" || p.installRequestFailed || p.installTimedOut) {
             WarnLine(
                 when {
-                    p.installRequestFailed -> localized(Res.string.providers_install_start_failed)
-                    p.installTimedOut -> localized(Res.string.providers_install_timed_out_machine, machine)
+                    p.installRequestFailed -> localized(Str.providers_install_start_failed)
+                    p.installTimedOut -> localized(Str.providers_install_timed_out_machine, machine)
                     else -> localizedInstallFailureMessage(p.install)
                 },
                 "agent_install_error_$kind",

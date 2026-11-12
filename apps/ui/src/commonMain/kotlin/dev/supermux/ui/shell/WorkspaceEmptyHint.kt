@@ -4,9 +4,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.unit.sp
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.shell_workspace_no_views
 
 /**
  * What a workspace group with no views draws (workspace still open, last view closed — spec §9.3
@@ -20,7 +19,7 @@ import dev.supermux.ui.resources.shell_workspace_no_views
 fun WorkspaceEmptyHint() {
     val cs = MaterialTheme.colorScheme
     Text(
-        localized(Res.string.shell_workspace_no_views),
+        localized(Str.shell_workspace_no_views),
         color = cs.onSurfaceVariant,
         fontSize = 13.sp,
     )

@@ -99,33 +99,16 @@ import dev.supermux.ui.settings.search.SettingsSearchGroup
 import dev.supermux.ui.settings.search.SettingsSearchIndex
 import dev.supermux.ui.settings.search.searchSettings
 import dev.supermux.ui.adaptive.LocalWindowControlsInsets
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.StringKey
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.i18n.uppercaseInAppLanguage
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.settings_back
-import dev.supermux.ui.resources.settings_desc_coding
-import dev.supermux.ui.resources.settings_desc_general
-import dev.supermux.ui.resources.settings_desc_machine
-import dev.supermux.ui.resources.settings_desc_memory
-import dev.supermux.ui.resources.settings_desc_privacy
-import dev.supermux.ui.resources.settings_desc_privacy_labs
-import dev.supermux.ui.resources.settings_desc_providers
-import dev.supermux.ui.resources.settings_desc_shortcuts
-import dev.supermux.ui.resources.settings_desc_voice
-import dev.supermux.ui.resources.settings_discard_confirm
-import dev.supermux.ui.resources.settings_discard_description
-import dev.supermux.ui.resources.settings_discard_keep
-import dev.supermux.ui.resources.settings_discard_title
-import dev.supermux.ui.resources.settings_search_none
-import dev.supermux.ui.resources.settings_search_page
-import dev.supermux.ui.resources.settings_title
 import dev.supermux.ui.settings.search.LocalizedSearchEntry
 import dev.supermux.ui.settings.search.localizedSearchEntries
 import dev.supermux.ui.widgets.LocalIosBackSwipe
 import dev.supermux.ui.widgets.SwipeBackHandler
 import dev.supermux.ui.widgets.SwipeBackPages
 import dev.supermux.ui.widgets.rememberIosBackSwipe
-import org.jetbrains.compose.resources.StringResource
 
 /**
  * What a section slot is handed by the hub.
@@ -680,7 +663,7 @@ fun SettingsHub(
                 under = {
                     Column(Modifier.fillMaxSize().background(c.pane).testTag("settings_index")) {
                         KitTopBar(
-                            localized(Res.string.settings_title),
+                            localized(Str.settings_title),
                             onBack = { leave() },
                             backTag = "settings_hub_back",
                             titleTag = "settings_index_title",
@@ -819,14 +802,14 @@ fun SettingsHub(
 
     if (showDiscardDialog) {
         KitSheet(
-            localized(Res.string.settings_discard_title),
+            localized(Str.settings_discard_title),
             onDismiss = { cancelDiscard() },
-            description = localized(Res.string.settings_discard_description),
+            description = localized(Str.settings_discard_description),
             tag = "settings_discard_dialog",
             buttons = {
-                KitGhostButton(localized(Res.string.settings_discard_keep), onClick = { cancelDiscard() }, modifier = Modifier.testTag("settings_discard_cancel"))
+                KitGhostButton(localized(Str.settings_discard_keep), onClick = { cancelDiscard() }, modifier = Modifier.testTag("settings_discard_cancel"))
                 KitGhostButton(
-                    localized(Res.string.settings_discard_confirm),
+                    localized(Str.settings_discard_confirm),
                     onClick = { confirmDiscard() },
                     modifier = Modifier.testTag("settings_discard_confirm"),
                     destructive = true,
@@ -843,7 +826,7 @@ private fun RailHeader(onBack: () -> Unit) {
     val src = remember { MutableInteractionSource() }
     val hovered by src.collectIsHoveredAsState()
     val shape = RoundedCornerShape(6.dp)
-    val back = localized(Res.string.settings_back)
+    val back = localized(Str.settings_back)
     Row(
         Modifier.fillMaxWidth().height(38.dp).padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -864,7 +847,7 @@ private fun RailHeader(onBack: () -> Unit) {
             Icon(KitGlyphs.Back, contentDescription = null, tint = c.dim, modifier = Modifier.size(16.dp))
         }
         Text(
-            localized(Res.string.settings_title),
+            localized(Str.settings_title),
             fontSize = 14.sp,
             fontWeight = FontWeight.SemiBold,
             color = c.text,
@@ -886,7 +869,7 @@ private fun SearchResults(
     val m = kitMetrics()
     if (groups.isEmpty()) {
         Text(
-            localized(Res.string.settings_search_none, query),
+            localized(Str.settings_search_none, query),
             fontSize = 12.5.sp,
             color = c.faint,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 16.dp).testTag("settings_search_empty"),
@@ -918,7 +901,7 @@ private fun SearchResults(
                         .testTag("settings_result_${g.section.name.lowercase()}_${e.anchor ?: "page"}"),
                 ) {
                     Text(highlight(words[e]?.label ?: e.label, query, c.accent), fontSize = if (m.phone) 15.sp else 13.sp, color = c.text)
-                    if (e.anchor == null) Text(localized(Res.string.settings_search_page), fontSize = 11.5.sp, color = c.faint)
+                    if (e.anchor == null) Text(localized(Str.settings_search_page), fontSize = 11.5.sp, color = c.faint)
                 }
             }
         }
@@ -957,13 +940,13 @@ internal fun SettingsSection.glyph(): ImageVector = when (this) {
 }
 
 /** One-line "what is behind this row" on the phone's index (#97 spec §2.1). [labs]: this device has lab features. */
-internal fun SettingsSection.descRes(labs: Boolean): StringResource = when (this) {
-    SettingsSection.General -> Res.string.settings_desc_general
-    SettingsSection.KeyboardShortcuts -> Res.string.settings_desc_shortcuts
-    SettingsSection.Providers -> Res.string.settings_desc_providers
-    SettingsSection.Voice -> Res.string.settings_desc_voice
-    SettingsSection.Coding -> Res.string.settings_desc_coding
-    SettingsSection.Memory -> Res.string.settings_desc_memory
-    SettingsSection.PrivacyLabs -> if (labs) Res.string.settings_desc_privacy_labs else Res.string.settings_desc_privacy
-    SettingsSection.Machine -> Res.string.settings_desc_machine
+internal fun SettingsSection.descRes(labs: Boolean): StringKey = when (this) {
+    SettingsSection.General -> Str.settings_desc_general
+    SettingsSection.KeyboardShortcuts -> Str.settings_desc_shortcuts
+    SettingsSection.Providers -> Str.settings_desc_providers
+    SettingsSection.Voice -> Str.settings_desc_voice
+    SettingsSection.Coding -> Str.settings_desc_coding
+    SettingsSection.Memory -> Str.settings_desc_memory
+    SettingsSection.PrivacyLabs -> if (labs) Str.settings_desc_privacy_labs else Str.settings_desc_privacy
+    SettingsSection.Machine -> Str.settings_desc_machine
 }

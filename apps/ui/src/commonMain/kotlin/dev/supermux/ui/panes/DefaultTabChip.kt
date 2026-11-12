@@ -48,9 +48,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.panes_close_view
 
 /**
  * The default tab chip: an icon, a label and a close affordance, as a sheet tab.
@@ -111,7 +110,7 @@ fun DefaultTabChip(
         TabClose(
             visible = state.selected || hovered,
             onClick = { onClose(itemId) },
-            label = closeLabel ?: localized(Res.string.panes_close_view),
+            label = closeLabel ?: localized(Str.panes_close_view),
             modifier = Modifier.testTag("tab-close-$itemId"),
         )
     }

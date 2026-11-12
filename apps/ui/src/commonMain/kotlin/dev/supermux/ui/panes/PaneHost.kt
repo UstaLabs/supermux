@@ -104,6 +104,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.zIndex
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.theme.Motion
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.collectActiveViewIds
@@ -122,8 +123,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.panes_select_tab
 
 /**
  * Renders a workspace [LayoutNode] as nested resizable splits with tab groups at
@@ -1002,7 +1001,7 @@ fun PaneTabStrip(
 ) = BoxWithConstraints(modifier.fillMaxWidth()) {
     val cs = MaterialTheme.colorScheme
     val density = LocalDensity.current
-    val selectTabLabel = localized(Res.string.panes_select_tab)
+    val selectTabLabel = localized(Str.panes_select_tab)
     val stripWidthPx = constraints.maxWidth.toFloat()
     // Unique, stable key for this strip's PaneStripChrome registrations (groupId can be "" on
     // back-compat call sites, and groups can recompose across workspaces).

@@ -82,6 +82,7 @@ import dev.supermux.ui.files.parentOf
 import dev.supermux.ui.files.tappedFileMissing
 import dev.supermux.fs.FileSystemService
 import dev.supermux.ui.editor.FilePane
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
 import dev.supermux.ui.prefs.EDITOR_LINE_WRAP_DEFAULT
@@ -92,12 +93,6 @@ import dev.supermux.ui.theme.Space
 import dev.supermux.ui.toEditorPath
 import kotlinx.coroutines.launch
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.shell_workspace_folder_itself
-import dev.supermux.ui.resources.shell_no_display_running
-import dev.supermux.ui.resources.shell_display_not_running
-import dev.supermux.ui.resources.shell_unknown_view
-import dev.supermux.ui.resources.shell_unknown_view_update
 
 /** Journey + desktop-parity tags for the workspace chat pane. */
 object WorkspaceChatPaneTestIds {
@@ -591,7 +586,7 @@ private fun rememberOpenTappedPath(
 ): (FilePathRef) -> Unit {
     val notices = LocalPlatform.current.notices
     val scope = rememberCoroutineScope()
-    val workspaceFolderItself by androidx.compose.runtime.rememberUpdatedState(localized(Res.string.shell_workspace_folder_itself))
+    val workspaceFolderItself by androidx.compose.runtime.rememberUpdatedState(localized(Str.shell_workspace_folder_itself))
     // One lambda while what it opens is the same: a new one each recomposition recomposed every markdown row it reached.
     val currentOpenFile by androidx.compose.runtime.rememberUpdatedState(onOpenFile)
     val currentFileSystem by androidx.compose.runtime.rememberUpdatedState(fileSystem)
@@ -852,8 +847,8 @@ private fun DisplayPanelForStream(
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                if (displayId.isBlank()) localized(Res.string.shell_no_display_running)
-                else localized(Res.string.shell_display_not_running, displayId),
+                if (displayId.isBlank()) localized(Str.shell_no_display_running)
+                else localized(Str.shell_display_not_running, displayId),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 13.sp,
             )
@@ -881,14 +876,14 @@ fun UnknownViewHint(kind: String, modifier: Modifier = Modifier) {
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
-                localized(Res.string.shell_unknown_view, kind),
+                localized(Str.shell_unknown_view, kind),
                 color = cs.onSurface,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
             )
             Spacer(Modifier.height(Space.xs))
             Text(
-                localized(Res.string.shell_unknown_view_update),
+                localized(Str.shell_unknown_view_update),
                 color = cs.onSurfaceVariant,
                 fontFamily = MonoFontFamily,
                 fontSize = 12.sp,

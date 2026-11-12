@@ -22,15 +22,10 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.theme.Motion
 import kotlin.math.roundToInt
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.panes_split_left
-import dev.supermux.ui.resources.panes_split_right
-import dev.supermux.ui.resources.panes_split_above
-import dev.supermux.ui.resources.panes_split_below
-import dev.supermux.ui.resources.panes_move_here
 
 /**
  * Translucent drop **preview** over still-live pane content.
@@ -76,11 +71,11 @@ fun PaneDropOverlay(
         label = "drop-a", // i18n-ok: animation label
     )
     val label = when (zone) {
-        DropZone.Left -> localized(Res.string.panes_split_left)
-        DropZone.Right -> localized(Res.string.panes_split_right)
-        DropZone.Top -> localized(Res.string.panes_split_above)
-        DropZone.Bottom -> localized(Res.string.panes_split_below)
-        DropZone.Centre -> localized(Res.string.panes_move_here)
+        DropZone.Left -> localized(Str.panes_split_left)
+        DropZone.Right -> localized(Str.panes_split_right)
+        DropZone.Top -> localized(Str.panes_split_above)
+        DropZone.Bottom -> localized(Str.panes_split_below)
+        DropZone.Centre -> localized(Str.panes_move_here)
         null -> ""
     }
     val tag = when (zone) {

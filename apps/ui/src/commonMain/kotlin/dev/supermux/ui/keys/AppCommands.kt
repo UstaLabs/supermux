@@ -1,48 +1,9 @@
 package dev.supermux.ui.keys
 
 import androidx.compose.runtime.Composable
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.StringKey
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.keys_cmd_browser_back
-import dev.supermux.ui.resources.keys_cmd_browser_device_mode
-import dev.supermux.ui.resources.keys_cmd_browser_focus_address
-import dev.supermux.ui.resources.keys_cmd_browser_forward
-import dev.supermux.ui.resources.keys_cmd_browser_inspect
-import dev.supermux.ui.resources.keys_cmd_browser_new_tab
-import dev.supermux.ui.resources.keys_cmd_browser_open_externally
-import dev.supermux.ui.resources.keys_cmd_browser_pick
-import dev.supermux.ui.resources.keys_cmd_browser_reload
-import dev.supermux.ui.resources.keys_cmd_browser_screenshot
-import dev.supermux.ui.resources.keys_cmd_browser_stop
-import dev.supermux.ui.resources.keys_cmd_browser_zoom_in
-import dev.supermux.ui.resources.keys_cmd_browser_zoom_out
-import dev.supermux.ui.resources.keys_cmd_browser_zoom_reset
-import dev.supermux.ui.resources.keys_cmd_close_tab
-import dev.supermux.ui.resources.keys_cmd_find
-import dev.supermux.ui.resources.keys_cmd_find_next
-import dev.supermux.ui.resources.keys_cmd_find_previous
-import dev.supermux.ui.resources.keys_cmd_go_to_file
-import dev.supermux.ui.resources.keys_cmd_move_to_new_window
-import dev.supermux.ui.resources.keys_cmd_new_session
-import dev.supermux.ui.resources.keys_cmd_new_terminal
-import dev.supermux.ui.resources.keys_cmd_open_settings
-import dev.supermux.ui.resources.keys_cmd_paste_image
-import dev.supermux.ui.resources.keys_cmd_reopen_closed_tab
-import dev.supermux.ui.resources.keys_cmd_show_shortcuts
-import dev.supermux.ui.resources.keys_cmd_split_down
-import dev.supermux.ui.resources.keys_cmd_split_right
-import dev.supermux.ui.resources.keys_cmd_tab_last
-import dev.supermux.ui.resources.keys_cmd_tab_next
-import dev.supermux.ui.resources.keys_cmd_tab_number
-import dev.supermux.ui.resources.keys_cmd_tab_previous
-import dev.supermux.ui.resources.keys_cmd_toggle_sidebar
-import dev.supermux.ui.resources.keys_group_browser
-import dev.supermux.ui.resources.keys_group_chat
-import dev.supermux.ui.resources.keys_group_files
-import dev.supermux.ui.resources.keys_group_general
-import dev.supermux.ui.resources.keys_group_sessions
-import dev.supermux.ui.resources.keys_group_workspace
-import org.jetbrains.compose.resources.StringResource
 
 /** Where a command sits in the shortcuts list. */
 enum class CommandGroup(val title: String) {
@@ -118,14 +79,14 @@ object AppCommands {
 }
 
 /** [group]'s heading in the app's language; [CommandGroup.title] stays the English one. */
-val CommandGroup.titleRes: StringResource
+val CommandGroup.titleRes: StringKey
     get() = when (this) {
-        CommandGroup.General -> Res.string.keys_group_general
-        CommandGroup.Sessions -> Res.string.keys_group_sessions
-        CommandGroup.Workspace -> Res.string.keys_group_workspace
-        CommandGroup.Chat -> Res.string.keys_group_chat
-        CommandGroup.Files -> Res.string.keys_group_files
-        CommandGroup.Browser -> Res.string.keys_group_browser
+        CommandGroup.General -> Str.keys_group_general
+        CommandGroup.Sessions -> Str.keys_group_sessions
+        CommandGroup.Workspace -> Str.keys_group_workspace
+        CommandGroup.Chat -> Str.keys_group_chat
+        CommandGroup.Files -> Str.keys_group_files
+        CommandGroup.Browser -> Str.keys_group_browser
     }
 
 @Composable
@@ -135,38 +96,38 @@ fun localizedTitle(group: CommandGroup): String = localized(group.titleRes)
  * [cmd]'s title in the app's language, for menus and the shortcuts list. Its [AppCommand.title] stays English: Settings
  * search matches it. Null for the numbered tab commands, which take their number ([localizedTitle] words them).
  */
-fun commandTitleRes(cmd: AppCommand): StringResource? = when (cmd.id) {
-    AppCommands.NewSession.id -> Res.string.keys_cmd_new_session
-    AppCommands.MoveToNewWindow.id -> Res.string.keys_cmd_move_to_new_window
-    AppCommands.NewTerminal.id -> Res.string.keys_cmd_new_terminal
-    AppCommands.ToggleSidebar.id -> Res.string.keys_cmd_toggle_sidebar
-    AppCommands.GoToFile.id -> Res.string.keys_cmd_go_to_file
-    AppCommands.Find.id -> Res.string.keys_cmd_find
-    AppCommands.FindNext.id -> Res.string.keys_cmd_find_next
-    AppCommands.FindPrevious.id -> Res.string.keys_cmd_find_previous
-    AppCommands.OpenSettings.id -> Res.string.keys_cmd_open_settings
-    AppCommands.ShowShortcuts.id -> Res.string.keys_cmd_show_shortcuts
-    AppCommands.PasteImage.id -> Res.string.keys_cmd_paste_image
-    AppCommands.SplitRight.id -> Res.string.keys_cmd_split_right
-    AppCommands.SplitDown.id -> Res.string.keys_cmd_split_down
-    AppCommands.CloseTab.id -> Res.string.keys_cmd_close_tab
-    AppCommands.ReopenClosedTab.id -> Res.string.keys_cmd_reopen_closed_tab
-    AppCommands.TabNext.id -> Res.string.keys_cmd_tab_next
-    AppCommands.TabPrevious.id -> Res.string.keys_cmd_tab_previous
-    AppCommands.BrowserFocusAddress.id -> Res.string.keys_cmd_browser_focus_address
-    AppCommands.BrowserReload.id -> Res.string.keys_cmd_browser_reload
-    AppCommands.BrowserBack.id -> Res.string.keys_cmd_browser_back
-    AppCommands.BrowserForward.id -> Res.string.keys_cmd_browser_forward
-    AppCommands.BrowserZoomIn.id -> Res.string.keys_cmd_browser_zoom_in
-    AppCommands.BrowserZoomOut.id -> Res.string.keys_cmd_browser_zoom_out
-    AppCommands.BrowserZoomReset.id -> Res.string.keys_cmd_browser_zoom_reset
-    AppCommands.BrowserOpenExternally.id -> Res.string.keys_cmd_browser_open_externally
-    AppCommands.BrowserNewTab.id -> Res.string.keys_cmd_browser_new_tab
-    AppCommands.BrowserScreenshot.id -> Res.string.keys_cmd_browser_screenshot
-    AppCommands.BrowserDeviceMode.id -> Res.string.keys_cmd_browser_device_mode
-    AppCommands.BrowserPick.id -> Res.string.keys_cmd_browser_pick
-    AppCommands.BrowserInspect.id -> Res.string.keys_cmd_browser_inspect
-    AppCommands.BrowserStop.id -> Res.string.keys_cmd_browser_stop
+fun commandTitleRes(cmd: AppCommand): StringKey? = when (cmd.id) {
+    AppCommands.NewSession.id -> Str.keys_cmd_new_session
+    AppCommands.MoveToNewWindow.id -> Str.keys_cmd_move_to_new_window
+    AppCommands.NewTerminal.id -> Str.keys_cmd_new_terminal
+    AppCommands.ToggleSidebar.id -> Str.keys_cmd_toggle_sidebar
+    AppCommands.GoToFile.id -> Str.keys_cmd_go_to_file
+    AppCommands.Find.id -> Str.keys_cmd_find
+    AppCommands.FindNext.id -> Str.keys_cmd_find_next
+    AppCommands.FindPrevious.id -> Str.keys_cmd_find_previous
+    AppCommands.OpenSettings.id -> Str.keys_cmd_open_settings
+    AppCommands.ShowShortcuts.id -> Str.keys_cmd_show_shortcuts
+    AppCommands.PasteImage.id -> Str.keys_cmd_paste_image
+    AppCommands.SplitRight.id -> Str.keys_cmd_split_right
+    AppCommands.SplitDown.id -> Str.keys_cmd_split_down
+    AppCommands.CloseTab.id -> Str.keys_cmd_close_tab
+    AppCommands.ReopenClosedTab.id -> Str.keys_cmd_reopen_closed_tab
+    AppCommands.TabNext.id -> Str.keys_cmd_tab_next
+    AppCommands.TabPrevious.id -> Str.keys_cmd_tab_previous
+    AppCommands.BrowserFocusAddress.id -> Str.keys_cmd_browser_focus_address
+    AppCommands.BrowserReload.id -> Str.keys_cmd_browser_reload
+    AppCommands.BrowserBack.id -> Str.keys_cmd_browser_back
+    AppCommands.BrowserForward.id -> Str.keys_cmd_browser_forward
+    AppCommands.BrowserZoomIn.id -> Str.keys_cmd_browser_zoom_in
+    AppCommands.BrowserZoomOut.id -> Str.keys_cmd_browser_zoom_out
+    AppCommands.BrowserZoomReset.id -> Str.keys_cmd_browser_zoom_reset
+    AppCommands.BrowserOpenExternally.id -> Str.keys_cmd_browser_open_externally
+    AppCommands.BrowserNewTab.id -> Str.keys_cmd_browser_new_tab
+    AppCommands.BrowserScreenshot.id -> Str.keys_cmd_browser_screenshot
+    AppCommands.BrowserDeviceMode.id -> Str.keys_cmd_browser_device_mode
+    AppCommands.BrowserPick.id -> Str.keys_cmd_browser_pick
+    AppCommands.BrowserInspect.id -> Str.keys_cmd_browser_inspect
+    AppCommands.BrowserStop.id -> Str.keys_cmd_browser_stop
     else -> null
 }
 
@@ -177,7 +138,7 @@ fun localizedTitle(cmd: AppCommand): String {
     val n = cmd.id.removePrefix("tab.goTo").toIntOrNull()
     return when {
         n == null || !cmd.id.startsWith("tab.goTo") -> cmd.title
-        n == 9 -> localized(Res.string.keys_cmd_tab_last)
-        else -> localized(Res.string.keys_cmd_tab_number, n)
+        n == 9 -> localized(Str.keys_cmd_tab_last)
+        else -> localized(Str.keys_cmd_tab_number, n)
     }
 }

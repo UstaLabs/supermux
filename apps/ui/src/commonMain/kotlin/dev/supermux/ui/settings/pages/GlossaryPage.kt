@@ -26,6 +26,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.retain.rememberRetainedOnPage
 import dev.supermux.ui.settings.GLOSSARY_SUB
@@ -43,17 +44,6 @@ import dev.supermux.ui.settings.kit.KitTextField
 import dev.supermux.ui.settings.kit.currentMachineOnline
 import dev.supermux.ui.settings.kit.kitColors
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.settings_glossary_add
-import dev.supermux.ui.resources.settings_glossary_add_word
-import dev.supermux.ui.resources.settings_glossary_back
-import dev.supermux.ui.resources.settings_glossary_empty
-import dev.supermux.ui.resources.settings_glossary_placeholder
-import dev.supermux.ui.resources.settings_glossary_remove
-import dev.supermux.ui.resources.settings_glossary_save_failed
-import dev.supermux.ui.resources.settings_pages_loading
-import dev.supermux.ui.resources.settings_pages_try_again
-import dev.supermux.ui.resources.settings_voice_glossary_description
 import dev.supermux.ui.settings.localizedSettingsTitle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -78,8 +68,8 @@ fun GlossaryPage(
         localizedSettingsTitle(SettingsPlace(SettingsSection.Voice, GLOSSARY_SUB)),
         modifier,
         scope = { KitMachineScope() },
-        lede = localized(Res.string.settings_voice_glossary_description),
-        backLabel = localized(Res.string.settings_glossary_back),
+        lede = localized(Str.settings_voice_glossary_description),
+        backLabel = localized(Str.settings_glossary_back),
         onBack = onBack,
         tag = "voice_glossary_page",
     ) {
@@ -92,7 +82,7 @@ private fun GlossaryList(actions: VoiceSettingsActions) {
     val c = kitColors()
     val scope = rememberCoroutineScope()
     val couldntReach = pagesCouldntReach()
-    val saveFailed = localized(Res.string.settings_glossary_save_failed)
+    val saveFailed = localized(Str.settings_glossary_save_failed)
     val terms = remember { mutableStateListOf<String>() }
     // "Add a word" open, with the word being typed in it, kept for the page on display (#89).
     val form = rememberRetainedOnPage("voice:glossary") { GlossaryForm() }
@@ -168,17 +158,17 @@ private fun GlossaryList(actions: VoiceSettingsActions) {
         Text(it, fontSize = 12.sp, color = c.danger, modifier = Modifier.padding(bottom = 6.dp).testTag("voice_glossary_error"))
     }
     when (loadState) {
-        GlossaryLoadState.Loading -> KitNote(localized(Res.string.settings_pages_loading), Modifier.testTag("voice_glossary_loading"))
+        GlossaryLoadState.Loading -> KitNote(localized(Str.settings_pages_loading), Modifier.testTag("voice_glossary_loading"))
         GlossaryLoadState.Error -> {
             KitNote(couldntReach, Modifier.testTag("voice_glossary_load_error"))
             KitTextAction(
-                localized(Res.string.settings_pages_try_again),
+                localized(Str.settings_pages_try_again),
                 onClick = { reloadKey++ },
                 modifier = Modifier.padding(top = 4.dp).testTag("voice_glossary_retry"),
             )
         }
         GlossaryLoadState.Empty -> KitNote(
-            localized(Res.string.settings_glossary_empty),
+            localized(Str.settings_glossary_empty),
             Modifier.padding(bottom = 10.dp).testTag("voice_glossary_empty"),
         )
         is GlossaryLoadState.Ready -> Unit
@@ -189,12 +179,12 @@ private fun GlossaryList(actions: VoiceSettingsActions) {
         for (term in terms) {
             val tagSafe = term.replace(Regex("[^A-Za-z0-9._-]"), "_")
             KitItem(term, Modifier.testTag("voice_glossary_term_$tagSafe")) {
-                KitGhostButton(localized(Res.string.settings_glossary_remove), onClick = { remove(term) }, modifier = Modifier.testTag("voice_glossary_remove_$tagSafe"))
+                KitGhostButton(localized(Str.settings_glossary_remove), onClick = { remove(term) }, modifier = Modifier.testTag("voice_glossary_remove_$tagSafe"))
             }
         }
         if (!form.adding) {
             KitItem(
-                localized(Res.string.settings_glossary_add_word),
+                localized(Str.settings_glossary_add_word),
                 Modifier.testTag("voice_glossary_add_item"),
                 mark = KitMark.Add,
                 onClick = { form.adding = true },
@@ -211,14 +201,14 @@ private fun GlossaryList(actions: VoiceSettingsActions) {
                     value = form.newTerm,
                     onValueChange = { form.newTerm = it },
                     modifier = Modifier.weight(1f).focusRequester(focus),
-                    placeholder = localized(Res.string.settings_glossary_placeholder),
+                    placeholder = localized(Str.settings_glossary_placeholder),
                     // No autocorrect on names and technical terms; Enter (or the keyboard's Done) adds.
                     keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
                     onSubmit = { add() },
                     fieldTag = "voice_glossary_input",
                 )
                 KitGhostButton(
-                    localized(Res.string.settings_glossary_add),
+                    localized(Str.settings_glossary_add),
                     onClick = { add() },
                     modifier = Modifier.testTag("voice_glossary_add"),
                     enabled = form.newTerm.isNotBlank(),

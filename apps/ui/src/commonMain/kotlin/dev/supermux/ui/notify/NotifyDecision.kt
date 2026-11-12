@@ -8,14 +8,8 @@ package dev.supermux.ui.notify
 
 import androidx.compose.runtime.Composable
 import dev.supermux.proto.LogEntry
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.notify_audio
-import dev.supermux.ui.resources.notify_file
-import dev.supermux.ui.resources.notify_new_message
-import dev.supermux.ui.resources.notify_photo
-import dev.supermux.ui.resources.notify_video
-import dev.supermux.ui.resources.notify_voice_message
 
 /**
  * The words a toast body falls back to when a reply has no text (#123). English by default, the broker's own push
@@ -33,12 +27,12 @@ data class NotifyWords(
 /** [NotifyWords] in the app's language. */
 @Composable
 fun localizedNotifyWords(): NotifyWords = NotifyWords(
-    photo = localized(Res.string.notify_photo),
-    voice = localized(Res.string.notify_voice_message),
-    audio = localized(Res.string.notify_audio),
-    video = localized(Res.string.notify_video),
-    file = localized(Res.string.notify_file),
-    newMessage = localized(Res.string.notify_new_message),
+    photo = localized(Str.notify_photo),
+    voice = localized(Str.notify_voice_message),
+    audio = localized(Str.notify_audio),
+    video = localized(Str.notify_video),
+    file = localized(Str.notify_file),
+    newMessage = localized(Str.notify_new_message),
 )
 
 object NotifyDecision {

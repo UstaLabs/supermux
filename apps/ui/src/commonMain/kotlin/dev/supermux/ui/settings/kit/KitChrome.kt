@@ -57,24 +57,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.widgets.Dialog
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.machine_kit_only_this_computer
-import dev.supermux.ui.resources.machine_kit_only_this_phone
-import dev.supermux.ui.resources.machine_kit_only_this_device
-import dev.supermux.ui.resources.machine_kit_scope_machine_before
-import dev.supermux.ui.resources.machine_kit_scope_machine_after
-import dev.supermux.ui.resources.machine_kit_scope_mixed_before
-import dev.supermux.ui.resources.machine_kit_scope_mixed_after
-import dev.supermux.ui.resources.machine_fallback_name
-import dev.supermux.ui.resources.machine_kit_pick_machine
-import dev.supermux.ui.resources.machine_kit_current
-import dev.supermux.ui.resources.machine_kit_this_computer
-import dev.supermux.ui.resources.machine_kit_server
-import dev.supermux.ui.resources.machine_kit_back
 
 /** The phone's top bar: a back glyph and the page title, under the status bar. Not Material's TopAppBar. */
 @Composable
@@ -89,7 +76,7 @@ fun KitTopBar(
     val src = remember { MutableInteractionSource() }
     val hovered by src.collectIsHoveredAsState()
     val backShape = RoundedCornerShape(8.dp)
-    val backLabel = localized(Res.string.machine_kit_back)
+    val backLabel = localized(Str.machine_kit_back)
     Row(
         modifier
             .fillMaxWidth()
@@ -316,9 +303,9 @@ fun KitDeviceScope(modifier: Modifier = Modifier) {
     val noun = kitDeviceNoun()
     val text = localized(
         when (noun) {
-            "computer" -> Res.string.machine_kit_only_this_computer
-            "phone" -> Res.string.machine_kit_only_this_phone
-            else -> Res.string.machine_kit_only_this_device
+            "computer" -> Str.machine_kit_only_this_computer
+            "phone" -> Str.machine_kit_only_this_phone
+            else -> Str.machine_kit_only_this_device
         },
     )
     ScopeRow(modifier, if (noun == "phone") KitGlyphs.Phone else KitGlyphs.Laptop) { Text(text) }
@@ -329,8 +316,8 @@ fun KitDeviceScope(modifier: Modifier = Modifier) {
 fun KitMachineScope(modifier: Modifier = Modifier) {
     val ms = LocalSettingsMachines.current
     // Two halves around the name: a language that puts the name first leaves the first one empty.
-    val before = localized(Res.string.machine_kit_scope_machine_before)
-    val after = localized(Res.string.machine_kit_scope_machine_after)
+    val before = localized(Str.machine_kit_scope_machine_before)
+    val after = localized(Str.machine_kit_scope_machine_after)
     ScopeRow(modifier, ms?.current?.glyph() ?: KitGlyphs.Server) {
         if (before.isNotEmpty()) Text(before)
         MachineName(ms)
@@ -343,8 +330,8 @@ fun KitMachineScope(modifier: Modifier = Modifier) {
 fun KitMixedScope(modifier: Modifier = Modifier) {
     val ms = LocalSettingsMachines.current ?: return
     if (ms.all.size < 2) return
-    val before = localized(Res.string.machine_kit_scope_mixed_before)
-    val after = localized(Res.string.machine_kit_scope_mixed_after)
+    val before = localized(Str.machine_kit_scope_mixed_before)
+    val after = localized(Str.machine_kit_scope_mixed_after)
     ScopeRow(modifier, ms.current?.glyph() ?: KitGlyphs.Server) {
         if (before.isNotEmpty()) Text(before)
         MachineName(ms)
@@ -368,7 +355,7 @@ private fun ScopeRow(modifier: Modifier, glyph: ImageVector, content: @Composabl
 @Composable
 private fun MachineName(ms: SettingsMachines?) {
     val c = kitColors()
-    val name = ms?.current?.name ?: localized(Res.string.machine_fallback_name)
+    val name = ms?.current?.name ?: localized(Str.machine_fallback_name)
     if (ms == null || ms.all.size < 2) {
         Text(name)
         return
@@ -397,11 +384,11 @@ private fun MachineName(ms: SettingsMachines?) {
             horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Text(name, color = c.text)
-            Icon(KitGlyphs.ChevronDown, contentDescription = localized(Res.string.machine_kit_pick_machine), tint = c.text, modifier = Modifier.size(12.dp))
+            Icon(KitGlyphs.ChevronDown, contentDescription = localized(Str.machine_kit_pick_machine), tint = c.text, modifier = Modifier.size(12.dp))
         }
-        val currentLabel = localized(Res.string.machine_kit_current)
-        val thisComputer = localized(Res.string.machine_kit_this_computer)
-        val server = localized(Res.string.machine_kit_server)
+        val currentLabel = localized(Str.machine_kit_current)
+        val thisComputer = localized(Str.machine_kit_this_computer)
+        val server = localized(Str.machine_kit_server)
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             for (mc in ms.all) {
                 DropdownMenuItem(

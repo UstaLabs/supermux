@@ -8,11 +8,8 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.machine_fallback_name
-import dev.supermux.ui.resources.machine_kit_offline
-import dev.supermux.ui.resources.machine_kit_offline_seen
 
 /**
  * A paired machine as Settings shows it. [local] = it runs on this computer (desktop). [status] is the card's line
@@ -50,7 +47,7 @@ val LocalSettingsMachines = staticCompositionLocalOf<SettingsMachines?> { null }
 
 /** The name machine pages use in their copy ("‹machine›'s local time"). */
 @Composable
-fun currentMachineName(): String = LocalSettingsMachines.current?.current?.name ?: localized(Res.string.machine_fallback_name)
+fun currentMachineName(): String = LocalSettingsMachines.current?.current?.name ?: localized(Str.machine_fallback_name)
 
 /** False when the machine Settings is about is offline: its sections show [KitOfflineNote] instead of content. */
 @Composable
@@ -65,8 +62,8 @@ fun currentMachineOnline(): Boolean = LocalSettingsMachines.current?.current?.on
 @Composable
 fun KitOfflineNote(modifier: Modifier = Modifier) {
     val m = LocalSettingsMachines.current?.current
-    val name = m?.name ?: localized(Res.string.machine_fallback_name)
+    val name = m?.name ?: localized(Str.machine_fallback_name)
     val seen = m?.lastSeen?.takeIf { it.isNotEmpty() }
-    val text = if (seen != null) localized(Res.string.machine_kit_offline_seen, name, seen) else localized(Res.string.machine_kit_offline, name)
+    val text = if (seen != null) localized(Str.machine_kit_offline_seen, name, seen) else localized(Str.machine_kit_offline, name)
     KitNote(text, modifier.testTag("settings_offline"))
 }

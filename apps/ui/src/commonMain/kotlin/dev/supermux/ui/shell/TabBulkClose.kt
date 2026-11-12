@@ -1,13 +1,10 @@
 package dev.supermux.ui.shell
 
 import dev.supermux.proto.ViewDto
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.StringKey
 import dev.supermux.ui.session.RowContextMenuEntry
 import dev.supermux.workspace.LayoutNode
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.shell_close_to_right
-import dev.supermux.ui.resources.shell_close_to_left
-import dev.supermux.ui.resources.shell_close_all
-import org.jetbrains.compose.resources.StringResource
 
 /**
  * The tab menu's bulk closes: everything to the right of a tab, everything to the left of it, or
@@ -21,11 +18,11 @@ enum class BulkClose(val label: String) {
 }
 
 /** [BulkClose]'s menu row in the app's language. */
-val BulkClose.labelRes: StringResource
+val BulkClose.labelRes: StringKey
     get() = when (this) {
-        BulkClose.RIGHT -> Res.string.shell_close_to_right
-        BulkClose.LEFT -> Res.string.shell_close_to_left
-        BulkClose.ALL -> Res.string.shell_close_all
+        BulkClose.RIGHT -> Str.shell_close_to_right
+        BulkClose.LEFT -> Str.shell_close_to_left
+        BulkClose.ALL -> Str.shell_close_all
     }
 
 /** The ids [which] closes from a strip of [viewIds], relative to [anchorId]. Empty when the anchor
