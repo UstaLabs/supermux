@@ -107,6 +107,13 @@ import dev.supermux.ui.theme.MonoFontFamily
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.shell_add_view
+import dev.supermux.ui.resources.shell_done
+import dev.supermux.ui.resources.shell_close_named
+import dev.supermux.ui.resources.shell_tab_count
+import dev.supermux.ui.i18n.localizedPlural
 
 /** What the header's count button needs: how many views, whether one has news, and how to open. */
 data class PhoneTabsButton(val count: Int, val unread: Boolean, val onOpen: () -> Unit)
@@ -121,12 +128,13 @@ val LocalPhoneTabsButton = compositionLocalOf<PhoneTabsButton?> { null }
 @Composable
 fun PhoneTabCountButton(button: PhoneTabsButton, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
+    val tabsLabel = localizedPlural(Res.plurals.shell_tab_count, button.count, button.count)
     Box(
         modifier
             .size(40.dp)
             .clip(CircleShape)
             .clickable(onClick = button.onOpen)
-            .semantics { contentDescription = "${button.count} tabs" }
+            .semantics { contentDescription = tabsLabel }
             .testTag("phone_tabs_button"),
         contentAlignment = Alignment.Center,
     ) {
@@ -249,15 +257,15 @@ internal fun PhoneTabSwitcher(
                     .testTag("phone_add_view"),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Filled.Add, contentDescription = "Add view", tint = cs.onPrimary, modifier = Modifier.size(22.dp))
+                Icon(Icons.Filled.Add, contentDescription = localized(Res.string.shell_add_view), tint = cs.onPrimary, modifier = Modifier.size(22.dp))
             }
             Text(
-                if (viewIds.size == 1) "1 tab" else "${viewIds.size} tabs",
+                localizedPlural(Res.plurals.shell_tab_count, viewIds.size, viewIds.size),
                 style = MaterialTheme.typography.titleSmall,
                 color = cs.onSurfaceVariant,
                 modifier = Modifier.weight(1f).padding(horizontal = 14.dp),
             )
-            TextButton(onClick = onDismiss, modifier = Modifier.testTag("phone_tabs_done")) { Text("Done") }
+            TextButton(onClick = onDismiss, modifier = Modifier.testTag("phone_tabs_done")) { Text(localized(Res.string.shell_done)) }
         }
         LazyVerticalGrid(
             columns = GridCells.Fixed(2),
@@ -376,7 +384,7 @@ private fun TabCard(
                     Modifier.size(32.dp).clickable(onClick = onClose).testTag("tab-close-$id"),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(Icons.Filled.Close, contentDescription = "Close $title", tint = onFrame, modifier = Modifier.size(15.dp))
+                    Icon(Icons.Filled.Close, contentDescription = localized(Res.string.shell_close_named, title), tint = onFrame, modifier = Modifier.size(15.dp))
                 }
             }
             Box(

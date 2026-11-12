@@ -36,6 +36,10 @@ import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.ui.shell.rememberHostWorkspaceSession
 import dev.supermux.workspace.subtreeCovering
 import kotlinx.coroutines.delay
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.shell_extra_window_main_closed
+import dev.supermux.ui.resources.shell_open_supermux
 
 /** How long a window waits for the main one before saying it is gone (a resize recreates it). */
 private const val MAIN_WINDOW_GRACE_MS = 1_500L
@@ -186,12 +190,12 @@ private fun MainWindowGone(onOpenMain: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Text(
-                "This window shows part of a workspace from the main supermux window, which is closed.",
+                localized(Res.string.shell_extra_window_main_closed),
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
             )
             Button(onClick = onOpenMain, modifier = Modifier.testTag("extra_window_open_main")) {
-                Text("Open supermux")
+                Text(localized(Res.string.shell_open_supermux))
             }
         }
     }

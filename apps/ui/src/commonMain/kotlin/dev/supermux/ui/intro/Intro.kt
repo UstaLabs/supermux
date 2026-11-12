@@ -130,6 +130,7 @@ import dev.supermux.pairing.PairingUiState
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.resources.Res
@@ -138,6 +139,44 @@ import dev.supermux.ui.resources.agent_codex
 import dev.supermux.ui.resources.agent_cursor
 import dev.supermux.ui.resources.agent_grok
 import dev.supermux.ui.resources.agent_antigravity
+import dev.supermux.ui.resources.intro_agents_stamp
+import dev.supermux.ui.resources.intro_agents_text
+import dev.supermux.ui.resources.intro_agents_title_1
+import dev.supermux.ui.resources.intro_agents_title_2
+import dev.supermux.ui.resources.intro_always_on_stamp
+import dev.supermux.ui.resources.intro_always_on_text
+import dev.supermux.ui.resources.intro_always_on_title_1
+import dev.supermux.ui.resources.intro_always_on_title_2
+import dev.supermux.ui.resources.intro_connect_accent
+import dev.supermux.ui.resources.intro_connect_stamp
+import dev.supermux.ui.resources.intro_connect_text_paste
+import dev.supermux.ui.resources.intro_connect_text_scan
+import dev.supermux.ui.resources.intro_connect_title_1
+import dev.supermux.ui.resources.intro_connect_title_2
+import dev.supermux.ui.resources.intro_hook_no_account
+import dev.supermux.ui.resources.intro_hook_no_vendor_cloud
+import dev.supermux.ui.resources.intro_hook_self_hosted
+import dev.supermux.ui.resources.intro_hook_stamp
+import dev.supermux.ui.resources.intro_hook_text
+import dev.supermux.ui.resources.intro_hook_title_1
+import dev.supermux.ui.resources.intro_hook_title_2
+import dev.supermux.ui.resources.intro_manual_hide
+import dev.supermux.ui.resources.intro_manual_show
+import dev.supermux.ui.resources.intro_next_connect
+import dev.supermux.ui.resources.intro_next_never_sleeps
+import dev.supermux.ui.resources.intro_next_see
+import dev.supermux.ui.resources.intro_or_paste
+import dev.supermux.ui.resources.intro_pairing
+import dev.supermux.ui.resources.intro_scan
+import dev.supermux.ui.resources.intro_scan_sub
+import dev.supermux.ui.resources.intro_skip_click
+import dev.supermux.ui.resources.intro_skip_tap
+import dev.supermux.ui.resources.intro_tagline
+import dev.supermux.ui.resources.intro_ticker_title
+import dev.supermux.ui.resources.intro_ticker_waiting
+import dev.supermux.ui.resources.onboarding_broker_host
+import dev.supermux.ui.resources.onboarding_device_token
+import dev.supermux.ui.resources.onboarding_pair
 import dev.supermux.ui.theme.GeistFontFamily
 import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.MonoFontFamily
@@ -357,11 +396,13 @@ fun OnboardingFlow(
                     elevation = ButtonDefaults.buttonElevation(defaultElevation = 8.dp),
                 ) {
                     Text(
-                        when (page) {
-                            0 -> "See what it does"
-                            1 -> "It never sleeps"
-                            else -> "Connect your computer"
-                        },
+                        localized(
+                            when (page) {
+                                0 -> Res.string.intro_next_see
+                                1 -> Res.string.intro_next_never_sleeps
+                                else -> Res.string.intro_next_connect
+                            },
+                        ),
                         fontFamily = GeistFontFamily,
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 16.sp,
@@ -399,19 +440,19 @@ private fun SkyBackground(page: Int, dark: Boolean) {
     val phases = if (dark) darkPhases() else lightPhases()
     val p = phases[page.coerceIn(0, phases.lastIndex)]
 
-    val top by animateColorAsState(p.top, tween(900, easing = FastOutSlowInEasing), label = "top")
-    val mid by animateColorAsState(p.mid, tween(900, easing = FastOutSlowInEasing), label = "mid")
-    val low by animateColorAsState(p.low, tween(900, easing = FastOutSlowInEasing), label = "low")
-    val orb by animateColorAsState(p.orb, tween(900, easing = FastOutSlowInEasing), label = "orb")
-    val orbX by animateFloatAsState(p.orbX, tween(900, easing = FastOutSlowInEasing), label = "orbX")
-    val orbY by animateFloatAsState(p.orbY, tween(900, easing = FastOutSlowInEasing), label = "orbY")
-    val orbScale by animateFloatAsState(p.orbScale, tween(900, easing = FastOutSlowInEasing), label = "orbS")
+    val top by animateColorAsState(p.top, tween(900, easing = FastOutSlowInEasing), label = "top") // i18n-ok: animation label
+    val mid by animateColorAsState(p.mid, tween(900, easing = FastOutSlowInEasing), label = "mid") // i18n-ok: animation label
+    val low by animateColorAsState(p.low, tween(900, easing = FastOutSlowInEasing), label = "low") // i18n-ok: animation label
+    val orb by animateColorAsState(p.orb, tween(900, easing = FastOutSlowInEasing), label = "orb") // i18n-ok: animation label
+    val orbX by animateFloatAsState(p.orbX, tween(900, easing = FastOutSlowInEasing), label = "orbX") // i18n-ok: animation label
+    val orbY by animateFloatAsState(p.orbY, tween(900, easing = FastOutSlowInEasing), label = "orbY") // i18n-ok: animation label
+    val orbScale by animateFloatAsState(p.orbScale, tween(900, easing = FastOutSlowInEasing), label = "orbS") // i18n-ok: animation label
 
-    val cloudShift by rememberInfiniteTransition(label = "clouds").animateFloat(
+    val cloudShift by rememberInfiniteTransition(label = "clouds").animateFloat( // i18n-ok: animation label
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(tween(70_000, easing = LinearEasing), RepeatMode.Restart),
-        label = "cloudShift",
+        label = "cloudShift", // i18n-ok: animation label
     )
 
     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(top, mid, low)))) {
@@ -468,12 +509,13 @@ private fun GrainOverlay() {
 
 // ── shared atoms ────────────────────────────────────────────────────
 
+/** [text] is shown in capitals; a language whose capitals `uppercase()` gets wrong (Turkish's İ) gives them ready-made. */
 @Composable
 private fun Stamp(text: String, inkSoft: Color, appeared: Boolean) {
     val a by animateFloatAsState(
         if (appeared) 1f else 0f,
         tween(500, delayMillis = 100, easing = FastOutSlowInEasing),
-        label = "stamp",
+        label = "stamp", // i18n-ok: animation label
     )
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -505,7 +547,7 @@ private fun WordReveal(
             val a by animateFloatAsState(
                 if (appeared) 1f else 0f,
                 tween(550, delayMillis = 250 + i * 130, easing = FastOutSlowInEasing),
-                label = "word$i",
+                label = "word$i", // i18n-ok: animation label
             )
             Text(
                 word,
@@ -538,7 +580,7 @@ private fun DayRail(
             val width by animateFloatAsState(
                 if (i == page) 26f else 8f,
                 tween(350, easing = FastOutSlowInEasing),
-                label = "dot$i",
+                label = "dot$i", // i18n-ok: animation label
             )
             Box(
                 Modifier
@@ -566,16 +608,17 @@ private fun HookPage(ink: Color, inkSoft: Color) {
     var appeared by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { appeared = true }
 
-    val subA by animateFloatAsState(if (appeared) 1f else 0f, tween(550, delayMillis = 620), label = "sub")
-    val trustA by animateFloatAsState(if (appeared) 1f else 0f, tween(500, delayMillis = 850), label = "trust")
+    val subA by animateFloatAsState(if (appeared) 1f else 0f, tween(550, delayMillis = 620), label = "sub") // i18n-ok: animation label
+    val trustA by animateFloatAsState(if (appeared) 1f else 0f, tween(500, delayMillis = 850), label = "trust") // i18n-ok: animation label
 
     PageColumn("intro_page_hook") {
-        Stamp("open-source · mobile-first · ADE", inkSoft, appeared)
+        Stamp(localized(Res.string.intro_hook_stamp), inkSoft, appeared)
         Spacer(Modifier.height(22.dp))
-        WordReveal(listOf("AFK.", "Still shipping."), appeared, ink, "Still shipping.")
+        val hookAccent = localized(Res.string.intro_hook_title_2)
+        WordReveal(listOf(localized(Res.string.intro_hook_title_1), hookAccent), appeared, ink, hookAccent)
         Spacer(Modifier.height(22.dp))
         Text(
-            "supermux runs your coding agents on a computer you own — and hands you every session on every screen you carry.",
+            localized(Res.string.intro_hook_text),
             fontFamily = GeistFontFamily,
             fontSize = 17.sp,
             lineHeight = 26.sp,
@@ -587,7 +630,12 @@ private fun HookPage(ink: Color, inkSoft: Color) {
             modifier = Modifier.graphicsLayer { alpha = trustA },
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            listOf("MIT", "self-hosted", "no vendor cloud", "no account").forEachIndexed { i, item ->
+            listOf(
+                "MIT", // i18n-ok: licence name
+                localized(Res.string.intro_hook_self_hosted),
+                localized(Res.string.intro_hook_no_vendor_cloud),
+                localized(Res.string.intro_hook_no_account),
+            ).forEachIndexed { i, item ->
                 if (i > 0) {
                     Box(Modifier.size(2.5.dp).clip(CircleShape).background(inkSoft.copy(alpha = 0.5f)))
                     Spacer(Modifier.width(6.dp))
@@ -618,12 +666,13 @@ private fun AgentsPage(ink: Color, inkSoft: Color) {
         )
     }
 
-    val subA by animateFloatAsState(if (appeared) 1f else 0f, tween(550, delayMillis = 750), label = "agentsub")
+    val subA by animateFloatAsState(if (appeared) 1f else 0f, tween(550, delayMillis = 750), label = "agentsub") // i18n-ok: animation label
 
     PageColumn("intro_page_agents") {
-        Stamp("bring your own subscription", inkSoft, appeared)
+        Stamp(localized(Res.string.intro_agents_stamp), inkSoft, appeared)
         Spacer(Modifier.height(22.dp))
-        WordReveal(listOf("Your agents.", "Your keys."), appeared, ink, "Your keys.")
+        val agentsAccent = localized(Res.string.intro_agents_title_2)
+        WordReveal(listOf(localized(Res.string.intro_agents_title_1), agentsAccent), appeared, ink, agentsAccent)
         Spacer(Modifier.height(24.dp))
 
         Row(horizontalArrangement = Arrangement.spacedBy((-8).dp)) {
@@ -631,7 +680,7 @@ private fun AgentsPage(ink: Color, inkSoft: Color) {
                 val aAnim by animateFloatAsState(
                     if (appeared) 1f else 0f,
                     tween(500, delayMillis = 350 + i * 90, easing = FastOutSlowInEasing),
-                    label = "agent$i",
+                    label = "agent$i", // i18n-ok: animation label
                 )
                 Box(
                     contentAlignment = Alignment.Center,
@@ -658,7 +707,7 @@ private fun AgentsPage(ink: Color, inkSoft: Color) {
         }
         Spacer(Modifier.height(24.dp))
         Text(
-            "Claude Code, Codex, Cursor, OpenCode, Grok & Antigravity — running on your machine, with your plan. No middleman, no markup.",
+            localized(Res.string.intro_agents_text),
             fontFamily = GeistFontFamily,
             fontSize = 17.sp,
             lineHeight = 26.sp,
@@ -674,17 +723,18 @@ private fun AgentsPage(ink: Color, inkSoft: Color) {
 private fun AlwaysOnPage(ink: Color, inkSoft: Color) {
     var appeared by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { appeared = true }
-    val subA by animateFloatAsState(if (appeared) 1f else 0f, tween(550, delayMillis = 700), label = "alwayssub")
+    val subA by animateFloatAsState(if (appeared) 1f else 0f, tween(550, delayMillis = 700), label = "alwayssub") // i18n-ok: animation label
 
     PageColumn("intro_page_always_on") {
-        Stamp("always-on sessions", inkSoft, appeared)
+        Stamp(localized(Res.string.intro_always_on_stamp), inkSoft, appeared)
         Spacer(Modifier.height(22.dp))
-        WordReveal(listOf("You leave.", "It doesn't."), appeared, ink, "It doesn't.")
+        val alwaysOnAccent = localized(Res.string.intro_always_on_title_2)
+        WordReveal(listOf(localized(Res.string.intro_always_on_title_1), alwaysOnAccent), appeared, ink, alwaysOnAccent)
         Spacer(Modifier.height(24.dp))
         MeanwhileTicker(appeared)
         Spacer(Modifier.height(24.dp))
         Text(
-            "Sessions live on your box, not a browser tab. Walk out the door and the work keeps moving — a push lands the moment you're needed.",
+            localized(Res.string.intro_always_on_text),
             fontFamily = GeistFontFamily,
             fontSize = 17.sp,
             lineHeight = 26.sp,
@@ -713,14 +763,15 @@ private fun MeanwhileTicker(appeared: Boolean) {
         }
     }
 
+    // The first three are an agent's commands and their output, as a terminal prints them; the last one talks to you.
     val lines = listOf(
-        "▸ bun test — 212 passed" to LeafGreen,
-        "▸ edit src/channels/web/session.ts" to Color(0xFFD1DBE8),
-        "▸ commit \"wire session resume\"" to Color(0xFFD1DBE8),
-        "▸ opening review — waiting on you" to Amber,
+        "▸ bun test — 212 passed" to LeafGreen, // i18n-ok: mock terminal output
+        "▸ edit src/channels/web/session.ts" to Color(0xFFD1DBE8), // i18n-ok: mock terminal output
+        "▸ commit \"wire session resume\"" to Color(0xFFD1DBE8), // i18n-ok: mock terminal output
+        localized(Res.string.intro_ticker_waiting) to Amber,
     )
 
-    val cardA by animateFloatAsState(if (appeared) 1f else 0f, tween(550, delayMillis = 400), label = "ticker")
+    val cardA by animateFloatAsState(if (appeared) 1f else 0f, tween(550, delayMillis = 400), label = "ticker") // i18n-ok: animation label
 
     Column(
         Modifier
@@ -740,7 +791,7 @@ private fun MeanwhileTicker(appeared: Boolean) {
             )
             Spacer(Modifier.width(8.dp))
             Text(
-                "meanwhile, on your computer",
+                localized(Res.string.intro_ticker_title),
                 fontFamily = MonoFontFamily,
                 fontWeight = FontWeight.Medium,
                 fontSize = 11.sp,
@@ -753,7 +804,7 @@ private fun MeanwhileTicker(appeared: Boolean) {
             val lineA by animateFloatAsState(
                 if (i < typedLines) 1f else 0f,
                 tween(400, easing = FastOutSlowInEasing),
-                label = "line$i",
+                label = "line$i", // i18n-ok: animation label
             )
             Text(
                 text,
@@ -803,9 +854,9 @@ private fun ConnectPage(
         }
     }
 
-    val subA by animateFloatAsState(if (appeared) 1f else 0f, tween(400, delayMillis = 500), label = "connsub")
-    val scanA by animateFloatAsState(if (appeared) 1f else 0f, tween(500, delayMillis = 600), label = "scan")
-    val pasteA by animateFloatAsState(if (appeared) 1f else 0f, tween(400, delayMillis = 750), label = "paste")
+    val subA by animateFloatAsState(if (appeared) 1f else 0f, tween(400, delayMillis = 500), label = "connsub") // i18n-ok: animation label
+    val scanA by animateFloatAsState(if (appeared) 1f else 0f, tween(500, delayMillis = 600), label = "scan") // i18n-ok: animation label
+    val pasteA by animateFloatAsState(if (appeared) 1f else 0f, tween(400, delayMillis = 750), label = "paste") // i18n-ok: animation label
 
     Column(
         Modifier
@@ -815,16 +866,19 @@ private fun ConnectPage(
             .padding(top = 48.dp, bottom = 20.dp)
             .testTag("intro_page_connect"),
     ) {
-        Stamp("pair your device", inkSoft, appeared)
+        Stamp(localized(Res.string.intro_connect_stamp), inkSoft, appeared)
         Spacer(Modifier.height(22.dp))
-        WordReveal(listOf("Connect to", "your computer."), appeared, ink, "your computer.", size = 36)
+        // The accent is whichever line names the computer: the second in English, the first in Turkish.
+        WordReveal(
+            listOf(localized(Res.string.intro_connect_title_1), localized(Res.string.intro_connect_title_2)),
+            appeared,
+            ink,
+            localized(Res.string.intro_connect_accent),
+            size = 36,
+        )
         Spacer(Modifier.height(18.dp))
         Text(
-            if (canScan) {
-                "Open supermux on your computer and scan the pairing code — you'll be briefed in seconds."
-            } else {
-                "Run `bun run pair <device-name>` on your broker and paste the link — you'll be briefed in seconds."
-            },
+            localized(if (canScan) Res.string.intro_connect_text_scan else Res.string.intro_connect_text_paste),
             fontFamily = GeistFontFamily,
             fontSize = 16.sp,
             lineHeight = 24.sp,
@@ -857,13 +911,13 @@ private fun ConnectPage(
                     Icon(Icons.Filled.QrCodeScanner, contentDescription = null, modifier = Modifier.size(26.dp))
                     Column(Modifier.weight(1f), horizontalAlignment = Alignment.Start) {
                         Text(
-                            "Scan pairing code",
+                            localized(Res.string.intro_scan),
                             fontFamily = GeistFontFamily,
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 17.sp,
                         )
                         Text(
-                            "shown by the supermux desktop app",
+                            localized(Res.string.intro_scan_sub),
                             fontFamily = GeistFontFamily,
                             fontSize = 12.sp,
                             color = Color.White.copy(alpha = 0.7f),
@@ -879,7 +933,7 @@ private fun ConnectPage(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.weight(1f).height(1.dp).background(ink.copy(alpha = 0.12f)))
                     Text(
-                        "  or paste a pairing link  ",
+                        "  ${localized(Res.string.intro_or_paste)}  ",
                         fontFamily = MonoFontFamily,
                         fontSize = 11.sp,
                         letterSpacing = 0.6.sp,
@@ -894,6 +948,7 @@ private fun ConnectPage(
             OutlinedTextField(
                 value = linkInput,
                 onValueChange = { linkInput = it; pairing.resetError() },
+                // i18n-ok: sample URL
                 placeholder = { Text("https://host/pair?t=…", fontFamily = MonoFontFamily, fontSize = 13.sp) },
                 singleLine = false,
                 minLines = 1,
@@ -909,14 +964,14 @@ private fun ConnectPage(
                 modifier = Modifier.fillMaxWidth().height(48.dp).testTag("intro_paste_submit"),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = TealDeep, contentColor = Color.White),
-            ) { Text("Pair", fontFamily = GeistFontFamily, fontWeight = FontWeight.SemiBold) }
+            ) { Text(localized(Res.string.onboarding_pair), fontFamily = GeistFontFamily, fontWeight = FontWeight.SemiBold) }
 
             TextButton(
                 onClick = { showManual = !showManual },
                 modifier = Modifier.align(Alignment.CenterHorizontally).testTag("intro_manual_toggle"),
             ) {
                 Text(
-                    if (showManual) "Hide manual entry" else "Manual entry",
+                    localized(if (showManual) Res.string.intro_manual_hide else Res.string.intro_manual_show),
                     fontFamily = MonoFontFamily,
                     fontSize = 12.sp,
                     color = inkSoft,
@@ -927,10 +982,10 @@ private fun ConnectPage(
                 OutlinedTextField(
                     value = manualHost,
                     onValueChange = { manualHost = it; pairing.resetError() },
-                    label = { Text("Broker host") },
+                    label = { Text(localized(Res.string.onboarding_broker_host)) },
                     placeholder = {
                         Text(
-                            if (pointer) "ws://127.0.0.1:9898" else "ws://10.0.2.2:9898",
+                            if (pointer) "ws://127.0.0.1:9898" else "ws://10.0.2.2:9898", // i18n-ok: sample URLs
                             fontFamily = MonoFontFamily,
                             fontSize = 13.sp,
                         )
@@ -944,7 +999,7 @@ private fun ConnectPage(
                 OutlinedTextField(
                     value = manualToken,
                     onValueChange = { manualToken = it; pairing.resetError() },
-                    label = { Text("Device token") },
+                    label = { Text(localized(Res.string.onboarding_device_token)) },
                     singleLine = true,
                     enabled = !validating,
                     keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
@@ -957,7 +1012,7 @@ private fun ConnectPage(
                     modifier = Modifier.fillMaxWidth().height(48.dp).testTag("intro_manual_submit"),
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = TealDeep, contentColor = Color.White),
-                ) { Text("Pair", fontFamily = GeistFontFamily, fontWeight = FontWeight.SemiBold) }
+                ) { Text(localized(Res.string.onboarding_pair), fontFamily = GeistFontFamily, fontWeight = FontWeight.SemiBold) }
             }
         }
 
@@ -965,7 +1020,7 @@ private fun ConnectPage(
             Spacer(Modifier.height(16.dp))
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 CircularProgressIndicator(color = Teal, strokeWidth = 2.5.dp)
-                Text("Pairing…", fontFamily = GeistFontFamily, fontSize = 14.sp, color = inkSoft)
+                Text(localized(Res.string.intro_pairing), fontFamily = GeistFontFamily, fontSize = 14.sp, color = inkSoft)
             }
         }
         (state as? PairingUiState.Error)?.let { err ->
@@ -1432,14 +1487,14 @@ fun FirstRunIntroOverlay(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(
-                    "supermux",
+                    "supermux", // i18n-ok: brand
                     fontFamily = GeistFontFamily, fontWeight = FontWeight.SemiBold,
                     fontSize = 34.sp, letterSpacing = (-0.68).sp, color = WordmarkInk,
                     modifier = Modifier.graphicsLayer { alpha = wmA },
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "AFK. Still shipping.",
+                    localized(Res.string.intro_tagline),
                     fontFamily = MonoFontFamily, fontSize = 13.sp, color = TaglineDim,
                     modifier = Modifier.graphicsLayer { alpha = tgA },
                 )
@@ -1449,7 +1504,7 @@ fun FirstRunIntroOverlay(
         // --- skip hint ---------------------------------------------------------------------------
         Text(
             // A finger taps; only a mouse clicks.
-            if (LocalPointerAvailable.current) "click anywhere to skip" else "tap anywhere to skip",
+            localized(if (LocalPointerAvailable.current) Res.string.intro_skip_click else Res.string.intro_skip_tap),
             fontFamily = MonoFontFamily, fontSize = 11.sp, color = Dim,
             modifier = Modifier
                 .align(Alignment.BottomEnd)

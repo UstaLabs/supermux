@@ -68,6 +68,7 @@ import dev.supermux.net.WorktreeListDto
 import dev.supermux.net.WorktreeSummaryDto
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.i18n.localizedPlural
+import dev.supermux.ui.i18n.uppercaseInAppLanguage
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.resources.Res
 import dev.supermux.ui.resources.common_clear
@@ -658,7 +659,7 @@ private fun WorktreesList(actions: WorktreesSettingsActions, form: WorktreesForm
     list.orphans.takeIf { it.count > 0 }?.let { o ->
         Row(Modifier.padding(top = 26.dp, bottom = 6.dp).testTag("wt_orphans"), verticalAlignment = Alignment.Bottom) {
             Text(
-                localized(Res.string.worktrees_repo_missing).uppercase(),
+                localized(Res.string.worktrees_repo_missing).uppercaseInAppLanguage(),
                 fontSize = 10.5.sp,
                 fontWeight = FontWeight.SemiBold,
                 letterSpacing = 0.63.sp,

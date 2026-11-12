@@ -49,6 +49,24 @@ import dev.supermux.host.hostDotArgb
 import dev.supermux.proto.SessionInfo
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.host_add_item
+import dev.supermux.ui.resources.host_all
+import dev.supermux.ui.resources.host_cancel
+import dev.supermux.ui.resources.host_forget
+import dev.supermux.ui.resources.host_forget_item
+import dev.supermux.ui.resources.host_forget_text
+import dev.supermux.ui.resources.host_forget_title
+import dev.supermux.ui.resources.host_label
+import dev.supermux.ui.resources.host_offline
+import dev.supermux.ui.resources.host_offline_dot
+import dev.supermux.ui.resources.host_offline_paren
+import dev.supermux.ui.resources.host_open
+import dev.supermux.ui.resources.host_rename
+import dev.supermux.ui.resources.host_rename_item
+import dev.supermux.ui.resources.host_rename_title
+import dev.supermux.ui.resources.host_selected
 import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.widgets.AlertDialog
 import dev.supermux.ui.widgets.DropdownMenu
@@ -121,13 +139,14 @@ fun HostScopePicker(
     val cs = MaterialTheme.colorScheme
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
     var expanded by remember { mutableStateOf(false) }
+    val hostLabel = localized(Res.string.host_label)
 
     @Composable
     fun Menu() {
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             hosts.forEach { host ->
                 DropdownMenuItem(
-                    text = { Text(host.displayLabel + if (!host.online) " (offline)" else "") },
+                    text = { Text(if (host.online) host.displayLabel else localized(Res.string.host_offline_paren, host.displayLabel)) },
                     leadingIcon = { HostDot(host.colorIndex, size = 10.dp) },
                     onClick = { expanded = false; onSelect(host.recordId) },
                 )
@@ -149,12 +168,12 @@ fun HostScopePicker(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (compact) {
-                Text("Host", color = cs.onSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Text(hostLabel, color = cs.onSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.weight(1f))
             }
             HostDot(selected.colorIndex, size = 9.dp)
             Text(
-                selected.displayLabel + if (!selected.online) " · Offline" else "",
+                if (selected.online) selected.displayLabel else localized(Res.string.host_offline_dot, selected.displayLabel),
                 modifier = Modifier.padding(start = 7.dp, end = 5.dp),
                 color = cs.onSurface,
                 fontSize = if (compact) 14.sp else TextUnit.Unspecified,
@@ -173,7 +192,7 @@ fun HostScopePicker(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("Host", color = cs.onSurfaceVariant)
+                Text(hostLabel, color = cs.onSurfaceVariant)
                 Box { Anchor(Modifier.wrapContentWidth()); Menu() }
             }
         }
@@ -230,6 +249,8 @@ fun HostSwitcher(
     var renameTarget by dialogs::renameTarget
     var renameText by dialogs::renameText
     var forgetTarget by dialogs::forgetTarget
+    val allHosts = localized(Res.string.host_all)
+    val offlineWord = localized(Res.string.host_offline)
 
     Box(modifier) {
         if (compact) {
@@ -244,7 +265,7 @@ fun HostSwitcher(
             ) {
                 Icon(
                     Icons.Filled.Dns,
-                    contentDescription = current?.displayLabel ?: "All hosts",
+                    contentDescription = current?.displayLabel ?: allHosts,
                     tint = cs.onSurfaceVariant,
                     modifier = Modifier.size(16.dp),
                 )
@@ -276,7 +297,7 @@ fun HostSwitcher(
                 Icon(Icons.Filled.Dns, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(14.dp))
             }
             Text(
-                current?.displayLabel ?: "All hosts",
+                current?.displayLabel ?: allHosts,
                 modifier = Modifier.weight(1f, fill = false),
                 color = if (current == null || current.online) cs.onSurface else cs.onSurfaceVariant.copy(alpha = 0.7f),
                 fontSize = 12.sp,
@@ -289,7 +310,7 @@ fun HostSwitcher(
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             if (hosts.size > 1) {
                 DropdownMenuItem(
-                    text = { Text("All hosts") },
+                    text = { Text(allHosts) },
                     leadingIcon = {
                         Icon(Icons.Filled.Dns, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(14.dp))
                     },
@@ -304,7 +325,7 @@ fun HostSwitcher(
                 DropdownMenuItem(
                     text = {
                         Text(
-                            h.displayLabel + if (!h.online) " · ${lastSeen.ifEmpty { "offline" }}" else "",
+                            h.displayLabel + if (!h.online) " · ${lastSeen.ifEmpty { offlineWord }}" else "",
                             color = if (h.online) Color.Unspecified else cs.onSurfaceVariant.copy(alpha = 0.7f),
                         )
                     },
@@ -317,7 +338,7 @@ fun HostSwitcher(
             HorizontalDivider(Modifier.padding(vertical = 4.dp))
             if (current != null && onOpenHost != null) {
                 DropdownMenuItem(
-                    text = { Text("Open ${current.displayLabel}") },
+                    text = { Text(localized(Res.string.host_open, current.displayLabel)) },
                     leadingIcon = {
                         Icon(Icons.Filled.Dns, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(14.dp))
                     },
@@ -327,18 +348,18 @@ fun HostSwitcher(
             }
             if (current != null) {
                 DropdownMenuItem(
-                    text = { Text("Rename ${current.displayLabel}…") },
+                    text = { Text(localized(Res.string.host_rename_item, current.displayLabel)) },
                     onClick = { expanded = false; renameText = current.displayLabel; renameTarget = current },
                     modifier = Modifier.testTag("host_switcher_rename"),
                 )
                 DropdownMenuItem(
-                    text = { Text("Forget ${current.displayLabel}…", color = cs.error) },
+                    text = { Text(localized(Res.string.host_forget_item, current.displayLabel), color = cs.error) },
                     onClick = { expanded = false; forgetTarget = current },
                     modifier = Modifier.testTag("host_switcher_forget"),
                 )
             }
             DropdownMenuItem(
-                text = { Text("Add host…") },
+                text = { Text(localized(Res.string.host_add_item)) },
                 leadingIcon = { Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp)) },
                 onClick = { expanded = false; onAddHost() },
                 modifier = Modifier.testTag("host_switcher_add"),
@@ -349,7 +370,7 @@ fun HostSwitcher(
     renameTarget?.let { target ->
         AlertDialog(
             onDismissRequest = { renameTarget = null },
-            title = { Text("Rename host") },
+            title = { Text(localized(Res.string.host_rename_title)) },
             text = {
                 OutlinedTextField(
                     value = renameText,
@@ -363,23 +384,23 @@ fun HostSwitcher(
                     onClick = { onRenameHost(target.recordId, renameText.trim()); renameTarget = null },
                     enabled = renameText.trim().isNotBlank(),
                     modifier = Modifier.testTag("host_rename_confirm"),
-                ) { Text("Rename") }
+                ) { Text(localized(Res.string.host_rename)) }
             },
-            dismissButton = { TextButton(onClick = { renameTarget = null }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { renameTarget = null }) { Text(localized(Res.string.host_cancel)) } },
         )
     }
     forgetTarget?.let { target ->
         AlertDialog(
             onDismissRequest = { forgetTarget = null },
-            title = { Text("Forget host?") },
-            text = { Text("Removes \"${target.displayLabel}\" and its sessions from this device. You'll need a new pairing link to add it again.") },
+            title = { Text(localized(Res.string.host_forget_title)) },
+            text = { Text(localized(Res.string.host_forget_text, target.displayLabel)) },
             confirmButton = {
                 TextButton(
                     onClick = { onForgetHost(target.recordId); forgetTarget = null },
                     modifier = Modifier.testTag("host_forget_confirm"),
-                ) { Text("Forget", color = cs.error) }
+                ) { Text(localized(Res.string.host_forget), color = cs.error) }
             },
-            dismissButton = { TextButton(onClick = { forgetTarget = null }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { forgetTarget = null }) { Text(localized(Res.string.host_cancel)) } },
         )
     }
 }
@@ -398,7 +419,7 @@ private fun MenuTrailing(count: Int, checked: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         if (count > 0) Text("$count", color = cs.onSurfaceVariant, fontSize = 11.sp)
         Box(Modifier.size(14.dp)) {
-            if (checked) Icon(Icons.Filled.Check, contentDescription = "Selected", tint = cs.primary, modifier = Modifier.size(14.dp))
+            if (checked) Icon(Icons.Filled.Check, contentDescription = localized(Res.string.host_selected), tint = cs.primary, modifier = Modifier.size(14.dp))
         }
     }
 }

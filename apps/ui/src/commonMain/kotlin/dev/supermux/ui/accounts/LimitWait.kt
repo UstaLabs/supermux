@@ -38,33 +38,77 @@ import androidx.compose.ui.unit.sp
 import dev.supermux.chat.chatTimeLabel
 import dev.supermux.chat.parseChatTs
 import dev.supermux.proto.LimitWaitDto
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.Stroke
 import kotlinx.coroutines.delay
 import kotlin.time.Clock
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.limit_any_moment
+import dev.supermux.ui.resources.limit_cancel
+import dev.supermux.ui.resources.limit_in_hours_minutes
+import dev.supermux.ui.resources.limit_in_minutes
+import dev.supermux.ui.resources.limit_on_account
+import dev.supermux.ui.resources.limit_resume_now
+import dev.supermux.ui.resources.limit_row_checks
+import dev.supermux.ui.resources.limit_row_resumes
+import dev.supermux.ui.resources.limit_soon
+import dev.supermux.ui.resources.limit_title_checks
+import dev.supermux.ui.resources.limit_title_resumes
+
+// The plain functions word in English: the tests' twins (#123). The strip and the session rows read the composable
+// twins (localizedLimitWaitRowText …), which word the same in the app's language.
 
 private fun at(wait: LimitWaitDto, nowMs: Long): String = chatTimeLabel(wait.resumeAt, nowMs) ?: "soon"
 
+@Composable
+private fun localizedAt(wait: LimitWaitDto, nowMs: Long): String =
+    chatTimeLabel(wait.resumeAt, nowMs) ?: localized(Res.string.limit_soon)
+
 /** The session row's line: "Waiting · resumes 18:13". */
 fun limitWaitRowText(wait: LimitWaitDto, nowMs: Long): String =
-    if (wait.resetsAt != null) "Waiting · resumes ${at(wait, nowMs)}" else "Waiting · checks again ${at(wait, nowMs)}"
+    if (wait.resetsAt != null) "Waiting · resumes ${at(wait, nowMs)}" else "Waiting · checks again ${at(wait, nowMs)}" // i18n-ok: test twin
+
+/** [limitWaitRowText] in the app's language. */
+@Composable
+fun localizedLimitWaitRowText(wait: LimitWaitDto, nowMs: Long): String =
+    localized(if (wait.resetsAt != null) Res.string.limit_row_resumes else Res.string.limit_row_checks, localizedAt(wait, nowMs))
 
 /** The strip's first line. */
 fun limitWaitTitle(wait: LimitWaitDto, nowMs: Long): String =
     if (wait.resetsAt != null) "Usage limit reached. Resumes automatically at ${at(wait, nowMs)}"
-    else "Usage limit reached. Checks again at ${at(wait, nowMs)}"
+    else "Usage limit reached. Checks again at ${at(wait, nowMs)}" // i18n-ok: test twin
+
+/** [limitWaitTitle] in the app's language. */
+@Composable
+fun localizedLimitWaitTitle(wait: LimitWaitDto, nowMs: Long): String =
+    localized(if (wait.resetsAt != null) Res.string.limit_title_resumes else Res.string.limit_title_checks, localizedAt(wait, nowMs))
+
+private fun minutesLeft(wait: LimitWaitDto, nowMs: Long): Long = ((parseChatTs(wait.resumeAt) ?: nowMs) - nowMs) / 60_000L
 
 /** The strip's second line: "in 1 h 24 min · on Work Max". */
 fun limitWaitDetail(wait: LimitWaitDto, nowMs: Long): String {
-    val left = ((parseChatTs(wait.resumeAt) ?: nowMs) - nowMs) / 60_000L
+    val left = minutesLeft(wait, nowMs)
     val whenText = when {
         left <= 0 -> "any moment now"
         left < 60 -> "in $left min"
         else -> "in ${left / 60} h ${left % 60} min"
     }
-    return if (wait.accountLabel.isBlank()) whenText else "$whenText · on ${wait.accountLabel}"
+    return if (wait.accountLabel.isBlank()) whenText else "$whenText · on ${wait.accountLabel}" // i18n-ok: test twin
+}
+
+/** [limitWaitDetail] in the app's language. */
+@Composable
+fun localizedLimitWaitDetail(wait: LimitWaitDto, nowMs: Long): String {
+    val left = minutesLeft(wait, nowMs)
+    val whenText = when {
+        left <= 0 -> localized(Res.string.limit_any_moment)
+        left < 60 -> localized(Res.string.limit_in_minutes, left)
+        else -> localized(Res.string.limit_in_hours_minutes, left / 60, left % 60)
+    }
+    return if (wait.accountLabel.isBlank()) whenText else localized(Res.string.limit_on_account, whenText, wait.accountLabel)
 }
 
 /** Ticks once a minute, so "in N min" stays true while the strip is on screen. */
@@ -109,11 +153,11 @@ fun LimitWaitStrip(
         ) {
             Icon(Icons.Outlined.HourglassBottom, contentDescription = null, tint = warning, modifier = Modifier.size(17.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                Text(limitWaitTitle(wait, now), color = cs.onSurface, fontWeight = FontWeight.Medium, fontSize = 13.sp)
-                Text(limitWaitDetail(wait, now), color = cs.onSurfaceVariant, fontSize = 12.sp)
+                Text(localizedLimitWaitTitle(wait, now), color = cs.onSurface, fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                Text(localizedLimitWaitDetail(wait, now), color = cs.onSurfaceVariant, fontSize = 12.sp)
             }
-            StripAction("Cancel", cs.onSurfaceVariant, onCancel, "limit-wait-cancel")
-            StripAction("Resume now", cs.onSurface, onResumeNow, "limit-wait-resume")
+            StripAction(localized(Res.string.limit_cancel), cs.onSurfaceVariant, onCancel, "limit-wait-cancel")
+            StripAction(localized(Res.string.limit_resume_now), cs.onSurface, onResumeNow, "limit-wait-resume")
         }
     }
 }

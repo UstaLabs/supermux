@@ -100,6 +100,7 @@ import dev.supermux.ui.settings.search.SettingsSearchIndex
 import dev.supermux.ui.settings.search.searchSettings
 import dev.supermux.ui.adaptive.LocalWindowControlsInsets
 import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.uppercaseInAppLanguage
 import dev.supermux.ui.resources.Res
 import dev.supermux.ui.resources.settings_back
 import dev.supermux.ui.resources.settings_desc_coding
@@ -895,7 +896,7 @@ private fun SearchResults(
     Column(Modifier.padding(horizontal = 4.dp).testTag("settings_search_results")) {
         for (g in groups) {
             Text(
-                titleOf(g.section).uppercase(),
+                titleOf(g.section).uppercaseInAppLanguage(),
                 fontSize = 10.5.sp,
                 fontWeight = FontWeight.SemiBold,
                 letterSpacing = 0.63.sp,

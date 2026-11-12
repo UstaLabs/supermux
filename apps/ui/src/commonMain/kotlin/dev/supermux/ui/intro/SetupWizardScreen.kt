@@ -50,8 +50,28 @@ import dev.supermux.ui.platform.LocalPlatform
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.supermux.net.AgentInstallStatus
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.resources.Res
 import dev.supermux.ui.resources.mux_logo
+import dev.supermux.ui.resources.setup_back
+import dev.supermux.ui.resources.setup_create_first_session
+import dev.supermux.ui.resources.setup_done_text
+import dev.supermux.ui.resources.setup_done_title
+import dev.supermux.ui.resources.setup_finish_failed
+import dev.supermux.ui.resources.setup_header
+import dev.supermux.ui.resources.setup_next
+import dev.supermux.ui.resources.setup_privacy
+import dev.supermux.ui.resources.setup_privacy_and_labs
+import dev.supermux.ui.resources.setup_start
+import dev.supermux.ui.resources.setup_step_done
+import dev.supermux.ui.resources.setup_step_git_hosting
+import dev.supermux.ui.resources.setup_step_phone
+import dev.supermux.ui.resources.setup_step_providers
+import dev.supermux.ui.resources.setup_step_welcome
+import dev.supermux.ui.resources.setup_telemetry_notice
+import dev.supermux.ui.resources.setup_title
+import dev.supermux.ui.resources.setup_welcome_text
+import dev.supermux.ui.resources.setup_welcome_title
 import dev.supermux.ui.settings.AgentSettingsActions
 import dev.supermux.ui.settings.AgentSettingsScreen
 import dev.supermux.ui.settings.DevicesSettingsActions
@@ -61,10 +81,17 @@ import dev.supermux.ui.theme.IconSize
 import dev.supermux.ui.theme.Space
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import org.jetbrains.compose.resources.StringResource
 import org.jetbrains.compose.resources.painterResource
 
-/** The five steps, in order — Vue's `ONBOARDING_STEP_LABELS`. */
-val SetupStepLabels = listOf("Welcome", "Providers", "Git Hosting", "Connect Your Phone", "Done")
+/** The five steps' names, in order — Vue's `ONBOARDING_STEP_LABELS`. */
+val SetupStepLabels: List<StringResource> = listOf(
+    Res.string.setup_step_welcome,
+    Res.string.setup_step_providers,
+    Res.string.setup_step_git_hosting,
+    Res.string.setup_step_phone,
+    Res.string.setup_step_done,
+)
 
 private const val STEP_WELCOME = 0
 private const val STEP_AGENTS = 1
@@ -150,7 +177,7 @@ fun SetupWizardScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                "Setup",
+                localized(Res.string.setup_title),
                 style = MaterialTheme.typography.titleMedium,
                 color = cs.onSurface,
                 modifier = Modifier.weight(1f),
@@ -158,7 +185,7 @@ fun SetupWizardScreen(
             // ONE text node, not "Step N of 5" + a styled label: the header is what the browser
             // run (and these tests) match on, and two nodes cannot be matched as one string.
             Text(
-                "Step ${step + 1} of ${SetupStepLabels.size} — ${SetupStepLabels[step]}",
+                localized(Res.string.setup_header, step + 1, SetupStepLabels.size, localized(SetupStepLabels[step])),
                 style = MaterialTheme.typography.labelMedium,
                 color = cs.onSurfaceVariant,
                 modifier = Modifier.testTag("setup_header"),
@@ -211,7 +238,7 @@ fun SetupWizardScreen(
                             modifier = Modifier.size(IconSize.md),
                         )
                         Spacer(Modifier.size(Space.sm))
-                        Text("Back")
+                        Text(localized(Res.string.setup_back))
                     }
                 }
                 Button(
@@ -219,7 +246,7 @@ fun SetupWizardScreen(
                     enabled = step != STEP_AGENTS || agentsCanProceed,
                     modifier = Modifier.testTag("setup_next"),
                 ) {
-                    Text(if (step == STEP_WELCOME) "Start" else "Next")
+                    Text(localized(if (step == STEP_WELCOME) Res.string.setup_start else Res.string.setup_next))
                     if (step > STEP_WELCOME) {
                         Spacer(Modifier.size(Space.sm))
                         Icon(
@@ -245,14 +272,13 @@ private fun SetupWelcomeStep() {
             modifier = Modifier.size(56.dp),
         )
         Text(
-            "Welcome to supermux",
+            localized(Res.string.setup_welcome_title),
             style = MaterialTheme.typography.headlineSmall,
             color = cs.onSurface,
             textAlign = TextAlign.Center,
         )
         Text(
-            "supermux drives coding agents from your phone or laptop. Let's connect one and get " +
-                "you set up in just a few steps.",
+            localized(Res.string.setup_welcome_text),
             style = MaterialTheme.typography.bodyMedium,
             color = cs.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -274,7 +300,8 @@ private fun SetupDoneStep(
 ) {
     val cs = MaterialTheme.colorScheme
     var finishing by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    // The `onboarded` write failed: the step says so under its button.
+    var failed by remember { mutableStateOf(false) }
 
     SetupCenteredColumn {
         Icon(
@@ -284,13 +311,13 @@ private fun SetupDoneStep(
             modifier = Modifier.size(56.dp),
         )
         Text(
-            "You're all set!",
+            localized(Res.string.setup_done_title),
             style = MaterialTheme.typography.headlineSmall,
             color = cs.onSurface,
             textAlign = TextAlign.Center,
         )
         Text(
-            "supermux is ready — create a session for the project you want to work on.",
+            localized(Res.string.setup_done_text),
             style = MaterialTheme.typography.bodyMedium,
             color = cs.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -298,9 +325,12 @@ private fun SetupDoneStep(
         // The first-run telemetry notice (TELEMETRY.md); the switch is in Settings → Privacy & labs
         // (Settings → Privacy where the device has no assistant overlay).
         Text(
-            "supermux sends anonymous usage events: no prompts, code, paths or names. " +
-                "You can turn this off in Settings → " +
-                    (if (LocalPlatform.current.caps.assistantOverlay) "Privacy & labs" else "Privacy") + ".",
+            localized(
+                Res.string.setup_telemetry_notice,
+                localized(
+                    if (LocalPlatform.current.caps.assistantOverlay) Res.string.setup_privacy_and_labs else Res.string.setup_privacy,
+                ),
+            ),
             style = MaterialTheme.typography.bodySmall,
             color = cs.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -311,14 +341,14 @@ private fun SetupDoneStep(
             onClick = {
                 if (finishing) return@Button
                 finishing = true
-                error = null
+                failed = false
                 scope.launch {
                     val ok = onFinish()
                     finishing = false
                     if (ok) {
                         onCreateFirstSession()
                     } else {
-                        error = "Couldn't finish setup. Check the connection and try again."
+                        failed = true
                     }
                 }
             },
@@ -333,11 +363,11 @@ private fun SetupDoneStep(
                 )
                 Spacer(Modifier.size(Space.sm))
             }
-            Text("Create your first session")
+            Text(localized(Res.string.setup_create_first_session))
         }
-        error?.let {
+        if (failed) {
             Text(
-                it,
+                localized(Res.string.setup_finish_failed),
                 style = MaterialTheme.typography.labelMedium,
                 color = cs.error,
                 textAlign = TextAlign.Center,

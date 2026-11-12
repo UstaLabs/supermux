@@ -28,6 +28,11 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.shell_new_tab
+import dev.supermux.ui.resources.shell_split_down
+import dev.supermux.ui.resources.shell_split_right
 
 /**
  * The tab strip's "+": it opens a New tab in this pane (#91), whose page offers what the tab can be.
@@ -46,7 +51,7 @@ fun WorkspaceAddButton(onClick: () -> Unit) {
             .testTag("tab-add-view"),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(Icons.Filled.Add, contentDescription = "New tab", tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
+        Icon(Icons.Filled.Add, contentDescription = localized(Res.string.shell_new_tab), tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
     }
 }
 
@@ -60,9 +65,9 @@ val WorkspaceSplitButtonsWidth = 66.dp
 @Composable
 fun WorkspaceSplitButtons(onSplit: (direction: String) -> Unit) {
     Row(Modifier.padding(end = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        SplitButton(NewTabGlyphs.SplitDown, "Split down", "tab-split-down") { onSplit("column") }
+        SplitButton(NewTabGlyphs.SplitDown, localized(Res.string.shell_split_down), "tab-split-down") { onSplit("column") }
         Spacer(Modifier.width(2.dp))
-        SplitButton(NewTabGlyphs.SplitRight, "Split right", "tab-split-right") { onSplit("row") }
+        SplitButton(NewTabGlyphs.SplitRight, localized(Res.string.shell_split_right), "tab-split-right") { onSplit("row") }
     }
 }
 

@@ -121,6 +121,9 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.panes_select_tab
 
 /**
  * Renders a workspace [LayoutNode] as nested resizable splits with tab groups at
@@ -767,7 +770,7 @@ private fun GroupHost(
     val sheetStartCorner by animateDpAsState(
         targetValue = if (activeFlushStart) 0.dp else SheetCorner,
         animationSpec = Motion.stateChange(),
-        label = "sheet-start-corner",
+        label = "sheet-start-corner", // i18n-ok: animation label
     )
     Column(modifier.fillMaxSize().padding(horizontal = PaneGutter)) {
         PaneTabStrip(
@@ -999,6 +1002,7 @@ fun PaneTabStrip(
 ) = BoxWithConstraints(modifier.fillMaxWidth()) {
     val cs = MaterialTheme.colorScheme
     val density = LocalDensity.current
+    val selectTabLabel = localized(Res.string.panes_select_tab)
     val stripWidthPx = constraints.maxWidth.toFloat()
     // Unique, stable key for this strip's PaneStripChrome registrations (groupId can be "" on
     // back-compat call sites, and groups can recompose across workspaces).
@@ -1203,13 +1207,13 @@ fun PaneTabStrip(
                             // An empty slot jumps: nothing shows it moving, and the tab settling
                             // into it must find it there.
                             animationSpec = if (hidden) snap() else TabSlide,
-                            label = "tab-morph-x-$id",
+                            label = "tab-morph-x-$id", // i18n-ok: animation label
                         )
                         val selected = id == activeViewId
                         val animatedWidth by animateFloatAsState(
                             targetValue = widthOf(id),
                             animationSpec = if (hidden) snap() else TabSlide,
-                            label = "tab-width-$id",
+                            label = "tab-width-$id", // i18n-ok: animation label
                         )
                         val z = when {
                             hidden -> 0f
@@ -1269,6 +1273,7 @@ fun PaneTabStrip(
                                             stripOrderProvider = { viewIdsNow.value },
                                             activeProvider = { activeNow.value },
                                             labelProvider = { titleFor(id) },
+                                            selectLabel = selectTabLabel,
                                             dragState = dragState,
                                             onSelect = onSelect,
                                             onDrop = onDrop,
@@ -1328,7 +1333,7 @@ fun PaneTabStrip(
                     val animatedCaretX by animateFloatAsState(
                         targetValue = caretX,
                         animationSpec = TabSlide,
-                        label = "tab-insert-caret-x",
+                        label = "tab-insert-caret-x", // i18n-ok: animation label
                     )
                     TabInsertCaret(
                         Modifier
@@ -1342,7 +1347,7 @@ fun PaneTabStrip(
                     val animatedAddX by animateFloatAsState(
                         targetValue = addTargetX,
                         animationSpec = TabSlide,
-                        label = "tab-add-x",
+                        label = "tab-add-x", // i18n-ok: animation label
                     )
                     Box(
                         Modifier
@@ -1415,6 +1420,7 @@ private fun Modifier.tabDragGestures(
     stripOrderProvider: () -> List<String>,
     activeProvider: () -> String,
     labelProvider: () -> String,
+    selectLabel: String,
     dragState: PaneDragController,
     onSelect: (String) -> Unit,
     onDrop: (PaneDropTarget) -> Unit,
@@ -1425,7 +1431,7 @@ private fun Modifier.tabDragGestures(
 ): Modifier = this
     // performClick() uses the semantics onClick action, not a real pointer stream.
     .semantics {
-        onClick(label = "Select tab") {
+        onClick(label = selectLabel) {
             onSelect(viewId)
             true
         }

@@ -42,6 +42,23 @@ test("strings go through localized(), which follows the language picked in Setti
   expect(direct).toEqual([])
 })
 
+test("translated text in capitals uses the app language's rules (Turkish İ), never uppercase()", () => {
+  const plain = kotlinSources()
+    .flatMap(f => readFileSync(f, "utf8").split("\n").map((t, i) => ({ f, i, t })))
+    .filter(({ t }) => /localized(?:Plural)?\([^)]*\)\)?\.uppercase\(\)/.test(t))
+    .map(({ f, i, t }) => `${f}:${i + 1}  ${t.trim()}`)
+  expect(plain).toEqual([])
+})
+
+test("an i18n-ok comment never swallows the code after it on its line", () => {
+  // `{ Text("…") // i18n-ok: x },` comments out the closing `},` — put the marker on the line above instead.
+  const swallowed = kotlinSources()
+    .flatMap(f => readFileSync(f, "utf8").split("\n").map((t, i) => ({ f, i, t })))
+    .filter(({ t }) => /\/\/\s*i18n-ok\b.*\s[})\]],?\s*$/.test(t) && /\{[^}]*\/\/\s*i18n-ok/.test(t))
+    .map(({ f, i, t }) => `${f}:${i + 1}  ${t.trim()}`)
+  expect(swallowed).toEqual([])
+})
+
 test("paths use / on every OS, as the baseline's keys do (Bun's Glob answers with \\ on Windows)", () => {
   expect(repoPath("apps\\ui\\src\\commonMain\\kotlin\\A.kt")).toBe("apps/ui/src/commonMain/kotlin/A.kt")
   expect(kotlinSources().every(f => !f.includes("\\"))).toBe(true)

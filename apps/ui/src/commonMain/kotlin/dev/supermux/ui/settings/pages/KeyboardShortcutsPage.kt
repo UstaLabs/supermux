@@ -23,6 +23,7 @@ import dev.supermux.ui.settings.kit.KitSectionHead
 import dev.supermux.ui.settings.kit.KitValueRow
 import dev.supermux.ui.settings.kit.kitAnchor
 import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.keys.localizedTitle
 import dev.supermux.ui.resources.Res
 import dev.supermux.ui.resources.settings_shortcuts_or
 import dev.supermux.ui.settings.localizedSettingsTitle
@@ -62,10 +63,10 @@ fun KeyboardShortcutsPage(
                     }
                 }
             if (rows.isEmpty()) continue
-            KitSectionHead(group.title, Modifier.testTag("shortcuts_group_${group.name.lowercase()}"))
+            KitSectionHead(localizedTitle(group), Modifier.testTag("shortcuts_group_${group.name.lowercase()}"))
             for ((cmd, keys) in rows) {
                 KitValueRow(
-                    cmd.title,
+                    localizedTitle(cmd),
                     keys,
                     Modifier.kitAnchor(shortcutAnchor(cmd)).testTag("shortcut_${cmd.id}"),
                     mono = true,

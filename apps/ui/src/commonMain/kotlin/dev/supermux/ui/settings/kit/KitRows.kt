@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.uppercaseInAppLanguage
 import dev.supermux.ui.resources.Res
 import dev.supermux.ui.resources.machine_kit_expanded
 import dev.supermux.ui.resources.machine_kit_collapsed
@@ -311,7 +312,7 @@ fun KitSectionHead(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text.uppercase(),
+            text.uppercaseInAppLanguage(),
             fontSize = 10.5.sp,
             fontWeight = FontWeight.SemiBold,
             letterSpacing = 0.63.sp,

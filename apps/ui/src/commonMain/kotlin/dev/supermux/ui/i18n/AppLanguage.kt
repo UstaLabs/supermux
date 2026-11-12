@@ -6,6 +6,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.ui.text.intl.Locale
+import androidx.compose.ui.text.toUpperCase
 import org.jetbrains.compose.resources.PluralStringResource
 import org.jetbrains.compose.resources.StringResource
 import org.jetbrains.compose.resources.pluralStringResource
@@ -72,3 +74,13 @@ fun localizedPlural(resource: PluralStringResource, count: Int, vararg args: Any
 @Composable
 fun <T> localizedLabels(options: List<T>, resource: (T) -> StringResource): Map<T, String> =
     options.associateWith { localized(resource(it)) }
+
+/**
+ * This text in capitals by the app language's rules: Turkish "i" becomes "İ" (Kotlin's `uppercase()` knows no
+ * language and gives "I"). Use it for every translated text shown in capitals.
+ */
+@Composable
+fun String.uppercaseInAppLanguage(): String {
+    LocalAppLanguage.current
+    return toUpperCase(Locale.current)
+}

@@ -66,9 +66,28 @@ import dev.supermux.net.PairUrl
 import dev.supermux.pairing.PairingState
 import dev.supermux.pairing.PairingUiState
 import dev.supermux.ui.adaptive.LocalPointerAvailable
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.resources.Res
 import dev.supermux.ui.resources.mux_logo
+import dev.supermux.ui.resources.onboarding_broker_host
+import dev.supermux.ui.resources.onboarding_cancel
+import dev.supermux.ui.resources.onboarding_connect
+import dev.supermux.ui.resources.onboarding_device_token
+import dev.supermux.ui.resources.onboarding_hint_paste
+import dev.supermux.ui.resources.onboarding_hint_scan
+import dev.supermux.ui.resources.onboarding_host_placeholder
+import dev.supermux.ui.resources.onboarding_mode_manual
+import dev.supermux.ui.resources.onboarding_mode_paste
+import dev.supermux.ui.resources.onboarding_mode_scan
+import dev.supermux.ui.resources.onboarding_pair
+import dev.supermux.ui.resources.onboarding_pairing_link
+import dev.supermux.ui.resources.onboarding_paste_placeholder
+import dev.supermux.ui.resources.onboarding_scan_qr
+import dev.supermux.ui.resources.onboarding_title
+import dev.supermux.ui.resources.onboarding_tofu_device
+import dev.supermux.ui.resources.onboarding_tofu_text
+import dev.supermux.ui.resources.onboarding_tofu_title
 import dev.supermux.ui.widgets.AlertDialog
 import dev.supermux.ui.widgets.submitOnEnter
 import kotlinx.coroutines.launch
@@ -170,17 +189,13 @@ fun OnboardingScreen(
                 tint = cs.primary,
             )
             Text(
-                "Connect to your broker",
+                localized(Res.string.onboarding_title),
                 style = MaterialTheme.typography.headlineSmall,
                 color = cs.onSurface,
                 textAlign = TextAlign.Center,
             )
             Text(
-                if (canScan) {
-                    "Run `bun run pair <name>` on your broker, then scan the QR or paste the pairing link."
-                } else {
-                    "Run `bun run pair <device-name>` on your broker, then paste the link here."
-                },
+                localized(if (canScan) Res.string.onboarding_hint_scan else Res.string.onboarding_hint_paste),
                 style = MaterialTheme.typography.bodyMedium,
                 color = cs.onSurfaceVariant,
                 textAlign = TextAlign.Center,
@@ -204,11 +219,13 @@ fun OnboardingScreen(
                         modifier = Modifier.testTag("onboarding_mode_${m.name.lowercase()}"),
                     ) {
                         Text(
-                            when (m) {
-                                PairMode.Scan -> "Scan"
-                                PairMode.Paste -> "Paste link"
-                                PairMode.Manual -> "Manual"
-                            },
+                            localized(
+                                when (m) {
+                                    PairMode.Scan -> Res.string.onboarding_mode_scan
+                                    PairMode.Paste -> Res.string.onboarding_mode_paste
+                                    PairMode.Manual -> Res.string.onboarding_mode_manual
+                                },
+                            ),
                         )
                     }
                 }
@@ -226,7 +243,7 @@ fun OnboardingScreen(
                     ) {
                         Icon(Icons.Filled.QrCodeScanner, contentDescription = null)
                         Spacer(Modifier.size(8.dp))
-                        Text("Scan QR code")
+                        Text(localized(Res.string.onboarding_scan_qr))
                     }
                 }
 
@@ -234,8 +251,8 @@ fun OnboardingScreen(
                     OutlinedTextField(
                         value = linkInput,
                         onValueChange = { linkInput = it; pairing.resetError() },
-                        label = { Text("Pairing link") },
-                        placeholder = { Text("https://host/pair?t=… or supermux://pair?t=…") },
+                        label = { Text(localized(Res.string.onboarding_pairing_link)) },
+                        placeholder = { Text(localized(Res.string.onboarding_paste_placeholder)) },
                         singleLine = false,
                         minLines = 1,
                         maxLines = 3,
@@ -254,21 +271,23 @@ fun OnboardingScreen(
                         onClick = submitPaste,
                         enabled = canSubmitPaste,
                         modifier = Modifier.fillMaxWidth().testTag("onboarding_paste_submit"),
-                    ) { Text("Pair") }
+                    ) { Text(localized(Res.string.onboarding_pair)) }
                 }
 
                 PairMode.Manual -> {
                     OutlinedTextField(
                         value = manualHost,
                         onValueChange = { manualHost = it; pairing.resetError() },
-                        label = { Text("Broker host") },
+                        label = { Text(localized(Res.string.onboarding_broker_host)) },
                         // The loopback example differs per host: a desktop app pairs against the
                         // broker on the very machine it runs on, an emulator/phone reaches that
                         // machine through the 10.0.2.2 alias.
                         placeholder = {
                             Text(
-                                if (pointer) "ws://127.0.0.1:9898 or https://host"
-                                else "ws://10.0.2.2:9898 or https://host",
+                                localized(
+                                    Res.string.onboarding_host_placeholder,
+                                    if (pointer) "ws://127.0.0.1:9898" else "ws://10.0.2.2:9898", // i18n-ok: sample URLs
+                                ),
                             )
                         },
                         singleLine = true,
@@ -286,7 +305,7 @@ fun OnboardingScreen(
                     OutlinedTextField(
                         value = manualToken,
                         onValueChange = { manualToken = it; pairing.resetError() },
-                        label = { Text("Device token") },
+                        label = { Text(localized(Res.string.onboarding_device_token)) },
                         singleLine = true,
                         enabled = !validating,
                         keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
@@ -299,7 +318,7 @@ fun OnboardingScreen(
                         onClick = submitManual,
                         enabled = canSubmitManual,
                         modifier = Modifier.fillMaxWidth().testTag("onboarding_manual_submit"),
-                    ) { Text("Pair") }
+                    ) { Text(localized(Res.string.onboarding_pair)) }
                 }
             }
 
@@ -336,11 +355,11 @@ fun PairTofuDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         icon = { Icon(Icons.Filled.Lock, contentDescription = null) },
-        title = { Text("Connect to this broker?") },
+        title = { Text(localized(Res.string.onboarding_tofu_title)) },
         text = {
             Column(Modifier.testTag("pair_tofu_dialog")) {
                 Text(
-                    "You're about to trust and store credentials for:",
+                    localized(Res.string.onboarding_tofu_text),
                     style = MaterialTheme.typography.bodyMedium,
                     color = cs.onSurfaceVariant,
                 )
@@ -351,17 +370,17 @@ fun PairTofuDialog(
                     color = cs.onSurface,
                 )
                 Text(
-                    "Device: $deviceName",
+                    localized(Res.string.onboarding_tofu_device, deviceName),
                     style = MaterialTheme.typography.bodyMedium,
                     color = cs.onSurfaceVariant,
                 )
             }
         },
         confirmButton = {
-            TextButton(onClick = onConfirm, modifier = Modifier.testTag("pair_tofu_confirm")) { Text("Connect") }
+            TextButton(onClick = onConfirm, modifier = Modifier.testTag("pair_tofu_confirm")) { Text(localized(Res.string.onboarding_connect)) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, modifier = Modifier.testTag("pair_tofu_cancel")) { Text("Cancel") }
+            TextButton(onClick = onDismiss, modifier = Modifier.testTag("pair_tofu_cancel")) { Text(localized(Res.string.onboarding_cancel)) }
         },
     )
 }

@@ -51,9 +51,27 @@ import dev.supermux.pairing.PairingCode
 import dev.supermux.state.AddHostResult
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.retain.rememberRetainedOnPage
 import dev.supermux.ui.retain.rememberRetainedScope
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.host_add
+import dev.supermux.ui.resources.host_add_intro
+import dev.supermux.ui.resources.host_back
+import dev.supermux.ui.resources.host_connect
+import dev.supermux.ui.resources.host_device_name
+import dev.supermux.ui.resources.host_found_set_up
+import dev.supermux.ui.resources.host_found_set_up_unnamed
+import dev.supermux.ui.resources.host_insecure_optin
+import dev.supermux.ui.resources.host_invalid_link
+import dev.supermux.ui.resources.host_mode_paste
+import dev.supermux.ui.resources.host_mode_scan
+import dev.supermux.ui.resources.host_mode_url
+import dev.supermux.ui.resources.host_pairing_link
+import dev.supermux.ui.resources.host_paste_placeholder
+import dev.supermux.ui.resources.host_scan_qr
+import dev.supermux.ui.resources.host_url
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
@@ -116,14 +134,14 @@ fun AddHostScreen(
     var busy by claim::busy
     var error by claim::error
     var info by claim::info
+    val invalidLink = localized(Res.string.host_invalid_link)
 
     fun handle(result: AddHostResult) {
         busy = false
         when (result) {
             is AddHostResult.Added -> onAdded()
             is AddHostResult.NeedsClaim -> {
-                info = "Found ${result.identity.name.ifBlank { "the host" }}. It's already set up — " +
-                    "run `mux pair` (or the host's Add-device screen) to mint a pairing link, then paste it above."
+                info = result.identity.name
             }
             is AddHostResult.Error -> error = result.message
         }
@@ -147,7 +165,7 @@ fun AddHostScreen(
                 launchClaim { onClaim(code.payload, name) }
             }
             is PairingCode.Token -> launchClaim { onClaimLegacy(code.pair) }
-            null -> error = "That isn't a valid supermux pairing link. Scan or paste the complete QR value."
+            null -> error = invalidLink
         }
     }
 
@@ -156,12 +174,12 @@ fun AddHostScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Add host", color = cs.onSurface) },
+                title = { Text(localized(Res.string.host_add), color = cs.onSurface) },
                 navigationIcon = {
                     IconButton(onClick = onBack, modifier = Modifier.testTag("add_host_back")) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
+                            contentDescription = localized(Res.string.host_back),
                             tint = cs.onSurface,
                             modifier = Modifier.size(18.dp),
                         )
@@ -183,7 +201,7 @@ fun AddHostScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Text(
-                "Pair another broker to see all its sessions in one merged list.",
+                localized(Res.string.host_add_intro),
                 style = MaterialTheme.typography.bodyMedium,
                 color = cs.onSurfaceVariant,
                 textAlign = TextAlign.Center,
@@ -203,7 +221,15 @@ fun AddHostScreen(
                         shape = SegmentedButtonDefaults.itemShape(i, modes.size),
                         modifier = Modifier.testTag("add_host_mode_${m.name.lowercase()}"),
                     ) {
-                        Text(when (m) { AddMode.Scan -> "Scan"; AddMode.Paste -> "Paste link"; AddMode.Url -> "URL" })
+                        Text(
+                            localized(
+                                when (m) {
+                                    AddMode.Scan -> Res.string.host_mode_scan
+                                    AddMode.Paste -> Res.string.host_mode_paste
+                                    AddMode.Url -> Res.string.host_mode_url
+                                },
+                            ),
+                        )
                     }
                 }
             }
@@ -211,7 +237,7 @@ fun AddHostScreen(
             OutlinedTextField(
                 value = deviceName,
                 onValueChange = { deviceName = it },
-                label = { Text("This device's name") },
+                label = { Text(localized(Res.string.host_device_name)) },
                 singleLine = true,
                 enabled = !busy,
                 modifier = Modifier.fillMaxWidth().testTag("add_host_device_name"),
@@ -228,15 +254,15 @@ fun AddHostScreen(
                 ) {
                     Icon(Icons.Filled.QrCodeScanner, contentDescription = null)
                     Spacer(Modifier.size(8.dp))
-                    Text("Scan pairing QR")
+                    Text(localized(Res.string.host_scan_qr))
                 }
 
                 AddMode.Paste -> {
                     OutlinedTextField(
                         value = pasteInput,
                         onValueChange = { pasteInput = it; error = null },
-                        label = { Text("Pairing link") },
-                        placeholder = { Text("https://host/pair?t=… or {\"v\":1,…}") },
+                        label = { Text(localized(Res.string.host_pairing_link)) },
+                        placeholder = { Text(localized(Res.string.host_paste_placeholder)) },
                         minLines = 1,
                         maxLines = 4,
                         enabled = !busy,
@@ -247,14 +273,15 @@ fun AddHostScreen(
                         onClick = { claimInput(pasteInput) },
                         enabled = !busy && pasteInput.isNotBlank(),
                         modifier = Modifier.fillMaxWidth().testTag("add_host_paste_submit"),
-                    ) { Text("Add host") }
+                    ) { Text(localized(Res.string.host_add)) }
                 }
 
                 AddMode.Url -> {
                     OutlinedTextField(
                         value = urlInput,
                         onValueChange = { urlInput = it; error = null; info = null },
-                        label = { Text("Host URL") },
+                        label = { Text(localized(Res.string.host_url)) },
+                        // i18n-ok: sample URL
                         placeholder = { Text("https://my-mac.tailnet.ts.net") },
                         singleLine = true,
                         enabled = !busy,
@@ -278,7 +305,7 @@ fun AddHostScreen(
                             )
                             Spacer(Modifier.width(4.dp))
                             Text(
-                                "Connect over an unencrypted connection — only on a network you trust (VPN/tailnet/LAN).",
+                                localized(Res.string.host_insecure_optin),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = cs.onSurfaceVariant,
                             )
@@ -294,7 +321,7 @@ fun AddHostScreen(
                         },
                         enabled = !busy && urlInput.isNotBlank() && (!needsOptIn || insecureAck),
                         modifier = Modifier.fillMaxWidth().testTag("add_host_url_submit"),
-                    ) { Text("Connect") }
+                    ) { Text(localized(Res.string.host_connect)) }
                 }
             }
 
@@ -305,8 +332,13 @@ fun AddHostScreen(
             error?.let {
                 Text(it, style = MaterialTheme.typography.bodyMedium, color = cs.error, textAlign = TextAlign.Center)
             }
-            info?.let {
-                Text(it, style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant, textAlign = TextAlign.Center)
+            info?.let { name ->
+                Text(
+                    if (name.isBlank()) localized(Res.string.host_found_set_up_unnamed) else localized(Res.string.host_found_set_up, name),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = cs.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
             }
         }
     }
@@ -319,6 +351,7 @@ fun AddHostScreen(
 private class HostClaim {
     var busy by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
+    /** A host that is already set up and needs a pairing link: its name ("" when it has none). */
     var info by mutableStateOf<String?>(null)
     var result by mutableStateOf<AddHostResult?>(null)
 }

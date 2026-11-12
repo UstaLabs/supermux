@@ -34,32 +34,54 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import dev.supermux.net.GitRequirement
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.host_git_failed
+import dev.supermux.ui.resources.host_git_install
+import dev.supermux.ui.resources.host_git_install_failed
+import dev.supermux.ui.resources.host_git_optional
+import dev.supermux.ui.resources.host_git_optional_mac
+import dev.supermux.ui.resources.host_git_retry
+import dev.supermux.ui.resources.host_git_started_browser
+import dev.supermux.ui.resources.host_git_started_mingit
+import dev.supermux.ui.resources.host_git_started_other
+import dev.supermux.ui.resources.host_git_started_winget
+import dev.supermux.ui.resources.host_git_started_xcode
+import dev.supermux.ui.resources.host_git_starting
+import dev.supermux.ui.resources.host_git_this_computer
+import dev.supermux.ui.resources.host_git_title
+import dev.supermux.ui.resources.host_git_title_mac
+import dev.supermux.ui.resources.host_git_title_mac_on
+import dev.supermux.ui.resources.host_git_title_on
 import dev.supermux.ui.theme.Space
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
-/** The banner's copy, as constants/functions so the tests assert the exact strings. */
+/**
+ * The banner's English copy, as constants/functions so the tests assert the exact strings. The banner itself reads
+ * the same words in the app's language through [GitBannerText]; keep the two in step.
+ */
 object GitBannerCopy {
     /** The title on a Mac, where git comes with Apple's command line tools. */
-    const val TITLE = "Developer tools not installed"
+    const val TITLE = "Developer tools not installed" // i18n-ok: test twin
     /** The title everywhere else. */
-    const val GIT_TITLE = "Git not installed"
+    const val GIT_TITLE = "Git not installed" // i18n-ok: test twin
     /** Says what git adds — and that agents do not need it. */
     const val OPTIONAL_MAC =
-        "Agents work without them. Install Apple's command line tools to turn on git features: worktrees, diffs and change tracking."
-    const val OPTIONAL = "Agents work without git. Install it to turn on worktrees, diffs and change tracking."
-    const val INSTALL = "Install…"
-    const val STARTING = "Starting…"
-    const val FAILED = "Couldn't start the installer."
-    const val RETRY = "Retry"
+        "Agents work without them. Install Apple's command line tools to turn on git features: worktrees, diffs and change tracking." // i18n-ok: test twin
+    const val OPTIONAL = "Agents work without git. Install it to turn on worktrees, diffs and change tracking." // i18n-ok: test twin
+    const val INSTALL = "Install…" // i18n-ok: test twin
+    const val STARTING = "Starting…" // i18n-ok: test twin
+    const val FAILED = "Couldn't start the installer." // i18n-ok: test twin
+    const val RETRY = "Retry" // i18n-ok: test twin
 
     /** The host's own report that its last install ended without git. */
-    fun installFailed(error: String): String = "Couldn't install git: $error"
+    fun installFailed(error: String): String = "Couldn't install git: $error" // i18n-ok: test twin
 
     /** "… on <host>" when a host is named; bare for the local / only host. */
     fun title(hostName: String?, install: String = GitRequirement.INSTALL_XCODE_SELECT): String {
         val base = if (install == GitRequirement.INSTALL_XCODE_SELECT) TITLE else GIT_TITLE
-        return hostName?.let { "$base on $it" } ?: base
+        return hostName?.let { "$base on $it" } ?: base // i18n-ok: test twin
     }
 
     fun optional(install: String): String =
@@ -67,14 +89,46 @@ object GitBannerCopy {
 
     /** What happened on [hostName] (null: "this computer") after a successful Install…, per kind. */
     fun started(install: String, hostName: String?): String {
-        val host = hostName ?: "this computer"
+        val host = hostName ?: "this computer" // i18n-ok: test twin
         return when (install) {
-            GitRequirement.INSTALL_XCODE_SELECT -> "Apple's installer is open on $host. Follow it, then this clears by itself."
-            GitRequirement.INSTALL_WINGET -> "Installing git on $host… this clears by itself when done."
-            GitRequirement.INSTALL_MINGIT -> "Installing git on $host…"
-            GitRequirement.INSTALL_BROWSER -> "The Git download page is open on $host."
-            else -> "The installer started on $host."
+            GitRequirement.INSTALL_XCODE_SELECT -> "Apple's installer is open on $host. Follow it, then this clears by itself." // i18n-ok: test twin
+            GitRequirement.INSTALL_WINGET -> "Installing git on $host… this clears by itself when done." // i18n-ok: test twin
+            GitRequirement.INSTALL_MINGIT -> "Installing git on $host…" // i18n-ok: test twin
+            GitRequirement.INSTALL_BROWSER -> "The Git download page is open on $host." // i18n-ok: test twin
+            else -> "The installer started on $host." // i18n-ok: test twin
         }
+    }
+}
+
+/** [GitBannerCopy]'s words in the app's language: what the banner shows. */
+private object GitBannerText {
+    @Composable
+    fun title(hostName: String?, install: String): String {
+        val mac = install == GitRequirement.INSTALL_XCODE_SELECT
+        return when {
+            hostName == null -> localized(if (mac) Res.string.host_git_title_mac else Res.string.host_git_title)
+            else -> localized(if (mac) Res.string.host_git_title_mac_on else Res.string.host_git_title_on, hostName)
+        }
+    }
+
+    @Composable
+    fun optional(install: String): String = localized(
+        if (install == GitRequirement.INSTALL_XCODE_SELECT) Res.string.host_git_optional_mac else Res.string.host_git_optional,
+    )
+
+    @Composable
+    fun started(install: String, hostName: String?): String {
+        val host = hostName ?: localized(Res.string.host_git_this_computer)
+        return localized(
+            when (install) {
+                GitRequirement.INSTALL_XCODE_SELECT -> Res.string.host_git_started_xcode
+                GitRequirement.INSTALL_WINGET -> Res.string.host_git_started_winget
+                GitRequirement.INSTALL_MINGIT -> Res.string.host_git_started_mingit
+                GitRequirement.INSTALL_BROWSER -> Res.string.host_git_started_browser
+                else -> Res.string.host_git_started_other
+            },
+            host,
+        )
     }
 }
 
@@ -111,13 +165,15 @@ fun GitRequirementBanner(
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
-    var status by remember(requirement.install) { mutableStateOf<String?>(null) }
+    // What this client saw after its click: true = the installer started, false = it could not start.
+    var status by remember(requirement.install) { mutableStateOf<Boolean?>(null) }
     // The host's own report wins over what this client saw after its click: a winget run that was
     // declined or failed must not leave "Installing…" up forever.
     LaunchedEffect(requirement.installError) { if (requirement.installError != null) status = null }
-    val shown = requirement.installError?.let(GitBannerCopy::installFailed)
-        ?: (if (requirement.installing) requirement.installNote ?: GitBannerCopy.started(requirement.install, hostName) else null)
-        ?: status
+    val startedText = GitBannerText.started(requirement.install, hostName)
+    val shown = requirement.installError?.let { localized(Res.string.host_git_install_failed, it) }
+        ?: (if (requirement.installing) requirement.installNote ?: startedText else null)
+        ?: status?.let { started -> if (started) startedText else localized(Res.string.host_git_failed) }
 
     Row(
         modifier
@@ -137,13 +193,13 @@ fun GitRequirementBanner(
         Spacer(Modifier.width(Space.sm))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
-                GitBannerCopy.title(hostName, requirement.install),
+                GitBannerText.title(hostName, requirement.install),
                 style = MaterialTheme.typography.bodyMedium,
                 color = cs.onSurface,
                 modifier = Modifier.testTag(GitBannerTags.TITLE),
             )
             Text(
-                GitBannerCopy.optional(requirement.install),
+                GitBannerText.optional(requirement.install),
                 style = MaterialTheme.typography.bodySmall,
                 color = cs.onSurfaceVariant,
                 modifier = Modifier.testTag(GitBannerTags.HINT),
@@ -179,7 +235,7 @@ fun GitRequirementBanner(
                         } catch (_: Throwable) {
                             false
                         }
-                        status = if (ok) GitBannerCopy.started(requirement.install, hostName) else GitBannerCopy.FAILED
+                        status = ok
                         busy = false
                     }
                 },
@@ -187,11 +243,13 @@ fun GitRequirementBanner(
                 modifier = Modifier.testTag(GitBannerTags.INSTALL),
             ) {
                 Text(
-                    when {
-                        busy -> GitBannerCopy.STARTING
-                        requirement.installError != null -> GitBannerCopy.RETRY
-                        else -> GitBannerCopy.INSTALL
-                    },
+                    localized(
+                        when {
+                            busy -> Res.string.host_git_starting
+                            requirement.installError != null -> Res.string.host_git_retry
+                            else -> Res.string.host_git_install
+                        },
+                    ),
                 )
             }
         }

@@ -56,7 +56,7 @@ fun Speedometer(
     val animated by animateFloatAsState(
         targetValue = progress,
         animationSpec = tween(durationMillis = 220),
-        label = "speedometer",
+        label = "speedometer", // i18n-ok: animation label
     )
     Canvas(
         modifier

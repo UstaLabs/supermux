@@ -6,7 +6,40 @@
 // scope — this file only ever runs while the desktop process is alive.
 package dev.supermux.ui.notify
 
+import androidx.compose.runtime.Composable
 import dev.supermux.proto.LogEntry
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.notify_audio
+import dev.supermux.ui.resources.notify_file
+import dev.supermux.ui.resources.notify_new_message
+import dev.supermux.ui.resources.notify_photo
+import dev.supermux.ui.resources.notify_video
+import dev.supermux.ui.resources.notify_voice_message
+
+/**
+ * The words a toast body falls back to when a reply has no text (#123). English by default, the broker's own push
+ * wording; the shell passes [localizedNotifyWords] so a toast reads in the app's language.
+ */
+data class NotifyWords(
+    val photo: String = "📷 Photo", // i18n-ok: English default, broker parity; UI passes localizedNotifyWords()
+    val voice: String = "🎙 Voice message", // i18n-ok: English default, broker parity
+    val audio: String = "🎵 Audio", // i18n-ok: English default, broker parity
+    val video: String = "🎥 Video", // i18n-ok: English default, broker parity
+    val file: String = "File", // i18n-ok: English default, broker parity
+    val newMessage: String = "New message", // i18n-ok: English default, broker parity
+)
+
+/** [NotifyWords] in the app's language. */
+@Composable
+fun localizedNotifyWords(): NotifyWords = NotifyWords(
+    photo = localized(Res.string.notify_photo),
+    voice = localized(Res.string.notify_voice_message),
+    audio = localized(Res.string.notify_audio),
+    video = localized(Res.string.notify_video),
+    file = localized(Res.string.notify_file),
+    newMessage = localized(Res.string.notify_new_message),
+)
 
 object NotifyDecision {
     /**
@@ -34,19 +67,19 @@ object NotifyDecision {
      * 117-char-plus-ellipsis truncation, same attachment-kind fallback) so a desktop toast reads
      * identically to a web/mobile push notification for the SAME reply.
      */
-    fun previewText(entry: LogEntry): String {
+    fun previewText(entry: LogEntry, words: NotifyWords = NotifyWords()): String {
         val text = entry.text
         if (!text.isNullOrEmpty()) {
             return if (text.length > 120) text.take(117) + "…" else text
         }
         val first = entry.attachments?.firstOrNull()
         return when (first?.kind) {
-            "photo" -> "📷 Photo"
-            "voice" -> "🎙 Voice message"
-            "audio" -> "🎵 Audio"
-            "video", "video_note" -> "🎥 Video"
-            "document" -> "📎 ${first.name ?: "File"}"
-            else -> "New message"
+            "photo" -> words.photo
+            "voice" -> words.voice
+            "audio" -> words.audio
+            "video", "video_note" -> words.video
+            "document" -> "📎 ${first.name ?: words.file}"
+            else -> words.newMessage
         }
     }
 }

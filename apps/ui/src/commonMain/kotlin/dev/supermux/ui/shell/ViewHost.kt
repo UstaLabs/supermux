@@ -91,6 +91,13 @@ import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.toEditorPath
 import kotlinx.coroutines.launch
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.shell_workspace_folder_itself
+import dev.supermux.ui.resources.shell_no_display_running
+import dev.supermux.ui.resources.shell_display_not_running
+import dev.supermux.ui.resources.shell_unknown_view
+import dev.supermux.ui.resources.shell_unknown_view_update
 
 /** Journey + desktop-parity tags for the workspace chat pane. */
 object WorkspaceChatPaneTestIds {
@@ -497,7 +504,7 @@ private fun ChatViewPane(
     val headerFraction by animateFloatAsState(
         targetValue = if (chromeHidden) 0f else 1f,
         animationSpec = tween(200),
-        label = "chatBarHeader",
+        label = "chatBarHeader", // i18n-ok: animation label
     )
     Column(modifier.fillMaxSize().testTag(WorkspaceChatPaneTestIds.CHAT_VIEW)) {
         ChatViewHeader(
@@ -584,6 +591,7 @@ private fun rememberOpenTappedPath(
 ): (FilePathRef) -> Unit {
     val notices = LocalPlatform.current.notices
     val scope = rememberCoroutineScope()
+    val workspaceFolderItself by androidx.compose.runtime.rememberUpdatedState(localized(Res.string.shell_workspace_folder_itself))
     // One lambda while what it opens is the same: a new one each recomposition recomposed every markdown row it reached.
     val currentOpenFile by androidx.compose.runtime.rememberUpdatedState(onOpenFile)
     val currentFileSystem by androidx.compose.runtime.rememberUpdatedState(fileSystem)
@@ -592,7 +600,7 @@ private fun rememberOpenTappedPath(
         val onOpenFile = currentOpenFile
         val candidates = tappedPathCandidates(ref, workdir, relativeTo)
         if (candidates.isEmpty()) {
-            notices.show("That's the workspace folder itself")
+            notices.show(workspaceFolderItself)
         } else {
             scope.launch {
                 val found = candidates.firstOrNull { !tappedFileMissing(fileSystem, editorAbsolutePath(workdir, it)) }
@@ -844,8 +852,8 @@ private fun DisplayPanelForStream(
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                if (displayId.isBlank()) "No display is running"
-                else "Display $displayId is not running",
+                if (displayId.isBlank()) localized(Res.string.shell_no_display_running)
+                else localized(Res.string.shell_display_not_running, displayId),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 13.sp,
             )
@@ -873,14 +881,14 @@ fun UnknownViewHint(kind: String, modifier: Modifier = Modifier) {
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
-                "This client does not draw “$kind” yet",
+                localized(Res.string.shell_unknown_view, kind),
                 color = cs.onSurface,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
             )
             Spacer(Modifier.height(Space.xs))
             Text(
-                "Update Supermux to open this view",
+                localized(Res.string.shell_unknown_view_update),
                 color = cs.onSurfaceVariant,
                 fontFamily = MonoFontFamily,
                 fontSize = 12.sp,

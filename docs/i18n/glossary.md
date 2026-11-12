@@ -12,7 +12,8 @@ English is the source: `apps/ui/src/commonMain/composeResources/values/strings.x
 
 ## Turkish (tr)
 Tone: polite plural (siz), short, plain; imperatives in the -In form ("Seçin", "Temizleyin"). Button labels are the
-bare verb stem ("Temizle", "Kaydet"), as Turkish apps do.
+bare verb stem ("Temizle", "Kaydet"), as Turkish apps do. Text the code uppercases is written in Turkish capitals in
+the catalog (İ, not I): Kotlin's uppercase() has no Turkish "i".
 
 | English | Türkçe | Note |
 |---|---|---|
@@ -50,4 +51,25 @@ bare verb stem ("Temizle", "Kaydet"), as Turkish apps do.
 | retry / try again | tekrar dene | |
 | effort | çaba | |
 | build (a version) | derleme | |
+| broker (the server a device connects to) | sunucu | |
+| pairing link / code | eşleştirme bağlantısı / kodu | |
+| QR code | karekod | |
+| credentials | kimlik bilgileri | |
+| offline | çevrimdışı | |
+| setup (wizard) | kurulum | |
+| view | görünüm | |
+| tab | sekme | |
+| workspace | çalışma alanı | |
+| sidebar | kenar çubuğu | |
+| split (a pane) | böl | |
+| git fetch / pull / push / publish | Getir / Çek / Gönder / Yayınla | |
+| kill (a session) | sonlandır | |
+| mute / unmute | sessize al / sesi aç | |
+| changes (a diff) | değişiklikler | |
+| shell | kabuk | |
+| reset (a limit) | sıfırlama | "resets X" = "sıfırlanma: X" (no suffix on a time or name) |
+| usage window | kullanım penceresi | |
+| credits | kredi | |
+| billing cycle | fatura dönemi | |
+| percent | %62 | Turkish puts % first: "%%1$d" |
 | supermux | supermux | the brand, never translated or capitalised |

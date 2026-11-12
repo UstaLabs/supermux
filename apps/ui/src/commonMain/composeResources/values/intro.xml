@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #123: the first run — the intro pager and its cinematic, the pairing screen, the setup wizard — and the host
+     screens (Add host, the host switcher, the git banner). English, the source; values-tr/intro.xml has the same keys
+     and placeholders (tests/i18n-strings.test.ts). Terms and tone: docs/i18n/glossary.md. -->
+<resources>
+    <!-- Intro pager -->
+    <string name="intro_next_see">See what it does</string>
+    <string name="intro_next_never_sleeps">It never sleeps</string>
+    <string name="intro_next_connect">Connect your computer</string>
+    <string name="intro_hook_stamp">open-source · mobile-first · ADE</string>
+    <string name="intro_hook_title_1">AFK.</string>
+    <string name="intro_hook_title_2">Still shipping.</string>
+    <string name="intro_hook_text">supermux runs your coding agents on a computer you own — and hands you every session on every screen you carry.</string>
+    <string name="intro_hook_self_hosted">self-hosted</string>
+    <string name="intro_hook_no_vendor_cloud">no vendor cloud</string>
+    <string name="intro_hook_no_account">no account</string>
+    <string name="intro_agents_stamp">bring your own subscription</string>
+    <string name="intro_agents_title_1">Your agents.</string>
+    <string name="intro_agents_title_2">Your keys.</string>
+    <string name="intro_agents_text">Claude Code, Codex, Cursor, OpenCode, Grok &amp; Antigravity — running on your machine, with your plan. No middleman, no markup.</string>
+    <string name="intro_always_on_stamp">always-on sessions</string>
+    <string name="intro_always_on_title_1">You leave.</string>
+    <string name="intro_always_on_title_2">It doesn't.</string>
+    <string name="intro_always_on_text">Sessions live on your box, not a browser tab. Walk out the door and the work keeps moving — a push lands the moment you're needed.</string>
+    <string name="intro_ticker_title">meanwhile, on your computer</string>
+    <string name="intro_ticker_waiting">▸ opening review — waiting on you</string>
+    <string name="intro_connect_stamp">pair your device</string>
+    <string name="intro_connect_title_1">Connect to</string>
+    <string name="intro_connect_title_2">your computer.</string>
+    <!-- The title line shown in the accent colour: one of the two above, word for word. -->
+    <string name="intro_connect_accent">your computer.</string>
+    <string name="intro_connect_text_scan">Open supermux on your computer and scan the pairing code — you'll be briefed in seconds.</string>
+    <string name="intro_connect_text_paste">Run `bun run pair &lt;device-name>` on your broker and paste the link — you'll be briefed in seconds.</string>
+    <string name="intro_scan">Scan pairing code</string>
+    <string name="intro_scan_sub">shown by the supermux desktop app</string>
+    <string name="intro_or_paste">or paste a pairing link</string>
+    <string name="intro_manual_show">Manual entry</string>
+    <string name="intro_manual_hide">Hide manual entry</string>
+    <string name="intro_pairing">Pairing…</string>
+    <!-- The cinematic -->
+    <string name="intro_tagline">AFK. Still shipping.</string>
+    <string name="intro_skip_click">click anywhere to skip</string>
+    <string name="intro_skip_tap">tap anywhere to skip</string>
+
+    <!-- Pairing screen and the trust dialog -->
+    <string name="onboarding_title">Connect to your broker</string>
+    <string name="onboarding_hint_scan">Run `bun run pair &lt;name>` on your broker, then scan the QR or paste the pairing link.</string>
+    <string name="onboarding_hint_paste">Run `bun run pair &lt;device-name>` on your broker, then paste the link here.</string>
+    <string name="onboarding_mode_scan">Scan</string>
+    <string name="onboarding_mode_paste">Paste link</string>
+    <string name="onboarding_mode_manual">Manual</string>
+    <string name="onboarding_scan_qr">Scan QR code</string>
+    <string name="onboarding_pairing_link">Pairing link</string>
+    <string name="onboarding_paste_placeholder">https://host/pair?t=… or supermux://pair?t=…</string>
+    <string name="onboarding_pair">Pair</string>
+    <string name="onboarding_broker_host">Broker host</string>
+    <!-- %1$s: a sample broker address -->
+    <string name="onboarding_host_placeholder">%1$s or https://host</string>
+    <string name="onboarding_device_token">Device token</string>
+    <string name="onboarding_tofu_title">Connect to this broker?</string>
+    <string name="onboarding_tofu_text">You're about to trust and store credentials for:</string>
+    <string name="onboarding_tofu_device">Device: %1$s</string>
+    <string name="onboarding_connect">Connect</string>
+    <string name="onboarding_cancel">Cancel</string>
+
+    <!-- Setup wizard -->
+    <string name="setup_step_welcome">Welcome</string>
+    <string name="setup_step_providers">Providers</string>
+    <string name="setup_step_git_hosting">Git Hosting</string>
+    <string name="setup_step_phone">Connect Your Phone</string>
+    <string name="setup_step_done">Done</string>
+    <string name="setup_title">Setup</string>
+    <!-- %1$d: this step, %2$d: the step count, %3$s: the step's name -->
+    <string name="setup_header">Step %1$d of %2$d — %3$s</string>
+    <string name="setup_back">Back</string>
+    <string name="setup_start">Start</string>
+    <string name="setup_next">Next</string>
+    <string name="setup_welcome_title">Welcome to supermux</string>
+    <string name="setup_welcome_text">supermux drives coding agents from your phone or laptop. Let's connect one and get you set up in just a few steps.</string>
+    <string name="setup_done_title">You're all set!</string>
+    <string name="setup_done_text">supermux is ready — create a session for the project you want to work on.</string>
+    <!-- %1$s: the Settings page's name, setup_privacy_and_labs or setup_privacy -->
+    <string name="setup_telemetry_notice">supermux sends anonymous usage events: no prompts, code, paths or names. You can turn this off in Settings → %1$s.</string>
+    <string name="setup_privacy_and_labs">Privacy &amp; labs</string>
+    <string name="setup_privacy">Privacy</string>
+    <string name="setup_create_first_session">Create your first session</string>
+    <string name="setup_finish_failed">Couldn't finish setup. Check the connection and try again.</string>
+    <string name="setup_phone_connected_title">Your phone is connected</string>
+    <string name="setup_phone_connected_text">Supermux is paired and ready to use on your phone.</string>
+    <string name="setup_phone_another">Connect another phone</string>
+    <string name="setup_phone_title">Connect from your phone</string>
+    <string name="setup_phone_text">Open Supermux on your iPhone, iPad, or Android device and scan this code.</string>
+    <string name="setup_phone_creating">Creating a secure pairing code…</string>
+    <string name="setup_phone_qr_failed">Couldn't render the QR — copy the link below and open it on your phone.</string>
+    <string name="setup_phone_qr_description">Phone pairing QR code</string>
+    <string name="setup_phone_copied">Copied</string>
+    <string name="setup_phone_copy">Copy pairing link</string>
+    <string name="setup_phone_refresh">Refresh code</string>
+    <string name="setup_phone_link_warning">The pairing link grants access to this host. Keep it private and only scan it with your own device.</string>
+    <string name="setup_phone_mint_failed">Couldn't create a phone pairing code.</string>
+    <string name="setup_phone_try_again">Try again</string>
+
+    <!-- Add host -->
+    <string name="host_add">Add host</string>
+    <string name="host_back">Back</string>
+    <string name="host_add_intro">Pair another broker to see all its sessions in one merged list.</string>
+    <string name="host_mode_scan">Scan</string>
+    <string name="host_mode_paste">Paste link</string>
+    <string name="host_mode_url">URL</string>
+    <string name="host_device_name">This device's name</string>
+    <string name="host_scan_qr">Scan pairing QR</string>
+    <string name="host_pairing_link">Pairing link</string>
+    <string name="host_paste_placeholder">https://host/pair?t=… or {"v":1,…}</string>
+    <string name="host_url">Host URL</string>
+    <string name="host_insecure_optin">Connect over an unencrypted connection — only on a network you trust (VPN/tailnet/LAN).</string>
+    <string name="host_connect">Connect</string>
+    <string name="host_invalid_link">That isn't a valid supermux pairing link. Scan or paste the complete QR value.</string>
+    <!-- %1$s: the host's name -->
+    <string name="host_found_set_up">Found %1$s. It's already set up — run `mux pair` (or the host's Add-device screen) to mint a pairing link, then paste it above.</string>
+    <string name="host_found_set_up_unnamed">Found the host. It's already set up — run `mux pair` (or the host's Add-device screen) to mint a pairing link, then paste it above.</string>
+
+    <!-- Host picker and switcher -->
+    <string name="host_label">Host</string>
+    <string name="host_offline_paren">%1$s (offline)</string>
+    <string name="host_offline_dot">%1$s · Offline</string>
+    <string name="host_offline">offline</string>
+    <string name="host_all">All hosts</string>
+    <string name="host_open">Open %1$s</string>
+    <string name="host_rename_item">Rename %1$s…</string>
+    <string name="host_forget_item">Forget %1$s…</string>
+    <string name="host_add_item">Add host…</string>
+    <string name="host_rename_title">Rename host</string>
+    <string name="host_rename">Rename</string>
+    <string name="host_cancel">Cancel</string>
+    <string name="host_forget_title">Forget host?</string>
+    <string name="host_forget_text">Removes "%1$s" and its sessions from this device. You'll need a new pairing link to add it again.</string>
+    <string name="host_forget">Forget</string>
+    <string name="host_selected">Selected</string>
+
+    <!-- Git banner -->
+    <string name="host_git_title_mac">Developer tools not installed</string>
+    <string name="host_git_title_mac_on">Developer tools not installed on %1$s</string>
+    <string name="host_git_title">Git not installed</string>
+    <string name="host_git_title_on">Git not installed on %1$s</string>
+    <string name="host_git_optional_mac">Agents work without them. Install Apple's command line tools to turn on git features: worktrees, diffs and change tracking.</string>
+    <string name="host_git_optional">Agents work without git. Install it to turn on worktrees, diffs and change tracking.</string>
+    <string name="host_git_install">Install…</string>
+    <string name="host_git_starting">Starting…</string>
+    <string name="host_git_failed">Couldn't start the installer.</string>
+    <string name="host_git_retry">Retry</string>
+    <string name="host_git_install_failed">Couldn't install git: %1$s</string>
+    <string name="host_git_this_computer">this computer</string>
+    <!-- %1$s: the host's name, or host_git_this_computer -->
+    <string name="host_git_started_xcode">Apple's installer is open on %1$s. Follow it, then this clears by itself.</string>
+    <string name="host_git_started_winget">Installing git on %1$s… this clears by itself when done.</string>
+    <string name="host_git_started_mingit">Installing git on %1$s…</string>
+    <string name="host_git_started_browser">The Git download page is open on %1$s.</string>
+    <string name="host_git_started_other">The installer started on %1$s.</string>
+</resources>

@@ -47,6 +47,9 @@ import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.widgets_copy
 
 /** Enter-to-submit: fire [submit] (and consume the event) on Enter/NumPad-Enter when [enabled]. */
 fun Modifier.submitOnEnter(enabled: Boolean, submit: () -> Unit): Modifier =
@@ -181,7 +184,7 @@ fun CopyableCommand(command: String, modifier: Modifier = Modifier) {
         }) {
             Icon(
                 if (copied) Icons.Filled.Check else Icons.Filled.ContentCopy,
-                contentDescription = "Copy",
+                contentDescription = localized(Res.string.widgets_copy),
                 tint = cs.primary,
                 modifier = Modifier.size(18.dp),
             )

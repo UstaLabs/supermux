@@ -8,6 +8,7 @@ import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.keys.AppCommands
 import dev.supermux.ui.keys.DefaultKeymap
 import dev.supermux.ui.keys.currentKeyOs
+import dev.supermux.ui.keys.localizedTitle
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.platform.Caps
 import dev.supermux.ui.resources.Res
@@ -57,8 +58,8 @@ fun searchKey(entry: SettingsSearchEntry): String =
 
 /**
  * Every entry of [entries] in the app's language: a page entry is its page's name ([pageTitles]); a row's label and
- * extra keywords come from the `settings_search.xml` catalogs by [searchKey]. An entry with no key (a provider's name, a
- * command) keeps its English.
+ * extra keywords come from the `settings_search.xml` catalogs by [searchKey]; a shortcut's is its command's title. An
+ * entry with no key (a provider's name) keeps its English.
  */
 @Composable
 fun localizedSearchEntries(
@@ -69,7 +70,13 @@ fun localizedSearchEntries(
     return entries.associateWith { e ->
         val key = searchKey(e)
         LocalizedSearchEntry(
-            label = if (e.anchor == null) pageTitles[e.section] ?: e.label else all[key]?.let { localized(it) } ?: e.label,
+            label = when {
+                e.anchor == null -> pageTitles[e.section] ?: e.label
+                // A shortcut's row is its command: its title in the app's language.
+                e.section == SettingsSection.KeyboardShortcuts ->
+                    AppCommands.all.firstOrNull { shortcutAnchor(it) == e.anchor }?.let { localizedTitle(it) } ?: e.label
+                else -> all[key]?.let { localized(it) } ?: e.label
+            },
             keywords = all["${key}_kw"]?.let { localized(it) }.orEmpty(),
         )
     }

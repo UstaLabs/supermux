@@ -24,6 +24,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.ui.theme.Motion
 import kotlin.math.roundToInt
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.panes_split_left
+import dev.supermux.ui.resources.panes_split_right
+import dev.supermux.ui.resources.panes_split_above
+import dev.supermux.ui.resources.panes_split_below
+import dev.supermux.ui.resources.panes_move_here
 
 /**
  * Translucent drop **preview** over still-live pane content.
@@ -59,21 +66,21 @@ fun PaneDropOverlay(
         DropZone.Centre -> listOf(0.06f, 0.06f, 0.94f, 0.94f)
         null -> listOf(0.46f, 0.46f, 0.54f, 0.54f)
     }
-    val left by animateFloatAsState(tL, Motion.spatial(), label = "drop-l")
-    val top by animateFloatAsState(tT, Motion.spatial(), label = "drop-t")
-    val right by animateFloatAsState(tR, Motion.spatial(), label = "drop-r")
-    val bottom by animateFloatAsState(tB, Motion.spatial(), label = "drop-b")
+    val left by animateFloatAsState(tL, Motion.spatial(), label = "drop-l") // i18n-ok: animation label
+    val top by animateFloatAsState(tT, Motion.spatial(), label = "drop-t") // i18n-ok: animation label
+    val right by animateFloatAsState(tR, Motion.spatial(), label = "drop-r") // i18n-ok: animation label
+    val bottom by animateFloatAsState(tB, Motion.spatial(), label = "drop-b") // i18n-ok: animation label
     val highlightAlpha by animateFloatAsState(
         targetValue = if (zone != null) 1f else 0f,
         animationSpec = Motion.stateChange(),
-        label = "drop-a",
+        label = "drop-a", // i18n-ok: animation label
     )
     val label = when (zone) {
-        DropZone.Left -> "Split left"
-        DropZone.Right -> "Split right"
-        DropZone.Top -> "Split above"
-        DropZone.Bottom -> "Split below"
-        DropZone.Centre -> "Move here"
+        DropZone.Left -> localized(Res.string.panes_split_left)
+        DropZone.Right -> localized(Res.string.panes_split_right)
+        DropZone.Top -> localized(Res.string.panes_split_above)
+        DropZone.Bottom -> localized(Res.string.panes_split_below)
+        DropZone.Centre -> localized(Res.string.panes_move_here)
         null -> ""
     }
     val tag = when (zone) {

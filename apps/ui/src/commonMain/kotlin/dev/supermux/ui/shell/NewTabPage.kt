@@ -71,6 +71,12 @@ import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Motion
 import dev.supermux.workspace.NewViewKind
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.shell_new_tab_keys_hint
+import dev.supermux.ui.resources.shell_new_tab
+import dev.supermux.ui.resources.shell_opening
+import dev.supermux.ui.resources.shell_close
 
 /**
  * A New tab's page: where it opens ([workspace], [branch]) and a row per view kind ([choices]).
@@ -148,7 +154,7 @@ internal fun NewTabPage(
                 if (keyboard) {
                     Spacer(Modifier.height(14.dp))
                     Text(
-                        "↑↓ to move  ·  ↵ to open  ·  esc to close",
+                        localized(Res.string.shell_new_tab_keys_hint),
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                         fontSize = 11.sp,
                         modifier = Modifier.padding(start = 12.dp),
@@ -169,9 +175,10 @@ private val NUMPAD_DIGITS = listOf(
 @Composable
 private fun Eyebrow(workspace: String, branch: String?, modifier: Modifier) {
     val cs = MaterialTheme.colorScheme
+    val newTab = localized(Res.string.shell_new_tab)
     Text(
         buildAnnotatedString {
-            withStyle(SpanStyle(color = cs.onSurface, fontWeight = FontWeight.Medium)) { append("New tab") }
+            withStyle(SpanStyle(color = cs.onSurface, fontWeight = FontWeight.Medium)) { append(newTab) }
             withStyle(SpanStyle(color = cs.onSurfaceVariant)) { append("  ·  $workspace") }
             if (branch != null) {
                 withStyle(SpanStyle(color = cs.onSurfaceVariant.copy(alpha = 0.75f), fontFamily = MonoFontFamily, fontSize = 11.5.sp)) {
@@ -212,7 +219,7 @@ private fun ChoiceRow(
         selected -> cs.onSurface.copy(alpha = wash)
         else -> Color.Transparent
     }
-    val glyph by animateColorAsState(if (selected) cs.primary else cs.onSurfaceVariant, Motion.stateChange(), label = "new-tab-glyph")
+    val glyph by animateColorAsState(if (selected) cs.primary else cs.onSurfaceVariant, Motion.stateChange(), label = "new-tab-glyph") // i18n-ok: animation label
     Row(
         Modifier
             .fillMaxWidth()
@@ -228,7 +235,7 @@ private fun ChoiceRow(
         Icon(c.icon, contentDescription = null, tint = glyph, modifier = Modifier.size(17.dp))
         Spacer(Modifier.width(12.dp))
         Text(
-            c.label,
+            localizedKindLabel(c.kind),
             color = cs.onSurface,
             fontSize = if (touch) 15.sp else 13.5.sp,
             fontWeight = FontWeight.Medium,
@@ -236,7 +243,7 @@ private fun ChoiceRow(
             modifier = Modifier.width(if (touch) 96.dp else 84.dp),
         )
         Text(
-            c.detail,
+            localizedKindDetail(c.kind, c.folder),
             color = cs.onSurfaceVariant,
             fontSize = if (touch) 14.sp else 13.sp,
             maxLines = 1,
@@ -244,7 +251,7 @@ private fun ChoiceRow(
             modifier = Modifier.weight(1f),
         )
         when {
-            opening -> Text("opening…", color = cs.primary, fontSize = 12.sp, modifier = Modifier.padding(start = 8.dp))
+            opening -> Text(localized(Res.string.shell_opening), color = cs.primary, fontSize = 12.sp, modifier = Modifier.padding(start = 8.dp))
             c.alreadyOpen -> Box(
                 Modifier
                     .padding(start = 8.dp)
@@ -281,14 +288,14 @@ internal fun PhoneNewTabPage(
         ) {
             Icon(Icons.Outlined.Tab, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
             Text(
-                "New tab",
+                localized(Res.string.shell_new_tab),
                 color = cs.onSurface,
                 fontFamily = MonoFontFamily,
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.weight(1f).padding(horizontal = 10.dp),
             )
             IconButton(onClick = onClose, modifier = Modifier.testTag("phone_new_tab_close")) {
-                Icon(Icons.Filled.Close, contentDescription = "Close", tint = cs.onSurfaceVariant)
+                Icon(Icons.Filled.Close, contentDescription = localized(Res.string.shell_close), tint = cs.onSurfaceVariant)
             }
         }
         NewTabPage(choices, workspace, branch, opening = null, onPick = onPick, onClose = onClose, modifier = Modifier.weight(1f))

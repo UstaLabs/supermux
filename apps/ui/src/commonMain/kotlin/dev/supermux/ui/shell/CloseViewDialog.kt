@@ -17,6 +17,15 @@ import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.worktree.WorktreeCleanupSection
 import dev.supermux.ui.worktree.WorktreeCleanupTick
 import dev.supermux.workspace.viewTitle
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.shell_close_and_delete
+import dev.supermux.ui.resources.shell_close
+import dev.supermux.ui.resources.shell_cancel
+import dev.supermux.ui.resources.shell_close_chat_confirm
+import dev.supermux.ui.resources.shell_close_terminal_confirm
+import dev.supermux.ui.resources.shell_close_display_confirm
+import dev.supermux.ui.resources.shell_close_view_confirm
 
 /**
  * Spec §9.3 — a close ends the work behind the view, so the user is asked first.
@@ -56,7 +65,7 @@ fun CloseViewDialog(
         onDismissRequest = onDismiss,
         text = {
             Column {
-                Text(closeConfirmText(view, sessionId?.let { sessionNames[it] }))
+                Text(localizedCloseConfirmText(view, sessionId?.let { sessionNames[it] }))
                 if (view.kind == "chat" && chatWorkdir != null && worktreeForWorkdir != null) {
                     WorktreeCleanupSection(
                         listOf(chatWorkdir), setOfNotNull(sessionId), worktreeForWorkdir,
@@ -74,14 +83,23 @@ fun CloseViewDialog(
                 } else {
                     onConfirm()
                 }
-            }) { Text(if (deleteWt) "Close & delete" else "Close") }
+            }) { Text(localized(if (deleteWt) Res.string.shell_close_and_delete else Res.string.shell_close)) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(localized(Res.string.shell_cancel)) } },
     )
 }
 
+/** [closeConfirmText] in the app's language: what the dialog shows. */
+@Composable
+fun localizedCloseConfirmText(view: ViewDto, sessionName: String?): String = when (view.kind) {
+    "chat" -> localized(Res.string.shell_close_chat_confirm, sessionName?.takeIf { it.isNotBlank() } ?: viewTitle(view))
+    "terminal" -> localized(Res.string.shell_close_terminal_confirm, view.stateString("terminalId") ?: "?")
+    "display" -> localized(Res.string.shell_close_display_confirm)
+    else -> localized(Res.string.shell_close_view_confirm)
+}
+
 /**
- * The one question, naming what the close stops.
+ * The one question, naming what the close stops. English, the tests' twin of [localizedCloseConfirmText].
  *
  * Desktop's wording throughout (it names the terminal being killed, which Android's "This kills
  * it." did not); [sessionName] is the chat's session name where the caller could resolve one.
@@ -89,10 +107,10 @@ fun CloseViewDialog(
 fun closeConfirmText(view: ViewDto, sessionName: String?): String = when (view.kind) {
     // Android's fallback (the view's own title) rather than desktop's "this session" — it names
     // something the user can see on the tab.
-    "chat" -> "Close this chat? This archives the session ${sessionName?.takeIf { it.isNotBlank() } ?: viewTitle(view)}."
-    "terminal" -> "Close this terminal? This stops the terminal ${view.stateString("terminalId") ?: "?"}."
-    "display" -> "Close this display? This stops the stream."
-    else -> "Close this view?"
+    "chat" -> "Close this chat? This archives the session ${sessionName?.takeIf { it.isNotBlank() } ?: viewTitle(view)}." // i18n-ok: test twin
+    "terminal" -> "Close this terminal? This stops the terminal ${view.stateString("terminalId") ?: "?"}." // i18n-ok: test twin
+    "display" -> "Close this display? This stops the stream." // i18n-ok: test twin
+    else -> "Close this view?" // i18n-ok: test twin
 }
 
 /**
