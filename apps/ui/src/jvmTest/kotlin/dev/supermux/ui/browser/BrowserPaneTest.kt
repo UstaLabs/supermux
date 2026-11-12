@@ -17,11 +17,13 @@ import androidx.compose.ui.test.assertWidthIsEqualTo
 import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performMouseInput
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
@@ -285,8 +287,11 @@ class BrowserPaneTest {
         onNodeWithTag("browser-address").performKeyInput { withKeyDown(mod) { pressKey(Key.R) } }
         waitUntil(timeoutMillis = 5_000) { "reload" in rig.calls }
         onNodeWithTag("browser-address").performKeyInput { withKeyDown(mod) { pressKey(Key.F) } }
+        // The reload may have leased the page another engine under load: every engine answers find the same.
+        rig.engines.created.toList().forEach { it.findAnswer = { _, _ -> FindResult(found = true, count = 5, current = 2) } }
         onNodeWithTag("browser-find-field").performTextInput("vite")
-        waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag("browser-find-count").fetchSemanticsNodes().isNotEmpty() }
+        // The count shows at once, empty, and the engine's answer lands after: wait for the answer, not the node.
+        waitUntil(timeoutMillis = 10_000) { runCatching { onNodeWithTag("browser-find-count").assertTextEquals("2 of 5") }.isSuccess }
         onNodeWithTag("browser-find-count").assertTextEquals("2 of 5")
     }
 
@@ -660,6 +665,8 @@ class BrowserPaneTest {
         engines.created.toList().forEach { engine ->
             engine.evaluateAnswer = { script ->
                 when {
+                    "elementFromPoint" in script && "i<1&&" in script ->
+                        """{"selector":"aside.summary","tag":"aside","text":"Order summary","label":"aside.summary · 360×240","box":{"x":0,"y":0.4,"w":1,"h":0.3}}"""
                     "elementFromPoint" in script -> pay
                     "querySelector(q)" in script -> if (gone()) "[null]" else """[{"x":0.25,"y":0.5,"w":0.5,"h":0.1}]"""
                     else -> null
@@ -767,6 +774,81 @@ class BrowserPaneTest {
         onNodeWithTag("browser-pick-sendbar").assertExists()
         onNodeWithTag("browser-pick-send").assertDoesNotExist()
         onNodeWithTag("browser-pick-compose").assertDoesNotExist()
+    }
+
+    /** A phone (compact, touch) showing the pane, with a chat to send to. */
+    private fun ComposeUiTest.showOnPhone(rig: Rig, sink: BrowserToChat?) {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        val runtime = WebViewRuntime(
+            RuntimeConfig(maxLive = 2, snapshotCacheBytes = 8L shl 20, factory = rig.engines, scope = scope, clock = { mainClock.currentTime }),
+        )
+        setPlatformContent {
+            CompositionLocalProvider(
+                LocalAppWebViews provides AppWebViews(runtime),
+                LocalBrowserToChat provides sink,
+                dev.supermux.ui.adaptive.LocalWindowWidthClass provides dev.supermux.ui.adaptive.WindowWidthClass.Compact,
+                dev.supermux.ui.adaptive.LocalPointerAvailable provides false,
+            ) {
+                BrowserPane(view("https://vitejs.dev/"), "w1", rig.actions(), Modifier.size(390.dp, 700.dp))
+            }
+        }
+        waitUntil(timeoutMillis = 5_000) { "https://vitejs.dev/" in rig.loads() }
+    }
+
+    /**
+     * #122 3c, the phone's minimal flow (§5.2): 🎯, "Tap what you mean · Done"; a tap opens the comment panel (its name,
+     * the field, a trash, Save); Save keeps it; the one bottom bar sends to the chat; Done ends picking.
+     */
+    @Test fun aPhoneTapsAnElementAndSendsTheComment() = runComposeUiTest {
+        val rig = Rig()
+        val sink = ChatSink()
+        showOnPhone(rig, sink)
+        rig.answerPicks()
+        onNodeWithTag("browser-pick").performClick()
+        onNodeWithText("Tap what you mean", useUnmergedTree = true).assertExists()
+        onNodeWithTag("browser-pick-layer").performTouchInput { click(center) }
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag("browser-pick-panel").fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithTag("browser-pick-comment").performTextInput("too small to tap")
+        onNodeWithTag("browser-pick-save").performClick()
+        onNodeWithTag("browser-pick-panel").assertDoesNotExist()
+        onNodeWithText("1 comment → Checkout agent", useUnmergedTree = true).assertExists()
+        onNodeWithTag("browser-pick-compose").assertDoesNotExist() // one way: Send
+        onNodeWithTag("browser-pick-clear").assertDoesNotExist()
+        onNodeWithTag("browser-pick-done").performClick()
+        onNodeWithTag("browser-pick-layer").assertDoesNotExist()
+        onNodeWithTag("browser-pick-send").performClick()
+        waitUntil(timeoutMillis = 5_000) { sink.messages.isNotEmpty() }
+        assertTrue(sink.messages.single().third)
+    }
+
+    /** Tapping the open element again takes its container instead: no breadcrumb buttons. */
+    @Test fun aSecondTapTakesTheContainer() = runComposeUiTest {
+        val rig = Rig()
+        showOnPhone(rig, ChatSink())
+        rig.answerPicks()
+        onNodeWithTag("browser-pick").performClick()
+        onNodeWithTag("browser-pick-layer").performTouchInput { click(center) }
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag("browser-pick-panel").fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithText("button.buy · 312×44", useUnmergedTree = true).assertExists()
+        onNodeWithTag("browser-pick-layer").performTouchInput { click(center) }
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithText("aside.summary · 360×240", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithTag("browser-pin-2", useUnmergedTree = true).assertDoesNotExist() // the same comment, its container
+    }
+
+    /** One way to delete: the panel's trash; Undo brings it back for a few seconds. */
+    @Test fun theTrashDeletesAndUndoBringsItBack() = runComposeUiTest {
+        val rig = Rig()
+        showOnPhone(rig, ChatSink())
+        rig.answerPicks()
+        onNodeWithTag("browser-pick").performClick()
+        onNodeWithTag("browser-pick-layer").performTouchInput { click(center) }
+        onNodeWithTag("browser-pick-comment").performTextInput("x")
+        onNodeWithTag("browser-pick-save").performClick()
+        onNodeWithTag("browser-pin-1", useUnmergedTree = true).performClick()
+        onNodeWithTag("browser-pick-delete").performClick()
+        onNodeWithTag("browser-pin-1", useUnmergedTree = true).assertDoesNotExist()
+        onNodeWithTag("browser-pick-undo").performClick()
+        onNodeWithTag("browser-pin-1", useUnmergedTree = true).assertExists()
     }
 
     /** No scripts into the page (the web client's iframe): no pick mode at all. */
