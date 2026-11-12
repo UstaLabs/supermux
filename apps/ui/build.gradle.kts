@@ -159,6 +159,12 @@ kotlin {
     }
 }
 
+// #123: the UI follows the system language, so pin the tests' JVM to English wherever they run.
+tasks.withType<Test>().configureEach {
+    systemProperty("user.language", "en")
+    systemProperty("user.country", "US")
+}
+
 compose.resources {
     // Generated accessor: dev.supermux.ui.resources.Res — public so app modules could reach it too.
     packageOfResClass = "dev.supermux.ui.resources"

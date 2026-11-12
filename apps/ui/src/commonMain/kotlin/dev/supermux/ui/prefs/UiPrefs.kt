@@ -22,6 +22,7 @@ import dev.supermux.state.liveRepliesOn
 import dev.supermux.state.SettingsStore
 import dev.supermux.ui.ChatDetailLevel
 import dev.supermux.ui.chat.DictationMode
+import dev.supermux.ui.i18n.AppLanguage
 import dev.supermux.ui.sanitizeSetLevel
 import dev.supermux.ui.terminal.TerminalAppearance
 import dev.supermux.ui.theme.AppearanceMode
@@ -198,6 +199,14 @@ class UiPrefs(private val settings: SettingsStore) {
 
     suspend fun putAppearance(mode: AppearanceMode) =
         settings.putString(SettingsKeys.APPEARANCE, mode.name)
+
+    /** #123: this device's chosen language; [AppLanguage.SYSTEM] when none is stored. */
+    val language: Flow<AppLanguage> = settings.string(SettingsKeys.LANGUAGE).map { AppLanguage.parse(it) }
+
+    /** System clears the key, so "follow the system" costs nothing and is what an unknown stored tag falls back to. */
+    suspend fun putLanguage(language: AppLanguage) {
+        settings.putString(SettingsKeys.LANGUAGE, language.tag)
+    }
 
     /** The assistant overlay (#62, experimental): the default Agent floating over other apps. Off unless turned on. */
     val assistantOverlay: Flow<Boolean> =
