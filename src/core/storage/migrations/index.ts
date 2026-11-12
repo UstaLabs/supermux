@@ -54,6 +54,7 @@ import m046 from "./046_agent_commands.sql" with { type: "text" }
 import m047 from "./047_browser_view.sql" with { type: "text" }
 import m048 from "./048_new_tab_view.sql" with { type: "text" }
 import m049 from "./049_message_cards.sql" with { type: "text" }
+import m050 from "./050_browser_comments.sql" with { type: "text" }
 
 export const MIGRATIONS: Migration[] = [
   { version: 1, name: "001_init", sql: m001 },
@@ -104,4 +105,5 @@ export const MIGRATIONS: Migration[] = [
   { version: 47, name: "047_browser_view", sql: m047 },
   { version: 48, name: "048_new_tab_view", sql: m048 },
   { version: 49, name: "049_message_cards", sql: m049 },
+  { version: 50, name: "050_browser_comments", sql: m050 },
 ].sort((a, b) => a.version - b.version)

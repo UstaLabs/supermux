@@ -396,6 +396,9 @@ export interface WebChannelOpts {
   reviewAdd?: (id: string, c: Omit<import("../../core/review/store").NewComment, "sessionId">) => import("../../core/review/store").Comment
   reviewUpdate?: (commentId: string, patch: { status?: "open" | "submitted" | "resolved"; body?: string; resolvedBy?: string }) => void
   reviewDelete?: (commentId: string) => void
+  /** #122 phase 4: store a Browser tab's comments in a session (and tell every client); its stored ones. */
+  browserCommentsAdd?: (sessionId: string, batch: import("../../core/browser-comments/store").BrowserCommentBatch) => import("../../core/browser-comments/store").BrowserComment[]
+  browserCommentsList?: (sessionId: string) => import("../../core/browser-comments/store").BrowserComment[]
   reviewSubmit?: (id: string) => Promise<{ ok: boolean; delivered: number; reason?: string }>
   sendUserMessage?: (id: string, text: string) => Promise<{ ok: boolean; reason?: string }>
   getWalkthrough?: (id: string) => import("../../core/walkthrough/store").Walkthrough | undefined
@@ -4079,6 +4082,31 @@ export class WebChannel implements Channel {
       const content = String(body.content ?? "")
       if (!content.trim()) return this.json({ error: "content required" }, 400)
       return this.json(this.opts.verifySave(id, content))
+    }
+    // #122 phase 4: a Browser tab's comments, sent to a session; its agent answers each through its mux tools.
+    if (method === "GET" && path.match(/^\/sessions\/[^/]+\/browser\/comments$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      if (!this.opts.browserCommentsList) return this.json({ error: "not configured" }, 503)
+      return this.json({ comments: this.opts.browserCommentsList(id) })
+    }
+    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/browser\/comments$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      if (!this.opts.browserCommentsAdd) return this.json({ error: "not configured" }, 503)
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>
+      const str = (v: unknown) => (typeof v === "string" ? v : null)
+      const raw = Array.isArray(b.comments) ? b.comments as Record<string, unknown>[] : []
+      const comments = raw.map((c, i) => ({
+        number: typeof c.number === "number" && Number.isInteger(c.number) && c.number > 0 ? c.number : i + 1,
+        comment: str(c.comment)?.trim() ?? "",
+        selector: str(c.selector)?.trim() ?? "",
+        text: str(c.text) ?? "",
+        picture: str(c.picture),
+      }))
+      if (!comments.length || comments.length > 50) return this.json({ error: "a batch is 1 to 50 comments" }, 400)
+      if (comments.some((c) => !c.comment || !c.selector || c.comment.length > 4000 || c.selector.length > 2000)) {
+        return this.json({ error: "each comment needs its words and its element's selector" }, 400)
+      }
+      return this.json({ comments: this.opts.browserCommentsAdd(id, { url: str(b.url), viewedAs: str(b.viewedAs), comments }) })
     }
     if (method === "GET" && path.match(/^\/sessions\/[^/]+\/review\/comments$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)

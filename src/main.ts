@@ -148,6 +148,7 @@ import { detectInstallMode, detectUpdateMode } from "./core/update/mode"
 import { TelemetryService } from "./core/telemetry/service"
 import { resolveTelemetry, mergeTelemetrySetting, telemetryEnv, SETTINGS_KEY_TELEMETRY } from "./core/telemetry/config"
 import { telemetryModel, telemetryEffort } from "./core/telemetry/sanitize"
+import { BrowserCommentStore } from "./core/browser-comments/store"
 import { ReviewStore } from "./core/review/store"
 import { WalkthroughStore } from "./core/walkthrough/store"
 import { formatInstantComment, matchingStep, toWalkthroughDto } from "./core/walkthrough/author"
@@ -479,6 +480,8 @@ try {
   log.error("projects_reconcile_failed", { err: String(err) })
 }
 const reviewStore = new ReviewStore(db)
+// #122 phase 4: a Browser tab's comments, answered by agents through their mux tools.
+const browserCommentStore = new BrowserCommentStore(db)
 const walkthroughStore = new WalkthroughStore(db)
 const settings = new SettingsStore(db)
 
@@ -1391,7 +1394,7 @@ const sessionManager = new SessionManager(registry, {
       return report
     },
   },
-  stores: { fileStore, messageLog, searchStore, db, reviewStore, walkthroughStore },
+  stores: { fileStore, messageLog, searchStore, db, reviewStore, walkthroughStore, browserCommentStore },
   resume: {
     bind: (sid) => server.bind(sid),
     ensureSessionWorktree: (s) => ensureSessionWorktree(s),
@@ -3461,6 +3464,12 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       } catch (e: any) { return { reachable: false, error: e?.message ?? String(e) } }
     },
     reviewList: (id) => reviewStore.list(id),
+    browserCommentsAdd: (id, batch) => {
+      const added = browserCommentStore.addBatch(id, batch, new Date().toISOString())
+      for (const comment of added) webChannel?.broadcastToAll({ type: "browser_comment", sessionId: id, comment })
+      return added
+    },
+    browserCommentsList: (id) => browserCommentStore.list(id),
     reviewAdd: (id, c) => {
       const comment = reviewStore.add({ ...c, sessionId: id })
       webChannel?.broadcastToAll({ type: "review_comment", sessionId: id, comment })
