@@ -208,3 +208,24 @@ test("staging refuses paths outside the repo, unknown repos and bad bodies", asy
   expect((await post(token, "/workspaces/ws-1/git/stage", { repo: "nope", paths: ["a.txt"], staged: true })).status).toBe(404)
   expect((await post(token, "/workspaces/ws-x/git/stage", { repo: "", paths: ["a.txt"], staged: true })).status).toBe(404)
 })
+
+test("commit with nothing in the next commit says so; all commits everything; undo brings it back", async () => {
+  const { dir, token } = await setup()
+  const none = await post(token, "/workspaces/ws-1/git/commit", { repo: "" })
+  expect(none.status).toBe(409)
+  expect(await none.json()).toEqual({ ok: false, reason: "nothing" })
+  const all = await post(token, "/workspaces/ws-1/git/commit", { repo: "", all: true, message: "" })
+  expect(all.status).toBe(200)
+  expect(await all.json()).toMatchObject({ ok: true, subject: "Update a.txt" })
+  expect(git(dir, "status", "--porcelain")).toBe("")
+  const undo = await post(token, "/sessions/s-1/git/uncommit", { repo: "" })
+  expect(await undo.json()).toEqual({ ok: true, subject: "Update a.txt" })
+  expect(git(dir, "diff", "--cached", "--name-only")).toBe("a.txt")
+})
+
+test("commit refuses a bad message and an unknown repo", async () => {
+  const { token } = await setup()
+  expect((await post(token, "/workspaces/ws-1/git/commit", { repo: "", message: 5 })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/commit", { repo: "nope", all: true })).status).toBe(404)
+  expect((await post(token, "/workspaces/ws-1/git/nope", { repo: "" })).status).not.toBe(200)
+})

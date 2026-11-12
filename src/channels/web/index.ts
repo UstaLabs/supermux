@@ -27,6 +27,7 @@ import { UnsupportedAudioError } from "../../core/transcription/wav"
 import { computeWorkdirDiff, listRepoRefs } from "../../core/editor/workdir-diff"
 import { listChanges, readBaseBlob, discoverReposCached } from "../../core/editor/changes"
 import { safeRepoPath, setStaged } from "../../core/git/stage"
+import { commit as gitCommit, uncommit as gitUncommit } from "../../core/git/commit"
 import { reanchor } from "../../core/review/anchor"
 import { formatInstantComment, matchingStep, toWalkthroughDto } from "../../core/walkthrough/author"
 import { LspConnection } from "../../core/lsp/bridge"
@@ -2350,25 +2351,40 @@ export class WebChannel implements Channel {
     }
   }
 
-  /** POST …/git/stage {repo, paths, staged} (#72): whole files into the next commit, or out of it. */
-  private async stageFiles(workdir: string, req: Request): Promise<Response> {
-    let body: { repo?: unknown; paths?: unknown; staged?: unknown }
+  /**
+   * POST …/git/{stage,commit,uncommit} (#72), all with {repo}:
+   * stage {paths, staged} puts whole files into the next commit or takes them out;
+   * commit {message?, all?, amend?} commits it (an empty message is written from the files);
+   * uncommit undoes the last commit and keeps its changes in the next one.
+   */
+  private async gitWrite(workdir: string, op: string, req: Request): Promise<Response> {
+    let body: { repo?: unknown; paths?: unknown; staged?: unknown; message?: unknown; all?: unknown; amend?: unknown }
     try { body = (await req.json()) as typeof body } catch { return this.json({ error: "bad json" }, 400) }
     if (!body || typeof body !== "object") return this.json({ error: "bad request" }, 400)
     const repo = typeof body.repo === "string" ? body.repo : ""
-    const paths = Array.isArray(body.paths) ? body.paths : []
-    if (!paths.length || paths.length > 5000 || !paths.every(safeRepoPath) || typeof body.staged !== "boolean") {
-      return this.json({ error: "bad request" }, 400)
-    }
     const found = (await discoverReposCached(workdir)).find((r) => r.relPath === repo)
       ?? (await discoverReposCached(workdir, { fresh: true })).find((r) => r.relPath === repo)
-    if (!found) return this.json({ error: "repo not found" }, 404)
-    try {
-      await setStaged(found.absPath, paths as string[], body.staged)
-      return this.json({ ok: true })
-    } catch (err) {
-      return this.json({ error: err instanceof Error ? err.message : String(err) }, 409)
+    if (op === "stage") {
+      const paths = Array.isArray(body.paths) ? body.paths : []
+      if (!paths.length || paths.length > 5000 || !paths.every(safeRepoPath) || typeof body.staged !== "boolean") {
+        return this.json({ error: "bad request" }, 400)
+      }
+      if (!found) return this.json({ error: "repo not found" }, 404)
+      try {
+        await setStaged(found.absPath, paths as string[], body.staged)
+        return this.json({ ok: true })
+      } catch (err) {
+        return this.json({ error: err instanceof Error ? err.message : String(err) }, 409)
+      }
     }
+    if (!found) return this.json({ error: "repo not found" }, 404)
+    if (op === "commit") {
+      if (body.message !== undefined && typeof body.message !== "string") return this.json({ error: "bad request" }, 400)
+      const r = await gitCommit(found.absPath, { message: body.message as string | undefined, all: body.all === true, amend: body.amend === true })
+      return r.ok ? this.json(r) : this.json(r, 409)
+    }
+    const r = await gitUncommit(found.absPath)
+    return r.ok ? this.json(r) : this.json(r, 409)
   }
 
   /** GET …/changes/blob for a resolved workdir (spec §2.2). */
@@ -3722,10 +3738,10 @@ export class WebChannel implements Channel {
       }))
       return this.json({ repos, comments })
     }
-    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/stage$/)) {
+    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/(stage|commit|uncommit)$/)) {
       const workdir = this.opts.getSessionWorkdir?.(decodeURIComponent(path.split("/")[2]!))
       if (!workdir) return this.json({ error: "session not found" }, 404)
-      return this.stageFiles(workdir, req)
+      return this.gitWrite(workdir, path.split("/")[4]!, req)
     }
     if (method === "GET" && path.match(/^\/sessions\/[^/]+\/changes\/blob$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
@@ -3828,10 +3844,10 @@ export class WebChannel implements Channel {
       const { repos } = await listChanges(workdir, base?.baseCommits ?? {}, base?.createdAt, url.searchParams.get("base") ?? undefined)
       return this.json({ repos, comments: [] })
     }
-    if (method === "POST" && path.match(/^\/workspaces\/[^/]+\/git\/stage$/)) {
+    if (method === "POST" && path.match(/^\/workspaces\/[^/]+\/git\/(stage|commit|uncommit)$/)) {
       const workdir = this.opts.getWorkspaceWorkdir?.(decodeURIComponent(path.split("/")[2]!))
       if (!workdir) return this.json({ error: "workspace not found" }, 404)
-      return this.stageFiles(workdir, req)
+      return this.gitWrite(workdir, path.split("/")[4]!, req)
     }
     if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/changes\/blob$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
