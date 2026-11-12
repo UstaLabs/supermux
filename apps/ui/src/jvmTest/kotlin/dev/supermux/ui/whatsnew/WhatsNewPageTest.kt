@@ -34,6 +34,8 @@ class WhatsNewPageTest {
     @Test fun the_page_asks_for_actions_by_name_and_anything_else_is_ignored() {
         assertEquals(WhatsNewAction.Done, whatsNewAction(buildJsonObject { put("action", JsonPrimitive("done")) }))
         assertEquals(WhatsNewAction.ResumeSetting, whatsNewAction(buildJsonObject { put("action", JsonPrimitive("resume-setting")) }))
+        assertEquals(WhatsNewAction.Browser, whatsNewAction(buildJsonObject { put("action", JsonPrimitive("browser")) }))
+        assertEquals(WhatsNewAction.CardPrompt, whatsNewAction(buildJsonObject { put("action", JsonPrimitive("card")) }))
         assertNull(whatsNewAction(buildJsonObject { put("action", JsonPrimitive("format-disk")) }))
         assertNull(whatsNewAction(JsonPrimitive("done")))
     }

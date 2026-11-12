@@ -583,15 +583,15 @@ const pick = (m, k) => m[k] ?? m[FAMILY] ?? m.all;
 const RESUME_TEXT = 'When an agent runs into its limit, the session waits and picks up again the moment the limit resets. Resume now or cancel from the strip above the composer.';
 const VARIANTS = {
   browser: { g: 'globe', v: {
-    desk: () => ({ scene: 'browser.desk', text: `Links from an agent open in a Browser tab, localhost included. Press <kbd>${MOD().pick}</kbd>, point at what's wrong (↑↓ for its parent or child), say what you want, and it goes to the agent with a crop of the page.` }),
-    phone: () => ({ scene: 'browser.phone', text: 'Links from an agent open in a Browser tab, localhost included. Tap ⌖, then tap what\'s wrong (tap again for its container), add a comment, and send it to the agent with a crop of the page.' }),
+    desk: () => ({ scene: 'browser.desk', text: `Links from an agent open in a Browser tab, localhost included. Press <kbd>${MOD().pick}</kbd>, point at what's wrong (↑↓ for its parent or child), say what you want, and it goes to the agent with a crop of the page.`, tryIt: ['browser', 'Open a Browser tab'] }),
+    phone: () => ({ scene: 'browser.phone', text: 'Links from an agent open in a Browser tab, localhost included. Tap ⌖, then tap what\'s wrong (tap again for its container), add a comment, and send it to the agent with a crop of the page.', tryIt: ['browser', 'Open a Browser tab'] }),
   } },
   device: { g: 'phone', v: {
     desk: () => ({ scene: 'device.desk', text: 'Device mode in the Browser tab shows the page as a phone would, next to the chat, without leaving the app.' }),
   } },
   cards: { g: 'card', v: {
-    all: () => ({ scene: 'cards.desk', text: 'Charts, tables and choices arrive as cards right in the chat. Click a button on a card and it answers for you.' }),
-    phone: () => ({ scene: 'cards.phone', text: 'Charts, tables and choices arrive as cards right in the chat. Tap a button on a card and it answers for you.' }),
+    all: () => ({ scene: 'cards.desk', text: 'Charts, tables and choices arrive as cards right in the chat. Click a button on a card and it answers for you.', tryIt: ['card', 'Ask an agent for a card'] }),
+    phone: () => ({ scene: 'cards.phone', text: 'Charts, tables and choices arrive as cards right in the chat. Tap a button on a card and it answers for you.', tryIt: ['card', 'Ask an agent for a card'] }),
   } },
   instant: { g: 'bolt', v: {
     desk: () => ({ scene: 'instant.desk', text: 'Recent chats are kept on this computer. They open instantly, at the first message you haven\'t read, and they are still there when the connection isn\'t.' }),

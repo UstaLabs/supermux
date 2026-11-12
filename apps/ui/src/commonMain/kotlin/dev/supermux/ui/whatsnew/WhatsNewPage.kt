@@ -47,7 +47,7 @@ import dev.supermux.ui.i18n.localized
 
 /** What the page can ask the app for, by the name it uses (`data-actions`, `hostBridge.call('whatsnew', {action})`). */
 enum class WhatsNewAction(val id: String) {
-    Done("done"), Notes("notes"), Settings("settings"), ResumeSetting("resume-setting"),
+    Done("done"), Notes("notes"), Settings("settings"), ResumeSetting("resume-setting"), Browser("browser"), CardPrompt("card"),
 }
 
 /** The action a page's call names, or null for anything else. */
