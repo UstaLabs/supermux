@@ -4,6 +4,8 @@
 // and swipe down to close.
 package dev.supermux.ui.chat
 
+import dev.supermux.ui.platform.SavedFile
+import dev.supermux.ui.work.saveDownload
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.expandVertically
@@ -283,17 +285,22 @@ internal fun ChatMediaViewerContent(
         scope.launch { pager.animateScrollToPage(index) }
     }
 
+    val savedWords = rememberSavedWords()
+
+    // Save SAVES, on a phone too (#95): a picture or a video into its gallery, any other file into its files, and it
+    // says where. It used to run the tap's rule, which on a phone is Open or Share: the chooser or the share sheet.
     fun save() {
         val item = current
         val handle = resolve(item)
         scope.launch {
             val couldNot = { platform.notices.show("Couldn't download ${item.name}") }
+            val said: (SavedFile?) -> Unit = { saved -> saved?.let { savedNotice(it, pointer, savedWords) }?.let(platform.notices::show) }
             // The FILE, through the fleet's downloads: closing the viewer lets go of it, and it waits in the bar.
-            if (startDownload(downloads, handle.media, handle.att, platform, pointer, onFailed = couldNot)) return@launch
-            // No download here (a host file, a preview): the bytes, as before.
+            if (startDownload(downloads, handle.media, handle.att, platform, pointer, onFailed = couldNot, then = { said(saveDownload(platform, pointer, downloads, it)) })) return@launch
+            // No download here (a host file, a preview): the bytes.
             val bytes = handle.media.peek(handle.att) ?: runCatching { handle.media.bytes(handle.att) }.getOrNull()
             if (bytes == null) couldNot()
-            else saveOrOpenAttachment(platform, pointer, item.name, handle.att.mime, bytes)
+            else said(saveAttachment(platform, pointer, item.name, handle.att.mime, bytes))
         }
     }
 

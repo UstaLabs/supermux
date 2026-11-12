@@ -128,8 +128,14 @@ class ViewerSaveDownloadTest {
     }
 
     /** The chat's viewer, open at [picture] while [open], in a fleet with [center]; a pointer host (desktop). */
-    private fun ComposeUiTest.viewer(platform: FakePlatform, center: DownloadCenter, media: AttachmentMedia, open: () -> Boolean = { true }) =
-        setPlatformContent(platform) {
+    private fun ComposeUiTest.viewer(
+        platform: FakePlatform,
+        center: DownloadCenter,
+        media: AttachmentMedia,
+        open: () -> Boolean = { true },
+        pointer: Boolean = true,
+    ) =
+        setPlatformContent(platform, pointer = pointer) {
             CompositionLocalProvider(LocalDownloads provides center) {
                 if (open()) {
                     ChatMediaViewer(
@@ -234,6 +240,24 @@ class ViewerSaveDownloadTest {
         assertEquals(listOf("a.png"), platform.files.openedSaved.map { it.name })
         assertEquals(emptyList(), platform.files.saved, "the FILE is saved, not bytes read into memory")
         assertEquals(emptyList(), heard.toList(), "the viewer that waited acted on it: no notice")
+    }
+
+    // #95, Ahmet's report: on a phone the viewer's Save ran the tap's rule, which is Open (Android) or Share (iOS).
+    @Test fun onAPhoneTheViewersSaveSavesAndSaysWhere() = runDesktopComposeUiTest {
+        val platform = FakePlatform()
+        val center = DownloadCenter(scope)
+        val media = HostMedia()
+        viewer(platform, center, media, pointer = false)
+        awaitPicture()
+        onNodeWithTag("chat_media_viewer_save").performClick()
+        settle { center.items.value.isNotEmpty() }
+        media.gate.complete(Unit)
+        settle { platform.notices.shown.isNotEmpty() }
+
+        assertEquals(listOf("a.png"), platform.files.savedFiles)
+        assertEquals(emptyList(), platform.files.openedFiles + platform.files.sharedFiles, "Save neither opens nor shares")
+        assertEquals(emptyList(), platform.files.openedSaved, "a phone says where it went instead")
+        assertEquals(listOf("Saved a.png"), platform.notices.shown)
     }
 
     @Test fun aSaveThatFailsWhileTheViewerIsOpenSaysSo() = runDesktopComposeUiTest {

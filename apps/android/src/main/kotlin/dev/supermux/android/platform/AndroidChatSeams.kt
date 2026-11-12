@@ -5,6 +5,7 @@
 package dev.supermux.android.platform
 
 import android.Manifest
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -12,8 +13,10 @@ import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.MediaPlayer
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.provider.MediaStore
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.webkit.MimeTypeMap
@@ -23,8 +26,9 @@ import androidx.core.content.FileProvider
 import dev.supermux.android.DevConfig
 import dev.supermux.android.chat.DictationEngine
 import dev.supermux.android.chat.DictationStart
-import dev.supermux.ui.chat.MessageTts
 import dev.supermux.chat.mimeForFileName
+import dev.supermux.fs.fileNameOf
+import dev.supermux.ui.chat.MessageTts
 import dev.supermux.ui.platform.CapturedAudio
 import dev.supermux.ui.platform.ClipboardAccess
 import dev.supermux.ui.platform.FileAccess
@@ -35,7 +39,9 @@ import dev.supermux.ui.platform.MicTrouble
 import dev.supermux.ui.platform.NoticeChannel
 import dev.supermux.ui.platform.PickedFile
 import dev.supermux.ui.platform.SavedFile
+import dev.supermux.ui.platform.SavedPlace
 import dev.supermux.ui.platform.TtsEngine
+import dev.supermux.ui.platform.isGalleryMedia
 import dev.supermux.work.DownloadedFile
 import java.io.File
 import java.io.OutputStream
@@ -51,7 +57,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import dev.supermux.fs.fileNameOf
 
 // ── clipboard ────────────────────────────────────────────────────────────────
 
@@ -126,6 +131,19 @@ internal class AndroidFileAccess(
 
     override suspend fun saveAs(name: String, mime: String, bytes: ByteArray): SavedFile? {
         val safeName = safeFileName(name)
+        // Straight to the gallery or Downloads where the phone allows it (Android 10+), as [saveFile] does.
+        if (mediaStore != null) {
+            return withContext(Dispatchers.IO) {
+                val staged = runCatching {
+                    File(File(context.cacheDir, "attachments").apply { mkdirs() }, safeName).apply { writeBytes(bytes) }
+                }.getOrNull() ?: return@withContext null
+                try {
+                    saveToMediaStore(staged.absolutePath, safeName, mime, mediaStore)
+                } finally {
+                    staged.delete()
+                }
+            }
+        }
         val target = saveHost.save(mime.ifBlank { "application/octet-stream" }, safeName)
             ?: return null
         val written = withContext(Dispatchers.IO) {
@@ -143,18 +161,31 @@ internal class AndroidFileAccess(
      */
     override suspend fun openSaved(saved: SavedFile): Boolean = false
 
-    /** What a finished download offers on a phone: the system's Open and Share, and the SAF save dialog. */
+    /** What a finished download offers on a phone: the system's Open and Share, and Save to the gallery or Downloads. */
     override val fileActions: Set<FileAction> = setOf(FileAction.Open, FileAction.Save, FileAction.Share)
 
+    /** The phone's own shelves (Android 10+: no permission, no dialog); null before, where Save asks where. */
+    private val mediaStore: MediaStoreRows<Uri>? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) AndroidMediaStoreRows(context.contentResolver) else null
+
     /**
-     * Ask where to put the downloaded file (the SAF create-document dialog [saveAs] uses) and stream it into the
-     * document the user chose ([saveStoredFile]). Null: cancelled, failed, or no file on disk to copy.
+     * Save the downloaded file the way a phone does (#95): a picture or a video into the gallery, any other file into
+     * Downloads ([saveToMediaStore]), streamed, with no dialog. Before Android 10 a shared folder needs a storage
+     * permission, so there it asks where (the SAF create-document dialog [saveStoredFile]). Null: cancelled, failed,
+     * or no file on disk to copy.
      */
-    override suspend fun saveFile(file: DownloadedFile): SavedFile? = saveStoredFile<Uri>(
-        file,
-        chooseTarget = { mime, name -> saveHost.save(mime, name) },
-        openTarget = { context.contentResolver.openOutputStream(it) },
-    )
+    override suspend fun saveFile(file: DownloadedFile): SavedFile? {
+        val rows = mediaStore
+        if (rows != null) {
+            val stored = file.path ?: return null
+            return withContext(Dispatchers.IO) { saveToMediaStore(stored, file.name, file.mime, rows) }
+        }
+        return saveStoredFile<Uri>(
+            file,
+            chooseTarget = { mime, name -> saveHost.save(mime, name) },
+            openTarget = { context.contentResolver.openOutputStream(it) },
+        )
+    }
 
     /**
      * The downloaded file under its real name ([stageNamed]), offered to the system the way [openExternally] offers
@@ -327,6 +358,84 @@ internal suspend fun <Target : Any> saveStoredFile(
         }.getOrDefault(false)
     }
     return if (copied) SavedFile(name, target.toString()) else null
+}
+
+/** Which of the phone's shared folders a saved file goes to, and how the app tells the user (#95). */
+internal enum class MediaShelf(val relativePath: String, val place: SavedPlace) {
+    Pictures("Pictures/Supermux", SavedPlace.Gallery),
+    Movies("Movies/Supermux", SavedPlace.Gallery),
+    Downloads("Download/Supermux", SavedPlace.Downloads),
+}
+
+/** A picture to Pictures, a video to Movies ([isGalleryMedia]), anything else to Downloads. */
+internal fun mediaShelfFor(mime: String): MediaShelf = when {
+    !isGalleryMedia(mime) -> MediaShelf.Downloads
+    mime.lowercase().startsWith("video/") -> MediaShelf.Movies
+    else -> MediaShelf.Pictures
+}
+
+/**
+ * MediaStore rows, as a seam: only a device has the provider. A row is inserted pending (hidden from the gallery and
+ * other apps), written, then published — or discarded, so a half-written file never shows.
+ */
+internal interface MediaStoreRows<Row : Any> {
+    fun insertPending(shelf: MediaShelf, name: String, mime: String): Row?
+    fun open(row: Row): OutputStream?
+    fun publish(row: Row)
+    fun discard(row: Row)
+}
+
+/**
+ * Copy the file at [stored] into the phone's [mediaShelfFor] shelf under [name], streamed (never whole in memory), and
+ * publish it. Null when the provider would not take a row or the copy failed; the row is then dropped.
+ */
+internal fun <Row : Any> saveToMediaStore(stored: String, name: String, mime: String, rows: MediaStoreRows<Row>): SavedFile? {
+    val safe = safeFileName(name)
+    val type = mime.ifBlank { "application/octet-stream" }
+    val shelf = mediaShelfFor(type)
+    val row = runCatching { rows.insertPending(shelf, safe, type) }.getOrNull() ?: return null
+    val copied = runCatching {
+        File(stored).inputStream().use { input ->
+            val output = rows.open(row) ?: return@use false
+            output.use { input.copyTo(it, COPY_BUFFER_BYTES) }
+            true
+        }
+    }.getOrDefault(false)
+    if (!copied || runCatching { rows.publish(row) }.isFailure) {
+        runCatching { rows.discard(row) }
+        return null
+    }
+    return SavedFile(safe, row.toString(), shelf.place)
+}
+
+/** [MediaStoreRows] over the real provider (Android 10+: RELATIVE_PATH and IS_PENDING). */
+@androidx.annotation.RequiresApi(Build.VERSION_CODES.Q)
+private class AndroidMediaStoreRows(private val resolver: android.content.ContentResolver) : MediaStoreRows<Uri> {
+    override fun insertPending(shelf: MediaShelf, name: String, mime: String): Uri? {
+        val volume = MediaStore.VOLUME_EXTERNAL_PRIMARY
+        val collection = when (shelf) {
+            MediaShelf.Pictures -> MediaStore.Images.Media.getContentUri(volume)
+            MediaShelf.Movies -> MediaStore.Video.Media.getContentUri(volume)
+            MediaShelf.Downloads -> MediaStore.Downloads.getContentUri(volume)
+        }
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+            put(MediaStore.MediaColumns.MIME_TYPE, mime)
+            put(MediaStore.MediaColumns.RELATIVE_PATH, shelf.relativePath)
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        return resolver.insert(collection, values)
+    }
+
+    override fun open(row: Uri): OutputStream? = resolver.openOutputStream(row)
+
+    override fun publish(row: Uri) {
+        resolver.update(row, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
+    }
+
+    override fun discard(row: Uri) {
+        resolver.delete(row, null, null)
+    }
 }
 
 /** Strip any directory part and refuse an empty name — attachment names are broker-supplied. */

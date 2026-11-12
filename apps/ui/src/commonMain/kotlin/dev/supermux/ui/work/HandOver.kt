@@ -2,6 +2,7 @@ package dev.supermux.ui.work
 
 import dev.supermux.ui.platform.FileAction
 import dev.supermux.ui.platform.Platform
+import dev.supermux.ui.platform.SavedFile
 import dev.supermux.work.Download
 import dev.supermux.work.DownloadCenter
 import dev.supermux.work.DownloadState
@@ -16,11 +17,18 @@ import dev.supermux.work.isAvailable
  * Nothing suspends before the platform's own call when the file is a browser Blob (the web), so a bar action
  * started inside the user's gesture is still inside it when the browser looks.
  */
-internal suspend fun handOver(platform: Platform, downloads: DownloadCenter, item: Download, action: FileAction): Boolean {
+internal suspend fun handOver(
+    platform: Platform,
+    downloads: DownloadCenter,
+    item: Download,
+    action: FileAction,
+    /** Where a Save put it, for the caller to say so. */
+    onSaved: (SavedFile) -> Unit = {},
+): Boolean {
     val file = stillThere(platform, downloads, item) ?: return false
     return when (action) {
         FileAction.Open -> open(platform, item, file)
-        FileAction.Save -> platform.files.saveFile(file) != null
+        FileAction.Save -> platform.files.saveFile(file)?.also(onSaved) != null
         FileAction.Share -> platform.files.shareFile(file)
     }
 }
@@ -43,6 +51,18 @@ internal suspend fun handOverAsTapped(platform: Platform, pointer: Boolean, down
         FileAction.Share in actions -> platform.files.shareFile(file)
         else -> false
     }
+}
+
+/**
+ * The Save button's verb, with the downloaded FILE: save it. Not the tap's rule ([handOverAsTapped]), which on a phone
+ * is Open or Share: Save there opened the chooser or the share sheet. Where it goes is the platform's
+ * ([SavedFile.place]). A pointer host then opens what it saved, as its tap does. Null: cancelled, failed or gone.
+ */
+internal suspend fun saveDownload(platform: Platform, pointer: Boolean, downloads: DownloadCenter, item: Download): SavedFile? {
+    val file = stillThere(platform, downloads, item) ?: return null
+    val saved = platform.files.saveFile(file) ?: return null
+    if (pointer) platform.files.openSaved(saved)
+    return saved
 }
 
 /** [item]'s file while it is done and still there. A vanished one fails, so its Retry fetches it again. */

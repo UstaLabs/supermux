@@ -1301,8 +1301,18 @@ jobs:
           fi
           # Upload only when secrets exist AND this run is meant to publish: a v* tag, or a
           # workflow_dispatch where the operator ticked the ios_testflight_upload input.
+          # The repo variable TESTFLIGHT_ON_TAG=off keeps a tag release off TestFlight (Ahmet
+          # decides per release whether iOS goes out); unset, a tag uploads as before.
           upload=0
-          if [ "$have" = 1 ] && { [ "${GITHUB_REF_TYPE}" = "tag" ] || [ "${{ inputs.ios_testflight_upload }}" = "true" ]; }; then
+          tag_upload=0
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            if [ "${{ vars.TESTFLIGHT_ON_TAG }}" = "off" ]; then
+              echo "::notice::TESTFLIGHT_ON_TAG=off: this tag builds the iOS app but does not upload it to TestFlight."
+            else
+              tag_upload=1
+            fi
+          fi
+          if [ "$have" = 1 ] && { [ "$tag_upload" = 1 ] || [ "${{ inputs.ios_testflight_upload }}" = "true" ]; }; then
             upload=1
           fi
           echo "have=$have" >> "$GITHUB_OUTPUT"
