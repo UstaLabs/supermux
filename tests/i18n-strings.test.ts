@@ -60,6 +60,16 @@ test("UI literals are found; tags, templates and marked lines are not", () => {
   expect(kt('    // Text("old")')).toBe(0)
 })
 
+test("a title on the next line and text picked by if/when are found too", () => {
+  const kt = (s: string) => scanText("apps/x/A.kt", s).length
+  expect(kt('    KitToggleRow(\n        "Show replies as they\'re written",\n')).toBe(1)
+  expect(kt('    Text(\n        if (count == 1) "1 new message" else "$count new messages",')).toBe(2)
+  expect(kt('        !offline -> "Connecting…"\n        inChat -> "Offline · messages send when you\'re back"')).toBe(2)
+  // A wire value or an id picked by when is no text: one lowercase word.
+  expect(kt('        LOW -> "low"\n        MEDIUM -> "medium"')).toBe(0)
+  expect(kt('    /* Text("old") */ val x = 1')).toBe(0)
+})
+
 test("parity reports missing, extra and placeholder drift", () => {
   const en = parseCatalog('<resources><string name="a">A %1$s</string><string name="b">B</string><plurals name="n"><item quantity="one">%d x</item><item quantity="other">%d xs</item></plurals></resources>')
   const tr = parseCatalog('<resources><string name="a">A</string><string name="c">C</string><plurals name="n"><item quantity="other">%d x</item></plurals></resources>')

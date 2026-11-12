@@ -117,7 +117,7 @@ private fun themeId(mode: AppearanceMode) = when (mode) {
 }
 
 private fun terminalId(mode: TerminalAppearance) = when (mode) {
-    TerminalAppearance.FOLLOW_APP -> "Match app"
+    TerminalAppearance.FOLLOW_APP -> "Match app" // i18n-ok: a test tag, not shown
     TerminalAppearance.DARK -> "Dark"
     TerminalAppearance.LIGHT -> "Light"
 }
