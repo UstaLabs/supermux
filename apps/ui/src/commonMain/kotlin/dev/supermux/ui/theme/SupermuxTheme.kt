@@ -9,6 +9,7 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalDensity
@@ -17,6 +18,9 @@ import androidx.compose.ui.unit.dp
 import dev.supermux.ui.SupermuxColors
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.i18n.AppLanguage
+import dev.supermux.ui.i18n.ProvideAppLanguage
+import dev.supermux.ui.prefs.LocalUiPrefsOrNull
 import dev.supermux.ui.supermuxDark
 import dev.supermux.ui.supermuxLight
 
@@ -171,7 +175,11 @@ fun SupermuxTheme(
             colorScheme = scheme,
             typography = resolvedTypography,
             shapes = SupermuxShapes,
-            content = content,
-        )
+        ) {
+            // #123: the stored language (Settings › General) applies wherever the app's preferences are installed.
+            val prefs = LocalUiPrefsOrNull.current
+            val language = prefs?.language?.collectAsState(AppLanguage.SYSTEM)?.value ?: AppLanguage.SYSTEM
+            ProvideAppLanguage(language, content)
+        }
     }
 }

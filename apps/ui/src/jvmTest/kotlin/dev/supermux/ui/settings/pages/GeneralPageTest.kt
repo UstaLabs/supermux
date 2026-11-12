@@ -305,6 +305,47 @@ class GeneralPageTest {
         onNode(anchored("cache")).assertDoesNotExist()
     }
 
+    // ── language (#123) ───────────────────────────────────────────────────────────────────────
+
+    @Test fun the_language_follows_the_system_until_someone_chooses() = runComposeUiTest {
+        setPlatformContent { GeneralPage() }
+        onNodeWithTag("general_language_system").assertIsSelected()
+    }
+
+    @Test fun choosing_a_language_persists_it_and_system_clears_it() = runComposeUiTest {
+        val store = FakeSettingsStore()
+        setPlatformContent(uiPrefs = UiPrefs(store)) { SupermuxTheme { GeneralPage() } }
+        waitForIdle()
+        onNodeWithTag("general_language_tr").performScrollTo().performClick()
+        waitForIdle()
+        assertEquals("tr", store.map.value[SettingsKeys.LANGUAGE])
+        onNodeWithTag("general_language_system").performScrollTo().performClick()
+        waitForIdle()
+        assertNull(store.map.value[SettingsKeys.LANGUAGE])
+    }
+
+    /** The theme reads the stored language, so choosing Türkçe repaints this very page in Turkish. */
+    @Test fun choosing_turkish_shows_the_page_in_turkish() = runComposeUiTest {
+        val store = FakeSettingsStore()
+        setPlatformContent(uiPrefs = UiPrefs(store)) { SupermuxTheme { GeneralPage() } }
+        onNodeWithText("Theme").assertExists()
+        onNodeWithTag("general_language_tr").performScrollTo().performClick()
+        waitForIdle()
+        onNodeWithText("Tema").assertExists()
+        onNodeWithText("Theme").assertDoesNotExist()
+        // Tags never translate: UI automation finds the same option in every language.
+        onNodeWithTag("general_theme_Light").assertExists()
+        onNodeWithTag("general_language_tr").assertIsSelected()
+    }
+
+    @Test fun a_stored_language_applies_on_open() = runComposeUiTest {
+        val store = FakeSettingsStore()
+        store.map.value = mapOf(SettingsKeys.LANGUAGE to "tr")
+        setPlatformContent(uiPrefs = UiPrefs(store)) { SupermuxTheme { GeneralPage() } }
+        waitForIdle()
+        onNodeWithText("Yazı boyutu").assertExists()
+    }
+
     @Test fun the_page_is_general_on_this_device() = runComposeUiTest {
         setPlatformContent { GeneralPage() }
         onNodeWithTag("appearance_settings_screen").assertIsDisplayed()

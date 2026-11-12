@@ -1,0 +1,12 @@
+package dev.supermux.ui.i18n
+
+import java.util.Locale
+
+private var system: Locale? = null
+
+/** As on desktop: Compose reads `Locale.getDefault()` (Android's LocaleList follows it). The system's is kept to return to. */
+internal actual fun applyPlatformLanguage(tag: String?) {
+    val home = system ?: Locale.getDefault().also { system = it }
+    val next = tag?.let(Locale::forLanguageTag) ?: home
+    if (Locale.getDefault() != next) Locale.setDefault(next)
+}

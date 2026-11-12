@@ -73,6 +73,8 @@ object SettingsKeys {
     const val DYNAMIC_COLOR = "appearance:dynamicColor"
     /** App-wide text-size multiplier, clamped 0.9..1.3. Default 1.0. */
     const val TEXT_SCALE = "appearance:textScale"
+    /** #123: the app's language as a BCP-47 tag ("en", "tr"). Per device; unset = follow the system. */
+    const val LANGUAGE = "appearance:language"
     /** "true"/"false": the assistant overlay (#62, experimental), the default Agent floating over
      *  other apps. Per device, never synced; unset = off. */
     const val ASSISTANT_OVERLAY = "appearance:assistantOverlay"

@@ -23,6 +23,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import dev.supermux.media.MediaCache
 import dev.supermux.ui.ChatDetailLevel
+import dev.supermux.ui.i18n.AppLanguage
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.platform.AppUpdater
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.prefs.LocalUiPrefs
@@ -40,8 +42,38 @@ import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.TEXT_SCALE_MAX
 import dev.supermux.ui.theme.TEXT_SCALE_MIN
 import dev.supermux.ui.worktree.formatBytes
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.common_clear
+import dev.supermux.ui.resources.common_dark
+import dev.supermux.ui.resources.common_light
+import dev.supermux.ui.resources.common_system
+import dev.supermux.ui.resources.general_cache
+import dev.supermux.ui.resources.general_cache_calculating
+import dev.supermux.ui.resources.general_cache_clearing
+import dev.supermux.ui.resources.general_cache_empty
+import dev.supermux.ui.resources.general_cache_empty_session
+import dev.supermux.ui.resources.general_cache_size_kept
+import dev.supermux.ui.resources.general_cache_size_session
+import dev.supermux.ui.resources.general_chat_detail
+import dev.supermux.ui.resources.general_chat_detail_description
+import dev.supermux.ui.resources.general_chat_detail_high
+import dev.supermux.ui.resources.general_chat_detail_low
+import dev.supermux.ui.resources.general_chat_detail_medium
+import dev.supermux.ui.resources.general_language
+import dev.supermux.ui.resources.general_language_description
+import dev.supermux.ui.resources.general_live_replies
+import dev.supermux.ui.resources.general_live_replies_description
+import dev.supermux.ui.resources.general_terminal_colours
+import dev.supermux.ui.resources.general_terminal_colours_description
+import dev.supermux.ui.resources.general_terminal_match_app
+import dev.supermux.ui.resources.general_text_size
+import dev.supermux.ui.resources.general_text_size_description
+import dev.supermux.ui.resources.general_theme
+import dev.supermux.ui.resources.general_this_app
+import dev.supermux.ui.resources.general_title
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
+import org.jetbrains.compose.resources.StringResource
 
 /**
  * The General page.
@@ -61,7 +93,7 @@ fun GeneralPage(
     updater: AppUpdater = LocalPlatform.current.updates,
 ) {
     KitPage(
-        "General",
+        localized(Res.string.general_title),
         modifier,
         scope = { KitDeviceScope() },
         anchor = anchor,
@@ -69,26 +101,49 @@ fun GeneralPage(
         tag = "appearance_settings_screen",
     ) {
         LookRows(defaultAppearance)
-        KitSectionHead("This app")
+        KitSectionHead(localized(Res.string.general_this_app))
         AppUpdateRows(updater = updater)
         if (cache != null) CacheRow(cache)
     }
 }
 
-/** An option's tag: `general_‹anchor›_‹its visible label›`. */
+/** An option's tag: `general_‹anchor›_‹its English label›` — never translated, so UI automation works in any language. */
 private fun optionTag(anchor: String): (String) -> String = { "general_${anchor}_$it" }
 
-private fun themeLabel(mode: AppearanceMode) = when (mode) {
+private fun themeId(mode: AppearanceMode) = when (mode) {
     AppearanceMode.SYSTEM -> "System"
     AppearanceMode.LIGHT -> "Light"
     AppearanceMode.DARK -> "Dark"
 }
 
-private fun terminalLabel(mode: TerminalAppearance) = when (mode) {
+private fun terminalId(mode: TerminalAppearance) = when (mode) {
     TerminalAppearance.FOLLOW_APP -> "Match app"
     TerminalAppearance.DARK -> "Dark"
     TerminalAppearance.LIGHT -> "Light"
 }
+
+private fun themeRes(mode: AppearanceMode) = when (mode) {
+    AppearanceMode.SYSTEM -> Res.string.common_system
+    AppearanceMode.LIGHT -> Res.string.common_light
+    AppearanceMode.DARK -> Res.string.common_dark
+}
+
+private fun terminalRes(mode: TerminalAppearance) = when (mode) {
+    TerminalAppearance.FOLLOW_APP -> Res.string.general_terminal_match_app
+    TerminalAppearance.DARK -> Res.string.common_dark
+    TerminalAppearance.LIGHT -> Res.string.common_light
+}
+
+private fun chatDetailRes(level: ChatDetailLevel) = when (level) {
+    ChatDetailLevel.LOW -> Res.string.general_chat_detail_low
+    ChatDetailLevel.MEDIUM -> Res.string.general_chat_detail_medium
+    ChatDetailLevel.HIGH -> Res.string.general_chat_detail_high
+}
+
+/** Each option's label in the current language, looked up once so the kit's plain `(T) -> String` can read it. */
+@Composable
+private fun <T> labels(options: List<T>, res: (T) -> StringResource): Map<T, String> =
+    options.associateWith { localized(res(it)) }
 
 @Composable
 private fun LookRows(defaultAppearance: AppearanceMode) {
@@ -98,6 +153,7 @@ private fun LookRows(defaultAppearance: AppearanceMode) {
     val terminalAppearance by prefs.terminalAppearance.collectAsState(TerminalAppearance.FOLLOW_APP)
     val storedTextScale by prefs.textScale.collectAsState(TEXT_SCALE_DEFAULT)
     val liveReplies by prefs.liveReplies.collectAsState(true)
+    val language by prefs.language.collectAsState(AppLanguage.SYSTEM)
     val chatDetail by prefs.chatDetailLevel.collectAsState(ChatDetailLevel.MEDIUM)
     // The slider is DRAGGED, so it cannot be driven by the persisted value: a write per step of the gesture is a
     // disk write per frame, and the knob would lag the finger by a round trip through the store. The drag lives
@@ -109,17 +165,29 @@ private fun LookRows(defaultAppearance: AppearanceMode) {
         if (draggedTextScale == storedTextScale) draggedTextScale = null
     }
 
+    val themeNames = labels(AppearanceMode.entries, ::themeRes)
     KitOptionsRow(
-        "Theme",
+        localized(Res.string.general_theme),
         AppearanceMode.entries,
         appearance,
         onSelect = { scope.launch { prefs.putAppearance(it) } },
-        optionLabel = ::themeLabel,
+        optionLabel = { themeNames.getValue(it) },
         modifier = Modifier.kitAnchor("theme").testTag("general_theme"),
-        optionTag = { optionTag("theme")(themeLabel(it)) },
+        optionTag = { optionTag("theme")(themeId(it)) },
+    )
+    val systemName = localized(Res.string.common_system)
+    KitOptionsRow(
+        localized(Res.string.general_language),
+        AppLanguage.entries,
+        language,
+        onSelect = { scope.launch { prefs.putLanguage(it) } },
+        optionLabel = { if (it == AppLanguage.SYSTEM) systemName else it.endonym },
+        modifier = Modifier.kitAnchor("language").testTag("general_language"),
+        description = localized(Res.string.general_language_description),
+        optionTag = { "general_language_${it.tag ?: "system"}" },
     )
     KitSliderRow(
-        "Text size",
+        localized(Res.string.general_text_size),
         value = textScale,
         // Snapped to whole 5 % steps here too, so the stored value stays clean ("1.2", not "1.2000000476").
         onChange = { draggedTextScale = (it * 20).roundToInt() / 20f },
@@ -127,7 +195,7 @@ private fun LookRows(defaultAppearance: AppearanceMode) {
         step = 0.05f,
         valueText = "${(textScale * 100).roundToInt()}%",
         modifier = Modifier.kitAnchor("text-size").testTag("general_text-size"),
-        description = "Scales all text in the app.",
+        description = localized(Res.string.general_text_size_description),
         sliderTag = "appearance_text_scale_slider",
         onChangeFinished = {
             val picked = draggedTextScale
@@ -142,31 +210,33 @@ private fun LookRows(defaultAppearance: AppearanceMode) {
     )
     // Card #76: replies stream in under the ink edge by default; off, they appear once finished.
     KitToggleRow(
-        "Show replies as they're written",
+        localized(Res.string.general_live_replies),
         checked = liveReplies,
         onCheckedChange = { on -> scope.launch { prefs.putLiveReplies(on) } },
         modifier = Modifier.kitAnchor("live-replies").testTag("appearance_live_replies_switch"),
-        description = "Off: a reply appears once the agent has finished it.",
+        description = localized(Res.string.general_live_replies_description),
     )
+    val detailNames = labels(ChatDetailLevel.entries, ::chatDetailRes)
     KitOptionsRow(
-        "Chat detail",
+        localized(Res.string.general_chat_detail),
         ChatDetailLevel.entries,
         chatDetail,
         onSelect = { scope.launch { prefs.putChatDetailLevel(it) } },
-        optionLabel = { it.label },
+        optionLabel = { detailNames.getValue(it) },
         modifier = Modifier.kitAnchor("chat-detail").testTag("general_chat-detail"),
-        description = "How much of each tool call a chat shows.",
+        description = localized(Res.string.general_chat_detail_description),
         optionTag = { optionTag("chat-detail")(it.label) },
     )
+    val terminalNames = labels(TerminalAppearance.entries, ::terminalRes)
     KitOptionsRow(
-        "Terminal colours",
+        localized(Res.string.general_terminal_colours),
         TerminalAppearance.entries,
         terminalAppearance,
         onSelect = { scope.launch { prefs.putTerminalAppearance(it) } },
-        optionLabel = ::terminalLabel,
+        optionLabel = { terminalNames.getValue(it) },
         modifier = Modifier.kitAnchor("terminal-colours").testTag("general_terminal-colours"),
-        description = "Programs that pick their own colours keep them.",
-        optionTag = { optionTag("terminal-colours")(terminalLabel(it)) },
+        description = localized(Res.string.general_terminal_colours_description),
+        optionTag = { optionTag("terminal-colours")(terminalId(it)) },
     )
 }
 
@@ -178,10 +248,10 @@ private fun CacheRow(cache: MediaCache) {
     var clearing by remember { mutableStateOf(false) }
     LaunchedEffect(cache) { size = cache.sizeBytes() }
     val current = size
-    val kept = if (cache.persistent) "kept so they open instantly and offline." else "kept only until this page closes."
+    val sized = if (cache.persistent) Res.string.general_cache_size_kept else Res.string.general_cache_size_session
     KitActionRow(
-        "Cached images and files",
-        button = "Clear",
+        localized(Res.string.general_cache),
+        button = localized(Res.string.common_clear),
         onClick = {
             clearing = true
             scope.launch {
@@ -192,10 +262,12 @@ private fun CacheRow(cache: MediaCache) {
         },
         modifier = Modifier.kitAnchor("cache").testTag("general_cache"),
         description = when {
-            clearing -> "Clearing…"
-            current == null -> "Calculating…"
-            current == 0L -> if (cache.persistent) "Empty" else "Empty. Images and files are $kept"
-            else -> "${formatBytes(current)}, $kept"
+            clearing -> localized(Res.string.general_cache_clearing)
+            current == null -> localized(Res.string.general_cache_calculating)
+            current == 0L -> localized(
+                if (cache.persistent) Res.string.general_cache_empty else Res.string.general_cache_empty_session,
+            )
+            else -> localized(sized, formatBytes(current))
         },
         descriptionTag = "storage_size",
         enabled = !clearing && (current ?: 0L) > 0L,

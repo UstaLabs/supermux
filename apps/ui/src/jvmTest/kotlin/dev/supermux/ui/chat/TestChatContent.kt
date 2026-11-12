@@ -14,6 +14,7 @@ import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.prefs.LocalUiPrefs
+import dev.supermux.ui.prefs.LocalUiPrefsOrNull
 import dev.supermux.ui.prefs.UiPrefs
 
 /**
@@ -59,6 +60,7 @@ internal fun PlatformTestProviders(
         LocalWindowWidthClass provides widthClass,
         LocalInputMode provides inputMode,
         LocalUiPrefs provides uiPrefs,
+        LocalUiPrefsOrNull provides uiPrefs,
     ) {
         content()
     }

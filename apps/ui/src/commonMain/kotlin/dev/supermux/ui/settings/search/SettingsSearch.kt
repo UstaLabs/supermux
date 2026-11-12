@@ -71,6 +71,7 @@ private fun page(section: SettingsSection, keywords: String = "") = SettingsSear
 val SettingsSearchIndex: List<SettingsSearchEntry> = listOf(
     page(SettingsSection.General, "appearance preferences"),
     SettingsSearchEntry(SettingsSection.General, "theme", "Theme", "dark light mode appearance colour"),
+    SettingsSearchEntry(SettingsSection.General, "language", "Language", "locale translation english turkish türkçe dil"),
     SettingsSearchEntry(SettingsSection.General, "text-size", "Text size", "font zoom scale bigger smaller"),
     SettingsSearchEntry(SettingsSection.General, "live-replies", "Show replies as they're written", "stream streaming"),
     SettingsSearchEntry(SettingsSection.General, "chat-detail", "Chat detail", "tools verbose transcript"),
