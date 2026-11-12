@@ -146,6 +146,9 @@ internal fun BrowserToolbar(
     /** Device mode is on (lit), off, or null where it isn't offered (a phone, #122 §3.2). */
     device: Boolean? = null,
     onDevice: () -> Unit = {},
+    /** Pick mode is on (lit), off, or null where it isn't offered (#122 phase 3: no scripts, or a phone for now). */
+    picking: Boolean? = null,
+    onPick: () -> Unit = {},
     /** A phone's "Desktop site" is on (checked), off, or null where it isn't offered (#122 2c). */
     desktopSite: Boolean? = null,
     onDesktopSite: () -> Unit = {},
@@ -225,6 +228,7 @@ internal fun BrowserToolbar(
                     }
                 },
             )
+            picking?.let { on -> BarButton(KitGlyphs.Target, "Comment on the page", "browser-pick", onPick, on = on) }
             device?.let { on -> BarButton(KitGlyphs.Phone, "Device mode", "browser-device", onDevice, on = on) }
             if (!phone) BarButton(KitGlyphs.External, "Open in your browser", "browser-external", onOpenExternally)
             Box {
@@ -235,6 +239,7 @@ internal fun BrowserToolbar(
                         ZoomMenuRow(zoomPercent, onZoom)
                         MenuLine()
                         onScreenshot?.let { send -> MenuRow(KitGlyphs.Camera, "Send screenshot to chat", AppCommands.BrowserScreenshot, "browser-menu-screenshot") { menu = false; send() } }
+                        picking?.let { MenuRow(KitGlyphs.Target, "Comment on the page", AppCommands.BrowserPick, "browser-menu-pick") { menu = false; onPick() } }
                         device?.let { MenuRow(KitGlyphs.Phone, "Device mode", AppCommands.BrowserDeviceMode, "browser-menu-device") { menu = false; onDevice() } }
                         MenuRow(KitGlyphs.Code, "Inspect", AppCommands.BrowserInspect, "browser-menu-inspect") { menu = false; onInspect() }
                         MenuRow(KitGlyphs.External, "Open in your browser", AppCommands.BrowserOpenExternally, "browser-menu-external") { menu = false; onOpenExternally() }

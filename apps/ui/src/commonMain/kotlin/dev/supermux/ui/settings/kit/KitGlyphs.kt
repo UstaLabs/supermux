@@ -18,6 +18,8 @@ object KitGlyphs {
     val Camera by lazy {
         glyph("camera", "M4 8.5A1.5 1.5 0 0 1 5.5 7h2.2l1.5-2h5.6l1.5 2h2.2A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z", circle(12f, 12.8f, 3.3f))
     }
+    /** A target: pick an element to comment on (#122). */
+    val Target by lazy { glyph("target", circle(12f, 12f, 7f), circle(12f, 12f, 2.5f), "M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3") }
     /** A fingertip's press: device mode's touch (#122). */
     val Touch by lazy { glyph("touch", "M9 11V5.5a1.5 1.5 0 0 1 3 0V11", "M12 10.5a1.5 1.5 0 0 1 3 0V12", "M15 11.5a1.5 1.5 0 0 1 3 0v3.5a6 6 0 0 1-6 6h-.5a6 6 0 0 1-4.6-2.2L4.5 15.5a1.5 1.5 0 0 1 2.3-1.9L9 16") }
     /** A phone on its side under a turning arrow: device mode's rotate (#122). */
@@ -114,7 +116,7 @@ object KitGlyphs {
         listOf(
             Back, Chevron, ChevronDown, Close, Plus, Check, Search, Sliders, Keyboard, Mic, Terminal, Download,
             Laptop, Server, Bot, Memory, Branch, Code, Devices, Link, Tree, Shield, Flask, Restart, Disk, Gauge,
-            Trash, External, Globe, User, Key, Phone, Qr, Warn, Copy, More, Lock, Forward, ChevronUp, Minus, Camera, Rotate, Touch,
+            Trash, External, Globe, User, Key, Phone, Qr, Warn, Copy, More, Lock, Forward, ChevronUp, Minus, Camera, Rotate, Touch, Target,
         )
     }
 

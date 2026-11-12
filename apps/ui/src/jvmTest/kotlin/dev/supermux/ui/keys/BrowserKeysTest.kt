@@ -65,6 +65,12 @@ class BrowserKeysTest {
         assertEquals(setOf(keys("Mod-Shift-m", true)), apple(AppCommands.BrowserDeviceMode))
     }
 
+    /** #122 3a: DevTools' inspect-element chord picks an element to comment on (Q5). */
+    @Test fun pickIsModShiftC() {
+        assertEquals(setOf(keys("Ctrl-Shift-c", false)), other(AppCommands.BrowserPick))
+        assertEquals(setOf(keys("Mod-Shift-c", true)), apple(AppCommands.BrowserPick))
+    }
+
     @Test fun escapeStopsLoading() {
         assertEquals(setOf(keys("Escape", false)), other(AppCommands.BrowserStop))
         assertEquals(setOf(keys("Escape", true)), apple(AppCommands.BrowserStop))
@@ -72,7 +78,7 @@ class BrowserKeysTest {
 
     @Test fun everyBrowserCommandIsListedAndBound() {
         val browser = AppCommands.all.filter { it.group == CommandGroup.Browser }
-        assertEquals(13, browser.size)
+        assertEquals(14, browser.size)
         for (c in browser) assertTrue(DefaultKeymap.chordsFor(c, KeyOs.Other).isNotEmpty(), c.id)
     }
 

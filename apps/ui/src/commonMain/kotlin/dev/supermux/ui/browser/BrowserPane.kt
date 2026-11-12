@@ -142,6 +142,9 @@ fun BrowserPane(
     val phone = phoneChrome()
     var deviceOn by remember(view.id) { mutableStateOf(false) }
     var device by remember(view.id) { mutableStateOf(DeviceMode.Default) }
+    // Pick and comment (#122 phase 3): pick mode and its pins, per tab and per client. Desktop first (3c brings touch).
+    val pick = remember(view.id) { PickState() }
+    val pickOffered = !phone && platform.caps.pagePick
     // A phone's "Desktop site" (#122 2c), per tab and per client, where the engine can do it.
     var desktopSite by remember(view.id) { mutableStateOf(false) }
 
@@ -312,6 +315,7 @@ fun BrowserPane(
     RegisterCommand(AppCommands.BrowserInspect) { inspectKey() }
     RegisterCommand(AppCommands.BrowserScreenshot, enabled = toChat != null) { sendScreenshot() }
     RegisterCommand(AppCommands.BrowserDeviceMode, enabled = !phone) { deviceOn = !deviceOn; true }
+    RegisterCommand(AppCommands.BrowserPick, enabled = pickOffered) { pick.on = !pick.on; if (!pick.on) pick.hover = null; true }
     val screenshotAction: (() -> Unit)? = if (toChat != null) { { sendScreenshot() } } else null
     // Esc stops a loading page; on a loaded one it declines, so the page keeps it.
     RegisterCommand(AppCommands.BrowserStop) {
@@ -368,6 +372,8 @@ fun BrowserPane(
             onScreenshot = screenshotAction,
             device = deviceOn.takeUnless { phone },
             onDevice = { deviceOn = !deviceOn },
+            picking = pick.on.takeIf { pickOffered },
+            onPick = { pick.on = !pick.on; if (!pick.on) pick.hover = null },
             desktopSite = desktopSite.takeIf { desktopSiteOffered },
             onDesktopSite = { desktopSite = !desktopSite },
         )
@@ -375,6 +381,7 @@ fun BrowserPane(
             device, emulation = platform.caps.pageEmulation, scale = stageScale.takeIf { fitting }, ratioAndTouch = emulates,
             onChange = { device = it }, onClose = { deviceOn = false },
         )
+        if (pick.on) PickStrip()
         notice?.let { text ->
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp).testTag("browser-notice"), verticalAlignment = Alignment.CenterVertically) {
                 Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
@@ -386,8 +393,12 @@ fun BrowserPane(
                 BrowserBody.NewTab -> BrowserMessage("Type a site, or a port such as 5173.", "browser-new-tab")
                 is BrowserBody.Said -> BrowserMessage(b.message, "browser-said")
                 is BrowserBody.Page -> {
-                    if (deviceOn && !phone) DeviceStage(device, fit = fitting, onScale = { stageScale = it }) { livePage(pageSettings, keepRunning) }
-                    else Box(Modifier.fillMaxSize().testTag("browser-viewport")) { livePage(pageSettings, keepRunning) }
+                    val pageAndPicks = @Composable {
+                        livePage(pageSettings, keepRunning)
+                        if (pickOffered) PickLayers(pick, state.navigator)
+                    }
+                    if (deviceOn && !phone) DeviceStage(device, fit = fitting, onScale = { stageScale = it }) { pageAndPicks() }
+                    else Box(Modifier.fillMaxSize().testTag("browser-viewport")) { pageAndPicks() }
                     (state.phase as? WebViewPhase.Unavailable)?.let { unavailable ->
                         BrowserMessage(
                             "This device can't show web pages in a tab" + (unavailable.detail?.let { ": $it" } ?: "."),
@@ -407,6 +418,7 @@ fun BrowserPane(
                 )
             }
         }
+        if (pick.commented.isNotEmpty()) PickSendBar(pick)
     }
     }
 }
