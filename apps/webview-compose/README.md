@@ -472,6 +472,35 @@ hostBridge.post('clicked', { at: Date.now() });
   - Names starting with `$` are the library's. `bridge.droppedMessages` counts what was dropped.
 - A page's own `call` times out after 30 s by default.
 
+### A send that must follow a click on a button
+
+`bridge.handleAfterButtonClick(method) { params, clicked -> … }` answers the page's `hostBridge.callAfterClick(method,
+params)` (a Promise, like `call`), and says whether the user just clicked a button in that page for it. Supermux's html
+cards send this way (spec open decision 4, option c). The rule is the same on every engine:
+
+- A call counts only within **1 s** of a **trusted click** on a `button` or `input[type=button|submit]` of that
+  document: a tap, a mouse click, Enter or Space on a focused button, or a screen reader's activation (VoiceOver,
+  TalkBack, Narrator click the button but deliver no input to the view, and still count). `[role=button]` doesn't count:
+  a page can put it on its whole body.
+- Each `callAfterClick` **takes** the click, counted or not: one click, one call. Where the engine has
+  `navigator.userActivation`, its transient activation must hold at call time; where it hasn't, it isn't required.
+- So a call on load, from a timer or a promise with no click, after a script-made `el.click()` or `dispatchEvent`,
+  after a click that isn't on a button or a key that isn't a click, after the window, a second call from one click, a
+  call from another view's page, and a plain `call` of the method all get `clicked = false`. The handler still runs, so
+  it can answer `{ok: false, reason}`.
+- The verdict is made out of the page's reach, as the call leaves the page:
+  - **WebKit (iOS, macOS, Linux):** by the relay, in the engine's own content world, from the clicks and the
+    activation it sees there. It replaces the verdict the page's world put on the call, and forwards each message (but a
+    `$ready`, up to the calls' 64 KiB cap) as it parsed it, so the host reads exactly what it judged.
+  - **Android, Windows, the web:** by the shim, which runs in the page's world before any page script. It listens for
+    `click` on the window as it captures, first of all listeners there; `isTrusted` is an unforgeable own property of
+    each event; it reads the target, the node type, `closest` and the `userActivation` getters through references it
+    captured at install (`Reflect.apply` too); and it sends every message as an object with no prototype, so a page's
+    `Object.prototype.toJSON` or accessors can neither add a verdict nor read the nonce. Its channel to the host is
+    one the page can't reach (WebView's channel needs the epoch's token, WebView2's is taken off the window, the web's
+    is a private `MessagePort`).
+- The host's input stamp (below) plays no part.
+
 ### A send that must follow the user's input
 
 `bridge.handleWithUserInput(method) { params, fromUserInput -> … }` answers a page call and says whether it may count
@@ -490,7 +519,7 @@ per view):
   library's own content world); the web, the shim's trusted press or key, **and** the browser's transient activation at
   the app's window, **and** no input in the app outside the frame since (the frame is the last thing touched).
 - Assistive activation (VoiceOver, TalkBack, Narrator) reaches the page as a click and delivers no input to the view, so
-  it is refused (spec open decision 4).
+  it is refused here. A send it should allow uses `handleAfterButtonClick` (above).
 
 
 ## Overlays and scrims

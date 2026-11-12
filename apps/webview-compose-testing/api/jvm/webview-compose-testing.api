@@ -40,6 +40,8 @@ public final class dev/supermux/webview/testing/FakeWebEngine : dev/supermux/web
 	public synthetic fun <init> (ILdev/supermux/webview/engine/EmbeddingMode;Ldev/supermux/webview/testing/FakeEngineBehavior;Ldev/supermux/webview/engine/EngineConfig;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun Surface (Landroidx/compose/ui/Modifier;Landroidx/compose/runtime/Composer;I)V
 	public fun applyOverlays (Ldev/supermux/webview/runtime/OverlayCutouts;)V
+	public final fun callFromPage (JLjava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/Boolean;)Z
+	public static synthetic fun callFromPage$default (Ldev/supermux/webview/testing/FakeWebEngine;JLjava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/Boolean;ILjava/lang/Object;)Z
 	public fun clearFind ()V
 	public fun configure (Ldev/supermux/webview/engine/PageSetup;)V
 	public final fun emit (Ldev/supermux/webview/engine/EngineEvent;)V

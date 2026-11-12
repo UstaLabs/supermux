@@ -178,6 +178,9 @@ public class WebBridge internal constructor(
 
     /** Methods that ask whether the call followed the user's input ([handleWithUserInput]). */
     private val inputMethods = HashMap<String, suspend (JsonElement, Boolean) -> JsonElement>()
+
+    /** Methods that get the page's click verdict ([handleAfterButtonClick]). */
+    private val clickMethods = HashMap<String, suspend (JsonElement, Boolean) -> JsonElement>()
     private val listeners = HashMap<String, MutableList<(JsonElement) -> Unit>>()
     private val messageBudget = TokenBucket(limits.messagesPerSecond, limits.messageBurst, clock)
     private val charBudget = TokenBucket(limits.charsPerSecond, limits.charBurst, clock)
@@ -330,6 +333,7 @@ public class WebBridge internal constructor(
      */
     public fun handle(method: String, handler: suspend (JsonElement) -> JsonElement): () -> Unit {
         inputMethods.remove(method)
+        clickMethods.remove(method)
         methods[method] = handler
         return { if (methods[method] === handler) methods.remove(method) }
     }
@@ -344,12 +348,39 @@ public class WebBridge internal constructor(
      * Nothing the page does is input: a call on load, from a timer or a promise, or after a script-made `click()` or
      * `dispatchEvent`, gets false, and so does one from an engine that can't tell of input. [handler] still runs, so it
      * can refuse with a reason. A call that is dropped (another document, over a limit) takes no input.
-     * Replaces any [handle] or [handleWithUserInput] for [method], and is replaced by one.
+     * Replaces any [handle], [handleWithUserInput] or [handleAfterButtonClick] for [method], and is replaced by one.
+     *
+     * Assistive activation (VoiceOver, TalkBack, Narrator) clicks in the page but delivers no input to the view, so it
+     * gets false here; [handleAfterButtonClick] counts it.
      */
     public fun handleWithUserInput(method: String, handler: suspend (params: JsonElement, fromUserInput: Boolean) -> JsonElement): () -> Unit {
         methods.remove(method)
+        clickMethods.remove(method)
         inputMethods[method] = handler
         return { if (inputMethods[method] === handler) inputMethods.remove(method) }
+    }
+
+    /**
+     * Answers the page's `hostBridge.callAfterClick(method, …)` and says whether the user clicked a button in that
+     * document for it, such as a card's click-to-send. [handler]'s `clicked` is the verdict the page side made as the call
+     * left: true only if a trusted click (one the engine made: a tap, a mouse click, Enter or Space on a focused button, a
+     * screen reader's activation) on a `button` or `input[type=button|submit]` of that document came within 1 s before
+     * the call, no other `callAfterClick` took it (one click, one call), and the engine reports transient user activation
+     * at call time where it has `navigator.userActivation`.
+     *
+     * The verdict is made out of the page's reach: on WebKit (iOS, macOS, Linux) by the relay in the engine's own content
+     * world, which replaces whatever the page's world said; elsewhere by the shim, with the accessors it captured before
+     * any page script ran. A call on load, from a timer or a promise with no click, after a script-made `click()` or
+     * `dispatchEvent`, after a click that isn't on a button, after the window, or from another view's page gets false;
+     * so does a plain `hostBridge.call` of [method]. The host's input stamp plays no part. [handler] still runs, so it can
+     * refuse with a reason.
+     * Replaces any [handle], [handleWithUserInput] or [handleAfterButtonClick] for [method], and is replaced by one.
+     */
+    public fun handleAfterButtonClick(method: String, handler: suspend (params: JsonElement, clicked: Boolean) -> JsonElement): () -> Unit {
+        methods.remove(method)
+        inputMethods.remove(method)
+        clickMethods[method] = handler
+        return { if (clickMethods[method] === handler) clickMethods.remove(method) }
     }
 
     /**
@@ -661,17 +692,24 @@ public class WebBridge internal constructor(
         }
         conn.callsInFlight++
         val owner = generation
-        val inputHandler = if (call.method.startsWith("$")) null else inputMethods[call.method]
+        val reservedName = call.method.startsWith("$")
+        val inputHandler = if (reservedName) null else inputMethods[call.method]
+        val clickHandler = if (reservedName) null else clickMethods[call.method]
         // Decided now, as the call arrives: the handler may run later, and the window is the page's, not the handler's.
         val fromUserInput = inputHandler != null && conn.userInput()
+        val clicked = call.clicked == true
         conn.scope.launch {
             val reply = try {
                 val handler = methods[call.method]
-                if ((handler == null && inputHandler == null) || call.method.startsWith("$")) {
+                if ((handler == null && inputHandler == null && clickHandler == null) || reservedName) {
                     BridgeMessage.Reply(call.id, error = "no such method: ${call.method}")
                 } else {
                     withTimeoutOrNull(limits.handlerTimeoutMillis) {
-                        if (inputHandler != null) inputHandler(call.params, fromUserInput) else handler!!(call.params)
+                        when {
+                            clickHandler != null -> clickHandler(call.params, clicked)
+                            inputHandler != null -> inputHandler(call.params, fromUserInput)
+                            else -> handler!!(call.params)
+                        }
                     }
                         ?.let { BridgeMessage.Reply(call.id, result = it) }
                         ?: BridgeMessage.Reply(call.id, error = "timeout")

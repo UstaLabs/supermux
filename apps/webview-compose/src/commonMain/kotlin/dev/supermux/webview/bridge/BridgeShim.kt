@@ -24,6 +24,10 @@ import dev.supermux.webview.engine.WebEngineSpi
  * Page API:
  * - `call(method, params)` returns a Promise. It rejects if the call can't be sent, the host doesn't answer in time,
  *   or the page is restored from the back-forward cache meanwhile.
+ * - `callAfterClick(method, params)` is `call`, carrying the shim's click verdict (`c`) for the host's
+ *   [WebBridge.handleAfterButtonClick]: true only if a trusted click on a `button` or `input[type=button|submit]` of this
+ *   document came within the last second, no other `callAfterClick` took it, and `navigator.userActivation.isActive`
+ *   holds (where the engine has it). Each one takes the click, true or not.
  * - `post(name, data)` returns whether it was sent.
  * - `on(name, fn)` and `handle(method, fn)` each return a function that undoes them.
  * - `onSaveState(fn)` registers what to keep while the view is cold. `onRestoreState(fn)` gets it back, even when
@@ -43,6 +47,16 @@ import dev.supermux.webview.engine.WebEngineSpi
  *
  * It captures built-ins at install (`JSON`, `Promise`, `Error`, `TypeError`, timers…), so pages that replace them or
  * patch prototypes later can't break it: its rejections stay real errors. Nothing here names the host app.
+ *
+ * The click proof runs before any page script, in the page's world on engines that have no other (Android, Windows,
+ * the web), so a page can't fake a click:
+ * - it listens for `click` on the window as it captures, first of all listeners there, and counts an event only if it
+ *   is trusted (`isTrusted` is an unforgeable own property of each event);
+ * - it reads the event's target, the node's type, `closest` and the `userActivation` getters through references it
+ *   captured at install (`Reflect.apply` too), never through the prototypes a page can redefine;
+ * - every message it sends is an object with no prototype, so a page's `Object.prototype.toJSON` or accessors can't
+ *   rewrite it (to add a verdict) or read its nonce.
+ * On WebKit the relay, in the engine's own world, makes the verdict again and replaces this one.
  */
 @WebEngineSpi
 public object BridgeShim {
@@ -76,6 +90,31 @@ public object BridgeShim {
   var MAX_MESSAGE = __MAX_MESSAGE__, MAX_REPLY = __MAX_REPLY__, CALL_TIMEOUT = __CALL_TIMEOUT__, CONSOLE_MAX = __CONSOLE_MAX__;
   var stringify = JSON.stringify, parse = JSON.parse, P = Promise, Err = Error, TypeErr = TypeError, setTimer = setTimeout, clearTimer = clearTimeout;
   var defineProperty = Object.defineProperty, create = Object.create, freeze = Object.freeze, now = Date.now, isArray = Array.isArray;
+  var apply = Reflect.apply, setProto = Object.setPrototypeOf, getOwn = Object.getOwnPropertyDescriptor, nav = navigator;
+  function getterOf(o, key) { try { var d = o && getOwn(o, key); return d && typeof d.get === 'function' ? d.get : null; } catch (e) { return null; } }
+  var trustedOf = getterOf(new Event('x'), 'isTrusted'), targetOf = getterOf(Event.prototype, 'target');
+  var nodeTypeOf = getterOf(Node.prototype, 'nodeType'), closest = Element.prototype.closest;
+  var activationOf = typeof Navigator === 'function' ? getterOf(Navigator.prototype, 'userActivation') : null;
+  var activeOf = typeof UserActivation === 'function' ? getterOf(UserActivation.prototype, 'isActive') : null;
+  var BUTTON = 'button, input[type="button"], input[type="submit"]', CLICK_WINDOW = 1000, clickAt = -1e9, clicked = false;
+  apply(EventTarget.prototype.addEventListener, window, ['click', function (e) {
+    try {
+      if ((trustedOf ? apply(trustedOf, e, []) : e.isTrusted) !== true) return;
+      var t = apply(targetOf, e, []);
+      if (t && apply(nodeTypeOf, t, []) === 1 && apply(closest, t, [BUTTON])) { clickAt = now(); clicked = true; }
+    } catch (x) {}
+  }, true]);
+  // Where the engine has no userActivation, it isn't required.
+  function activated() {
+    if (!activationOf || !activeOf) return true;
+    try { return apply(activeOf, apply(activationOf, nav, []), []) === true; } catch (e) { return false; }
+  }
+  // Takes the click: one click, one callAfterClick.
+  function takeClick() {
+    var was = clicked, age = now() - clickAt;
+    clicked = false;
+    return was && age >= 0 && age <= CLICK_WINDOW && activated();
+  }
   var raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : function (f) { return setTimer(f, 16); };
   var nextId = 1, pending = create(null), listeners = create(null), methods = create(null);
   var saveProvider = null, restoreListener = null, restored = null, hasRestored = false;
@@ -84,7 +123,7 @@ public object BridgeShim {
     catch (e) { return String(Math.random()).slice(2) + String(now()); }
   }
   var documentNonce = nonce(), lastSpokeUp = -1e9;
-  function announce() { out({ t: 'event', n: '${'$'}ready', d: { nonce: documentNonce }, from: documentNonce }); }
+  function announce() { out({ t: 'event', n: '${'$'}ready', d: bare({ nonce: documentNonce }), from: documentNonce }); }
   function tellSaveProvider() { out({ t: 'event', n: '${'$'}saveStateProvider', d: true, from: documentNonce }); }
   // The host wrote to another document, so the nonce it has for this one is stale (its announcement was lost, say).
   // Announce again, at most once a second; the host ignores an announcement it already has.
@@ -94,9 +133,11 @@ public object BridgeShim {
     lastSpokeUp = t;
     announce();
   }
+  // An object of the shim's with no prototype: stringify finds no toJSON or accessor of the page's on it.
+  function bare(o) { setProto(o, null); return o; }
   function out(msg, limit) {
     var text;
-    try { text = stringify(msg); } catch (e) { return false; }
+    try { text = stringify(bare(msg)); } catch (e) { return false; }
     if (typeof text !== 'string' || text.length > (limit || MAX_MESSAGE)) return false;
     try { send(text); return true; } catch (e) { return false; }
   }
@@ -172,22 +213,28 @@ public object BridgeShim {
     if (reserved(name)) throw new TypeErr('hostBridge.' + api + ': names starting with $ are reserved');
     if (needsFunction && typeof fn !== 'function') throw new TypeErr('hostBridge.' + api + ': the second argument must be a function');
   }
+  // A call to the host; with the click verdict when [afterClick] (callAfterClick). Literals only: assigning a
+  // property could run a setter the page put on Object.prototype.
+  function request(api, method, params, afterClick) {
+    if (reserved(method)) return P.reject(new TypeErr('hostBridge.' + api + ': names starting with $ are reserved'));
+    var verdict = afterClick ? takeClick() : false;
+    var id = nextId++, p = params === undefined ? null : params;
+    return new P(function (resolve, reject) {
+      var timer = setTimer(function () {
+        if (pending[id]) { delete pending[id]; reject(new Err('hostBridge: the host did not answer in time')); }
+      }, CALL_TIMEOUT);
+      pending[id] = { resolve: resolve, reject: reject, timer: timer };
+      var msg = afterClick ? { t: 'call', id: id, m: method, p: p, c: verdict, from: documentNonce } : { t: 'call', id: id, m: method, p: p, from: documentNonce };
+      if (!out(msg)) {
+        delete pending[id];
+        clearTimer(timer);
+        reject(new Err('hostBridge: the call could not be sent (too large, not JSON, or no channel)'));
+      }
+    });
+  }
   var api = freeze({
-    call: function (method, params) {
-      if (reserved(method)) return P.reject(new TypeErr('hostBridge.call: names starting with $ are reserved'));
-      var id = nextId++;
-      return new P(function (resolve, reject) {
-        var timer = setTimer(function () {
-          if (pending[id]) { delete pending[id]; reject(new Err('hostBridge: the host did not answer in time')); }
-        }, CALL_TIMEOUT);
-        pending[id] = { resolve: resolve, reject: reject, timer: timer };
-        if (!out({ t: 'call', id: id, m: method, p: params === undefined ? null : params, from: documentNonce })) {
-          delete pending[id];
-          clearTimer(timer);
-          reject(new Err('hostBridge: the call could not be sent (too large, not JSON, or no channel)'));
-        }
-      });
-    },
+    call: function (method, params) { return request('call', method, params, false); },
+    callAfterClick: function (method, params) { return request('callAfterClick', method, params, true); },
     post: function (name, data) {
       checkName('post', name);
       return out({ t: 'event', n: name, d: data === undefined ? null : data, from: documentNonce });

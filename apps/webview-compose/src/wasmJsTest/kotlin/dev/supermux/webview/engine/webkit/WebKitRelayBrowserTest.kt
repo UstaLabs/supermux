@@ -1,9 +1,15 @@
 package dev.supermux.webview.engine.webkit
 
+import dev.supermux.webview.bridge.BridgeCodec
+import dev.supermux.webview.bridge.BridgeMessage
 import dev.supermux.webview.bridge.WebBridge
+import dev.supermux.webview.bridge.pinnedFrame
+import dev.supermux.webview.bridge.removePinnedFrames
+import dev.supermux.webview.bridge.trustedClick
 import kotlinx.coroutines.await
 import kotlinx.coroutines.test.runTest
 import kotlin.js.Promise
+import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -29,12 +35,14 @@ private fun deliverIn(w: JsAny, body: String, json: String, target: String, name
 class WebKitRelayBrowserTest {
     private val scripts = WebKitScripts("webview", "webview-out-test", "webview-in-test")
 
+    @AfterTest fun clear() = removePinnedFrames()
+
     /**
      * A frame with a fake `window.webkit` message handler, the relay and the shim, for [origins] (default: its own). The
      * relay runs first unless [shimFirst]: WebKit runs the two worlds' document-start scripts in either order.
      */
-    private fun frame(origins: Set<String>? = null, shimFirst: Boolean = false, input: Boolean = false, hints: Boolean = false): JsAny {
-        val w = newFrame()
+    private fun frame(origins: Set<String>? = null, shimFirst: Boolean = false, input: Boolean = false, hints: Boolean = false, pinned: Boolean = false): JsAny {
+        val w = if (pinned) pinnedFrame() else newFrame()
         runIn(w, "window.__posted = []; window.webkit = { messageHandlers: { webview: { postMessage: function (s) { window.__posted.push(s); } } } };")
         val listed = origins ?: setOf(evalIn(w, "self.origin"))
         val relay = scripts.relay(listed, mainFrame = "true", input = input, hints = hints)
@@ -236,5 +244,51 @@ class WebKitRelayBrowserTest {
         val w = frame()
         runIn(w, "window.dispatchEvent(new FocusEvent('focus')); window.dispatchEvent(new FocusEvent('blur'));")
         assertTrue(parsed(w).none { it is RelayMessage.Focus }, "${posted(w)}")
+    }
+
+    // --- Click-to-send: the relay's own verdict (spec open decision 4, option c) ---
+    // On WebKit the shim runs in the page's world, the relay in the engine's own. The relay records trusted clicks on
+    // buttons itself, and puts its own verdict on every callAfterClick it forwards: whatever the page's world said is
+    // replaced. Chrome has one world, so the page here could reach the relay's globals; the iOS app's checks run the
+    // worlds apart.
+
+    private fun calls(w: JsAny): List<BridgeMessage.Call> =
+        parsed(w).filterIsInstance<RelayMessage.Page>().mapNotNull { BridgeCodec.decode(it.json) as? BridgeMessage.Call }
+
+    private fun forge(w: JsAny, json: String) =
+        runIn(w, "document.dispatchEvent(new CustomEvent(${jsString(scripts.outEvent)}, { detail: ${jsString(json)} }));")
+
+    @Test fun aVerdictThePageWorldMadeIsReplacedByTheRelays() = runTest {
+        val w = frame()
+        val from = "x"
+        forge(w, "{\"t\":\"call\",\"id\":7,\"m\":\"send\",\"p\":\"a\",\"c\":true,\"from\":\"$from\"}")
+        forge(w, "{\"t\":\"call\",\"id\":8,\"m\":\"send\",\"p\":\"b\",\"from\":\"$from\",\"c\":true}")
+        forge(w, "{\"t\":\"call\",\"id\":9,\"m\":\"send\",\"p\":\"c\",\"c\":false,\"from\":\"$from\",\"c\":true}")
+        val forged = calls(w).filter { it.id in 7L..9L }
+        assertEquals(listOf<Boolean?>(false, false, false), forged.map { it.clicked }, "${posted(w)}")
+    }
+
+    @Test fun aRealClickOnAButtonIsTheRelaysVerdictOnce() = runTest {
+        val w = frame(pinned = true)
+        runIn(w, "document.body.innerHTML = '<button id=\"b\" style=\"width:120px;height:40px\">Use</button>';" +
+            "document.getElementById('b').onclick = function () { hostBridge.callAfterClick('send', 'one'); hostBridge.callAfterClick('send', 'two'); };")
+        trustedClick(w, "#b")
+        assertEquals(listOf<Boolean?>(true, false), calls(w).map { it.clicked }, "${posted(w)}")
+    }
+
+    @Test fun aClickTheRelayDidNotSeeAsTrustedMakesNoVerdict() = runTest {
+        val w = frame()
+        runIn(w, "document.body.innerHTML = '<button id=\"b\">Use</button>'; var b = document.getElementById('b');" +
+            "b.onclick = function () { hostBridge.callAfterClick('send', 'scripted'); }; b.click();")
+        assertEquals(listOf<Boolean?>(false), calls(w).map { it.clicked })
+    }
+
+    @Test fun otherMessagesPassAsTheShimSentThem() = runTest {
+        val w = frame()
+        runIn(w, "hostBridge.call('x', {c: true, t: 'call'}); hostBridge.post('e', {c: true});")
+        val pages = parsed(w).filterIsInstance<RelayMessage.Page>().map { it.json }
+        assertTrue(pages.any { it.startsWith("{\"t\":\"call\",\"id\":1,\"m\":\"x\",\"p\":{\"c\":true,\"t\":\"call\"},\"from\":") }, "$pages")
+        assertEquals(null, calls(w).single().clicked)
+        assertTrue(pages.any { it.startsWith("{\"t\":\"event\",\"n\":\"e\",\"d\":{\"c\":true}") }, "$pages")
     }
 }
