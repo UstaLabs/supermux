@@ -66,6 +66,11 @@ sealed interface Route {
     @SerialName("usage")
     data object Usage : Route
 
+    /** What's new (#90): [version]'s edition, a full-pane page on every width. */
+    @Serializable
+    @SerialName("whats_new")
+    data class WhatsNew(val version: String) : Route
+
     /**
      * The machine page's Devices (#97 Step 2). Kept so callers, links and saved stacks that name it still land:
      * the shell pushes it as `Settings(Machine, anchor = "devices")` (`canonicalRoute`), never as itself.

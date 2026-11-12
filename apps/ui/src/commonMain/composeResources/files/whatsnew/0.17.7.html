@@ -1,0 +1,692 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What's new in v0.17.7</title>
+<!-- What's new (#90), the v0.17.7 edition. The app reads the manifest below for its card and passes the platform
+     (data-platform), the actions it can take (data-actions) and its theme (--sm-*). Each chapter shows that platform's
+     own UI, rebuilt in HTML; a chapter whose "on" leaves a platform out isn't there at all. -->
+<script type="application/json" id="edition">
+{"version":"0.17.7","chapters":[
+  {"id":"browser","on":["mac","win","android","iphone"]},
+  {"id":"device","on":["mac","win"]},
+  {"id":"cards"},
+  {"id":"instant"},
+  {"id":"resume"},
+  {"id":"restart","on":["mac","win","linux"]},
+  {"id":"settings"},
+  {"id":"signed","on":["win"]}
+]}
+</script>
+<style>
+:root {
+  --fg: var(--sm-fg, oklch(0.94 0.008 120)); --mutedFg: var(--sm-muted-fg, oklch(0.68 0.018 125));
+  --card: var(--sm-card, oklch(0.18 0.008 130)); --border: var(--sm-border, oklch(0.28 0.01 130));
+  --muted: var(--sm-muted, oklch(0.24 0.008 130)); --primary: var(--sm-primary, oklch(0.72 0.105 180));
+  --onPrimary: oklch(0.13 0.018 170); --warning: oklch(0.78 0.12 75); --danger: oklch(0.72 0.18 24);
+  --bg: color-mix(in oklch, var(--card) 70%, black); --chat: color-mix(in oklch, var(--card) 85%, black);
+  --list: color-mix(in oklch, var(--card) 60%, var(--muted)); --rail: var(--card); --header: color-mix(in oklch, var(--card) 90%, black);
+  --work: transparent; --bubble: var(--muted);
+  --hair: color-mix(in oklch, var(--fg) 9%, transparent);
+  --page: oklch(0.985 0.004 105); --pageFg: oklch(0.2 0.01 130);
+}
+html[data-theme="light"] {
+  --onPrimary: oklch(0.985 0.01 180); --warning: oklch(0.66 0.13 75); --danger: oklch(0.54 0.19 27);
+  --bg: color-mix(in oklch, var(--card) 94%, black); --chat: color-mix(in oklch, var(--card) 97%, black);
+  --header: var(--card);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: transparent; }
+body { color: var(--fg); font: 14px/1.45 var(--sm-font, Geist, system-ui, -apple-system, "Segoe UI", sans-serif); -webkit-font-smoothing: antialiased; }
+button { font: inherit; color: inherit; }
+svg.g { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+kbd { font-family: inherit; font-size: 0.92em; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; padding: 0 5px; color: var(--fg); background: var(--card); white-space: nowrap; }
+#root { height: 100%; }
+/* ── the what's-new experience ── */
+.wn { display: flex; width: 100%; height: 100%; background: var(--work); }
+.wn-index { width: 236px; flex: none; padding: 34px 14px 20px 22px; border-right: 1px solid var(--hair); display: flex; flex-direction: column; gap: 2px; }
+.wn-index .v { font-size: 12px; color: var(--mutedFg); margin: 0 0 4px 10px; }
+.wn-index .h { font-size: 15px; font-weight: 600; margin: 0 0 14px 10px; }
+.wn-index a { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 7px; color: var(--mutedFg); text-decoration: none; font-size: 13px; cursor: pointer; }
+.wn-index a svg { transition: color 200ms; }
+.wn-index a:hover { background: var(--muted); color: var(--fg); }
+.wn-index a.on { color: var(--fg); background: var(--muted); } .wn-index a.on svg { color: var(--primary); }
+.wn-index .sp { flex: 1; }
+.wn-index .rn { font-size: 12px; color: var(--mutedFg); padding: 8px 10px; display: flex; gap: 6px; align-items: center; text-decoration: none; }
+.wn-index .rn:hover { color: var(--fg); }
+.wn-main { flex: 1; overflow-y: auto; scroll-behavior: smooth; min-width: 0; }
+html.rm .wn-main { scroll-behavior: auto; }
+.wn-col { max-width: 640px; margin: 0 auto; padding: 40px 32px 60px; }
+.wn-head small { color: var(--mutedFg); font-size: 12.5px; }
+.wn-head h1 { font-size: 30px; font-weight: 600; letter-spacing: -0.02em; margin: 4px 0 6px; }
+.wn-head p { margin: 0 0 30px; color: var(--mutedFg); font-size: 15px; }
+.ch { padding: 6px 0 46px; }
+.ch h2 { font-size: 19px; font-weight: 600; letter-spacing: -0.01em; margin: 18px 0 6px; display: flex; align-items: center; gap: 10px; }
+.ch h2 svg { color: var(--primary); width: 18px; height: 18px; }
+.ch p { margin: 0 0 12px; color: var(--mutedFg); font-size: 14.5px; line-height: 1.55; }
+.try { background: none; border: 0; padding: 0; color: var(--primary); font-weight: 500; font-size: 14px; cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+.try:hover { text-decoration: underline; text-underline-offset: 3px; }
+.also { border-top: 1px solid var(--hair); padding-top: 22px; }
+.also h3 { font-size: 13px; font-weight: 500; color: var(--mutedFg); margin: 0 0 10px; }
+.also .ar { display: flex; gap: 12px; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--hair); font-size: 14px; }
+.also .ar svg { color: var(--mutedFg); }
+.also .ar span { color: var(--mutedFg); margin-left: auto; font-size: 12.5px; text-align: right; }
+.wn-end { margin-top: 26px; display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: var(--mutedFg); flex-wrap: wrap; gap: 10px; }
+.wn-end a { color: var(--mutedFg); display: inline-flex; gap: 6px; align-items: center; }
+.wn-end .done { border: 1px solid var(--border); background: transparent; border-radius: 8px; padding: 7px 14px; cursor: pointer; color: var(--fg); }
+.wn.narrow .wn-index { display: none; }
+.wn.narrow .wn-col { padding: 20px 18px 40px; }
+.wn.narrow .wn-head h1 { font-size: 26px; }
+.wn.narrow .also .ar span { display: none; }
+/* stage: the product in motion, rebuilt in HTML, scaled from a fixed 420×300 scene */
+.stagebox { position: relative; width: 100%; aspect-ratio: 420 / 300; border-radius: 10px; overflow: hidden; border: 1px solid var(--hair); background: var(--bg); }
+.scene { position: absolute; left: 0; top: 0; width: 420px; height: 300px; transform-origin: 0 0; font-size: 11px; line-height: 1.4; }
+.play { position: absolute; right: 10px; bottom: 10px; display: none; align-items: center; gap: 6px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 5px 10px; font-size: 12px; cursor: pointer; color: var(--fg); }
+html.rm .stagebox:not(.playing) .play { display: inline-flex; }
+html.rm .stagebox:not(.playing) .scene *, html.rm .stagebox:not(.playing) .scene { transition: none !important; animation: none !important; }
+
+/* scene kit */
+.scene .mw { position: absolute; inset: 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--chat); overflow: hidden; display: flex; flex-direction: column; transition: opacity 250ms, transform 250ms; }
+.scene .mtabs { height: 26px; flex: none; display: flex; background: var(--rail); border-bottom: 1px solid var(--border); }
+.scene .mtab { display: flex; align-items: center; gap: 5px; padding: 0 10px; color: var(--mutedFg); border-right: 1px solid var(--border); white-space: nowrap; }
+.scene .mtab svg { width: 11px; height: 11px; }
+.scene .mtab.on { background: var(--chat); color: var(--fg); box-shadow: inset 0 -1.5px 0 var(--primary); }
+.scene .mtab.new { max-width: 0; padding: 0; overflow: hidden; border-right-width: 0; transition: max-width 260ms ease; }
+.scene .mtab.new.in { max-width: 140px; padding: 0 10px; border-right-width: 1px; }
+.scene .mbody { flex: 1; position: relative; min-height: 0; overflow: hidden; }
+.scene .pn, .scene .mc, .scene .cp { overflow: hidden; }
+.scene .pn { position: absolute; inset: 0; display: none; flex-direction: column; }
+.scene .pn.on { display: flex; }
+.scene .cp { justify-content: flex-end; gap: 7px; padding: 10px 12px; }
+.scene .b { max-width: 78%; padding: 6px 9px; border-radius: 9px; transition: opacity 220ms, transform 220ms; }
+.scene .b.me { align-self: flex-end; background: var(--primary); color: var(--onPrimary); border-bottom-right-radius: 3px; }
+.scene .b.ag { align-self: flex-start; background: var(--bubble); border-bottom-left-radius: 3px; }
+.scene .b small { display: block; opacity: .75; font-size: 9.5px; }
+.scene .hide { display: none !important; }
+.scene .fade { opacity: 0; transform: translateY(6px); }
+.scene .lnk { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
+.scene .b.me .lnk { color: inherit; }
+.scene .cur { position: absolute; left: 330px; top: 250px; width: 14px; height: 14px; z-index: 50; transition: left 520ms cubic-bezier(.4,.1,.2,1), top 520ms cubic-bezier(.4,.1,.2,1); pointer-events: none; }
+.scene .cur svg { width: 14px; height: 14px; display: block; filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / .45)); }
+.scene .cur::after { content: ""; position: absolute; left: -9px; top: -9px; width: 18px; height: 18px; border-radius: 50%; background: var(--primary); opacity: 0; transform: scale(.4); }
+.scene .cur.tap::after { animation: tap 380ms ease-out; }
+@keyframes tap { 0% { opacity: .55; transform: scale(.4); } 100% { opacity: 0; transform: scale(1.6); } }
+html[data-family="phone"] .scene .cur svg { display: none; }
+html[data-family="phone"] .scene .cur::before { content: ""; position: absolute; left: -9px; top: -9px; width: 18px; height: 18px; border-radius: 50%; background: color-mix(in oklch, var(--fg) 30%, transparent); border: 1px solid color-mix(in oklch, var(--fg) 55%, transparent); }
+.scene .press { filter: brightness(1.15); }
+.scene .ic { width: 20px; height: 20px; display: grid; place-items: center; color: var(--mutedFg); border-radius: 5px; }
+.scene .ic svg { width: 12px; height: 12px; }
+.scene .ic.on { background: var(--muted); color: var(--primary); }
+.scene .composer { padding: 0 10px 9px; }
+.scene .composer div { border: 1px solid var(--border); background: var(--card); border-radius: 9px; padding: 6px 9px; color: var(--mutedFg); }
+.scene .split { flex: 1; display: flex; min-height: 0; }
+.scene .ml { width: 138px; flex: none; background: var(--list); border-right: 1px solid var(--border); padding-top: 4px; }
+.scene .mr { display: flex; align-items: center; gap: 7px; padding: 5px 8px; transition: background 150ms; }
+.scene .mr.on { background: var(--muted); }
+.scene .mr .a { width: 20px; height: 20px; border-radius: 50%; flex: none; display: grid; place-items: center; font-size: 9px; font-weight: 600; color: var(--bg); }
+.scene .mr .t { flex: 1; min-width: 0; } .scene .mr .n { font-weight: 500; }
+.scene .mr .s { color: var(--mutedFg); font-size: 9.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; gap: 3px; align-items: center; }
+.scene .mr .s svg { width: 9px; height: 9px; }
+.scene .badge { background: var(--primary); color: var(--onPrimary); border-radius: 8px; font-size: 9px; padding: 0 5px; font-weight: 600; transition: opacity 200ms; }
+.scene .mc { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+/* phone scenes (300×400) */
+.scene .ps { position: absolute; inset: 0; background: var(--chat); display: flex; flex-direction: column; overflow: hidden; font-size: 12px; transition: opacity 250ms; }
+.scene .pa { height: 40px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 10px; background: var(--header); border-bottom: 1px solid var(--border); }
+.scene .pa svg { width: 15px; height: 15px; color: var(--mutedFg); }
+.scene .pa .tt { font-weight: 600; font-size: 13px; flex: 1; } .scene .pa .tt small { display: block; font-size: 9.5px; color: var(--mutedFg); font-weight: 400; }
+.scene .pa .pill { height: 24px; font-size: 10.5px; }
+.scene .pv { flex: 1; display: none; flex-direction: column; min-height: 0; position: relative; overflow: hidden; } .scene .pv.on { display: flex; }
+.scene .ps .cp { display: flex; flex-direction: column; flex: 1; justify-content: flex-end; gap: 7px; padding: 10px; }
+.scene .ps .mr { padding: 8px 12px; gap: 10px; } .scene .ps .mr .a { width: 30px; height: 30px; font-size: 12px; } .scene .ps .mr .n { font-size: 12.5px; } .scene .ps .mr .s { font-size: 10.5px; }
+.scene .kbk { flex: none; background: var(--muted); display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; padding: 7px 5px 12px; }
+.scene .kbk i { height: 22px; border-radius: 4px; background: var(--card); display: block; }
+.scene .sheet { position: absolute; left: 0; right: 0; bottom: 0; background: var(--card); border-top: 1px solid var(--border); border-radius: 12px 12px 0 0; transform: translateY(105%); transition: transform 280ms cubic-bezier(.2,.8,.2,1); z-index: 20; }
+.scene .sheet.up { transform: none; }
+.scene .sheet .in { padding: 10px; display: flex; gap: 8px; align-items: flex-end; }
+.scene .sheet .ta { flex: 1; min-height: 34px; border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; }
+.scene .sheet .add { background: var(--primary); color: var(--onPrimary); border-radius: 7px; padding: 6px 10px; font-weight: 500; }
+.scene .pstrip { flex: none; padding: 5px 10px; background: color-mix(in oklch, var(--primary) 12%, transparent); font-size: 10.5px; display: flex; justify-content: space-between; align-items: center; }
+.scene .pstrip b { color: var(--primary); font-weight: 500; }
+.scene .addc { position: absolute; background: var(--primary); color: var(--onPrimary); border-radius: 14px; padding: 5px 11px; font-weight: 500; font-size: 11px; box-shadow: 0 4px 12px rgb(0 0 0 / .25); white-space: nowrap; }
+.scene .kbd { position: absolute; left: 50%; top: 48%; transform: translate(-50%, -50%); background: var(--card); border: 1px solid var(--border); border-bottom-width: 3px; border-radius: 9px; padding: 8px 16px; font-size: 19px; font-weight: 500; box-shadow: 0 8px 24px rgb(0 0 0 / .3); z-index: 60; letter-spacing: 0.04em; }
+.scene .prow { display: flex; justify-content: space-between; align-items: center; padding: 9px 12px; border-bottom: 1px solid var(--hair); font-size: 12px; transition: background 200ms; }
+.scene .prow .rs { color: var(--mutedFg); font-size: 10px; } .scene .prow > span { color: var(--mutedFg); }
+.scene .ps .srch { margin: 8px 10px; padding: 6px 9px; font-size: 11.5px; }
+.scene .ps .row { padding: 10px 0; font-size: 12px; }
+.scene .ps .clock { position: static; }
+/* device mode */
+.scene .dstage { flex: 1; display: flex; justify-content: center; background: var(--work); min-height: 0; overflow: hidden; }
+.scene .dp { width: 100%; transition: width 520ms cubic-bezier(.3,.7,.2,1), margin 520ms, border-radius 520ms; border: 1px solid transparent; overflow: hidden; }
+.scene .dstage.mob .dp { width: 150px; margin: 10px 0; border-radius: 14px; border-color: var(--border); }
+.scene .dp .gridc { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-top: 12px; } .scene .dp .gridc i { height: 40px; border-radius: 5px; background: oklch(0.92 0.006 120); display: block; }
+.scene .dstage.mob .dp .gridc { grid-template-columns: 1fr; } .scene .dstage.mob .dp h3 { font-size: 15px; } .scene .dstage.mob .dp .gridc i { height: 22px; }
+.scene .dseg { display: flex; border: 1px solid var(--border); border-radius: 5px; overflow: hidden; font-size: 9.5px; } .scene .dseg span { padding: 1px 6px; color: var(--mutedFg); } .scene .dseg span.on { background: var(--muted); color: var(--fg); }
+
+/* scene 1: browser */
+.scene .addr { height: 26px; flex: none; display: flex; align-items: center; gap: 3px; padding: 0 6px; border-bottom: 1px solid var(--border); background: var(--header); }
+.scene .pill { flex: 1; height: 18px; border-radius: 9px; background: var(--muted); display: flex; align-items: center; padding: 0 9px; color: var(--mutedFg); font-family: var(--sm-mono, ui-monospace, monospace); font-size: 9.5px; }
+.scene .page { flex: 1; position: relative; background: var(--page); color: var(--pageFg); padding: 12px 18px; }
+.scene .page .pnav { display: flex; justify-content: space-between; font-size: 10px; margin-bottom: 22px; } .scene .page .pnav span { opacity: .6; }
+.scene .page h3 { margin: 0 0 8px; font-size: 21px; letter-spacing: -0.02em; font-weight: 600; }
+.scene .page .ln { height: 6px; border-radius: 3px; background: oklch(0.88 0.006 120); width: 70%; margin: 0 0 6px; } .scene .page .ln.s { width: 48%; margin-bottom: 14px; }
+.scene .page .cta { display: inline-block; padding: 6px 12px; border-radius: 6px; background: oklch(0.3 0.01 130); color: white; font-size: 10.5px; transition: all 400ms; }
+.scene .page .cta.after { background: oklch(0.6 0.11 180); padding: 8px 16px; font-size: 12px; }
+.scene .sel { position: absolute; border: 1.5px solid var(--primary); border-radius: 5px; background: color-mix(in oklch, var(--primary) 12%, transparent); pointer-events: none; }
+.scene .sel .lab { position: absolute; left: -1.5px; top: -17px; background: var(--primary); color: var(--onPrimary); font-family: var(--sm-mono, ui-monospace, monospace); font-size: 9px; padding: 1px 5px; border-radius: 3px; white-space: nowrap; }
+.scene .pin { position: absolute; width: 16px; height: 16px; border-radius: 50% 50% 50% 2px; background: var(--primary); color: var(--onPrimary); font-size: 9px; font-weight: 600; display: grid; place-items: center; }
+.scene .cbox { position: absolute; width: 170px; background: var(--card); color: var(--fg); border: 1px solid var(--border); border-radius: 8px; padding: 7px; box-shadow: 0 6px 18px rgb(0 0 0 / .2); }
+.scene .cbox .ta { min-height: 30px; border: 1px solid var(--border); border-radius: 5px; padding: 4px 6px; }
+.scene .cbox .ta::after { content: ""; display: inline-block; width: 1px; height: 11px; background: var(--primary); vertical-align: -2px; margin-left: 1px; }
+.scene .cbox .rw { display: flex; justify-content: flex-end; margin-top: 6px; }
+.scene .cbox .add { background: var(--primary); color: var(--onPrimary); border-radius: 5px; padding: 3px 8px; font-weight: 500; }
+.scene .sendbar { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); display: flex; gap: 10px; align-items: center; background: var(--card); color: var(--fg); border: 1px solid var(--border); border-radius: 8px; padding: 5px 6px 5px 10px; box-shadow: 0 6px 18px rgb(0 0 0 / .2); white-space: nowrap; }
+.scene .sendbar .sb { background: var(--primary); color: var(--onPrimary); border-radius: 5px; padding: 3px 8px; font-weight: 500; }
+.scene .chip { display: flex; gap: 7px; align-items: center; }
+.scene .chip .crop { width: 34px; height: 24px; border-radius: 4px; background: var(--page); position: relative; flex: none; }
+.scene .chip .crop::after { content: ""; position: absolute; left: 7px; top: 8px; width: 20px; height: 8px; border-radius: 2px; background: oklch(0.3 0.01 130); outline: 1px solid var(--onPrimary); }
+.scene .chip code { font-family: var(--sm-mono, ui-monospace, monospace); font-size: 9px; opacity: .8; }
+
+/* scene 2: html card */
+.scene .hcard { align-self: flex-start; width: 78%; border: 1px solid var(--border); border-radius: 9px; background: var(--card); padding: 9px 10px; transition: opacity 260ms, transform 260ms; }
+.scene .hcard .ht { font-weight: 600; margin-bottom: 7px; }
+.scene .bars { display: flex; flex-direction: column; gap: 5px; margin-bottom: 9px; }
+.scene .br { display: flex; align-items: center; gap: 6px; } .scene .br span { width: 10px; color: var(--mutedFg); }
+.scene .br i { height: 9px; border-radius: 3px; background: var(--muted); width: 0; transition: width 700ms cubic-bezier(.2,.7,.2,1); display: block; }
+.scene .br.hl i { background: var(--primary); }
+.scene .filled .br i { width: var(--w); }
+.scene .br em { font-style: normal; color: var(--mutedFg); font-size: 9.5px; }
+.scene .hb { display: inline-block; border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; margin-right: 4px; transition: filter 150ms; }
+.scene .hb.pr { background: var(--primary); color: var(--onPrimary); border-color: transparent; }
+
+/* scene 3 / 4: strips */
+.scene .strip { display: flex; align-items: center; gap: 6px; padding: 4px 9px; font-size: 10px; color: var(--mutedFg); background: var(--muted); border-bottom: 1px solid var(--border); transition: opacity 250ms; }
+.scene .strip .dt { width: 6px; height: 6px; border-radius: 50%; background: var(--warning); }
+.scene .strip .sp { width: 9px; height: 9px; border: 1.3px solid var(--mutedFg); border-top-color: transparent; border-radius: 50%; animation: spin .9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.scene .newl { display: flex; align-items: center; gap: 6px; color: var(--primary); font-size: 9.5px; transition: opacity 600ms; }
+.scene .newl::before, .scene .newl::after { content: ""; flex: 1; height: 1px; background: color-mix(in oklch, var(--primary) 50%, transparent); }
+.scene .blank { flex: 1; display: grid; place-items: center; color: var(--mutedFg); }
+.scene .rstrip { margin: 0 10px 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); padding: 5px 9px; display: flex; gap: 8px; align-items: center; transition: opacity 250ms; }
+.scene .rstrip svg { width: 11px; height: 11px; color: var(--warning); }
+.scene .rstrip .gr { flex: 1; } .scene .rstrip .lk { color: var(--primary); font-weight: 500; } .scene .rstrip .mu { color: var(--mutedFg); }
+.scene .sys { align-self: center; color: var(--mutedFg); font-size: 9.5px; }
+.scene .clock { position: absolute; right: 22px; top: 20px; font-family: var(--sm-mono, ui-monospace, monospace); font-size: 10px; color: var(--mutedFg); }
+.scene .typing::after { content: "▍"; color: var(--primary); }
+
+/* scene 5: restart */
+.scene .uc { margin: 6px; padding: 8px 8px 9px 10px; border-radius: 7px; background: var(--card); border: 1px solid var(--hair); transition: opacity 250ms; }
+.scene .uc .ut { display: flex; gap: 6px; align-items: center; font-weight: 500; font-size: 11.5px; margin-bottom: 3px; }
+.scene .uc .ut svg { width: 12px; height: 12px; }
+.scene .uc .us { color: var(--mutedFg); margin-bottom: 7px; }
+.scene .uc .ub { display: flex; gap: 5px; } .scene .uc .ub span { flex: 1; text-align: center; border: 1px solid var(--border); border-radius: 5px; padding: 4px 0; font-weight: 500; }
+.scene .uc .ub .pr { background: var(--primary); color: var(--onPrimary); border-color: transparent; }
+.scene .mw.closing { opacity: 0; transform: scale(.985); }
+.scene .sdot { width: 6px; height: 6px; border-radius: 50%; background: var(--primary); flex: none; transition: background 300ms; }
+.scene .off .sdot { background: var(--mutedFg); }
+.scene .ntc { position: absolute; left: 50%; bottom: 18px; transform: translate(-50%, 8px); background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 5px 10px; white-space: nowrap; opacity: 0; transition: opacity 250ms, transform 250ms; box-shadow: 0 6px 16px rgb(0 0 0 / .2); }
+.scene .ntc.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* scene 6: settings */
+.scene .sn { width: 128px; flex: none; background: var(--list); border-right: 1px solid var(--border); padding: 8px 6px; }
+.scene .srch { border: 1px solid var(--border); border-radius: 6px; padding: 3px 7px; color: var(--mutedFg); margin-bottom: 7px; display: flex; gap: 5px; align-items: center; background: var(--card); }
+.scene .srch svg { width: 10px; height: 10px; } .scene .srch .q { color: var(--fg); }
+.scene .si { padding: 4px 7px; border-radius: 5px; color: var(--mutedFg); transition: opacity 200ms, background 150ms; }
+.scene .si.on { background: var(--muted); color: var(--fg); } .scene .si.dim { opacity: .3; }
+.scene .sp2 { flex: 1; padding: 12px 14px; position: relative; }
+.scene .pg { position: absolute; inset: 12px 14px; display: none; } .scene .pg.on { display: block; }
+.scene .pg h4 { margin: 0 0 9px; font-size: 13px; font-weight: 600; }
+.scene .row { display: flex; align-items: center; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid var(--hair); transition: background 300ms; }
+.scene .row.flash { background: color-mix(in oklch, var(--primary) 14%, transparent); }
+.scene .row .rs { color: var(--mutedFg); font-size: 9.5px; }
+.scene .opts { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; } .scene .opts span { padding: 2px 7px; color: var(--mutedFg); } .scene .opts span.on { background: var(--muted); color: var(--fg); }
+.scene .tg { width: 24px; height: 14px; border-radius: 7px; background: var(--muted); position: relative; transition: background 200ms; } .scene .tg::after { content: ""; position: absolute; left: 2px; top: 2px; width: 10px; height: 10px; border-radius: 50%; background: var(--fg); transition: left 200ms; }
+.scene .tg.on { background: var(--primary); } .scene .tg.on::after { left: 12px; background: var(--onPrimary); }
+.scene .cb { width: 12px; height: 12px; border-radius: 3px; border: 1.3px solid var(--mutedFg); display: grid; place-items: center; flex: none; transition: background 150ms; }
+.scene .cb.on { background: var(--primary); border-color: var(--primary); } .scene .cb.on::after { content: ""; width: 5px; height: 3px; border: 1.5px solid var(--onPrimary); border-top: 0; border-right: 0; transform: rotate(-45deg) translate(0, -1px); }
+.scene .wtr { display: flex; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--hair); } .scene .wtr .wn2 { flex: 1; font-family: var(--sm-mono, ui-monospace, monospace); font-size: 9.5px; } .scene .wtr .rs { color: var(--mutedFg); font-size: 9.5px; }
+.scene .del { position: absolute; right: 0; bottom: 0; border-radius: 6px; padding: 4px 10px; background: var(--muted); color: var(--mutedFg); transition: all 200ms; } .scene .del.on { background: var(--danger); color: white; }
+
+/* scene 7: windows */
+.scene .wdlg { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 330px; background: oklch(0.97 0 0); color: #1b1b1b; border: 1px solid #c8c8c8; box-shadow: 0 10px 30px rgb(0 0 0 / .35); font-family: "Segoe UI", Geist, sans-serif; transition: opacity 250ms; }
+.scene .wdlg .wt { padding: 6px 10px; font-size: 10px; border-bottom: 1px solid #e3e3e3; display: flex; justify-content: space-between; }
+.scene .wdlg .wb { padding: 10px 14px 12px; }
+.scene .wdlg .q { font-size: 12.5px; color: #1d4f91; margin-bottom: 10px; }
+.scene .wdlg dl { display: grid; grid-template-columns: 70px 1fr; gap: 4px 6px; margin: 0 0 12px; font-size: 10.5px; }
+.scene .wdlg dt { color: #555; } .scene .wdlg dd { margin: 0; }
+.scene .wdlg .pub { display: flex; gap: 5px; align-items: center; }
+.scene .wdlg .pub b { font-weight: 600; } .scene .wdlg .pub .unk { color: #a4262c; }
+.scene .wdlg .pub svg { width: 11px; height: 11px; }
+.scene .wdlg .wbt { display: flex; justify-content: flex-end; gap: 6px; } .scene .wdlg .wbt span { border: 1px solid #adadad; background: #e1e1e1; padding: 3px 16px; font-size: 10.5px; } .scene .wdlg .wbt .df { border-color: #0067c0; }
+.scene .wlabel { position: absolute; left: 18px; top: 16px; font-size: 10px; color: var(--mutedFg); transition: opacity 250ms; }
+.scene .winst { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 300px; background: oklch(0.97 0 0); color: #1b1b1b; border: 1px solid #c8c8c8; box-shadow: 0 10px 30px rgb(0 0 0 / .35); font-family: "Segoe UI", Geist, sans-serif; padding: 12px 14px; font-size: 11px; }
+.scene .winst .bar { height: 6px; background: #e6e6e6; margin: 10px 0 4px; } .scene .winst .bar i { display: block; height: 100%; width: 0; background: #06b025; transition: width 1400ms linear; }
+.scene .winst.go .bar i { width: 100%; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const G = {
+  chat: '<path d="M4 5h16v11H9l-5 4z"/>',
+  folder: '<path d="M3 6h6l2 2h10v11H3z"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18"/>',
+  term: '<path d="M4 5h16v14H4z"/><path d="M8 10l3 2-3 2M13 15h3"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/>',
+  search: '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/>',
+  x: '<path d="M6 6l12 12M18 6L6 18"/>',
+  back: '<path d="M15 5l-7 7 7 7"/>',
+  gift: '<path d="M4 10h16v10H4zM3 7h18v3H3zM12 7v13"/><path d="M12 7c-2-4-6-3-5 0M12 7c2-4 6-3 5 0"/>',
+  card: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 15v-3M12 15V9M16 15v-5"/>',
+  bolt: '<path d="M13 3L5 14h6l-1 7 8-11h-6z"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  restart: '<path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v5h-5"/>',
+  sliders: '<path d="M5 6h9M18 6h1M5 12h3M12 12h7M5 18h11M20 18h-1"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
+  shield: '<path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/><path d="M9 12l2 2 4-4"/>',
+  warn: '<path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17v.5"/>',
+  pick: '<path d="M5 5l6 14 2-6 6-2z"/>',
+  arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+  ext: '<path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6"/>',
+  down: '<path d="M12 4v12M7 11l5 5 5-5M5 20h14"/>',
+  audio: '<path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/>',
+  tab: '<rect x="3" y="5" width="18" height="15" rx="2"/><path d="M3 9h18M8 5v4"/>',
+  keys: '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h1M11 10h1M15 10h1M8 14h8"/>',
+  models: '<circle cx="7" cy="7" r="3"/><circle cx="17" cy="7" r="3"/><circle cx="7" cy="17" r="3"/><circle cx="17" cy="17" r="3"/>',
+  check: '<path d="M5 12l5 5 9-10"/>',
+  phone: '<rect x="7" y="3" width="10" height="18" rx="2"/><path d="M11 18h2"/>',
+  camera: '<path d="M4 8h4l2-2h4l2 2h4v11H4z"/><circle cx="12" cy="13" r="3.5"/>',
+  cursor: '<path d="M5 3l14 8-6 2-3 6z" fill="white" stroke="black" stroke-width="1.2"/>',
+};
+const g = (n, cls = 'g') => `<svg class="${cls}" viewBox="0 0 24 24">${G[n]}</svg>`;
+const hydrate = root => root.querySelectorAll('[data-g]').forEach(el => { el.innerHTML = g(el.dataset.g); });
+// ── scenes: the product doing the new thing ──
+const LIST_ROWS = [['API', 'oklch(0.72 0.12 300)', 'Tests pass again'], ['Frontend', 'oklch(0.75 0.12 60)', 'Dev server is up'], ['Release', 'oklch(0.72 0.105 180)', 'CI is green'], ['Docs', 'oklch(0.75 0.1 140)', 'Changelog drafted']];
+const mrow = ([n, c, s], extra = '') => `<div class="mr" data-n="${n}"><div class="a" style="background:${c}">${n[0]}</div><div class="t"><div class="n">${n}</div><div class="s">${s}</div></div>${extra}</div>`;
+const CUR = `<div class="cur">${g('cursor', '')}</div>`;
+
+const SCENES = {
+  'browser.desk': () => ({
+    html: `<div class="mw"><div class="mtabs"><div class="mtab on" data-t="c">${g('chat')}Frontend</div><div class="mtab new" data-t="b">${g('globe')}localhost:5173</div></div>
+      <div class="mbody">
+        <div class="pn cp on" data-p="c"><div class="b me">Start the dev server</div><div class="b ag">Dev server is up at <span class="lnk">localhost:5173</span></div>
+          <div class="b me sent hide"><div class="chip"><span class="crop"></span><div><code>button.cta</code><br>Make this teal and bigger</div></div></div>
+          <div class="b ag reply hide fade">On it: <span style="font-family:var(--sm-mono, ui-monospace, monospace)">button.cta</span> is teal and 2px bigger now.</div></div>
+        <div class="pn" data-p="b"><div class="addr"><span class="ic">${g('back')}</span><span class="ic">${g('restart')}</span><div class="pill">localhost:5173</div><span class="ic pk">${g('pick')}</span></div>
+          <div class="pstrip hide"><span>Pick an element · ↑↓ parent / child · Esc to finish</span></div>
+          <div class="page"><div class="pnav"><b>Acme</b><span>Docs · Pricing</span></div><h3>Ship faster</h3><p class="ln"></p><p class="ln s"></p><span class="cta">Get started</span>
+            <div class="sel hide"><span class="lab">button.cta</span></div><div class="pin hide">1</div>
+            <div class="cbox hide"><div class="ta"></div><div class="rw"><span class="add">Add comment</span></div></div>
+            <div class="sendbar hide">1 comment <span class="sb">Send to chat</span></div></div></div>
+      </div></div><div class="kbd hide">${MOD().pick}</div>${CUR}`,
+    steps: [
+      [500, a => a.point('.lnk')], [650, a => a.tap('.lnk')],
+      [180, a => { a.$('.mtab.new').classList.add('in'); a.tabTo('b'); }],
+      [700, a => a.show('.kbd')], [800, a => { a.hide('.kbd'); a.$('.pk').classList.add('on'); a.show('.pstrip'); }],
+      [400, a => a.point('.page h3', 0.4, 0.5)], [450, a => { a.cover('.sel', '.page h3'); a.$('.sel .lab').textContent = 'h1'; }],
+      [700, a => a.point('.cta', 0.6, 0.6)],
+      [450, a => { a.cover('.sel', '.cta'); a.$('.sel .lab').textContent = 'button.cta'; }],
+      [450, a => { a.tap('.cta'); a.hide('.pstrip'); a.place('.cbox', '.cta', a.$('.cta').offsetWidth + 14, -18); a.show('.cbox'); }],
+      [250, a => a.type('.cbox .ta', 'Make this teal and bigger', 45)],
+      [1500, a => a.point('.add')], [600, a => { a.tap('.add'); a.hide('.cbox'); a.place('.pin', '.cta', -6, -8); a.show('.pin'); a.show('.sendbar'); }],
+      [600, a => a.point('.sb')], [600, a => a.tap('.sb')],
+      [200, a => { a.hide('.sendbar'); a.tabTo('c'); a.show('.sent'); }],
+      [900, a => { a.show('.reply'); a.later(30, () => a.$('.reply').classList.remove('fade')); }],
+    ],
+  }),
+  'cards.desk': {
+    html: `<div class="mw"><div class="mtabs"><div class="mtab on">${g('chat')}Pricing research</div></div>
+      <div class="mbody"><div class="pn cp on">
+        <div class="b me">Compare the three plans as a card</div>
+        <div class="b ag a1 hide fade">Here is how they compare at 5 seats:</div>
+        <div class="hcard hide fade"><div class="ht">Plans · monthly, 5 seats</div>
+          <div class="bars"><div class="br"><span>A</span><i style="--w:62%"></i><em>$90</em></div><div class="br hl"><span>B</span><i style="--w:38%"></i><em>$55</em></div><div class="br"><span>C</span><i style="--w:86%"></i><em>$120</em></div></div>
+          <span class="hb pr gb">Go with B</span><span class="hb">Show yearly</span></div>
+        <div class="b me fc hide fade"><small>from the card "Plans"</small>Go with B</div>
+      </div></div></div>${CUR}`,
+    steps: [
+      [500, a => a.reveal('.a1')], [500, a => a.reveal('.hcard')], [250, a => a.$('.hcard').classList.add('filled')],
+      [1300, a => a.point('.gb')], [600, a => a.tap('.gb')], [250, a => a.reveal('.fc')],
+    ],
+  },
+  'instant.desk': {
+    html: `<div class="mw" style="opacity:0"><div class="strip"><span class="dt"></span><span class="st">Offline · showing saved chats</span></div>
+      <div class="split"><div class="ml">${mrow(LIST_ROWS[0], '<span class="badge">2</span>')}${LIST_ROWS.slice(1).map(r => mrow(r)).join('')}</div>
+      <div class="mc"><div class="blank">No chat open</div>
+        <div class="cp conv hide" style="display:flex;flex-direction:column;flex:1;justify-content:flex-end;gap:6px;padding:10px">
+          <div class="b me">Run the suite again after the fix</div><div class="b ag">Running it now.</div>
+          <div class="newl">2 new messages</div>
+          <div class="b ag">All 412 tests pass.</div><div class="b ag">Pushed to fix/tests.</div></div></div></div></div>${CUR}`,
+    steps: [
+      [300, a => { a.$('.mw').style.opacity = 1; }],
+      [700, a => a.point('[data-n="API"]')], [600, a => { a.tap('[data-n="API"]'); a.$('[data-n="API"]').classList.add('on'); a.hide('.blank'); a.show('.conv'); a.$('.badge').style.opacity = 0; }],
+      [1800, a => { a.$('.strip .dt').outerHTML = '<span class="sp"></span>'; a.$('.st').textContent = 'Connecting…'; }],
+      [1300, a => { a.$('.strip').style.opacity = 0; }],
+      [900, a => { a.$('.newl').style.opacity = 0; }],
+    ],
+  },
+  'resume.desk': {
+    html: `<div class="mw"><div class="split"><div class="ml">${mrow(['API', LIST_ROWS[0][1], `${g('clock')}<span class="ws">Waiting · resumes 14:05</span>`])}${LIST_ROWS.slice(1).map(r => mrow(r)).join('')}</div>
+      <div class="mc"><div class="cp" style="display:flex;flex-direction:column;flex:1;justify-content:flex-end;gap:6px;padding:10px">
+        <div class="b me">Fix the five failing tests</div><div class="b ag">Fixed 3 of 5. Two left in auth.</div>
+        <div class="sys">Claude's usage limit reached · resets 14:05</div>
+        <div class="b ag go hide fade typing"></div></div>
+        <div class="rstrip">${g('clock')}<span class="gr">Resumes at 14:05</span><span class="lk">Resume now</span><span class="mu">Cancel</span></div>
+        <div class="composer"><div>Message API…</div></div></div></div></div>
+      <div class="clock">14:04:57</div>${CUR}`,
+    steps: [
+      [800, a => { a.$('.clock').textContent = '14:04:58'; }], [800, a => { a.$('.clock').textContent = '14:04:59'; }],
+      [800, a => { a.$('.clock').textContent = '14:05:00'; }],
+      [350, a => { a.$('.rstrip').style.opacity = 0; a.$('.ws').textContent = 'Working…'; }],
+      [300, a => { a.hide('.rstrip'); a.reveal('.go'); a.type('.go', 'Picking up where I stopped: fixing the two in auth.', 28, () => a.$('.go').classList.remove('typing')); }],
+    ],
+  },
+  'restart.desk': {
+    html: `<div class="mw"><div class="split"><div class="ml" style="width:170px;display:flex;flex-direction:column">
+        <div style="flex:1">${LIST_ROWS.map(r => mrow([r[0], r[1], `<span class="sdot"></span>${r[2]}`])).join('')}</div>
+        <div class="uc"><div class="ut">${g('gift')}Update ready</div><div class="us">v0.17.8 is downloaded.</div><div class="ub"><span>What's new</span><span class="pr rs">Restart to update</span></div></div></div>
+      <div class="mc"><div class="cp" style="display:flex;flex-direction:column;flex:1;justify-content:flex-end;gap:6px;padding:10px"><div class="b me">Keep going on the release notes</div><div class="b ag">Writing the Windows section now.</div></div></div></div></div>
+      <div class="ntc">Updated to v0.17.8 · all sessions reconnected</div>${CUR}`,
+    steps: [
+      [700, a => a.point('.rs')], [650, a => a.tap('.rs')],
+      [300, a => { a.$('.mw').classList.add('closing'); a.$('.cur').style.opacity = 0; }],
+      [900, a => { a.hide('.uc'); a.$('.ml').classList.add('off'); a.$('.mw').classList.remove('closing'); }],
+      [700, a => { a.$('.ml').classList.remove('off'); a.$('.ntc').classList.add('show'); }],
+    ],
+  },
+  'settings.desk': {
+    html: `<div class="mw"><div class="split"><div class="sn"><div class="srch">${g('search')}<span class="q">Search</span></div>
+        <div class="si on" data-s="gen">General</div><div class="si" data-s="app">Appearance</div><div class="si" data-s="ag">Agents</div><div class="si" data-s="no">Notifications</div><div class="si" data-s="ma">This machine</div><div class="si" data-s="wt">Worktrees</div></div>
+      <div class="sp2">
+        <div class="pg on" data-p="gen"><h4>General</h4><div class="row">App version<span class="rs">v0.17.7</span></div><div class="row">Download updates in the background<span class="tg on"></span></div><div class="row">Resume after a limit reset<span class="tg on"></span></div></div>
+        <div class="pg" data-p="app"><h4>Appearance</h4><div class="row th">Theme<span class="opts"><span>System</span><span class="l on">Light</span><span class="d">Dark</span></span></div><div class="row">Text size<span class="rs">100%</span></div><div class="row">Compact list<span class="tg"></span></div></div>
+        <div class="pg" data-p="wt"><h4>Worktrees</h4>
+          <div class="wtr"><span class="cb c1"></span><span class="wn2">feature/old-tabs</span><span class="rs">merged · 2 GB</span></div>
+          <div class="wtr"><span class="cb c2"></span><span class="wn2">feature/scroll-fix</span><span class="rs">merged · 1.4 GB</span></div>
+          <div class="wtr"><span class="cb"></span><span class="wn2">feature/onboarding</span><span class="rs">in use</span></div>
+          <span class="del">Delete</span></div>
+      </div></div></div>${CUR}`,
+    steps: [
+      [500, a => a.point('.srch')], [600, a => { a.tap('.srch'); a.$('.srch .q').textContent = ''; }],
+      [200, a => a.type('.srch .q', 'theme', 90)],
+      [600, a => { a.$$('.si').forEach(e => e.classList.toggle('dim', e.dataset.s !== 'app')); a.page('app'); a.$('.th').classList.add('flash'); }],
+      [700, a => { a.$('.th').classList.remove('flash'); a.point('.th .d'); }], [600, a => { a.tap('.th .d'); a.$('.th .l').classList.remove('on'); a.$('.th .d').classList.add('on'); }],
+      [800, a => { a.$('.srch .q').textContent = 'Search'; a.$$('.si').forEach(e => e.classList.remove('dim')); a.point('[data-s="wt"]'); }],
+      [600, a => { a.tap('[data-s="wt"]'); a.page('wt'); }],
+      [500, a => a.point('.c1')], [450, a => { a.tap('.c1'); a.$('.c1').classList.add('on'); a.$('.del').textContent = 'Delete 1'; a.$('.del').classList.add('on'); }],
+      [400, a => a.point('.c2')], [450, a => { a.tap('.c2'); a.$('.c2').classList.add('on'); a.$('.del').textContent = 'Delete 2 · 3.4 GB'; }],
+    ],
+  },
+  'signed.win': {
+    html: `<div class="wlabel">Before</div>
+      <div class="wdlg"><div class="wt">Open File - Security Warning<span>✕</span></div><div class="wb"><div class="q">Do you want to run this file?</div>
+        <dl><dt>Name:</dt><dd>supermux-0.17.7-x64.msi</dd><dt>Publisher:</dt><dd class="pub"><span class="unk">${g('warn')}</span><b class="pn2 unk">Unknown Publisher</b></dd><dt>Type:</dt><dd>Windows Installer Package</dd></dl>
+        <div class="wbt"><span class="df run">Run</span><span>Cancel</span></div></div></div>
+      <div class="winst hide">supermux Setup<div class="bar"><i></i></div><span class="ist">Installing…</span></div>${CUR}`,
+    steps: [
+      [1300, a => { a.$('.wlabel').textContent = 'Now'; const p = a.$('.pub'); p.innerHTML = `<span style="color:#0f7b0f">${g('shield')}</span><b>Open Source Developer Ahmet Hüseyin Dok</b>`; }],
+      [1300, a => a.point('.run')], [600, a => a.tap('.run')],
+      [250, a => { a.hide('.wdlg'); a.show('.winst'); a.later(40, () => a.$('.winst').classList.add('go')); }],
+      [1600, a => { a.$('.ist').textContent = 'supermux 0.17.7 is installed.'; }],
+    ],
+  },
+  'device.desk': {
+    html: `<div class="mw"><div class="mtabs"><div class="mtab on">${g('globe')}localhost:5173</div></div>
+      <div class="mbody"><div class="pn on">
+        <div class="addr"><span class="ic">${g('back')}</span><span class="ic">${g('restart')}</span><div class="pill">localhost:5173</div><span class="dseg hide"><span class="on">Mobile</span><span>Desktop</span></span><span class="ic dv">${g('phone')}</span></div>
+        <div class="dstage"><div class="page dp"><div class="pnav"><b>Acme</b><span>Docs · Pricing</span></div><h3>Ship faster</h3><p class="ln"></p><p class="ln s"></p><span class="cta">Get started</span><div class="gridc"><i></i><i></i><i></i></div></div></div>
+      </div></div></div>${CUR}`,
+    steps: [
+      [700, a => a.point('.dv')], [600, a => a.tap('.dv')],
+      [150, a => { a.$('.dv').classList.add('on'); a.$('.dstage').classList.add('mob'); a.show('.dseg'); }],
+    ],
+  },
+  'browser.phone': {
+    w: 300, h: 400,
+    html: `<div class="ps">
+      <div class="pv on" data-p="c"><div class="pa">${g('back')}<span class="tt">Frontend</span></div>
+        <div class="cp"><div class="b me">Start the dev server</div><div class="b ag">Dev server is up at <span class="lnk">localhost:5173</span></div>
+          <div class="b me sent hide"><div class="chip"><span class="crop"></span><div><code>button.cta</code><br>Make this teal and bigger</div></div></div>
+          <div class="b ag reply hide fade">On it: <span style="font-family:var(--sm-mono, ui-monospace, monospace)">button.cta</span> is teal and bigger now.</div></div>
+        <div class="composer"><div>Message Frontend…</div></div></div>
+      <div class="pv" data-p="b"><div class="pa">${g('back')}<div class="pill">localhost:5173</div><span class="ic pk">${g('pick')}</span></div>
+        <div class="pstrip hide"><span>Tap what you mean</span><b>Done</b></div>
+        <div class="page"><div class="pnav"><b>Acme</b><span>☰</span></div><h3>Ship faster</h3><p class="ln"></p><p class="ln s"></p><span class="cta">Get started</span>
+          <div class="sel hide"><span class="lab">button.cta</span></div><div class="pin hide">1</div><span class="addc hide">Add comment</span>
+          <div class="sendbar hide">1 comment <span class="sb">Send to chat</span></div></div>
+        <div class="sheet"><div class="in"><div class="ta"></div><span class="add">Add</span></div><div class="kbk">${'<i></i>'.repeat(29)}</div></div></div>
+    </div>${CUR}`,
+    steps: [
+      [500, a => a.point('.lnk')], [650, a => a.tap('.lnk')], [200, a => a.view('b')],
+      [700, a => a.point('.pk')], [550, a => { a.tap('.pk'); a.$('.pk').classList.add('on'); a.show('.pstrip'); }],
+      [600, a => a.point('.cta')], [550, a => { a.tap('.cta'); a.cover('.sel', '.cta'); a.place('.addc', '.cta', 0, a.$('.cta').offsetHeight + 12); a.show('.addc'); }],
+      [700, a => a.point('.addc')], [550, a => { a.tap('.addc'); a.hide('.addc'); a.$('.sheet').classList.add('up'); }],
+      [400, a => a.type('.sheet .ta', 'Make this teal and bigger', 45)],
+      [1500, a => a.point('.sheet .add')], [550, a => { a.tap('.sheet .add'); a.$('.sheet').classList.remove('up'); a.hide('.sel'); a.hide('.pstrip'); a.place('.pin', '.cta', -6, -8); a.show('.pin'); a.show('.sendbar'); }],
+      [700, a => a.point('.sb')], [550, a => a.tap('.sb')],
+      [200, a => { a.view('c'); a.show('.sent'); }], [900, a => a.reveal('.reply')],
+    ],
+  },
+  'cards.phone': {
+    w: 300, h: 400,
+    html: `<div class="ps"><div class="pv on"><div class="pa">${g('back')}<span class="tt">Pricing research</span></div>
+      <div class="cp"><div class="b me">Compare the three plans as a card</div>
+        <div class="b ag a1 hide fade">Here is how they compare at 5 seats:</div>
+        <div class="hcard hide fade" style="width:92%"><div class="ht">Plans · monthly, 5 seats</div>
+          <div class="bars"><div class="br"><span>A</span><i style="--w:62%"></i><em>$90</em></div><div class="br hl"><span>B</span><i style="--w:38%"></i><em>$55</em></div><div class="br"><span>C</span><i style="--w:80%"></i><em>$120</em></div></div>
+          <span class="hb pr gb">Go with B</span><span class="hb">Show yearly</span></div>
+        <div class="b me fc hide fade"><small>from the card "Plans"</small>Go with B</div></div>
+      <div class="composer"><div>Message…</div></div></div></div>${CUR}`,
+    steps: [
+      [500, a => a.reveal('.a1')], [500, a => a.reveal('.hcard')], [250, a => a.$('.hcard').classList.add('filled')],
+      [1300, a => a.point('.gb')], [600, a => a.tap('.gb')], [250, a => a.reveal('.fc')],
+    ],
+  },
+  'instant.phone': {
+    w: 300, h: 400,
+    html: `<div class="ps" style="opacity:0">
+      <div class="pv on" data-p="l"><div class="pa"><span class="tt" style="font-size:16px">Chats</span></div><div class="strip"><span class="dt"></span>Offline · showing saved chats</div>
+        ${mrow(LIST_ROWS[0], '<span class="badge">2</span>')}${LIST_ROWS.slice(1).map(r => mrow(r)).join('')}</div>
+      <div class="pv" data-p="c"><div class="pa">${g('back')}<span class="tt">API</span></div><div class="strip cs"><span class="dt"></span><span class="st">Offline · messages send when you're back</span></div>
+        <div class="cp"><div class="b me">Run the suite again after the fix</div><div class="b ag">Running it now.</div><div class="newl">2 new messages</div><div class="b ag">All 412 tests pass.</div><div class="b ag">Pushed to fix/tests.</div></div>
+        <div class="composer"><div>Message API…</div></div></div>
+    </div>${CUR}`,
+    steps: [
+      [300, a => { a.$('.ps').style.opacity = 1; }],
+      [700, a => a.point('[data-n="API"]')], [600, a => { a.tap('[data-n="API"]'); a.view('c'); }],
+      [1800, a => { a.$('.cs .dt').outerHTML = '<span class="sp"></span>'; a.$('.cs .st').textContent = 'Connecting…'; }],
+      [1300, a => { a.$('.cs').style.opacity = 0; }],
+      [900, a => { a.$('.newl').style.opacity = 0; }],
+    ],
+  },
+  'resume.phone': {
+    w: 300, h: 400,
+    html: `<div class="ps"><div class="pv on"><div class="pa">${g('back')}<span class="tt">API<small class="ws">Waiting · resumes 14:05</small></span><span class="clock">14:04:57</span></div>
+      <div class="cp"><div class="b me">Fix the five failing tests</div><div class="b ag">Fixed 3 of 5. Two left in auth.</div>
+        <div class="sys">Claude's usage limit reached · resets 14:05</div><div class="b ag go hide fade typing"></div></div>
+      <div class="rstrip">${g('clock')}<span class="gr">Resumes at 14:05</span><span class="lk">Resume now</span><span class="mu">Cancel</span></div>
+      <div class="composer"><div>Message API…</div></div></div></div>${CUR}`,
+    steps: [
+      [800, a => { a.$('.clock').textContent = '14:04:58'; }], [800, a => { a.$('.clock').textContent = '14:04:59'; }],
+      [800, a => { a.$('.clock').textContent = '14:05:00'; }],
+      [350, a => { a.$('.rstrip').style.opacity = 0; a.$('.ws').textContent = 'Working…'; }],
+      [300, a => { a.hide('.rstrip'); a.reveal('.go'); a.type('.go', 'Picking up where I stopped: fixing the two in auth.', 28, () => a.$('.go').classList.remove('typing')); }],
+    ],
+  },
+  'settings.phone': {
+    w: 300, h: 400,
+    html: `<div class="ps">
+      <div class="pv on" data-p="s"><div class="pa"><span class="tt" style="font-size:16px">Settings</span></div>
+        <div class="srch">${g('search')}<span class="q">Search settings</span></div>
+        <div class="lst" style="flex:1">${['General', 'Appearance', 'Agents', 'Notifications', 'This machine', 'Worktrees'].map(n => `<div class="prow">${n}<span>›</span></div>`).join('')}</div>
+        <div class="res hide" style="flex:1"><div class="prow r1"><div>Theme<div class="rs">Appearance</div></div><span>›</span></div></div>
+        <div class="kbk hide">${'<i></i>'.repeat(29)}</div></div>
+      <div class="pv" data-p="a"><div class="pa">${g('back')}<span class="tt">Appearance</span></div>
+        <div style="padding:4px 12px"><div class="row th">Theme<span class="opts"><span>System</span><span class="l on">Light</span><span class="d">Dark</span></span></div><div class="row">Text size<span class="rs">100%</span></div><div class="row">Compact list<span class="tg"></span></div></div></div>
+    </div>${CUR}`,
+    steps: [
+      [500, a => a.point('.srch')], [550, a => { a.tap('.srch'); a.$('.srch .q').textContent = ''; a.show('.kbk'); }],
+      [250, a => a.type('.srch .q', 'theme', 110)],
+      [700, a => { a.hide('.lst'); a.show('.res'); }],
+      [500, a => a.point('.r1')], [550, a => { a.tap('.r1'); a.view('a'); a.$('.th').classList.add('flash'); }],
+      [800, a => { a.$('.th').classList.remove('flash'); a.point('.th .d'); }], [550, a => { a.tap('.th .d'); a.$('.th .l').classList.remove('on'); a.$('.th .d').classList.add('on'); }],
+    ],
+  },
+};
+
+// ── a tiny timeline player per stage ──
+class Player {
+  constructor(box, id) {
+    this.box = box; const d = SCENES[id]; this.def = typeof d === 'function' ? d() : d; this.w = this.def.w || 420; this.h = this.def.h || 300; this.scene = box.querySelector('.scene'); this.timers = []; this.playing = false;
+    const api = this.api = {
+      $: s => this.scene.querySelector(s), $$: s => [...this.scene.querySelectorAll(s)],
+      later: (ms, fn) => { if (this.instant) fn(); else this.timers.push(setTimeout(fn, ms)); },
+      show: s => api.$(s).classList.remove('hide'), hide: s => api.$(s).classList.add('hide'),
+      reveal: s => { api.show(s); api.later(20, () => api.$(s).classList.remove('fade')); },
+      pos: el => { let x = 0, y = 0; while (el && el !== this.scene) { x += el.offsetLeft; y += el.offsetTop; el = el.offsetParent; } return [x, y]; },
+      point: (s, fx = 0.5, fy = 0.55) => { const el = api.$(s), [x, y] = api.pos(el), c = api.$('.cur'); c.style.left = (x + el.offsetWidth * fx) + 'px'; c.style.top = (y + el.offsetHeight * fy) + 'px'; },
+      tap: s => { const c = api.$('.cur'), el = api.$(s); if (this.instant) return; c.classList.remove('tap'); void c.offsetWidth; c.classList.add('tap'); el.classList.add('press'); api.later(180, () => el.classList.remove('press')); },
+      view: v => api.$$('.pv').forEach(e => e.classList.toggle('on', e.dataset.p === v)),
+      tabTo: t => { api.$$('.mtab').forEach(e => e.classList.toggle('on', e.dataset.t === t)); api.$$('.pn').forEach(e => e.classList.toggle('on', e.dataset.p === t)); },
+      page: p => { api.$$('.pg').forEach(e => e.classList.toggle('on', e.dataset.p === p)); api.$$('.si').forEach(e => e.classList.toggle('on', e.dataset.s === p)); },
+      cover: (s, over) => { const o = api.$(over), el = api.$(s); el.style.left = (o.offsetLeft - 4) + 'px'; el.style.top = (o.offsetTop - 4) + 'px'; el.style.width = (o.offsetWidth + 8) + 'px'; el.style.height = (o.offsetHeight + 8) + 'px'; api.show(s); },
+      place: (s, at, dx, dy) => { const o = api.$(at), el = api.$(s); el.style.left = (o.offsetLeft + dx) + 'px'; el.style.top = (o.offsetTop + dy) + 'px'; },
+      type: (s, text, ms, done) => { const el = api.$(s); if (this.instant) { el.textContent = text; done && done(); return; } let i = 0; el.textContent = ''; const tick = () => { el.textContent = text.slice(0, ++i); if (i < text.length) this.timers.push(setTimeout(tick, ms)); else done && done(); }; tick(); },
+    };
+  }
+  reset() { this.stop(); this.scene.style.width = this.w + 'px'; this.scene.style.height = this.h + 'px'; this.scene.innerHTML = this.def.html; }
+  stop() { this.timers.forEach(clearTimeout); this.timers = []; this.playing = false; }
+  end() { this.reset(); this.instant = true; this.def.steps.forEach(([, fn]) => fn(this.api)); this.instant = false; const c = this.api.$('.cur'); if (c) c.style.opacity = 0; }
+  play(loop = true) {
+    this.reset(); this.playing = true; let t = 0;
+    for (const [d, fn] of this.def.steps) { t += d; this.timers.push(setTimeout(() => fn(this.api), t)); }
+    // every ending gets a settle before it starts over
+    this.timers.push(setTimeout(() => { if (loop) this.play(); else { this.playing = false; this.box.classList.remove('playing'); } }, t + 2600));
+  }
+}
+
+// ── the platform the app says it is, its theme and what it can do ──
+const root = document.documentElement;
+const params = new URLSearchParams(location.search);
+const PLATFORM = root.dataset.platform || params.get('platform') || 'mac';
+const FAMILY = PLATFORM === 'mac' || PLATFORM === 'win' || PLATFORM === 'linux' ? 'desk' : PLATFORM === 'web' ? 'web' : 'phone';
+root.dataset.family = FAMILY;
+const ACTIONS = new Set((root.dataset.actions || params.get('actions') || '').split(/\s+/).filter(Boolean));
+const RM = matchMedia('(prefers-reduced-motion: reduce)');
+const S = { rm: RM.matches };
+const MOD = () => PLATFORM === 'mac' ? { pick: '⌘⇧C' } : { pick: 'Ctrl+Shift+C' };
+const EDITION = JSON.parse(document.getElementById('edition').textContent);
+const pick = (m, k) => m[k] ?? m[FAMILY] ?? m.all;
+
+// ── each chapter's variants: this platform's own, then its family's (desk / phone / web), then everyone's ──
+const RESUME_TEXT = 'When an agent runs into its limit, the session waits and picks up again the moment the limit resets. Resume now or cancel from the strip above the composer.';
+const VARIANTS = {
+  browser: { g: 'globe', title: 'Open your app right next to the chat', v: {
+    desk: () => ({ scene: 'browser.desk', text: `Links from an agent open in a Browser tab, localhost included. Press <kbd>${MOD().pick}</kbd>, point at what's wrong (↑↓ for its parent or child), say what you want, and it goes to the agent with a crop of the page.` }),
+    phone: () => ({ scene: 'browser.phone', text: 'Links from an agent open in a Browser tab, localhost included. Tap ⌖, then tap what\'s wrong (tap again for its container), add a comment, and send it to the agent with a crop of the page.' }),
+  } },
+  device: { g: 'phone', title: 'See your page at phone size', v: {
+    desk: () => ({ scene: 'device.desk', text: 'Device mode in the Browser tab shows the page as a phone would, next to the chat, without leaving the app.' }),
+  } },
+  cards: { g: 'card', title: 'Agents can answer with a live page', v: {
+    all: () => ({ scene: 'cards.desk', text: 'Charts, tables and choices arrive as cards right in the chat. Click a button on a card and it answers for you.' }),
+    phone: () => ({ scene: 'cards.phone', text: 'Charts, tables and choices arrive as cards right in the chat. Tap a button on a card and it answers for you.' }),
+  } },
+  instant: { g: 'bolt', title: 'Chats open at once, even offline', v: {
+    desk: () => ({ scene: 'instant.desk', text: 'Recent chats are kept on this computer. They open instantly, at the first message you haven\'t read, and they are still there when the connection isn\'t.' }),
+    web: () => ({ scene: 'instant.desk', title: 'Chats open at once', text: 'Recent chats are kept in this browser. They open instantly at the first message you haven\'t read, and stay on screen if the connection drops.' }),
+    phone: () => ({ scene: 'instant.phone', text: 'Recent chats are kept on your phone. They open instantly, at the first message you haven\'t read, and they are still there with no signal.' }),
+  } },
+  resume: { g: 'clock', title: 'Hit a usage limit? It carries on by itself', v: {
+    all: () => ({ scene: 'resume.desk', text: RESUME_TEXT, tryIt: ['resume-setting', 'See the setting'] }),
+    phone: () => ({ scene: 'resume.phone', text: RESUME_TEXT, tryIt: ['resume-setting', 'See the setting'] }),
+  } },
+  restart: { g: 'restart', title: 'Updates are one click', v: {
+    mac: () => ({ scene: 'restart.desk', text: 'New versions download in the background. Press Restart to update: the app swaps itself in place, reopens, and every session reconnects. It is how you got here.' }),
+    win: () => ({ scene: 'restart.desk', text: 'New versions download in the background. Press Restart to update: the installer closes the app, updates it and opens it again, and every session reconnects. It is how you got here.' }),
+    linux: () => ({ scene: 'restart.desk', text: 'New versions download in the background. Press Restart to update, enter your password once, and the app reopens with every session reconnected. It is how you got here.' }),
+  } },
+  settings: { g: 'sliders', title: 'Settings, rebuilt', v: {
+    all: () => ({ scene: 'settings.desk', text: 'Search any setting, see this machine on its own page, and clear out old worktrees with a few checkboxes.', tryIt: ['settings', 'Open Settings'] }),
+    phone: () => ({ scene: 'settings.phone', text: 'Type in the search field to jump straight to any setting. This machine and its worktrees have their own pages.', tryIt: ['settings', 'Open Settings'] }),
+  } },
+  signed: { g: 'shield', title: 'A signed installer for Windows', v: {
+    win: () => ({ scene: 'signed.win', text: 'The installer now names its publisher, so Windows stops warning about an unknown app before you install or update.' }),
+  } },
+};
+// "Also in this release": the same rule, one line each, worded per platform.
+const ALSO = [
+  { g: 'down', t: { all: 'Downloads you can pause and resume' }, d: { all: 'click the ring', phone: 'tap the ring' } },
+  { g: 'audio', t: { desk: 'An audio player for voice notes and read-aloud, with media keys', linux: 'An audio player for voice notes and read-aloud', web: 'An audio player for voice notes and read-aloud',
+      android: 'Read-aloud keeps playing in the background, with a media notification', iphone: 'Read-aloud keeps playing in the background and on the lock screen' }, d: {} },
+  { g: 'camera', on: ['mac', 'win'], t: { all: 'Send a screenshot of the page to the chat' }, d: { mac: '⌘⇧S', win: 'Ctrl+Shift+S' } },
+  { g: 'tab', on: ['mac', 'win', 'linux'], t: { all: 'A new tab page' }, d: { mac: '⌘T', all: 'Ctrl+T' } },
+  { g: 'keys', on: ['mac', 'win'], t: { all: 'Chrome\'s own shortcuts inside the Browser tab' }, d: { mac: '⌘F · ⌘R · ⌥⌘I', win: 'Ctrl+F · F5 · F12' } },
+  { g: 'models', t: { all: 'Cursor\'s own models in the model picker, and OpenCode' }, d: {} },
+];
+const visible = x => !x.on || x.on.includes(PLATFORM);
+function chapters() {
+  return EDITION.chapters.filter(visible).map(c => {
+    const def = VARIANTS[c.id]; const fn = def && pick(def.v, PLATFORM);
+    return fn ? { id: c.id, g: def.g, title: def.title, ...fn() } : null;
+  }).filter(Boolean);
+}
+const also = () => ALSO.filter(visible).map(a => ({ g: a.g, t: pick(a.t, PLATFORM), d: pick(a.d, PLATFORM) || '' })).filter(a => a.t);
+
+// ── asking the app ──
+function act(action) {
+  const bridge = window.hostBridge;
+  if (bridge) bridge.call('whatsnew', { action }); else console.log('whatsnew action', action);
+}
+
+// ── render ──
+let players = [], observer = null;
+function stopAll() { players.forEach(p => p.stop()); players = []; observer && observer.disconnect(); }
+const WORDS = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten'];
+
+function render() {
+  stopAll();
+  const host = document.getElementById('root');
+  const chs = chapters(), narrow = innerWidth < 760;
+  root.classList.toggle('rm', S.rm);
+  host.innerHTML = `<div class="wn ${narrow ? 'narrow' : ''}">
+    <aside class="wn-index"><div class="v">v${EDITION.version}</div><div class="h">What's new</div>
+      ${chs.map(c => `<a data-to="${c.id}">${g(c.g)}${c.title.split(/[,?:]/)[0]}</a>`).join('')}
+      <div class="sp"></div>${ACTIONS.has('notes') ? `<a class="rn" data-act="notes">${g('ext')}Full release notes</a>` : ''}</aside>
+    <main class="wn-main"><div class="wn-col">
+      <div class="wn-head"><small>v${EDITION.version} · November 2026</small><h1>What's new</h1><p>${WORDS[chs.length] || chs.length} things you can do now.</p></div>
+      ${chs.map(c => `<section class="ch" id="ch-${c.id}" data-id="${c.id}">
+        <div class="stagebox" data-scene="${c.scene}" style="aspect-ratio:${(SCENES[c.scene].w || 420)} / ${(SCENES[c.scene].h || 300)}"><div class="scene"></div><button class="play">▶ Play</button></div>
+        <h2>${g(c.g)}${c.title}</h2><p>${c.text}</p>
+        ${c.tryIt && ACTIONS.has(c.tryIt[0]) ? `<button class="try" data-act="${c.tryIt[0]}">${c.tryIt[1]} ${g('arrow')}</button>` : ''}</section>`).join('')}
+      <section class="also"><h3>Also in this release</h3>${also().map(a => `<div class="ar">${g(a.g)}${a.t}<span>${a.d}</span></div>`).join('')}</section>
+      <div class="wn-end">${ACTIONS.has('notes') ? `<a data-act="notes">${g('ext')}Full release notes on GitHub</a>` : '<span></span>'}${ACTIONS.has('done') ? '<button class="done" data-act="done">Done</button>' : ''}</div>
+    </div></main></div>`;
+  const main = host.querySelector('.wn-main');
+  host.querySelectorAll('.stagebox').forEach(box => {
+    const p = new Player(box, box.dataset.scene); players.push(p); box._p = p;
+    const fit = () => { box.querySelector('.scene').style.transform = `scale(${box.clientWidth / p.w})`; };
+    new ResizeObserver(fit).observe(box); fit();
+    p.end();
+    box.querySelector('.play').onclick = () => { box.classList.add('playing'); p.play(false); };
+  });
+  // a chapter plays only while it is on screen; reduced motion shows its end state
+  observer = new IntersectionObserver(entries => entries.forEach(e => {
+    const p = e.target._p; if (S.rm) return;
+    if (e.isIntersecting && !p.playing) p.play(); else if (!e.isIntersecting && p.playing) p.end();
+  }), { root: main, threshold: 0.6 });
+  if (!S.rm) host.querySelectorAll('.stagebox').forEach(b => observer.observe(b));
+  const links = [...host.querySelectorAll('.wn-index a[data-to]')];
+  const sync = () => { let cur = chs[0] && chs[0].id; host.querySelectorAll('.ch').forEach(s => { if (s.offsetTop - main.scrollTop < 200) cur = s.dataset.id; }); links.forEach(l => l.classList.toggle('on', l.dataset.to === cur)); };
+  main.addEventListener('scroll', sync); sync();
+  links.forEach(l => l.onclick = () => main.scrollTo({ top: host.querySelector('#ch-' + l.dataset.to).offsetTop - 30 }));
+  host.querySelectorAll('[data-act]').forEach(b => b.onclick = () => act(b.dataset.act));
+}
+RM.addEventListener('change', () => { S.rm = RM.matches; render(); });
+let wasNarrow = innerWidth < 760;
+addEventListener('resize', () => { const n = innerWidth < 760; if (n !== wasNarrow) { wasNarrow = n; render(); } });
+render();
+</script>
+</body>
+</html>

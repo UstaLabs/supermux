@@ -77,7 +77,7 @@ const val FILES_REVEAL_ACTIVE_DEFAULT = true
  * for the first frame and the stored value immediately after. That matches how the rest of the
  * shared store is already consumed (drafts, launcher prefs).
  */
-class UiPrefs(private val settings: SettingsStore) {
+class UiPrefs(val settings: SettingsStore) {
 
     /** Soft wrap in the code editor. */
     val editorLineWrap: Flow<Boolean> =

@@ -300,6 +300,8 @@ class ShellUiState {
 
     // Menu / chrome conveniences → navigate
     fun openArchived() = navigate(Route.Archived)
+    /** The sidebar card's Explore (#90): [version]'s edition. */
+    fun openWhatsNew(version: String) = navigate(Route.WhatsNew(version))
     fun openDisplays() = navigate(Route.Displays)
     fun openAddHost() = navigate(Route.AddHost)
 

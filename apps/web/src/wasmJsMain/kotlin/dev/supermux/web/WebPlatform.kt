@@ -114,6 +114,7 @@ class WebPlatform(
     override fun videoDecoder(): VideoSurfaceFactory? = null
     /** The machine that serves this page updates it; the app only says which build it is (General ▸ App version). */
     override val updates: AppUpdater = VersionOnlyUpdater(WEB_APP_VERSION)
+    override val releasePlatform: dev.supermux.ui.whatsnew.ReleasePlatform = dev.supermux.ui.whatsnew.ReleasePlatform.Web
     override val notifications: NotificationManager = NoopNotificationManager
     override val windows: WindowHostController? = null
     /**

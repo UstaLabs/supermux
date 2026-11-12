@@ -166,6 +166,11 @@ import dev.supermux.ui.session.rememberLauncherActions
 import dev.supermux.ui.session.rememberSessionListActions
 import dev.supermux.ui.session.withWorkspaceOps
 import dev.supermux.ui.settings.SettingsHub
+import dev.supermux.ui.whatsnew.WhatsNewAction
+import dev.supermux.ui.whatsnew.WhatsNewPage
+import dev.supermux.ui.whatsnew.WhatsNewSlot
+import dev.supermux.ui.whatsnew.rememberWhatsNew
+import dev.supermux.ui.whatsnew.releaseNotesUrl
 import dev.supermux.ui.settings.SettingsPlace
 import dev.supermux.ui.settings.SettingsSlotScope
 import dev.supermux.ui.settings.kit.KitMachine
@@ -464,6 +469,14 @@ fun SupermuxApp(
     val projectImageScope = rememberCoroutineScope()
     val projectImageCache = remember(fleet, projectImageScope) { ProjectImageCache(projectImageScope) }
     val uiPrefs = LocalUiPrefs.current
+    // What's new (#90): the sidebar card after an update, and its page.
+    val appPlatform = LocalPlatform.current
+    val whatsNew = rememberWhatsNew(
+        uiPrefs.settings,
+        appPlatform.updates.currentVersion,
+        appPlatform.releasePlatform,
+        existingInstall = { fleet.store.list().isNotEmpty() },
+    )
     val onCollapsedPathsChange: (Set<String>) -> Unit = { paths ->
         ui.collapsedProjectPaths = paths
         overlayScope.launch { uiPrefs.putCollapsedProjectPaths(paths) }
@@ -1053,7 +1066,12 @@ fun SupermuxApp(
                                             // The update card sits on the footer rail, not across the
                                             // top of the app; it draws nothing until a newer release
                                             // is found. The downloads' list (#95) stands on both.
-                                            card = { AppUpdateCard(onOpenPage = { ui.openAppUpdate() }) },
+                                            card = {
+                                                Column {
+                                                    WhatsNewSlot(whatsNew, onOpen = { ui.openWhatsNew(it) })
+                                                    AppUpdateCard(onOpenPage = { ui.openAppUpdate() })
+                                                }
+                                            },
                                         )
                                     }
                                 },
@@ -1198,6 +1216,27 @@ fun SupermuxApp(
                                             )
                                         }
                                     }
+                                }
+                            }
+
+                            entry<Route.WhatsNew>(
+                                metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
+                            ) { route ->
+                                EscapeBox("whats_new_overlay", onEscape = { ui.goBack() }) {
+                                    WhatsNewPage(
+                                        version = route.version,
+                                        platform = appPlatform.releasePlatform,
+                                        actions = WhatsNewAction.entries.toSet(),
+                                        onAction = { action ->
+                                            when (action) {
+                                                WhatsNewAction.Done -> ui.goBack()
+                                                WhatsNewAction.Notes -> appPlatform.openUrl(releaseNotesUrl(route.version))
+                                                WhatsNewAction.Settings -> ui.openSettings()
+                                                WhatsNewAction.ResumeSetting -> ui.openSettings(SettingsSection.Providers, anchor = "limit-resume")
+                                            }
+                                        },
+                                        onBack = { ui.goBack() },
+                                    )
                                 }
                             }
 

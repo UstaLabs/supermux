@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What's new (#90): the card after an update and its page. -->
+<resources>
+    <string name="whatsnew_card_title">Updated to v%1$s</string>
+    <plurals name="whatsnew_card_count">
+        <item quantity="one">%1$d new thing you can do %2$s.</item>
+        <item quantity="other">%1$d new things you can do %2$s.</item>
+    </plurals>
+    <plurals name="whatsnew_card_count_anywhere">
+        <item quantity="one">%1$d new thing you can do.</item>
+        <item quantity="other">%1$d new things you can do.</item>
+    </plurals>
+    <string name="whatsnew_place_mac">on this Mac</string>
+    <string name="whatsnew_place_win">on this PC</string>
+    <string name="whatsnew_place_linux">on this computer</string>
+    <string name="whatsnew_place_web">in the web app</string>
+    <string name="whatsnew_place_android">on this phone</string>
+    <string name="whatsnew_place_iphone">on this iPhone</string>
+    <string name="whatsnew_card_explore">Explore what's new</string>
+    <string name="whatsnew_dismiss">Dismiss</string>
+    <string name="whatsnew_page_title">What's new</string>
+    <string name="whatsnew_back">Back</string>
+</resources>
