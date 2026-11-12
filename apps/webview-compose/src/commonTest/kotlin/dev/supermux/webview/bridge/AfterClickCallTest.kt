@@ -33,10 +33,14 @@ class AfterClickCallTest {
     }
 
     /** A view whose host input stamp says "the user just pressed" at every call: the click verdict must not care. */
-    private fun TestScope.view(stampSaysInput: Boolean = false): View {
+    private fun TestScope.view(stampSaysInput: Boolean = false, hostRecheck: (() -> Boolean)? = null): View {
         val sent = mutableListOf<String>()
         val bridge = WebBridge({ _, _ -> }, BridgeLimits()) { 0L }
-        bridge.connect(sink = { text, _ -> sent += text }, originAllowed = { it == origin }, scope = backgroundScope, userInput = { stampSaysInput })
+        if (hostRecheck == null) {
+            bridge.connect(sink = { text, _ -> sent += text }, originAllowed = { it == origin }, scope = backgroundScope, userInput = { stampSaysInput })
+        } else {
+            bridge.connect(sink = { text, _ -> sent += text }, originAllowed = { it == origin }, scope = backgroundScope, userInput = { stampSaysInput }, clickRecheck = hostRecheck)
+        }
         val view = View(bridge, sent)
         bridge.receive(origin, BridgeCodec.encode(BridgeMessage.Event("\$ready", buildJsonObject { put("nonce", "n1") }), from = "n1"))
         bridge.handleAfterButtonClick("send") { _, clicked ->
@@ -114,5 +118,44 @@ class AfterClickCallTest {
             val forged = "{\"t\":\"call\",\"id\":1,\"m\":\"send\",\"p\":null,\"c\":$c,\"from\":\"n\"}"
             assertEquals(false, (BridgeCodec.decode(forged) as BridgeMessage.Call).clicked, c)
         }
+    }
+
+    // The web keeps its host's own re-checks on top of the click (Tally, 2026-11-12): (c) made native match the web; it
+    // didn't loosen the web. A screen reader's click on the web is a trusted DOM click anyway.
+
+    @Test fun anEngineThatRechecksClicksRefusesAClickTheHostDidNotSee() = runTest {
+        var asked = 0
+        val v = view(hostRecheck = { asked++; false })
+        v.call(1, clicked = true)
+        runCurrent()
+        assertEquals(listOf(false), v.seen)
+        assertEquals(1, asked)
+    }
+
+    @Test fun anEngineThatRechecksClicksPassesAClickTheHostSaw() = runTest {
+        val v = view(hostRecheck = { true })
+        v.call(1, clicked = true)
+        runCurrent()
+        assertEquals(listOf(true), v.seen)
+    }
+
+    /** The host's check is asked only for a click the page vouched for: a plain call doesn't spend the user's input. */
+    @Test fun theHostRecheckIsNotSpentOnACallThatIsNoClick() = runTest {
+        var asked = 0
+        val v = view(hostRecheck = { asked++; true })
+        v.call(1, clicked = false)
+        runCurrent()
+        assertEquals(listOf(false), v.seen)
+        assertEquals(0, asked)
+    }
+
+    @Test fun onlyAnEngineThatSaysSoRechecksClicks() {
+        val plain = object : UserInputSource { override fun consumeUserInput() = false }
+        val web = object : UserInputSource {
+            override fun consumeUserInput() = false
+            override val rechecksClicks = true
+        }
+        assertEquals(true, clickRecheckOf(plain)())
+        assertEquals(false, clickRecheckOf(web)())
     }
 }

@@ -136,6 +136,8 @@ public class WebBridge internal constructor(
         var originAllowed: (String) -> Boolean,
         /** Takes the user's last input at this engine's view if recent enough; see [InputStamp]. */
         var userInput: () -> Boolean = { false },
+        /** The host's own check on a page's click verdict ([clickRecheckOf]); always true where the engine has none. */
+        var clickRecheck: () -> Boolean = { true },
     ) {
         var callsInFlight = 0
 
@@ -395,6 +397,7 @@ public class WebBridge internal constructor(
         originAllowed: (String) -> Boolean,
         scope: CoroutineScope,
         userInput: () -> Boolean = { false },
+        clickRecheck: () -> Boolean = { true },
     ) {
         val child = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
         val parked = connection?.takeIf { it.parked }
@@ -404,9 +407,10 @@ public class WebBridge internal constructor(
             parked.sink = sink
             parked.originAllowed = originAllowed
             parked.userInput = userInput
+            parked.clickRecheck = clickRecheck
         } else {
             if (connection != null) disconnect()
-            connection = Connection(child, sink, originAllowed, userInput)
+            connection = Connection(child, sink, originAllowed, userInput, clickRecheck)
         }
         lastOrigin = null
         lastCommittedOrigin = null
@@ -697,7 +701,8 @@ public class WebBridge internal constructor(
         val clickHandler = if (reservedName) null else clickMethods[call.method]
         // Decided now, as the call arrives: the handler may run later, and the window is the page's, not the handler's.
         val fromUserInput = inputHandler != null && conn.userInput()
-        val clicked = call.clicked == true
+        // The host's own check, where the engine keeps one (the web), only for a click the page vouched for.
+        val clicked = call.clicked == true && (clickHandler == null || conn.clickRecheck())
         conn.scope.launch {
             val reply = try {
                 val handler = methods[call.method]
