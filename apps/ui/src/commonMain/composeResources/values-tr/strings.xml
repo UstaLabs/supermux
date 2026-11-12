@@ -40,4 +40,13 @@
         <item quantity="one">%1$d yeni mesaj</item>
         <item quantity="other">%1$d yeni mesaj</item>
     </plurals>
+
+    <!-- Browser tab › a sent comment (#122 phase 4) -->
+    <string name="browser_comment_remove">Kaldır</string>
+    <string name="browser_comment_close">Kapat</string>
+    <string name="browser_comment_sent">Gönderildi</string>
+    <string name="browser_comment_seen">Görüldü</string>
+    <string name="browser_comment_done">Tamamlandı</string>
+    <string name="browser_comment_answered">Yanıtlandı</string>
+    <string name="browser_comment_dismissed">Yok sayıldı</string>
 </resources>

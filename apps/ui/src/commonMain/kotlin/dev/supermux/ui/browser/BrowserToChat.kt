@@ -19,6 +19,15 @@ fun interface BrowserToChat {
 
     /** The chat they go to, by its session's name; null when there is none. */
     fun recipient(): String? = null
+
+    /**
+     * Stores the comments in the chat's session first (#122 phase 4), so its agent answers each and the pins follow:
+     * them as stored, with their ids; null where they can't be (no chat, or a broker from before it).
+     */
+    suspend fun storeComments(body: dev.supermux.net.BrowserCommentsBody): List<dev.supermux.net.BrowserCommentDto>? = null
+
+    /** The stored comments' states by id, as their agents answer them; null where none are stored. */
+    fun commentStates(): kotlinx.coroutines.flow.StateFlow<Map<String, dev.supermux.net.BrowserCommentDto>>? = null
 }
 
 /** The workspace's. Null where a Browser tab can't send pictures to a chat: then it offers no screenshot at all. */

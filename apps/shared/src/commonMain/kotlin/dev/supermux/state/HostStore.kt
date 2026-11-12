@@ -486,6 +486,15 @@ class HostStore(
     /** Per-session walkthrough holders. Created and updated by [walkthroughSeam] on first frame. */
     private val walkthroughs = mutableMapOf<String, Any>()
 
+    /** #122 phase 4: the Browser tab comments this host has stored, by id, as the agents answer them. */
+    private val _browserComments = MutableStateFlow<Map<String, dev.supermux.net.BrowserCommentDto>>(emptyMap())
+    val browserComments: StateFlow<Map<String, dev.supermux.net.BrowserCommentDto>> = _browserComments.asStateFlow()
+
+    /** Keeps [comments] (what the broker answered a send), so their pins follow before any frame arrives. */
+    fun rememberBrowserComments(comments: List<dev.supermux.net.BrowserCommentDto>) {
+        _browserComments.update { map -> map + comments.associateBy { it.id } }
+    }
+
     @Suppress("UNCHECKED_CAST")
     fun <T : Any> walkthroughState(sessionId: String): T {
         val seam = requireNotNull(walkthroughSeam) { "HostStore was built without a WalkthroughSeam" } as WalkthroughSeam<Any>
@@ -861,6 +870,7 @@ class HostStore(
             is ServerFrame.FsChanged -> Unit
             is ServerFrame.WalkthroughUpdated -> applyWalkthroughFrame(frame.sessionId, frame)
             is ServerFrame.ReviewCommentFrame -> applyWalkthroughFrame(frame.sessionId, frame)
+            is ServerFrame.BrowserCommentFrame -> rememberBrowserComments(listOf(frame.comment))
             is ServerFrame.LspRpcIn -> _lspRpc.tryEmit(frame)
             is ServerFrame.UsageUpdated -> holdUsage(frame.usage)
             ServerFrame.AccountsChanged -> if (accountsWanted) refreshAccounts()

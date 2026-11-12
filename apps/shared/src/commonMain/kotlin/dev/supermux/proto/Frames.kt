@@ -901,6 +901,13 @@ sealed interface ServerFrame {
         val comment: ReviewComment,
     ) : ServerFrame
 
+    /** #122 phase 4: a Browser tab comment stored, or the agent's answer to it (its pin follows). */
+    @Serializable @SerialName("browser_comment")
+    data class BrowserCommentFrame(
+        val sessionId: String,
+        val comment: dev.supermux.net.BrowserCommentDto,
+    ) : ServerFrame
+
     // Finish job lifecycle: the broker broadcasts `{type:"finish_job",session,job}`
     // on every job state change (running → done|failed) — src/main.ts:onUpdate.
     @Serializable @SerialName("finish_job")

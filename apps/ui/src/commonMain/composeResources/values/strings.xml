@@ -45,4 +45,13 @@
         <item quantity="one">%1$d new message</item>
         <item quantity="other">%1$d new messages</item>
     </plurals>
+
+    <!-- Browser tab › a sent comment (#122 phase 4) -->
+    <string name="browser_comment_remove">Remove</string>
+    <string name="browser_comment_close">Close</string>
+    <string name="browser_comment_sent">Sent</string>
+    <string name="browser_comment_seen">Seen</string>
+    <string name="browser_comment_done">Done</string>
+    <string name="browser_comment_answered">Answered</string>
+    <string name="browser_comment_dismissed">Dismissed</string>
 </resources>

@@ -31,6 +31,16 @@ class FramesTest {
         assertEquals("agent", reply.author)
     }
 
+    /** #122 phase 4: the agent's answer to a Browser tab comment, as the broker sends it. */
+    @Test fun parses_browser_comment_frame() {
+        val f = json.decodeFromString<ServerFrame>(
+            """{"type":"browser_comment","sessionId":"s1","comment":{"id":"c1","sessionId":"s1","batchId":"b1","number":1,"url":null,"viewedAs":null,"selector":"button.buy","text":"","comment":"cut off","picture":null,"status":"done","note":"padding fixed","createdAt":"t","updatedAt":"t"}}""",
+        )
+        val c = (f as ServerFrame.BrowserCommentFrame).comment
+        assertEquals("done", c.status)
+        assertEquals("padding fixed", c.note)
+    }
+
     @Test fun parses_agent_state_with_workingSince() {
         val f = json.decodeFromString<ServerFrame>(
             """{"type":"agent_state","session":"editor","phase":"working","workingSince":1717200000000}""",

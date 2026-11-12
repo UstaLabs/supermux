@@ -1292,6 +1292,38 @@ data class RefCommit(
     val subject: String = "",
 )
 
+/**
+ * One Browser tab comment (#122 phase 4) as the broker stored it in the session it went to: its pin [number], the
+ * element ([selector], [text]), the person's words ([comment]), and what the agent did with it ([status]: sent, seen,
+ * done, answered or dismissed, with its one-line [note]).
+ */
+@Serializable
+data class BrowserCommentDto(
+    val id: String,
+    val sessionId: String,
+    val batchId: String,
+    val number: Int,
+    val url: String? = null,
+    val viewedAs: String? = null,
+    val selector: String,
+    val text: String = "",
+    val comment: String,
+    val picture: String? = null,
+    val status: String,
+    val note: String? = null,
+    val createdAt: String,
+    val updatedAt: String,
+)
+
+@Serializable
+data class BrowserCommentInput(val number: Int, val comment: String, val selector: String, val text: String = "", val picture: String? = null)
+
+@Serializable
+data class BrowserCommentsBody(val url: String? = null, val viewedAs: String? = null, val comments: List<BrowserCommentInput>)
+
+@Serializable
+data class BrowserCommentsResult(val comments: List<BrowserCommentDto> = emptyList())
+
 @Serializable
 data class ReviewComment(
     val id: String,
@@ -3679,6 +3711,10 @@ class BrokerApi(
     /** GET /workspaces/<id>/fs/refs */
     suspend fun workspaceFsRefs(workspaceId: String): FsRefsResult =
         getJson("$httpBase/workspaces/$workspaceId/fs/refs")
+
+    /** #122 phase 4: POST /sessions/<id>/browser/comments → the comments as stored, with their ids. */
+    suspend fun addBrowserComments(sessionId: String, body: BrowserCommentsBody): List<BrowserCommentDto> =
+        postReturningJson<BrowserCommentsBody, BrowserCommentsResult>("$httpBase/sessions/$sessionId/browser/comments", body).comments
 
     /** POST /sessions/<id>/review/comments {repo,path,side,anchorLine,anchorContext,body,diffHunkHeader?} → the created comment. */
     suspend fun reviewAddComment(sessionId: String, body: AddCommentBody): ReviewComment =

@@ -14,6 +14,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import dev.supermux.ui.keys.LocalShortcutDispatcher
 import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -32,6 +33,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import dev.supermux.browser.DeviceMode
+import dev.supermux.net.BrowserCommentInput
+import dev.supermux.net.BrowserCommentsBody
 import dev.supermux.browser.PageAppearance
 import dev.supermux.browser.AddressAction
 import dev.supermux.browser.BrowserTabSync
@@ -308,6 +311,8 @@ fun BrowserPane(
     // Its comments go to the workspace's chat (3b): one message, each element's picture where the engine can picture
     // the page. Send posts it; Add to message leaves it in the composer.
     val chat = LocalBrowserToChat.current
+    val commentStatesFlow = remember(chat) { chat?.commentStates() ?: kotlinx.coroutines.flow.MutableStateFlow(emptyMap()) }
+    val commentStates by commentStatesFlow.collectAsState()
     val accent = dev.supermux.ui.settings.kit.kitColors().accent
     val sendScope = rememberCoroutineScope()
     fun sendComments(send: Boolean) {
@@ -331,8 +336,19 @@ fun BrowserPane(
                 if (png != null) images += name to png
                 CommentOut(p.number, p.comment, p.element.selector, p.element.text, name.takeIf { png != null })
             }
-            if (sink.sendMessage(commentsMessage(url, viewedAs, outs), images, send)) {
-                pick.clear()
+            // Stored first (phase 4): the message names each by its id, and the pins stay to follow the agent's answer.
+            val stored = sink.storeComments(
+                BrowserCommentsBody(url, viewedAs, outs.map { BrowserCommentInput(it.number, it.comment, it.selector, it.text, it.picture) }),
+            )
+            val ids = stored?.associate { it.number to it.id }
+            if (sink.sendMessage(commentsMessage(url, viewedAs, outs, ids), images, send)) {
+                if (ids == null) {
+                    pick.clear()
+                } else {
+                    for (p in comments) p.commentId = ids[p.number]
+                    pick.editing = null
+                    pick.hover = null
+                }
                 pick.on = false
             }
         }
@@ -434,7 +450,7 @@ fun BrowserPane(
                 is BrowserBody.Page -> {
                     val pageAndPicks = @Composable {
                         livePage(pageSettings, keepRunning)
-                        if (pickOffered) PickLayers(pick, state.navigator, touch = phone)
+                        if (pickOffered) PickLayers(pick, state.navigator, touch = phone, states = commentStates)
                     }
                     if (deviceOn && !phone) DeviceStage(device, fit = fitting, onScale = { stageScale = it }) { pageAndPicks() }
                     else Box(Modifier.fillMaxSize().testTag("browser-viewport")) { pageAndPicks() }

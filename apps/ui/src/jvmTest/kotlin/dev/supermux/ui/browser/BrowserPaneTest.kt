@@ -373,9 +373,22 @@ class BrowserPaneTest {
         assertTrue("stop" !in rig.calls, "${rig.calls}")
     }
 
-    private class ChatSink : BrowserToChat {
+    private class ChatSink(private val stores: Boolean = false) : BrowserToChat {
         val sent = mutableListOf<Pair<ByteArray, String>>()
         val messages = mutableListOf<Triple<String, List<Pair<String, ByteArray>>, Boolean>>()
+        val states = kotlinx.coroutines.flow.MutableStateFlow<Map<String, dev.supermux.net.BrowserCommentDto>>(emptyMap())
+        override suspend fun storeComments(body: dev.supermux.net.BrowserCommentsBody): List<dev.supermux.net.BrowserCommentDto>? {
+            if (!stores) return null
+            val stored = body.comments.map { c ->
+                dev.supermux.net.BrowserCommentDto(
+                    id = "c${c.number}", sessionId = "s1", batchId = "b1", number = c.number, url = body.url, selector = c.selector,
+                    text = c.text, comment = c.comment, status = "sent", createdAt = "t", updatedAt = "t",
+                )
+            }
+            states.value = states.value + stored.associateBy { it.id }
+            return stored
+        }
+        override fun commentStates() = states
         override fun sendImage(png: ByteArray, name: String): Boolean { sent += png to name; return true }
         override fun sendMessage(text: String, images: List<Pair<String, ByteArray>>, send: Boolean): Boolean {
             messages += Triple(text, images, send)
@@ -773,6 +786,29 @@ class BrowserPaneTest {
         onNodeWithTag("browser-pick-sendbar").assertDoesNotExist()
         onNodeWithTag("browser-pin-1", useUnmergedTree = true).assertDoesNotExist()
         onNodeWithTag("browser-pick-layer").assertDoesNotExist()
+    }
+
+    /**
+     * #122 phase 4: Send stores the comments in the chat's session first; the message names each by its id and how to
+     * answer it; the pins stay, and follow what the agent does (done, with its note).
+     */
+    @Test fun sentCommentsAreStoredAndTheirPinsFollowTheAgentsAnswer() = runComposeUiTest {
+        val rig = Rig()
+        val sink = ChatSink(stores = true)
+        showWithChat(rig, mutableStateOf(view("https://vitejs.dev/")), sink)
+        pickPay(rig, "the Pay button is cut off")
+        onNodeWithTag("browser-pick-send").performClick()
+        waitUntil(timeoutMillis = 5_000) { sink.messages.isNotEmpty() }
+        val text = sink.messages.single().first
+        assertTrue("### ① \"the Pay button is cut off\" · id c1" in text, text)
+        assertTrue("resolve_browser_comment" in text, text)
+        waitForIdle()
+        onNodeWithTag("browser-pin-1-sent", useUnmergedTree = true).assertExists()
+        onNodeWithTag("browser-pick-sendbar").assertDoesNotExist() // nothing left to send
+        sink.states.value = sink.states.value + ("c1" to sink.states.value["c1"]!!.copy(status = "done", note = "padding fixed"))
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag("browser-pin-1-done", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithTag("browser-pin-1-done", useUnmergedTree = true).performClick()
+        onNodeWithText("Done · padding fixed", useUnmergedTree = true).assertExists()
     }
 
     /** "Add to message" (⌥Send in the design) leaves them in the chat's composer, unsent. */
