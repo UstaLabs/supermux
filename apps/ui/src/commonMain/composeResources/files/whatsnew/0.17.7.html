@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>What's new in v0.17.7</title>
+<!-- the website's real-app kit (UstaLabs/supermux-website app/), bundled by scripts/sync-site-kit.ts; the app inlines it here -->
+<!--whatsnew-kit-->
 <!-- What's new (#90), the v0.17.7 edition. The app reads the manifest below for its card and passes the platform
      (data-platform), the actions it can take (data-actions) and its theme (--sm-*). Each chapter shows that platform's
      own UI, rebuilt in HTML; a chapter whose "on" leaves a platform out isn't there at all. -->
@@ -57,7 +59,7 @@ kbd { font-family: inherit; font-size: 0.92em; border: 1px solid var(--border); 
 .wn-index .rn:hover { color: var(--fg); }
 .wn-main { flex: 1; overflow-y: auto; scroll-behavior: smooth; min-width: 0; }
 html.rm .wn-main { scroll-behavior: auto; }
-.wn-col { max-width: 640px; margin: 0 auto; padding: 40px 32px 60px; }
+.wn-col { max-width: 880px; margin: 0 auto; padding: 40px 32px 60px; }
 .wn-head small { color: var(--mutedFg); font-size: 12.5px; }
 .wn-head h1 { font-size: 30px; font-weight: 600; letter-spacing: -0.02em; margin: 4px 0 6px; }
 .wn-head p { margin: 0 0 30px; color: var(--mutedFg); font-size: 15px; }
@@ -80,6 +82,7 @@ html.rm .wn-main { scroll-behavior: auto; }
 .wn.narrow .wn-head h1 { font-size: 26px; }
 .wn.narrow .also .ar span { display: none; }
 /* stage: the product in motion, rebuilt in HTML, scaled from a fixed 420×300 scene */
+.stagebox.kit { aspect-ratio: auto; background: transparent; }
 .stagebox { position: relative; width: 100%; aspect-ratio: 420 / 300; border-radius: 10px; overflow: hidden; border: 1px solid var(--hair); background: var(--bg); }
 .scene { position: absolute; left: 0; top: 0; width: 420px; height: 300px; transform-origin: 0 0; font-size: 11px; line-height: 1.4; }
 .play { position: absolute; right: 10px; bottom: 10px; display: none; align-items: center; gap: 6px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 5px 10px; font-size: 12px; cursor: pointer; color: var(--fg); }
@@ -572,6 +575,11 @@ const params = new URLSearchParams(location.search);
 const PLATFORM = root.dataset.platform || params.get('platform') || 'mac';
 const FAMILY = PLATFORM === 'mac' || PLATFORM === 'win' || PLATFORM === 'linux' ? 'desk' : PLATFORM === 'web' ? 'web' : 'phone';
 root.dataset.family = FAMILY;
+// Chapters the website's real-app kit plays (the real UI, a recorded session, a pointer and a camera), on desktop and
+// the web; the phones keep their drawings until the kit has their layout.
+const KIT = window.SupermuxSceneKit;
+const KIT_SCENES = { browser: 'browser', cards: 'cards' };
+const kitScene = c => FAMILY !== 'phone' && KIT && KIT.scenes[KIT_SCENES[c.id]] ? KIT_SCENES[c.id] : null;
 const ACTIONS = new Set((root.dataset.actions || params.get('actions') || '').split(/\s+/).filter(Boolean));
 const RM = matchMedia('(prefers-reduced-motion: reduce)');
 const S = { rm: RM.matches };
@@ -642,7 +650,10 @@ function act(action) {
 
 // ── render ──
 let players = [], observer = null;
-function stopAll() { players.forEach(p => p.stop()); players = []; observer && observer.disconnect(); }
+function stopAll() {
+  players.forEach(p => p.stop()); players = []; observer && observer.disconnect();
+  document.querySelectorAll('.kithost').forEach(k => k.__smScene && k.__smScene.stop());
+}
 const WORDS = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten'];
 
 function render() {
@@ -657,14 +668,16 @@ function render() {
     <main class="wn-main"><div class="wn-col">
       <div class="wn-head"><small>v${EDITION.version} · November 2026</small><h1>What's new</h1><p>${WORDS[chs.length] || chs.length} things you can do now.</p></div>
       ${chs.map(c => `<section class="ch" id="ch-${c.id}" data-id="${c.id}">
-        <div class="stagebox" data-scene="${c.scene}" style="aspect-ratio:${(SCENES[c.scene].w || 420)} / ${(SCENES[c.scene].h || 300)}"><div class="scene"></div><button class="play">▶ Play</button></div>
+        ${kitScene(c) ? `<div class="stagebox kit"><div class="kithost" data-kit="${kitScene(c)}" data-keys="${PLATFORM === 'mac' ? 'mac' : 'other'}"></div></div>`
+          : `<div class="stagebox" data-scene="${c.scene}" style="aspect-ratio:${(SCENES[c.scene].w || 420)} / ${(SCENES[c.scene].h || 300)}"><div class="scene"></div><button class="play">▶ Play</button></div>`}
         <h2>${g(c.g)}${c.title}</h2><p>${c.text}</p>
         ${c.tryIt && ACTIONS.has(c.tryIt[0]) ? `<button class="try" data-act="${c.tryIt[0]}">${c.tryIt[1]} ${g('arrow')}</button>` : ''}</section>`).join('')}
       <section class="also"><h3>Also in this release</h3>${also().map(a => `<div class="ar">${g(a.g)}${a.t}<span>${a.d}</span></div>`).join('')}</section>
       <div class="wn-end">${ACTIONS.has('notes') ? `<a data-act="notes">${g('ext')}Full release notes on GitHub</a>` : '<span></span>'}${ACTIONS.has('done') ? '<button class="done" data-act="done">Done</button>' : ''}</div>
     </div></main></div>`;
   const main = host.querySelector('.wn-main');
-  host.querySelectorAll('.stagebox').forEach(box => {
+  host.querySelectorAll('.kithost').forEach(k => KIT.mount(k, KIT.scenes[k.dataset.kit]));
+  host.querySelectorAll('.stagebox:not(.kit)').forEach(box => {
     const p = new Player(box, box.dataset.scene); players.push(p); box._p = p;
     const fit = () => { box.querySelector('.scene').style.transform = `scale(${box.clientWidth / p.w})`; };
     new ResizeObserver(fit).observe(box); fit();
@@ -676,7 +689,7 @@ function render() {
     const p = e.target._p; if (S.rm) return;
     if (e.isIntersecting && !p.playing) p.play(); else if (!e.isIntersecting && p.playing) p.end();
   }), { root: main, threshold: 0.6 });
-  if (!S.rm) host.querySelectorAll('.stagebox').forEach(b => observer.observe(b));
+  if (!S.rm) host.querySelectorAll('.stagebox:not(.kit)').forEach(b => observer.observe(b));
   const links = [...host.querySelectorAll('.wn-index a[data-to]')];
   const sync = () => { let cur = chs[0] && chs[0].id; host.querySelectorAll('.ch').forEach(s => { if (s.offsetTop - main.scrollTop < 200) cur = s.dataset.id; }); links.forEach(l => l.classList.toggle('on', l.dataset.to === cur)); };
   main.addEventListener('scroll', sync); sync();

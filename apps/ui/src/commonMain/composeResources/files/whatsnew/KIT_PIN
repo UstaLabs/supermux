@@ -1,0 +1,20 @@
+{
+  "repo": "UstaLabs/supermux-website",
+  "sha": "2d411da5fcdc8e26402ce4e38c9a18f952eb0004",
+  "sha256": "f5cd7910efc23458815d560b6abd29bcf365cc0f5419627d4331c5d43c4d5293",
+  "files": [
+    "assets/fonts/geist-400.woff2",
+    "assets/fonts/geist-500.woff2",
+    "assets/fonts/geist-600.woff2",
+    "assets/fonts/geist-mono-400.woff2",
+    "app/app.css",
+    "app/scene-kit.css",
+    "app/browser-scene.css",
+    "app/cards-scene.css",
+    "app/replay-data.js",
+    "app/app.js",
+    "app/scene-kit.js",
+    "app/browser-scene.js",
+    "app/cards-scene.js"
+  ]
+}
