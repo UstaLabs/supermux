@@ -32,4 +32,22 @@ bare verb stem ("Temizle", "Kaydet"), as Turkish apps do.
 | tool call | araç çağrısı | |
 | terminal | terminal | |
 | cache | önbellek | |
+| provider | sağlayıcı | |
+| sign in / login | giriş yap / giriş | |
+| account | hesap | |
+| API key | API anahtarı | |
+| token | token | kept |
+| install | kur / kurulum | |
+| subscription | abonelik | |
+| limit | limit | |
+| memory (the agents' shared notes) | hafıza | |
+| shared link | paylaşılan bağlantı | |
+| dictation | dikte | |
+| read aloud | sesli oku | |
+| tidy-up (memory, dictation) | toparlama | |
+| labs | deneyler | "Privacy & labs" = "Gizlilik ve deneyler" |
+| experimental | deneysel | |
+| retry / try again | tekrar dene | |
+| effort | çaba | |
+| build (a version) | derleme | |
 | supermux | supermux | the brand, never translated or capitalised |

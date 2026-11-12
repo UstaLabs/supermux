@@ -66,6 +66,109 @@ import dev.supermux.net.DeviceDto
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.UsageResponse
 import dev.supermux.state.AccountResult
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.machine_cancel
+import dev.supermux.ui.resources.machine_chat
+import dev.supermux.ui.resources.machine_code_expired
+import dev.supermux.ui.resources.machine_copied
+import dev.supermux.ui.resources.machine_copy_link
+import dev.supermux.ui.resources.machine_devices
+import dev.supermux.ui.resources.machine_devices_failed
+import dev.supermux.ui.resources.machine_done
+import dev.supermux.ui.resources.machine_limit_5_hour
+import dev.supermux.ui.resources.machine_limit_monthly
+import dev.supermux.ui.resources.machine_limit_usage
+import dev.supermux.ui.resources.machine_limit_weekly
+import dev.supermux.ui.resources.machine_limit_your_login
+import dev.supermux.ui.resources.machine_limits
+import dev.supermux.ui.resources.machine_link_from
+import dev.supermux.ui.resources.machine_link_private
+import dev.supermux.ui.resources.machine_link_public
+import dev.supermux.ui.resources.machine_link_title
+import dev.supermux.ui.resources.machine_links
+import dev.supermux.ui.resources.machine_links_failed
+import dev.supermux.ui.resources.machine_links_note
+import dev.supermux.ui.resources.machine_loading
+import dev.supermux.ui.resources.machine_make_private
+import dev.supermux.ui.resources.machine_make_public
+import dev.supermux.ui.resources.machine_make_public_menu
+import dev.supermux.ui.resources.machine_making_code
+import dev.supermux.ui.resources.machine_more
+import dev.supermux.ui.resources.machine_name
+import dev.supermux.ui.resources.machine_name_hint
+import dev.supermux.ui.resources.machine_name_placeholder
+import dev.supermux.ui.resources.machine_name_taken
+import dev.supermux.ui.resources.machine_name_too_long
+import dev.supermux.ui.resources.machine_new_code
+import dev.supermux.ui.resources.machine_no_chats
+import dev.supermux.ui.resources.machine_no_devices
+import dev.supermux.ui.resources.machine_no_limits
+import dev.supermux.ui.resources.machine_open
+import dev.supermux.ui.resources.machine_open_usage
+import dev.supermux.ui.resources.machine_pair
+import dev.supermux.ui.resources.machine_pair_expires
+import dev.supermux.ui.resources.machine_pair_failed
+import dev.supermux.ui.resources.machine_pair_help
+import dev.supermux.ui.resources.machine_pair_note
+import dev.supermux.ui.resources.machine_pair_text
+import dev.supermux.ui.resources.machine_pair_text_same_network
+import dev.supermux.ui.resources.machine_pair_used
+import dev.supermux.ui.resources.machine_paired
+import dev.supermux.ui.resources.machine_pairing_code
+import dev.supermux.ui.resources.machine_parts_not_hosting
+import dev.supermux.ui.resources.machine_parts_not_running
+import dev.supermux.ui.resources.machine_parts_offline
+import dev.supermux.ui.resources.machine_parts_offline_seen
+import dev.supermux.ui.resources.machine_parts_starting
+import dev.supermux.ui.resources.machine_port
+import dev.supermux.ui.resources.machine_port_error
+import dev.supermux.ui.resources.machine_private_failed
+import dev.supermux.ui.resources.machine_public_failed
+import dev.supermux.ui.resources.machine_public_text
+import dev.supermux.ui.resources.machine_public_title
+import dev.supermux.ui.resources.machine_refresh
+import dev.supermux.ui.resources.machine_refreshing
+import dev.supermux.ui.resources.machine_remove
+import dev.supermux.ui.resources.machine_remove_failed
+import dev.supermux.ui.resources.machine_remove_menu
+import dev.supermux.ui.resources.machine_remove_text
+import dev.supermux.ui.resources.machine_remove_text_port
+import dev.supermux.ui.resources.machine_remove_title
+import dev.supermux.ui.resources.machine_rename
+import dev.supermux.ui.resources.machine_rename_failed
+import dev.supermux.ui.resources.machine_rename_gone
+import dev.supermux.ui.resources.machine_rename_save
+import dev.supermux.ui.resources.machine_rename_title
+import dev.supermux.ui.resources.machine_revoke
+import dev.supermux.ui.resources.machine_revoke_failed
+import dev.supermux.ui.resources.machine_revoke_text
+import dev.supermux.ui.resources.machine_revoke_title
+import dev.supermux.ui.resources.machine_revoking
+import dev.supermux.ui.resources.machine_saving
+import dev.supermux.ui.resources.machine_seen_days
+import dev.supermux.ui.resources.machine_seen_hours
+import dev.supermux.ui.resources.machine_seen_just_now
+import dev.supermux.ui.resources.machine_seen_min
+import dev.supermux.ui.resources.machine_seen_never
+import dev.supermux.ui.resources.machine_seen_now
+import dev.supermux.ui.resources.machine_seen_yesterday
+import dev.supermux.ui.resources.machine_share
+import dev.supermux.ui.resources.machine_share_failed
+import dev.supermux.ui.resources.machine_share_go
+import dev.supermux.ui.resources.machine_share_help
+import dev.supermux.ui.resources.machine_share_text
+import dev.supermux.ui.resources.machine_share_title
+import dev.supermux.ui.resources.machine_sharing
+import dev.supermux.ui.resources.machine_sign_in_expired
+import dev.supermux.ui.resources.machine_this_device
+import dev.supermux.ui.resources.machine_try_again
+import dev.supermux.ui.resources.machine_updated_days
+import dev.supermux.ui.resources.machine_updated_hours
+import dev.supermux.ui.resources.machine_updated_just_now
+import dev.supermux.ui.resources.machine_updated_min
+import dev.supermux.ui.resources.machine_usage_unread
+import dev.supermux.ui.resources.machine_working
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.retain.rememberRetainedOnPage
 import dev.supermux.ui.retain.rememberRetainedScope
@@ -104,131 +207,147 @@ import kotlinx.coroutines.launch
 @Immutable
 data class PairTimings(val ttlMs: Long = 10 * 60_000L, val pollMs: Long = 2_000L)
 
-/** The prototype's copy for the machine's own parts, as constants and pure helpers so the tests assert the strings. */
+/**
+ * The prototype's copy for the machine's own parts, in the app's language (resources `machine_*`). [seen] keeps the
+ * English the tests assert (the page shows [seenText]); [updated] stays plain for callers inside a `remember`.
+ */
 object MachinePartsCopy {
-    const val DEVICES = "Devices"
-    const val THIS_DEVICE = "This device"
-    const val REVOKE = "Revoke"
-    const val RENAME = "Rename"
-    const val RENAME_SAVE = "Save"
-    const val SAVING = "Saving…"
-    const val RENAME_TITLE = "Rename device"
-    const val NAME_TAKEN = "Another device already has that name."
+    val DEVICES: String @Composable get() = localized(Res.string.machine_devices)
+    val THIS_DEVICE: String @Composable get() = localized(Res.string.machine_this_device)
+    val REVOKE: String @Composable get() = localized(Res.string.machine_revoke)
+    val RENAME: String @Composable get() = localized(Res.string.machine_rename)
+    val RENAME_SAVE: String @Composable get() = localized(Res.string.machine_rename_save)
+    val SAVING: String @Composable get() = localized(Res.string.machine_saving)
+    val RENAME_TITLE: String @Composable get() = localized(Res.string.machine_rename_title)
+    val NAME_TAKEN: String @Composable get() = localized(Res.string.machine_name_taken)
     /** The broker's limit on a device's name (#97). */
     const val DEVICE_NAME_MAX = 40
-    const val NAME_TOO_LONG = "Use a name of 40 characters or fewer."
-    const val REVOKING = "Revoking…"
-    const val PAIR = "Pair a phone or computer"
-    const val PAIR_HELP = "Scan a code or open a link on it"
-    const val PAIR_TEXT = "Scan this with the supermux app on it, or open the link there."
-    const val SAME_NETWORK = " It needs to be on the same network: reaching it from anywhere is off."
-    const val PAIR_NOTE = "Treat the link like a password until it’s used."
-    const val NEW_CODE = "New code"
-    const val COPY_LINK = "Copy link"
-    const val COPIED = "Copied"
-    const val DONE = "Done"
-    const val CANCEL = "Cancel"
-    const val TRY_AGAIN = "Try again"
-    const val MAKING_CODE = "Making a code…"
-    const val CODE_EXPIRED = "This code expired. Make a new one to pair."
-    const val LOADING = "Loading…"
-    const val NO_DEVICES = "No devices are paired yet."
-    const val DEVICES_FAILED = "Couldn’t load the devices."
+    val NAME_TOO_LONG: String @Composable get() = localized(Res.string.machine_name_too_long, DEVICE_NAME_MAX)
+    val REVOKING: String @Composable get() = localized(Res.string.machine_revoking)
+    val PAIR: String @Composable get() = localized(Res.string.machine_pair)
+    val PAIR_HELP: String @Composable get() = localized(Res.string.machine_pair_help)
+    val PAIR_NOTE: String @Composable get() = localized(Res.string.machine_pair_note)
+    val NEW_CODE: String @Composable get() = localized(Res.string.machine_new_code)
+    val COPY_LINK: String @Composable get() = localized(Res.string.machine_copy_link)
+    val COPIED: String @Composable get() = localized(Res.string.machine_copied)
+    val DONE: String @Composable get() = localized(Res.string.machine_done)
+    val CANCEL: String @Composable get() = localized(Res.string.machine_cancel)
+    val TRY_AGAIN: String @Composable get() = localized(Res.string.machine_try_again)
+    val MAKING_CODE: String @Composable get() = localized(Res.string.machine_making_code)
+    val CODE_EXPIRED: String @Composable get() = localized(Res.string.machine_code_expired)
+    val LOADING: String @Composable get() = localized(Res.string.machine_loading)
+    val NO_DEVICES: String @Composable get() = localized(Res.string.machine_no_devices)
+    val DEVICES_FAILED: String @Composable get() = localized(Res.string.machine_devices_failed)
 
-    /** The name a code's device carries until it is renamed: pairing asks for none (§13). */
-    const val PAIR_DEVICE_NAME = "New device"
+    /** The name a code's device carries until it is renamed: pairing asks for none (§13). Sent to the broker as is. */
+    const val PAIR_DEVICE_NAME = "New device" // i18n-ok: a device's stored name, the broker's data
 
-    const val LINKS = "Shared links"
-    const val SHARE = "Share a port…"
-    const val SHARE_HELP = "A link to something a chat is running"
-    const val LINKS_NOTE = "A link closes when its chat is archived. Making one public asks first."
-    const val LINKS_FAILED = "Couldn’t load the shared links."
-    const val PRIVATE = "Private: your paired devices"
-    const val PUBLIC = "Public: anyone with the link"
-    const val OPEN = "Open"
-    const val MORE = "More"
-    const val MAKE_PUBLIC_MENU = "Make public…"
-    const val MAKE_PRIVATE = "Make private"
-    const val REMOVE_MENU = "Remove…"
-    const val MAKE_PUBLIC = "Make public"
-    const val REMOVE = "Remove"
-    const val SHARE_TITLE = "Share a port"
-    const val CHAT = "Chat"
-    const val PORT = "Port"
-    const val NAME = "Name"
-    const val PORT_ERROR = "A number from 1 to 65535."
-    const val NAME_HINT = "Shows in the link. Letters, numbers and dashes."
-    const val NAME_PLACEHOLDER = "From the chat’s name"
-    const val SHARE_GO = "Share"
-    const val SHARING = "Sharing…"
-    const val NO_CHATS = "No chats to share from yet."
-    const val WORKING = "working"
+    val LINKS: String @Composable get() = localized(Res.string.machine_links)
+    val SHARE: String @Composable get() = localized(Res.string.machine_share)
+    val SHARE_HELP: String @Composable get() = localized(Res.string.machine_share_help)
+    val LINKS_NOTE: String @Composable get() = localized(Res.string.machine_links_note)
+    val LINKS_FAILED: String @Composable get() = localized(Res.string.machine_links_failed)
+    val PRIVATE: String @Composable get() = localized(Res.string.machine_link_private)
+    val PUBLIC: String @Composable get() = localized(Res.string.machine_link_public)
+    val OPEN: String @Composable get() = localized(Res.string.machine_open)
+    val MORE: String @Composable get() = localized(Res.string.machine_more)
+    val MAKE_PUBLIC_MENU: String @Composable get() = localized(Res.string.machine_make_public_menu)
+    val MAKE_PRIVATE: String @Composable get() = localized(Res.string.machine_make_private)
+    val REMOVE_MENU: String @Composable get() = localized(Res.string.machine_remove_menu)
+    val MAKE_PUBLIC: String @Composable get() = localized(Res.string.machine_make_public)
+    val REMOVE: String @Composable get() = localized(Res.string.machine_remove)
+    val SHARE_TITLE: String @Composable get() = localized(Res.string.machine_share_title)
+    val CHAT: String @Composable get() = localized(Res.string.machine_chat)
+    val PORT: String @Composable get() = localized(Res.string.machine_port)
+    val NAME: String @Composable get() = localized(Res.string.machine_name)
+    val PORT_ERROR: String @Composable get() = localized(Res.string.machine_port_error)
+    val NAME_HINT: String @Composable get() = localized(Res.string.machine_name_hint)
+    val NAME_PLACEHOLDER: String @Composable get() = localized(Res.string.machine_name_placeholder)
+    val SHARE_GO: String @Composable get() = localized(Res.string.machine_share_go)
+    val SHARING: String @Composable get() = localized(Res.string.machine_sharing)
+    val NO_CHATS: String @Composable get() = localized(Res.string.machine_no_chats)
+    val WORKING: String @Composable get() = localized(Res.string.machine_working)
 
-    const val LIMITS = "Limits"
-    const val REFRESH = "Refresh"
-    const val REFRESHING = "Refreshing…"
-    const val OPEN_USAGE = "Open full usage"
-    const val NO_LIMITS = "No limits to show yet."
-    const val USAGE_UNREAD = "Couldn’t read its usage"
-    const val SIGN_IN_EXPIRED = "Sign-in expired"
+    val LIMITS: String @Composable get() = localized(Res.string.machine_limits)
+    val REFRESH: String @Composable get() = localized(Res.string.machine_refresh)
+    val REFRESHING: String @Composable get() = localized(Res.string.machine_refreshing)
+    val OPEN_USAGE: String @Composable get() = localized(Res.string.machine_open_usage)
+    val NO_LIMITS: String @Composable get() = localized(Res.string.machine_no_limits)
+    val USAGE_UNREAD: String @Composable get() = localized(Res.string.machine_usage_unread)
+    val SIGN_IN_EXPIRED: String @Composable get() = localized(Res.string.machine_sign_in_expired)
 
-    const val NOT_HOSTING = "Not hosting. Turn it on above to see this."
-    const val STARTING = "Starting…"
-    const val NOT_RUNNING = "supermux isn’t running on this computer."
+    val NOT_HOSTING: String @Composable get() = localized(Res.string.machine_parts_not_hosting)
+    val STARTING: String @Composable get() = localized(Res.string.machine_parts_starting)
+    val NOT_RUNNING: String @Composable get() = localized(Res.string.machine_parts_not_running)
 
-    fun offline(machine: String, lastSeen: String) =
-        "$machine is offline" + if (lastSeen.isBlank()) "" else " · last seen $lastSeen"
-    fun paired(n: Int) = "$n paired"
-    fun revokeTitle(device: String) = "Revoke $device?"
-    fun revokeText(machine: String) = "It can’t reach $machine any more, and its open chats close on it. Pair it again to bring it back."
-    fun revokeFailed(device: String) = "Couldn’t revoke $device. Try again."
-    fun renameFailed(device: String) = "Couldn’t rename $device. Try again."
-    fun renameGone(device: String) = "$device isn’t paired any more."
-    fun pairText(sameNetwork: Boolean) = PAIR_TEXT + if (sameNetwork) SAME_NETWORK else ""
-    fun expires(leftMs: Long): String {
+    @Composable fun offline(machine: String, lastSeen: String) =
+        if (lastSeen.isBlank()) localized(Res.string.machine_parts_offline, machine)
+        else localized(Res.string.machine_parts_offline_seen, machine, lastSeen)
+    @Composable fun paired(n: Int) = localized(Res.string.machine_paired, n)
+    @Composable fun revokeTitle(device: String) = localized(Res.string.machine_revoke_title, device)
+    @Composable fun revokeText(machine: String) = localized(Res.string.machine_revoke_text, machine)
+    @Composable fun revokeFailed(device: String) = localized(Res.string.machine_revoke_failed, device)
+    @Composable fun renameFailed(device: String) = localized(Res.string.machine_rename_failed, device)
+    @Composable fun renameGone(device: String) = localized(Res.string.machine_rename_gone, device)
+    @Composable fun pairText(sameNetwork: Boolean) =
+        localized(if (sameNetwork) Res.string.machine_pair_text_same_network else Res.string.machine_pair_text)
+    @Composable fun expires(leftMs: Long): String {
         val s = ((leftMs.coerceAtLeast(0) + 999) / 1000).toInt()
-        return "Works once · expires in ${s / 60}:${(s % 60).toString().padStart(2, '0')}"
+        return localized(Res.string.machine_pair_expires, "${s / 60}:${(s % 60).toString().padStart(2, '0')}")
     }
-    fun pairUsed(device: String) = "$device is paired. It shows up under Devices."
-    fun pairFailed(machine: String) = "Couldn’t make a pairing code on $machine."
+    @Composable fun pairUsed(device: String) = localized(Res.string.machine_pair_used, device)
+    @Composable fun pairFailed(machine: String) = localized(Res.string.machine_pair_failed, machine)
 
     /** "Last seen 2 min ago"; "Connected now" for the device asking; "Not used yet" before its first visit. */
-    fun seen(d: DeviceDto, nowMs: Long): String {
-        if (d.current) return "Connected now"
-        val then = parseChatTs(d.last_seen_at) ?: return "Not used yet"
+    @Composable fun seenText(d: DeviceDto, nowMs: Long): String {
+        if (d.current) return localized(Res.string.machine_seen_now)
+        val then = parseChatTs(d.last_seen_at) ?: return localized(Res.string.machine_seen_never)
         val min = ((nowMs - then).coerceAtLeast(0)) / 60_000
-        return "Last seen " + when {
-            min < 1 -> "just now"
-            min < 60 -> "$min min ago"
-            min < 24 * 60 -> "${min / 60} h ago"
-            min < 48 * 60 -> "yesterday"
-            else -> "${min / (24 * 60)} days ago"
+        return when {
+            min < 1 -> localized(Res.string.machine_seen_just_now)
+            min < 60 -> localized(Res.string.machine_seen_min, min.toInt())
+            min < 24 * 60 -> localized(Res.string.machine_seen_hours, (min / 60).toInt())
+            min < 48 * 60 -> localized(Res.string.machine_seen_yesterday)
+            else -> localized(Res.string.machine_seen_days, (min / (24 * 60)).toInt())
         }
     }
 
-    fun linkTitle(p: ProxyDto) = if (p.port != 0) "${p.domain} · port ${p.port}" else p.domain
-    fun linkFrom(p: ProxyDto) = if (p.sessionName.isBlank()) "" else "From “${p.sessionName}” · "
-    fun publicTitle(name: String) = "Make $name public?"
-    fun publicText(port: Int, machine: String) =
-        "Anyone with the link can open port $port on $machine, not only your paired devices. You can make it private again at any time."
-    fun publicFailed() = "Couldn’t make the link public. Try again."
-    fun privateFailed(name: String) = "Couldn’t make “$name” private."
-    fun removeTitle(name: String) = "Remove $name?"
-    fun removeText(port: Int, chat: String) =
-        "The link stops working." + if (chat.isNotBlank()) " Port $port keeps running in “$chat”." else ""
-    fun removeFailed() = "Couldn’t remove the link. Try again."
-    fun shareText(machine: String) =
-        "A private link to something a chat is running on $machine. Only your paired devices can open it until you make it public."
-    fun shareFailed(port: Int) = "Couldn’t share port $port. Try again."
+    /** [seenText] in English: the tests' copy. */
+    fun seen(d: DeviceDto, nowMs: Long): String {
+        if (d.current) return "Connected now" // i18n-ok: English twin for the tests
+        val then = parseChatTs(d.last_seen_at) ?: return "Not used yet" // i18n-ok: English twin for the tests
+        val min = ((nowMs - then).coerceAtLeast(0)) / 60_000
+        return "Last seen " + when { // i18n-ok: English twin for the tests
+            min < 1 -> "just now" // i18n-ok: English twin for the tests
+            min < 60 -> "$min min ago" // i18n-ok: English twin for the tests
+            min < 24 * 60 -> "${min / 60} h ago" // i18n-ok: English twin for the tests
+            min < 48 * 60 -> "yesterday" // i18n-ok: English twin for the tests
+            else -> "${min / (24 * 60)} days ago" // i18n-ok: English twin for the tests
+        }
+    }
+
+    @Composable fun linkTitle(p: ProxyDto) = if (p.port != 0) localized(Res.string.machine_link_title, p.domain, p.port) else p.domain
+    @Composable fun linkFrom(p: ProxyDto) = if (p.sessionName.isBlank()) "" else localized(Res.string.machine_link_from, p.sessionName) + " · "
+    @Composable fun publicTitle(name: String) = localized(Res.string.machine_public_title, name)
+    @Composable fun publicText(port: Int, machine: String) = localized(Res.string.machine_public_text, port, machine)
+    @Composable fun publicFailed() = localized(Res.string.machine_public_failed)
+    @Composable fun privateFailed(name: String) = localized(Res.string.machine_private_failed, name)
+    @Composable fun removeTitle(name: String) = localized(Res.string.machine_remove_title, name)
+    @Composable fun removeText(port: Int, chat: String) =
+        if (chat.isNotBlank()) localized(Res.string.machine_remove_text_port, port, chat) else localized(Res.string.machine_remove_text)
+    @Composable fun removeFailed() = localized(Res.string.machine_remove_failed)
+    @Composable fun shareText(machine: String) = localized(Res.string.machine_share_text, machine)
+    @Composable fun shareFailed(port: Int) = localized(Res.string.machine_share_failed, port)
     fun portOk(text: String): Boolean = text.toIntOrNull()?.let { it in 1..65535 } == true
 
-    fun updated(nowMs: Long, thenMs: Long): String {
+    /** "Updated 2 min ago", in the app's language. */
+    @Composable fun updatedText(nowMs: Long, thenMs: Long): String {
         val min = ((nowMs - thenMs).coerceAtLeast(0)) / 60_000
-        return "Updated " + when {
-            min < 1 -> "just now"
-            min < 60 -> "$min min ago"
-            min < 24 * 60 -> "${min / 60} h ago"
-            else -> "${min / (24 * 60)} days ago"
+        return when {
+            min < 1 -> localized(Res.string.machine_updated_just_now)
+            min < 60 -> localized(Res.string.machine_updated_min, min.toInt())
+            min < 24 * 60 -> localized(Res.string.machine_updated_hours, (min / 60).toInt())
+            else -> localized(Res.string.machine_updated_days, (min / (24 * 60)).toInt())
         }
     }
 }
@@ -371,7 +490,7 @@ internal fun DevicesSection(
             KitItem(
                 d.name,
                 Modifier.testTag("device_row_${d.name}"),
-                subtitle = MachinePartsCopy.seen(d, now),
+                subtitle = MachinePartsCopy.seenText(d, now),
                 mark = KitMark.Glyph(KitGlyphs.Devices),
                 titleBadge = if (d.current) MachinePartsCopy.THIS_DEVICE else null,
             ) {
@@ -419,6 +538,7 @@ internal fun DevicesSection(
                 form.revokeError = null
             }
         }
+        val revokeFailed = MachinePartsCopy.revokeFailed(target)
         KitSheet(
             MachinePartsCopy.revokeTitle(target),
             onDismiss = close,
@@ -439,7 +559,7 @@ internal fun DevicesSection(
                                 // The list comes from the broker again, never a local filter.
                                 form.changed++
                             } else {
-                                form.revokeError = MachinePartsCopy.revokeFailed(target)
+                                form.revokeError = revokeFailed
                             }
                         }
                     },
@@ -464,6 +584,11 @@ private fun RenameSheet(actions: DevicesSettingsActions, form: DevicesForm, targ
     val calls = rememberRetainedScope()
     val wanted = form.renameText.trim()
     val canSave = wanted.isNotEmpty() && !form.renameBusy
+    // Resolved here: the save coroutine can't read resources.
+    val nameTaken = MachinePartsCopy.NAME_TAKEN
+    val renameGone = MachinePartsCopy.renameGone(target)
+    val nameTooLong = MachinePartsCopy.NAME_TOO_LONG
+    val renameFailed = MachinePartsCopy.renameFailed(target)
     val close = {
         if (!form.renameBusy) {
             form.renameTarget = null
@@ -486,14 +611,14 @@ private fun RenameSheet(actions: DevicesSettingsActions, form: DevicesForm, targ
                     form.changed++
                 }
                 r is AccountResult.Failed && (r.status == 409 || r.code == "name_taken") ->
-                    form.renameError = MachinePartsCopy.NAME_TAKEN
+                    form.renameError = nameTaken
                 r is AccountResult.Failed && r.status == 404 -> {
-                    form.renameError = MachinePartsCopy.renameGone(target)
+                    form.renameError = renameGone
                     form.changed++
                 }
                 r is AccountResult.Failed && (r.status == 400 || r.code == "name_invalid") ->
-                    form.renameError = MachinePartsCopy.NAME_TOO_LONG
-                else -> form.renameError = MachinePartsCopy.renameFailed(target)
+                    form.renameError = nameTooLong
+                else -> form.renameError = renameFailed
             }
         }
     }
@@ -638,7 +763,7 @@ private fun PairSheet(
                 if (qr != null) {
                     Image(
                         bitmap = qr,
-                        contentDescription = "Pairing code",
+                        contentDescription = localized(Res.string.machine_pairing_code),
                         modifier = Modifier
                             .padding(top = 16.dp, bottom = 4.dp)
                             .size(168.dp)
@@ -785,6 +910,7 @@ internal fun LinksSection(
             val url = p.url?.takeIf { it.isNotBlank() }
             var menu by remember(p.domain) { mutableStateOf(false) }
             var copied by remember(p.domain, url) { mutableStateOf(false) }
+            val privateFailed = MachinePartsCopy.privateFailed(p.domain)
             KitItem(
                 MachinePartsCopy.linkTitle(p),
                 Modifier.testTag("proxy_row_$key"),
@@ -824,7 +950,7 @@ internal fun LinksSection(
                                     if (actions.proxySetPublic(p.domain, false)) {
                                         setLocally(p.domain, false)
                                     } else {
-                                        toggleError = MachinePartsCopy.privateFailed(p.domain)
+                                        toggleError = privateFailed
                                         reload++
                                     }
                                 }
@@ -867,6 +993,7 @@ internal fun LinksSection(
                 form.publicError = null
             }
         }
+        val publicFailed = MachinePartsCopy.publicFailed()
         KitSheet(
             MachinePartsCopy.publicTitle(p.domain),
             onDismiss = close,
@@ -886,7 +1013,7 @@ internal fun LinksSection(
                                 form.publicTarget = null
                                 form.changed++
                             } else {
-                                form.publicError = MachinePartsCopy.publicFailed()
+                                form.publicError = publicFailed
                             }
                         }
                     },
@@ -907,6 +1034,7 @@ internal fun LinksSection(
                 form.removeError = null
             }
         }
+        val removeFailed = MachinePartsCopy.removeFailed()
         KitSheet(
             MachinePartsCopy.removeTitle(p.domain),
             onDismiss = close,
@@ -926,7 +1054,7 @@ internal fun LinksSection(
                                 form.removeTarget = null
                                 form.changed++
                             } else {
-                                form.removeError = MachinePartsCopy.removeFailed()
+                                form.removeError = removeFailed
                             }
                         }
                     },
@@ -963,6 +1091,8 @@ private fun ShareSheet(actions: ProxiesSettingsActions, form: LinksForm, machine
     val portOk = MachinePartsCopy.portOk(form.port)
     val chat = form.chat?.takeIf { it in chats }
     val canShare = chat != null && portOk && !form.shareBusy
+    // Resolved here for the port in the field: the share coroutine can't read resources (typing clears the error).
+    val shareFailed = MachinePartsCopy.shareFailed(form.port.toIntOrNull() ?: 0)
     val close = {
         if (!form.shareBusy) {
             form.shareOpen = false
@@ -978,7 +1108,7 @@ private fun ShareSheet(actions: ProxiesSettingsActions, form: LinksForm, machine
             val r = actions.proxyCreate(session, port, form.name.trim().trim('-').ifBlank { null })
             form.shareBusy = false
             if (r == null) {
-                form.shareError = MachinePartsCopy.shareFailed(port)
+                form.shareError = shareFailed
             } else {
                 form.shareOpen = false
                 form.resetShare()
@@ -1038,7 +1168,7 @@ private fun ShareSheet(actions: ProxiesSettingsActions, form: LinksForm, machine
                 form.port,
                 { form.port = it.filter(Char::isDigit).take(5); form.shareError = null },
                 label = MachinePartsCopy.PORT,
-                placeholder = "3000",
+                placeholder = "3000", // i18n-ok: a port number
                 error = if (form.port.isNotEmpty() && !portOk) MachinePartsCopy.PORT_ERROR else null,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 onSubmit = { if (canShare) share() },
@@ -1074,9 +1204,24 @@ data class LimitLogin(
     val mark: String,
     val title: String,
     val windows: List<LimitWindow> = emptyList(),
-    val note: String? = null,
+    val note: LimitNote? = null,
     val noteWarn: Boolean = false,
+    /** The machine's own login beside added ones: shown as "‹title› · your login". */
+    val yourLogin: Boolean = false,
 )
+
+/** Why a login shows no windows. */
+enum class LimitNote { SignInExpired, UsageUnread }
+
+/** [LimitWindow.label] is an English id (it is in the row's tag); these are the ones the app words. */
+@Composable
+private fun limitLabel(label: String): String = when (label) {
+    "5-hour" -> localized(Res.string.machine_limit_5_hour)
+    "Weekly" -> localized(Res.string.machine_limit_weekly)
+    "Monthly" -> localized(Res.string.machine_limit_monthly)
+    "Usage" -> localized(Res.string.machine_limit_usage)
+    else -> label
+}
 
 @Immutable
 data class LimitWindow(val label: String, val percent: Int, val reset: String) {
@@ -1101,11 +1246,10 @@ fun limitLogins(u: UsageResponse?, now: Long): List<LimitLogin> {
     if (u == null) return emptyList()
     val out = mutableListOf<LimitLogin>()
     fun hasAccounts(agent: String) = u.accounts.any { it.agent == agent && it.quota }
-    fun systemTitle(agent: String, name: String) = if (hasAccounts(agent)) "$name · your login" else name
     fun unread(key: String, mark: String, title: String, agent: String) {
         if (u.errors.containsKey(agent)) {
             val expired = u.errorCodes[agent] == "account_expired"
-            out += LimitLogin(key, mark, title, note = if (expired) MachinePartsCopy.SIGN_IN_EXPIRED else MachinePartsCopy.USAGE_UNREAD, noteWarn = expired)
+            out += LimitLogin(key, mark, title, note = if (expired) LimitNote.SignInExpired else LimitNote.UsageUnread, noteWarn = expired, yourLogin = hasAccounts(agent))
         }
     }
     fun claude(c: dev.supermux.net.ClaudeUsage) = listOf(
@@ -1123,7 +1267,8 @@ fun limitLogins(u: UsageResponse?, now: Long): List<LimitLogin> {
     val title = mapOf("claude" to "Claude Code", "codex" to "Codex", "cursor" to "Cursor", "grok" to "Grok")
     val mark = mapOf("claude" to "C", "codex" to "X", "cursor" to "Cu", "grok" to "G")
     for (agent in listOf("claude", "codex", "cursor", "grok")) {
-        val t = systemTitle(agent, title.getValue(agent))
+        val t = title.getValue(agent)
+        val yours = hasAccounts(agent)
         val m = mark.getValue(agent)
         val windows = when (agent) {
             "claude" -> u.claude?.let(::claude)
@@ -1131,7 +1276,7 @@ fun limitLogins(u: UsageResponse?, now: Long): List<LimitLogin> {
             "cursor" -> u.cursor?.let(::cursor)
             else -> u.grok?.let(::grok)
         }
-        if (windows != null) out += LimitLogin(agent, m, t, windows) else unread(agent, m, t, agent)
+        if (windows != null) out += LimitLogin(agent, m, t, windows, yourLogin = yours) else unread(agent, m, t, agent)
         u.accounts.filter { it.agent == agent && it.quota }.forEach { a ->
             val at = "${title.getValue(agent)} · ${a.label.ifBlank { a.id }}"
             val aw = when (agent) {
@@ -1142,8 +1287,8 @@ fun limitLogins(u: UsageResponse?, now: Long): List<LimitLogin> {
             }
             out += when {
                 aw != null -> LimitLogin("$agent:${a.id}", m, at, aw)
-                a.errorCode == "account_expired" -> LimitLogin("$agent:${a.id}", m, at, note = MachinePartsCopy.SIGN_IN_EXPIRED, noteWarn = true)
-                else -> LimitLogin("$agent:${a.id}", m, at, note = MachinePartsCopy.USAGE_UNREAD)
+                a.errorCode == "account_expired" -> LimitLogin("$agent:${a.id}", m, at, note = LimitNote.SignInExpired, noteWarn = true)
+                else -> LimitLogin("$agent:${a.id}", m, at, note = LimitNote.UsageUnread)
             }
         }
     }
@@ -1180,7 +1325,7 @@ internal fun LimitsSection(usage: UsageActions?, quiet: String?, onOpenUsage: ()
                         Text(MachinePartsCopy.REFRESHING, fontSize = 11.5.sp, color = c.faint, modifier = Modifier.testTag("machine_limits_refreshing"))
                     } else {
                         shown?.let(::newestFetch)?.let {
-                            Text(MachinePartsCopy.updated(nowMs(), it) + " · ", fontSize = 11.5.sp, color = c.faint, modifier = Modifier.testTag("machine_limits_updated"))
+                            Text(MachinePartsCopy.updatedText(nowMs(), it) + " · ", fontSize = 11.5.sp, color = c.faint, modifier = Modifier.testTag("machine_limits_updated"))
                         }
                         val src = remember { MutableInteractionSource() }
                         Text(
@@ -1221,9 +1366,13 @@ internal fun LimitsSection(usage: UsageActions?, quiet: String?, onOpenUsage: ()
         else -> KitItemList(Modifier.padding(top = 4.dp)) {
             logins.forEach { l ->
                 KitItem(
-                    l.title,
+                    if (l.yourLogin) localized(Res.string.machine_limit_your_login, l.title) else l.title,
                     Modifier.testTag("machine_limit_${l.key}"),
-                    subtitle = l.note,
+                    subtitle = when (l.note) {
+                        LimitNote.SignInExpired -> MachinePartsCopy.SIGN_IN_EXPIRED
+                        LimitNote.UsageUnread -> MachinePartsCopy.USAGE_UNREAD
+                        null -> null
+                    },
                     subtitleWarn = l.noteWarn,
                     mark = KitMark.Letters(l.mark),
                     below = if (l.windows.isEmpty()) null else {
@@ -1249,7 +1398,7 @@ private fun LimitWindowRow(w: LimitWindow, tag: String) {
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text(
-            listOf(w.label, w.reset).filter { it.isNotBlank() }.joinToString(" · "),
+            listOf(limitLabel(w.label), w.reset).filter { it.isNotBlank() }.joinToString(" · "),
             fontSize = 12.sp,
             color = tone,
             maxLines = 1,

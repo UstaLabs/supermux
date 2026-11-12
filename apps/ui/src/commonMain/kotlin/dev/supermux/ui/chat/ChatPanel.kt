@@ -166,6 +166,9 @@ import kotlin.math.exp
 import kotlin.math.max
 import kotlin.time.Clock
 import dev.supermux.ui.accounts.LimitWaitStrip
+import dev.supermux.ui.i18n.localizedPlural
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.chat_new_messages
 
 /** Reading-width cap for the composer so it lines up with the timeline's own cap. */
 private val CONTENT_MAX_WIDTH = 860.dp
@@ -1560,7 +1563,7 @@ private fun NewMessagesLine(count: Int) {
     ) {
         Box(Modifier.weight(1f).height(1.dp).background(cs.primary.copy(alpha = 0.45f)))
         Text(
-            if (count == 1) "1 new message" else "$count new messages",
+            localizedPlural(Res.plurals.chat_new_messages, count, count),
             color = cs.primary,
             fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold,

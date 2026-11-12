@@ -3,11 +3,15 @@
 // page task adds its rows here, in page order.
 package dev.supermux.ui.settings.search
 
+import androidx.compose.runtime.Composable
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.keys.AppCommands
 import dev.supermux.ui.keys.DefaultKeymap
 import dev.supermux.ui.keys.currentKeyOs
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.platform.Caps
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.allStringResources
 import dev.supermux.ui.settings.MachineSub
 import dev.supermux.ui.settings.SettingsPlace
 import dev.supermux.ui.settings.pages.shortcutAnchor
@@ -44,19 +48,52 @@ data class SettingsSearchGroup(val section: SettingsSection, val hits: List<Sett
 fun settingsPageTitle(section: SettingsSection, ctx: SettingsSearchContext): String =
     settingsTitle(SettingsPlace(section), labs = ctx.caps.assistantOverlay)
 
-/** Every word of [query] must appear, in any case, in an entry's label, keywords or page title. */
+/** An entry in the app's language (#123): what a result shows, and more words it is found by. */
+data class LocalizedSearchEntry(val label: String, val keywords: String = "")
+
+/** The resource key of an entry's label in the app's language: `search_‹section›_‹anchor›` (its keywords: + `_kw`). */
+fun searchKey(entry: SettingsSearchEntry): String =
+    "search_${entry.section.name.lowercase()}_${(entry.anchor ?: "page").replace('-', '_')}"
+
+/**
+ * Every entry of [entries] in the app's language: a page entry is its page's name ([pageTitles]); a row's label and
+ * extra keywords come from the `settings_search.xml` catalogs by [searchKey]. An entry with no key (a provider's name, a
+ * command) keeps its English.
+ */
+@Composable
+fun localizedSearchEntries(
+    entries: List<SettingsSearchEntry>,
+    pageTitles: Map<SettingsSection, String>,
+): Map<SettingsSearchEntry, LocalizedSearchEntry> {
+    val all = Res.allStringResources
+    return entries.associateWith { e ->
+        val key = searchKey(e)
+        LocalizedSearchEntry(
+            label = if (e.anchor == null) pageTitles[e.section] ?: e.label else all[key]?.let { localized(it) } ?: e.label,
+            keywords = all["${key}_kw"]?.let { localized(it) }.orEmpty(),
+        )
+    }
+}
+
+/**
+ * Every word of [query] must appear, in any case, in an entry's label, keywords or page title — in English or, from
+ * [translations], in the app's language: a Turkish reader can type either.
+ */
 fun searchSettings(
     query: String,
     ctx: SettingsSearchContext,
     entries: List<SettingsSearchEntry> = SettingsSearchIndex,
     limit: Int = 40,
+    translations: Map<SettingsSearchEntry, LocalizedSearchEntry> = emptyMap(),
 ): List<SettingsSearchGroup> {
     val words = query.lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }
     if (words.isEmpty()) return emptyList()
     return entries.asSequence()
         .filter { it.shownWhen(ctx) }
         .filter { e ->
-            val hay = "${e.label} ${e.keywords} ${settingsPageTitle(e.section, ctx)}".lowercase()
+            val local = translations[e]
+            val hay = "${e.label} ${e.keywords} ${settingsPageTitle(e.section, ctx)} ${local?.label.orEmpty()} ${local?.keywords.orEmpty()}"
+                .lowercase()
             words.all { it in hay }
         }
         .take(limit)

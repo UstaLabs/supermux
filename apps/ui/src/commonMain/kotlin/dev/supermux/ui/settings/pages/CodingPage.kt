@@ -23,7 +23,18 @@ import dev.supermux.ui.settings.kit.LocalSettingsMachines
 import dev.supermux.ui.settings.kit.currentMachineOnline
 import dev.supermux.ui.settings.kit.kitAnchor
 import dev.supermux.ui.settings.kit.kitDeviceNoun
-import dev.supermux.ui.settings.settingsTitle
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.settings_coding_code_intelligence
+import dev.supermux.ui.resources.settings_coding_editor
+import dev.supermux.ui.resources.settings_pages_couldnt_reach
+import dev.supermux.ui.resources.settings_pages_couldnt_reach_this_machine
+import dev.supermux.ui.resources.settings_pages_on_machine
+import dev.supermux.ui.resources.settings_pages_on_this_computer
+import dev.supermux.ui.resources.settings_pages_on_this_device
+import dev.supermux.ui.resources.settings_pages_on_this_machine
+import dev.supermux.ui.resources.settings_pages_on_this_phone
+import dev.supermux.ui.settings.localizedSettingsTitle
 
 @Composable
 fun CodingPage(
@@ -35,11 +46,11 @@ fun CodingPage(
 ) {
     val online = currentMachineOnline()
     // Mid-sentence: "on studio-mini", or "on this machine" when Settings knows no name.
-    val machine = LocalSettingsMachines.current?.current?.name ?: "this machine"
+    val machineNote = pagesMachineNote()
     // Another machine picked: its sections load afresh.
     val machineId = LocalSettingsMachines.current?.current?.id
     KitPage(
-        settingsTitle(SettingsPlace(SettingsSection.Coding)),
+        localizedSettingsTitle(SettingsPlace(SettingsSection.Coding)),
         modifier,
         scope = { KitMixedScope() },
         anchor = anchor,
@@ -47,20 +58,44 @@ fun CodingPage(
         tag = "coding_settings_screen",
     ) {
         KitSectionHead(
-            "GitHub & GitLab",
+            "GitHub & GitLab", // i18n-ok: product names
             Modifier.kitAnchor("github").testTag("coding_github"),
-            note = "on $machine",
+            note = machineNote,
         )
         if (!online) KitOfflineNote() else key(machineId) { GitHubSection(forges) }
 
-        KitSectionHead("Editor & terminal", note = "on this ${kitDeviceNoun()}")
+        KitSectionHead(localized(Res.string.settings_coding_editor), note = pagesDeviceNote())
         EditorSection()
 
         KitSectionHead(
-            "Code intelligence",
+            localized(Res.string.settings_coding_code_intelligence),
             Modifier.kitAnchor("code-intelligence").testTag("coding_code-intelligence"),
-            note = "on $machine",
+            note = machineNote,
         )
         if (!online) KitOfflineNote() else key(machineId) { CodeIntelligenceSection(lsp) }
     }
+}
+
+/** A section head's note for the machine's rows: "on ‹machine›", or "on this machine" when Settings knows no name. */
+@Composable
+internal fun pagesMachineNote(): String {
+    val name = LocalSettingsMachines.current?.current?.name
+    return if (name != null) localized(Res.string.settings_pages_on_machine, name) else localized(Res.string.settings_pages_on_this_machine)
+}
+
+/** A section head's note for this device's rows: "on this computer", "on this phone" or "on this device". */
+@Composable
+internal fun pagesDeviceNote(): String = localized(
+    when (kitDeviceNoun()) {
+        "computer" -> Res.string.settings_pages_on_this_computer
+        "phone" -> Res.string.settings_pages_on_this_phone
+        else -> Res.string.settings_pages_on_this_device
+    },
+)
+
+/** "Couldn't reach ‹machine›." for a failed load, or "…this machine." when Settings knows no name. */
+@Composable
+internal fun pagesCouldntReach(): String {
+    val name = LocalSettingsMachines.current?.current?.name
+    return if (name != null) localized(Res.string.settings_pages_couldnt_reach, name) else localized(Res.string.settings_pages_couldnt_reach_this_machine)
 }

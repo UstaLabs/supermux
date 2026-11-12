@@ -39,6 +39,42 @@ import dev.supermux.net.LspServer
 import dev.supermux.proto.ServerFrame
 import dev.supermux.state.FleetStore
 import dev.supermux.state.HostStore
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.git_this_machine
+import dev.supermux.ui.resources.lsp_add
+import dev.supermux.ui.resources.lsp_add_failed
+import dev.supermux.ui.resources.lsp_add_note
+import dev.supermux.ui.resources.lsp_add_own
+import dev.supermux.ui.resources.lsp_adding
+import dev.supermux.ui.resources.lsp_cancel
+import dev.supermux.ui.resources.lsp_close
+import dev.supermux.ui.resources.lsp_dismiss
+import dev.supermux.ui.resources.lsp_field_arguments
+import dev.supermux.ui.resources.lsp_field_command
+import dev.supermux.ui.resources.lsp_field_extensions
+import dev.supermux.ui.resources.lsp_field_install_command
+import dev.supermux.ui.resources.lsp_field_language_name
+import dev.supermux.ui.resources.lsp_field_name
+import dev.supermux.ui.resources.lsp_field_short_name
+import dev.supermux.ui.resources.lsp_fill_required
+import dev.supermux.ui.resources.lsp_install
+import dev.supermux.ui.resources.lsp_install_failed
+import dev.supermux.ui.resources.lsp_install_note
+import dev.supermux.ui.resources.lsp_installed
+import dev.supermux.ui.resources.lsp_installing
+import dev.supermux.ui.resources.lsp_installing_title
+import dev.supermux.ui.resources.lsp_nothing_logged
+import dev.supermux.ui.resources.lsp_remove
+import dev.supermux.ui.resources.lsp_removing
+import dev.supermux.ui.resources.lsp_show_log
+import dev.supermux.ui.resources.lsp_state_needs
+import dev.supermux.ui.resources.lsp_state_needs_toolchain
+import dev.supermux.ui.resources.lsp_state_not_found
+import dev.supermux.ui.resources.lsp_state_not_installed
+import dev.supermux.ui.resources.lsp_state_ready
+import dev.supermux.ui.resources.lsp_state_ready_command
+import dev.supermux.ui.resources.lsp_use_server
 import dev.supermux.ui.retain.rememberRetainedOnPage
 import dev.supermux.ui.retain.rememberRetainedScope
 import dev.supermux.ui.settings.kit.KitButtons
@@ -105,7 +141,7 @@ fun rememberCodeIntelligenceActions(fleet: FleetStore): CodeIntelligenceActions 
 
 /** The machine as a sentence names it mid-way: its name, or "this machine" when Settings knows none. */
 @Composable
-private fun machineInSentence(): String = LocalSettingsMachines.current?.current?.name ?: "this machine"
+private fun machineInSentence(): String = LocalSettingsMachines.current?.current?.name ?: localized(Res.string.git_this_machine)
 
 /**
  * One item per language server, then "Add your own language server". Loads on first composition; the caller re-keys
@@ -142,6 +178,7 @@ fun CodeIntelligenceSection(actions: CodeIntelligenceActions, modifier: Modifier
     }
 
     LaunchedEffect(Unit) { reload() }
+    val addFailed = localized(Res.string.lsp_add_failed)
 
     Column(modifier.fillMaxWidth().testTag("lsp_settings_screen")) {
         if (loaded && servers.isNotEmpty()) {
@@ -201,7 +238,7 @@ fun CodeIntelligenceSection(actions: CodeIntelligenceActions, modifier: Modifier
         // A new fold after each save, so a saved server leaves it closed; open from the start while it holds typing.
         if (loaded) key(add.saved) {
             KitFold(
-                "Add your own language server",
+                localized(Res.string.lsp_add_own),
                 modifier = Modifier.kitAnchor("add-language-server"),
                 anchors = setOf("add-language-server"),
                 tag = "lsp_add_toggle",
@@ -220,7 +257,7 @@ fun CodeIntelligenceSection(actions: CodeIntelligenceActions, modifier: Modifier
                                 add.saved++
                                 add.added = r.lsp!!.servers
                             } else {
-                                add.addError = r?.error ?: "Couldn't add the language server."
+                                add.addError = r?.error ?: addFailed
                             }
                         }
                     },
@@ -233,15 +270,15 @@ fun CodeIntelligenceSection(actions: CodeIntelligenceActions, modifier: Modifier
         val server = servers.firstOrNull { it.id == id }
         val result = installDone[id]
         KitSheet(
-            title = "Installing ${server?.label ?: id}",
+            title = localized(Res.string.lsp_installing_title, server?.label ?: id),
             onDismiss = { logFor = null },
             description = result?.error,
             tag = "lsp_install_log_sheet",
-            buttons = { KitGhostButton("Close", onClick = { logFor = null }) },
+            buttons = { KitGhostButton(localized(Res.string.lsp_close), onClick = { logFor = null }) },
         ) {
             val lines = installLog[id].orEmpty()
             Column(Modifier.padding(top = 10.dp)) {
-                if (lines.isEmpty()) KitNote("Nothing was logged.")
+                if (lines.isEmpty()) KitNote(localized(Res.string.lsp_nothing_logged))
                 lines.forEach { line -> Text(line, fontSize = 11.sp, fontFamily = MonoFontFamily, color = kitColors().dim) }
             }
         }
@@ -269,12 +306,12 @@ private fun LspServerItem(
     Column(Modifier.fillMaxWidth().testTag("lsp_server_row_${server.id}")) {
         KitItem(
             server.label,
-            subtitle = if (ready && server.extensions.isNotEmpty()) extSummary(server.extensions) else stateLabel(server, machine),
+            subtitle = if (ready && server.extensions.isNotEmpty()) extSummary(server.extensions) else localizedStateLabel(server, machine),
             mark = KitMark.Letters(lspMark(server.label)),
         ) {
             if (server.enabled && server.installable && !ready) {
                 KitGhostButton(
-                    if (installing) "Installing…" else (server.installLabel ?: "Install"),
+                    if (installing) localized(Res.string.lsp_installing) else (server.installLabel ?: localized(Res.string.lsp_install)),
                     onClick = onInstall,
                     modifier = Modifier.testTag("lsp_install_${server.id}"),
                     enabled = !installBlocked,
@@ -282,7 +319,7 @@ private fun LspServerItem(
             }
             if (server.custom) {
                 KitGhostButton(
-                    if (removing) "Removing…" else "Remove",
+                    if (removing) localized(Res.string.lsp_removing) else localized(Res.string.lsp_remove),
                     onClick = onRemove,
                     modifier = Modifier.testTag("lsp_remove_${server.id}"),
                     enabled = !removing,
@@ -292,7 +329,7 @@ private fun LspServerItem(
             KitToggle(
                 checked = server.enabled,
                 onCheckedChange = onToggle,
-                label = "Use ${server.label}",
+                label = localized(Res.string.lsp_use_server, server.label),
                 modifier = Modifier.testTag("lsp_toggle_${server.id}"),
                 enabled = !toggling,
             )
@@ -315,15 +352,15 @@ private fun LspServerItem(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
-                    if (result.ok) "Installed." else "Couldn't install ${server.label}.",
+                    if (result.ok) localized(Res.string.lsp_installed) else localized(Res.string.lsp_install_failed, server.label),
                     fontSize = 12.sp,
                     color = if (result.ok) c.dim else c.danger,
                     modifier = Modifier.weight(1f),
                 )
                 if (!result.ok) {
-                    KitTextAction("Show log", onClick = onShowLog, modifier = Modifier.testTag("lsp_install_show_log_${server.id}"))
+                    KitTextAction(localized(Res.string.lsp_show_log), onClick = onShowLog, modifier = Modifier.testTag("lsp_install_show_log_${server.id}"))
                 }
-                KitTextAction("Dismiss", onClick = onDismissResult, modifier = Modifier.testTag("lsp_install_dismiss_${server.id}"))
+                KitTextAction(localized(Res.string.lsp_dismiss), onClick = onDismissResult, modifier = Modifier.testTag("lsp_install_dismiss_${server.id}"))
             }
         }
     }
@@ -344,6 +381,7 @@ private fun AddLspForm(
     var languageId by form::languageId
     var installCmd by form::installCmd
     val saving = form.saving
+    val fillRequired = localized(Res.string.lsp_fill_required)
 
     fun save() {
         val idStr = id.trim().ifEmpty { slugId(label) }
@@ -351,7 +389,7 @@ private fun AddLspForm(
         val commandStr = command.trim()
         val extStr = extensions.trim()
         if (labelStr.isEmpty() || commandStr.isEmpty() || extStr.isEmpty()) {
-            form.addError = "Fill in the name, command and file extensions."
+            form.addError = fillRequired
             return
         }
         form.saving = true
@@ -373,30 +411,30 @@ private fun AddLspForm(
         Modifier.fillMaxWidth().padding(top = 4.dp).testTag("lsp_add_form"),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        KitNote("Name, command, file extensions — for languages we don't list.")
-        LspField("Short name", "zig", id, "lsp_add_id", enabled = !saving) { id = it }
-        LspField("Name", "Zig", label, "lsp_add_label", mono = false, enabled = !saving) {
+        KitNote(localized(Res.string.lsp_add_note))
+        LspField(localized(Res.string.lsp_field_short_name), "zig", id, "lsp_add_id", enabled = !saving) { id = it }
+        LspField(localized(Res.string.lsp_field_name), "Zig", label, "lsp_add_label", mono = false, enabled = !saving) {
             label = it
             // The short name follows the name until it is typed in itself.
             if (id.isBlank() && it.isNotBlank()) id = slugId(it)
         }
-        LspField("Command", "zls", command, "lsp_add_command", enabled = !saving) { command = it }
-        LspField("Arguments", "--stdio", args, "lsp_add_args", enabled = !saving) { args = it }
-        LspField("File extensions", ".zig, .zon", extensions, "lsp_add_extensions", enabled = !saving) { extensions = it }
-        LspField("Language name (optional)", "zig", languageId, "lsp_add_language_id", enabled = !saving) { languageId = it }
-        LspField("Install command (optional)", null, installCmd, "lsp_add_install_cmd", enabled = !saving) { installCmd = it }
-        KitNote("The install command runs as your user on $machine, without sudo.")
+        LspField(localized(Res.string.lsp_field_command), "zls", command, "lsp_add_command", enabled = !saving) { command = it }
+        LspField(localized(Res.string.lsp_field_arguments), "--stdio", args, "lsp_add_args", enabled = !saving) { args = it }
+        LspField(localized(Res.string.lsp_field_extensions), ".zig, .zon", extensions, "lsp_add_extensions", enabled = !saving) { extensions = it }
+        LspField(localized(Res.string.lsp_field_language_name), "zig", languageId, "lsp_add_language_id", enabled = !saving) { languageId = it }
+        LspField(localized(Res.string.lsp_field_install_command), null, installCmd, "lsp_add_install_cmd", enabled = !saving) { installCmd = it }
+        KitNote(localized(Res.string.lsp_install_note, machine))
         form.addError?.let {
             Text(it, fontSize = 12.sp, color = kitColors().danger, modifier = Modifier.testTag("lsp_add_error"))
         }
         KitButtons {
             KitGhostButton(
-                if (saving) "Adding…" else "Add",
+                if (saving) localized(Res.string.lsp_adding) else localized(Res.string.lsp_add),
                 onClick = { save() },
                 modifier = Modifier.testTag("lsp_add_save"),
                 enabled = !saving,
             )
-            KitGhostButton("Cancel", onClick = onCancel, modifier = Modifier.testTag("lsp_add_cancel"), enabled = !saving)
+            KitGhostButton(localized(Res.string.lsp_cancel), onClick = onCancel, modifier = Modifier.testTag("lsp_add_cancel"), enabled = !saving)
         }
     }
 }
@@ -429,9 +467,22 @@ private fun LspField(
 
 /** "Ready" / "Ready · ‹command›" (yours) / "Needs ‹what› on ‹machine›" / "Not installed" / "Not found on ‹machine›" (yours). */
 internal fun stateLabel(server: LspServer, machine: String): String = when (server.state) {
-    "ready" -> if (server.custom && server.command != null) "Ready · ${server.command}" else "Ready"
-    "prereq-missing" -> "Needs ${server.requires ?: "its toolchain"} on $machine"
-    else -> if (server.custom) "Not found on $machine" else "Not installed"
+    "ready" -> if (server.custom && server.command != null) "Ready · ${server.command}" else "Ready" // i18n-ok: English for tests; the item shows localizedStateLabel
+    "prereq-missing" -> "Needs ${server.requires ?: "its toolchain"} on $machine" // i18n-ok: as above
+    else -> if (server.custom) "Not found on $machine" else "Not installed" // i18n-ok: as above
+}
+
+/** [stateLabel] in the app's language, for the server's item. */
+@Composable
+private fun localizedStateLabel(server: LspServer, machine: String): String = when (server.state) {
+    "ready" -> if (server.custom && server.command != null) {
+        localized(Res.string.lsp_state_ready_command, server.command!!)
+    } else {
+        localized(Res.string.lsp_state_ready)
+    }
+    "prereq-missing" -> server.requires?.let { localized(Res.string.lsp_state_needs, it, machine) }
+        ?: localized(Res.string.lsp_state_needs_toolchain, machine)
+    else -> if (server.custom) localized(Res.string.lsp_state_not_found, machine) else localized(Res.string.lsp_state_not_installed)
 }
 
 /** Up to 6 unique extensions, comma-joined, with a trailing "…" if more were truncated. */

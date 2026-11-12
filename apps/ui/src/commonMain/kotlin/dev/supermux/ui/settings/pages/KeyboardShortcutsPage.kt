@@ -22,7 +22,10 @@ import dev.supermux.ui.settings.kit.KitPage
 import dev.supermux.ui.settings.kit.KitSectionHead
 import dev.supermux.ui.settings.kit.KitValueRow
 import dev.supermux.ui.settings.kit.kitAnchor
-import dev.supermux.ui.settings.settingsTitle
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.settings_shortcuts_or
+import dev.supermux.ui.settings.localizedSettingsTitle
 
 /** A command row's search anchor (the search index declares the same one). */
 fun shortcutAnchor(command: AppCommand): String = "key-${command.id}"
@@ -41,8 +44,9 @@ fun KeyboardShortcutsPage(
     os: KeyOs = currentKeyOs,
     keymap: Keymap = DefaultKeymap,
 ) {
+    val orWord = localized(Res.string.settings_shortcuts_or)
     KitPage(
-        settingsTitle(SettingsPlace(SettingsSection.KeyboardShortcuts)),
+        localizedSettingsTitle(SettingsPlace(SettingsSection.KeyboardShortcuts)),
         modifier,
         scope = { KitDeviceScope() },
         anchor = anchor,
@@ -54,7 +58,7 @@ fun KeyboardShortcutsPage(
                 .filter { it.group == group }
                 .mapNotNull { cmd ->
                     keymap.chordsFor(cmd, os).takeIf { it.isNotEmpty() }?.let { chords ->
-                        cmd to chords.joinToString(" or ") { formatChord(it, os) }
+                        cmd to chords.joinToString(" $orWord ") { formatChord(it, os) }
                     }
                 }
             if (rows.isEmpty()) continue

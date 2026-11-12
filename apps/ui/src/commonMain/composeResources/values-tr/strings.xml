@@ -30,4 +30,14 @@
     <string name="general_cache_empty_session">Boş. Görseller ve dosyalar yalnızca bu sayfa kapanana kadar tutulur.</string>
     <string name="general_cache_size_kept">%1$s; anında ve çevrimdışı açılmaları için saklanır.</string>
     <string name="general_cache_size_session">%1$s; yalnızca bu sayfa kapanana kadar tutulur.</string>
+
+    <string name="connection_connecting">Bağlanıyor…</string>
+    <string name="connection_offline_in_chat">Çevrimdışı · mesajlar bağlantı gelince gönderilir</string>
+    <string name="connection_offline_saved_chats">Çevrimdışı · kayıtlı sohbetler gösteriliyor</string>
+    <string name="connection_retry">Tekrar dene</string>
+
+    <plurals name="chat_new_messages">
+        <item quantity="one">%1$d yeni mesaj</item>
+        <item quantity="other">%1$d yeni mesaj</item>
+    </plurals>
 </resources>

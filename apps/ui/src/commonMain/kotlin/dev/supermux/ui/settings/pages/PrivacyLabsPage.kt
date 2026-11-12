@@ -41,14 +41,37 @@ import dev.supermux.ui.settings.kit.KitSheet
 import dev.supermux.ui.settings.kit.KitTextAction
 import dev.supermux.ui.settings.kit.KitToggleRow
 import dev.supermux.ui.settings.kit.LocalSettingsMachines
-import dev.supermux.ui.settings.kit.currentMachineName
 import dev.supermux.ui.settings.kit.currentMachineOnline
 import dev.supermux.ui.settings.kit.kitAnchor
 import dev.supermux.ui.settings.kit.kitColors
-import dev.supermux.ui.settings.kit.kitDeviceNoun
-import dev.supermux.ui.settings.settingsTitle
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.settings_pages_close
+import dev.supermux.ui.resources.settings_privacy_change_failed
+import dev.supermux.ui.resources.settings_privacy_experimental
+import dev.supermux.ui.resources.settings_privacy_labs
+import dev.supermux.ui.resources.settings_privacy_nothing_yet
+import dev.supermux.ui.resources.settings_privacy_off_on
+import dev.supermux.ui.resources.settings_privacy_off_on_this_machine
+import dev.supermux.ui.resources.settings_privacy_overlay
+import dev.supermux.ui.resources.settings_privacy_overlay_allow
+import dev.supermux.ui.resources.settings_privacy_overlay_description
+import dev.supermux.ui.resources.settings_privacy_overlay_open_again
+import dev.supermux.ui.resources.settings_privacy_overlay_screen
+import dev.supermux.ui.resources.settings_privacy_queued
+import dev.supermux.ui.resources.settings_privacy_recent_description
+import dev.supermux.ui.resources.settings_privacy_recent_description_this_machine
+import dev.supermux.ui.resources.settings_privacy_recent_events
+import dev.supermux.ui.resources.settings_privacy_send_stats
+import dev.supermux.ui.resources.settings_privacy_send_stats_description
+import dev.supermux.ui.resources.settings_privacy_sent
+import dev.supermux.ui.resources.settings_privacy_test_build
+import dev.supermux.ui.resources.settings_privacy_title
+import dev.supermux.ui.resources.settings_privacy_what_we_send
+import dev.supermux.ui.resources.settings_pages_try_again
+import dev.supermux.ui.settings.localizedSettingsTitle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
@@ -66,15 +89,19 @@ private val prettyJson = Json { prettyPrint = true }
  * Why the switch can't be used, or null when it can. Says where, never how: the environment variables that lock it
  * are named in TELEMETRY.md, not on the page (spec §6).
  */
-internal fun telemetryLockedReason(state: TelemetryState, machine: String): String? = when (state.source) {
-    "env" -> "Turned off on $machine."
-    "build" -> "A test build of supermux: nothing is sent."
-    else -> null
-}
-
-/** The machine as a sentence names it: its name, or "this machine" when Settings knows none. */
 @Composable
-private fun machineInSentence(): String = LocalSettingsMachines.current?.current?.name ?: "this machine"
+internal fun telemetryLockedReason(state: TelemetryState): String? {
+    val machine = LocalSettingsMachines.current?.current?.name
+    return when (state.source) {
+        "env" -> if (machine != null) {
+            localized(Res.string.settings_privacy_off_on, machine)
+        } else {
+            localized(Res.string.settings_privacy_off_on_this_machine)
+        }
+        "build" -> localized(Res.string.settings_privacy_test_build)
+        else -> null
+    }
+}
 
 @Composable
 fun PrivacyLabsPage(
@@ -85,18 +112,18 @@ fun PrivacyLabsPage(
 ) {
     val caps = LocalPlatform.current.caps
     KitPage(
-        settingsTitle(SettingsPlace(SettingsSection.PrivacyLabs), labs = caps.assistantOverlay),
+        localizedSettingsTitle(SettingsPlace(SettingsSection.PrivacyLabs), labs = caps.assistantOverlay),
         modifier,
         scope = { KitMixedScope() },
         anchor = anchor,
         onAnchorShown = onAnchorShown,
         tag = "privacy_settings_screen",
     ) {
-        KitSectionHead("Privacy", note = "on ${currentMachineName()}")
+        KitSectionHead(localized(Res.string.settings_privacy_title), note = pagesMachineNote())
         if (!currentMachineOnline()) KitOfflineNote() else TelemetryRows(system)
         if (caps.assistantOverlay) {
             LocalPlatform.current.assistantOverlay?.let { host ->
-                KitSectionHead("Labs", note = "on this ${kitDeviceNoun()}")
+                KitSectionHead(localized(Res.string.settings_privacy_labs), note = pagesDeviceNote())
                 AssistantOverlayRows(host)
             }
         }
@@ -109,7 +136,8 @@ private fun TelemetryRows(actions: SystemSettingsActions) {
     val c = kitColors()
     val scope = rememberCoroutineScope()
     val platform = LocalPlatform.current
-    val machine = machineInSentence()
+    val machineName = LocalSettingsMachines.current?.current?.name
+    val changeFailed = localized(Res.string.settings_privacy_change_failed)
     val machineId = LocalSettingsMachines.current?.current?.id
     var state by remember(machineId) { mutableStateOf<TelemetryState?>(null) }
     var failed by remember(machineId) { mutableStateOf(false) }
@@ -126,37 +154,37 @@ private fun TelemetryRows(actions: SystemSettingsActions) {
     }
 
     if (failed) {
-        KitNote("Couldn't reach $machine.", Modifier.testTag("privacy_telemetry_failed"))
-        KitTextAction("Try again", onClick = { attempt++ }, modifier = Modifier.padding(top = 4.dp))
+        KitNote(pagesCouldntReach(), Modifier.testTag("privacy_telemetry_failed"))
+        KitTextAction(localized(Res.string.settings_pages_try_again), onClick = { attempt++ }, modifier = Modifier.padding(top = 4.dp))
         return
     }
     val s = state ?: return
-    val locked = telemetryLockedReason(s, machine)
+    val locked = telemetryLockedReason(s)
     KitToggleRow(
-        label = "Send anonymous usage statistics",
+        label = localized(Res.string.settings_privacy_send_stats),
         checked = s.enabled,
         onCheckedChange = { on ->
             saving = true
             error = null
             scope.launch {
                 val next = actions.setTelemetry(on)
-                if (next != null) state = next else error = "Couldn't change the setting."
+                if (next != null) state = next else error = changeFailed
                 saving = false
             }
         },
         modifier = Modifier.kitAnchor("telemetry").testTag("system_telemetry_switch"),
-        description = locked ?: "Which agents, models and features you use. Never prompts, code, paths or names.",
+        description = locked ?: localized(Res.string.settings_privacy_send_stats_description),
         enabled = locked == null && !saving,
     )
     error?.let { Text(it, fontSize = 12.sp, color = c.danger, modifier = Modifier.padding(top = 6.dp)) }
     KitButtons {
         KitGhostButton(
-            "Recent events",
+            localized(Res.string.settings_privacy_recent_events),
             onClick = { scope.launch { recent = actions.getTelemetryRecent()?.events ?: emptyList() } },
             modifier = Modifier.testTag("system_telemetry_recent"),
         )
         KitGhostButton(
-            "What we send",
+            localized(Res.string.settings_privacy_what_we_send),
             onClick = { platform.openUrl(TELEMETRY_DOC_URL) },
             modifier = Modifier.testTag("system_telemetry_doc"),
         )
@@ -164,21 +192,25 @@ private fun TelemetryRows(actions: SystemSettingsActions) {
 
     recent?.let { events ->
         KitSheet(
-            title = "Recent events",
+            title = localized(Res.string.settings_privacy_recent_events),
             onDismiss = { recent = null },
-            description = "The last events from $machine, exactly as sent.",
+            description = if (machineName != null) {
+                localized(Res.string.settings_privacy_recent_description, machineName)
+            } else {
+                localized(Res.string.settings_privacy_recent_description_this_machine)
+            },
             tag = "system_telemetry_recent_dialog",
-            buttons = { KitGhostButton("Close", onClick = { recent = null }) },
+            buttons = { KitGhostButton(localized(Res.string.settings_pages_close), onClick = { recent = null }) },
         ) {
             Column(
                 Modifier.padding(top = 12.dp).heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                if (events.isEmpty()) Text("Nothing recorded yet.", fontSize = 12.5.sp, color = c.dim)
+                if (events.isEmpty()) Text(localized(Res.string.settings_privacy_nothing_yet), fontSize = 12.5.sp, color = c.dim)
                 for (e in events) {
                     val sent = (e["sent"] as? JsonPrimitive)?.booleanOrNull == true
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(if (sent) "sent" else "queued", fontSize = 11.5.sp, color = c.faint)
+                        Text(localized(if (sent) Res.string.settings_privacy_sent else Res.string.settings_privacy_queued), fontSize = 11.5.sp, color = c.faint)
                         Text(
                             prettyJson.encodeToString(JsonElement.serializer(), JsonObject(e - "sent")),
                             fontFamily = MonoFontFamily,
@@ -218,7 +250,7 @@ private fun AssistantOverlayRows(host: AssistantOverlayHost) {
     }
     Column(Modifier.testTag("appearance_overlay_row")) {
         KitToggleRow(
-            label = "Assistant overlay",
+            label = localized(Res.string.settings_privacy_overlay),
             checked = on || waiting,
             onCheckedChange = { want ->
                 when {
@@ -237,13 +269,13 @@ private fun AssistantOverlayRows(host: AssistantOverlayHost) {
                 }
             },
             modifier = Modifier.kitAnchor("assistant-overlay").testTag("appearance_overlay_switch"),
-            description = "Your default Agent floats over other apps: tap it to chat, hold it to talk.",
-            badge = "Experimental",
+            description = localized(Res.string.settings_privacy_overlay_description),
+            badge = localized(Res.string.settings_privacy_experimental),
         )
         if (waiting) {
-            KitNote("Allow “Display over other apps” for supermux, then come back here.")
+            KitNote(localized(Res.string.settings_privacy_overlay_allow))
             KitTextAction(
-                "Open the setting again",
+                localized(Res.string.settings_privacy_overlay_open_again),
                 onClick = { host.openPermissionPage() },
                 modifier = Modifier.testTag("appearance_overlay_allow"),
             )
@@ -251,7 +283,7 @@ private fun AssistantOverlayRows(host: AssistantOverlayHost) {
         if (on) {
             val screen by prefs.assistantOverlayScreen.collectAsState(true)
             KitToggleRow(
-                label = "Let it see your screen",
+                label = localized(Res.string.settings_privacy_overlay_screen),
                 checked = screen,
                 onCheckedChange = { scope.launch { prefs.putAssistantOverlayScreen(it) } },
                 modifier = Modifier.testTag("appearance_overlay_screen_switch"),

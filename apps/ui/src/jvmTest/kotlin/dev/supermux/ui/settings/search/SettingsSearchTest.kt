@@ -2,6 +2,8 @@ package dev.supermux.ui.settings.search
 
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.platform.NO_CAPS
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.allStringResources
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -187,4 +189,25 @@ class SettingsSearchTest {
         assertEquals(1, searchSettings("disk media", desk).flatMap { it.hits }.size)
         assertTrue(searchSettings("disk media", desk.copy(mediaCache = false)).isEmpty())
     }
+
+    // ── #123: search in the app's language ────────────────────────────────────────────────────
+
+    /** Every row a reader can find has its label in the catalogs, so a translation can never be forgotten. */
+    @Test fun every_row_has_a_translatable_label() {
+        val keyed = SettingsSearchIndex.filter {
+            it.anchor != null && it.section != SettingsSection.KeyboardShortcuts && !it.anchor!!.startsWith("provider-")
+        }
+        val missing = keyed.map(::searchKey).filter { it !in Res.allStringResources || "${it}_kw" !in Res.allStringResources }
+        assertEquals(emptyList(), missing)
+    }
+
+    @Test fun a_translated_label_or_keyword_finds_the_row_and_english_still_does() {
+        val theme = SettingsSearchIndex.first { it.anchor == "theme" }
+        val words = mapOf(theme to LocalizedSearchEntry("Tema", "koyu açık"))
+        fun anchors(q: String) = searchSettings(q, desk, SettingsSearchIndex, translations = words).flatMap { it.hits }.map { it.anchor }
+        assertEquals(listOf("theme"), anchors("tema"))
+        assertEquals(listOf("theme"), anchors("koyu"))
+        assertTrue("theme" in anchors("dark"))
+    }
 }
+

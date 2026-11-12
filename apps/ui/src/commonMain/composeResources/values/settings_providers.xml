@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #123: English, the source, for Settings › Providers & accounts and a provider's page. Every key here also lives in
+     values-tr/settings_providers.xml with the same placeholders (tests/i18n-strings.test.ts). Keys are providers_thing.
+     Terms and tone: docs/i18n/glossary.md. -->
+<resources>
+    <!-- The list -->
+    <string name="providers_lede">The coding agents %1$s can run, and the logins they use.</string>
+    <string name="providers_this_machine">this machine</string>
+    <string name="providers_composer_note">Model, effort and permissions are picked per chat, in the composer.</string>
+    <string name="providers_loading">Loading…</string>
+    <string name="providers_no_agents">%1$s reported no coding agents.</string>
+    <string name="providers_try_again">Try again</string>
+    <string name="providers_couldnt_reach">Couldn't reach %1$s.</string>
+    <string name="providers_install_start_failed">Couldn't start the install.</string>
+    <string name="providers_install_timed_out">The install timed out.</string>
+    <string name="providers_your_login_email">Your login · %1$s</string>
+    <plurals name="providers_line_more">
+        <item quantity="one">%1$s + %2$d more</item>
+        <item quantity="other">%1$s + %2$d more</item>
+    </plurals>
+    <string name="providers_installing">Installing…</string>
+    <string name="providers_install">Install</string>
+    <string name="providers_signing_in">Signing in…</string>
+    <string name="providers_sign_in_again">Sign in again</string>
+    <string name="providers_ready">Ready</string>
+    <string name="providers_setting_save_failed">Couldn't save the setting.</string>
+    <string name="providers_auto_switch">Switch accounts at a limit</string>
+    <string name="providers_auto_switch_description">With two logins for a provider, a chat moves to the other one when the first runs out. Not for Cursor or logins kept apart.</string>
+    <string name="providers_auto_resume">Resume after a limit reset</string>
+    <string name="providers_auto_resume_description">When every login has run out, the chat waits for the first reset and then carries on.</string>
+
+    <!-- A provider's page: Your login and the sign-in flow -->
+    <string name="providers_not_on_machine">%1$s isn't on %2$s.</string>
+    <string name="providers_sign_in_expired">Sign-in expired</string>
+    <string name="providers_this_machines_login">This machine's login</string>
+    <string name="providers_not_signed_in">Not signed in</string>
+    <string name="providers_sign_in">Sign in</string>
+    <string name="providers_codex_hint">Signing in needs "Allow device code login" turned on in ChatGPT ▸ Settings ▸ Security.</string>
+    <string name="providers_use_token">Use a token instead</string>
+    <string name="providers_sign_in_start_failed">Couldn't start the sign-in.</string>
+    <string name="providers_sign_in_timed_out">The sign-in timed out — %1$s may be unreachable.</string>
+    <string name="providers_generating_link">Generating the sign-in link — this can take a few seconds…</string>
+    <string name="providers_cancel">Cancel</string>
+    <string name="providers_signed_in">Signed in.</string>
+    <string name="providers_sign_in_failed">Sign-in failed: %1$s</string>
+    <string name="providers_unknown_error">unknown error</string>
+    <string name="providers_sign_in_cancelled">Sign-in cancelled.</string>
+    <string name="providers_close">Close</string>
+    <string name="providers_open_page_hint">Open the sign-in page and approve the request.</string>
+    <string name="providers_open_sign_in_page">Open sign-in page</string>
+    <string name="providers_copy_link">Copy link</string>
+    <string name="providers_enter_code_there">Enter this code there:</string>
+    <string name="providers_waiting_approval">Waiting for you to approve…</string>
+    <string name="providers_paste_code_hint">Then paste the code the page shows:</string>
+    <string name="providers_paste_code">Paste the code</string>
+    <string name="providers_submit">Submit</string>
+
+    <!-- A provider's page: the token sheet -->
+    <string name="providers_save_failed">Couldn't save — check the connection and try again.</string>
+    <string name="providers_paste_token_title">Paste a token</string>
+    <string name="providers_paste_api_key_title">Paste an API key</string>
+    <string name="providers_token_description">A token for %1$s's own %2$s login.</string>
+    <string name="providers_saving">Saving…</string>
+    <string name="providers_save">Save</string>
+    <string name="providers_claude_token_hint">On a computer with a browser, run this and paste the token it prints:</string>
+    <string name="providers_openai_key_hint">Paste your OpenAI API key.</string>
+    <string name="providers_cursor_key_hint">Paste your Cursor API key.</string>
+    <string name="providers_gemini_key_hint">Paste your Gemini API key.</string>
+    <string name="providers_api_key_hint">Paste an API key.</string>
+
+    <!-- A provider's page: Install -->
+    <string name="providers_not_installed">%1$s isn't installed on %2$s yet. Install it to start chats with it.</string>
+    <string name="providers_stop_watching">Stop watching</string>
+    <string name="providers_stop_watching_hint">Stops updating this page only. The install keeps running on %1$s.</string>
+    <string name="providers_installed">Installed.</string>
+    <string name="providers_stopped_watching">Stopped watching. The install may still be running on %1$s — Watch progress to check.</string>
+    <string name="providers_watch_progress">Watch progress</string>
+    <string name="providers_retry_install">Retry installation</string>
+    <string name="providers_install_timed_out_machine">The install timed out — %1$s may be unreachable.</string>
+
+    <!-- OpenCode's page -->
+    <string name="providers_opencode_plan">OpenCode Go or Zen</string>
+    <string name="providers_opencode_plan_description">Approve this machine at opencode.ai with a code.</string>
+    <string name="providers_opencode_sign_in">Sign in with OpenCode</string>
+    <string name="providers_opencode_model_providers">Model providers in OpenCode</string>
+    <string name="providers_refresh">Refresh</string>
+    <string name="providers_opencode_free_note">Free models work out of the box. Connect a subscription for more.</string>
+    <string name="providers_opencode_load_failed">Couldn't load the providers.</string>
+    <string name="providers_opencode_none">No other providers to connect.</string>
+    <string name="providers_key_save_failed">Couldn't save the key — check the connection and try again.</string>
+    <string name="providers_opencode_key">OpenCode key (Zen + Go)</string>
+    <string name="providers_opencode_key_description">For OpenCode's own models, on this machine's OpenCode.</string>
+    <string name="providers_get_key">Get a key</string>
+    <string name="providers_opencode_key_placeholder">OpenCode key</string>
+    <string name="providers_connected">Connected</string>
+    <string name="providers_browser_opened">A browser tab opened. Approve there, then paste the code:</string>
+    <string name="providers_reopen_sign_in">Reopen sign-in</string>
+    <string name="providers_finishing">Finishing…</string>
+    <string name="providers_finish">Finish</string>
+    <string name="providers_oauth_finish_failed">Couldn't finish the sign-in — check the code and try again.</string>
+    <string name="providers_login_via_browser">Login via browser</string>
+    <string name="providers_oauth_start_failed">Couldn't start the browser sign-in.</string>
+    <string name="providers_api_key">API key</string>
+</resources>

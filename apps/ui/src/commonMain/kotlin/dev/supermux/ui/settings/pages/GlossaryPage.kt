@@ -40,10 +40,21 @@ import dev.supermux.ui.settings.kit.KitOfflineNote
 import dev.supermux.ui.settings.kit.KitPage
 import dev.supermux.ui.settings.kit.KitTextAction
 import dev.supermux.ui.settings.kit.KitTextField
-import dev.supermux.ui.settings.kit.LocalSettingsMachines
 import dev.supermux.ui.settings.kit.currentMachineOnline
 import dev.supermux.ui.settings.kit.kitColors
-import dev.supermux.ui.settings.settingsTitle
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.settings_glossary_add
+import dev.supermux.ui.resources.settings_glossary_add_word
+import dev.supermux.ui.resources.settings_glossary_back
+import dev.supermux.ui.resources.settings_glossary_empty
+import dev.supermux.ui.resources.settings_glossary_placeholder
+import dev.supermux.ui.resources.settings_glossary_remove
+import dev.supermux.ui.resources.settings_glossary_save_failed
+import dev.supermux.ui.resources.settings_pages_loading
+import dev.supermux.ui.resources.settings_pages_try_again
+import dev.supermux.ui.resources.settings_voice_glossary_description
+import dev.supermux.ui.settings.localizedSettingsTitle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -64,11 +75,11 @@ fun GlossaryPage(
     onBack: () -> Unit = {},
 ) {
     KitPage(
-        settingsTitle(SettingsPlace(SettingsSection.Voice, GLOSSARY_SUB)),
+        localizedSettingsTitle(SettingsPlace(SettingsSection.Voice, GLOSSARY_SUB)),
         modifier,
         scope = { KitMachineScope() },
-        lede = "Names and terms dictation and agents keep exactly as you write them.",
-        backLabel = "Voice",
+        lede = localized(Res.string.settings_voice_glossary_description),
+        backLabel = localized(Res.string.settings_glossary_back),
         onBack = onBack,
         tag = "voice_glossary_page",
     ) {
@@ -80,7 +91,8 @@ fun GlossaryPage(
 private fun GlossaryList(actions: VoiceSettingsActions) {
     val c = kitColors()
     val scope = rememberCoroutineScope()
-    val machine = LocalSettingsMachines.current?.current?.name ?: "this machine"
+    val couldntReach = pagesCouldntReach()
+    val saveFailed = localized(Res.string.settings_glossary_save_failed)
     val terms = remember { mutableStateListOf<String>() }
     // "Add a word" open, with the word being typed in it, kept for the page on display (#89).
     val form = rememberRetainedOnPage("voice:glossary") { GlossaryForm() }
@@ -125,7 +137,7 @@ private fun GlossaryList(actions: VoiceSettingsActions) {
             if (saved == null) {
                 // Show what the machine still has — never an empty list on a failed reload.
                 actions.glossaryLoad()?.let(::show)
-                error = "Couldn't save — reverted"
+                error = saveFailed
             } else {
                 error = null
                 show(saved)
@@ -156,17 +168,17 @@ private fun GlossaryList(actions: VoiceSettingsActions) {
         Text(it, fontSize = 12.sp, color = c.danger, modifier = Modifier.padding(bottom = 6.dp).testTag("voice_glossary_error"))
     }
     when (loadState) {
-        GlossaryLoadState.Loading -> KitNote("Loading…", Modifier.testTag("voice_glossary_loading"))
+        GlossaryLoadState.Loading -> KitNote(localized(Res.string.settings_pages_loading), Modifier.testTag("voice_glossary_loading"))
         GlossaryLoadState.Error -> {
-            KitNote("Couldn't reach $machine.", Modifier.testTag("voice_glossary_load_error"))
+            KitNote(couldntReach, Modifier.testTag("voice_glossary_load_error"))
             KitTextAction(
-                "Try again",
+                localized(Res.string.settings_pages_try_again),
                 onClick = { reloadKey++ },
                 modifier = Modifier.padding(top = 4.dp).testTag("voice_glossary_retry"),
             )
         }
         GlossaryLoadState.Empty -> KitNote(
-            "No words yet. Add the names dictation keeps getting wrong.",
+            localized(Res.string.settings_glossary_empty),
             Modifier.padding(bottom = 10.dp).testTag("voice_glossary_empty"),
         )
         is GlossaryLoadState.Ready -> Unit
@@ -177,12 +189,12 @@ private fun GlossaryList(actions: VoiceSettingsActions) {
         for (term in terms) {
             val tagSafe = term.replace(Regex("[^A-Za-z0-9._-]"), "_")
             KitItem(term, Modifier.testTag("voice_glossary_term_$tagSafe")) {
-                KitGhostButton("Remove", onClick = { remove(term) }, modifier = Modifier.testTag("voice_glossary_remove_$tagSafe"))
+                KitGhostButton(localized(Res.string.settings_glossary_remove), onClick = { remove(term) }, modifier = Modifier.testTag("voice_glossary_remove_$tagSafe"))
             }
         }
         if (!form.adding) {
             KitItem(
-                "Add a word",
+                localized(Res.string.settings_glossary_add_word),
                 Modifier.testTag("voice_glossary_add_item"),
                 mark = KitMark.Add,
                 onClick = { form.adding = true },
@@ -199,14 +211,14 @@ private fun GlossaryList(actions: VoiceSettingsActions) {
                     value = form.newTerm,
                     onValueChange = { form.newTerm = it },
                     modifier = Modifier.weight(1f).focusRequester(focus),
-                    placeholder = "A name or term, e.g. Supermux",
+                    placeholder = localized(Res.string.settings_glossary_placeholder),
                     // No autocorrect on names and technical terms; Enter (or the keyboard's Done) adds.
                     keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
                     onSubmit = { add() },
                     fieldTag = "voice_glossary_input",
                 )
                 KitGhostButton(
-                    "Add",
+                    localized(Res.string.settings_glossary_add),
                     onClick = { add() },
                     modifier = Modifier.testTag("voice_glossary_add"),
                     enabled = form.newTerm.isNotBlank(),

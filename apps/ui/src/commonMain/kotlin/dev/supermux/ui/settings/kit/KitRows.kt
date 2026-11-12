@@ -51,6 +51,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.machine_kit_expanded
+import dev.supermux.ui.resources.machine_kit_collapsed
 
 /** The focus ring's shape on a whole row. */
 private val RowRing = RoundedCornerShape(4.dp)
@@ -389,8 +393,10 @@ fun KitFold(
     var open by rememberSaveable { mutableStateOf(initiallyOpen) }
     val target = registry?.target
     LaunchedEffect(target) { if (target != null && target in anchors) open = true }
-    val turn by animateFloatAsState(if (open) 90f else 0f, tween(120), label = "kit-fold")
+    val turn by animateFloatAsState(if (open) 90f else 0f, tween(120), label = "kit-fold") // i18n-ok: animation debug label
     val src = remember { MutableInteractionSource() }
+    val expanded = localized(Res.string.machine_kit_expanded)
+    val collapsed = localized(Res.string.machine_kit_collapsed)
     Column(modifier.fillMaxWidth()) {
         Row(
             Modifier
@@ -398,7 +404,7 @@ fun KitFold(
                 .heightIn(min = if (m.phone) 48.dp else 0.dp)
                 .clickable(interactionSource = src, indication = null, role = Role.Button) { open = !open }
                 .semantics {
-                    stateDescription = if (open) "Expanded" else "Collapsed"
+                    stateDescription = if (open) expanded else collapsed
                     if (open) {
                         collapse {
                             open = false

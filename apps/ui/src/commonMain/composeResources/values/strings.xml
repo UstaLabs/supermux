@@ -33,4 +33,16 @@
     <string name="general_cache_empty_session">Empty. Images and files are kept only until this page closes.</string>
     <string name="general_cache_size_kept">%1$s, kept so they open instantly and offline.</string>
     <string name="general_cache_size_session">%1$s, kept only until this page closes.</string>
+
+    <!-- Shell: the connection strip (#121) -->
+    <string name="connection_connecting">Connecting…</string>
+    <string name="connection_offline_in_chat">Offline · messages send when you're back</string>
+    <string name="connection_offline_saved_chats">Offline · showing saved chats</string>
+    <string name="connection_retry">Retry</string>
+
+    <!-- Chat -->
+    <plurals name="chat_new_messages">
+        <item quantity="one">%1$d new message</item>
+        <item quantity="other">%1$d new messages</item>
+    </plurals>
 </resources>

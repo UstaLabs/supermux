@@ -30,6 +30,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.host.HostView
 import dev.supermux.ui.theme.LocalSemantics
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.connection_connecting
+import dev.supermux.ui.resources.connection_offline_in_chat
+import dev.supermux.ui.resources.connection_offline_saved_chats
+import dev.supermux.ui.resources.connection_retry
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.Stroke
 import kotlinx.coroutines.delay
@@ -100,9 +106,9 @@ fun ConnectionStrip(inChat: Boolean, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
     val offline = status.banner == ConnectionBanner.Offline
     val text = when {
-        !offline -> "Connecting…"
-        inChat -> "Offline · messages send when you're back"
-        else -> "Offline · showing saved chats"
+        !offline -> localized(Res.string.connection_connecting)
+        inChat -> localized(Res.string.connection_offline_in_chat)
+        else -> localized(Res.string.connection_offline_saved_chats)
     }
     Column(modifier.fillMaxWidth().testTag("connection_strip")) {
         if (inChat) HorizontalDivider(thickness = Stroke.hairline, color = cs.outline)
@@ -124,7 +130,7 @@ fun ConnectionStrip(inChat: Boolean, modifier: Modifier = Modifier) {
             if (offline && !inChat) {
                 Spacer(Modifier.weight(1f))
                 Text(
-                    "Retry",
+                    localized(Res.string.connection_retry),
                     color = cs.primary,
                     fontSize = 12.5.sp,
                     modifier = Modifier.testTag("connection_retry").clickable(onClick = status.retry),

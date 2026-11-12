@@ -107,7 +107,7 @@ fun Modifier.kitAnchor(key: String): Modifier {
     val tint by animateColorAsState(
         if (lit) c.flash else c.flash.copy(alpha = 0f),
         if (lit) snap() else tween(900),
-        label = "kit-flash",
+        label = "kit-flash", // i18n-ok: animation debug label
     )
     return this
         .semantics { kitAnchor = key }

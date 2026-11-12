@@ -42,6 +42,27 @@ import dev.supermux.ui.update.formatUpdateProgress
 import dev.supermux.ui.update.installCaption
 import dev.supermux.ui.update.installerKindFrom
 import dev.supermux.ui.work.rememberDownloads
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.settings_update_allow_installs
+import dev.supermux.ui.resources.settings_update_android_asks
+import dev.supermux.ui.resources.settings_update_app_version
+import dev.supermux.ui.resources.settings_update_background
+import dev.supermux.ui.resources.settings_update_background_description
+import dev.supermux.ui.resources.settings_update_check
+import dev.supermux.ui.resources.settings_update_check_failed
+import dev.supermux.ui.resources.settings_update_checking
+import dev.supermux.ui.resources.settings_update_download
+import dev.supermux.ui.resources.settings_update_downloaded
+import dev.supermux.ui.resources.settings_update_install
+import dev.supermux.ui.resources.settings_update_install_restart
+import dev.supermux.ui.resources.settings_update_no_installer
+import dev.supermux.ui.resources.settings_update_open_settings
+import dev.supermux.ui.resources.settings_update_ready
+import dev.supermux.ui.resources.settings_update_release_notes
+import dev.supermux.ui.resources.settings_update_up_to_date
+import dev.supermux.ui.resources.settings_update_version_build
+import dev.supermux.ui.resources.settings_pages_try_again
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -59,11 +80,13 @@ fun AppUpdateRows(
     val s = update.release
     val version = (s?.currentVersion ?: updater.currentVersion).takeIf { it.isNotBlank() }
     val code = s?.currentVersionCode ?: updater.currentVersionCode
-    val versionText = listOfNotNull("supermux", version).joinToString(" ") + (code?.let { " (build $it)" } ?: "")
+    val product = listOfNotNull("supermux", version).joinToString(" ") // i18n-ok: the brand and a version number
+    val versionText = if (code != null) localized(Res.string.settings_update_version_build, product, code.toString()) else product
+    val appVersion = localized(Res.string.settings_update_app_version)
     val rowModifier = modifier.kitAnchor("app-version").testTag("general_app-version")
 
     if (!canUpdate) {
-        KitRow("App version", rowModifier, description = versionText, descriptionTag = "app_update_version")
+        KitRow(appVersion, rowModifier, description = versionText, descriptionTag = "app_update_version")
         return
     }
 
@@ -118,15 +141,15 @@ fun AppUpdateRows(
     val state: String? = when {
         installing -> formatUpdateProgress(update.bytesReceived, update.contentLength)
         waiting -> finishingLabel(work)
-        loading -> "Checking…"
+        loading -> localized(Res.string.settings_update_checking)
         s == null || feedError != null -> null
-        ready != null -> "${s.latestVersion} is downloaded"
-        s.updateAvailable -> "${s.latestVersion} is ready"
-        else -> "up to date"
+        ready != null -> localized(Res.string.settings_update_downloaded, s.latestVersion.toString())
+        s.updateAvailable -> localized(Res.string.settings_update_ready, s.latestVersion.toString())
+        else -> localized(Res.string.settings_update_up_to_date)
     }
     val busy = installing || waiting || loading
     KitRow(
-        "App version",
+        appVersion,
         rowModifier,
         description = versionText + (state?.let { " · $it" } ?: ""),
         descriptionTag = "app_update_version",
@@ -135,20 +158,20 @@ fun AppUpdateRows(
         when {
             busy -> Unit
             ready != null -> KitGhostButton(
-                if (restarts) "Install and restart" else "Install",
+                localized(if (restarts) Res.string.settings_update_install_restart else Res.string.settings_update_install),
                 onClick = { installReady() },
                 modifier = Modifier.testTag("app_update_install"),
             )
-            installable -> KitGhostButton("Download", onClick = { download() }, modifier = Modifier.testTag("app_update_install"))
+            installable -> KitGhostButton(localized(Res.string.settings_update_download), onClick = { download() }, modifier = Modifier.testTag("app_update_install"))
             s == null || feedError != null || s.updateAvailable -> Unit
-            else -> KitGhostButton("Check for updates", onClick = { check() }, modifier = Modifier.testTag("general_check_updates"))
+            else -> KitGhostButton(localized(Res.string.settings_update_check), onClick = { check() }, modifier = Modifier.testTag("general_check_updates"))
         }
     }
 
     Column(Modifier.padding(bottom = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         when {
             checkFailed || feedError != null -> ErrorLine(
-                feedError ?: update.error ?: "Couldn't check for updates.",
+                feedError ?: update.error ?: localized(Res.string.settings_update_check_failed),
                 tag = "app_update_message",
                 onRetry = { check() },
             )
@@ -157,7 +180,7 @@ fun AppUpdateRows(
                     ready != null -> if (restarts) KitNote(RESTART_CAPTION)
                     installable -> KitNote(installCaption(installerKindFrom(s.downloadUrl)))
                     // Deliberately installer-agnostic: this fires on every host, and only one of them ships an APK.
-                    else -> KitNote("Update is available but no installer file was published for this release.")
+                    else -> KitNote(localized(Res.string.settings_update_no_installer))
                 }
                 if (s.highlights.isNotEmpty()) {
                     Column(Modifier.padding(top = 6.dp).testTag("app_update_whats_new")) {
@@ -171,7 +194,7 @@ fun AppUpdateRows(
                 }
                 if (s.notesUrl != null) {
                     KitTextAction(
-                        "Release notes",
+                        localized(Res.string.settings_update_release_notes),
                         onClick = { updater.openReleaseNotes() },
                         modifier = Modifier.padding(top = 4.dp).testTag("app_update_notes"),
                     )
@@ -189,21 +212,21 @@ fun AppUpdateRows(
         // Only a platform with an unknown-sources gate raises this (Android). Download already jumped to the system
         // page once; this row is what the user comes back to.
         KitActionRow(
-            "Allow installs from supermux",
-            button = "Open settings",
+            localized(Res.string.settings_update_allow_installs),
+            button = localized(Res.string.settings_update_open_settings),
             onClick = { updater.openInstallPermissionSettings() },
             modifier = Modifier.testTag("app_update_permission"),
-            description = update.error ?: "Android asks once before supermux can install its own updates.",
+            description = update.error ?: localized(Res.string.settings_update_android_asks),
             buttonTag = "app_update_permission_action",
         )
     }
     if (updater.offersBackgroundUpdates) {
         KitToggleRow(
-            "Download updates in the background",
+            localized(Res.string.settings_update_background),
             checked = update.background,
             onCheckedChange = { updater.setBackgroundUpdates(it) },
             modifier = Modifier.testTag("app_update_background"),
-            description = "A new version downloads quietly, then asks before restarting. Off: you choose when to download.",
+            description = localized(Res.string.settings_update_background_description),
         )
     }
 }
@@ -213,5 +236,5 @@ fun AppUpdateRows(
 private fun ErrorLine(text: String, tag: String, onRetry: () -> Unit) {
     val c = kitColors()
     Text(text, fontSize = 12.sp, lineHeight = 18.sp, color = c.danger, modifier = Modifier.padding(top = 2.dp).testTag(tag))
-    KitTextAction("Try again", onClick = onRetry, modifier = Modifier.testTag("app_update_retry"))
+    KitTextAction(localized(Res.string.settings_pages_try_again), onClick = onRetry, modifier = Modifier.testTag("app_update_retry"))
 }

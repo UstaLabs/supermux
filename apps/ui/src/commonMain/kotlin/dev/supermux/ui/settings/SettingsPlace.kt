@@ -1,12 +1,29 @@
 // Where inside Settings a page is (#97): the section, an optional second-level page, an optional row to land on.
 package dev.supermux.ui.settings
 
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import dev.supermux.ui.accounts.agentDisplayName
 import dev.supermux.ui.accounts.ACCOUNT_AGENTS
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.nav.Route
 import dev.supermux.ui.nav.SettingsSection
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.settings_section_coding
+import dev.supermux.ui.resources.settings_section_general
+import dev.supermux.ui.resources.settings_section_machine
+import dev.supermux.ui.resources.settings_section_memory
+import dev.supermux.ui.resources.settings_section_privacy
+import dev.supermux.ui.resources.settings_section_privacy_labs
+import dev.supermux.ui.resources.settings_section_providers
+import dev.supermux.ui.resources.settings_section_shortcuts
+import dev.supermux.ui.resources.settings_section_voice
+import dev.supermux.ui.resources.settings_title_chat_worktrees
+import dev.supermux.ui.resources.settings_title_glossary
+import dev.supermux.ui.resources.settings_title_this_computer
+import dev.supermux.ui.resources.settings_title_this_machine
 import dev.supermux.ui.settings.kit.MACHINE_FALLBACK_NAME
+import org.jetbrains.compose.resources.StringResource
 
 @Immutable
 data class SettingsPlace(val section: SettingsSection, val sub: String? = null, val anchor: String? = null)
@@ -68,7 +85,8 @@ fun settingsSubOrNull(section: SettingsSection, sub: String?): String? = sub?.ta
 
 /**
  * A page's title: the phone's top bar and the wide page heading. [machineName] names the Machine page; [labs] is
- * false on a device without lab features, where Privacy & labs is just "Privacy".
+ * false on a device without lab features, where Privacy & labs is just "Privacy". English: search matches it as well
+ * as the translation, and screens show [localizedSettingsTitle].
  */
 fun settingsTitle(place: SettingsPlace, machineName: String? = null, labs: Boolean = true): String {
     val sub = place.sub
@@ -83,6 +101,35 @@ fun settingsTitle(place: SettingsPlace, machineName: String? = null, labs: Boole
             else -> machineName ?: MACHINE_FALLBACK_NAME
         }
         else -> place.section.label
+    }
+}
+
+/** A section's own name. */
+fun SettingsSection.titleRes(): StringResource = when (this) {
+    SettingsSection.General -> Res.string.settings_section_general
+    SettingsSection.KeyboardShortcuts -> Res.string.settings_section_shortcuts
+    SettingsSection.Providers -> Res.string.settings_section_providers
+    SettingsSection.Voice -> Res.string.settings_section_voice
+    SettingsSection.Coding -> Res.string.settings_section_coding
+    SettingsSection.Memory -> Res.string.settings_section_memory
+    SettingsSection.PrivacyLabs -> Res.string.settings_section_privacy_labs
+    SettingsSection.Machine -> Res.string.settings_section_machine
+}
+
+/** [settingsTitle] in the app's language (#123): what a page's bar, the rail and the index show. */
+@Composable
+fun localizedSettingsTitle(place: SettingsPlace, machineName: String? = null, labs: Boolean = true): String {
+    val sub = place.sub
+    return when (place.section) {
+        SettingsSection.Providers -> if (sub != null) providerTitle(sub) else localized(place.section.titleRes())
+        SettingsSection.Voice -> localized(if (sub == GLOSSARY_SUB) Res.string.settings_title_glossary else place.section.titleRes())
+        SettingsSection.PrivacyLabs -> localized(if (labs) Res.string.settings_section_privacy_labs else Res.string.settings_section_privacy)
+        SettingsSection.Machine -> when (sub) {
+            MachineSub.COMPUTER -> localized(Res.string.settings_title_this_computer)
+            MachineSub.WORKTREES -> localized(Res.string.settings_title_chat_worktrees)
+            else -> machineName ?: localized(Res.string.settings_title_this_machine)
+        }
+        else -> localized(place.section.titleRes())
     }
 }
 

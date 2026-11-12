@@ -67,3 +67,8 @@ fun localizedPlural(resource: PluralStringResource, count: Int, vararg args: Any
     LocalAppLanguage.current
     return pluralStringResource(resource, count, *args)
 }
+
+/** Each option's label in the app's language, looked up once so a plain `(T) -> String` (a kit's optionLabel) can read it. */
+@Composable
+fun <T> localizedLabels(options: List<T>, resource: (T) -> StringResource): Map<T, String> =
+    options.associateWith { localized(resource(it)) }

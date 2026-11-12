@@ -552,9 +552,24 @@ class SettingsHubTest {
         assertEquals(1, closed)
     }
 
+    /** #123: a stored language reaches the hub's own words, the rail and the index's descriptions. */
+    @Test fun the_hub_speaks_the_stored_language() = runComposeUiTest {
+        val store = dev.supermux.ui.chat.FakeSettingsStore()
+        store.map.value = mapOf(dev.supermux.state.SettingsKeys.LANGUAGE to "tr")
+        setPlatformContent(uiPrefs = dev.supermux.ui.prefs.UiPrefs(store), widthClass = WindowWidthClass.Expanded) {
+            dev.supermux.ui.theme.SupermuxTheme {
+                SettingsHub(section = null, onSectionChange = {}, onBack = {}) { p, _ -> Text("page ${p.section}") }
+            }
+        }
+        waitForIdle()
+        onNodeWithText("Ayarlar").assertExists()
+        onNodeWithText("Genel").assertExists()
+        onNodeWithText("Settings").assertDoesNotExist()
+    }
+
     @Test fun every_section_has_an_index_description() {
-        SettingsSection.entries.forEach { assertTrue(it.desc(labs = false).isNotBlank(), "no desc for $it") }
-        assertEquals("Usage statistics", SettingsSection.PrivacyLabs.desc(labs = false))
+        SettingsSection.entries.forEach { assertTrue(en(it.descRes(labs = false)).isNotBlank(), "no desc for $it") }
+        assertEquals("Usage statistics", en(SettingsSection.PrivacyLabs.descRes(labs = false)))
     }
 
     // ── #97: plain Settings, sub-pages and anchors ─────────────────────────────────────────────
@@ -1043,7 +1058,7 @@ class SettingsHubTest {
 
     @Test fun keyboard_shortcuts_is_the_second_row_with_a_hardware_keyboard() = runComposeUiTest {
         assertEquals(SettingsSection.KeyboardShortcuts, SettingsSection.entries[1])
-        assertEquals("Every shortcut on this keyboard", SettingsSection.KeyboardShortcuts.desc(labs = true))
+        assertEquals("Every shortcut on this keyboard", en(SettingsSection.KeyboardShortcuts.descRes(labs = true)))
         setPlatformContent(widthClass = WindowWidthClass.Expanded) {
             SettingsHub(section = null, onSectionChange = {}, onBack = {}) { p, _ -> Text("page ${p.section}") }
         }
@@ -1104,3 +1119,7 @@ private class TestBackInput : NavigationEventInput() {
         dispatchOnBackCompleted()
     }
 }
+
+/** A resource's English text (the tests' JVM runs in English). */
+private fun en(res: org.jetbrains.compose.resources.StringResource): String =
+    kotlinx.coroutines.runBlocking { org.jetbrains.compose.resources.getString(res) }

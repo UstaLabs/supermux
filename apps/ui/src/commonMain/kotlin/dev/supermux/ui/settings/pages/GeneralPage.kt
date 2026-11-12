@@ -25,6 +25,7 @@ import dev.supermux.media.MediaCache
 import dev.supermux.ui.ChatDetailLevel
 import dev.supermux.ui.i18n.AppLanguage
 import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.localizedLabels
 import dev.supermux.ui.platform.AppUpdater
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.prefs.LocalUiPrefs
@@ -73,7 +74,6 @@ import dev.supermux.ui.resources.general_this_app
 import dev.supermux.ui.resources.general_title
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
-import org.jetbrains.compose.resources.StringResource
 
 /**
  * The General page.
@@ -140,10 +140,6 @@ private fun chatDetailRes(level: ChatDetailLevel) = when (level) {
     ChatDetailLevel.HIGH -> Res.string.general_chat_detail_high
 }
 
-/** Each option's label in the current language, looked up once so the kit's plain `(T) -> String` can read it. */
-@Composable
-private fun <T> labels(options: List<T>, res: (T) -> StringResource): Map<T, String> =
-    options.associateWith { localized(res(it)) }
 
 @Composable
 private fun LookRows(defaultAppearance: AppearanceMode) {
@@ -165,7 +161,7 @@ private fun LookRows(defaultAppearance: AppearanceMode) {
         if (draggedTextScale == storedTextScale) draggedTextScale = null
     }
 
-    val themeNames = labels(AppearanceMode.entries, ::themeRes)
+    val themeNames = localizedLabels(AppearanceMode.entries, ::themeRes)
     KitOptionsRow(
         localized(Res.string.general_theme),
         AppearanceMode.entries,
@@ -216,7 +212,7 @@ private fun LookRows(defaultAppearance: AppearanceMode) {
         modifier = Modifier.kitAnchor("live-replies").testTag("appearance_live_replies_switch"),
         description = localized(Res.string.general_live_replies_description),
     )
-    val detailNames = labels(ChatDetailLevel.entries, ::chatDetailRes)
+    val detailNames = localizedLabels(ChatDetailLevel.entries, ::chatDetailRes)
     KitOptionsRow(
         localized(Res.string.general_chat_detail),
         ChatDetailLevel.entries,
@@ -227,7 +223,7 @@ private fun LookRows(defaultAppearance: AppearanceMode) {
         description = localized(Res.string.general_chat_detail_description),
         optionTag = { optionTag("chat-detail")(it.label) },
     )
-    val terminalNames = labels(TerminalAppearance.entries, ::terminalRes)
+    val terminalNames = localizedLabels(TerminalAppearance.entries, ::terminalRes)
     KitOptionsRow(
         localized(Res.string.general_terminal_colours),
         TerminalAppearance.entries,

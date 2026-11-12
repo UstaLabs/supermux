@@ -53,9 +53,112 @@ import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.SessionInfo
 import dev.supermux.state.FleetStore
 import dev.supermux.state.HostStore
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.localizedPlural
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.machine_awake
+import dev.supermux.ui.resources.machine_awake_help
+import dev.supermux.ui.resources.machine_away
+import dev.supermux.ui.resources.machine_background
+import dev.supermux.ui.resources.machine_background_help
+import dev.supermux.ui.resources.machine_battery
+import dev.supermux.ui.resources.machine_cancel
+import dev.supermux.ui.resources.machine_cant_restart
+import dev.supermux.ui.resources.machine_chats
+import dev.supermux.ui.resources.machine_check_failed
+import dev.supermux.ui.resources.machine_check_updates
+import dev.supermux.ui.resources.machine_checking
+import dev.supermux.ui.resources.machine_copied
+import dev.supermux.ui.resources.machine_copy
+import dev.supermux.ui.resources.machine_copy_all
+import dev.supermux.ui.resources.machine_didnt_start
+import dev.supermux.ui.resources.machine_didnt_start_here
+import dev.supermux.ui.resources.machine_didnt_start_reason
+import dev.supermux.ui.resources.machine_done
+import dev.supermux.ui.resources.machine_elsewhere
+import dev.supermux.ui.resources.machine_fallback_name
+import dev.supermux.ui.resources.machine_from_anywhere
+import dev.supermux.ui.resources.machine_git_install_error
+import dev.supermux.ui.resources.machine_git_missing
+import dev.supermux.ui.resources.machine_host_on
+import dev.supermux.ui.resources.machine_host_on_help
+import dev.supermux.ui.resources.machine_hosting_auto_login
+import dev.supermux.ui.resources.machine_hosting_lid_uninstall
+import dev.supermux.ui.resources.machine_hosting_lid_waiting
+import dev.supermux.ui.resources.machine_install_failed
+import dev.supermux.ui.resources.machine_install_git
+import dev.supermux.ui.resources.machine_installing
+import dev.supermux.ui.resources.machine_last_seen
+import dev.supermux.ui.resources.machine_lid
+import dev.supermux.ui.resources.machine_lid_help
+import dev.supermux.ui.resources.machine_log_lines
+import dev.supermux.ui.resources.machine_log_text
+import dev.supermux.ui.resources.machine_log_title
+import dev.supermux.ui.resources.machine_manage
+import dev.supermux.ui.resources.machine_manage_go
+import dev.supermux.ui.resources.machine_manage_text
+import dev.supermux.ui.resources.machine_manage_title
+import dev.supermux.ui.resources.machine_managed
+import dev.supermux.ui.resources.machine_managed_on
+import dev.supermux.ui.resources.machine_names_and
+import dev.supermux.ui.resources.machine_not_hosting
+import dev.supermux.ui.resources.machine_not_running_here
+import dev.supermux.ui.resources.machine_off
+import dev.supermux.ui.resources.machine_offline
+import dev.supermux.ui.resources.machine_ok
+import dev.supermux.ui.resources.machine_on_network
+import dev.supermux.ui.resources.machine_paired_server
+import dev.supermux.ui.resources.machine_recent_log
+import dev.supermux.ui.resources.machine_reconnect
+import dev.supermux.ui.resources.machine_relay
+import dev.supermux.ui.resources.machine_relay_help
+import dev.supermux.ui.resources.machine_restart
+import dev.supermux.ui.resources.machine_restart_failed
+import dev.supermux.ui.resources.machine_restarting
+import dev.supermux.ui.resources.machine_running
+import dev.supermux.ui.resources.machine_running_counts
+import dev.supermux.ui.resources.machine_service
+import dev.supermux.ui.resources.machine_show_log
+import dev.supermux.ui.resources.machine_start_hosting
+import dev.supermux.ui.resources.machine_starting_line
+import dev.supermux.ui.resources.machine_starting_status
+import dev.supermux.ui.resources.machine_stop_hosting
+import dev.supermux.ui.resources.machine_stop_kept
+import dev.supermux.ui.resources.machine_stop_many
+import dev.supermux.ui.resources.machine_stop_none
+import dev.supermux.ui.resources.machine_stop_one
+import dev.supermux.ui.resources.machine_stop_title
+import dev.supermux.ui.resources.machine_stop_wait_others
+import dev.supermux.ui.resources.machine_stop_wait_yours
+import dev.supermux.ui.resources.machine_this_computer
+import dev.supermux.ui.resources.machine_try_again
+import dev.supermux.ui.resources.machine_turn_on_awake_help
+import dev.supermux.ui.resources.machine_turn_on_background_help
+import dev.supermux.ui.resources.machine_turn_on_relay_help
+import dev.supermux.ui.resources.machine_turn_on_text
+import dev.supermux.ui.resources.machine_up_to_date
+import dev.supermux.ui.resources.machine_up_to_date_version
+import dev.supermux.ui.resources.machine_update
+import dev.supermux.ui.resources.machine_update_couldnt_start
+import dev.supermux.ui.resources.machine_update_downloading
+import dev.supermux.ui.resources.machine_update_downloading_version
+import dev.supermux.ui.resources.machine_update_failed
+import dev.supermux.ui.resources.machine_update_failed_to
+import dev.supermux.ui.resources.machine_update_installed
+import dev.supermux.ui.resources.machine_update_installed_version
+import dev.supermux.ui.resources.machine_update_installing
+import dev.supermux.ui.resources.machine_update_installing_version
+import dev.supermux.ui.resources.machine_update_no_answer
+import dev.supermux.ui.resources.machine_update_no_reason
+import dev.supermux.ui.resources.machine_update_ready
+import dev.supermux.ui.resources.machine_update_ready_version
+import dev.supermux.ui.resources.machine_update_starting
+import dev.supermux.ui.resources.machine_update_title
+import dev.supermux.ui.resources.machine_update_you_have
+import dev.supermux.ui.resources.machine_updating
+import dev.supermux.ui.resources.machine_whats_new
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.settings.HostingActions
-import dev.supermux.ui.settings.HostingCopy
 import dev.supermux.ui.settings.HostingPhase
 import dev.supermux.ui.settings.HostingUiState
 import dev.supermux.ui.settings.DevicesSettingsActions
@@ -75,7 +178,6 @@ import dev.supermux.ui.settings.kit.KitSheet
 import dev.supermux.ui.settings.kit.KitTextAction
 import dev.supermux.ui.settings.kit.KitToggleRow
 import dev.supermux.ui.settings.kit.LocalSettingsMachines
-import dev.supermux.ui.settings.kit.MACHINE_FALLBACK_NAME
 import dev.supermux.ui.settings.kit.glyph
 import dev.supermux.ui.settings.kit.kitAnchor
 import dev.supermux.ui.settings.kit.kitColors
@@ -130,113 +232,144 @@ class ThisComputerHosting(
     val retryTurnOn: () -> Unit = {},
 )
 
-/** The prototype's copy, as constants so the tests assert the exact strings. */
+/**
+ * The prototype's copy, in the app's language (resources `machine_*`). [stopText] keeps the English the tests assert;
+ * the page shows [stopLines].
+ */
 object MachineCopy {
-    const val THIS_COMPUTER = "This computer"
-    const val PAIRED_SERVER = "A server you paired"
-    const val RESTART = "Restart"
-    const val RESTARTING = "Restarting…"
-    const val RESTARTING_STATUS = "Restarting…"
-    const val RECONNECT = "chats reconnect on their own"
-    const val CHECK = "Check for updates"
-    const val CHECKING = "Checking…"
-    const val MANAGED = "Updated with the app"
-    const val NOT_HOSTING = "Not hosting"
-    const val NOT_RUNNING_HERE = "supermux isn’t running on this computer"
-    const val STARTING_STATUS = "Starting supermux…"
-    const val DIDNT_START = "Didn’t start"
-    const val AWAY = "While you're away"
-    const val HOST_ON = "Host on this computer"
-    const val HOST_ON_HELP = "Run supermux here, so your agents keep working and your phone can reach them."
-    const val STARTING_LINE = "Starting supermux on this computer…"
-    const val BACKGROUND = "Keep running in the background"
-    const val BACKGROUND_HELP = "Your agents stay reachable after you quit, sign out or restart."
-    const val AWAKE = "Keep this computer awake"
-    const val AWAKE_HELP = "Stops it from sleeping while supermux runs. The screen can still turn off."
-    const val BATTERY = "Also on battery"
-    const val LID = "Even with the lid closed"
-    const val LID_HELP = "It can get hot: don’t put it in a bag while this is on."
-    const val RELAY = "Reach it from anywhere"
-    const val RELAY_HELP = "Your phone reaches it away from home too. Turning this on or off restarts supermux."
-    const val ON_NETWORK = "On this network"
-    const val FROM_ANYWHERE = "From anywhere"
-    const val OFF = "Off"
-    const val RECENT_LOG = "Recent log"
-    const val SHOW_LOG = "Show log"
-    const val STOP = "Stop hosting"
-    const val SERVICE = "Run by your system’s service."
-    const val SERVICE_REST = " These are set where that service is set up; the app only shows them."
-    const val MANAGE = "Manage"
-    const val MANAGE_TITLE = "Let the app manage supermux?"
-    const val MANAGE_TEXT = "The app takes over from your system’s service: it turns that service off and starts supermux " +
-        "itself, so you can change these switches here. supermux restarts once; chats reconnect on their own."
-    const val MANAGE_GO = "Let the app manage it"
-    const val GIT_MISSING =
-        "git isn’t installed on this computer. Agents still run, but worktrees, diffs and branches are off until it is."
-    const val INSTALL_GIT = "Install git"
-    const val INSTALLING = "Installing…"
-    const val INSTALL_FAILED = "Couldn’t start the installer."
-    const val TRY_AGAIN = "Try again"
-    const val TURN_ON_TEXT = "supermux runs here and your agents work from this computer’s folders. Your phone and other " +
-        "computers reach it once they’re paired."
-    const val TURN_ON_BACKGROUND_HELP = "After you quit, sign out or restart."
-    const val TURN_ON_AWAKE_HELP = "The screen can still turn off."
-    const val TURN_ON_RELAY_HELP = "Not only on this Wi-Fi."
-    const val START_HOSTING = "Start hosting"
-    const val CANCEL = "Cancel"
-    const val LOG_TITLE = "supermux log · this computer"
-    const val LOG_TEXT = "The newest lines are at the bottom."
-    const val COPY_ALL = "Copy all"
-    const val COPIED = "Copied"
-    const val COPY = "Copy"
-    const val DONE = "Done"
-    const val OK = "OK"
-    const val WHATS_NEW = "What’s new"
+    val THIS_COMPUTER: String @Composable get() = localized(Res.string.machine_this_computer)
+    val PAIRED_SERVER: String @Composable get() = localized(Res.string.machine_paired_server)
+    val RESTART: String @Composable get() = localized(Res.string.machine_restart)
+    val RESTARTING: String @Composable get() = localized(Res.string.machine_restarting)
+    val RESTARTING_STATUS: String @Composable get() = localized(Res.string.machine_restarting)
+    val RECONNECT: String @Composable get() = localized(Res.string.machine_reconnect)
+    val CHECK: String @Composable get() = localized(Res.string.machine_check_updates)
+    val CHECKING: String @Composable get() = localized(Res.string.machine_checking)
+    val MANAGED: String @Composable get() = localized(Res.string.machine_managed)
+    val NOT_HOSTING: String @Composable get() = localized(Res.string.machine_not_hosting)
+    val NOT_RUNNING_HERE: String @Composable get() = localized(Res.string.machine_not_running_here)
+    val STARTING_STATUS: String @Composable get() = localized(Res.string.machine_starting_status)
+    val DIDNT_START: String @Composable get() = localized(Res.string.machine_didnt_start)
+    val AWAY: String @Composable get() = localized(Res.string.machine_away)
+    val HOST_ON: String @Composable get() = localized(Res.string.machine_host_on)
+    val HOST_ON_HELP: String @Composable get() = localized(Res.string.machine_host_on_help)
+    val STARTING_LINE: String @Composable get() = localized(Res.string.machine_starting_line)
+    val BACKGROUND: String @Composable get() = localized(Res.string.machine_background)
+    val BACKGROUND_HELP: String @Composable get() = localized(Res.string.machine_background_help)
+    val AWAKE: String @Composable get() = localized(Res.string.machine_awake)
+    val AWAKE_HELP: String @Composable get() = localized(Res.string.machine_awake_help)
+    val BATTERY: String @Composable get() = localized(Res.string.machine_battery)
+    val LID: String @Composable get() = localized(Res.string.machine_lid)
+    val LID_HELP: String @Composable get() = localized(Res.string.machine_lid_help)
+    val RELAY: String @Composable get() = localized(Res.string.machine_relay)
+    val RELAY_HELP: String @Composable get() = localized(Res.string.machine_relay_help)
+    val ON_NETWORK: String @Composable get() = localized(Res.string.machine_on_network)
+    val FROM_ANYWHERE: String @Composable get() = localized(Res.string.machine_from_anywhere)
+    val OFF: String @Composable get() = localized(Res.string.machine_off)
+    val RECENT_LOG: String @Composable get() = localized(Res.string.machine_recent_log)
+    val SHOW_LOG: String @Composable get() = localized(Res.string.machine_show_log)
+    val STOP: String @Composable get() = localized(Res.string.machine_stop_hosting)
+    /** "Run by your system’s service." and what that means for the switches, as one sentence pair. */
+    val SERVICE: String @Composable get() = localized(Res.string.machine_service)
+    val MANAGE: String @Composable get() = localized(Res.string.machine_manage)
+    val MANAGE_TITLE: String @Composable get() = localized(Res.string.machine_manage_title)
+    val MANAGE_TEXT: String @Composable get() = localized(Res.string.machine_manage_text)
+    val MANAGE_GO: String @Composable get() = localized(Res.string.machine_manage_go)
+    val GIT_MISSING: String @Composable get() = localized(Res.string.machine_git_missing)
+    val INSTALL_GIT: String @Composable get() = localized(Res.string.machine_install_git)
+    val INSTALLING: String @Composable get() = localized(Res.string.machine_installing)
+    val INSTALL_FAILED: String @Composable get() = localized(Res.string.machine_install_failed)
+    val TRY_AGAIN: String @Composable get() = localized(Res.string.machine_try_again)
+    val TURN_ON_TEXT: String @Composable get() = localized(Res.string.machine_turn_on_text)
+    val TURN_ON_BACKGROUND_HELP: String @Composable get() = localized(Res.string.machine_turn_on_background_help)
+    val TURN_ON_AWAKE_HELP: String @Composable get() = localized(Res.string.machine_turn_on_awake_help)
+    val TURN_ON_RELAY_HELP: String @Composable get() = localized(Res.string.machine_turn_on_relay_help)
+    val START_HOSTING: String @Composable get() = localized(Res.string.machine_start_hosting)
+    val CANCEL: String @Composable get() = localized(Res.string.machine_cancel)
+    val LOG_TITLE: String @Composable get() = localized(Res.string.machine_log_title)
+    val LOG_TEXT: String @Composable get() = localized(Res.string.machine_log_text)
+    val COPY_ALL: String @Composable get() = localized(Res.string.machine_copy_all)
+    val COPIED: String @Composable get() = localized(Res.string.machine_copied)
+    val COPY: String @Composable get() = localized(Res.string.machine_copy)
+    val DONE: String @Composable get() = localized(Res.string.machine_done)
+    val OK: String @Composable get() = localized(Res.string.machine_ok)
+    val WHATS_NEW: String @Composable get() = localized(Res.string.machine_whats_new)
 
-    fun scope(local: Boolean) = if (local) THIS_COMPUTER else PAIRED_SERVER
-    fun managedOn(name: String) = "Updated with the app on $name"
-    fun cantRestart(name: String) =
-        "supermux on $name isn’t run by a service, so it can’t restart itself. Restart it where it runs."
-    fun restartFailed(name: String) = "Couldn’t reach supermux on $name, so it didn’t restart."
-    fun elsewhere(name: String) = "Running in the background, staying awake and remote access are set on $name itself."
-    fun updateTitle(name: String) = "Update supermux on $name"
-    fun upToDate(version: String) = if (version.isBlank()) "Up to date" else "Up to date · $version"
-    fun ready(latest: String?, current: String) =
-        listOfNotNull(latest?.let { "$it is ready" } ?: "An update is ready", current.takeIf { it.isNotBlank() }?.let { "you have $it" })
-            .joinToString(" · ")
-    fun installed(latest: String?) = "${latest ?: "The update"} is installed · restart to finish"
-    fun updateFailed(latest: String?, name: String, why: String?) =
-        "Couldn’t update${latest?.let { " to $it" } ?: ""}: ${why?.trimEnd('.') ?: "$name didn’t say why"}. Nothing changed."
-    fun didntStart(reason: String?) =
-        if (reason.isNullOrBlank()) "supermux didn’t start on this computer." else "supermux didn’t start: $reason"
-    fun chats(n: Int) = if (n == 1) "1 chat" else "$n chats"
-    fun running(version: String?, chats: MachineChats) = listOfNotNull(
-        version?.takeIf { it.isNotBlank() }?.let { "supermux $it" },
-        "${chats(chats.total)}, ${chats.working.size} working",
+    @Composable fun scope(local: Boolean) = if (local) THIS_COMPUTER else PAIRED_SERVER
+    @Composable fun managedOn(name: String) = localized(Res.string.machine_managed_on, name)
+    @Composable fun cantRestart(name: String) = localized(Res.string.machine_cant_restart, name)
+    @Composable fun restartFailed(name: String) = localized(Res.string.machine_restart_failed, name)
+    @Composable fun elsewhere(name: String) = localized(Res.string.machine_elsewhere, name)
+    @Composable fun updateTitle(name: String) = localized(Res.string.machine_update_title, name)
+    @Composable fun upToDate(version: String) =
+        if (version.isBlank()) localized(Res.string.machine_up_to_date) else localized(Res.string.machine_up_to_date_version, version)
+    @Composable fun ready(latest: String?, current: String) = listOfNotNull(
+        latest?.let { localized(Res.string.machine_update_ready_version, it) } ?: localized(Res.string.machine_update_ready),
+        current.takeIf { it.isNotBlank() }?.let { localized(Res.string.machine_update_you_have, it) },
     ).joinToString(" · ")
-    fun offline(lastSeen: String) = if (lastSeen.isBlank()) "" else "last seen $lastSeen"
+    @Composable fun installed(latest: String?) =
+        latest?.let { localized(Res.string.machine_update_installed_version, it) } ?: localized(Res.string.machine_update_installed)
+    @Composable fun updateFailed(latest: String?, name: String, why: String?): String {
+        val reason = why?.trimEnd('.') ?: localized(Res.string.machine_update_no_reason, name)
+        return if (latest != null) localized(Res.string.machine_update_failed_to, latest, reason)
+        else localized(Res.string.machine_update_failed, reason)
+    }
+    @Composable fun didntStart(reason: String?) =
+        if (reason.isNullOrBlank()) localized(Res.string.machine_didnt_start_here) else localized(Res.string.machine_didnt_start_reason, reason)
+    @Composable fun chats(n: Int) = localizedPlural(Res.plurals.machine_chats, n, n)
+    @Composable fun running(version: String?, chats: MachineChats) = listOfNotNull(
+        version?.takeIf { it.isNotBlank() }?.let { "supermux $it" }, // i18n-ok: the brand and its version
+        localized(Res.string.machine_running_counts, chats(chats.total), chats.working.size),
+    ).joinToString(" · ")
+    @Composable fun offline(lastSeen: String) = if (lastSeen.isBlank()) "" else localized(Res.string.machine_last_seen, lastSeen)
 
-    /** "“a”, “b” and “c”". */
-    fun names(names: List<String>): String {
+    /** "“a”, “b” and “c”", in the app's language. */
+    @Composable fun namesText(names: List<String>): String {
         val q = names.map { "“$it”" }
-        return if (q.size > 1) q.dropLast(1).joinToString(", ") + " and " + q.last() else q.firstOrNull().orEmpty()
+        return if (q.size > 1) localized(Res.string.machine_names_and, q.dropLast(1).joinToString(", "), q.last())
+        else q.firstOrNull().orEmpty()
     }
 
-    /** The Stop hosting sheet's two lines. */
-    fun stopText(chats: MachineChats): Pair<String, String> {
+    /** The Stop hosting sheet's two lines, in the app's language. */
+    @Composable fun stopLines(chats: MachineChats): Pair<String, String> {
         val w = chats.working
         val first = when (w.size) {
-            0 -> "This stops supermux on this computer. No chat is working right now."
-            1 -> "This stops supermux and the chat working right now: ${names(w)}. It stops mid-reply."
-            else -> "This stops supermux and the ${w.size} chats working right now: ${names(w)}. They stop mid-reply."
+            0 -> localized(Res.string.machine_stop_none)
+            1 -> localized(Res.string.machine_stop_one, namesText(w))
+            else -> localized(Res.string.machine_stop_many, w.size, namesText(w))
         }
         val others = (chats.total - w.size).coerceAtLeast(0)
         val wait = when {
             others == 0 -> ""
-            w.isEmpty() -> "Your ${chats(others)} wait until you host again. "
-            else -> "The other ${chats(others)} wait until you host again. "
+            w.isEmpty() -> localized(Res.string.machine_stop_wait_yours, chats(others))
+            else -> localized(Res.string.machine_stop_wait_others, chats(others))
         }
-        return first to "${wait}Nothing is deleted, and supermux no longer starts with this computer."
+        val kept = localized(Res.string.machine_stop_kept)
+        return first to if (wait.isEmpty()) kept else "$wait $kept"
+    }
+
+    /** "“a”, “b” and “c”" in English, for [stopText]. */
+    fun names(names: List<String>): String {
+        val q = names.map { "“$it”" }
+        return if (q.size > 1) q.dropLast(1).joinToString(", ") + " and " + q.last() else q.firstOrNull().orEmpty() // i18n-ok: English twin for the tests
+    }
+
+    /** The Stop hosting sheet's two lines in English: the tests' copy of [stopLines]. */
+    fun stopText(chats: MachineChats): Pair<String, String> {
+        val w = chats.working
+        val first = when (w.size) {
+            0 -> "This stops supermux on this computer. No chat is working right now." // i18n-ok: English twin for the tests
+            1 -> "This stops supermux and the chat working right now: ${names(w)}. It stops mid-reply." // i18n-ok: English twin for the tests
+            else -> "This stops supermux and the ${w.size} chats working right now: ${names(w)}. They stop mid-reply." // i18n-ok: English twin for the tests
+        }
+        val others = (chats.total - w.size).coerceAtLeast(0)
+        val n = if (others == 1) "1 chat" else "$others chats" // i18n-ok: English twin for the tests
+        val wait = when {
+            others == 0 -> ""
+            w.isEmpty() -> "Your $n wait until you host again. " // i18n-ok: English twin for the tests
+            else -> "The other $n wait until you host again. " // i18n-ok: English twin for the tests
+        }
+        return first to "${wait}Nothing is deleted, and supermux no longer starts with this computer." // i18n-ok: English twin for the tests
     }
 }
 
@@ -244,6 +377,7 @@ object MachineCopy {
  * The one line a machine's parts show instead of their rows while supermux isn't there to ask: this computer not
  * hosting (or still starting, or failed), another machine offline; null while it is running.
  */
+@Composable
 internal fun machineQuiet(hosting: ThisComputerHosting?, up: Boolean, name: String, lastSeen: String): String? = when {
     hosting != null -> when (hosting.state.phase) {
         HostingPhase.Off -> MachinePartsCopy.NOT_HOSTING
@@ -289,7 +423,7 @@ fun MachinePage(
     val machine = LocalSettingsMachines.current?.current
     val local = hosting != null || machine?.local == true
     val name = if (hosting != null) machine?.name?.takeIf { machine.local } ?: MachineCopy.THIS_COMPUTER
-    else machine?.name ?: MACHINE_FALLBACK_NAME
+    else machine?.name ?: localized(Res.string.machine_fallback_name)
     val glyph = if (local) KitGlyphs.Laptop else machine?.glyph() ?: KitGlyphs.Server
     val phone = kitMetrics().phone
     val scope = rememberCoroutineScope()
@@ -309,6 +443,9 @@ fun MachinePage(
     var restartFailed by remember { mutableStateOf(false) }
 
     LaunchedEffect(up) { if (up) system.updateStatus()?.let { status = it } }
+    // Resolved here: runUpdate's coroutine can't read resources.
+    val noAnswer = localized(Res.string.machine_update_no_answer, name)
+    val couldntStart = localized(Res.string.machine_update_couldnt_start)
 
     /** Waits for supermux to go down and come back (or to keep answering, for a restart quicker than a poll). */
     suspend fun awaitBack() {
@@ -359,7 +496,7 @@ fun MachinePage(
             try {
                 val r = system.runUpdate()
                 when {
-                    r == null -> runError = "$name didn’t answer"
+                    r == null -> runError = noAnswer
                     r.started -> {
                         var sawRunning = false
                         for (i in 0 until pollAttempts) {
@@ -374,7 +511,7 @@ fun MachinePage(
                             if (fresh.state != "idle" || sawRunning) break
                         }
                     }
-                    else -> runError = r.instruction ?: r.error ?: "it couldn’t start the update"
+                    else -> runError = r.instruction ?: r.error ?: couldntStart
                 }
             } finally {
                 updating = false
@@ -400,8 +537,8 @@ fun MachinePage(
             hosting != null && phase == HostingPhase.Starting && !restarting -> Triple(KitDot.Warn, MachineCopy.STARTING_STATUS, "")
             hosting != null && phase == HostingPhase.Failed -> Triple(KitDot.Danger, MachineCopy.DIDNT_START, "")
             down -> Triple(KitDot.Warn, MachineCopy.RESTARTING_STATUS, MachineCopy.RECONNECT)
-            !up -> Triple(KitDot.Off, "Offline", MachineCopy.offline(machine?.lastSeen.orEmpty()))
-            else -> Triple(KitDot.Ok, "Running", MachineCopy.running(status?.current, chats))
+            !up -> Triple(KitDot.Off, localized(Res.string.machine_offline), MachineCopy.offline(machine?.lastSeen.orEmpty()))
+            else -> Triple(KitDot.Ok, localized(Res.string.machine_running), MachineCopy.running(status?.current, chats))
         }
         Column(Modifier.kitAnchor("updates")) {
         HeaderStatus(dot, lead, rest, Modifier.kitAnchor("status").testTag("machine_status"))
@@ -443,7 +580,7 @@ fun MachinePage(
                     )
                 }
             }
-            if (checkFailed) Words("Couldn’t check for updates on $name.", "machine_check_failed", Modifier.padding(top = 8.dp))
+            if (checkFailed) Words(localized(Res.string.machine_check_failed, name), "machine_check_failed", Modifier.padding(top = 8.dp))
             if (cantRestart) {
                 MachineLine(KitGlyphs.Warn, MachineCopy.cantRestart(name), Tone.Warn, Modifier.testTag("machine_cant_restart")) {
                     KitTextAction(MachineCopy.OK, { cantRestart = false }, Modifier.testTag("machine_cant_restart_ok"))
@@ -498,10 +635,12 @@ private fun UpdateRow(
     var danger = false
     when {
         running -> desc = when (s.state) {
-            "downloading" -> "Downloading ${s.latest ?: "the update"}…"
-            "swapping" -> "Installing ${s.latest ?: "the update"}…"
-            "checking" -> "Checking…"
-            else -> "Starting the update…"
+            "downloading" -> s.latest?.let { localized(Res.string.machine_update_downloading_version, it) }
+                ?: localized(Res.string.machine_update_downloading)
+            "swapping" -> s.latest?.let { localized(Res.string.machine_update_installing_version, it) }
+                ?: localized(Res.string.machine_update_installing)
+            "checking" -> localized(Res.string.machine_checking)
+            else -> localized(Res.string.machine_update_starting)
         }
         finish -> desc = MachineCopy.installed(s.latest)
         failed -> {
@@ -528,10 +667,10 @@ private fun UpdateRow(
                 }
             }
             when {
-                running -> KitGhostButton("Updating…", {}, Modifier.testTag("machine_update_button"), enabled = false)
+                running -> KitGhostButton(localized(Res.string.machine_updating), {}, Modifier.testTag("machine_update_button"), enabled = false)
                 finish -> KitGhostButton(MachineCopy.RESTART, onRestart, Modifier.testTag("machine_update_button"), enabled = !down)
                 failed -> KitGhostButton(MachineCopy.TRY_AGAIN, onUpdate, Modifier.testTag("machine_update_button"))
-                else -> KitGhostButton("Update", onUpdate, Modifier.testTag("machine_update_button"))
+                else -> KitGhostButton(localized(Res.string.machine_update), onUpdate, Modifier.testTag("machine_update_button"))
             }
         }
         dev.supermux.ui.settings.kit.KitHairline()
@@ -571,7 +710,7 @@ private fun ColumnScope.Away(h: ThisComputerHosting, chats: MachineChats) {
         HostingPhase.Running -> {
             val ro = st.readOnly
             if (ro) {
-                MachineLine(KitGlyphs.Server, MachineCopy.SERVICE + MachineCopy.SERVICE_REST, Tone.Dim, Modifier.kitAnchor("service").testTag("machine_service")) {
+                MachineLine(KitGlyphs.Server, MachineCopy.SERVICE, Tone.Dim, Modifier.kitAnchor("service").testTag("machine_service")) {
                     KitGhostButton(MachineCopy.MANAGE, { manage = true }, Modifier.testTag("machine_manage"))
                 }
             }
@@ -602,13 +741,13 @@ private fun ColumnScope.Away(h: ThisComputerHosting, chats: MachineChats) {
                     MachineCopy.LID, lid.on, a::setLidClosed, Modifier.testTag("machine_lid"),
                     description = MachineCopy.LID_HELP, indent = true, enabled = lid.enabled && !lid.busy && !ro,
                 )
-                (if (lid.busy) HostingCopy.LID_WAITING else lid.note)?.let { Line(it, Tone.Dim, "machine_lid_note") }
+                (if (lid.busy) localized(Res.string.machine_hosting_lid_waiting) else lid.note)?.let { Line(it, Tone.Dim, "machine_lid_note") }
                 lid.error?.let { Line(it, Tone.Danger, "machine_lid_error") }
                 if (lid.installed) {
-                    KitTextAction(HostingCopy.LID_UNINSTALL, a::uninstallLidHelper, Modifier.testTag("machine_lid_uninstall"), enabled = !lid.busy)
+                    KitTextAction(localized(Res.string.machine_hosting_lid_uninstall), a::uninstallLidHelper, Modifier.testTag("machine_lid_uninstall"), enabled = !lid.busy)
                 }
             }
-            if (st.power?.autoLoginHint == true) KitNote(HostingCopy.AUTO_LOGIN, Modifier.testTag("machine_auto_login_hint"))
+            if (st.power?.autoLoginHint == true) KitNote(localized(Res.string.machine_hosting_auto_login), Modifier.testTag("machine_auto_login_hint"))
             KitToggleRow(
                 MachineCopy.RELAY, st.relay, a::setRelay,
                 Modifier.kitAnchor("reach-anywhere").testTag("machine_relay"),
@@ -643,9 +782,9 @@ private fun ColumnScope.Away(h: ThisComputerHosting, chats: MachineChats) {
         h.startHosting(bg, awake, relay)
     }
     if (stop) {
-        val (first, second) = MachineCopy.stopText(chats)
+        val (first, second) = MachineCopy.stopLines(chats)
         KitSheet(
-            "Stop hosting?",
+            localized(Res.string.machine_stop_title),
             onDismiss = { stop = false },
             tag = "machine_stop_sheet",
             buttons = {
@@ -685,7 +824,7 @@ private fun ColumnScope.Away(h: ThisComputerHosting, chats: MachineChats) {
             description = MachineCopy.LOG_TEXT,
             tag = "machine_log_sheet",
             buttons = {
-                lines?.let { Words(if (it.size == 1) "1 line" else "${it.size} lines", "machine_log_count") }
+                lines?.let { Words(localizedPlural(Res.plurals.machine_log_lines, it.size, it.size), "machine_log_count") }
                 KitGhostButton(if (copied) MachineCopy.COPIED else MachineCopy.COPY_ALL, {
                     platform.copyToClipboard(lines.orEmpty().joinToString("\n"))
                     copied = true
@@ -736,10 +875,13 @@ private fun GitLine(st: HostingUiState, a: HostingActions) {
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
     var failed by remember { mutableStateOf(false) }
+    val missing = MachineCopy.GIT_MISSING
+    val installError = req.installError?.let { localized(Res.string.machine_git_install_error, it) }
+    val installFailed = MachineCopy.INSTALL_FAILED
     val text = buildString {
-        append(MachineCopy.GIT_MISSING)
-        req.installError?.let { append(" Couldn’t install git: ").append(it) }
-        if (failed) append(" ").append(MachineCopy.INSTALL_FAILED)
+        append(missing)
+        installError?.let { append(" ").append(it) }
+        if (failed) append(" ").append(installFailed)
     }
     MachineLine(KitGlyphs.Warn, text, Tone.Warn, Modifier.kitAnchor("git").testTag("machine_git")) {
         if (req.installable) {

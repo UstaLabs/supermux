@@ -1,0 +1,432 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #123: English, the source, for Settings › machine pages, Worktrees, Git hosting, Code intelligence, Editor &amp; terminal
+     and the Settings kit. Every key here also lives in values-tr/settings_machine.xml with the same placeholders
+     (tests/i18n-strings.test.ts). Terms and tone: docs/i18n/glossary.md. -->
+<resources>
+    <!-- Shared -->
+    <string name="machine_fallback_name">This machine</string>
+    <!-- Settings kit -->
+    <string name="machine_kit_back">Back</string>
+    <string name="machine_kit_only_this_computer">Only this computer</string>
+    <string name="machine_kit_only_this_phone">Only this phone</string>
+    <string name="machine_kit_only_this_device">Only this device</string>
+    <string name="machine_kit_scope_machine_before">On</string>
+    <string name="machine_kit_scope_machine_after">· every device that uses it</string>
+    <string name="machine_kit_scope_mixed_before">Machine parts on</string>
+    <string name="machine_kit_scope_mixed_after"></string>
+    <string name="machine_kit_pick_machine">Pick a machine</string>
+    <string name="machine_kit_current">Current</string>
+    <string name="machine_kit_this_computer">this computer</string>
+    <string name="machine_kit_server">server</string>
+    <string name="machine_kit_decrease">Decrease %1$s</string>
+    <string name="machine_kit_increase">Increase %1$s</string>
+    <string name="machine_kit_search_settings">Search settings</string>
+    <string name="machine_kit_clear_search">Clear search</string>
+    <string name="machine_kit_hide">Hide</string>
+    <string name="machine_kit_show">Show</string>
+    <string name="machine_kit_copied">Copied</string>
+    <string name="machine_kit_copy">Copy</string>
+    <string name="machine_kit_expanded">Expanded</string>
+    <string name="machine_kit_collapsed">Collapsed</string>
+    <string name="machine_kit_offline">%1$s is offline.</string>
+    <string name="machine_kit_offline_seen">%1$s is offline · last seen %2$s.</string>
+    <!-- This computer's hosting (HostingCopy) -->
+    <string name="machine_hosting_lid_waiting">Waiting for your password…</string>
+    <string name="machine_hosting_lid_uninstall">Uninstall lid helper</string>
+    <string name="machine_hosting_auto_login">To start without anyone at the keyboard, turn on Automatic Login in System Settings ▸ Users &amp; Groups.</string>
+    <!-- Editor &amp; terminal -->
+    <string name="editor_settings_wrap">Wrap long lines</string>
+    <string name="editor_settings_wrap_description">Wrap instead of scrolling sideways.</string>
+    <string name="editor_settings_editor_font">Editor font size</string>
+    <string name="editor_settings_terminal_font">Terminal font size</string>
+    <string name="editor_settings_terminal_pinch">Pinch in a terminal to change it too.</string>
+    <string name="editor_settings_zoom_apple">Also ⌘+ and ⌘− in a terminal.</string>
+    <string name="editor_settings_zoom_other">Also Ctrl+Plus and Ctrl+Minus in a terminal.</string>
+    <string name="editor_settings_side_by_side">Side-by-side diffs</string>
+    <string name="editor_settings_side_by_side_description">Each changed file in two columns.</string>
+    <string name="editor_settings_accessory_bar">Keys above the keyboard</string>
+    <string name="editor_settings_accessory_bar_description">Tab, arrows, undo and find over the on-screen keyboard.</string>
+    <!-- Providers: install and sign-in status -->
+    <string name="agent_settings_install_failed">Installation failed.</string>
+    <string name="agent_settings_install_failed_code">Installation failed (exit code %1$d).</string>
+    <string name="agent_settings_sign_in_expired">Sign-in expired — sign in again</string>
+    <string name="agent_settings_authenticated">Authenticated</string>
+    <string name="agent_settings_not_installed">Not installed</string>
+    <string name="agent_settings_ready_free_tier">Ready · free tier</string>
+    <string name="agent_settings_installed_not_authenticated">Installed, not authenticated</string>
+
+    <!-- MachinePage: header and updates -->
+    <string name="machine_this_computer">This computer</string>
+    <string name="machine_paired_server">A server you paired</string>
+    <string name="machine_restart">Restart</string>
+    <string name="machine_restarting">Restarting…</string>
+    <string name="machine_reconnect">chats reconnect on their own</string>
+    <string name="machine_check_updates">Check for updates</string>
+    <string name="machine_checking">Checking…</string>
+    <string name="machine_managed">Updated with the app</string>
+    <string name="machine_managed_on">Updated with the app on %1$s</string>
+    <string name="machine_not_hosting">Not hosting</string>
+    <string name="machine_not_running_here">supermux isn’t running on this computer</string>
+    <string name="machine_starting_status">Starting supermux…</string>
+    <string name="machine_didnt_start">Didn’t start</string>
+    <string name="machine_offline">Offline</string>
+    <string name="machine_running">Running</string>
+    <string name="machine_running_counts">%1$s, %2$d working</string>
+    <string name="machine_last_seen">last seen %1$s</string>
+    <string name="machine_check_failed">Couldn’t check for updates on %1$s.</string>
+    <string name="machine_cant_restart">supermux on %1$s isn’t run by a service, so it can’t restart itself. Restart it where it runs.</string>
+    <string name="machine_restart_failed">Couldn’t reach supermux on %1$s, so it didn’t restart.</string>
+    <string name="machine_ok">OK</string>
+    <string name="machine_update_title">Update supermux on %1$s</string>
+    <string name="machine_up_to_date">Up to date</string>
+    <string name="machine_up_to_date_version">Up to date · %1$s</string>
+    <string name="machine_update_ready">An update is ready</string>
+    <string name="machine_update_ready_version">%1$s is ready</string>
+    <string name="machine_update_you_have">you have %1$s</string>
+    <string name="machine_update_installed">The update is installed · restart to finish</string>
+    <string name="machine_update_installed_version">%1$s is installed · restart to finish</string>
+    <string name="machine_update_failed">Couldn’t update: %1$s. Nothing changed.</string>
+    <string name="machine_update_failed_to">Couldn’t update to %1$s: %2$s. Nothing changed.</string>
+    <string name="machine_update_no_reason">%1$s didn’t say why</string>
+    <string name="machine_update_no_answer">%1$s didn’t answer</string>
+    <string name="machine_update_couldnt_start">it couldn’t start the update</string>
+    <string name="machine_update_downloading">Downloading the update…</string>
+    <string name="machine_update_downloading_version">Downloading %1$s…</string>
+    <string name="machine_update_installing">Installing the update…</string>
+    <string name="machine_update_installing_version">Installing %1$s…</string>
+    <string name="machine_update_starting">Starting the update…</string>
+    <string name="machine_updating">Updating…</string>
+    <string name="machine_update">Update</string>
+    <string name="machine_whats_new">What’s new</string>
+
+    <!-- MachinePage: While you're away -->
+    <string name="machine_away">While you're away</string>
+    <string name="machine_elsewhere">Running in the background, staying awake and remote access are set on %1$s itself.</string>
+    <string name="machine_host_on">Host on this computer</string>
+    <string name="machine_host_on_help">Run supermux here, so your agents keep working and your phone can reach them.</string>
+    <string name="machine_starting_line">Starting supermux on this computer…</string>
+    <string name="machine_didnt_start_here">supermux didn’t start on this computer.</string>
+    <string name="machine_didnt_start_reason">supermux didn’t start: %1$s</string>
+    <string name="machine_background">Keep running in the background</string>
+    <string name="machine_background_help">Your agents stay reachable after you quit, sign out or restart.</string>
+    <string name="machine_awake">Keep this computer awake</string>
+    <string name="machine_awake_help">Stops it from sleeping while supermux runs. The screen can still turn off.</string>
+    <string name="machine_battery">Also on battery</string>
+    <string name="machine_lid">Even with the lid closed</string>
+    <string name="machine_lid_help">It can get hot: don’t put it in a bag while this is on.</string>
+    <string name="machine_relay">Reach it from anywhere</string>
+    <string name="machine_relay_help">Your phone reaches it away from home too. Turning this on or off restarts supermux.</string>
+    <string name="machine_on_network">On this network</string>
+    <string name="machine_from_anywhere">From anywhere</string>
+    <string name="machine_off">Off</string>
+    <string name="machine_recent_log">Recent log</string>
+    <string name="machine_show_log">Show log</string>
+    <string name="machine_stop_hosting">Stop hosting</string>
+    <string name="machine_service">Run by your system’s service. These are set where that service is set up; the app only shows them.</string>
+    <string name="machine_manage">Manage</string>
+    <string name="machine_manage_title">Let the app manage supermux?</string>
+    <string name="machine_manage_text">The app takes over from your system’s service: it turns that service off and starts supermux itself, so you can change these switches here. supermux restarts once; chats reconnect on their own.</string>
+    <string name="machine_manage_go">Let the app manage it</string>
+    <string name="machine_git_missing">git isn’t installed on this computer. Agents still run, but worktrees, diffs and branches are off until it is.</string>
+    <string name="machine_git_install_error">Couldn’t install git: %1$s</string>
+    <string name="machine_install_git">Install git</string>
+    <string name="machine_installing">Installing…</string>
+    <string name="machine_install_failed">Couldn’t start the installer.</string>
+    <string name="machine_try_again">Try again</string>
+    <string name="machine_turn_on_text">supermux runs here and your agents work from this computer’s folders. Your phone and other computers reach it once they’re paired.</string>
+    <string name="machine_turn_on_background_help">After you quit, sign out or restart.</string>
+    <string name="machine_turn_on_awake_help">The screen can still turn off.</string>
+    <string name="machine_turn_on_relay_help">Not only on this Wi-Fi.</string>
+    <string name="machine_start_hosting">Start hosting</string>
+    <string name="machine_cancel">Cancel</string>
+    <string name="machine_log_title">supermux log · this computer</string>
+    <string name="machine_log_text">The newest lines are at the bottom.</string>
+    <string name="machine_copy_all">Copy all</string>
+    <string name="machine_copied">Copied</string>
+    <string name="machine_copy">Copy</string>
+    <string name="machine_done">Done</string>
+    <string name="machine_stop_title">Stop hosting?</string>
+    <string name="machine_names_and">%1$s and %2$s</string>
+    <string name="machine_stop_none">This stops supermux on this computer. No chat is working right now.</string>
+    <string name="machine_stop_one">This stops supermux and the chat working right now: %1$s. It stops mid-reply.</string>
+    <string name="machine_stop_many">This stops supermux and the %1$d chats working right now: %2$s. They stop mid-reply.</string>
+    <string name="machine_stop_wait_yours">Your %1$s wait until you host again.</string>
+    <string name="machine_stop_wait_others">The other %1$s wait until you host again.</string>
+    <string name="machine_stop_kept">Nothing is deleted, and supermux no longer starts with this computer.</string>
+
+    <!-- MachineParts: Devices -->
+    <string name="machine_devices">Devices</string>
+    <string name="machine_paired">%1$d paired</string>
+    <string name="machine_this_device">This device</string>
+    <string name="machine_revoke">Revoke</string>
+    <string name="machine_revoking">Revoking…</string>
+    <string name="machine_revoke_title">Revoke %1$s?</string>
+    <string name="machine_revoke_text">It can’t reach %1$s any more, and its open chats close on it. Pair it again to bring it back.</string>
+    <string name="machine_revoke_failed">Couldn’t revoke %1$s. Try again.</string>
+    <string name="machine_rename">Rename</string>
+    <string name="machine_rename_save">Save</string>
+    <string name="machine_saving">Saving…</string>
+    <string name="machine_rename_title">Rename device</string>
+    <string name="machine_name_taken">Another device already has that name.</string>
+    <string name="machine_name_too_long">Use a name of %1$d characters or fewer.</string>
+    <string name="machine_rename_failed">Couldn’t rename %1$s. Try again.</string>
+    <string name="machine_rename_gone">%1$s isn’t paired any more.</string>
+    <string name="machine_pair">Pair a phone or computer</string>
+    <string name="machine_pair_help">Scan a code or open a link on it</string>
+    <string name="machine_pair_text">Scan this with the supermux app on it, or open the link there.</string>
+    <string name="machine_pair_text_same_network">Scan this with the supermux app on it, or open the link there. It needs to be on the same network: reaching it from anywhere is off.</string>
+    <string name="machine_pair_note">Treat the link like a password until it’s used.</string>
+    <string name="machine_new_code">New code</string>
+    <string name="machine_copy_link">Copy link</string>
+    <string name="machine_making_code">Making a code…</string>
+    <string name="machine_code_expired">This code expired. Make a new one to pair.</string>
+    <string name="machine_pair_expires">Works once · expires in %1$s</string>
+    <string name="machine_pair_used">%1$s is paired. It shows up under Devices.</string>
+    <string name="machine_pair_failed">Couldn’t make a pairing code on %1$s.</string>
+    <string name="machine_pairing_code">Pairing code</string>
+    <string name="machine_loading">Loading…</string>
+    <string name="machine_no_devices">No devices are paired yet.</string>
+    <string name="machine_devices_failed">Couldn’t load the devices.</string>
+    <string name="machine_seen_now">Connected now</string>
+    <string name="machine_seen_never">Not used yet</string>
+    <string name="machine_seen_just_now">Last seen just now</string>
+    <string name="machine_seen_min">Last seen %1$d min ago</string>
+    <string name="machine_seen_hours">Last seen %1$d h ago</string>
+    <string name="machine_seen_yesterday">Last seen yesterday</string>
+    <string name="machine_seen_days">Last seen %1$d days ago</string>
+
+    <!-- MachineParts: Shared links -->
+    <string name="machine_links">Shared links</string>
+    <string name="machine_share">Share a port…</string>
+    <string name="machine_share_help">A link to something a chat is running</string>
+    <string name="machine_links_note">A link closes when its chat is archived. Making one public asks first.</string>
+    <string name="machine_links_failed">Couldn’t load the shared links.</string>
+    <string name="machine_link_private">Private: your paired devices</string>
+    <string name="machine_link_public">Public: anyone with the link</string>
+    <string name="machine_link_title">%1$s · port %2$d</string>
+    <string name="machine_link_from">From “%1$s”</string>
+    <string name="machine_open">Open</string>
+    <string name="machine_more">More</string>
+    <string name="machine_make_public_menu">Make public…</string>
+    <string name="machine_make_private">Make private</string>
+    <string name="machine_remove_menu">Remove…</string>
+    <string name="machine_make_public">Make public</string>
+    <string name="machine_remove">Remove</string>
+    <string name="machine_public_title">Make %1$s public?</string>
+    <string name="machine_public_text">Anyone with the link can open port %1$d on %2$s, not only your paired devices. You can make it private again at any time.</string>
+    <string name="machine_public_failed">Couldn’t make the link public. Try again.</string>
+    <string name="machine_private_failed">Couldn’t make “%1$s” private.</string>
+    <string name="machine_remove_title">Remove %1$s?</string>
+    <string name="machine_remove_text">The link stops working.</string>
+    <string name="machine_remove_text_port">The link stops working. Port %1$d keeps running in “%2$s”.</string>
+    <string name="machine_remove_failed">Couldn’t remove the link. Try again.</string>
+    <string name="machine_share_title">Share a port</string>
+    <string name="machine_share_text">A private link to something a chat is running on %1$s. Only your paired devices can open it until you make it public.</string>
+    <string name="machine_share_failed">Couldn’t share port %1$d. Try again.</string>
+    <string name="machine_chat">Chat</string>
+    <string name="machine_port">Port</string>
+    <string name="machine_name">Name</string>
+    <string name="machine_port_error">A number from 1 to 65535.</string>
+    <string name="machine_name_hint">Shows in the link. Letters, numbers and dashes.</string>
+    <string name="machine_name_placeholder">From the chat’s name</string>
+    <string name="machine_share_go">Share</string>
+    <string name="machine_sharing">Sharing…</string>
+    <string name="machine_no_chats">No chats to share from yet.</string>
+    <string name="machine_working">working</string>
+
+    <!-- MachineParts: Limits and quiet lines -->
+    <string name="machine_limits">Limits</string>
+    <string name="machine_refresh">Refresh</string>
+    <string name="machine_refreshing">Refreshing…</string>
+    <string name="machine_open_usage">Open full usage</string>
+    <string name="machine_no_limits">No limits to show yet.</string>
+    <string name="machine_usage_unread">Couldn’t read its usage</string>
+    <string name="machine_sign_in_expired">Sign-in expired</string>
+    <string name="machine_limit_your_login">%1$s · your login</string>
+    <string name="machine_limit_5_hour">5-hour</string>
+    <string name="machine_limit_weekly">Weekly</string>
+    <string name="machine_limit_monthly">Monthly</string>
+    <string name="machine_limit_usage">Usage</string>
+    <string name="machine_updated_just_now">Updated just now</string>
+    <string name="machine_updated_min">Updated %1$d min ago</string>
+    <string name="machine_updated_hours">Updated %1$d h ago</string>
+    <string name="machine_updated_days">Updated %1$d days ago</string>
+    <string name="machine_parts_not_hosting">Not hosting. Turn it on above to see this.</string>
+    <string name="machine_parts_starting">Starting…</string>
+    <string name="machine_parts_not_running">supermux isn’t running on this computer.</string>
+    <string name="machine_parts_offline">%1$s is offline</string>
+    <string name="machine_parts_offline_seen">%1$s is offline · last seen %2$s</string>
+
+    <!-- Machine page counts -->
+    <plurals name="machine_chats">
+        <item quantity="one">%1$d chat</item>
+        <item quantity="other">%1$d chats</item>
+    </plurals>
+    <plurals name="machine_log_lines">
+        <item quantity="one">%1$d line</item>
+        <item quantity="other">%1$d lines</item>
+    </plurals>
+
+    <!-- WorktreesPage -->
+    <string name="worktrees_disk">Disk</string>
+    <string name="worktrees_chat_worktrees">Chat worktrees</string>
+    <string name="worktrees_disk_note">Folders agents worked in. Nothing is deleted on its own.</string>
+    <string name="worktrees_none">No chat worktrees</string>
+    <string name="worktrees_counting">Counting…</string>
+    <string name="worktrees_refresh">Refresh</string>
+    <string name="worktrees_refreshing">Refreshing…</string>
+    <string name="worktrees_try_again">Try again</string>
+    <string name="worktrees_nothing_on_disk">Nothing on disk</string>
+    <string name="worktrees_empty">No chat worktrees on this machine.</string>
+    <string name="worktrees_sort">Sort</string>
+    <string name="worktrees_size">Size</string>
+    <string name="worktrees_last_used">Last used</string>
+    <string name="worktrees_every_folder_changed">Every folder has changes or is in use.</string>
+    <string name="worktrees_paused">Deleting. The list is paused until it’s done.</string>
+    <string name="worktrees_no_chat">No chat</string>
+    <string name="worktrees_no_changes">No changes</string>
+    <string name="worktrees_in_use">In use by a running chat</string>
+    <string name="worktrees_cant_look">Couldn’t look inside</string>
+    <string name="worktrees_has_changes">Has changes</string>
+    <string name="worktrees_cant_check">Can’t check for changes</string>
+    <string name="worktrees_repo_missing">Repository missing</string>
+    <string name="worktrees_gone_text">The repository is gone; this deletes the folder.</string>
+    <string name="worktrees_select_it">Select it</string>
+    <string name="worktrees_show_more">Show more</string>
+    <string name="worktrees_cancel">Cancel</string>
+    <string name="worktrees_delete">Delete</string>
+    <string name="worktrees_updating">Updating the list…</string>
+    <plurals name="worktrees_folders">
+        <item quantity="one">%1$d folder</item>
+        <item quantity="other">%1$d folders</item>
+    </plurals>
+    <string name="worktrees_clean_none">all have changes</string>
+    <plurals name="worktrees_clean_count">
+        <item quantity="one">%1$d has no changes</item>
+        <item quantity="other">%1$d have no changes</item>
+    </plurals>
+    <string name="worktrees_size_in">%1$s in %2$s</string>
+    <string name="worktrees_disk_summary">%1$s in %2$s · %3$s</string>
+    <string name="worktrees_disk_failed">Couldn’t read the worktrees on %1$s.</string>
+    <string name="worktrees_select_clean">Select the %1$d without changes</string>
+    <string name="worktrees_select_folder">Select %1$s</string>
+    <string name="worktrees_delete_n">Delete %1$s · %2$s</string>
+    <string name="worktrees_delete_title">Delete %1$s?</string>
+    <plurals name="worktrees_delete_head">
+        <item quantity="one">Deletes the folder and its branch · %1$s.</item>
+        <item quantity="other">Deletes the folders and their branches · %1$s.</item>
+    </plurals>
+    <string name="worktrees_delete_none_changed">None of them has changes.</string>
+    <plurals name="worktrees_delete_all_gone">
+        <item quantity="one">It has no repository left, so nothing there can be checked.</item>
+        <item quantity="other">They have no repository left, so nothing there can be checked.</item>
+    </plurals>
+    <plurals name="worktrees_delete_some_gone">
+        <item quantity="one">%1$s of them has no repository left, so nothing there can be checked.</item>
+        <item quantity="other">%1$s of them have no repository left, so nothing there can be checked.</item>
+    </plurals>
+    <string name="worktrees_cant_undo">This can’t be undone.</string>
+    <string name="worktrees_deleting">Deleting %1$d of %2$d…</string>
+    <string name="worktrees_deleted">Deleted %1$s · %2$s freed</string>
+    <string name="worktrees_showing">Showing %1$d of %2$d folders.</string>
+    <string name="worktrees_more_gone">Show more (%1$d left)</string>
+    <string name="worktrees_gone_title">Select “%1$s”?</string>
+    <string name="worktrees_gone_detail">%1$s · last used %2$s. There’s no repository to say whether it had changes.</string>
+    <string name="worktrees_gone_note">The repository these were made from is gone, so there’s no telling whether they had changes. They’re never included in “%1$s”.</string>
+    <string name="worktrees_ago_today">today</string>
+    <string name="worktrees_ago_yesterday">yesterday</string>
+    <plurals name="worktrees_ago_days">
+        <item quantity="one">%1$d day ago</item>
+        <item quantity="other">%1$d days ago</item>
+    </plurals>
+    <plurals name="worktrees_ago_weeks">
+        <item quantity="one">%1$d week ago</item>
+        <item quantity="other">%1$d weeks ago</item>
+    </plurals>
+    <plurals name="worktrees_ago_months">
+        <item quantity="one">%1$d month ago</item>
+        <item quantity="other">%1$d months ago</item>
+    </plurals>
+    <plurals name="worktrees_changed_files">
+        <item quantity="one">%1$d changed file</item>
+        <item quantity="other">%1$d changed files</item>
+    </plurals>
+    <plurals name="worktrees_unmerged_commits">
+        <item quantity="one">%1$d unmerged commit</item>
+        <item quantity="other">%1$d unmerged commits</item>
+    </plurals>
+    <string name="worktrees_row_last_used">Last used %1$s</string>
+    <string name="worktrees_unknown_location">unknown location</string>
+    <string name="worktrees_cant_reach">Couldn’t reach %1$s</string>
+    <string name="worktrees_in_use_by">In use by %1$s</string>
+    <string name="worktrees_cant_delete">Couldn’t delete it</string>
+    <string name="worktrees_cant_delete_why">Couldn’t delete it: %1$s</string>
+
+    <!-- GitHostingScreen -->
+    <string name="git_title">GitHub &amp; GitLab</string>
+    <string name="git_this_machine">this machine</string>
+    <string name="git_couldnt_reach">Couldn't reach %1$s.</string>
+    <string name="git_try_again">Try again</string>
+    <string name="git_add_account">Add a GitHub or GitLab account</string>
+    <string name="git_add_subtitle_paste">Paste a personal access token</string>
+    <string name="git_add_subtitle_login">Use the %1$s sign-in found on %2$s, or paste a token</string>
+    <string name="git_disconnect_title">Disconnect @%1$s?</string>
+    <string name="git_disconnect_description">supermux on %1$s stops using this account. You can connect it again at any time.</string>
+    <string name="git_cancel">Cancel</string>
+    <string name="git_disconnecting">Disconnecting…</string>
+    <string name="git_disconnect">Disconnect</string>
+    <string name="git_disconnect_failed">Couldn't disconnect — try again.</string>
+    <string name="git_reconnect">Reconnect</string>
+    <string name="git_connected">Connected</string>
+    <string name="git_connect_failed">Couldn't connect — check your token and try again.</string>
+    <string name="git_import_failed">Couldn't use the %1$s sign-in found on %2$s — is it signed in?</string>
+    <string name="git_connecting">Connecting…</string>
+    <string name="git_connect_forge">Connect %1$s</string>
+    <string name="git_use_login">Use the %1$s sign-in found on %2$s</string>
+    <string name="git_login_found">@%1$s, found on that machine</string>
+    <string name="git_paste_token">Paste a token</string>
+    <string name="git_token_label">Personal access token</string>
+    <string name="git_needs_scopes">Needs scopes: %1$s</string>
+    <string name="git_own_server">Your own server</string>
+    <string name="git_server">Server</string>
+    <string name="git_ssh_gitlab_experimental">SSH for GitLab is experimental.</string>
+    <string name="git_url_spaces">URL can't contain spaces</string>
+    <string name="git_url_scheme">URL must start with http:// or https://</string>
+    <string name="git_url_not_host">Enter a host like github.example.com</string>
+
+    <!-- LspSettingsScreen -->
+    <string name="lsp_add_own">Add your own language server</string>
+    <string name="lsp_add_failed">Couldn't add the language server.</string>
+    <string name="lsp_installing_title">Installing %1$s</string>
+    <string name="lsp_close">Close</string>
+    <string name="lsp_nothing_logged">Nothing was logged.</string>
+    <string name="lsp_installing">Installing…</string>
+    <string name="lsp_install">Install</string>
+    <string name="lsp_removing">Removing…</string>
+    <string name="lsp_remove">Remove</string>
+    <string name="lsp_use_server">Use %1$s</string>
+    <string name="lsp_installed">Installed.</string>
+    <string name="lsp_install_failed">Couldn't install %1$s.</string>
+    <string name="lsp_show_log">Show log</string>
+    <string name="lsp_dismiss">Dismiss</string>
+    <string name="lsp_fill_required">Fill in the name, command and file extensions.</string>
+    <string name="lsp_add_note">Name, command, file extensions — for languages we don't list.</string>
+    <string name="lsp_field_short_name">Short name</string>
+    <string name="lsp_field_name">Name</string>
+    <string name="lsp_field_command">Command</string>
+    <string name="lsp_field_arguments">Arguments</string>
+    <string name="lsp_field_extensions">File extensions</string>
+    <string name="lsp_field_language_name">Language name (optional)</string>
+    <string name="lsp_field_install_command">Install command (optional)</string>
+    <string name="lsp_install_note">The install command runs as your user on %1$s, without sudo.</string>
+    <string name="lsp_adding">Adding…</string>
+    <string name="lsp_add">Add</string>
+    <string name="lsp_cancel">Cancel</string>
+    <string name="lsp_state_ready">Ready</string>
+    <string name="lsp_state_ready_command">Ready · %1$s</string>
+    <string name="lsp_state_needs">Needs %1$s on %2$s</string>
+    <string name="lsp_state_needs_toolchain">Needs its toolchain on %1$s</string>
+    <string name="lsp_state_not_found">Not found on %1$s</string>
+    <string name="lsp_state_not_installed">Not installed</string>
+
+</resources>

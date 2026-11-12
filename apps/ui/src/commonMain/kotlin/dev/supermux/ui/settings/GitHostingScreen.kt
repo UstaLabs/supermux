@@ -28,6 +28,38 @@ import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ForgeConnectionsResponse
 import dev.supermux.state.FleetStore
 import dev.supermux.state.HostStore
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.git_add_account
+import dev.supermux.ui.resources.git_add_subtitle_login
+import dev.supermux.ui.resources.git_add_subtitle_paste
+import dev.supermux.ui.resources.git_cancel
+import dev.supermux.ui.resources.git_connect_failed
+import dev.supermux.ui.resources.git_connect_forge
+import dev.supermux.ui.resources.git_connected
+import dev.supermux.ui.resources.git_connecting
+import dev.supermux.ui.resources.git_couldnt_reach
+import dev.supermux.ui.resources.git_disconnect
+import dev.supermux.ui.resources.git_disconnect_description
+import dev.supermux.ui.resources.git_disconnect_failed
+import dev.supermux.ui.resources.git_disconnect_title
+import dev.supermux.ui.resources.git_disconnecting
+import dev.supermux.ui.resources.git_import_failed
+import dev.supermux.ui.resources.git_login_found
+import dev.supermux.ui.resources.git_needs_scopes
+import dev.supermux.ui.resources.git_own_server
+import dev.supermux.ui.resources.git_paste_token
+import dev.supermux.ui.resources.git_reconnect
+import dev.supermux.ui.resources.git_server
+import dev.supermux.ui.resources.git_ssh_gitlab_experimental
+import dev.supermux.ui.resources.git_this_machine
+import dev.supermux.ui.resources.git_title
+import dev.supermux.ui.resources.git_token_label
+import dev.supermux.ui.resources.git_try_again
+import dev.supermux.ui.resources.git_url_not_host
+import dev.supermux.ui.resources.git_url_scheme
+import dev.supermux.ui.resources.git_url_spaces
+import dev.supermux.ui.resources.git_use_login
 import dev.supermux.ui.retain.rememberRetainedOnPage
 import dev.supermux.ui.retain.rememberRetainedScope
 import dev.supermux.ui.settings.kit.KitDot
@@ -98,12 +130,12 @@ fun GitHostingScreen(
     onBack: () -> Unit = {},
     topBarShown: Boolean = false,
 ) {
-    KitPage("GitHub & GitLab", modifier) { GitHubSection(actions) }
+    KitPage(localized(Res.string.git_title), modifier) { GitHubSection(actions) }
 }
 
 /** The machine as a sentence names it mid-way: its name, or "this machine" when Settings knows none. */
 @Composable
-private fun machineInSentence(): String = LocalSettingsMachines.current?.current?.name ?: "this machine"
+private fun machineInSentence(): String = LocalSettingsMachines.current?.current?.name ?: localized(Res.string.git_this_machine)
 
 internal fun forgeLabel(kind: String): String = if (kind == "gitlab") "GitLab" else "GitHub"
 
@@ -143,13 +175,14 @@ fun GitHubSection(actions: GitHostingActions, modifier: Modifier = Modifier) {
     }
 
     LaunchedEffect(attempt) { reload() }
+    val disconnectFailed = localized(Res.string.git_disconnect_failed)
 
     Column(modifier.fillMaxWidth().testTag("git_hosting_screen")) {
         when {
             loadFailed -> {
-                KitNote("Couldn't reach $machine.", Modifier.testTag("git_hosting_error"))
+                KitNote(localized(Res.string.git_couldnt_reach, machine), Modifier.testTag("git_hosting_error"))
                 KitTextAction(
-                    "Try again",
+                    localized(Res.string.git_try_again),
                     onClick = { attempt++ },
                     modifier = Modifier.padding(top = 4.dp).testTag("git_hosting_retry"),
                 )
@@ -163,12 +196,12 @@ fun GitHubSection(actions: GitHostingActions, modifier: Modifier = Modifier) {
                     }
                     val logins = loginKinds(cliStatus)
                     KitItem(
-                        "Add a GitHub or GitLab account",
+                        localized(Res.string.git_add_account),
                         modifier = Modifier.testTag("git_hosting_add_account"),
                         subtitle = if (logins.isEmpty()) {
-                            "Paste a personal access token"
+                            localized(Res.string.git_add_subtitle_paste)
                         } else {
-                            "Use the ${logins.joinToString(" / ") { forgeName(it) }} sign-in found on $machine, or paste a token"
+                            localized(Res.string.git_add_subtitle_login, logins.joinToString(" / ") { forgeName(it) }, machine)
                         },
                         mark = KitMark.Add,
                         onClick = { add.open(null) },
@@ -194,19 +227,19 @@ fun GitHubSection(actions: GitHostingActions, modifier: Modifier = Modifier) {
 
     disconnectTarget?.let { target ->
         KitSheet(
-            title = "Disconnect @${target.account.login}?",
+            title = localized(Res.string.git_disconnect_title, target.account.login),
             onDismiss = { if (!disconnecting) disconnectTarget = null },
-            description = "supermux on $machine stops using this account. You can connect it again at any time.",
+            description = localized(Res.string.git_disconnect_description, machine),
             tag = "git_hosting_disconnect_dialog",
             buttons = {
                 KitGhostButton(
-                    "Cancel",
+                    localized(Res.string.git_cancel),
                     onClick = { disconnectTarget = null },
                     modifier = Modifier.testTag("git_hosting_disconnect_cancel"),
                     enabled = !disconnecting,
                 )
                 KitGhostButton(
-                    if (disconnecting) "Disconnecting…" else "Disconnect",
+                    if (disconnecting) localized(Res.string.git_disconnecting) else localized(Res.string.git_disconnect),
                     onClick = {
                         if (disconnecting) return@KitGhostButton
                         disconnecting = true
@@ -220,7 +253,7 @@ fun GitHubSection(actions: GitHostingActions, modifier: Modifier = Modifier) {
                                 delay(250)
                                 reload()
                             } else {
-                                error = "Couldn't disconnect — try again."
+                                error = disconnectFailed
                                 reload(clearError = false)
                             }
                         }
@@ -244,11 +277,11 @@ private fun ForgeItem(c: ForgeConnection, onReconnect: () -> Unit, onDisconnect:
         mark = KitMark.Letters(if (c.kind == "gitlab") "gl" else "gh"),
     ) {
         if (c.status == "needs_reconnect") {
-            KitGhostButton("Reconnect", onClick = onReconnect, modifier = Modifier.testTag("forge_reconnect_${c.id}"))
+            KitGhostButton(localized(Res.string.git_reconnect), onClick = onReconnect, modifier = Modifier.testTag("forge_reconnect_${c.id}"))
         } else {
-            KitItemStatus("Connected", dot = KitDot.Ok, modifier = Modifier.testTag("forge_ok_${c.id}"))
+            KitItemStatus(localized(Res.string.git_connected), dot = KitDot.Ok, modifier = Modifier.testTag("forge_ok_${c.id}"))
         }
-        KitGhostButton("Disconnect", onClick = onDisconnect, modifier = Modifier.testTag("forge_disconnect_${c.id}"))
+        KitGhostButton(localized(Res.string.git_disconnect), onClick = onDisconnect, modifier = Modifier.testTag("forge_disconnect_${c.id}"))
     }
 }
 
@@ -281,8 +314,10 @@ private fun AddForgeSheet(
         onDone()
     }
 
-    val hostUrlError = forgeHostUrlError(hostUrl)
+    val hostUrlError = localizedForgeHostUrlError(hostUrl)
     val canConnect = token.trim().isNotEmpty() && hostUrlError == null
+    val connectFailed = localized(Res.string.git_connect_failed)
+    val importFailed = listOf("github", "gitlab").associateWith { localized(Res.string.git_import_failed, forgeName(it), machine) }
 
     fun submitConnect() {
         val t = token.trim()
@@ -295,7 +330,7 @@ private fun AddForgeSheet(
         scope.launch {
             val ok = onAdd(k, t, host, tr)
             form.submitting = false
-            if (ok) form.done = true else form.error = "Couldn't connect — check your token and try again."
+            if (ok) form.done = true else form.error = connectFailed
         }
     }
 
@@ -307,25 +342,25 @@ private fun AddForgeSheet(
         scope.launch {
             val ok = onImport(k, tr)
             form.submitting = false
-            if (ok) form.done = true else form.error = "Couldn't use the ${forgeName(k)} sign-in found on $machine — is it signed in?"
+            if (ok) form.done = true else form.error = importFailed[k]
         }
     }
 
     KitSheet(
-        title = "Add a GitHub or GitLab account",
+        title = localized(Res.string.git_add_account),
         // Read when the dismiss arrives, not captured at composition.
         onDismiss = { if (!form.submitting) form.close() },
         tag = "git_hosting_add_dialog",
         dismissOnOutside = false,
         buttons = {
             KitGhostButton(
-                "Cancel",
+                localized(Res.string.git_cancel),
                 onClick = { form.close() },
                 modifier = Modifier.testTag("git_hosting_add_cancel"),
                 enabled = !submitting,
             )
             KitGhostButton(
-                if (submitting) "Connecting…" else "Connect ${forgeLabel(kind)}",
+                if (submitting) localized(Res.string.git_connecting) else localized(Res.string.git_connect_forge, forgeLabel(kind)),
                 onClick = { submitConnect() },
                 modifier = Modifier.testTag("git_hosting_connect"),
                 enabled = canConnect && !submitting,
@@ -337,15 +372,15 @@ private fun AddForgeSheet(
             KitItemList(Modifier.padding(top = 12.dp)) {
                 logins.forEach { k ->
                     KitItem(
-                        "Use the ${forgeName(k)} sign-in found on $machine",
+                        localized(Res.string.git_use_login, forgeName(k), machine),
                         modifier = Modifier.testTag("git_hosting_import_$k"),
-                        subtitle = cliLogin(cliStatus, k)?.let { "@$it, found on that machine" },
+                        subtitle = cliLogin(cliStatus, k)?.let { localized(Res.string.git_login_found, it) },
                         onClick = { useLogin(k) },
                     )
                 }
             }
         }
-        KitSectionHead("Paste a token")
+        KitSectionHead(localized(Res.string.git_paste_token))
         KitOptions(
             options = listOf("github", "gitlab"),
             selected = kind,
@@ -359,8 +394,8 @@ private fun AddForgeSheet(
             value = token,
             onValueChange = { token = it },
             modifier = Modifier.padding(top = 12.dp),
-            label = "Personal access token",
-            placeholder = if (kind == "github") "github_pat_…" else "glpat-…",
+            label = localized(Res.string.git_token_label),
+            placeholder = if (kind == "github") "github_pat_…" else "glpat-…", // i18n-ok: token prefixes
             secret = true,
             enabled = !submitting,
             onSubmit = { if (canConnect) submitConnect() },
@@ -369,11 +404,11 @@ private fun AddForgeSheet(
         if (error != null) {
             ErrorLine(error!!, "git_hosting_add_error")
         } else {
-            KitNote("Needs scopes: ${scopesHint(kind, hostUrl)}")
+            KitNote(localized(Res.string.git_needs_scopes, scopesHint(kind, hostUrl)))
         }
         // Open from the start when it holds something: an unfolded phone keeps the typing, not the fold.
         KitFold(
-            "Your own server",
+            localized(Res.string.git_own_server),
             tag = "git_hosting_advanced_toggle",
             initiallyOpen = hostUrl.isNotBlank() || transport != "https",
         ) {
@@ -384,7 +419,7 @@ private fun AddForgeSheet(
                     error = null
                 },
                 modifier = Modifier.padding(top = 8.dp),
-                label = "Server",
+                label = localized(Res.string.git_server),
                 placeholder = if (kind == "gitlab") "gitlab.example.com" else "github.example.com",
                 enabled = !submitting,
                 error = hostUrlError,
@@ -400,7 +435,7 @@ private fun AddForgeSheet(
                 enabled = !submitting,
                 tag = { "git_hosting_transport_$it" },
             )
-            if (transport == "ssh" && kind == "gitlab") KitNote("SSH for GitLab is experimental.")
+            if (transport == "ssh" && kind == "gitlab") KitNote(localized(Res.string.git_ssh_gitlab_experimental))
         }
     }
 }
@@ -462,15 +497,31 @@ internal fun scopesHint(kind: String, hostUrl: String): String {
  * the API path itself, so the hint never asks for one (inventory bug 8).
  * Returns an error message, or null when valid.
  */
-internal fun forgeHostUrlError(raw: String): String? {
+internal fun forgeHostUrlError(raw: String): String? = when (forgeHostUrlProblem(raw)) {
+    null -> null
+    HostUrlProblem.Spaces -> "URL can't contain spaces" // i18n-ok: English for tests; the sheet shows localizedForgeHostUrlError
+    HostUrlProblem.Scheme -> "URL must start with http:// or https://" // i18n-ok: as above
+    HostUrlProblem.NotHost -> "Enter a host like github.example.com" // i18n-ok: as above
+}
+
+/** [forgeHostUrlError] in the app's language, for the add sheet. */
+@Composable
+private fun localizedForgeHostUrlError(raw: String): String? = when (forgeHostUrlProblem(raw)) {
+    null -> null
+    HostUrlProblem.Spaces -> localized(Res.string.git_url_spaces)
+    HostUrlProblem.Scheme -> localized(Res.string.git_url_scheme)
+    HostUrlProblem.NotHost -> localized(Res.string.git_url_not_host)
+}
+
+private enum class HostUrlProblem { Spaces, Scheme, NotHost }
+
+private fun forgeHostUrlProblem(raw: String): HostUrlProblem? {
     val t = raw.trim()
     if (t.isEmpty()) return null
-    if (t.any { it.isWhitespace() }) return "URL can't contain spaces"
+    if (t.any { it.isWhitespace() }) return HostUrlProblem.Spaces
     val lower = t.lowercase()
-    if ("://" in lower && !lower.startsWith("http://") && !lower.startsWith("https://")) {
-        return "URL must start with http:// or https://"
-    }
-    return if (isValidForgeHostUrl(t)) null else "Enter a host like github.example.com"
+    if ("://" in lower && !lower.startsWith("http://") && !lower.startsWith("https://")) return HostUrlProblem.Scheme
+    return if (isValidForgeHostUrl(t)) null else HostUrlProblem.NotHost
 }
 
 /** True when [raw] is blank or a plausible host / http(s) URL. */
