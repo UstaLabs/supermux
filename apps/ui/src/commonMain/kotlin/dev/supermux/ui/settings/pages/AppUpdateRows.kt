@@ -43,6 +43,7 @@ import dev.supermux.ui.update.installCaption
 import dev.supermux.ui.update.installerKindFrom
 import dev.supermux.ui.work.rememberDownloads
 import kotlinx.coroutines.flow.first
+import dev.supermux.ui.whatsnew.WhatsNewLink
 import kotlinx.coroutines.launch
 
 /**
@@ -64,6 +65,7 @@ fun AppUpdateRows(
 
     if (!canUpdate) {
         KitRow("App version", rowModifier, description = versionText, descriptionTag = "app_update_version")
+        WhatsNewLink(updater.currentVersion, Modifier.padding(bottom = 6.dp))
         return
     }
 
@@ -146,6 +148,7 @@ fun AppUpdateRows(
     }
 
     Column(Modifier.padding(bottom = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        WhatsNewLink(updater.currentVersion)
         when {
             checkFailed || feedError != null -> ErrorLine(
                 feedError ?: update.error ?: "Couldn't check for updates.",

@@ -8,6 +8,7 @@ import dev.supermux.state.SettingsStore
 import dev.supermux.ui.resources.Res
 import dev.supermux.update.compareVersions
 import kotlinx.coroutines.flow.first
+import androidx.compose.runtime.staticCompositionLocalOf
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -40,6 +41,18 @@ fun parseEdition(page: String): Edition? {
     val body = MANIFEST.find(page)?.groupValues?.get(1) ?: return null
     return runCatching { manifestJson.decodeFromString(Edition.serializer(), body.trim()) }.getOrNull()
 }
+
+/**
+ * The edition Settings › App version reopens: the newest one [currentVersion] has. A local build ("dev", no release
+ * version) reopens the newest edition, so a developer can see it.
+ */
+fun editionFor(currentVersion: String, editions: List<String> = EDITIONS): String? {
+    val local = compareVersions(currentVersion, "0") < 0
+    return editions.filter { local || compareVersions(it, currentVersion) <= 0 }.maxWithOrNull(::compareVersions)
+}
+
+/** Opens What's new at an edition, where the shell provides it (Settings' App version row reopens from it). */
+val LocalOpenWhatsNew = staticCompositionLocalOf<((String) -> Unit)?> { null }
 
 /** [version]'s release notes on GitHub, the full list the edition picks from. */
 fun releaseNotesUrl(version: String): String = "https://github.com/UstaLabs/supermux/releases/tag/v$version"

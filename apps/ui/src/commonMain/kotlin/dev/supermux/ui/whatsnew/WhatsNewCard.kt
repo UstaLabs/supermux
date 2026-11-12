@@ -57,6 +57,8 @@ import dev.supermux.ui.resources.whatsnew_place_linux
 import dev.supermux.ui.resources.whatsnew_place_mac
 import dev.supermux.ui.resources.whatsnew_place_web
 import dev.supermux.ui.resources.whatsnew_place_win
+import dev.supermux.ui.resources.whatsnew_reopen
+import dev.supermux.ui.settings.kit.KitTextAction
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.Stroke
@@ -216,5 +218,17 @@ fun WhatsNewSlot(state: WhatsNewState, onOpen: (String) -> Unit, modifier: Modif
         },
         onDismiss = { state.settle() },
         modifier = modifier,
+    )
+}
+
+/** Settings › App version's link back to What's new (#90): the newest edition this build has, where the shell opens it. */
+@Composable
+fun WhatsNewLink(currentVersion: String, modifier: Modifier = Modifier) {
+    val open = LocalOpenWhatsNew.current ?: return
+    val version = editionFor(currentVersion) ?: return
+    KitTextAction(
+        localized(Res.string.whatsnew_reopen, version),
+        onClick = { open(version) },
+        modifier = modifier.testTag("app_update_whats_new_link"),
     )
 }

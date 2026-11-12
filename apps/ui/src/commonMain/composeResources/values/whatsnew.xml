@@ -19,5 +19,6 @@
     <string name="whatsnew_card_explore">Explore what's new</string>
     <string name="whatsnew_dismiss">Dismiss</string>
     <string name="whatsnew_page_title">What's new</string>
+    <string name="whatsnew_reopen">What's new in v%1$s</string>
     <string name="whatsnew_back">Back</string>
 </resources>

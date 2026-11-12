@@ -166,6 +166,7 @@ import dev.supermux.ui.session.rememberLauncherActions
 import dev.supermux.ui.session.rememberSessionListActions
 import dev.supermux.ui.session.withWorkspaceOps
 import dev.supermux.ui.settings.SettingsHub
+import dev.supermux.ui.whatsnew.LocalOpenWhatsNew
 import dev.supermux.ui.whatsnew.WhatsNewAction
 import dev.supermux.ui.whatsnew.WhatsNewPage
 import dev.supermux.ui.whatsnew.WhatsNewSlot
@@ -1147,7 +1148,7 @@ fun SupermuxApp(
                     }
                     val currentRouteOnBack by rememberUpdatedState(routeOnBack)
                     val routeBack = remember(routeSwipe) { RouteBack(routeSwipe) { currentRouteOnBack() } }
-                    CompositionLocalProvider(LocalRouteBack provides routeBack) {
+                    CompositionLocalProvider(LocalRouteBack provides routeBack, LocalOpenWhatsNew provides { ui.openWhatsNew(it) }) {
                     NavDisplay(
                         backStack = ui.backStack,
                         modifier = Modifier.fillMaxSize(),

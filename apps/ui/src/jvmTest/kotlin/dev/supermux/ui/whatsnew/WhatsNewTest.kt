@@ -47,6 +47,18 @@ class WhatsNewTest {
         assertEquals(listOf("cards"), parseEdition(page)!!.chaptersFor(null).map { it.id })
     }
 
+    // ── which edition Settings reopens ──────────────────────────────────────────────────────────
+
+    @Test fun settings_reopens_the_newest_edition_this_build_has() {
+        assertEquals("0.17.7", editionFor("0.17.8", listOf("0.17.7")))
+        assertEquals("0.17.9", editionFor("0.17.9", listOf("0.17.7", "0.17.9", "0.18.0")))
+        assertNull(editionFor("0.17.6", listOf("0.17.7")))
+    }
+
+    @Test fun a_local_build_reopens_the_newest_edition() {
+        assertEquals("0.18.0", editionFor("dev", listOf("0.17.7", "0.18.0")))
+    }
+
     // ── when it is offered ────────────────────────────────────────────────────────────────────
 
     private fun tracker(store: FakeSettingsStore, current: String, editions: List<String> = listOf("0.17.7")) =

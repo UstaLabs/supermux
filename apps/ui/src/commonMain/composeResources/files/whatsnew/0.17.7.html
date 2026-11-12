@@ -9,14 +9,14 @@
      own UI, rebuilt in HTML; a chapter whose "on" leaves a platform out isn't there at all. -->
 <script type="application/json" id="edition">
 {"version":"0.17.7","chapters":[
-  {"id":"browser","on":["mac","win","android","iphone"]},
-  {"id":"device","on":["mac","win"]},
-  {"id":"cards"},
-  {"id":"instant"},
-  {"id":"resume"},
-  {"id":"restart","on":["mac","win","linux"]},
-  {"id":"settings"},
-  {"id":"signed","on":["win"]}
+  {"id":"browser","title":"Open your app right next to the chat","on":["mac","win","android","iphone"]},
+  {"id":"device","title":"See your page at phone size","on":["mac","win"]},
+  {"id":"cards","title":"Agents can answer with a live page"},
+  {"id":"instant","title":"Chats open at once, even offline"},
+  {"id":"resume","title":"Hit a usage limit? It carries on by itself"},
+  {"id":"restart","title":"Updates are one click","on":["mac","win","linux"]},
+  {"id":"settings","title":"Settings, rebuilt"},
+  {"id":"signed","title":"A signed installer for Windows","on":["win"]}
 ]}
 </script>
 <style>
@@ -579,39 +579,39 @@ const MOD = () => PLATFORM === 'mac' ? { pick: '⌘⇧C' } : { pick: 'Ctrl+Shift
 const EDITION = JSON.parse(document.getElementById('edition').textContent);
 const pick = (m, k) => m[k] ?? m[FAMILY] ?? m.all;
 
-// ── each chapter's variants: this platform's own, then its family's (desk / phone / web), then everyone's ──
+// ── each chapter's variants (its title is the manifest's, which the release notes use too): this platform's own, then its family's (desk / phone / web), then everyone's ──
 const RESUME_TEXT = 'When an agent runs into its limit, the session waits and picks up again the moment the limit resets. Resume now or cancel from the strip above the composer.';
 const VARIANTS = {
-  browser: { g: 'globe', title: 'Open your app right next to the chat', v: {
+  browser: { g: 'globe', v: {
     desk: () => ({ scene: 'browser.desk', text: `Links from an agent open in a Browser tab, localhost included. Press <kbd>${MOD().pick}</kbd>, point at what's wrong (↑↓ for its parent or child), say what you want, and it goes to the agent with a crop of the page.` }),
     phone: () => ({ scene: 'browser.phone', text: 'Links from an agent open in a Browser tab, localhost included. Tap ⌖, then tap what\'s wrong (tap again for its container), add a comment, and send it to the agent with a crop of the page.' }),
   } },
-  device: { g: 'phone', title: 'See your page at phone size', v: {
+  device: { g: 'phone', v: {
     desk: () => ({ scene: 'device.desk', text: 'Device mode in the Browser tab shows the page as a phone would, next to the chat, without leaving the app.' }),
   } },
-  cards: { g: 'card', title: 'Agents can answer with a live page', v: {
+  cards: { g: 'card', v: {
     all: () => ({ scene: 'cards.desk', text: 'Charts, tables and choices arrive as cards right in the chat. Click a button on a card and it answers for you.' }),
     phone: () => ({ scene: 'cards.phone', text: 'Charts, tables and choices arrive as cards right in the chat. Tap a button on a card and it answers for you.' }),
   } },
-  instant: { g: 'bolt', title: 'Chats open at once, even offline', v: {
+  instant: { g: 'bolt', v: {
     desk: () => ({ scene: 'instant.desk', text: 'Recent chats are kept on this computer. They open instantly, at the first message you haven\'t read, and they are still there when the connection isn\'t.' }),
     web: () => ({ scene: 'instant.desk', title: 'Chats open at once', text: 'Recent chats are kept in this browser. They open instantly at the first message you haven\'t read, and stay on screen if the connection drops.' }),
     phone: () => ({ scene: 'instant.phone', text: 'Recent chats are kept on your phone. They open instantly, at the first message you haven\'t read, and they are still there with no signal.' }),
   } },
-  resume: { g: 'clock', title: 'Hit a usage limit? It carries on by itself', v: {
+  resume: { g: 'clock', v: {
     all: () => ({ scene: 'resume.desk', text: RESUME_TEXT, tryIt: ['resume-setting', 'See the setting'] }),
     phone: () => ({ scene: 'resume.phone', text: RESUME_TEXT, tryIt: ['resume-setting', 'See the setting'] }),
   } },
-  restart: { g: 'restart', title: 'Updates are one click', v: {
+  restart: { g: 'restart', v: {
     mac: () => ({ scene: 'restart.desk', text: 'New versions download in the background. Press Restart to update: the app swaps itself in place, reopens, and every session reconnects. It is how you got here.' }),
     win: () => ({ scene: 'restart.desk', text: 'New versions download in the background. Press Restart to update: the installer closes the app, updates it and opens it again, and every session reconnects. It is how you got here.' }),
     linux: () => ({ scene: 'restart.desk', text: 'New versions download in the background. Press Restart to update, enter your password once, and the app reopens with every session reconnected. It is how you got here.' }),
   } },
-  settings: { g: 'sliders', title: 'Settings, rebuilt', v: {
+  settings: { g: 'sliders', v: {
     all: () => ({ scene: 'settings.desk', text: 'Search any setting, see this machine on its own page, and clear out old worktrees with a few checkboxes.', tryIt: ['settings', 'Open Settings'] }),
     phone: () => ({ scene: 'settings.phone', text: 'Type in the search field to jump straight to any setting. This machine and its worktrees have their own pages.', tryIt: ['settings', 'Open Settings'] }),
   } },
-  signed: { g: 'shield', title: 'A signed installer for Windows', v: {
+  signed: { g: 'shield', v: {
     win: () => ({ scene: 'signed.win', text: 'The installer now names its publisher, so Windows stops warning about an unknown app before you install or update.' }),
   } },
 };
@@ -629,7 +629,7 @@ const visible = x => !x.on || x.on.includes(PLATFORM);
 function chapters() {
   return EDITION.chapters.filter(visible).map(c => {
     const def = VARIANTS[c.id]; const fn = def && pick(def.v, PLATFORM);
-    return fn ? { id: c.id, g: def.g, title: def.title, ...fn() } : null;
+    return fn ? { id: c.id, g: def.g, title: c.title, ...fn() } : null;
   }).filter(Boolean);
 }
 const also = () => ALSO.filter(visible).map(a => ({ g: a.g, t: pick(a.t, PLATFORM), d: pick(a.d, PLATFORM) || '' })).filter(a => a.t);

@@ -19,5 +19,6 @@
     <string name="whatsnew_card_explore">Yeniliklere göz at</string>
     <string name="whatsnew_dismiss">Kapat</string>
     <string name="whatsnew_page_title">Yenilikler</string>
+    <string name="whatsnew_reopen">v%1$s sürümündeki yenilikler</string>
     <string name="whatsnew_back">Geri</string>
 </resources>
