@@ -300,6 +300,8 @@ class ShellUiState {
 
     // Menu / chrome conveniences → navigate
     fun openArchived() = navigate(Route.Archived)
+    /** The sidebar card's Explore (#90): [version]'s edition. */
+    fun openWhatsNew(version: String) = navigate(Route.WhatsNew(version))
     fun openDisplays() = navigate(Route.Displays)
     fun openAddHost() = navigate(Route.AddHost)
 
@@ -376,6 +378,30 @@ class ShellUiState {
      * `stageFiles`/`sendWith` funnel the Attach dialog and Send button use.
      */
     var externalAttach by mutableStateOf<Pair<String, dev.supermux.ui.chat.ComposerExternalAttach>?>(null)
+
+    /**
+     * What's new's "Ask an agent for a card" (#90): back to the open chat with [text] in its composer, unsent. False
+     * (and nothing done) with no chat open.
+     */
+    fun askAgentForCard(text: String): Boolean {
+        val session = selectedId ?: return false
+        popToHome()
+        externalAttach = session to dev.supermux.ui.chat.ComposerExternalAttach(emptyList(), text, send = false)
+        return true
+    }
+
+    /** What's new's "Open a Browser tab" (#90): home, and the workspace on show opens an empty Browser tab once. */
+    var browserTabRequested by mutableStateOf(false)
+        private set
+
+    fun requestBrowserTab() {
+        popToHome()
+        browserTabRequested = true
+    }
+
+    fun consumeBrowserTabRequest() {
+        browserTabRequested = false
+    }
 
     /**
      * One-shot "transcribe this WAV file into the chat composer's draft" request (session id +

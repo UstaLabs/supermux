@@ -48,5 +48,6 @@
     <string name="browser_comment_seen">Görüldü</string>
     <string name="browser_comment_done">Tamamlandı</string>
     <string name="browser_comment_answered">Yanıtlandı</string>
+    <string name="browser_comment_to">→ %1$s</string>
     <string name="browser_comment_dismissed">Yok sayıldı</string>
 </resources>

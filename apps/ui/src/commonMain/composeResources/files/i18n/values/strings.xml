@@ -53,5 +53,6 @@
     <string name="browser_comment_seen">Seen</string>
     <string name="browser_comment_done">Done</string>
     <string name="browser_comment_answered">Answered</string>
+    <string name="browser_comment_to">→ %1$s</string>
     <string name="browser_comment_dismissed">Dismissed</string>
 </resources>

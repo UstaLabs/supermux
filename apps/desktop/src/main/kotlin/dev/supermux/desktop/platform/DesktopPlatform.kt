@@ -1,5 +1,6 @@
 package dev.supermux.desktop.platform
 
+import dev.supermux.ui.whatsnew.ReleasePlatform
 import dev.supermux.desktop.notify.DesktopNotifications
 import dev.supermux.desktop.shell.DesktopWindowHostController
 import dev.supermux.desktop.update.DesktopAppUpdater
@@ -101,6 +102,12 @@ class DesktopPlatform : Platform {
 
     // #105: a desktop browser's tabs never freeze: room for every kept tab plus what shows.
     override val keepsBrowserTabsLive: Boolean = true
+
+    override val releasePlatform: ReleasePlatform = when (DesktopOs.current) {
+        DesktopOs.MACOS -> ReleasePlatform.Mac
+        DesktopOs.WINDOWS -> ReleasePlatform.Windows
+        DesktopOs.LINUX -> ReleasePlatform.Linux
+    }
 
     init {
         dev.supermux.ui.browser.AppWebViews.liveBudget = dev.supermux.ui.browser.BrowserTabKeeper.MAX_LIVE_TABS + 8

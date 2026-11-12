@@ -277,7 +277,9 @@ val distDir = layout.buildDirectory.dir("dist/wasmJs/productionExecutable")
 // the app wasm is still the real fix and is now owed, not optional.
 // AND 2026-11-10 (#105, Tally): 9229 KiB, 13 KiB over 9 MiB. The Browser tab: webview-compose's iframe engine, which
 // the web client needs because its Browser tabs are synced and shown. Raised to 9344 KiB.
-val maxGzipBytes = 9344L * 1024
+// 2026-11-12 (#90, Tally): What's new Kotlin; dev was 10 KiB under; app wasm shrink owed. CI counted 9354 KiB for
+// #90 car 1. Raised by the minimum, to 9376 KiB: the edition pages themselves are composeResources, outside this sum.
+val maxGzipBytes = 9376L * 1024
 
 // THE NATIVE EDITOR'S SYNTAX MODULE IS OUTSIDE THAT CEILING, with a ceiling of its own (M5).
 // `supermux-syntax.wasm` is 7.45 MB raw / 2.69 MB gzipped (editor-syntax/native/README.md): counted

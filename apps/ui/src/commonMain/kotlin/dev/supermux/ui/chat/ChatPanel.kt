@@ -518,6 +518,8 @@ fun ChatPanel(
     headerActions: @Composable RowScope.() -> Unit = {},
     /** Opens the workspace's singleton Changes pane in walkthrough mode. */
     onOpenWalkthrough: (stepId: String?) -> Unit = {},
+    /** Reveals the workspace's Changes view (#72: the composer footer's git sign). */
+    onOpenChanges: (() -> Unit)? = null,
     /**
      * Reports scroll-to-hide on a narrow view (see [ChatChromeAutoHide]): true while the transcript
      * has been scrolled down and the chrome is tucked away. A host that draws its OWN header above
@@ -1182,13 +1184,7 @@ fun ChatPanel(
                     scope.launch { refreshCatalogs() }
                 },
                 tray = {
-                    ComposerFooter(
-                        session = session,
-                        onFetch = actions.composer.gitFetch,
-                        onPull = actions.composer.gitPull,
-                        onPush = actions.composer.gitPush,
-                        onPublish = actions.composer.gitPublish,
-                    )
+                    ComposerFooter(session = session, onOpenChanges = onOpenChanges)
                 },
                 modifier = Modifier.fillMaxWidth(),
             )

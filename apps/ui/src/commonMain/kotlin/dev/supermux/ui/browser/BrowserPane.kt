@@ -311,6 +311,15 @@ fun BrowserPane(
     // Its comments go to the workspace's chat (3b): one message, each element's picture where the engine can picture
     // the page. Send posts it; Add to message leaves it in the composer.
     val chat = LocalBrowserToChat.current
+    // Whose chat (4a-3): the one chosen in the bar for this tab, else the session that owns a named preview's port
+    // (§5.6, first match), else the default chat.
+    var chosenChat by remember(view.id) { mutableStateOf<String?>(null) }
+    val chats = chat?.chats().orEmpty()
+    val portOwner = (shown?.let { displayAddress(it, previews.orEmpty(), byPort) } as? DisplayAddress.Preview)
+        ?.let { p -> previews.orEmpty().firstOrNull { it.port == p.port && it.sessionName.isNotEmpty() }?.sessionName }
+        ?.let { name -> chats.firstOrNull { it.second == name }?.first }
+    val recipientId = chosenChat?.takeIf { id -> chats.any { it.first == id } } ?: portOwner
+    val recipientName = recipientId?.let { id -> chats.firstOrNull { it.first == id }?.second } ?: chat?.recipient()
     val commentStatesFlow = remember(chat) { chat?.commentStates() ?: kotlinx.coroutines.flow.MutableStateFlow(emptyMap()) }
     val commentStates by commentStatesFlow.collectAsState()
     val accent = dev.supermux.ui.settings.kit.kitColors().accent
@@ -339,9 +348,10 @@ fun BrowserPane(
             // Stored first (phase 4): the message names each by its id, and the pins stay to follow the agent's answer.
             val stored = sink.storeComments(
                 BrowserCommentsBody(url, viewedAs, outs.map { BrowserCommentInput(it.number, it.comment, it.selector, it.text, it.picture) }),
+                recipientId,
             )
             val ids = stored?.associate { it.number to it.id }
-            if (sink.sendMessage(commentsMessage(url, viewedAs, outs, ids), images, send)) {
+            if (sink.sendMessage(commentsMessage(url, viewedAs, outs, ids), images, send, recipientId)) {
                 if (ids == null) {
                     pick.clear()
                 } else {
@@ -465,7 +475,7 @@ fun BrowserPane(
             }
             // A phone's send floats over the page's bottom, above the home indicator (no bar under it).
             if (phone && (pick.commented.isNotEmpty() || pick.removed != null)) {
-                PickSendPill(pick, chat?.recipient(), commentsAction, Modifier.align(Alignment.BottomCenter))
+                PickSendPill(pick, recipientName, commentsAction, Modifier.align(Alignment.BottomCenter))
             }
             if (finding) {
                 // Floats over the page's corner: an overlay the page leaves room for where it sits above Compose (#122).
@@ -477,7 +487,9 @@ fun BrowserPane(
                 )
             }
         }
-        if (!phone && (pick.commented.isNotEmpty() || pick.removed != null)) PickSendBar(pick, chat?.recipient(), commentsAction)
+        if (!phone && (pick.commented.isNotEmpty() || pick.removed != null)) {
+            PickSendBar(pick, recipientName, commentsAction, chats = chats, onChooseChat = { chosenChat = it })
+        }
     }
     }
 }

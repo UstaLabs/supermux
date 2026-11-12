@@ -62,6 +62,7 @@ fun pathFor(route: Route, selectedId: String?): String = when (route) {
     Route.Devices, Route.Proxies -> pathFor(canonicalRoute(route), selectedId)
     Route.Archived -> "/archived"
     Route.Displays -> "/displays"
+    is Route.WhatsNew -> "/whats-new/${route.version}"
 }
 
 /**
@@ -86,6 +87,7 @@ fun parsePath(pathAndQuery: String): UrlTarget {
         segs[0] == "archived" -> UrlTarget.Screen(Route.Archived)
         segs[0] == "proxies" -> UrlTarget.Screen(canonicalRoute(Route.Proxies))
         segs[0] == "displays" -> UrlTarget.Screen(Route.Displays)
+        segs[0] == "whats-new" && segs.size == 2 -> UrlTarget.Screen(Route.WhatsNew(segs[1]))
         segs[0] == "settings" && segs.size == 1 -> UrlTarget.Screen(Route.Settings())
         segs[0] == "settings" -> UrlTarget.Screen(
             // Step 1's machine screens land on the machine page at their part; any other sub-page the page does not

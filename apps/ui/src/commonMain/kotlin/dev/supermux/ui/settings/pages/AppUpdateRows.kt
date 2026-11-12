@@ -45,6 +45,8 @@ import dev.supermux.ui.update.installerKindFrom
 import dev.supermux.ui.work.rememberDownloads
 import dev.supermux.ui.i18n.localized
 import kotlinx.coroutines.flow.first
+import dev.supermux.ui.whatsnew.WhatsNewLink
+import dev.supermux.ui.whatsnew.highlightsFor
 import kotlinx.coroutines.launch
 
 /**
@@ -67,7 +69,12 @@ fun AppUpdateRows(
     val rowModifier = modifier.kitAnchor("app-version").testTag("general_app-version")
 
     if (!canUpdate) {
+<<<<<<< HEAD
         KitRow(appVersion, rowModifier, description = versionText, descriptionTag = "app_update_version")
+=======
+        KitRow("App version", rowModifier, description = versionText, descriptionTag = "app_update_version")
+        WhatsNewLink(updater.currentVersion, Modifier.padding(bottom = 6.dp))
+>>>>>>> origin/dev
         return
     }
 
@@ -150,6 +157,7 @@ fun AppUpdateRows(
     }
 
     Column(Modifier.padding(bottom = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        WhatsNewLink(updater.currentVersion)
         when {
             checkFailed || feedError != null -> ErrorLine(
                 feedError ?: update.error ?: localized(Str.settings_update_check_failed),
@@ -163,9 +171,10 @@ fun AppUpdateRows(
                     // Deliberately installer-agnostic: this fires on every host, and only one of them ships an APK.
                     else -> KitNote(localized(Str.settings_update_no_installer))
                 }
-                if (s.highlights.isNotEmpty()) {
+                val highlights = highlightsFor(s.highlights, LocalPlatform.current.releasePlatform)
+                if (highlights.isNotEmpty()) {
                     Column(Modifier.padding(top = 6.dp).testTag("app_update_whats_new")) {
-                        for (line in s.highlights) {
+                        for (line in highlights) {
                             Row {
                                 Text("·", fontSize = 12.sp, lineHeight = 18.sp, color = c.faint, modifier = Modifier.width(12.dp))
                                 Text(line, fontSize = 12.sp, lineHeight = 18.sp, color = c.dim)

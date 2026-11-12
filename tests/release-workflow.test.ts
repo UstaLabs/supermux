@@ -436,3 +436,13 @@ test("every CI run tests the Windows desktop host and broker seams, with the rel
   expect(workflow).toContain(hostTests)
   for (const f of ["tests/windows-staging.test.ts", "src/core/sessiond/session-store.test.ts", "src/core/process/launcher.test.ts"]) expect(job).toContain(f)
 })
+
+test("a release with a What's new edition takes its notes from it: GitHub's list and TestFlight's iPhone text (#90)", () => {
+  const release = jobBetween(workflow, "  release:", "\n  publish-website:")
+  // The edition first; the release PR's bullets only for a release without one.
+  expect(release).toContain('highlights=$(bun scripts/whatsnew-notes.ts "${GITHUB_REF_NAME}")')
+  expect(release).toMatch(/if \[ -z "\$highlights" \]; then\s+highlights=\$\(gh api/)
+  expect(release).toContain("uses: oven-sh/setup-bun@v2")
+  const testflight = jobBetween(workflow, "  assign-testflight:", "\n  release:")
+  expect(testflight).toContain('bun scripts/whatsnew-notes.ts "$GITHUB_REF_NAME" --store iphone')
+})
