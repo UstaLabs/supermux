@@ -246,6 +246,9 @@ internal class MacWebEngine(
     /** The backdrop the glue has ([updateBackdrop]): an opaque ARGB, 0 for none; null before the first. */
     private var sentBackdrop: Int? = null
 
+    /** What lies behind a transparent page in its view, as the glue has it ([updateBackdrop]): 0 for nothing; null before the first. */
+    private var sentUnderlay: Int? = null
+
     override val mode: EmbeddingMode get() = EmbeddingMode.NativeView
     override val events: Flow<EngineEvent> get() = queue.events
     override val isUsable: Boolean get() = !released && !crashed
@@ -886,13 +889,24 @@ internal class MacWebEngine(
      * view at its next commit, and skiko the hole when the GPU has drawn Compose's frame, two or three frames later while
      * WebGL pages keep the GPU busy; the band of the hole the view has left would show the window's backing (Swing's light
      * grey) and shows this instead. The colour along the last snapshot's edges, as the cover's; the theme's before there is
-     * one. None for a transparent page, whose hole shows what is under the canvas anyway, nor without a lease.
+     * one. For a transparent page, its underlay ([PageSetup.underlay]), or none. None without a lease.
+     *
+     * And the underlay itself, behind a transparent page in its own view ([PageGlue.setUnderlay]), from the lease's
+     * start: WebKit draws nothing behind a transparent page, and its view lies under the canvas, so without it the page's
+     * hole shows the window's backing (black) through every clear pixel of the page, not what the app draws there.
      */
     private fun updateBackdrop() {
         if (released) return
         val current = setup
+        val behind = if (current != null && current.transparentBackground) current.underlay else null
+        val underlay = behind?.copy(alpha = 1f)?.toArgb() ?: 0
+        if (underlay != sentUnderlay) {
+            sentUnderlay = underlay
+            glue.setUnderlay(underlay)
+        }
         val argb = when {
-            !backdropEnabled || current == null || current.transparentBackground -> 0
+            !backdropEnabled || current == null -> 0
+            current.transparentBackground -> underlay
             else -> (motionCoverBackground.takeIf { it.alpha > 0f } ?: if (current.dark) Color.Black else Color.White).copy(alpha = 1f).toArgb()
         }
         if (argb == sentBackdrop) return

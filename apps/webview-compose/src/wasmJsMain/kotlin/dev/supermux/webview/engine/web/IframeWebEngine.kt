@@ -325,7 +325,7 @@ internal class IframeWebEngine(
     override fun configure(setup: PageSetup) {
         if (!alive()) return
         this.setup = setup
-        frame.setTheme(setup.dark, setup.transparentBackground)
+        frame.setTheme(setup.dark, setup.transparentBackground, setup.underlay)
         current?.let { styleIframe(it.iframe, setup.dark) }
     }
 

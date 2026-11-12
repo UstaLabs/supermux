@@ -1,5 +1,6 @@
 package dev.supermux.webview
 
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import dev.supermux.webview.engine.PageSetup
 import dev.supermux.webview.engine.pageSetup
@@ -101,5 +102,36 @@ class WebSettingsTest {
         assertTrue("Mobile" !in dev.supermux.webview.engine.DesktopSite.AGENT && "Android" !in dev.supermux.webview.engine.DesktopSite.AGENT)
         assertTrue("X11; Linux x86_64" in dev.supermux.webview.engine.DesktopSite.AGENT)
         assertTrue("width=1280" in dev.supermux.webview.engine.DesktopSite.VIEWPORT_SCRIPT)
+    }
+
+    /**
+     * Where a page lies under the Compose canvas (macOS, iOS, the web), a transparent page shows what is under the canvas,
+     * not what the app drew behind the view: the black of a Mac window's backing behind an agent's card in a light chat.
+     * The app names the colour it draws there, and the setup carries it to the engine for a transparent page only.
+     */
+    @Test fun anUnderlayReachesTheSetupOfATransparentPageOnly() {
+        val chat = Color(0xFFF4F4F5)
+        assertEquals(null, WebSettings.Default.underlay)
+        assertEquals(null, WebSettings(transparentBackground = true).pageSetup(false, emptySet()).underlay, "none unless named")
+        assertEquals(chat, WebSettings(transparentBackground = true, underlay = chat).pageSetup(false, emptySet()).underlay)
+        assertEquals(null, WebSettings(underlay = chat).pageSetup(false, emptySet()).underlay, "an opaque page paints its own")
+    }
+
+    @Test fun theUnderlayIsPartOfEqualityAndCopy() {
+        val chat = Color(0xFFF4F4F5)
+        assertEquals(WebSettings(underlay = chat), WebSettings.Default.copy(underlay = chat))
+        assertEquals(WebSettings(underlay = chat).hashCode(), WebSettings.Default.copy(underlay = chat).hashCode())
+        assertTrue(WebSettings(underlay = chat) != WebSettings(underlay = Color.Black))
+        assertTrue(WebSettings(underlay = chat) != WebSettings.Default)
+        assertEquals(chat, WebSettings(underlay = chat).copy(darkMode = DarkMode.Dark).underlay, "kept by a copy that names another")
+        assertTrue("underlay=" in WebSettings(underlay = chat).toString())
+    }
+
+    /** It stands for what the app draws behind the view, so it hides what the canvas has under it: an opaque colour. */
+    @Test fun anUnderlayIsAnOpaqueColour() {
+        for (bad in listOf(Color.Unspecified, Color.Transparent, Color.White.copy(alpha = 0.5f))) {
+            val e = assertFailsWith<IllegalArgumentException>("$bad") { WebSettings(underlay = bad) }
+            assertTrue("underlay" in e.message.orEmpty(), e.message)
+        }
     }
 }

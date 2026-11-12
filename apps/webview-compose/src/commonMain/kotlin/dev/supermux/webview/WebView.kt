@@ -142,7 +142,7 @@ public fun WebView(
     // A new host is a new view: its layout reports its position afresh.
     key(host) {
         // The host's node draws the snapshot over the placeholder when there is one (see HostNode).
-        Box(probe.then(sized).then(HostElement(host, dark))) {
+        Box(probe.then(sized).then(HostElement(host, dark, settings.underlay.takeIf { settings.transparentBackground }))) {
             val engine = host.engine
             if (engine != null) {
                 key(engine) {
@@ -176,23 +176,27 @@ internal fun DarkMode.isDark(): Boolean = when (this) {
 
 /**
  * Tells [host] where the view is laid out, when it no longer is, and when the user presses on it, and draws the cover
- * in [dark].
+ * in [dark], on a transparent page's [underlay] if it has one.
  */
-private class HostElement(private val host: WebViewHost, private val dark: Boolean) : ModifierNodeElement<HostNode>() {
-    override fun create() = HostNode(host, dark)
+private class HostElement(private val host: WebViewHost, private val dark: Boolean, private val underlay: Color?) :
+    ModifierNodeElement<HostNode>() {
+    override fun create() = HostNode(host, dark, underlay)
 
     override fun update(node: HostNode) {
         node.host = host
         node.dark = dark
+        node.underlay = underlay
     }
 
-    override fun equals(other: Any?): Boolean = other is HostElement && other.host === host && other.dark == dark
+    override fun equals(other: Any?): Boolean =
+        other is HostElement && other.host === host && other.dark == dark && other.underlay == underlay
 
-    override fun hashCode(): Int = 31 * host.hashCode() + dark.hashCode()
+    override fun hashCode(): Int = 31 * (31 * host.hashCode() + dark.hashCode()) + underlay.hashCode()
 
     override fun InspectorInfo.inspectableProperties() {
         name = "webViewHost"
         properties["dark"] = dark
+        properties["underlay"] = underlay
     }
 }
 
@@ -208,10 +212,21 @@ private class HostElement(private val host: WebViewHost, private val dark: Boole
  * It draws the cover itself so that a view coming on screen shows its snapshot in that very frame: the host reads the
  * snapshot from the cache in layout, and this node redraws before the frame is drawn.
  */
-private class HostNode(var host: WebViewHost, dark: Boolean) :
+private class HostNode(var host: WebViewHost, dark: Boolean, underlay: Color?) :
     Modifier.Node(), GlobalPositionAwareModifierNode, UnplacedAwareModifierNode, PointerInputModifierNode,
     DrawModifierNode {
     var dark: Boolean = dark
+        set(value) {
+            if (field == value) return
+            field = value
+            invalidateDraw()
+        }
+
+    /**
+     * What the app draws behind a transparent page ([WebSettings.underlay]). The cover lies on it: where the page lies
+     * under the canvas, the cover's clear pixels would show the canvas's hole, what is under the canvas.
+     */
+    var underlay: Color? = underlay
         set(value) {
             if (field == value) return
             field = value
@@ -244,6 +259,7 @@ private class HostNode(var host: WebViewHost, dark: Boolean) :
             backgroundOf = image
             background = coverBackgroundOf(image)
         }
+        underlay?.let { drawRect(it) }
         drawCover(image, coverScale(image.width, image.height, size, density, cover.key.pixelsPerDp), background)
     }
 }

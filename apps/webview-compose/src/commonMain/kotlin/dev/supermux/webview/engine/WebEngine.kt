@@ -5,6 +5,7 @@ import dev.supermux.webview.InspectorResult
 import dev.supermux.webview.WebCookie
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import dev.supermux.webview.ConsoleMessage
 import dev.supermux.webview.DialogResult
@@ -52,6 +53,9 @@ public data class EngineConfig(val profile: WebProfile, val mediaPlaybackRequire
  * @property bridgeOrigins the origins whose documents get the bridge shim.
  * @property userAgent a whole user agent in place of the engine's own, or null ([agent]).
  * @property desktopSite the desktop site, as a phone browser's "Desktop site" ([WebSettings.desktopSite]).
+ * @property underlay the opaque colour the app draws behind a transparent page ([WebSettings.underlay]), which an engine
+ *   whose page lies under the Compose canvas paints behind it from the lease's start; null for none, and always for an
+ *   opaque page. An engine drawn in Compose's order ignores it: its page is truly transparent.
  */
 @WebEngineSpi
 public data class PageSetup(
@@ -63,6 +67,7 @@ public data class PageSetup(
     val bridgeOrigins: Set<String>,
     val userAgent: String? = null,
     val desktopSite: Boolean = false,
+    val underlay: Color? = null,
 ) {
     /** The agent to set on an engine whose own is [base]: [userAgent] or [base], then the suffix; null to leave it alone. */
     public fun agent(base: String?): String? =
@@ -82,6 +87,7 @@ internal fun WebSettings.pageSetup(dark: Boolean, bridgeOrigins: Set<String>): P
     bridgeOrigins = bridgeOrigins,
     userAgent = userAgent,
     desktopSite = desktopSite,
+    underlay = underlay.takeIf { transparentBackground },
 )
 
 /**
