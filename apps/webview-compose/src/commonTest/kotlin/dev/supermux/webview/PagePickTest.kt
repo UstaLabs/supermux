@@ -35,6 +35,12 @@ class PagePickTest {
 
     @Test fun thePointIsAFractionOfTheViewport() {
         val script = PickScripts.elementAt(0.25f, 0.5f, up = 1)
-        assertTrue("innerWidth*0.25" in script && "innerHeight*0.5" in script && "i<1" in script, script)
+        assertTrue("innerWidth*0.25" in script && "innerHeight*0.5" in script && "up=1" in script, script)
+    }
+
+    /** Over a block's own text, level 0 is the text's box and ↑ (level 1) the block's own: one more level than before. */
+    @Test fun overTextLevelZeroHugsItAndOneUpIsTheBlock() {
+        val script = PickScripts.elementAt(0.5f, 0.5f, up = 0)
+        assertTrue("var h=hug(el,x,y);if(h){if(up===0)return describe(el,h);up--;}" in script, script)
     }
 }

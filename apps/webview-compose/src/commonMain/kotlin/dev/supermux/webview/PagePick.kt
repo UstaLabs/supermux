@@ -44,10 +44,15 @@ public class PageElement(
 
 /** The picker's scripts: read-only, run when asked, nothing left in the page. */
 internal object PickScripts {
-    /** The element at ([fx], [fy]) of the viewport, [up] ancestors above it; JSON or null. */
+    /**
+     * The element at ([fx], [fy]) of the viewport, [up] levels above it; JSON or null. Over text a block holds itself
+     * (`<div class="hero">Welcome to the docs</div>`), level 0 is that block with its box hugging its text, not its
+     * padding and empty width; level 1 the block's own box, and on up its ancestors.
+     */
     fun elementAt(fx: Float, fy: Float, up: Int): String =
-        "(function(){$COMMON var x=innerWidth*$fx,y=innerHeight*$fy;var el=document.elementFromPoint(x,y);" +
-            "for(var i=0;i<$up&&el&&el.parentElement&&el.parentElement!==document.documentElement;i++)el=el.parentElement;" +
+        "(function(){$COMMON var x=innerWidth*$fx,y=innerHeight*$fy,up=$up;var el=document.elementFromPoint(x,y);" +
+            "var h=hug(el,x,y);if(h){if(up===0)return describe(el,h);up--;}" +
+            "for(var i=0;i<up&&el&&el.parentElement&&el.parentElement!==document.documentElement;i++)el=el.parentElement;" +
             "return el?describe(el):null;})()"
 
     /** Each selector's element box now, or null where it no longer resolves; a JSON array. */
@@ -60,7 +65,9 @@ internal object PickScripts {
      * acted on: never a bare tag. Unique (querySelectorAll matches exactly that element) and stable: an id, then
      * data-testid / aria-label / name / placeholder / title, then meaningful classes (not generated ones:
      * `css-1x2y3z`, `Card_root__3xK9a`), and where the element alone doesn't say it, the nearest ancestor that does
-     * (`section.cart > h3`), with :nth-of-type only when alike siblings need it. Kept plain JS: the test harness reads it.
+     * (`section.cart > h3`), with :nth-of-type only when alike siblings need it. Over a block's own text the box hugs
+     * that text (`hug`: what is under the pointer, not the block's padding), but a control's (a button's, a link's,
+     * a cell's) is the control's. Kept plain JS: the test harness reads it.
      */
     internal const val PICK_JS = """
 function esc(s){return window.CSS&&CSS.escape?CSS.escape(s):String(s).replace(/([^\w-])/g,function(m){return '\\'+m;});}
@@ -87,11 +94,22 @@ a=a.parentElement;direct=false;}
 var parts=[],n=el;while(n&&n!==document.body&&n!==document.documentElement){var s=n===el?base:n.nodeName.toLowerCase();
 parts.unshift(s+nth(n));var q2=parts.join(' > ');if((parts.length>1||mine.length)&&unique(q2,el))return q2;n=n.parentElement;}
 return parts.join(' > ');}
-function box(el){var r=el.getBoundingClientRect();return {x:r.left/innerWidth,y:r.top/innerHeight,w:r.width/innerWidth,h:r.height/innerHeight};}
-function describe(el){var r=el.getBoundingClientRect();
+function rbox(r){return {x:r.left/innerWidth,y:r.top/innerHeight,w:r.width/innerWidth,h:r.height/innerHeight};}
+function box(el){return rbox(el.getBoundingClientRect());}
+var ACTS=/^(A|BUTTON|LABEL|SUMMARY|SELECT|OPTION|INPUT|TEXTAREA|TD|TH)$/,ROLES=/^(button|link|tab|menuitem|option|checkbox|radio|switch)$/;
+function caretText(x,y){var n=null;if(document.caretPositionFromPoint){var c=document.caretPositionFromPoint(x,y);n=c&&c.offsetNode;}
+else if(document.caretRangeFromPoint){var r=document.caretRangeFromPoint(x,y);n=r&&r.startContainer;}return n&&n.nodeType===3?n:null;}
+function over(rs,x,y){for(var i=0;i<rs.length;i++){var r=rs[i];if(x>=r.left-1&&x<=r.right+1&&y>=r.top-1&&y<=r.bottom+1)return true;}return false;}
+function hug(el,x,y){if(!el||ACTS.test(el.nodeName)||ROLES.test(el.getAttribute('role')||''))return null;
+var t=caretText(x,y);if(!t||t.parentElement!==el||!t.textContent.trim())return null;
+var r=document.createRange();r.selectNodeContents(t);if(!over(r.getClientRects(),x,y))return null;
+r.selectNodeContents(el);var c=r.getBoundingClientRect(),b=el.getBoundingClientRect();
+var l=Math.max(c.left,b.left),t2=Math.max(c.top,b.top),w=Math.min(c.right,b.right)-l,h=Math.min(c.bottom,b.bottom)-t2;
+return w>=1&&h>=1&&w*h<b.width*b.height*0.8?{left:l,top:t2,width:w,height:h}:null;}
+function describe(el,hugged){var r=hugged||el.getBoundingClientRect();
 var t=(el.innerText||el.textContent||el.value||el.getAttribute('aria-label')||el.getAttribute('alt')||'').replace(/\s+/g,' ').trim().slice(0,60);
 var c=classes(el);
-return {selector:path(el),tag:el.nodeName.toLowerCase(),text:t,label:el.nodeName.toLowerCase()+(c.length?'.'+c[0]:'')+' · '+Math.round(r.width)+'×'+Math.round(r.height),box:box(el)};}
+return {selector:path(el),tag:el.nodeName.toLowerCase(),text:t,label:el.nodeName.toLowerCase()+(c.length?'.'+c[0]:'')+' · '+Math.round(r.width)+'×'+Math.round(r.height),box:rbox(r)};}
 """
 
     private const val COMMON = PICK_JS
