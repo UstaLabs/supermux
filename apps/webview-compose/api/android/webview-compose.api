@@ -616,7 +616,7 @@ public final class dev/supermux/webview/WebSettings {
 	public final fun getMediaPlaybackRequiresGesture ()Z
 	public final fun getProfile ()Ldev/supermux/webview/WebProfile;
 	public final fun getTransparentBackground ()Z
-	public final fun getUnderlay ()Landroidx/compose/ui/graphics/Color;
+	public final fun getUnderlay-QN2ZGVo ()Landroidx/compose/ui/graphics/Color;
 	public final fun getUserAgent ()Ljava/lang/String;
 	public final fun getUserAgentSuffix ()Ljava/lang/String;
 	public fun hashCode ()I
@@ -1008,7 +1008,7 @@ public final class dev/supermux/webview/engine/PageSetup {
 	public final fun component6 ()Ljava/util/Set;
 	public final fun component7 ()Ljava/lang/String;
 	public final fun component8 ()Z
-	public final fun component9 ()Landroidx/compose/ui/graphics/Color;
+	public final fun component9-QN2ZGVo ()Landroidx/compose/ui/graphics/Color;
 	public final fun copy-d3vT3uU (ZZZZLjava/lang/String;Ljava/util/Set;Ljava/lang/String;ZLandroidx/compose/ui/graphics/Color;)Ldev/supermux/webview/engine/PageSetup;
 	public static synthetic fun copy-d3vT3uU$default (Ldev/supermux/webview/engine/PageSetup;ZZZZLjava/lang/String;Ljava/util/Set;Ljava/lang/String;ZLandroidx/compose/ui/graphics/Color;ILjava/lang/Object;)Ldev/supermux/webview/engine/PageSetup;
 	public fun equals (Ljava/lang/Object;)Z
@@ -1018,7 +1018,7 @@ public final class dev/supermux/webview/engine/PageSetup {
 	public final fun getInspectable ()Z
 	public final fun getJavaScriptEnabled ()Z
 	public final fun getTransparentBackground ()Z
-	public final fun getUnderlay ()Landroidx/compose/ui/graphics/Color;
+	public final fun getUnderlay-QN2ZGVo ()Landroidx/compose/ui/graphics/Color;
 	public final fun getUserAgent ()Ljava/lang/String;
 	public final fun getUserAgentSuffix ()Ljava/lang/String;
 	public fun hashCode ()I
