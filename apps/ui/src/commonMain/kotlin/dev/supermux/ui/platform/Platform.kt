@@ -269,6 +269,11 @@ data class Caps(
      * client, whose iframe has the browser's own.
      */
     val pageEmulation: Boolean = true,
+    /**
+     * A Browser tab's engine has a page zoom, so device mode can fit a big device in the pane at its own CSS size (#122
+     * 2b). macOS and iOS (WebKit's pageZoom); not Android, whose zoom is text zoom, nor Windows, Linux or the web yet.
+     */
+    val pageFit: Boolean = false,
 )
 
 /**

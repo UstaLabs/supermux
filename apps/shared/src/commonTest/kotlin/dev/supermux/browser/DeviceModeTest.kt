@@ -66,4 +66,15 @@ class DeviceModeTest {
         assertEquals(PageAppearance.System, DeviceMode.Default.appearance)
         assertEquals(PageAppearance.Dark, DeviceMode.Default.copy(appearance = PageAppearance.Dark).withPreset(DevicePresets.byId("laptop")!!).appearance)
     }
+
+    /** #122 2b: Auto fits the device in the pane, never above 100 %; a chosen fit is that, whatever the pane. */
+    @Test fun autoFitsThePaneAndNeverEnlarges() {
+        val ipad = DeviceMode.Default.withPreset(DevicePresets.byId("ipad-mini")!!) // 768 × 1024
+        assertNull(ipad.fit, "Auto by default")
+        assertEquals(0.5f, ipad.scaleIn(paneWidth = 2000f, paneHeight = 512f), 0.001f)
+        assertEquals(1f, DeviceMode.Default.scaleIn(paneWidth = 2000f, paneHeight = 2000f), "a small device stays at 100 %")
+        assertEquals(0.75f, ipad.copy(fit = 75).scaleIn(paneWidth = 100f, paneHeight = 100f))
+        assertEquals(1.5f, ipad.copy(fit = 150).scaleIn(paneWidth = 100f, paneHeight = 100f))
+        assertTrue(DeviceMode.FITS.containsAll(listOf(50, 75, 100, 125, 150)))
+    }
 }

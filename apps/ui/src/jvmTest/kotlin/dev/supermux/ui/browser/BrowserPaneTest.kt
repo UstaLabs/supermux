@@ -572,6 +572,44 @@ class BrowserPaneTest {
         onNodeWithTag("browser-device-appearance").assertDoesNotExist()
     }
 
+    private fun Rig.lastZoom(): Float? = calls.lastOrNull { it.startsWith("zoom:") }?.substringAfter(':')?.toFloat()
+
+    /**
+     * #122 2b: where the engine has a page zoom, a device bigger than the pane fits it: the page's view is the device's
+     * size times the scale and the page is zoomed by the same, so its CSS width stays the device's.
+     */
+    @Test fun aBigDeviceFitsThePaneAtItsOwnCssSize() = runComposeUiTest {
+        val rig = Rig()
+        show(rig, mutableStateOf(view("https://vitejs.dev/")), rig.actions(), FakePlatform(caps = dev.supermux.ui.platform.NO_CAPS.copy(pageFit = true)))
+        waitUntil(timeoutMillis = 5_000) { "https://vitejs.dev/" in rig.loads() }
+        onNodeWithTag("browser-device").performClick()
+        onNodeWithTag("browser-device-preset").performClick()
+        onNodeWithTag("browser-device-ipad-mini").performClick()
+        waitUntil(timeoutMillis = 5_000) { (rig.lastZoom() ?: 1f) < 1f }
+        val shown = onNodeWithTag("browser-viewport").fetchSemanticsNode().size.width / density.density
+        assertTrue(shown < 768f, "drawn smaller than the pane: $shown")
+        assertEquals(768f, shown / rig.lastZoom()!!, 2f)
+        onNodeWithTag("browser-device-fit").performClick()
+        onNodeWithTag("browser-device-fit-100").performClick()
+        onNodeWithTag("browser-viewport").assertWidthIsEqualTo(768.dp)
+        waitUntil(timeoutMillis = 5_000) { rig.lastZoom() == 1f }
+        onNodeWithTag("browser-device-close").performClick()
+        onNodeWithTag("browser-viewport").assertWidthIsEqualTo(800.dp)
+    }
+
+    /** No page zoom (Android's is text zoom; Windows, Linux and the web have none yet): no Fit, and the device pans at 100 %. */
+    @Test fun withoutAPageZoomThereIsNoFitAndTheDevicePans() = runComposeUiTest {
+        val rig = Rig()
+        show(rig, mutableStateOf(view("https://vitejs.dev/")), rig.actions(), FakePlatform())
+        waitUntil(timeoutMillis = 5_000) { "https://vitejs.dev/" in rig.loads() }
+        onNodeWithTag("browser-device").performClick()
+        onNodeWithTag("browser-device-preset").performClick()
+        onNodeWithTag("browser-device-ipad-mini").performClick()
+        onNodeWithTag("browser-device-fit").assertDoesNotExist()
+        onNodeWithTag("browser-viewport").assertWidthIsEqualTo(768.dp)
+        assertEquals(null, rig.lastZoom())
+    }
+
     /** On a phone a phone-sized page inside it is pointless: no device button and no menu row (#122 §3.2). */
     @Test fun aPhoneHasNoDeviceMode() = runComposeUiTest {
         val rig = Rig()

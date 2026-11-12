@@ -65,7 +65,13 @@ data class DeviceMode(
     /** Mobile (the device's browser's agent) or Desktop (the engine's own). A preset brings its own; then it's yours. */
     val mobile: Boolean = true,
     val appearance: PageAppearance = PageAppearance.System,
+    /** The picture's scale in percent, or null for Auto: fit the pane, never above 100 %. The page's CSS size stays. */
+    val fit: Int? = null,
 ) {
+    /** The scale the device is drawn at in a pane of this size (the stage's room, in dp). */
+    fun scaleIn(paneWidth: Float, paneHeight: Float): Float =
+        fit?.let { it / 100f } ?: minOf(1f, paneWidth / width, paneHeight / height).coerceAtLeast(0.1f)
+
     val preset: DevicePreset? get() = DevicePresets.byId(presetId)
 
     fun withMobile(mobile: Boolean): DeviceMode = copy(mobile = mobile)
@@ -95,5 +101,8 @@ data class DeviceMode(
         const val MIN_SIDE = 50
         const val MAX_SIDE = 10_000
         val Default = DeviceMode("iphone-16", 393, 852, rotated = false)
+
+        /** The scales one can choose besides Auto, as Chrome's zoom menu. */
+        val FITS = listOf(50, 75, 100, 125, 150)
     }
 }

@@ -192,7 +192,17 @@ fun BrowserPane(
         state.load(WebContent.Url(url))
     }
     // A zoom outlives the engine: a new lease gets it again.
-    LaunchedEffect(live, zoom) { if (live && zoom != 1f) state.navigator.setZoom(zoom) }
+    // Device mode's fit (#122 2b) zooms the page by the stage's scale on top of the user's zoom; leaving it zooms back.
+    var stageScale by remember(view.id) { mutableFloatStateOf(1f) }
+    val fitting = deviceOn && !phone && platform.caps.pageFit
+    val pageZoom = zoom * (if (fitting) stageScale else 1f)
+    var appliedZoom by remember(view.id) { mutableFloatStateOf(1f) }
+    LaunchedEffect(live, pageZoom) {
+        if (live && (pageZoom != 1f || appliedZoom != 1f)) {
+            state.navigator.setZoom(pageZoom)
+            appliedZoom = pageZoom
+        }
+    }
 
     // The page's icon for its tab, after each page it commits.
     val icons = LocalBrowserIcons.current
@@ -232,7 +242,7 @@ fun BrowserPane(
     }
     fun zoomBy(direction: Int) {
         val next = if (direction == 0) 1f else nextZoom(zoom, direction)
-        if (state.navigator.setZoom(next)) zoom = next else notice = "Zoom isn't available here yet"
+        if (state.navigator.setZoom(next * (if (fitting) stageScale else 1f))) zoom = next else notice = "Zoom isn't available here yet"
     }
     fun inspect() {
         notice = when (val r = state.navigator.openInspector()) {
@@ -337,7 +347,10 @@ fun BrowserPane(
             device = deviceOn.takeUnless { phone },
             onDevice = { deviceOn = !deviceOn },
         )
-        if (deviceOn && !phone) DeviceBar(device, emulation = platform.caps.pageEmulation, onChange = { device = it }, onClose = { deviceOn = false })
+        if (deviceOn && !phone) DeviceBar(
+            device, emulation = platform.caps.pageEmulation, scale = stageScale.takeIf { fitting },
+            onChange = { device = it }, onClose = { deviceOn = false },
+        )
         notice?.let { text ->
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp).testTag("browser-notice"), verticalAlignment = Alignment.CenterVertically) {
                 Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
@@ -349,7 +362,7 @@ fun BrowserPane(
                 BrowserBody.NewTab -> BrowserMessage("Type a site, or a port such as 5173.", "browser-new-tab")
                 is BrowserBody.Said -> BrowserMessage(b.message, "browser-said")
                 is BrowserBody.Page -> {
-                    if (deviceOn && !phone) DeviceStage(device) { livePage(pageSettings, keepRunning) }
+                    if (deviceOn && !phone) DeviceStage(device, fit = fitting, onScale = { stageScale = it }) { livePage(pageSettings, keepRunning) }
                     else Box(Modifier.fillMaxSize().testTag("browser-viewport")) { livePage(pageSettings, keepRunning) }
                     (state.phase as? WebViewPhase.Unavailable)?.let { unavailable ->
                         BrowserMessage(
