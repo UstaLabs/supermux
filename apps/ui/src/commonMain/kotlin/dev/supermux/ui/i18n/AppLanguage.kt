@@ -5,6 +5,7 @@ package dev.supermux.ui.i18n
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.text.intl.Locale
 import androidx.compose.ui.text.toUpperCase
@@ -77,12 +78,27 @@ private fun catalogState(language: String) = produceState(remember(language) { C
     if (value == null) value = Catalogs.load(language)
 }
 
+/** Outside any provider (a test, a preview): English, read once and kept by [Catalogs]. */
 @Composable
+@ReadOnlyComposable
 private fun loadedLanguage(): LoadedLanguage =
-    LocalCatalogs.current ?: remember { LoadedLanguage("en", null, Catalogs.now("en")) }
+    LocalCatalogs.current ?: LoadedLanguage("en", null, Catalogs.now("en"))
 
-/** A string in the app's language, English where the language lacks it. Use this, never `stringResource`. */
+/**
+ * A string in the app's language, English where the language lacks it. Use this, never `stringResource`. The
+ * plain overload exists for size: most calls have no arguments, and a vararg call builds an array at every one of
+ * them (~850 call sites, measurable in the web bundle).
+ */
 @Composable
+@ReadOnlyComposable
+fun localized(key: StringKey): String {
+    val l = loadedLanguage()
+    return lookup(key.name, l.chosen, l.english)
+}
+
+/** [localized] with `%1$s` / `%1$d` placeholders filled from [args]. */
+@Composable
+@ReadOnlyComposable
 fun localized(key: StringKey, vararg args: Any): String {
     val l = loadedLanguage()
     return formatCatalogText(lookup(key.name, l.chosen, l.english), args)
@@ -90,6 +106,7 @@ fun localized(key: StringKey, vararg args: Any): String {
 
 /** A count's string in the app's language, with that language's plural rules. */
 @Composable
+@ReadOnlyComposable
 fun localizedPlural(key: PluralKey, count: Int, vararg args: Any): String {
     val l = loadedLanguage()
     return formatCatalogText(lookupPlural(key.name, l.language, count, l.chosen, l.english), args)
@@ -97,6 +114,7 @@ fun localizedPlural(key: PluralKey, count: Int, vararg args: Any): String {
 
 /** A key looked up by name (Settings search's entries), or null when English has no such key. */
 @Composable
+@ReadOnlyComposable
 fun localizedOrNull(name: String): String? {
     val l = loadedLanguage()
     return if (l.english?.strings?.containsKey(name) == true || l.chosen?.strings?.containsKey(name) == true) {
