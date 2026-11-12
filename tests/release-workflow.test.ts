@@ -446,3 +446,8 @@ test("a release with a What's new edition takes its notes from it: GitHub's list
   const testflight = jobBetween(workflow, "  assign-testflight:", "\n  release:")
   expect(testflight).toContain('bun scripts/whatsnew-notes.ts "$GITHUB_REF_NAME" --store iphone')
 })
+
+test("a tag stays off TestFlight when the repo variable TESTFLIGHT_ON_TAG is off", () => {
+  expect(workflow).toContain('if [ "${{ vars.TESTFLIGHT_ON_TAG }}" = "off" ]; then')
+  expect(workflow).toContain('{ [ "$tag_upload" = 1 ] || [ "${{ inputs.ios_testflight_upload }}" = "true" ]; }')
+})
