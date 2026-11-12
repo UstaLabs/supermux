@@ -38,9 +38,17 @@ internal class TranscriptScroll(
 
     fun atEnd(): Boolean = transcriptAtEnd(list, slopPx)
 
+    /** The next position change is this owner's own (a [keepEnd] that moves the list), not the reader's. */
+    private var requested = false
+
     /** FOLLOWING: put the end of [lastIndex] on screen in the next measure. Never while the reader is scrolling. */
     fun keepEnd(lastIndex: Int) {
         if (!following || lastIndex < 0 || ours > 0 || list.isScrollInProgress) return
+        // Only when it moves the list (a row was added, or the end is off screen): a request that changes nothing
+        // must not mark the reader's next move as ours.
+        val info = list.layoutInfo
+        if (info.totalItemsCount - 1 == lastIndex && distanceToEnd(list) <= 0.5f) return
+        requested = true
         list.requestScrollToItem(lastIndex, END_OFFSET)
     }
 
@@ -66,18 +74,25 @@ internal class TranscriptScroll(
         }
     }
 
-    /** The reader's own scrolling sets the mode: at the end → FOLLOWING, anywhere else → READING. */
+    /**
+     * The reader's own scrolling sets the mode: at the end → FOLLOWING, anywhere else → READING. His scrolling is any
+     * move of the first visible row (by key) or of its offset that this owner did not make: a drag, a fling, and an
+     * instant jump too (a scroll-to-index starts and ends inside one frame, so "a scroll in progress" is never seen).
+     * Rows inserted above, or a row growing, keep the first visible row's key and offset, so content never counts.
+     */
     suspend fun watchReader() {
-        var reading = false
-        snapshotFlow { Triple(list.isScrollInProgress, list.firstVisibleItemIndex, list.firstVisibleItemScrollOffset) }
-            .collect { (scrolling, _, _) ->
-                if (scrolling && ours == 0) {
-                    reading = true
-                    following = atEnd()
-                } else if (!scrolling && reading) {
-                    reading = false
-                    following = atEnd()
+        var last: Pair<Any?, Int>? = null
+        snapshotFlow { Triple(list.isScrollInProgress, list.layoutInfo.visibleItemsInfo.firstOrNull()?.key, list.firstVisibleItemScrollOffset) }
+            .collect { (scrolling, key, offset) ->
+                val now = key to offset
+                val moved = last != null && now != last
+                last = now
+                if (ours > 0) return@collect
+                if (requested && !scrolling) {
+                    requested = false
+                    return@collect
                 }
+                if (scrolling || moved) following = atEnd()
             }
     }
 

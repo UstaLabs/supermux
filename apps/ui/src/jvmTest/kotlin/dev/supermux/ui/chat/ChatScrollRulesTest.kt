@@ -10,6 +10,7 @@ import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.swipeDown
@@ -133,6 +134,19 @@ class ChatScrollRulesTest {
         val row = firstOnScreen(this, 31..60) + 1
         val d = moved("message number $row of") { state = ChatState(messages = (1..60).map { msg(it) }, historyLoaded = true) }
         assertTrue(d < 1f, "the row he reads moved $d px when the history page replaced the saved rows")
+    }
+
+    // Row 14: an instant scroll (a scroll-to-index, a programmatic jump) is the reader's too. It starts and ends inside
+    // one frame, so "a scroll in progress" is never seen; the owner missed it and kept FOLLOWING (CI, #89's tests).
+    @Test fun an_instant_scroll_away_from_the_end_is_reading() = runComposeUiTest {
+        state = ChatState(messages = (1..40).map { msg(it) })
+        open()
+        onNode(androidx.compose.ui.test.hasScrollToIndexAction()).performScrollToIndex(0)
+        waitForIdle()
+        assertTrue(onScreen("message number 1 of"), "the jump landed at the top")
+        state = state.copy(messages = state.messages + msg(41))
+        waitForIdle()
+        assertTrue(onScreen("message number 1 of"), "a new message pulled the reader back to the end")
     }
 
     // Row 7: a new message while following.
