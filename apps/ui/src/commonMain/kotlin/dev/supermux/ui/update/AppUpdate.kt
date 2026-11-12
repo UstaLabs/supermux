@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.sp
 import dev.supermux.ui.platform.AppUpdater
 import dev.supermux.ui.platform.DownloadedInstaller
 import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.whatsnew.highlightsFor
 import dev.supermux.ui.platform.UpdateStatus
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
@@ -436,11 +437,12 @@ private fun UpdateCardBody(
 @Composable
 private fun WhatsNewButton(release: ClientUpdateStatus, updater: AppUpdater, modifier: Modifier) {
     val cs = MaterialTheme.colorScheme
+    val highlights = highlightsFor(release.highlights, LocalPlatform.current.releasePlatform)
     var open by remember { mutableStateOf(false) }
     Box(modifier) {
         OutlinedButton(
             onClick = {
-                if (release.highlights.isNotEmpty()) open = true else updater.openReleaseNotes()
+                if (highlights.isNotEmpty()) open = true else updater.openReleaseNotes()
             },
             shape = RoundedCornerShape(Radii.sm),
             border = BorderStroke(Stroke.hairline, cs.onSurface.copy(alpha = 0.16f)),
@@ -470,7 +472,7 @@ private fun WhatsNewButton(release: ClientUpdateStatus, updater: AppUpdater, mod
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
                 )
-                release.highlights.forEach { HighlightLine(it) }
+                highlights.forEach { HighlightLine(it) }
                 if (release.notesUrl != null) {
                     Row(
                         Modifier

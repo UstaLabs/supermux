@@ -81,10 +81,14 @@ class UrlRoutesTest {
     }
     @Test fun parseRoundTrips() {
         val cases = listOf(Route.Home, Route.NewSession("d1"), Route.Settings(SettingsSection.Memory), Route.Usage,
-            Route.Archived, Route.Displays, Route.AddHost,
+            Route.Archived, Route.Displays, Route.AddHost, Route.WhatsNew("0.17.7"),
             Route.Settings(SettingsSection.Machine, sub = "computer"))
         for (r in cases) assertEquals(UrlTarget.Screen(r), parsePath(pathFor(r, null)), r.toString())
         assertEquals(UrlTarget.Session("abc"), parsePath("/s/abc"))
+    }
+    @Test fun whatsNewIsItsEditionsAddress() {
+        assertEquals("/whats-new/0.17.7", pathFor(Route.WhatsNew("0.17.7"), null))
+        assertEquals(UrlTarget.Screen(Route.Home), parsePath("/whats-new"))
     }
     @Test fun unknownAndLegacyPathsGoHome() {
         assertEquals(UrlTarget.Screen(Route.Home), parsePath("/nope/what"))

@@ -166,6 +166,15 @@ import dev.supermux.ui.session.rememberLauncherActions
 import dev.supermux.ui.session.rememberSessionListActions
 import dev.supermux.ui.session.withWorkspaceOps
 import dev.supermux.ui.settings.SettingsHub
+import dev.supermux.ui.whatsnew.LocalOpenWhatsNew
+import dev.supermux.ui.resources.whatsnew_card_prompt
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.whatsnew.WhatsNewAction
+import dev.supermux.ui.whatsnew.WhatsNewPage
+import dev.supermux.ui.whatsnew.WhatsNewSlot
+import dev.supermux.ui.whatsnew.rememberWhatsNew
+import dev.supermux.ui.whatsnew.releaseNotesUrl
 import dev.supermux.ui.settings.SettingsPlace
 import dev.supermux.ui.settings.SettingsSlotScope
 import dev.supermux.ui.settings.kit.KitMachine
@@ -464,6 +473,14 @@ fun SupermuxApp(
     val projectImageScope = rememberCoroutineScope()
     val projectImageCache = remember(fleet, projectImageScope) { ProjectImageCache(projectImageScope) }
     val uiPrefs = LocalUiPrefs.current
+    // What's new (#90): the sidebar card after an update, and its page.
+    val appPlatform = LocalPlatform.current
+    val whatsNew = rememberWhatsNew(
+        uiPrefs.settings,
+        appPlatform.updates.currentVersion,
+        appPlatform.releasePlatform,
+        existingInstall = { fleet.store.list().isNotEmpty() },
+    )
     val onCollapsedPathsChange: (Set<String>) -> Unit = { paths ->
         ui.collapsedProjectPaths = paths
         overlayScope.launch { uiPrefs.putCollapsedProjectPaths(paths) }
@@ -1053,7 +1070,12 @@ fun SupermuxApp(
                                             // The update card sits on the footer rail, not across the
                                             // top of the app; it draws nothing until a newer release
                                             // is found. The downloads' list (#95) stands on both.
-                                            card = { AppUpdateCard(onOpenPage = { ui.openAppUpdate() }) },
+                                            card = {
+                                                Column {
+                                                    WhatsNewSlot(whatsNew, onOpen = { ui.openWhatsNew(it) })
+                                                    AppUpdateCard(onOpenPage = { ui.openAppUpdate() })
+                                                }
+                                            },
                                         )
                                     }
                                 },
@@ -1129,7 +1151,7 @@ fun SupermuxApp(
                     }
                     val currentRouteOnBack by rememberUpdatedState(routeOnBack)
                     val routeBack = remember(routeSwipe) { RouteBack(routeSwipe) { currentRouteOnBack() } }
-                    CompositionLocalProvider(LocalRouteBack provides routeBack) {
+                    CompositionLocalProvider(LocalRouteBack provides routeBack, LocalOpenWhatsNew provides { ui.openWhatsNew(it) }) {
                     NavDisplay(
                         backStack = ui.backStack,
                         modifier = Modifier.fillMaxSize(),
@@ -1198,6 +1220,39 @@ fun SupermuxApp(
                                             )
                                         }
                                     }
+                                }
+                            }
+
+                            entry<Route.WhatsNew>(
+                                metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
+                            ) { route ->
+                                EscapeBox("whats_new_overlay", onEscape = { ui.goBack() }) {
+                                    val cardPrompt = localized(Res.string.whatsnew_card_prompt)
+                                    // A "Try it" is offered only where it can work: a Browser tab needs a workspace on show
+                                    // (and an app whose links open in its own tabs), a card prompt an open chat.
+                                    val actions = WhatsNewAction.entries.filterTo(mutableSetOf()) { a ->
+                                        when (a) {
+                                            WhatsNewAction.Browser -> activeWorkspace != null && appPlatform.caps.linksInBrowserTabs
+                                            WhatsNewAction.CardPrompt -> ui.selectedId != null
+                                            else -> true
+                                        }
+                                    }
+                                    WhatsNewPage(
+                                        version = route.version,
+                                        platform = appPlatform.releasePlatform,
+                                        actions = actions,
+                                        onAction = { action ->
+                                            when (action) {
+                                                WhatsNewAction.Done -> ui.goBack()
+                                                WhatsNewAction.Notes -> appPlatform.openUrl(releaseNotesUrl(route.version))
+                                                WhatsNewAction.Settings -> ui.openSettings()
+                                                WhatsNewAction.ResumeSetting -> ui.openSettings(SettingsSection.Providers, anchor = "limit-resume")
+                                                WhatsNewAction.Browser -> ui.requestBrowserTab()
+                                                WhatsNewAction.CardPrompt -> ui.askAgentForCard(cardPrompt)
+                                            }
+                                        },
+                                        onBack = { ui.goBack() },
+                                    )
                                 }
                             }
 
@@ -1957,6 +2012,20 @@ private fun WorkspacePanel(
                 ReopenKeyAction.NewTerminal -> { reopenTerminal(); true }
                 ReopenKeyAction.Nothing -> false
             }
+        }
+    }
+
+    // What's new's "Open a Browser tab" (#90): an empty one in the focused pane, else the first.
+    if (isActive) {
+        LaunchedEffect(ui.browserTabRequested) {
+            if (!ui.browserTabRequested) return@LaunchedEffect
+            ui.consumeBrowserTabRequest()
+            val opener = ws.browserOpener ?: return@LaunchedEffect
+            val tree = ws.layoutSync.tree
+            val group = ws.focusedViewId?.let { dev.supermux.workspace.groupIdOf(tree, it) }
+                ?: dev.supermux.workspace.firstGroupId(tree)
+                ?: return@LaunchedEffect
+            opener.openEmpty(group, onPlaced = { id -> if (compact) wsApp.setActiveView(current.id, id) })
         }
     }
 

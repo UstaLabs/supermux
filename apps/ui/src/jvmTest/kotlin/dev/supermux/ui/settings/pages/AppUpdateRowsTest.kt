@@ -57,6 +57,31 @@ class AppUpdateRowsTest {
     private fun platform(updater: FakeAppUpdater) =
         FakePlatform(caps = caps).also { it.updates = updater }
 
+    // ── #90: the running release's What's new reopens from here ─────────────────────────────────
+
+    @Test fun the_running_releases_whats_new_reopens_from_the_app_version_row() = runComposeUiTest {
+        var opened: String? = null
+        val platform = FakePlatform(caps = NO_CAPS).also { it.updates = VersionOnlyUpdater("0.17.7") }
+        setPlatformContent(platform) {
+            androidx.compose.runtime.CompositionLocalProvider(dev.supermux.ui.whatsnew.LocalOpenWhatsNew provides { opened = it }) {
+                AppUpdateRows()
+            }
+        }
+        onNodeWithText("What's new in v0.17.7").performClick()
+        assertEquals("0.17.7", opened)
+    }
+
+    @Test fun a_release_older_than_every_edition_has_no_whats_new_link() = runComposeUiTest {
+        val platform = FakePlatform(caps = caps).also { it.updates = FakeAppUpdater(currentVersion = "0.17.6", release = release()) }
+        setPlatformContent(platform) {
+            androidx.compose.runtime.CompositionLocalProvider(dev.supermux.ui.whatsnew.LocalOpenWhatsNew provides { }) {
+                AppUpdateRows()
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("app_update_whats_new_link").assertDoesNotExist()
+    }
+
     // ── phases → what the row says ────────────────────────────────────────────────────────────
 
     @Test fun the_first_check_says_checking_until_it_has_something_to_show() = runComposeUiTest {
@@ -154,6 +179,16 @@ class AppUpdateRowsTest {
         waitForIdle()
         onNodeWithTag("app_update_whats_new").assertIsDisplayed()
         notes.forEach { onNodeWithText(it).assertIsDisplayed() }
+    }
+
+    @Test fun the_page_lists_only_this_platforms_highlights_without_their_tags() = runComposeUiTest {
+        val notes = listOf("Updates are one click (desktop)", "Read-aloud on the lock screen (Android, iPhone)")
+        val updater = FakeAppUpdater(release = release().copy(highlights = notes))
+        val mac = platform(updater).also { it.releasePlatform = dev.supermux.ui.whatsnew.ReleasePlatform.Mac }
+        setPlatformContent(mac) { AppUpdateRows() }
+        waitForIdle()
+        onNodeWithText("Updates are one click").assertIsDisplayed()
+        onNodeWithText("Read-aloud on the lock screen", substring = true).assertDoesNotExist()
     }
 
     @Test fun the_download_shows_its_progress_in_words() = runComposeUiTest {

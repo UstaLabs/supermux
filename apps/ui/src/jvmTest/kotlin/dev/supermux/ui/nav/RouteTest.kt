@@ -23,6 +23,13 @@ class RouteTest {
     }
 
     @Test
+    fun whats_new_round_trips_with_its_edition() {
+        val route = Route.WhatsNew("0.17.7")
+        assertEquals(route, roundTrip(route))
+        assertEquals("""{"type":"whats_new","version":"0.17.7"}""", json.encodeToString(Route.serializer(), route))
+    }
+
+    @Test
     fun settings_defaults_to_just_settings() {
         // #97: no section is "just Settings" — the phone's index, General on a wide window.
         assertEquals(null, Route.Settings().section)

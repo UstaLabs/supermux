@@ -189,6 +189,9 @@ interface Platform {
      * tabs do (#105, Ahmet's call: tabs never freeze). Phones keep only the tab in front and park the rest.
      */
     val keepsBrowserTabsLive: Boolean get() = false
+
+    /** Which build this is, as a What's new edition names it (#90); null where none says. */
+    val releasePlatform: dev.supermux.ui.whatsnew.ReleasePlatform? get() = null
 }
 
 /** Default [Platform.pickFiles] requester for screens that only ever have one picker in play. */
