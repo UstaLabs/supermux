@@ -2,6 +2,7 @@ package dev.supermux.webview.engine.ios
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
@@ -618,13 +619,6 @@ internal class IosWebEngine private constructor(
     override fun Surface(modifier: Modifier) {
         if (released) return
         val inList = LocalWebSurfaceHints.current.inScrollingList
-        val properties = remember(inList) {
-            UIKitInteropProperties(
-                // An embed in a list lets a drag that starts on it scroll the list; a pane gives its page every touch.
-                interactionMode = if (inList) UIKitInteropInteractionMode.Cooperative() else UIKitInteropInteractionMode.NonCooperative,
-                isNativeAccessibilityEnabled = true,
-            )
-        }
         val dispatcher = remember { NestedScrollDispatcher() }
         val density = LocalDensity.current.density
         DisposableEffect(dispatcher, density) {
@@ -632,12 +626,24 @@ internal class IosWebEngine private constructor(
             sideSwipe.density = density
             onDispose { if (sideSwipe.dispatcher === dispatcher) sideSwipe.dispatcher = null }
         }
-        UIKitView(
-            factory = { EngineContainerView(this).also(::attach) },
-            modifier = modifier.nestedScroll(NoNestedScroll, dispatcher),
-            onRelease = ::detach,
-            properties = properties,
-        )
+        // UIKitView takes its properties when it creates its interop view, not after: a hint that changes (an embed
+        // whose page turns out to take touches itself, made a pane) gets a new container, which adopts the web view.
+        // attach and detach compare containers, so the old one's release, before or after, doesn't undo the new one.
+        key(inList) {
+            val properties = remember {
+                UIKitInteropProperties(
+                    // An embed in a list lets a drag that starts on it scroll the list; a pane gives its page every touch.
+                    interactionMode = if (inList) UIKitInteropInteractionMode.Cooperative() else UIKitInteropInteractionMode.NonCooperative,
+                    isNativeAccessibilityEnabled = true,
+                )
+            }
+            UIKitView(
+                factory = { EngineContainerView(this).also(::attach) },
+                modifier = modifier.nestedScroll(NoNestedScroll, dispatcher),
+                onRelease = ::detach,
+                properties = properties,
+            )
+        }
     }
 
     // --- Reuse ---

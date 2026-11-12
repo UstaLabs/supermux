@@ -120,7 +120,7 @@ class HtmlCardScrollTest {
             frames.docks += onNodeWithTag("chat_composer_dock").getBoundsInRoot().height.value
             // The view's own height, not its clipped bounds: the list clips a card that runs under the composer.
             frames.cardHeights += onNodeWithTag("html-card-page:card1").fetchSemanticsNode().size.height.toFloat()
-            frames.surfaces += engines.created.filter { it.calls.any { c -> c.startsWith("load:") } }.map { it.surfaceSize }.single()
+            frames.surfaces += runOnUiThread { engines.created.filter { it.calls.any { c -> c.startsWith("load:") } }.map { it.surfaceSize }.single() }
             frames.transcript += (compositions["transcript"] ?: 0) - t
             frames.card += (compositions["card"] ?: 0) - c
         }
@@ -141,7 +141,8 @@ class HtmlCardScrollTest {
         onNodeWithTag("chat_body").drag(+300f)
         waitForIdle()
         waitForIdle()
-        waitUntil(timeoutMillis = 5_000) { engines.created.any { e -> e.calls.any { it.startsWith("load:") } } }
+        // On the UI thread: the fake engines record their calls there.
+        waitUntil(timeoutMillis = 5_000) { runOnUiThread { engines.created.any { e -> e.calls.any { it.startsWith("load:") } } } }
         // Let the page's reported height settle the card at its cap.
         mainClock.advanceTimeBy(2_000)
         waitForIdle()

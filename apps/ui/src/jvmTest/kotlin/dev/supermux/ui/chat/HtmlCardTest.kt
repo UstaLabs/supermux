@@ -70,6 +70,15 @@ class HtmlCardTest {
         assertTrue("<p>hi</p>" in doc)
     }
 
+    // iOS: WKWebView rubber-bands even a page that doesn't scroll. The sample stops it in its pages' CSS (orbit.html):
+    // overscroll-behavior none on the root. A card that scrolls inside keeps its scroll, without the outer bounce.
+    @Test fun aCardsPageDoesNotBounce() {
+        val doc = cardDocument("<p>hi</p>", dark)
+        val base = doc.substringAfter("<style id=\"sm-base\">").substringBefore("</style>")
+        val rule = base.substringAfter("html,body{").substringBefore("}")
+        assertTrue("overscroll-behavior:none" in rule, "html and body keep their page from bouncing: $rule")
+    }
+
     @Test fun aFragmentIsWrappedInADocument() {
         val doc = cardDocument("<button onclick=\"supermux.send('B')\">B</button>", dark.copy(dark = false))
         assertTrue(doc.startsWith("<!doctype html><html data-theme=\"light\">"))
@@ -168,12 +177,12 @@ class HtmlCardTest {
         }
         onNodeWithText("Sales by region").assertExists()
         val key = WebContent.Html(cardDocument(rig.page, theme!!)).key
-        waitUntil(timeoutMillis = 5_000) { rig.calls.any { it == "load:$key" } }
-        val engine = rig.engines.created.single { e -> e.calls.any { it == "load:$key" } }
+        waitUntil(timeoutMillis = 5_000) { runOnUiThread { rig.calls.any { it == "load:$key" } } }
+        val engine = runOnUiThread { rig.engines.created.single { e -> e.calls.any { it == "load:$key" } } }
         assertEquals(WebProfile.Ephemeral, engine.config.profile)
         assertTrue(engine.lastSetup!!.transparentBackground)
         assertTrue(engine.lastSetup!!.dark)
-        rig.engines.created.forEach { assertEquals(emptyList(), it.violations) }
+        runOnUiThread { rig.engines.created.map { it.violations.toList() } }.forEach { assertEquals(emptyList(), it) }
     }
 
     @Test fun beforeThePageArrivesTheCardReservesItsStoredHeight() = runComposeUiTest {
@@ -198,11 +207,11 @@ class HtmlCardTest {
                 HtmlCardView("o1", card, Modifier.width(600.dp))
             }
         }
-        waitUntil(timeoutMillis = 5_000) { rig.calls.any { it.startsWith("load:html:") } }
+        waitUntil(timeoutMillis = 5_000) { runOnUiThread { rig.calls.any { it.startsWith("load:html:") } } }
         appearance = AppearanceMode.LIGHT
         waitForIdle()
         val fg = light!!.vars.toMap()["--sm-fg"]!!
-        waitUntil(timeoutMillis = 5_000) { rig.calls.any { it.startsWith("post:") && "\"n\":\"theme\"" in it && "\"dark\":false" in it && fg in it } }
+        waitUntil(timeoutMillis = 5_000) { runOnUiThread { rig.calls.any { it.startsWith("post:") && "\"n\":\"theme\"" in it && "\"dark\":false" in it && fg in it } } }
     }
 
     @Test fun anAgentMessageWithACardShowsTheCardInTheTimeline() = runComposeUiTest {

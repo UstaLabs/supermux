@@ -18,7 +18,7 @@ Order, set by Ahmet on 2026-11-08:
 - **No label or badge on cards.**
 - **A click in the page sends straight away.** The message shows in the chat as his, from the card. It works only after a real click or tap in that card, on all six platforms, and tests prove it.
 - **Each call makes a new card.**
-- **Limits:** 2 MB per page; inline height up to ~70 % of the visible chat.
+- **Limits:** 2 MB per page; inline height up to ~70 % of the chat at rest, and never capped under 560 dp (so a phone shows a page of up to 560 whole).
 - **Full screen:**
   - desktop and tablet: #105's Browser tab;
   - phone: a view over the chat;
@@ -177,11 +177,11 @@ The frame's transient user activation (`navigator.userActivation.isActive`) must
 
 - **Desktop and tablet:**
   - The card sits inline in the reply. It shows the title, full screen and ⋯ (Open in a Browser tab, View source, Save as .html, Copy source).
-  - The height comes from the stored heights, capped at ~70 % of the visible chat; past that the page scrolls inside.
+  - The height comes from the stored heights, capped at the larger of 560 dp and ~70 % of the chat at rest; past that the page scrolls inside.
   - The page is live once on screen (the library's activation) and a still otherwise.
   - Full screen opens `openInBrowserTab(workspaceId, Doc(id))` (#105). The tab renders through the same `AgentHtmlView(ref, mode = Tab)`, and the card says where the page is ("Live in the Preview tab · Show here").
 - **Phone:**
-  - The same inline card. On iOS a drag scrolls the chat and a tap reaches the page; on Android a drag that starts on the page belongs to it.
+  - The same inline card. On iOS a drag scrolls the chat and a tap reaches the page, unless the page takes touches itself (an element whose computed `touch-action` blocks panning, such as a three.js canvas): the card's script tells the app, which then gives that card every touch, as a pane; on Android a drag that starts on the page belongs to it.
   - Full screen is a view over the chat; back returns to the same scroll.
 - **Web:** the same card in the `data:` frame. The app's document must declare the card's colour scheme. A frame whose `color-scheme` differs from its embedder's gets an opaque canvas from the browser, which breaks the card's transparency.
 - **Old messages:** the same card, fetched lazily. After a restart a card shows a still until it goes live.

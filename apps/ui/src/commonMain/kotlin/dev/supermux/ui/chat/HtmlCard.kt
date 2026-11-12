@@ -15,12 +15,15 @@ import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -44,6 +47,8 @@ import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.SupermuxSemantics
 import dev.supermux.webview.DarkMode
+import dev.supermux.webview.LocalWebSurfaceHints
+import dev.supermux.webview.WebSurfaceHints
 import dev.supermux.webview.NewWindowDecision
 import dev.supermux.webview.NewWindowRequest
 import dev.supermux.webview.WebClient
@@ -88,9 +93,13 @@ internal val CARD_THEME_VARIABLES: List<String> =
 /** The longest text a card may send, as the broker allows. */
 internal const val CARD_SEND_MAX = 2000
 
-/** A card's share of the visible chat, and its cap where the chat's height isn't known. */
+/**
+ * A card's share of the chat at rest, and the least its cap is: as the webview sample caps a preview that follows its
+ * page (560 dp), so a phone, whose 70 % is about 455 pt, shows a page of up to 560 whole rather than scrolling it
+ * inside. Also the cap where the chat's height isn't known.
+ */
 private const val CARD_MAX_FRACTION = 0.7f
-private val CARD_MAX_FALLBACK = 480.dp
+private val CARD_MAX_FLOOR = 560.dp
 
 /** A card's height before its page reports, when the broker measured none. */
 private val CARD_DEFAULT_HEIGHT = 280.dp
@@ -161,11 +170,33 @@ private fun cardPrelude(theme: CardTheme): String {
     val vars = theme.vars.joinToString(";") { (name, value) -> "$name:$value" }
     return "<style id=\"sm-base\">:root{color-scheme:$scheme;$vars;--sm-radius:8px;" +
         "--sm-font:\"Geist\",system-ui,-apple-system,\"Segoe UI\",sans-serif;--sm-mono:\"Geist Mono\",ui-monospace,monospace}" +
-        "html,body{margin:0;background:transparent;color:var(--sm-fg);font:14px/1.45 var(--sm-font)}</style>" +
+        "html,body{margin:0;background:transparent;overscroll-behavior:none;color:var(--sm-fg);font:14px/1.45 var(--sm-font)}</style>" +
         "<script id=\"sm-api\">" + CARD_API_SCRIPT.replace("\$SCHEME", scheme) + "</script>"
 }
 
-private val CARD_API_SCRIPT = """
+/**
+ * The event a card's page posts (`{pane: true}`) once it has an element that takes touches itself, and the host's
+ * question, which the page answers so, each time a view shows the page.
+ */
+internal const val CARD_TOUCH_EVENT = "touch"
+
+/** Whether a [CARD_TOUCH_EVENT] asks for the card to be a pane: `{pane: true}` and nothing else. */
+internal fun cardWantsPane(data: JsonElement): Boolean =
+    ((data as? JsonObject)?.get("pane") as? JsonPrimitive)?.let { !it.isString && it.content == "true" } == true
+
+/** A card's cap for a chat of resting height [viewport]: 70 % of it, and never under 560 dp. */
+internal fun cardMaxHeight(viewport: Dp): Dp =
+    if (viewport == Dp.Unspecified) CARD_MAX_FLOOR else (viewport * CARD_MAX_FRACTION).coerceAtLeast(CARD_MAX_FLOOR)
+
+/**
+ * The surface hints of a card's view (the webview sample's). An embed: a drag that starts on the page scrolls the chat
+ * (UIKit interop Cooperative on iOS). A pane: the page takes every touch (NonCooperative), for a page that handles
+ * drags itself, such as a three.js canvas with `touch-action: none`, which an embed's drag up or down would scroll away.
+ */
+private val CARD_EMBED = WebSurfaceHints(inScrollingList = true)
+private val CARD_PANE = WebSurfaceHints(inScrollingList = false)
+
+internal val CARD_API_SCRIPT = """
 (function () {
   var bridge = window.hostBridge, root = document.documentElement;
   root.setAttribute('data-theme', '${'$'}SCHEME');
@@ -186,6 +217,40 @@ private val CARD_API_SCRIPT = """
       return { ok: false, reason: String((e && e.message) || e) };
     });
   }
+  // A page with an element that handles touches itself (a computed touch-action that blocks panning one way or both:
+  // none, pinch-zoom, pan-x or pan-y alone) tells the host, which then gives it every touch. Looked for once the
+  // document is parsed, at load, and as the page changes for a while after (a canvas a script adds), once found no more.
+  // The host asks again (a '$CARD_TOUCH_EVENT' event) each time a view shows the page, which may be a new view adopting it.
+  if (bridge) (function () {
+    var found = false, timer = 0, observer = null, MAX = 5000;
+    function blocks(v) {
+      if (!v || v === 'auto' || v === 'manipulation') return false;
+      return !(/\bpan-x\b/.test(v) && /\bpan-y\b/.test(v));
+    }
+    function scan() {
+      timer = 0;
+      if (found) return;
+      var all = document.getElementsByTagName('*');
+      for (var i = 0; i < all.length && i < MAX; i++) {
+        if (blocks(getComputedStyle(all[i]).touchAction)) {
+          found = true;
+          if (observer) observer.disconnect();
+          bridge.post('$CARD_TOUCH_EVENT', { pane: true });
+          return;
+        }
+      }
+    }
+    bridge.on('$CARD_TOUCH_EVENT', function () { if (found) bridge.post('$CARD_TOUCH_EVENT', { pane: true }); });
+    function soon() { if (!found && !timer) timer = setTimeout(scan, 100); }
+    document.addEventListener('DOMContentLoaded', function () {
+      scan();
+      if (found || typeof MutationObserver !== 'function') return;
+      observer = new MutationObserver(soon);
+      observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
+      setTimeout(function () { if (observer) observer.disconnect(); observer = null; }, 10000);
+    });
+    window.addEventListener('load', soon);
+  })();
   Object.defineProperty(window, 'supermux', { value: Object.freeze({ send: send }), writable: false, configurable: false, enumerable: false });
   var self = document.currentScript;
   if (self && self.parentNode) self.parentNode.removeChild(self);
@@ -231,8 +296,9 @@ private sealed interface CardPage {
 }
 
 /**
- * An agent's html card: its title, then its page live. The page sizes to its content, capped at about 70 % of the visible
- * chat (taller pages scroll inside), and the stored height is reserved until it reports, so the list doesn't jump.
+ * An agent's html card: its title, then its page live. The page sizes to its content, capped at the larger of 560 dp and
+ * 70 % of the chat at rest ([cardMaxHeight]; taller pages scroll inside), and the stored height is reserved until it
+ * reports, so the list doesn't jump. An embed in the chat, or a pane once its page says it takes touches itself.
  */
 @Composable
 internal fun HtmlCardView(entryId: String, card: HtmlCardDto, modifier: Modifier = Modifier) {
@@ -242,8 +308,7 @@ internal fun HtmlCardView(entryId: String, card: HtmlCardDto, modifier: Modifier
     val currentTheme by rememberUpdatedState(theme)
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
     LocalChatCompositionProbe.current?.let { probe -> SideEffect { probe("card") } }
-    val viewport = LocalChatViewportHeight.current
-    val max = if (viewport == Dp.Unspecified) CARD_MAX_FALLBACK else (viewport * CARD_MAX_FRACTION).coerceAtLeast(120.dp)
+    val max = cardMaxHeight(LocalChatViewportHeight.current)
     val reserved = (cardStoredHeight(card, compact) ?: CARD_DEFAULT_HEIGHT).coerceAtMost(max)
     // Built once per card, with the theme of the moment, off the main thread (Html hashes its text); a later theme
     // change reaches the page over the bridge.
@@ -281,9 +346,17 @@ private fun CardPageView(entryId: String, content: WebContent.Html, card: HtmlCa
         }
         onDispose { off() }
     }
-    // Again whenever the page goes live: a post while the view has no engine is lost.
+    // An embed until its page says it takes touches itself; nothing is kept, the page says so each time it's shown.
+    var pane by remember(state) { mutableStateOf(false) }
+    DisposableEffect(state) {
+        val off = state.bridge.on(CARD_TOUCH_EVENT) { data -> if (cardWantsPane(data)) pane = true }
+        onDispose { off() }
+    }
+    // Again whenever the page goes live: a post while the view has no engine is lost. The touch question too, for a
+    // page this state adopted, which said so to another one.
     val live = state.phase == WebViewPhase.Live
     LaunchedEffect(state, theme, live) { if (live) state.bridge.post("theme", theme.toJson()) }
+    LaunchedEffect(state, live) { if (live) state.bridge.post(CARD_TOUCH_EVENT) }
     val settings = remember(theme.dark) {
         WebSettings(
             profile = WebProfile.Ephemeral,
@@ -292,12 +365,14 @@ private fun CardPageView(entryId: String, content: WebContent.Html, card: HtmlCa
         )
     }
     ProvideWebViewRuntime(webViews.runtime) {
-        WebView(
-            state,
-            Modifier.fillMaxWidth().testTag("html-card-page:$entryId"),
-            settings = settings,
-            client = CardClient,
-            sizing = WebSizing.WrapContentHeight(max = max, initial = reserved),
-        )
+        CompositionLocalProvider(LocalWebSurfaceHints provides if (pane) CARD_PANE else CARD_EMBED) {
+            WebView(
+                state,
+                Modifier.fillMaxWidth().testTag("html-card-page:$entryId"),
+                settings = settings,
+                client = CardClient,
+                sizing = WebSizing.WrapContentHeight(max = max, initial = reserved),
+            )
+        }
     }
 }
