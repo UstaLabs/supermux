@@ -240,6 +240,16 @@ report();
 </script></body></html>""",
     )
 
+    /** A checkout-like page for the picker (#122): a heading with an id, two rows alike, a summary with its button. */
+    private val PICK_PAGE = WebContent.Html(
+        """<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>pick</title>
+<style>html,body{margin:0;height:100%;font:16px system-ui}h1{margin:0;height:10vh}ul{margin:0;padding:0;height:40vh}
+li{list-style:none;height:20vh}aside{position:absolute;left:0;right:0;top:60vh;height:30vh}
+button{display:block;width:100%;height:15vh;margin-top:8vh}</style></head>
+<body><h1 id="title">Your cart</h1><ul><li class="row">Shoes</li><li class="row">Socks</li></ul>
+<aside class="summary"><h2 style="margin:0;height:8vh">Order summary</h2><button class="buy">Pay €42</button></aside></body></html>""",
+    )
+
     /** A local page that puts the Cookie header its request carried, and what its script can read, in its title. */
     private fun cookieEcho(): HttpServer = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
         createContext("/") { exchange ->
@@ -291,6 +301,29 @@ report();
                 waitFor("the page laid out at twice the view's width (720 ± 2)") { (width() ?: 0) in 718..722 }
                 stage.state.navigator.setZoom(1f)
                 waitFor("the page back at the view's width") { width() == base }
+            }
+        },
+        Check("mac-the-picker-names-an-element-with-a-short-verified-selector") {
+            // #122 pick and comment: the element under a point, its selector as short as stays unique and resolves back
+            // (supercomment's rule), its text and box; a parent; and boxes of pinned selectors, one gone.
+            val stage = Stage()
+            withPage(stage) { _ ->
+                stage.state.load(PICK_PAGE)
+                waitFor("the checkout page") { stage.state.title == "pick" }
+                val nav = stage.state.navigator
+                val pay = assertNotNull(nav.elementAt(0.5f, 0.83f), "an element at the button")
+                assertEquals("button.buy", pay.selector, "unique on its own: no longer")
+                assertEquals("Pay €42", pay.text)
+                assertEquals("button", pay.tag)
+                assertTrue(pay.label.startsWith("button.buy · "), pay.label)
+                assertTrue(pay.box.y in 0.74f..0.78f && pay.box.height in 0.13f..0.17f, "the button at 76 % of the height, 15 % tall: ${pay.box}")
+                assertEquals("aside.summary", nav.elementAt(0.5f, 0.83f, up = 1)?.selector)
+                val second = assertNotNull(nav.elementAt(0.5f, 0.35f), "the second of two alike")
+                assertEquals("li.row:nth-of-type(2)", second.selector)
+                assertEquals("#title", nav.elementAt(0.5f, 0.05f)?.selector?.removePrefix("h1"))
+                val boxes = nav.boxesOf(listOf(pay.selector, "section.gone"))
+                assertEquals(pay.box, boxes[0])
+                assertEquals(null, boxes[1])
             }
         },
         Check("mac-a-cookie-set-before-the-page-reaches-its-request-and-an-httponly-one-stays-out-of-its-script") {

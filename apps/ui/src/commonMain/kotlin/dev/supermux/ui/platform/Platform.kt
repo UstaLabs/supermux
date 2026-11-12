@@ -274,6 +274,11 @@ data class Caps(
      * 2b). macOS and iOS (WebKit's pageZoom); not Android, whose zoom is text zoom, nor Windows, Linux or the web yet.
      */
     val pageFit: Boolean = false,
+    /**
+     * A Browser tab can run its picker's reads in the page (#122 pick and comment). False on the web client, whose
+     * cross-origin iframe takes no script from the app.
+     */
+    val pagePick: Boolean = true,
 )
 
 /**

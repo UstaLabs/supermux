@@ -239,6 +239,31 @@ public final class dev/supermux/webview/NewWindowRequest {
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class dev/supermux/webview/PageBox {
+	public static final field $stable I
+	public fun <init> (FFFF)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getHeight ()F
+	public final fun getWidth ()F
+	public final fun getX ()F
+	public final fun getY ()F
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/PageElement {
+	public static final field $stable I
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ldev/supermux/webview/PageBox;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBox ()Ldev/supermux/webview/PageBox;
+	public final fun getLabel ()Ljava/lang/String;
+	public final fun getSelector ()Ljava/lang/String;
+	public final fun getTag ()Ljava/lang/String;
+	public final fun getText ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class dev/supermux/webview/PermissionKind : java/lang/Enum {
 	public static final field Camera Ldev/supermux/webview/PermissionKind;
 	public static final field ClipboardRead Ldev/supermux/webview/PermissionKind;
@@ -478,7 +503,10 @@ public final class dev/supermux/webview/WebError$UnsupportedOnPlatform : dev/sup
 public final class dev/supermux/webview/WebNavigator {
 	public static final field $stable I
 	public final fun back ()V
+	public final fun boxesOf (Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun clearFind ()V
+	public final fun elementAt (FFILkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun elementAt$default (Ldev/supermux/webview/WebNavigator;FFILkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun emulateDevice (Ldev/supermux/webview/DeviceEmulation;)Z
 	public final fun favicon (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun find (Ljava/lang/String;ZLkotlin/coroutines/Continuation;)Ljava/lang/Object;

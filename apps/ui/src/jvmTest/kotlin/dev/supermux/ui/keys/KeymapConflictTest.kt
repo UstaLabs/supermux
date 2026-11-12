@@ -74,6 +74,9 @@ class KeymapConflictTest {
         AppCommands.BrowserZoomIn.id to "Mod-+",
         // DevTools' device-mode key (#122 phase 2): only the Browser pane registers it, where no editor is.
         AppCommands.BrowserDeviceMode.id to "Mod-Shift-m",
+        // DevTools' inspect-element key, the Browser tab's pick (#122 3a): a terminal's copy, but only the Browser pane
+        // registers it, and no terminal is in one.
+        AppCommands.BrowserPick.id to "Mod-Shift-c",
     )
 
     /** ⌘/ and ⌘F stay the editor's (the deeper scope wins); paste-image is handled only by a composer. */

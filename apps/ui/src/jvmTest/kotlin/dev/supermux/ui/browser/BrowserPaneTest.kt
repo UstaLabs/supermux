@@ -21,6 +21,8 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performMouseInput
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.pressKey
@@ -644,6 +646,74 @@ class BrowserPaneTest {
         waitForIdle()
         onNodeWithTag("browser-device-dpr").assertDoesNotExist()
         onNodeWithTag("browser-device-touch").assertDoesNotExist()
+    }
+
+    /** The picker's page: a Pay button in the middle of the viewport (as the engine's evaluate answers), or gone. */
+    private fun Rig.answerPicks(gone: () -> Boolean = { false }) {
+        val pay = """{"selector":"button.buy","tag":"button","text":"Pay €42","label":"button.buy · 312×44","box":{"x":0.25,"y":0.5,"w":0.5,"h":0.1}}"""
+        engines.created.toList().forEach { engine ->
+            engine.evaluateAnswer = { script ->
+                when {
+                    "elementFromPoint" in script -> pay
+                    "querySelector(q)" in script -> if (gone()) "[null]" else """[{"x":0.25,"y":0.5,"w":0.5,"h":0.1}]"""
+                    else -> null
+                }
+            }
+        }
+    }
+
+    /**
+     * #122 3a: ⌘⇧C is pick mode. Hovering names the element; a click pins it ① with a comment field there; Return keeps
+     * the comment; Esc closes the field, then pick mode; the pin stays.
+     */
+    @Test fun pickModePinsAnElementWithAComment() = runComposeUiTest {
+        val rig = Rig()
+        showWithKeys(rig, mutableStateOf(view("https://vitejs.dev/")))
+        rig.answerPicks()
+        onNodeWithTag("browser-pick-layer").assertDoesNotExist()
+        onNodeWithTag("browser-address").performClick()
+        onNodeWithTag("browser-address").performKeyInput { withKeyDown(mod) { withKeyDown(Key.ShiftLeft) { pressKey(Key.C) } } }
+        onNodeWithTag("browser-pick-strip").assertExists()
+        onNodeWithTag("browser-pick-layer").performMouseInput { moveTo(center) }
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag("browser-pick-hover", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithText("button.buy · 312×44", useUnmergedTree = true).assertExists()
+        onNodeWithTag("browser-pick-layer").performMouseInput { click(center) }
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag("browser-pin-1", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithTag("browser-pick-comment").performTextInput("the Pay button is cut off")
+        onNodeWithTag("browser-pick-comment").performKeyInput { pressKey(Key.Enter) }
+        onNodeWithTag("browser-pick-comment").assertDoesNotExist()
+        onNodeWithTag("browser-pick-sendbar").assertExists()
+        onNodeWithText("1 comment", useUnmergedTree = true).assertExists()
+        // Esc leaves pick mode; the pin stays.
+        onNodeWithTag("browser-pick-layer").performKeyInput { pressKey(Key.Escape) }
+        waitForIdle()
+        onNodeWithTag("browser-pick-layer").assertDoesNotExist()
+        onNodeWithTag("browser-pin-1", useUnmergedTree = true).assertExists()
+    }
+
+    /** A pin follows its element; one whose element is gone greys out ("element changed") and stays. */
+    @Test fun aPinWhoseElementIsGoneGreysOut() = runComposeUiTest {
+        val rig = Rig()
+        var gone = false
+        showWithKeys(rig, mutableStateOf(view("https://vitejs.dev/")))
+        rig.answerPicks { gone }
+        onNodeWithTag("browser-pick").performClick()
+        onNodeWithTag("browser-pick-layer").performMouseInput { click(center) }
+        onNodeWithTag("browser-pick-comment").performTextInput("x")
+        onNodeWithTag("browser-pick-comment").performKeyInput { pressKey(Key.Enter) }
+        gone = true
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag("browser-pin-1-gone", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithTag("browser-pick-clear").performClick()
+        onNodeWithTag("browser-pin-1-gone", useUnmergedTree = true).assertDoesNotExist()
+        onNodeWithTag("browser-pick-sendbar").assertDoesNotExist()
+    }
+
+    /** No scripts into the page (the web client's iframe): no pick mode at all. */
+    @Test fun withoutPagePickingThereIsNoPickButton() = runComposeUiTest {
+        val rig = Rig()
+        show(rig, mutableStateOf(view("https://vitejs.dev/")), rig.actions(), FakePlatform(caps = dev.supermux.ui.platform.NO_CAPS.copy(pagePick = false)))
+        waitUntil(timeoutMillis = 5_000) { "https://vitejs.dev/" in rig.loads() }
+        onNodeWithTag("browser-pick").assertDoesNotExist()
     }
 
     /** On a phone a phone-sized page inside it is pointless: no device button and no menu row (#122 §3.2). */
