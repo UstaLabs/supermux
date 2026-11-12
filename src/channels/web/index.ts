@@ -397,7 +397,7 @@ export interface WebChannelOpts {
   reviewUpdate?: (commentId: string, patch: { status?: "open" | "submitted" | "resolved"; body?: string; resolvedBy?: string }) => void
   reviewDelete?: (commentId: string) => void
   /** #122 phase 4: store a Browser tab's comments in a session (and tell every client); its stored ones. */
-  browserCommentsAdd?: (sessionId: string, batch: import("../../core/browser-comments/store").BrowserCommentBatch) => import("../../core/browser-comments/store").BrowserComment[]
+  browserCommentsAdd?: (sessionId: string, batch: import("../../core/browser-comments/store").BrowserCommentBatch) => import("../../core/browser-comments/store").BrowserComment[] | null
   browserCommentsList?: (sessionId: string) => import("../../core/browser-comments/store").BrowserComment[]
   reviewSubmit?: (id: string) => Promise<{ ok: boolean; delivered: number; reason?: string }>
   sendUserMessage?: (id: string, text: string) => Promise<{ ok: boolean; reason?: string }>
@@ -4106,7 +4106,15 @@ export class WebChannel implements Channel {
       if (comments.some((c) => !c.comment || !c.selector || c.comment.length > 4000 || c.selector.length > 2000)) {
         return this.json({ error: "each comment needs its words and its element's selector" }, 400)
       }
-      return this.json({ comments: this.opts.browserCommentsAdd(id, { url: str(b.url), viewedAs: str(b.viewedAs), comments }) })
+      // A picture is its attachment's file name (the picture itself goes to the chat as an attachment): short, a name.
+      if (comments.some((c) => c.picture !== null && (c.picture.length > 200 || !/^[\w.-]+$/.test(c.picture) || c.picture.startsWith(".")))) {
+        return this.json({ error: "a comment's picture is its file's name, such as comment-1.png" }, 400)
+      }
+      const url = str(b.url), viewedAs = str(b.viewedAs)
+      if ((url?.length ?? 0) > 4000 || (viewedAs?.length ?? 0) > 200) return this.json({ error: "url or viewedAs too long" }, 400)
+      const added = this.opts.browserCommentsAdd(id, { url, viewedAs, comments })
+      if (!added) return this.json({ error: "session not found" }, 404)
+      return this.json({ comments: added })
     }
     if (method === "GET" && path.match(/^\/sessions\/[^/]+\/review\/comments$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)

@@ -3465,6 +3465,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     },
     reviewList: (id) => reviewStore.list(id),
     browserCommentsAdd: (id, batch) => {
+      if (!registry.get(id)) return null
       const added = browserCommentStore.addBatch(id, batch, new Date().toISOString())
       for (const comment of added) webChannel?.broadcastToAll({ type: "browser_comment", sessionId: id, comment })
       return added

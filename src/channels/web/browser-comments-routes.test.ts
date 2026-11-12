@@ -25,6 +25,7 @@ async function boot() {
     getSessionsSnapshot: () => [], getSessionLog: () => [], setMute: () => {}, onSendFromWeb: () => {},
     // As main.ts wires it: store, then tell every client.
     browserCommentsAdd: (sessionId, batch) => {
+      if (sessionId !== "s1") return null // main.ts: no such session in the registry
       const added = store.addBatch(sessionId, batch, new Date().toISOString())
       for (const comment of added) frames.push({ type: "browser_comment", sessionId, comment })
       return added
@@ -64,4 +65,20 @@ test("POST refuses a batch with no comments or a comment without its selector an
   expect((await call("POST", "/sessions/s1/browser/comments", { comments: [] })).status).toBe(400)
   expect((await call("POST", "/sessions/s1/browser/comments", { comments: [{ number: 1, comment: "", selector: "a" }] })).status).toBe(400)
   expect((await call("POST", "/sessions/s1/browser/comments", { comments: [{ number: 1, comment: "x" }] })).status).toBe(400)
+})
+
+test("POST to a session that doesn't exist is a 404, and stores nothing", async () => {
+  const { call, store } = await boot()
+  const res = await call("POST", "/sessions/nope/browser/comments", batch)
+  expect(res.status).toBe(404)
+  expect(store.list("nope")).toEqual([])
+})
+
+test("a comment's picture is its file's name, not the picture: a long one or a path is refused", async () => {
+  const { call } = await boot()
+  const one = (picture: unknown) => ({ comments: [{ number: 1, comment: "x", selector: "a", picture }] })
+  expect((await call("POST", "/sessions/s1/browser/comments", one("comment-1.png"))).status).toBe(200)
+  expect((await call("POST", "/sessions/s1/browser/comments", one("x".repeat(201)))).status).toBe(400)
+  expect((await call("POST", "/sessions/s1/browser/comments", one("data:image/png;base64,iVBORw0KGgo="))).status).toBe(400)
+  expect((await call("POST", "/sessions/s1/browser/comments", one("../../etc/passwd"))).status).toBe(400)
 })
