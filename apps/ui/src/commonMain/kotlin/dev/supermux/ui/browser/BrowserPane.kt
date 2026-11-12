@@ -53,6 +53,7 @@ import dev.supermux.webview.runtime.ProvideWebViewRuntime
 import dev.supermux.webview.WebClient
 import dev.supermux.webview.WebContent
 import dev.supermux.webview.DarkMode
+import dev.supermux.webview.DeviceEmulation
 import dev.supermux.webview.WebCookie
 import dev.supermux.webview.WebSettings
 import dev.supermux.webview.WebView
@@ -196,8 +197,26 @@ fun BrowserPane(
     // A zoom outlives the engine: a new lease gets it again.
     // Device mode's fit (#122 2b) zooms the page by the stage's scale on top of the user's zoom; leaving it zooms back.
     var stageScale by remember(view.id) { mutableFloatStateOf(1f) }
-    val fitting = deviceOn && !phone && platform.caps.pageFit
-    val pageZoom = zoom * (if (fitting) stageScale else 1f)
+    // An engine that emulates devices itself (WebView2's DevTools protocol, #122 2b) gets the device whole: its CSS size,
+    // pixel ratio, mobile viewport and touch, drawn at the stage's scale. Elsewhere the fit is the page's zoom.
+    var emulates by remember(view.id) { mutableStateOf(false) }
+    var emulated by remember(view.id) { mutableStateOf(false) }
+    val emulation = if (deviceOn && !phone) {
+        DeviceEmulation(device.width, device.height, device.deviceScaleFactor(), device.mobile, device.hasTouch(), stageScale)
+    } else null
+    LaunchedEffect(live, emulation) {
+        if (!live) return@LaunchedEffect
+        if (emulation != null) {
+            emulates = state.navigator.emulateDevice(emulation)
+            emulated = emulates
+        } else if (emulated) {
+            state.navigator.emulateDevice(null)
+            emulated = false
+        }
+    }
+    val fitting = deviceOn && !phone && (platform.caps.pageFit || emulates)
+    val zoomFits = fitting && !emulates
+    val pageZoom = zoom * (if (zoomFits) stageScale else 1f)
     var appliedZoom by remember(view.id) { mutableFloatStateOf(1f) }
     LaunchedEffect(live, pageZoom) {
         if (live && (pageZoom != 1f || appliedZoom != 1f)) {
@@ -244,7 +263,7 @@ fun BrowserPane(
     }
     fun zoomBy(direction: Int) {
         val next = if (direction == 0) 1f else nextZoom(zoom, direction)
-        if (state.navigator.setZoom(next * (if (fitting) stageScale else 1f))) zoom = next else notice = "Zoom isn't available here yet"
+        if (state.navigator.setZoom(next * (if (zoomFits) stageScale else 1f))) zoom = next else notice = "Zoom isn't available here yet"
     }
     fun inspect() {
         notice = when (val r = state.navigator.openInspector()) {
@@ -353,7 +372,7 @@ fun BrowserPane(
             onDesktopSite = { desktopSite = !desktopSite },
         )
         if (deviceOn && !phone) DeviceBar(
-            device, emulation = platform.caps.pageEmulation, scale = stageScale.takeIf { fitting },
+            device, emulation = platform.caps.pageEmulation, scale = stageScale.takeIf { fitting }, ratioAndTouch = emulates,
             onChange = { device = it }, onClose = { deviceOn = false },
         )
         notice?.let { text ->

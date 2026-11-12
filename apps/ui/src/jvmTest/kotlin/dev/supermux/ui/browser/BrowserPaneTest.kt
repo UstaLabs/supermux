@@ -65,8 +65,8 @@ class BrowserPaneTest {
     private val preview = ProxyDto(domain = "p-5173", sessionName = "s", port = 5173, url = "https://relay.test/p/p-5173/")
     private val cookie = PreviewCookieDto(name = "cmux_preview", value = "pv", url = "https://relay.test/p/", path = "/p/")
 
-    private class Rig {
-        val engines = FakeWebEngineFactory(behavior = FakeEngineBehavior())
+    private class Rig(behavior: FakeEngineBehavior = FakeEngineBehavior()) {
+        val engines = FakeWebEngineFactory(behavior = behavior)
         val writes = mutableListOf<Pair<JsonObject, String?>>()
         // The engines append from their own threads: a read that meets a write tries again.
         val calls: List<String>
@@ -608,6 +608,42 @@ class BrowserPaneTest {
         onNodeWithTag("browser-device-fit").assertDoesNotExist()
         onNodeWithTag("browser-viewport").assertWidthIsEqualTo(768.dp)
         assertEquals(null, rig.lastZoom())
+    }
+
+    private fun Rig.lastEmulation(): String? = calls.lastOrNull { it.startsWith("emulate:") }?.substringAfter(':')
+
+    /**
+     * #122 2b on Windows: an engine that emulates devices (WebView2's DevTools protocol) gets the device itself: its CSS
+     * size, pixel ratio, mobile viewport and touch, drawn at the stage's scale; DPR and Touch are in the bar; off is off.
+     */
+    @Test fun anEngineThatEmulatesGetsTheDeviceWithItsRatioAndTouch() = runComposeUiTest {
+        val rig = Rig(FakeEngineBehavior(emulatesDevices = true))
+        show(rig, mutableStateOf(view("https://vitejs.dev/")), rig.actions(), FakePlatform())
+        waitUntil(timeoutMillis = 5_000) { "https://vitejs.dev/" in rig.loads() }
+        onNodeWithTag("browser-device-dpr").assertDoesNotExist()
+        onNodeWithTag("browser-device").performClick()
+        waitUntil(timeoutMillis = 5_000) { rig.lastEmulation()?.startsWith("393x852@3.0 mobile=true touch=true") == true }
+        onNodeWithTag("browser-device-fit").assertExists() // the engine scales, so a big device fits here too
+        onNodeWithTag("browser-device-dpr").performClick()
+        onNodeWithTag("browser-device-dpr-2").performClick()
+        waitUntil(timeoutMillis = 5_000) { rig.lastEmulation()?.startsWith("393x852@2.0") == true }
+        onNodeWithTag("browser-device-touch").performClick()
+        waitUntil(timeoutMillis = 5_000) { rig.lastEmulation()?.contains("touch=false") == true }
+        onNodeWithTag("browser-device-close").performClick()
+        waitUntil(timeoutMillis = 5_000) { rig.lastEmulation() == "none" }
+        assertEquals(null, rig.lastZoom(), "the engine scales: the page's zoom is never used for the fit")
+    }
+
+    /** Most engines can't: no DPR or Touch at all (the hide rule). */
+    @Test fun anEngineThatCantEmulateShowsNoRatioOrTouch() = runComposeUiTest {
+        val rig = Rig()
+        show(rig, mutableStateOf(view("https://vitejs.dev/")), rig.actions(), FakePlatform())
+        waitUntil(timeoutMillis = 5_000) { "https://vitejs.dev/" in rig.loads() }
+        onNodeWithTag("browser-device").performClick()
+        onNodeWithTag("browser-device-bar").assertExists()
+        waitForIdle()
+        onNodeWithTag("browser-device-dpr").assertDoesNotExist()
+        onNodeWithTag("browser-device-touch").assertDoesNotExist()
     }
 
     /** On a phone a phone-sized page inside it is pointless: no device button and no menu row (#122 §3.2). */

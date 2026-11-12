@@ -229,6 +229,17 @@ setTimeout(report, 50);
 </script></body></html>""",
     )
 
+    /** A page whose title says its layout width in CSS px (#122 2b: device mode's fit keeps it). */
+    private val WIDTH_PAGE = WebContent.Html(
+        """<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>width-page</title></head>
+<body><script>
+function report() { document.title = 'w=' + window.innerWidth; }
+window.addEventListener('resize', report);
+setInterval(report, 100);
+report();
+</script></body></html>""",
+    )
+
     /** A local page that puts the Cookie header its request carried, and what its script can read, in its title. */
     private fun cookieEcho(): HttpServer = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
         createContext("/") { exchange ->
@@ -263,6 +274,23 @@ setTimeout(report, 50);
                 waitFor("the page at 200 %") { (stage.state.title?.removePrefix("dpr=")?.toDoubleOrNull() ?: 0.0) >= before * 1.9 }
                 stage.state.navigator.setZoom(1f)
                 waitFor("the page back at 100 %") { stage.state.title?.removePrefix("dpr=")?.toDoubleOrNull() == before }
+            }
+        },
+        Check("mac-page-zoom-keeps-the-css-width-device-mode-fits-with") {
+            // #122 2b: device mode fits a big device by drawing the view at size × s and zooming the page by s. Its CSS
+            // width must stay the device's: a 360 dp view at 50 % is a 720 CSS px page, as media queries see it.
+            val stage = Stage()
+            withPage(stage) { _ ->
+                stage.state.load(WIDTH_PAGE)
+                fun width() = stage.state.title?.removePrefix("w=")?.toIntOrNull()
+                waitFor("the width page") { width() != null }
+                val base = width()!!
+                assertTrue(base in 359..361, "at 100 % the page is the view's width (360 dp, ± a pixel's rounding): $base")
+                assertTrue(stage.state.navigator.setZoom(0.5f), "the engine zooms")
+                // The view is 360 dp; WebKit rounds the 100 % width to the slot's pixels (361 on a 2× screen).
+                waitFor("the page laid out at twice the view's width (720 ± 2)") { (width() ?: 0) in 718..722 }
+                stage.state.navigator.setZoom(1f)
+                waitFor("the page back at the view's width") { width() == base }
             }
         },
         Check("mac-a-cookie-set-before-the-page-reaches-its-request-and-an-httponly-one-stays-out-of-its-script") {

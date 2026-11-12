@@ -67,7 +67,15 @@ data class DeviceMode(
     val appearance: PageAppearance = PageAppearance.System,
     /** The picture's scale in percent, or null for Auto: fit the pane, never above 100 %. The page's CSS size stays. */
     val fit: Int? = null,
+    /** The page's devicePixelRatio, or null for the preset's (1 for Responsive). Only where the engine can set it. */
+    val dpr: Double? = null,
+    /** Touch (touch events, a coarse pointer), or null to follow [mobile]. Only where the engine can emulate it. */
+    val touch: Boolean? = null,
 ) {
+    fun deviceScaleFactor(): Double = dpr ?: preset?.dpr ?: 1.0
+
+    fun hasTouch(): Boolean = touch ?: mobile
+
     /** The scale the device is drawn at in a pane of this size (the stage's room, in dp). */
     fun scaleIn(paneWidth: Float, paneHeight: Float): Float =
         fit?.let { it / 100f } ?: minOf(1f, paneWidth / width, paneHeight / height).coerceAtLeast(0.1f)
@@ -104,5 +112,8 @@ data class DeviceMode(
 
         /** The scales one can choose besides Auto, as Chrome's zoom menu. */
         val FITS = listOf(50, 75, 100, 125, 150)
+
+        /** The pixel ratios one can choose besides the preset's, as Chrome's DPR menu. */
+        val DPRS = listOf(1.0, 2.0, 3.0)
     }
 }

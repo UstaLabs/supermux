@@ -402,6 +402,17 @@ public class WebNavigator internal constructor(private val state: WebViewState) 
         return applied
     }
 
+    /**
+     * Shows the page as [emulation]'s device (a browser's device mode), or as itself again (null). False without a live
+     * engine, or on one that can't (today only WebView2 can: its DevTools protocol). A new engine starts as itself:
+     * apply it again when the page is live again.
+     */
+    public fun emulateDevice(emulation: DeviceEmulation?): Boolean {
+        var applied = false
+        state.owner?.onEngine { applied = it.emulateDevice(emulation) }
+        return applied
+    }
+
     /** Puts [cookie] in the view's profile; true once it's there. Set it before loading the page that needs it. */
     public suspend fun setCookie(cookie: WebCookie): Boolean = state.owner?.withEngine { it.setCookie(cookie) } ?: false
 

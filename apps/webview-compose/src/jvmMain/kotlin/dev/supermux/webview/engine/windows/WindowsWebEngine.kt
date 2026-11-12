@@ -16,6 +16,7 @@ import androidx.compose.ui.input.pointer.isPrimaryPressed
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.isShiftPressed
 import androidx.compose.ui.input.pointer.isTertiaryPressed
+import dev.supermux.webview.DeviceEmulation
 import dev.supermux.webview.DialogResult
 import dev.supermux.webview.DownloadRequest
 import dev.supermux.webview.FileChooserRequest
@@ -1007,6 +1008,37 @@ internal class WindowsWebEngine(
         moveFocus = { if (!pageClosed) page.moveFocus(it) },
         returnToAwt = { windows.canvasComponent(surfaceWindow)?.requestFocusInWindow() },
     )
+
+    /**
+     * Device mode (#122) through the DevTools protocol, as Chrome's own: the page's CSS viewport, its pixel ratio and a
+     * mobile viewport (setDeviceMetricsOverride, drawn at [DeviceEmulation.scale]), touch with the mouse sending touches.
+     * The overrides live on the page's target across its documents; null takes them off.
+     */
+    override fun emulateDevice(emulation: DeviceEmulation?): Boolean {
+        if (released || crashed) return false
+        if (emulation == null) {
+            page.devtools(NO_ANSWER, "Emulation.clearDeviceMetricsOverride", "{}")
+            page.devtools(NO_ANSWER, "Emulation.setTouchEmulationEnabled", "{\"enabled\":false}")
+            page.devtools(NO_ANSWER, "Emulation.setEmitTouchEventsForMouse", "{\"enabled\":false}")
+            return true
+        }
+        page.devtools(NO_ANSWER, "Emulation.setDeviceMetricsOverride", buildJsonObject {
+            put("width", JsonPrimitive(emulation.width))
+            put("height", JsonPrimitive(emulation.height))
+            put("deviceScaleFactor", JsonPrimitive(emulation.deviceScaleFactor))
+            put("mobile", JsonPrimitive(emulation.mobile))
+            put("scale", JsonPrimitive(emulation.scale))
+        }.toString())
+        page.devtools(NO_ANSWER, "Emulation.setTouchEmulationEnabled", buildJsonObject {
+            put("enabled", JsonPrimitive(emulation.touch))
+            if (emulation.touch) put("maxTouchPoints", JsonPrimitive(5))
+        }.toString())
+        page.devtools(NO_ANSWER, "Emulation.setEmitTouchEventsForMouse", buildJsonObject {
+            put("enabled", JsonPrimitive(emulation.touch))
+            if (emulation.touch) put("configuration", JsonPrimitive(if (emulation.mobile) "mobile" else "desktop"))
+        }.toString())
+        return true
+    }
 
     /** The app's shortcuts while the page has the keyboard: offered to Compose first (D15). */
     private val keyRouter = KeyRouter(target = { if (surfaceFocused) canvasForKeys else null }, pageFirst = Wv2Keys::pageFirst)
