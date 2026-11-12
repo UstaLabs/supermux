@@ -104,10 +104,10 @@ class HtmlCardRowRecompositionTest {
             up()
         }
         waitForIdle()
-        waitUntil(timeoutMillis = 5_000) { engines.created.any { e -> e.calls.any { it.startsWith("load:") } } }
+        waitUntil(timeoutMillis = 5_000) { runOnUiThread { engines.created.any { e -> e.calls.any { it.startsWith("load:") } } } }
         mainClock.advanceTimeBy(2_000)
         waitForIdle()
-        assertTrue(onNodeWithTag("fake-engine-${engines.created.single().id}", useUnmergedTree = true).fetchSemanticsNode().size.height > 100, "the card's page is live and laid out")
+        assertTrue(onNodeWithTag("fake-engine-${runOnUiThread { engines.created.single { e -> e.calls.any { it.startsWith("load:") } } }.id}", useUnmergedTree = true).fetchSemanticsNode().size.height > 100, "the card's page is live and laid out")
 
         // Every state object a global apply changes, by frame.
         val changed = mutableListOf<String>()
