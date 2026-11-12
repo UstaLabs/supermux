@@ -653,18 +653,32 @@ struct ExtraWindowView: UIViewControllerRepresentable {
     }
 }
 
-/// Adding a file to Photos (#95), main-thread result. Its own type so a test can drive it without the bridge.
+/// Adding a file to Photos (#95), main-thread result. The library is a parameter so a test drives the logic with a
+/// fake one: a simulator's Photos permission is a system prompt nobody answers on CI.
 enum PhotoSaver {
-    static func save(_ url: URL, video: Bool, done: @escaping (Bool) -> Void) {
+    /// What PhotoSaver needs from Photos: add-only access, and adding one file.
+    struct Library {
+        var authorize: (@escaping (PHAuthorizationStatus) -> Void) -> Void
+        var add: (_ url: URL, _ video: Bool, _ done: @escaping (Bool) -> Void) -> Void
+
+        static let system = Library(
+            authorize: { PHPhotoLibrary.requestAuthorization(for: .addOnly, handler: $0) },
+            add: { url, video, done in
+                PHPhotoLibrary.shared().performChanges({
+                    let request = PHAssetCreationRequest.forAsset()
+                    let options = PHAssetResourceCreationOptions()
+                    options.originalFilename = url.lastPathComponent
+                    request.addResource(with: video ? .video : .photo, fileURL: url, options: options)
+                }, completionHandler: { ok, _ in done(ok) })
+            }
+        )
+    }
+
+    static func save(_ url: URL, video: Bool, library: Library = .system, done: @escaping (Bool) -> Void) {
         let finish: (Bool) -> Void = { ok in DispatchQueue.main.async { done(ok) } }
-        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+        library.authorize { status in
             guard status == .authorized || status == .limited else { return finish(false) }
-            PHPhotoLibrary.shared().performChanges({
-                let request = PHAssetCreationRequest.forAsset()
-                let options = PHAssetResourceCreationOptions()
-                options.originalFilename = url.lastPathComponent
-                request.addResource(with: video ? .video : .photo, fileURL: url, options: options)
-            }, completionHandler: { ok, _ in finish(ok) })
+            library.add(url, video, finish)
         }
     }
 }
