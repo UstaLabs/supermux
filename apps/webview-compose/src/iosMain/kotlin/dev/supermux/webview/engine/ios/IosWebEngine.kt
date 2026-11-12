@@ -105,6 +105,7 @@ import platform.WebKit.WKUserScript
 import platform.WebKit.WKUserScriptInjectionTime
 import platform.WebKit.WKWebView
 import platform.WebKit.WKWebViewConfiguration
+import platform.WebKit.WKContentMode
 import platform.WebKit.WKWebpagePreferences
 import platform.WebKit.WKFindConfiguration
 import platform.WebKit.WKWebsiteDataStore
@@ -882,6 +883,8 @@ internal class IosWebEngine private constructor(
         val cancel = WKNavigationActionPolicy.WKNavigationActionPolicyCancel
         if (released) return decisionHandler(cancel, preferences)
         preferences.allowsContentJavaScript = setup?.javaScriptEnabled ?: true
+        // "Desktop site" (#122): WebKit's own desktop content mode, as Safari's "Request Desktop Website".
+        preferences.preferredContentMode = if (setup?.desktopSite == true) WKContentMode.WKContentModeDesktop else WKContentMode.WKContentModeRecommended
         val url = action.request.URL?.absoluteString
         val target = action.targetFrame
         val isMainFrame = target?.isMainFrame ?: true

@@ -87,4 +87,19 @@ class WebSettingsTest {
         assertEquals(WebSettings(userAgent = "a"), WebSettings.Default.copy(userAgent = "a"))
         assertTrue(WebSettings(userAgent = "a") != WebSettings(userAgent = "b"))
     }
+
+    /** #122 2c: a phone's "Desktop site" is a per-lease setting the engines read. */
+    @Test fun aDesktopSiteIsPartOfThePageSetup() {
+        assertEquals(false, WebSettings.Default.pageSetup(false, emptySet()).desktopSite)
+        assertEquals(true, WebSettings(desktopSite = true).pageSetup(false, emptySet()).desktopSite)
+        assertTrue(WebSettings(desktopSite = true) != WebSettings.Default)
+        assertEquals(WebSettings(desktopSite = true), WebSettings.Default.copy(desktopSite = true))
+    }
+
+    /** What Android does for it, as Chrome Android's Desktop site: a desktop Chrome's agent and a 1280 px layout. */
+    @Test fun theDesktopSiteIsADesktopAgentAndAWideLayout() {
+        assertTrue("Mobile" !in dev.supermux.webview.engine.DesktopSite.AGENT && "Android" !in dev.supermux.webview.engine.DesktopSite.AGENT)
+        assertTrue("X11; Linux x86_64" in dev.supermux.webview.engine.DesktopSite.AGENT)
+        assertTrue("width=1280" in dev.supermux.webview.engine.DesktopSite.VIEWPORT_SCRIPT)
+    }
 }

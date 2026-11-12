@@ -805,12 +805,14 @@ final class dev.supermux.webview.engine/EngineEventQueue { // dev.supermux.webvi
 }
 
 final class dev.supermux.webview.engine/PageSetup { // dev.supermux.webview.engine/PageSetup|null[0]
-    constructor <init>(kotlin/Boolean, kotlin/Boolean, kotlin/Boolean, kotlin/Boolean, kotlin/String?, kotlin.collections/Set<kotlin/String>, kotlin/String? = ...) // dev.supermux.webview.engine/PageSetup.<init>|<init>(kotlin.Boolean;kotlin.Boolean;kotlin.Boolean;kotlin.Boolean;kotlin.String?;kotlin.collections.Set<kotlin.String>;kotlin.String?){}[0]
+    constructor <init>(kotlin/Boolean, kotlin/Boolean, kotlin/Boolean, kotlin/Boolean, kotlin/String?, kotlin.collections/Set<kotlin/String>, kotlin/String? = ..., kotlin/Boolean = ...) // dev.supermux.webview.engine/PageSetup.<init>|<init>(kotlin.Boolean;kotlin.Boolean;kotlin.Boolean;kotlin.Boolean;kotlin.String?;kotlin.collections.Set<kotlin.String>;kotlin.String?;kotlin.Boolean){}[0]
 
     final val bridgeOrigins // dev.supermux.webview.engine/PageSetup.bridgeOrigins|{}bridgeOrigins[0]
         final fun <get-bridgeOrigins>(): kotlin.collections/Set<kotlin/String> // dev.supermux.webview.engine/PageSetup.bridgeOrigins.<get-bridgeOrigins>|<get-bridgeOrigins>(){}[0]
     final val dark // dev.supermux.webview.engine/PageSetup.dark|{}dark[0]
         final fun <get-dark>(): kotlin/Boolean // dev.supermux.webview.engine/PageSetup.dark.<get-dark>|<get-dark>(){}[0]
+    final val desktopSite // dev.supermux.webview.engine/PageSetup.desktopSite|{}desktopSite[0]
+        final fun <get-desktopSite>(): kotlin/Boolean // dev.supermux.webview.engine/PageSetup.desktopSite.<get-desktopSite>|<get-desktopSite>(){}[0]
     final val inspectable // dev.supermux.webview.engine/PageSetup.inspectable|{}inspectable[0]
         final fun <get-inspectable>(): kotlin/Boolean // dev.supermux.webview.engine/PageSetup.inspectable.<get-inspectable>|<get-inspectable>(){}[0]
     final val javaScriptEnabled // dev.supermux.webview.engine/PageSetup.javaScriptEnabled|{}javaScriptEnabled[0]
@@ -830,7 +832,8 @@ final class dev.supermux.webview.engine/PageSetup { // dev.supermux.webview.engi
     final fun component5(): kotlin/String? // dev.supermux.webview.engine/PageSetup.component5|component5(){}[0]
     final fun component6(): kotlin.collections/Set<kotlin/String> // dev.supermux.webview.engine/PageSetup.component6|component6(){}[0]
     final fun component7(): kotlin/String? // dev.supermux.webview.engine/PageSetup.component7|component7(){}[0]
-    final fun copy(kotlin/Boolean = ..., kotlin/Boolean = ..., kotlin/Boolean = ..., kotlin/Boolean = ..., kotlin/String? = ..., kotlin.collections/Set<kotlin/String> = ..., kotlin/String? = ...): dev.supermux.webview.engine/PageSetup // dev.supermux.webview.engine/PageSetup.copy|copy(kotlin.Boolean;kotlin.Boolean;kotlin.Boolean;kotlin.Boolean;kotlin.String?;kotlin.collections.Set<kotlin.String>;kotlin.String?){}[0]
+    final fun component8(): kotlin/Boolean // dev.supermux.webview.engine/PageSetup.component8|component8(){}[0]
+    final fun copy(kotlin/Boolean = ..., kotlin/Boolean = ..., kotlin/Boolean = ..., kotlin/Boolean = ..., kotlin/String? = ..., kotlin.collections/Set<kotlin/String> = ..., kotlin/String? = ..., kotlin/Boolean = ...): dev.supermux.webview.engine/PageSetup // dev.supermux.webview.engine/PageSetup.copy|copy(kotlin.Boolean;kotlin.Boolean;kotlin.Boolean;kotlin.Boolean;kotlin.String?;kotlin.collections.Set<kotlin.String>;kotlin.String?;kotlin.Boolean){}[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview.engine/PageSetup.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // dev.supermux.webview.engine/PageSetup.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // dev.supermux.webview.engine/PageSetup.toString|toString(){}[0]
@@ -1216,11 +1219,14 @@ final class dev.supermux.webview/WebResource { // dev.supermux.webview/WebResour
 final class dev.supermux.webview/WebSettings { // dev.supermux.webview/WebSettings|null[0]
     constructor <init>(kotlin/Boolean = ..., kotlin/Boolean = ..., dev.supermux.webview/DarkMode = ..., kotlin/Boolean = ..., kotlin/String? = ..., dev.supermux.webview/WebProfile? = ..., kotlin/Boolean = ..., kotlin.collections/Set<kotlin/String> = ...) // dev.supermux.webview/WebSettings.<init>|<init>(kotlin.Boolean;kotlin.Boolean;dev.supermux.webview.DarkMode;kotlin.Boolean;kotlin.String?;dev.supermux.webview.WebProfile?;kotlin.Boolean;kotlin.collections.Set<kotlin.String>){}[0]
     constructor <init>(kotlin/Boolean = ..., kotlin/Boolean = ..., dev.supermux.webview/DarkMode = ..., kotlin/Boolean = ..., kotlin/String? = ..., dev.supermux.webview/WebProfile? = ..., kotlin/Boolean = ..., kotlin.collections/Set<kotlin/String> = ..., kotlin/String? = ...) // dev.supermux.webview/WebSettings.<init>|<init>(kotlin.Boolean;kotlin.Boolean;dev.supermux.webview.DarkMode;kotlin.Boolean;kotlin.String?;dev.supermux.webview.WebProfile?;kotlin.Boolean;kotlin.collections.Set<kotlin.String>;kotlin.String?){}[0]
+    constructor <init>(kotlin/Boolean = ..., kotlin/Boolean = ..., dev.supermux.webview/DarkMode = ..., kotlin/Boolean = ..., kotlin/String? = ..., dev.supermux.webview/WebProfile? = ..., kotlin/Boolean = ..., kotlin.collections/Set<kotlin/String> = ..., kotlin/String? = ..., kotlin/Boolean = ...) // dev.supermux.webview/WebSettings.<init>|<init>(kotlin.Boolean;kotlin.Boolean;dev.supermux.webview.DarkMode;kotlin.Boolean;kotlin.String?;dev.supermux.webview.WebProfile?;kotlin.Boolean;kotlin.collections.Set<kotlin.String>;kotlin.String?;kotlin.Boolean){}[0]
 
     final val bridgeOrigins // dev.supermux.webview/WebSettings.bridgeOrigins|{}bridgeOrigins[0]
         final fun <get-bridgeOrigins>(): kotlin.collections/Set<kotlin/String> // dev.supermux.webview/WebSettings.bridgeOrigins.<get-bridgeOrigins>|<get-bridgeOrigins>(){}[0]
     final val darkMode // dev.supermux.webview/WebSettings.darkMode|{}darkMode[0]
         final fun <get-darkMode>(): dev.supermux.webview/DarkMode // dev.supermux.webview/WebSettings.darkMode.<get-darkMode>|<get-darkMode>(){}[0]
+    final val desktopSite // dev.supermux.webview/WebSettings.desktopSite|{}desktopSite[0]
+        final fun <get-desktopSite>(): kotlin/Boolean // dev.supermux.webview/WebSettings.desktopSite.<get-desktopSite>|<get-desktopSite>(){}[0]
     final val inspectable // dev.supermux.webview/WebSettings.inspectable|{}inspectable[0]
         final fun <get-inspectable>(): kotlin/Boolean // dev.supermux.webview/WebSettings.inspectable.<get-inspectable>|<get-inspectable>(){}[0]
     final val javaScriptEnabled // dev.supermux.webview/WebSettings.javaScriptEnabled|{}javaScriptEnabled[0]
@@ -1238,6 +1244,7 @@ final class dev.supermux.webview/WebSettings { // dev.supermux.webview/WebSettin
 
     final fun copy(kotlin/Boolean = ..., kotlin/Boolean = ..., dev.supermux.webview/DarkMode = ..., kotlin/Boolean = ..., kotlin/String? = ..., dev.supermux.webview/WebProfile? = ..., kotlin/Boolean = ..., kotlin.collections/Set<kotlin/String> = ...): dev.supermux.webview/WebSettings // dev.supermux.webview/WebSettings.copy|copy(kotlin.Boolean;kotlin.Boolean;dev.supermux.webview.DarkMode;kotlin.Boolean;kotlin.String?;dev.supermux.webview.WebProfile?;kotlin.Boolean;kotlin.collections.Set<kotlin.String>){}[0]
     final fun copy(kotlin/Boolean = ..., kotlin/Boolean = ..., dev.supermux.webview/DarkMode = ..., kotlin/Boolean = ..., kotlin/String? = ..., dev.supermux.webview/WebProfile? = ..., kotlin/Boolean = ..., kotlin.collections/Set<kotlin/String> = ..., kotlin/String? = ...): dev.supermux.webview/WebSettings // dev.supermux.webview/WebSettings.copy|copy(kotlin.Boolean;kotlin.Boolean;dev.supermux.webview.DarkMode;kotlin.Boolean;kotlin.String?;dev.supermux.webview.WebProfile?;kotlin.Boolean;kotlin.collections.Set<kotlin.String>;kotlin.String?){}[0]
+    final fun copy(kotlin/Boolean = ..., kotlin/Boolean = ..., dev.supermux.webview/DarkMode = ..., kotlin/Boolean = ..., kotlin/String? = ..., dev.supermux.webview/WebProfile? = ..., kotlin/Boolean = ..., kotlin.collections/Set<kotlin/String> = ..., kotlin/String? = ..., kotlin/Boolean = ...): dev.supermux.webview/WebSettings // dev.supermux.webview/WebSettings.copy|copy(kotlin.Boolean;kotlin.Boolean;dev.supermux.webview.DarkMode;kotlin.Boolean;kotlin.String?;dev.supermux.webview.WebProfile?;kotlin.Boolean;kotlin.collections.Set<kotlin.String>;kotlin.String?;kotlin.Boolean){}[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview/WebSettings.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // dev.supermux.webview/WebSettings.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // dev.supermux.webview/WebSettings.toString|toString(){}[0]
@@ -1302,6 +1309,13 @@ final object dev.supermux.webview.bridge/BridgeShim { // dev.supermux.webview.br
     final fun source(kotlin/String, kotlin/String = ..., kotlin/Long = ...): kotlin/String // dev.supermux.webview.bridge/BridgeShim.source|source(kotlin.String;kotlin.String;kotlin.Long){}[0]
 }
 
+final object dev.supermux.webview.engine/DesktopSite { // dev.supermux.webview.engine/DesktopSite|null[0]
+    final const val AGENT // dev.supermux.webview.engine/DesktopSite.AGENT|{}AGENT[0]
+        final fun <get-AGENT>(): kotlin/String // dev.supermux.webview.engine/DesktopSite.AGENT.<get-AGENT>|<get-AGENT>(){}[0]
+    final const val VIEWPORT_SCRIPT // dev.supermux.webview.engine/DesktopSite.VIEWPORT_SCRIPT|{}VIEWPORT_SCRIPT[0]
+        final fun <get-VIEWPORT_SCRIPT>(): kotlin/String // dev.supermux.webview.engine/DesktopSite.VIEWPORT_SCRIPT.<get-VIEWPORT_SCRIPT>|<get-VIEWPORT_SCRIPT>(){}[0]
+}
+
 final val dev.supermux.webview.bridge/dev_supermux_webview_bridge_BridgeException$stableprop // dev.supermux.webview.bridge/dev_supermux_webview_bridge_BridgeException$stableprop|#static{}dev_supermux_webview_bridge_BridgeException$stableprop[0]
 final val dev.supermux.webview.bridge/dev_supermux_webview_bridge_BridgeMessage_Call$stableprop // dev.supermux.webview.bridge/dev_supermux_webview_bridge_BridgeMessage_Call$stableprop|#static{}dev_supermux_webview_bridge_BridgeMessage_Call$stableprop[0]
 final val dev.supermux.webview.bridge/dev_supermux_webview_bridge_BridgeMessage_Event$stableprop // dev.supermux.webview.bridge/dev_supermux_webview_bridge_BridgeMessage_Event$stableprop|#static{}dev_supermux_webview_bridge_BridgeMessage_Event$stableprop[0]
@@ -1336,6 +1350,7 @@ final val dev.supermux.webview.engine.webkit/dev_supermux_webview_engine_webkit_
 final val dev.supermux.webview.engine.webkit/dev_supermux_webview_engine_webkit_RelayMessage_Start$stableprop // dev.supermux.webview.engine.webkit/dev_supermux_webview_engine_webkit_RelayMessage_Start$stableprop|#static{}dev_supermux_webview_engine_webkit_RelayMessage_Start$stableprop[0]
 final val dev.supermux.webview.engine.webkit/dev_supermux_webview_engine_webkit_RelayMessage_Title$stableprop // dev.supermux.webview.engine.webkit/dev_supermux_webview_engine_webkit_RelayMessage_Title$stableprop|#static{}dev_supermux_webview_engine_webkit_RelayMessage_Title$stableprop[0]
 final val dev.supermux.webview.engine.webkit/dev_supermux_webview_engine_webkit_RelayMessage_Url$stableprop // dev.supermux.webview.engine.webkit/dev_supermux_webview_engine_webkit_RelayMessage_Url$stableprop|#static{}dev_supermux_webview_engine_webkit_RelayMessage_Url$stableprop[0]
+final val dev.supermux.webview.engine/dev_supermux_webview_engine_DesktopSite$stableprop // dev.supermux.webview.engine/dev_supermux_webview_engine_DesktopSite$stableprop|#static{}dev_supermux_webview_engine_DesktopSite$stableprop[0]
 final val dev.supermux.webview.engine/dev_supermux_webview_engine_EngineConfig$stableprop // dev.supermux.webview.engine/dev_supermux_webview_engine_EngineConfig$stableprop|#static{}dev_supermux_webview_engine_EngineConfig$stableprop[0]
 final val dev.supermux.webview.engine/dev_supermux_webview_engine_EngineEventQueue$stableprop // dev.supermux.webview.engine/dev_supermux_webview_engine_EngineEventQueue$stableprop|#static{}dev_supermux_webview_engine_EngineEventQueue$stableprop[0]
 final val dev.supermux.webview.engine/dev_supermux_webview_engine_EngineEvent_Console$stableprop // dev.supermux.webview.engine/dev_supermux_webview_engine_EngineEvent_Console$stableprop|#static{}dev_supermux_webview_engine_EngineEvent_Console$stableprop[0]
@@ -1463,6 +1478,7 @@ final fun dev.supermux.webview.engine.webkit/dev_supermux_webview_engine_webkit_
 final fun dev.supermux.webview.engine.webkit/dev_supermux_webview_engine_webkit_RelayMessage_Title$stableprop_getter(): kotlin/Int // dev.supermux.webview.engine.webkit/dev_supermux_webview_engine_webkit_RelayMessage_Title$stableprop_getter|dev_supermux_webview_engine_webkit_RelayMessage_Title$stableprop_getter(){}[0]
 final fun dev.supermux.webview.engine.webkit/dev_supermux_webview_engine_webkit_RelayMessage_Url$stableprop_getter(): kotlin/Int // dev.supermux.webview.engine.webkit/dev_supermux_webview_engine_webkit_RelayMessage_Url$stableprop_getter|dev_supermux_webview_engine_webkit_RelayMessage_Url$stableprop_getter(){}[0]
 final fun dev.supermux.webview.engine/WebEngineFactory(kotlin.coroutines/SuspendFunction1<dev.supermux.webview.engine/EngineConfig, dev.supermux.webview.engine/WebEngineResult>): dev.supermux.webview.engine/WebEngineFactory // dev.supermux.webview.engine/WebEngineFactory|WebEngineFactory(kotlin.coroutines.SuspendFunction1<dev.supermux.webview.engine.EngineConfig,dev.supermux.webview.engine.WebEngineResult>){}[0]
+final fun dev.supermux.webview.engine/dev_supermux_webview_engine_DesktopSite$stableprop_getter(): kotlin/Int // dev.supermux.webview.engine/dev_supermux_webview_engine_DesktopSite$stableprop_getter|dev_supermux_webview_engine_DesktopSite$stableprop_getter(){}[0]
 final fun dev.supermux.webview.engine/dev_supermux_webview_engine_EngineConfig$stableprop_getter(): kotlin/Int // dev.supermux.webview.engine/dev_supermux_webview_engine_EngineConfig$stableprop_getter|dev_supermux_webview_engine_EngineConfig$stableprop_getter(){}[0]
 final fun dev.supermux.webview.engine/dev_supermux_webview_engine_EngineEventQueue$stableprop_getter(): kotlin/Int // dev.supermux.webview.engine/dev_supermux_webview_engine_EngineEventQueue$stableprop_getter|dev_supermux_webview_engine_EngineEventQueue$stableprop_getter(){}[0]
 final fun dev.supermux.webview.engine/dev_supermux_webview_engine_EngineEvent_Console$stableprop_getter(): kotlin/Int // dev.supermux.webview.engine/dev_supermux_webview_engine_EngineEvent_Console$stableprop_getter|dev_supermux_webview_engine_EngineEvent_Console$stableprop_getter(){}[0]

@@ -632,6 +632,41 @@ class BrowserPaneTest {
         onNodeWithTag("browser-menu-device").assertDoesNotExist()
     }
 
+    /** #122 2c: on a phone the sheet's "Desktop site" asks the page for its desktop site, and again for the phone's. */
+    @Test fun aPhoneAsksForTheDesktopSite() = runComposeUiTest {
+        val rig = Rig()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        val runtime = WebViewRuntime(
+            RuntimeConfig(maxLive = 2, snapshotCacheBytes = 8L shl 20, factory = rig.engines, scope = scope, clock = { mainClock.currentTime }),
+        )
+        setPlatformContent {
+            CompositionLocalProvider(
+                LocalAppWebViews provides AppWebViews(runtime),
+                dev.supermux.ui.adaptive.LocalWindowWidthClass provides dev.supermux.ui.adaptive.WindowWidthClass.Compact,
+                dev.supermux.ui.adaptive.LocalPointerAvailable provides false,
+            ) {
+                BrowserPane(view("https://vitejs.dev/"), "w1", rig.actions(), Modifier.size(390.dp, 700.dp))
+            }
+        }
+        waitUntil(timeoutMillis = 5_000) { "https://vitejs.dev/" in rig.loads() }
+        assertEquals(false, rig.live()?.lastSetup?.desktopSite)
+        onNodeWithTag("browser-menu").performClick()
+        onNodeWithTag("browser-menu-desktop-site").performClick()
+        waitUntil(timeoutMillis = 5_000) { rig.live()?.lastSetup?.desktopSite == true }
+        onNodeWithTag("browser-menu").performClick()
+        onNodeWithTag("browser-menu-desktop-site").performClick()
+        waitUntil(timeoutMillis = 5_000) { rig.live()?.lastSetup?.desktopSite == false }
+    }
+
+    /** A desktop is a desktop already: no "Desktop site" in its menu. */
+    @Test fun aDesktopHasNoDesktopSiteRow() = runComposeUiTest {
+        val rig = Rig()
+        showWithKeys(rig, mutableStateOf(view("https://vitejs.dev/")))
+        onNodeWithTag("browser-menu").performClick()
+        onNodeWithTag("browser-menu-find").assertExists()
+        onNodeWithTag("browser-menu-desktop-site").assertDoesNotExist()
+    }
+
     @Test fun noEngineHereSaysSoAndOffersTheSystemBrowser() = runComposeUiTest {
         val rig = Rig().apply { engines.unavailable = UnavailableReason.NotImplemented }
         val platform = FakePlatform()

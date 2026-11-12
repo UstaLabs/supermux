@@ -141,6 +141,8 @@ fun BrowserPane(
     val phone = phoneChrome()
     var deviceOn by remember(view.id) { mutableStateOf(false) }
     var device by remember(view.id) { mutableStateOf(DeviceMode.Default) }
+    // A phone's "Desktop site" (#122 2c), per tab and per client, where the engine can do it.
+    var desktopSite by remember(view.id) { mutableStateOf(false) }
 
     // A port resolves through the by-port route or the previews, so the first page waits for them: three seconds at
     // most, then none.
@@ -309,7 +311,8 @@ fun BrowserPane(
     }
     // Device mode's agent and appearance (#122 2a2), where the engine can change them.
     val emulating = deviceOn && !phone && platform.caps.pageEmulation
-    val pageSettings = if (!emulating) BROWSER_SETTINGS else BROWSER_SETTINGS.copy(
+    val desktopSiteOffered = phone && platform.caps.pageEmulation
+    val pageSettings = if (desktopSiteOffered && desktopSite) BROWSER_SETTINGS.copy(desktopSite = true) else if (!emulating) BROWSER_SETTINGS else BROWSER_SETTINGS.copy(
         userAgent = device.userAgent(),
         darkMode = when (device.appearance) {
             PageAppearance.System -> BROWSER_SETTINGS.darkMode
@@ -346,6 +349,8 @@ fun BrowserPane(
             onScreenshot = screenshotAction,
             device = deviceOn.takeUnless { phone },
             onDevice = { deviceOn = !deviceOn },
+            desktopSite = desktopSite.takeIf { desktopSiteOffered },
+            onDesktopSite = { desktopSite = !desktopSite },
         )
         if (deviceOn && !phone) DeviceBar(
             device, emulation = platform.caps.pageEmulation, scale = stageScale.takeIf { fitting },
