@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Git (#72): the composer footer's sign, the Changes pane and its menus. -->
+<resources>
+    <plurals name="git_sign_changed">
+        <item quantity="one">%1$d değişiklik</item>
+        <item quantity="other">%1$d değişiklik</item>
+    </plurals>
+    <plurals name="git_sign_not_in_base">
+        <item quantity="one">%1$d commit %2$s dalında yok</item>
+        <item quantity="other">%1$d commit %2$s dalında yok</item>
+    </plurals>
+    <plurals name="git_sign_base_moved">
+        <item quantity="one">%2$s dalında %1$d yeni</item>
+        <item quantity="other">%2$s dalında %1$d yeni</item>
+    </plurals>
+    <plurals name="git_sign_to_push">
+        <item quantity="one">%1$d gönderilecek</item>
+        <item quantity="other">%1$d gönderilecek</item>
+    </plurals>
+    <plurals name="git_sign_to_pull">
+        <item quantity="one">%1$d çekilecek</item>
+        <item quantity="other">%1$d çekilecek</item>
+    </plurals>
+</resources>

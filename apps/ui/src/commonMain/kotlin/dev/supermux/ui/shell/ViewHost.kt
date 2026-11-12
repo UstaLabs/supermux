@@ -172,6 +172,8 @@ fun ViewHost(
     onEntryMoved: (oldAbsolutePath: String, newAbsolutePath: String?) -> Unit = { _, _ -> },
     /** Reveal/create the singleton Changes pane and switch it into walkthrough mode. */
     onOpenWalkthrough: (sessionId: String, stepId: String?) -> Unit = { _, _ -> },
+    /** Reveal/create the singleton Changes pane (#72: the composer footer's git sign). */
+    onOpenChanges: (() -> Unit)? = null,
     /** Session whose walkthrough the singleton Changes pane currently presents. */
     walkthroughSessionId: String? = null,
     onWalkthroughClosed: () -> Unit = {},
@@ -235,6 +237,7 @@ fun ViewHost(
                         onSelectSession = onSelectSession,
                         onOpenFile = onOpenFile,
                         onOpenWalkthrough = { stepId -> onOpenWalkthrough(sessionId, stepId) },
+                        onOpenChanges = onOpenChanges,
                         forceLinksMenu = forceLinksMenuFor == sessionId,
                         onForceLinksMenuConsumed = onForceLinksMenuConsumed,
                         externalAttach = externalAttach?.takeIf { it.first == sessionId }?.second,
@@ -356,6 +359,7 @@ private fun ChatViewPane(
     onSelectSession: (String) -> Unit,
     onOpenFile: (path: String, line: Int?, endLine: Int?) -> Unit,
     onOpenWalkthrough: (stepId: String?) -> Unit,
+    onOpenChanges: (() -> Unit)?,
     forceLinksMenu: Boolean,
     onForceLinksMenuConsumed: () -> Unit,
     externalAttach: ComposerExternalAttach?,
@@ -408,6 +412,7 @@ private fun ChatViewPane(
                 modifier = modifier.fillMaxSize().testTag(WorkspaceChatPaneTestIds.VIEW_CHAT),
                 showHeader = true,
                 onOpenWalkthrough = onOpenWalkthrough,
+                onOpenChanges = onOpenChanges,
                 // Mute is the one session control this panel can perform without a dialog; rename/kill
                 // live in OverflowMenu (the header slot below), so they stay out of the slash menu here.
                 onRequestMute = { actions.setMute(sessionId, !(session.mute ?: false)) },
@@ -471,6 +476,7 @@ private fun ChatViewPane(
                 onDraftChange = { drafts[sessionId] = it },
                 showHeader = false,
                 onOpenWalkthrough = onOpenWalkthrough,
+                onOpenChanges = onOpenChanges,
                 onRequestMute = { actions.setMute(sessionId, !(session.mute ?: false)) },
                 externalAttach = externalAttach,
                 onExternalAttachConsumed = onExternalAttachConsumed,
