@@ -20,9 +20,12 @@ const FONTS: Array<[string, string, number]> = [
   ["assets/fonts/geist-600.woff2", "Geist", 600],
   ["assets/fonts/geist-mono-400.woff2", "Geist Mono", 400],
 ]
-const STYLES = ["app/app.css", "app/scene-kit.css", "app/browser-scene.css", "app/cards-scene.css"]
+// one scene per What's new chapter
+const SCENES = ["browser", "device", "cards", "offline", "resume", "restart", "settings"]
+const STYLES = ["app/app.css", "app/scene-kit.css", ...SCENES.map(n => `app/${n}-scene.css`)]
 // load order: the recording before app.js (it reads it as it loads), the runner before its scenes
-const SCRIPTS = ["app/replay-data.js", "app/app.js", "app/scene-kit.js", "app/browser-scene.js", "app/cards-scene.js"]
+// the Agents block (auto-resume's waiting Agent row) needs the site's agents and their avatars before app.js
+const SCRIPTS = ["app/replay-data.js", "app/agents-data.js", "app/avatar.js", "app/app.js", "app/scene-kit.js", ...SCENES.map(n => `app/${n}-scene.js`)]
 export const KIT_FILES = [...FONTS.map(f => f[0]), ...STYLES, ...SCRIPTS]
 
 type Read = (path: string) => Uint8Array

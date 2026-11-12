@@ -578,7 +578,7 @@ root.dataset.family = FAMILY;
 // Chapters the website's real-app kit plays (the real UI, a recorded session, a pointer and a camera), on desktop and
 // the web; the phones keep their drawings until the kit has their layout.
 const KIT = window.SupermuxSceneKit;
-const KIT_SCENES = { browser: 'browser', cards: 'cards' };
+const KIT_SCENES = { browser: 'browser', device: 'device', cards: 'cards', instant: 'offline', resume: 'resume', restart: 'restart', settings: 'settings' };
 const kitScene = c => FAMILY !== 'phone' && KIT && KIT.scenes[KIT_SCENES[c.id]] ? KIT_SCENES[c.id] : null;
 const ACTIONS = new Set((root.dataset.actions || params.get('actions') || '').split(/\s+/).filter(Boolean));
 const RM = matchMedia('(prefers-reduced-motion: reduce)');
@@ -668,7 +668,7 @@ function render() {
     <main class="wn-main"><div class="wn-col">
       <div class="wn-head"><small>v${EDITION.version} · November 2026</small><h1>What's new</h1><p>${WORDS[chs.length] || chs.length} things you can do now.</p></div>
       ${chs.map(c => `<section class="ch" id="ch-${c.id}" data-id="${c.id}">
-        ${kitScene(c) ? `<div class="stagebox kit"><div class="kithost" data-kit="${kitScene(c)}" data-keys="${PLATFORM === 'mac' ? 'mac' : 'other'}"></div></div>`
+        ${kitScene(c) ? `<div class="stagebox kit"><div class="kithost" data-kit="${kitScene(c)}" data-keys="${PLATFORM === 'mac' ? 'mac' : 'other'}" data-version="${EDITION.version}" data-chapters="${chs.length}"></div></div>`
           : `<div class="stagebox" data-scene="${c.scene}" style="aspect-ratio:${(SCENES[c.scene].w || 420)} / ${(SCENES[c.scene].h || 300)}"><div class="scene"></div><button class="play">▶ Play</button></div>`}
         <h2>${g(c.g)}${c.title}</h2><p>${c.text}</p>
         ${c.tryIt && ACTIONS.has(c.tryIt[0]) ? `<button class="try" data-act="${c.tryIt[0]}">${c.tryIt[1]} ${g('arrow')}</button>` : ''}</section>`).join('')}
