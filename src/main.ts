@@ -4602,6 +4602,14 @@ agentStateStore.on("change", (sessionId: string, state) => {
   const workdir = registry.get(sessionId)?.workdir
   if (workdir) worktreeService.touchWorkdir(workdir)
 })
+// #122 phase 4: a turn the agent starts after a Browser tab's comments were sent is it having seen them: their pins say so.
+agentStateStore.on("change", (sessionId: string, state: { phase: string; workingSince?: number }) => {
+  if (state.phase !== "thinking" && state.phase !== "running") return
+  if (state.workingSince === undefined) return
+  for (const comment of browserCommentStore.markSeen(sessionId, state.workingSince, new Date().toISOString())) {
+    webChannel?.broadcastToAll({ type: "browser_comment", sessionId, comment })
+  }
+})
 agentStateStore.on("thoughtComplete", (sessionId: string, durationMs: number, now: number) => {
   const sec = Math.max(1, Math.round(durationMs / 1000))
   activityStore.append(sessionId, { ts: new Date(now).toISOString(), kind: "thinking", title: `Thought for ${sec}s` })
