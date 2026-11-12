@@ -19,6 +19,11 @@
 // open-comment count — is the shared behaviour both apps already had.
 package dev.supermux.ui.editor
 
+import dev.supermux.net.GitWriteResult
+import dev.supermux.net.CommitRequest
+import dev.supermux.ui.resources.git_in_next_commit
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.i18n.localizedPlural
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -170,9 +175,56 @@ fun DiffView(
      * comments being written and a post in flight. Null keeps them in this composition.
      */
     retainKey: String? = null,
+    /** #72: puts whole files into the next commit or takes them out (repo, paths, in); null: no boxes. */
+    stage: (suspend (repo: String, paths: List<String>, staged: Boolean) -> Boolean)? = null,
+    /** #72: commit / uncommit (op, body); null: no commit bar. */
+    gitWrite: (suspend (op: String, body: CommitRequest) -> GitWriteResult?)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
+    // #72: the files with something uncommitted, and the one stage call in flight at a time.
+    var staging by remember { mutableStateOf(false) }
+    val uncommitted = repos.flatMap { r -> r.files.filter { it.staged != null }.map { r.repo to it } }
+    fun include(targets: List<Pair<String, DiffFile>>, on: Boolean) {
+        val call = stage ?: return
+        if (staging || targets.isEmpty()) return
+        staging = true
+        scope.launch {
+            try { targets.groupBy({ it.first }, { it.second.path }).forEach { (repo, paths) -> call(repo, paths, on) } }
+            finally { staging = false; onReload() }
+        }
+    }
+    // #72: the commit bar's message, the action in flight, and what the last one did.
+    var commitMessage by remember { mutableStateOf("") }
+    var lastGitWrite by remember { mutableStateOf<Pair<String, GitWriteResult?>?>(null) }
+    fun runGit(op: String, amend: Boolean = false) {
+        val call = gitWrite ?: return
+        if (staging) return
+        val includedRepos = uncommitted.filter { it.second.staged != "none" }.map { it.first }.distinct()
+        val all = includedRepos.isEmpty()
+        val targets = when {
+            op == "uncommit" || amend -> listOf(includedRepos.firstOrNull() ?: repos.firstOrNull()?.repo ?: "")
+            all -> uncommitted.map { it.first }.distinct()
+            else -> includedRepos
+        }
+        staging = true
+        scope.launch {
+            var shown: GitWriteResult? = null
+            try {
+                for (repo in targets) {
+                    val r = call(op, CommitRequest(repo, commitMessage.trim().ifEmpty { null }, all = op == "commit" && all && !amend, amend = amend))
+                    if (shown == null || shown.ok) shown = r
+                }
+                if (shown?.ok == true && op == "commit") commitMessage = ""
+                lastGitWrite = op to shown
+            } finally { staging = false; onReload() }
+        }
+    }
+    val includeBox: (String, DiffFile) -> (@Composable () -> Unit)? = { repoId, f ->
+        val st = f.staged
+        if (stage == null || st == null) null
+        else { { IncludeBox(st, !staging, "diff_include_${f.path}") { include(listOf(repoId to f), st != "all") } } }
+    }
     // The drafts, and the posts that would clear them, outlive this composition when [retainKey]
     // names the pane: a rotation used to drop a half-written comment, or cancel its post halfway
     // and leave it to be sent twice (#89).
@@ -277,6 +329,21 @@ fun DiffView(
                 // chip/toggles keep their intrinsic width on a 360dp phone instead of overflowing.
                 modifier = Modifier.weight(1f, fill = false),
             )
+            if (stage != null && uncommitted.isNotEmpty()) {
+                val inCount = uncommitted.count { it.second.staged != "none" }
+                val all = uncommitted.all { it.second.staged == "all" }
+                Text(
+                    localizedPlural(Res.plurals.git_in_next_commit, inCount, inCount, uncommitted.size),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = cs.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(start = Space.sm).weight(1f, fill = false),
+                )
+                IncludeBox(if (all) "all" else if (inCount > 0) "partial" else "none", !staging, "diff_include_all") {
+                    include(uncommitted, !all)
+                }
+            }
             Box(Modifier.weight(1f))
             // Adjustable diff base (the compare target stays the working tree) — parity with the
             // web/Android/iOS DiffView base picker. A DropdownMenu where there is a pointer, a
@@ -445,6 +512,7 @@ fun DiffView(
                                                 },
                                                 native = native,
                                                 onReload = onReload,
+                                                include = includeBox(repo.repo, node.file),
                                             )
                                             HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
                                         }
@@ -490,6 +558,7 @@ fun DiffView(
                                         },
                                         native = native,
                                         onReload = onReload,
+                                        include = includeBox(repo.repo, file),
                                     )
                                     HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
                                 }
@@ -498,6 +567,21 @@ fun DiffView(
                     }
                 }
             }
+        }
+
+        if (gitWrite != null && repos.isNotEmpty()) {
+            HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
+            CommitBar(
+                uncommitted = uncommitted.size,
+                included = uncommitted.count { it.second.staged != "none" },
+                busy = staging,
+                message = commitMessage,
+                onMessage = { commitMessage = it },
+                last = lastGitWrite,
+                onCommit = { runGit("commit") },
+                onAmend = { runGit("commit", amend = true) },
+                onUndo = { runGit("uncommit") },
+            )
         }
 
         // ── Sticky submit bar ──────────────────────────────────────────────────
@@ -919,6 +1003,8 @@ private fun FileSection(
     label: String = file.path,
     native: NativeDiffSupport? = null,
     onReload: () -> Unit = {},
+    /** #72: the file's "in the next commit" box, before its name; null: none. */
+    include: (@Composable () -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
@@ -939,6 +1025,7 @@ private fun FileSection(
                 .padding(horizontal = Space.md),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            include?.invoke()
             Icon(
                 if (expanded) Icons.Filled.KeyboardArrowDown else Icons.Filled.KeyboardArrowRight,
                 contentDescription = null,
