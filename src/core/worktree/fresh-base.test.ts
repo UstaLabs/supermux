@@ -6,7 +6,10 @@ import { tmpdir } from "os"
 import { join } from "path"
 import { createSessionBranch, createWorktree, ensureWorktreeAt, freshBase, removeWorktree, repoSlug, worktreesRoot } from "./manager"
 
-const git = (dir: string, ...args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf-8" }).trim()
+/** Real git, many spawns: slow on Windows (CI), so a longer limit than bun's 5 s. */
+const REAL_GIT_MS = 30_000
+
+const git = (dir: string, ...args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim()
 function commit(dir: string, file: string, msg: string) {
   writeFileSync(join(dir, file), msg)
   git(dir, "add", "."); git(dir, "commit", "-q", "-m", msg)
@@ -33,7 +36,7 @@ test("a base that tracks a remote branch is fetched first, and the copy starts f
   expect(await freshBase(local, "dev")).toBe("origin/dev")
   expect(git(local, "rev-parse", "origin/dev")).toBe(fresh)
   expect(git(local, "rev-parse", "dev")).not.toBe(fresh)   // the user's own branch is never moved
-})
+}, REAL_GIT_MS)
 
 test("a branch made at Send moves to the fetched base at its first checkout, and does not track it", async () => {
   const { local, other } = setup()
@@ -42,9 +45,9 @@ test("a branch made at Send moves to the fetched base at its first checkout, and
   const workdir = join(worktreesRoot(), repoSlug(local), "born-fresh")
   expect(await ensureWorktreeAt({ repoRoot: local, workdir, sessionBranch: "mux/born", baseBranch: "dev" })).toEqual({ created: true })
   expect(git(workdir, "rev-parse", "HEAD")).toBe(fresh)
-  expect(() => git(local, "rev-parse", "--abbrev-ref", "mux/born@{upstream}")).toThrow()
+  expect(() => git(local, "rev-parse", "--abbrev-ref", "mux/born@{upstream}")).toThrow()   // --no-track: git says "no upstream"
   await removeWorktree(local, workdir, "mux/born")
-})
+}, REAL_GIT_MS)
 
 test("a branch with a commit of its own is never moved", async () => {
   const { local, other } = setup()
@@ -58,7 +61,7 @@ test("a branch with a commit of its own is never moved", async () => {
   await ensureWorktreeAt({ repoRoot: local, workdir, sessionBranch: "mux/worked", baseBranch: "dev" })
   expect(git(workdir, "rev-parse", "HEAD")).toBe(own)
   await removeWorktree(local, workdir, "mux/worked")
-})
+}, REAL_GIT_MS)
 
 test("a local base with commits the remote lacks stays the start, so nothing local is dropped", async () => {
   const { local, other } = setup()
@@ -66,7 +69,7 @@ test("a local base with commits the remote lacks stays the start, so nothing loc
   pushNew(other, "two")
   expect(await freshBase(local, "dev")).toBe("dev")
   expect(git(local, "rev-parse", "dev")).toBe(mine)
-})
+}, REAL_GIT_MS)
 
 test("a base with no upstream is used as it is, and nothing assumes main", async () => {
   const { local } = setup()
@@ -74,13 +77,13 @@ test("a base with no upstream is used as it is, and nothing assumes main", async
   commit(local, "r.txt", "release")
   expect(await freshBase(local, "release/2.4")).toBe("release/2.4")
   expect(await freshBase(local, "HEAD")).toBe("HEAD")
-})
+}, REAL_GIT_MS)
 
 test("a fetch that fails falls back to what the clone already has", async () => {
   const { local } = setup()
   git(local, "remote", "set-url", "origin", join(tmpdir(), "no-such-remote-" + Date.now()))
   expect(await freshBase(local, "dev")).toBe("origin/dev")   // the last known upstream still holds dev
-})
+}, REAL_GIT_MS)
 
 test("createWorktree (a worktree made beforehand) starts from the fetched base too", async () => {
   const { local, other } = setup()
@@ -89,4 +92,4 @@ test("createWorktree (a worktree made beforehand) starts from the fetched base t
   expect(git(h.worktreeDir, "rev-parse", "HEAD")).toBe(fresh)
   expect(h.baseBranch).toBe("dev")
   await removeWorktree(h.repoRoot, h.worktreeDir, h.sessionBranch)
-})
+}, REAL_GIT_MS)

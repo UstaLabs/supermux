@@ -6,6 +6,7 @@
 import { lstat, open } from "fs/promises"
 import { join } from "path"
 import { gitAsync } from "../git/exec"
+import { indexState, stagedOf, type Staged } from "../git/stage"
 import { spawnCommand } from "../process/launcher"
 import { mapLimit } from "../fs/pool"
 import { discoverRepos, parseBaseSpec, resolveSpecBase, REPO_CONCURRENCY } from "./workdir-diff"
@@ -20,6 +21,8 @@ export interface ChangedFile {
   baseBlob: string | null
   /** Working-copy bytes; null for a deleted file. Filled by listChanges, not by the parser. */
   size?: number | null
+  /** #72: how much of it is in the next commit; absent when it holds nothing uncommitted. */
+  staged?: Staged
 }
 
 const ZERO_SHA = /^0+$/
@@ -182,9 +185,10 @@ async function untrackedEntry(repoAbs: string, path: string): Promise<ChangedFil
 
 async function repoChanges(repoAbs: string, relPath: string, baseSha: string): Promise<RepoChanges> {
   try {
-    const [raw, numstat] = await Promise.all([
+    const [raw, numstat, index] = await Promise.all([
       gitAsync(repoAbs, ["diff", "--raw", "-z", "--no-abbrev", "-M", baseSha], { trim: false }),
       gitAsync(repoAbs, ["diff", "--numstat", "-z", "-M", baseSha], { trim: false }),
+      indexState(repoAbs).catch(() => null),
     ])
     const tracked = parseRawNumstat(raw, numstat)
     const keptTracked = tracked.slice(0, MAX_LIST_FILES)
@@ -198,7 +202,11 @@ async function repoChanges(repoAbs: string, relPath: string, baseSha: string): P
       })),
       mapLimit(others.paths, UNTRACKED_CONCURRENCY, (p) => untrackedEntry(repoAbs, p)),
     ])
-    const files = [...trackedSized, ...untracked]
+    const withStage = (f: ChangedFile, untracked: boolean): ChangedFile => {
+      const st = index && stagedOf(f.path, index, untracked)
+      return st ? { ...f, staged: st } : f
+    }
+    const files = [...trackedSized.map((f) => withStage(f, false)), ...untracked.map((f) => withStage(f, true))]
     return { repo: relPath, baseSha, files, truncated: total > files.length, total, ...(others.error ? { error: others.error } : {}) }
   } catch (err) {
     return { repo: relPath, baseSha, files: [], truncated: false, total: 0, error: err instanceof Error ? err.message : String(err) }
