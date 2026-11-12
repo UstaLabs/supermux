@@ -26,4 +26,20 @@
         <item quantity="other">%2$d dosyadan %1$d tanesi sonraki commit'te</item>
     </plurals>
     <string name="git_include_in_commit">Sonraki commit'te</string>
+    <string name="git_commit">Commit et</string>
+    <plurals name="git_commit_all">
+        <item quantity="one">%1$d dosyayı commit et</item>
+        <item quantity="other">Tümünü commit et (%1$d)</item>
+    </plurals>
+    <string name="git_commit_hint">Commit mesajı: boş bırakırsanız sizin için yazılır</string>
+    <string name="git_more_commit_actions">Diğer commit işlemleri</string>
+    <string name="git_amend">Son commit'i düzelt</string>
+    <string name="git_undo_commit">Son commit'i geri al</string>
+    <string name="git_committed">Commit edildi: %1$s</string>
+    <string name="git_nothing_to_commit">Commit edilecek bir şey yok</string>
+    <string name="git_commit_failed">Commit başarısız: %1$s</string>
+    <string name="git_undone">Geri alındı: %1$s. Değişiklikleri geri geldi.</string>
+    <string name="git_undo_pushed">Bu commit zaten gönderildi, burada geri alınmaz</string>
+    <string name="git_undo_merge">Birleştirme commit'i burada geri alınmaz</string>
+    <string name="git_undo_none">Geri alınacak commit yok</string>
 </resources>

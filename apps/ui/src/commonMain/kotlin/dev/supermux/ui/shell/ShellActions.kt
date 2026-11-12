@@ -134,6 +134,8 @@ class ShellActions(
     val workspaceFsDiff: suspend (workspaceId: String, base: String?) -> FsDiffResult? = { _, _ -> null },
     /** #72: whole files into the next commit, or out of it; null: this host can't stage (no checkboxes). */
     val workspaceStage: (suspend (workspaceId: String, repo: String, paths: List<String>, staged: Boolean) -> Boolean)? = null,
+    /** #72: commit / uncommit in a workspace repo; null: this host can't (no commit bar). */
+    val workspaceGitWrite: (suspend (workspaceId: String, op: String, body: dev.supermux.net.CommitRequest) -> dev.supermux.net.GitWriteResult?)? = null,
     /** A lazy Changes file's base text by blob; null: this host can't load one (no Retry offered). */
     val workspaceChangesBlob: (suspend (workspaceId: String, repo: String, sha: String, force: Boolean) -> BlobText)? = null,
     val workspaceFsRefs: suspend (workspaceId: String) -> FsRefsResult? = { null },
@@ -223,6 +225,7 @@ fun rememberShellActions(
             workspaceFsRead = { wsId, path -> app.workspaceFsRead(wsId, path) },
             workspaceFsWrite = { wsId, path, content -> app.workspaceFsWrite(wsId, path, content) },
             workspaceStage = { wsId, repo, paths, staged -> app.workspaceStage(wsId, repo, paths, staged) },
+            workspaceGitWrite = { wsId, op, body -> app.workspaceGitWrite(wsId, op, body) },
             workspaceFsDiff = { wsId, base -> app.workspaceFsDiff(wsId, base) },
             workspaceChangesBlob = { wsId, repo, sha, force -> app.workspaceChangesBlob(wsId, repo, sha, force) },
             workspaceFsRefs = { wsId -> app.workspaceFsRefs(wsId) },
@@ -289,6 +292,7 @@ fun rememberShellActions(fleet: FleetStore): ShellActions {
             workspaceFsRead = { wsId, path -> fleet.workspaceFsRead(wsId, path) },
             workspaceFsWrite = { wsId, path, content -> fleet.workspaceFsWrite(wsId, path, content) },
             workspaceStage = { wsId, repo, paths, staged -> fleet.workspaceStage(wsId, repo, paths, staged) },
+            workspaceGitWrite = { wsId, op, body -> fleet.workspaceGitWrite(wsId, op, body) },
             workspaceFsDiff = { wsId, base -> fleet.workspaceFsDiff(wsId, base) },
             workspaceChangesBlob = { wsId, repo, sha, force -> fleet.workspaceChangesBlob(wsId, repo, sha, force) },
             workspaceFsRefs = { wsId -> fleet.workspaceFsRefs(wsId) },

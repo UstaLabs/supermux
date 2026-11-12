@@ -1249,6 +1249,21 @@ data class ChangedFile(
     val staged: String? = null,
 )
 
+/** POST …/git/commit and …/git/uncommit (#72): {repo} plus, for commit, the message and how. */
+@Serializable
+data class CommitRequest(val repo: String, val message: String? = null, val all: Boolean = false, val amend: Boolean = false)
+
+/** What a commit or an undo did: ok with the commit's subject, or why not (nothing | failed | none | merge | pushed). */
+@Serializable
+data class GitWriteResult(
+    val ok: Boolean = false,
+    val sha: String? = null,
+    val subject: String? = null,
+    val reason: String? = null,
+    val message: String? = null,
+    val error: String? = null,
+)
+
 /** POST …/git/stage (#72): whole files into the next commit, or out of it. */
 @Serializable
 data class StageRequest(val repo: String, val paths: List<String>, val staged: Boolean)
@@ -3667,6 +3682,17 @@ class BrokerApi(
     /** GET /workspaces/<id>/fs/diff?base=<spec> */
     suspend fun workspaceFsDiff(workspaceId: String, base: String? = null): FsDiffResult =
         getJson("$httpBase/workspaces/$workspaceId/fs/diff" + if (base != null) "?base=${urlEncode(base)}" else "")
+
+    /** POST /workspaces/<id>/git/<commit|uncommit>: the broker's answer, a refusal (409) included. */
+    suspend fun workspaceGitWrite(workspaceId: String, op: String, body: CommitRequest): GitWriteResult {
+        val resp = http.post("$httpBase/workspaces/$workspaceId/git/$op") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(body))
+        }
+        val text = resp.bodyAsText()
+        return runCatching { json.decodeFromString<GitWriteResult>(text) }.getOrElse { GitWriteResult(reason = "failed", message = text.take(200)) }
+    }
 
     /** POST /workspaces/<id>/git/stage — throws when the broker refuses. */
     suspend fun workspaceStage(workspaceId: String, repo: String, paths: List<String>, staged: Boolean) =

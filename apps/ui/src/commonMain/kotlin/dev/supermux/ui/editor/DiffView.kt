@@ -19,6 +19,8 @@
 // open-comment count — is the shared behaviour both apps already had.
 package dev.supermux.ui.editor
 
+import dev.supermux.net.GitWriteResult
+import dev.supermux.net.CommitRequest
 import dev.supermux.ui.resources.git_in_next_commit
 import dev.supermux.ui.resources.Res
 import dev.supermux.ui.i18n.localizedPlural
@@ -175,6 +177,8 @@ fun DiffView(
     retainKey: String? = null,
     /** #72: puts whole files into the next commit or takes them out (repo, paths, in); null: no boxes. */
     stage: (suspend (repo: String, paths: List<String>, staged: Boolean) -> Boolean)? = null,
+    /** #72: commit / uncommit (op, body); null: no commit bar. */
+    gitWrite: (suspend (op: String, body: CommitRequest) -> GitWriteResult?)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -188,6 +192,32 @@ fun DiffView(
         scope.launch {
             try { targets.groupBy({ it.first }, { it.second.path }).forEach { (repo, paths) -> call(repo, paths, on) } }
             finally { staging = false; onReload() }
+        }
+    }
+    // #72: the commit bar's message, the action in flight, and what the last one did.
+    var commitMessage by remember { mutableStateOf("") }
+    var lastGitWrite by remember { mutableStateOf<Pair<String, GitWriteResult?>?>(null) }
+    fun runGit(op: String, amend: Boolean = false) {
+        val call = gitWrite ?: return
+        if (staging) return
+        val includedRepos = uncommitted.filter { it.second.staged != "none" }.map { it.first }.distinct()
+        val all = includedRepos.isEmpty()
+        val targets = when {
+            op == "uncommit" || amend -> listOf(includedRepos.firstOrNull() ?: repos.firstOrNull()?.repo ?: "")
+            all -> uncommitted.map { it.first }.distinct()
+            else -> includedRepos
+        }
+        staging = true
+        scope.launch {
+            var shown: GitWriteResult? = null
+            try {
+                for (repo in targets) {
+                    val r = call(op, CommitRequest(repo, commitMessage.trim().ifEmpty { null }, all = op == "commit" && all && !amend, amend = amend))
+                    if (shown == null || shown.ok) shown = r
+                }
+                if (shown?.ok == true && op == "commit") commitMessage = ""
+                lastGitWrite = op to shown
+            } finally { staging = false; onReload() }
         }
     }
     val includeBox: (String, DiffFile) -> (@Composable () -> Unit)? = { repoId, f ->
@@ -537,6 +567,21 @@ fun DiffView(
                     }
                 }
             }
+        }
+
+        if (gitWrite != null && repos.isNotEmpty()) {
+            HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
+            CommitBar(
+                uncommitted = uncommitted.size,
+                included = uncommitted.count { it.second.staged != "none" },
+                busy = staging,
+                message = commitMessage,
+                onMessage = { commitMessage = it },
+                last = lastGitWrite,
+                onCommit = { runGit("commit") },
+                onAmend = { runGit("commit", amend = true) },
+                onUndo = { runGit("uncommit") },
+            )
         }
 
         // ── Sticky submit bar ──────────────────────────────────────────────────

@@ -72,6 +72,7 @@ class DiffViewTest {
         readFile: (suspend (String, String) -> Result<String>)? = null,
         prefs: UiPrefs = UiPrefs(InMemorySettingsStore()),
         stage: (suspend (String, List<String>, Boolean) -> Boolean)? = null,
+        gitWrite: (suspend (String, dev.supermux.net.CommitRequest) -> dev.supermux.net.GitWriteResult?)? = null,
     ): @androidx.compose.runtime.Composable () -> Unit = {
         CompositionLocalProvider(
             LocalUiPrefs provides prefs,
@@ -95,6 +96,7 @@ class DiffViewTest {
                 autoExpandAll = autoExpandAll,
                 readFile = readFile,
                 stage = stage,
+                gitWrite = gitWrite,
             )
         }
         }
@@ -133,6 +135,51 @@ class DiffViewTest {
         onNodeWithTag("diff_include_all").performClick()
         waitForIdle()
         assertEquals(setOf(Triple("", listOf("a.txt", "b.txt"), true), Triple("lib", listOf("d.txt"), true)), calls.toSet())
+    }
+
+    private fun noneTicked() = listOf(
+        RepoDiff(repo = "", files = listOf(
+            DiffFile(path = "a.txt", status = "modified", staged = "none"),
+            DiffFile(path = "b.txt", status = "added", staged = "none"),
+        )),
+    )
+
+    @Test
+    fun with_nothing_ticked_the_button_commits_all_and_says_what_it_did() = runComposeUiTest {
+        val calls = mutableListOf<Pair<String, dev.supermux.net.CommitRequest>>()
+        setContent(host(noneTicked(), stage = { _, _, _ -> true }, gitWrite = { op, body ->
+            calls += op to body
+            dev.supermux.net.GitWriteResult(ok = true, subject = "Update a.txt and b.txt")
+        }))
+        waitForIdle()
+        onNodeWithText("Commit all 2").assertExists()
+        onNodeWithTag("commit_button").performClick()
+        waitForIdle()
+        assertEquals(listOf("commit" to dev.supermux.net.CommitRequest("", null, all = true)), calls)
+        onNodeWithText("Committed: Update a.txt and b.txt").assertExists()
+    }
+
+    @Test
+    fun a_ticked_file_makes_it_commit_with_the_message_typed() = runComposeUiTest {
+        val calls = mutableListOf<dev.supermux.net.CommitRequest>()
+        setContent(host(stagedDiff(), stage = { _, _, _ -> true }, gitWrite = { _, body -> calls += body; dev.supermux.net.GitWriteResult(ok = true, subject = "Fix") }))
+        waitForIdle()
+        onNodeWithText("Commit").assertExists()
+        onNodeWithTag("commit_message").performTextInput("Fix")
+        onNodeWithTag("commit_button").performClick()
+        waitForIdle()
+        assertEquals(listOf(dev.supermux.net.CommitRequest("", "Fix"), dev.supermux.net.CommitRequest("lib", "Fix")), calls)
+    }
+
+    @Test
+    fun an_undo_the_broker_refuses_says_why() = runComposeUiTest {
+        setContent(host(noneTicked(), stage = { _, _, _ -> true }, gitWrite = { _, _ -> dev.supermux.net.GitWriteResult(reason = "pushed") }))
+        waitForIdle()
+        onNodeWithTag("commit_more").performClick()
+        waitForIdle()
+        onNodeWithTag("commit_undo").performClick()
+        waitForIdle()
+        onNodeWithText("That commit is already pushed, so it isn't undone here").assertExists()
     }
 
     @Test
