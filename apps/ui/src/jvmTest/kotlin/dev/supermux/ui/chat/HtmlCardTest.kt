@@ -8,6 +8,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertHeightIsEqualTo
@@ -45,6 +46,7 @@ import kotlin.test.Test
 import kotlinx.coroutines.test.runTest
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /** #104 car A: an agent's html card in the chat, its page API, and the user's message a card sent. */
@@ -190,6 +192,34 @@ class HtmlCardTest {
         assertTrue(engine.lastSetup!!.transparentBackground)
         assertTrue(engine.lastSetup!!.dark)
         runOnUiThread { rig.engines.created.map { it.violations.toList() } }.forEach { assertEquals(emptyList(), it) }
+    }
+
+    /**
+     * A card's page has no background of its own. On a Mac (and iOS, and the web) the page lies under the Compose canvas,
+     * so its transparent pixels showed the window's black backing, not the chat (the user's report, light theme): the
+     * card names the chat's own background as its underlay, which the engine paints behind the page, theme by theme.
+     */
+    @OptIn(WebEngineSpi::class)
+    @Test fun aCardsPageLiesOnTheChatsBackgroundInEitherTheme() = runComposeUiTest {
+        val rig = Rig()
+        var appearance by mutableStateOf(AppearanceMode.LIGHT)
+        val chat = mutableMapOf<AppearanceMode, Color>()
+        show(rig) {
+            SupermuxTheme(appearance = appearance) {
+                chat[appearance] = MaterialTheme.colorScheme.surfaceContainerLow
+                HtmlCardView("o1", card, Modifier.width(600.dp))
+            }
+        }
+        waitUntil(timeoutMillis = 5_000) { runOnUiThread { rig.calls.any { it.startsWith("load:html:") } } }
+        val engine = runOnUiThread { rig.engines.created.single { e -> e.calls.any { it.startsWith("load:html:") } } }
+        val light = assertNotNull(runOnUiThread { engine.lastSetup })
+        assertTrue(light.transparentBackground)
+        assertEquals(chat.getValue(AppearanceMode.LIGHT), light.underlay, "the light chat's background behind the page")
+        appearance = AppearanceMode.DARK
+        waitForIdle()
+        val dark = chat.getValue(AppearanceMode.DARK)
+        assertTrue(dark != chat.getValue(AppearanceMode.LIGHT))
+        waitUntil(timeoutMillis = 5_000) { runOnUiThread { rig.engines.created.any { it.lastSetup?.underlay == dark } } }
     }
 
     @Test fun beforeThePageArrivesTheCardReservesItsStoredHeight() = runComposeUiTest {
