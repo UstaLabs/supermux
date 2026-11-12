@@ -5,24 +5,26 @@
 import { isAbsolute } from "path"
 import { gitAsync } from "./exec"
 
-export type Staged = "all" | "partial" | "none"
+export type Staged = "all" | "partial" | "none" | "conflict"
 
-export interface IndexState { staged: Set<string>; unstaged: Set<string> }
+export interface IndexState { staged: Set<string>; unstaged: Set<string>; conflicted?: Set<string> }
 
 const names = (out: string) => new Set(out.split("\0").filter(Boolean))
 
 /** Paths whose index differs from HEAD (staged) and whose working copy differs from the index (unstaged). */
 export async function indexState(repoAbs: string): Promise<IndexState> {
-  const [staged, unstaged] = await Promise.all([
+  const [staged, unstaged, conflicted] = await Promise.all([
     gitAsync(repoAbs, ["diff", "--cached", "--name-only", "-z", "--no-renames"], { trim: false }),
     gitAsync(repoAbs, ["diff", "--name-only", "-z", "--no-renames"], { trim: false }),
+    gitAsync(repoAbs, ["diff", "--name-only", "-z", "--diff-filter=U"], { trim: false }),
   ])
-  return { staged: names(staged), unstaged: names(unstaged) }
+  return { staged: names(staged), unstaged: names(unstaged), conflicted: names(conflicted) }
 }
 
 /** null: the file has nothing uncommitted (a change since the base that is already committed). */
 export function stagedOf(path: string, s: IndexState, untracked = false): Staged | null {
   if (untracked) return "none"
+  if (s.conflicted?.has(path)) return "conflict"
   const inIndex = s.staged.has(path), inWork = s.unstaged.has(path)
   if (inIndex) return inWork ? "partial" : "all"
   return inWork ? "none" : null

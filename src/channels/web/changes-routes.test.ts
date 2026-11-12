@@ -229,3 +229,11 @@ test("commit refuses a bad message and an unknown repo", async () => {
   expect((await post(token, "/workspaces/ws-1/git/commit", { repo: "nope", all: true })).status).toBe(404)
   expect((await post(token, "/workspaces/ws-1/git/nope", { repo: "" })).status).not.toBe(200)
 })
+
+test("get latest needs the chat's own base; resolve and abort refuse bad input", async () => {
+  const { token } = await setup()
+  expect((await post(token, "/sessions/s-1/git/latest", {})).status).toBe(409)   // no base known here: no guess
+  expect((await post(token, "/workspaces/ws-1/git/resolve", { repo: "", path: "a.txt", side: "left" })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/resolve", { repo: "", path: "../a.txt", side: "mine" })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/abort", { repo: "" })).status).toBe(409)   // no merge in progress
+})

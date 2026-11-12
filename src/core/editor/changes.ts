@@ -102,6 +102,8 @@ export interface RepoChanges {
   truncated: boolean
   total: number
   error?: string
+  /** #72: a merge is in progress (conflicts, or resolved and waiting for "Continue merge"). */
+  merging?: boolean
 }
 
 export interface ChangesList { repos: RepoChanges[] }
@@ -191,6 +193,7 @@ async function repoChanges(repoAbs: string, relPath: string, baseSha: string): P
       gitAsync(repoAbs, ["diff", "--numstat", "-z", "-M", baseSha], { trim: false }),
       indexState(repoAbs).catch(() => null),
     ])
+    const merging = await gitAsync(repoAbs, ["rev-parse", "-q", "--verify", "MERGE_HEAD"]).then(() => true, () => false)
     const tracked = parseRawNumstat(raw, numstat)
     const keptTracked = tracked.slice(0, MAX_LIST_FILES)
     const room = Math.max(0, MAX_LIST_FILES - keptTracked.length)
@@ -208,7 +211,7 @@ async function repoChanges(repoAbs: string, relPath: string, baseSha: string): P
       return st ? { ...f, staged: st } : f
     }
     const files = [...trackedSized.map((f) => withStage(f, false)), ...untracked.map((f) => withStage(f, true))]
-    return { repo: relPath, baseSha, files, truncated: total > files.length, total, ...(others.error ? { error: others.error } : {}) }
+    return { repo: relPath, baseSha, files, truncated: total > files.length, total, ...(merging ? { merging } : {}), ...(others.error ? { error: others.error } : {}) }
   } catch (err) {
     return { repo: relPath, baseSha, files: [], truncated: false, total: 0, error: err instanceof Error ? err.message : String(err) }
   }
