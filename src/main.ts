@@ -259,7 +259,7 @@ import { deriveName, ensureUnique } from "./core/session-manager/naming"
 import { InboxStore } from "./core/inbox/store"
 import { InboxCursorStore } from "./core/inbox/cursor"
 import { InboxDelivery } from "./core/inbox/delivery"
-import { dirs, files as platformFiles, host, paths, proc } from "@supermux/platform"
+import { dirs, files as platformFiles, host, paths, ports, proc } from "@supermux/platform"
 
 const log = makeLogger("main")
 // Under the desktop app's Windows Scheduled Task loop? Captured once and removed from the env so
@@ -3470,6 +3470,12 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       return added
     },
     browserCommentsList: (id) => browserCommentStore.list(id),
+    portOwner: (port) => {
+      const byPid = new Map(registry.list().filter((s) => s.pid > 0).map((s) => [s.pid, s] as const))
+      const pid = ports.ownerAmong(port, new Set(byPid.keys()))
+      const owner = pid === null ? undefined : byPid.get(pid)
+      return owner ? { sessionId: owner.id, sessionName: owner.name } : null
+    },
     reviewAdd: (id, c) => {
       const comment = reviewStore.add({ ...c, sessionId: id })
       webChannel?.broadcastToAll({ type: "review_comment", sessionId: id, comment })

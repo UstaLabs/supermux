@@ -1328,6 +1328,10 @@ data class BrowserCommentInput(val number: Int, val comment: String, val selecto
 @Serializable
 data class BrowserCommentsBody(val url: String? = null, val viewedAs: String? = null, val comments: List<BrowserCommentInput>)
 
+/** #122 phase 4: the session whose process listens on a port (its dev server). */
+@Serializable
+data class PortOwnerDto(val sessionId: String, val sessionName: String)
+
 @Serializable
 data class BrowserCommentsResult(val comments: List<BrowserCommentDto> = emptyList())
 
@@ -3722,6 +3726,12 @@ class BrokerApi(
     /** GET /workspaces/<id>/fs/refs */
     suspend fun workspaceFsRefs(workspaceId: String): FsRefsResult =
         getJson("$httpBase/workspaces/$workspaceId/fs/refs")
+
+    /** #122 phase 4: GET /ports/<port>/owner → whose dev server listens there; null when no session's does (404). */
+    suspend fun portOwner(port: Int): PortOwnerDto? {
+        val res = http.get("$httpBase/ports/$port/owner") { authHeader() }
+        return if (res.status.value == 200) json.decodeFromString(PortOwnerDto.serializer(), res.bodyAsText()) else null
+    }
 
     /** #122 phase 4: POST /sessions/<id>/browser/comments → the comments as stored, with their ids. */
     suspend fun addBrowserComments(sessionId: String, body: BrowserCommentsBody): List<BrowserCommentDto> =
