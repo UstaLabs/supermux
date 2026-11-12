@@ -1250,6 +1250,30 @@ private fun WorkspacePaneContent(
                     groupIdOf(layoutSync.tree, v.id)?.also { opener.openEmpty(it) } != null
                 }
             }
+            // The workspace's one Changes view: shown where it is, else added to this chat's pane.
+            val revealChanges: () -> Unit = {
+                val existing = openSingletonView(layout, viewsById, NewViewKind.DIFF)
+                if (existing != null) {
+                    val (diffViewId, ownerGroup) = existing
+                    layoutSync.edit { setActiveViewInGroup(it, ownerGroup, diffViewId) }
+                    ui.windows.expandClaim(hostId, setOf(diffViewId), layoutSync.tree)
+                } else {
+                    val groupId = groupIdOf(layout, viewId)
+                    if (groupId != null) {
+                        app.addWorkspaceView(current.id, NewViewKind.DIFF, groupId) { newViewId ->
+                            ui.windows.expandClaim(hostId, setOf(newViewId), layoutSync.tree)
+                        }
+                    } else {
+                        // A phone workspace has no groups to split: post the pane and let the
+                        // broker's view order place it in the tab strip.
+                        app.addWorkspaceView(
+                            current.id,
+                            NewViewKind.DIFF.wire,
+                            addViewState(NewViewKind.DIFF, nowMillis()),
+                        )
+                    }
+                }
+            }
             ProvideKeyScope(paneScope) {
             ViewHost(
                 previewModeFor = { previewModes[it] == true },
@@ -1296,28 +1320,9 @@ private fun WorkspacePaneContent(
                 onOpenWalkthrough = { sessionId, stepId ->
                     onWalkthroughSessionId(sessionId)
                     appFor(sessionId).walkthroughState<WalkthroughState>(sessionId).open(stepId)
-                    val existing = openSingletonView(layout, viewsById, NewViewKind.DIFF)
-                    if (existing != null) {
-                        val (diffViewId, ownerGroup) = existing
-                        layoutSync.edit { setActiveViewInGroup(it, ownerGroup, diffViewId) }
-                        ui.windows.expandClaim(hostId, setOf(diffViewId), layoutSync.tree)
-                    } else {
-                        val groupId = groupIdOf(layout, viewId)
-                        if (groupId != null) {
-                            app.addWorkspaceView(current.id, NewViewKind.DIFF, groupId) { newViewId ->
-                                ui.windows.expandClaim(hostId, setOf(newViewId), layoutSync.tree)
-                            }
-                        } else {
-                            // A phone workspace has no groups to split: post the pane and let the
-                            // broker's view order place it in the tab strip.
-                            app.addWorkspaceView(
-                                current.id,
-                                NewViewKind.DIFF.wire,
-                                addViewState(NewViewKind.DIFF, nowMillis()),
-                            )
-                        }
-                    }
+                    revealChanges()
                 },
+                onOpenChanges = revealChanges,
                 walkthroughSessionId = walkthroughSessionId,
                 onWalkthroughClosed = { onWalkthroughSessionId(null) },
                 onCloseView = { onCloseCandidate(v) },

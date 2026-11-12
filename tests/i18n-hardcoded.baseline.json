@@ -25,7 +25,7 @@
   "apps/ui/src/commonMain/kotlin/dev/supermux/ui/chat/ChatMediaViewer.kt": 3,
   "apps/ui/src/commonMain/kotlin/dev/supermux/ui/chat/ChatPanel.kt": 9,
   "apps/ui/src/commonMain/kotlin/dev/supermux/ui/chat/Composer.kt": 14,
-  "apps/ui/src/commonMain/kotlin/dev/supermux/ui/chat/ComposerFooter.kt": 6,
+  "apps/ui/src/commonMain/kotlin/dev/supermux/ui/chat/ComposerFooter.kt": 2,
   "apps/ui/src/commonMain/kotlin/dev/supermux/ui/chat/ComposerMediaTile.kt": 1,
   "apps/ui/src/commonMain/kotlin/dev/supermux/ui/chat/ContinueConversationFlow.kt": 8,
   "apps/ui/src/commonMain/kotlin/dev/supermux/ui/chat/CouncilCard.kt": 8,

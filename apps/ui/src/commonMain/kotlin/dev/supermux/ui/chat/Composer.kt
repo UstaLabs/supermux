@@ -274,11 +274,6 @@ class ComposerActions(
     /** Live dictation as a stream (`/transcribe/stream`): the broker hears the pauses and owns the
      *  text. Used only when the broker says it can ([VoiceCaps.streaming]). */
     val openDictationStream: OpenDictationStream? = null,
-    /** Git ops for [ComposerFooter]; null hides the branch chip's menu (the label still renders). */
-    val gitFetch: (suspend () -> dev.supermux.net.GitOpResult?)? = null,
-    val gitPull: (suspend () -> dev.supermux.net.GitOpResult?)? = null,
-    val gitPush: (suspend () -> dev.supermux.net.GitOpResult?)? = null,
-    val gitPublish: (suspend () -> dev.supermux.net.GitOpResult?)? = null,
     /**
      * The `@` menu's rows: one folder of the session's workdir, or a fuzzy search across it (see
      * [MentionLookup]); null rows = the host could not answer. Null = no `@` menu at all.
@@ -319,10 +314,6 @@ fun rememberComposerActions(
         transcribeWarm = { id -> app.transcribeWarm(id) },
         openDictationStream = { id, session -> app.openDictationStream(sessionId, id, session) },
         consumePendingFirst = { id -> app.consumePendingFirst(id)?.let { it.text to it.attachments } },
-        gitFetch = { app.gitFetch(sessionId) },
-        gitPull = { app.gitPull(sessionId) },
-        gitPush = { app.gitPush(sessionId) },
-        gitPublish = { app.gitPublish(sessionId) },
         mentionFiles = workdir?.takeIf { it.isNotBlank() }?.let { dir ->
             { lookup -> lookupMentionFiles(app.fileSystem, dir, lookup) }
         },
