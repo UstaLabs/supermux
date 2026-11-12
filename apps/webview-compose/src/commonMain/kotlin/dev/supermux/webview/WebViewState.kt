@@ -413,6 +413,19 @@ public class WebNavigator internal constructor(private val state: WebViewState) 
         return applied
     }
 
+    /**
+     * The element at ([fx], [fy]), fractions of the viewport's width and height, or [up] ancestors above it: what a
+     * person points at in pick mode (#122). Read-only, run when asked: nothing stays in the page. Null without a live
+     * engine, an element there, or a script (the web's cross-origin iframe). The page could lie about its own DOM.
+     */
+    public suspend fun elementAt(fx: Float, fy: Float, up: Int = 0): PageElement? =
+        PickScripts.parseElement(state.owner?.withEngine { it.evaluate(PickScripts.elementAt(fx, fy, up)) })
+
+    /** Each selector's element box now (pins follow their elements as the page scrolls or changes), null where it's gone. */
+    public suspend fun boxesOf(selectors: List<String>): List<PageBox?> =
+        if (selectors.isEmpty()) emptyList()
+        else PickScripts.parseBoxes(state.owner?.withEngine { it.evaluate(PickScripts.boxesOf(selectors)) }, selectors.size)
+
     /** Puts [cookie] in the view's profile; true once it's there. Set it before loading the page that needs it. */
     public suspend fun setCookie(cookie: WebCookie): Boolean = state.owner?.withEngine { it.setCookie(cookie) } ?: false
 
