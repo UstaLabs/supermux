@@ -69,12 +69,8 @@ fun AppUpdateRows(
     val rowModifier = modifier.kitAnchor("app-version").testTag("general_app-version")
 
     if (!canUpdate) {
-<<<<<<< HEAD
         KitRow(appVersion, rowModifier, description = versionText, descriptionTag = "app_update_version")
-=======
-        KitRow("App version", rowModifier, description = versionText, descriptionTag = "app_update_version")
         WhatsNewLink(updater.currentVersion, Modifier.padding(bottom = 6.dp))
->>>>>>> origin/dev
         return
     }
 

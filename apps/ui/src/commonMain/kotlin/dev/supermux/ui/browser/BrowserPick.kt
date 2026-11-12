@@ -64,9 +64,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
-<<<<<<< HEAD
-=======
->>>>>>> origin/dev
 import dev.supermux.ui.settings.kit.KitGlyphs
 import dev.supermux.ui.settings.kit.KitTextAction
 import dev.supermux.ui.settings.kit.kitColors
