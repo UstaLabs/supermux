@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -90,6 +91,22 @@ internal class PickState {
     var up by mutableIntStateOf(0)
     val picks = mutableStateListOf<Pick>()
     var editing by mutableStateOf<Pick?>(null)
+
+    /**
+     * On touch, what a tap selected (shown as hover is on a desktop), before it's commented: what was tapped, and how
+     * many containers up a second tap went.
+     */
+    var selectedTapped: String? = null
+    var selectedLevel = 0
+
+    /** On touch: comment the selection. */
+    fun commentSelection() {
+        val element = hover ?: return
+        closeComment()
+        editing = add(element)
+        hover = null
+        selectedTapped = null
+    }
     private var next = 1
 
     val commented: List<Pick> get() = picks.filter { it.comment.isNotBlank() }
@@ -201,7 +218,7 @@ internal fun PickLayers(pick: PickState, navigator: WebNavigator, touch: Boolean
                                 val event = awaitPointerEvent()
                                 val at = event.changes.firstOrNull()?.position ?: continue
                                 when (event.type) {
-                                    PointerEventType.Move, PointerEventType.Enter -> {
+                                    PointerEventType.Move, PointerEventType.Enter -> if (!touch) {
                                         // A new place is a new element: back to it, not its ancestor.
                                         if (last != at) pick.up = 0
                                         last = at
@@ -211,14 +228,19 @@ internal fun PickLayers(pick: PickState, navigator: WebNavigator, touch: Boolean
                                         event.changes.forEach { it.consume() }
                                         val (fx, fy) = fractions(at)
                                         scope.launch {
-                                            val element = navigator.elementAt(fx, fy, pick.up) ?: return@launch
-                                            val open = pick.editing
-                                            // On touch, a second tap on the open comment's element takes its container (§5.2).
-                                            if (touch && open != null && open.tapped == element.selector) {
-                                                val container = navigator.elementAt(fx, fy, open.level + 1) ?: return@launch
-                                                open.level++
-                                                open.element = container
-                                                open.box = container.box
+                                            val element = navigator.elementAt(fx, fy, if (touch) 0 else pick.up) ?: return@launch
+                                            if (touch) {
+                                                // A tap selects, as hover does on a desktop; the same element again is its
+                                                // container (§5.2); "Add comment" comments it (Ahmet, 2026-11-12).
+                                                if (pick.selectedTapped == element.selector && pick.hover != null) {
+                                                    val container = navigator.elementAt(fx, fy, pick.selectedLevel + 1) ?: return@launch
+                                                    pick.selectedLevel++
+                                                    pick.hover = container
+                                                } else {
+                                                    pick.selectedTapped = element.selector
+                                                    pick.selectedLevel = 0
+                                                    pick.hover = element
+                                                }
                                                 return@launch
                                             }
                                             pick.closeComment()
@@ -251,6 +273,26 @@ internal fun PickLayers(pick: PickState, navigator: WebNavigator, touch: Boolean
                         .background(c.accent)
                         .padding(horizontal = 6.dp, vertical = 2.dp),
                 )
+                if (touch) {
+                    // Under the selection (above it when it reaches the bottom): comment what's outlined.
+                    Box(
+                        Modifier
+                            .offset {
+                                val below = ((hover.box.y + hover.box.height) * h.toPx()) + 6.dp.toPx()
+                                val y = if (below + 44.dp.toPx() < h.toPx()) below else ((hover.box.y * h.toPx()) - 72.dp.toPx()).coerceAtLeast(0f)
+                                IntOffset((hover.box.x * w.toPx()).coerceIn(0f, (w - 140.dp).toPx().coerceAtLeast(0f)).roundToInt(), y.roundToInt())
+                            }
+                            .height(38.dp)
+                            .webViewOverlay(RoundedCornerShape(19.dp))
+                            .shadow(6.dp, RoundedCornerShape(19.dp))
+                            .clip(RoundedCornerShape(19.dp))
+                            .background(c.accent)
+                            .clickable { pick.commentSelection() }
+                            .padding(horizontal = 16.dp)
+                            .testTag("browser-pick-add"),
+                        contentAlignment = Alignment.Center,
+                    ) { Text("Add comment", fontSize = 14.sp, color = c.onAccent) }
+                }
             }
         }
 
@@ -276,7 +318,7 @@ internal fun PickLayers(pick: PickState, navigator: WebNavigator, touch: Boolean
             }
         }
 
-        pick.editing?.let { open -> if (touch) CommentPanel(open, pick, Modifier.align(Alignment.BottomCenter)) else CommentPopover(open, pick, w, h) }
+        pick.editing?.let { open -> if (touch) CommentSheet(open, pick) else CommentPopover(open, pick, w, h) }
     }
 }
 
@@ -355,7 +397,28 @@ internal fun PickStrip(touch: Boolean = false, onDone: () -> Unit = {}, modifier
     }
 }
 
-/** On touch, the comment in a small panel at the bottom of the page: its name, the field, a trash and Save (§5.2). */
+/**
+ * On touch, the comment in a small sheet from the bottom, in a window of its own so it rises above the keyboard (the
+ * iPhone's covered Save, 2026-11-12): its name, the field, a trash and Save (§5.2). A tap outside keeps it, as Save.
+ */
+@Composable
+private fun CommentSheet(open: Pick, pick: PickState) {
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = { pick.closeComment() },
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null) { pick.closeComment() }
+                .imePadding(),
+            contentAlignment = Alignment.BottomCenter,
+        ) {
+            CommentPanel(open, pick, Modifier.clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null) {})
+        }
+    }
+}
+
 @Composable
 private fun CommentPanel(open: Pick, pick: PickState, modifier: Modifier = Modifier) {
     val c = kitColors()

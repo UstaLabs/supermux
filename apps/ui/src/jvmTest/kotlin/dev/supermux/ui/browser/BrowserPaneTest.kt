@@ -796,8 +796,9 @@ class BrowserPaneTest {
     }
 
     /**
-     * #122 3c, the phone's minimal flow (§5.2): 🎯, "Tap what you mean · Done"; a tap opens the comment panel (its name,
-     * the field, a trash, Save); Save keeps it; the one bottom bar sends to the chat; Done ends picking.
+     * #122 3c, the phone's flow (§5.2, as Ahmet asked 2026-11-12): 🎯, "Tap what you mean · Done"; a tap SELECTS (the
+     * outline and label, as hover on a desktop) and offers "Add comment"; that opens the panel (its name, the field, a
+     * trash, Save); Save keeps it; the one bottom bar sends to the chat; Done ends picking.
      */
     @Test fun aPhoneTapsAnElementAndSendsTheComment() = runComposeUiTest {
         val rig = Rig()
@@ -807,6 +808,10 @@ class BrowserPaneTest {
         onNodeWithTag("browser-pick").performClick()
         onNodeWithText("Tap what you mean", useUnmergedTree = true).assertExists()
         onNodeWithTag("browser-pick-layer").performTouchInput { click(center) }
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag("browser-pick-hover", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithText("button.buy · 312×44", useUnmergedTree = true).assertExists()
+        onNodeWithTag("browser-pick-panel").assertDoesNotExist() // selected, not yet commented
+        onNodeWithTag("browser-pick-add").performClick()
         waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag("browser-pick-panel").fetchSemanticsNodes().isNotEmpty() }
         onNodeWithTag("browser-pick-comment").performTextInput("too small to tap")
         onNodeWithTag("browser-pick-save").performClick()
@@ -828,11 +833,12 @@ class BrowserPaneTest {
         rig.answerPicks()
         onNodeWithTag("browser-pick").performClick()
         onNodeWithTag("browser-pick-layer").performTouchInput { click(center) }
-        waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag("browser-pick-panel").fetchSemanticsNodes().isNotEmpty() }
-        onNodeWithText("button.buy · 312×44", useUnmergedTree = true).assertExists()
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithText("button.buy · 312×44", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
         onNodeWithTag("browser-pick-layer").performTouchInput { click(center) }
         waitUntil(timeoutMillis = 5_000) { onAllNodesWithText("aside.summary · 360×240", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
-        onNodeWithTag("browser-pin-2", useUnmergedTree = true).assertDoesNotExist() // the same comment, its container
+        onNodeWithTag("browser-pick-panel").assertDoesNotExist() // still only selecting
+        onNodeWithTag("browser-pick-add").performClick()
+        onNodeWithText("aside.summary · 360×240", useUnmergedTree = true).assertExists() // the container is commented
     }
 
     /** One way to delete: the panel's trash; Undo brings it back for a few seconds. */
@@ -842,6 +848,8 @@ class BrowserPaneTest {
         rig.answerPicks()
         onNodeWithTag("browser-pick").performClick()
         onNodeWithTag("browser-pick-layer").performTouchInput { click(center) }
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag("browser-pick-add").fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithTag("browser-pick-add").performClick()
         onNodeWithTag("browser-pick-comment").performTextInput("x")
         onNodeWithTag("browser-pick-save").performClick()
         onNodeWithTag("browser-pin-1", useUnmergedTree = true).performClick()
