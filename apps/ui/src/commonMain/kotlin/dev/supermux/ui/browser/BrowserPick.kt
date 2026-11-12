@@ -7,6 +7,12 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -282,16 +288,23 @@ internal fun PickLayers(pick: PickState, navigator: WebNavigator, touch: Boolean
                                 val y = if (below + 44.dp.toPx() < h.toPx()) below else ((hover.box.y * h.toPx()) - 72.dp.toPx()).coerceAtLeast(0f)
                                 IntOffset((hover.box.x * w.toPx()).coerceIn(0f, (w - 140.dp).toPx().coerceAtLeast(0f)).roundToInt(), y.roundToInt())
                             }
-                            .height(38.dp)
-                            .webViewOverlay(RoundedCornerShape(19.dp))
-                            .shadow(6.dp, RoundedCornerShape(19.dp))
-                            .clip(RoundedCornerShape(19.dp))
-                            .background(c.accent)
-                            .clickable { pick.commentSelection() }
-                            .padding(horizontal = 16.dp)
+                            .height(34.dp)
+                            .webViewOverlay(RoundedCornerShape(8.dp))
+                            // The kit's chip (the prototype's): our chrome, a hairline in the accent, our type; no
+                            // elevation and no ripple (Ahmet: the first one looked Android).
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(c.chrome)
+                            .border(1.dp, c.accent, RoundedCornerShape(8.dp))
+                            .clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null) { pick.commentSelection() }
+                            .padding(horizontal = 12.dp)
                             .testTag("browser-pick-add"),
                         contentAlignment = Alignment.Center,
-                    ) { Text("Add comment", fontSize = 14.sp, color = c.onAccent) }
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            androidx.compose.material3.Icon(KitGlyphs.Plus, contentDescription = null, tint = c.accent, modifier = Modifier.size(14.dp))
+                            Text("Add comment", fontSize = 13.sp, color = c.text)
+                        }
+                    }
                 }
             }
         }
@@ -300,7 +313,12 @@ internal fun PickLayers(pick: PickState, navigator: WebNavigator, touch: Boolean
             val tag = "browser-pin-${p.number}" + if (p.gone) "-gone" else ""
             Box(
                 Modifier
-                    .offset { IntOffset(((p.box.x * w.toPx()) - 9.dp.toPx()).roundToInt(), ((p.box.y * h.toPx()) - 9.dp.toPx()).roundToInt()) }
+                    // On its element's corner, but always whole on the page (an element at its edge: seen on the Fold).
+                    .offset {
+                        val x = ((p.box.x * w.toPx()) - 9.dp.toPx()).coerceIn(2.dp.toPx(), (w - PIN - 2.dp).toPx().coerceAtLeast(2.dp.toPx()))
+                        val y = ((p.box.y * h.toPx()) - 9.dp.toPx()).coerceIn(2.dp.toPx(), (h - PIN - 2.dp).toPx().coerceAtLeast(2.dp.toPx()))
+                        IntOffset(x.roundToInt(), y.roundToInt())
+                    }
                     .size(PIN)
                     .webViewOverlay(CircleShape)
                     .shadow(3.dp, CircleShape)
@@ -501,6 +519,47 @@ internal fun PickSendBar(pick: PickState, recipient: String?, onSend: ((send: Bo
                 if (!touch) KitTextAction("Add to message", { send(false) }, Modifier.testTag("browser-pick-compose"))
                 SendButton { send(true) }
             }
+        }
+    }
+}
+
+/**
+ * On a phone, the comments' send as a floating dark pill at the bottom of the page, above the home indicator and the
+ * gesture bar (Ahmet, 2026-11-12: the bar ran into the home indicator): "Send 1 comment to <chat>"; Undo in it for a
+ * few seconds after the trash. Without a chat to take them, it only counts them.
+ */
+@Composable
+internal fun PickSendPill(pick: PickState, recipient: String?, onSend: ((send: Boolean) -> Unit)?, modifier: Modifier = Modifier) {
+    val n = pick.commented.size
+    val count = if (n == 1) "1 comment" else "$n comments"
+    val shape = RoundedCornerShape(24.dp)
+    val ink = Color.White
+    Row(
+        modifier
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal))
+            .padding(bottom = 12.dp)
+            .heightIn(min = 48.dp)
+            .webViewOverlay(shape)
+            .shadow(10.dp, shape)
+            .clip(shape)
+            .background(Color(0xFF111214))
+            .then(if (n > 0 && onSend != null) Modifier.clickable { onSend(true) } else Modifier)
+            .padding(horizontal = 20.dp, vertical = 12.dp)
+            .testTag("browser-pick-pill"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        pick.removed?.let { removed ->
+            LaunchedEffect(removed) { delay(UNDO_MILLIS); if (pick.removed === removed) pick.removed = null }
+            Text("Undo", fontSize = 15.sp, color = ink, modifier = Modifier.clickable { pick.undo() }.testTag("browser-pick-undo"))
+        }
+        if (n > 0) {
+            Text(
+                if (onSend != null && recipient != null) "Send $count to $recipient" else if (onSend != null) "Send $count" else count,
+                fontSize = 15.sp, color = ink, maxLines = 1,
+            )
+        } else {
+            Text("Comment deleted", fontSize = 15.sp, color = ink.copy(alpha = 0.7f), maxLines = 1)
         }
     }
 }

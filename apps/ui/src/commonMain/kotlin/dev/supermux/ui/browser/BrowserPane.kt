@@ -441,6 +441,10 @@ fun BrowserPane(
                     }
                 }
             }
+            // A phone's send floats over the page's bottom, above the home indicator (no bar under it).
+            if (phone && (pick.commented.isNotEmpty() || pick.removed != null)) {
+                PickSendPill(pick, chat?.recipient(), commentsAction, Modifier.align(Alignment.BottomCenter))
+            }
             if (finding) {
                 // Floats over the page's corner: an overlay the page leaves room for where it sits above Compose (#122).
                 FindBar(
@@ -451,7 +455,7 @@ fun BrowserPane(
                 )
             }
         }
-        if (pick.commented.isNotEmpty() || pick.removed != null) PickSendBar(pick, chat?.recipient(), commentsAction, touch = phone)
+        if (!phone && (pick.commented.isNotEmpty() || pick.removed != null)) PickSendBar(pick, chat?.recipient(), commentsAction)
     }
     }
 }

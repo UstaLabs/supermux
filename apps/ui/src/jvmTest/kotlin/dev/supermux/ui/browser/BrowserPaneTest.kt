@@ -816,12 +816,14 @@ class BrowserPaneTest {
         onNodeWithTag("browser-pick-comment").performTextInput("too small to tap")
         onNodeWithTag("browser-pick-save").performClick()
         onNodeWithTag("browser-pick-panel").assertDoesNotExist()
-        onNodeWithText("1 comment → Checkout agent", useUnmergedTree = true).assertExists()
+        // A floating pill above the home indicator, not a bar (Ahmet, 2026-11-12): the count, to whom, and it sends.
+        onNodeWithTag("browser-pick-sendbar").assertDoesNotExist()
+        onNodeWithText("Send 1 comment to Checkout agent", useUnmergedTree = true).assertExists()
         onNodeWithTag("browser-pick-compose").assertDoesNotExist() // one way: Send
         onNodeWithTag("browser-pick-clear").assertDoesNotExist()
         onNodeWithTag("browser-pick-done").performClick()
         onNodeWithTag("browser-pick-layer").assertDoesNotExist()
-        onNodeWithTag("browser-pick-send").performClick()
+        onNodeWithTag("browser-pick-pill").performClick()
         waitUntil(timeoutMillis = 5_000) { sink.messages.isNotEmpty() }
         assertTrue(sink.messages.single().third)
     }
@@ -857,6 +859,29 @@ class BrowserPaneTest {
         onNodeWithTag("browser-pin-1", useUnmergedTree = true).assertDoesNotExist()
         onNodeWithTag("browser-pick-undo").performClick()
         onNodeWithTag("browser-pin-1", useUnmergedTree = true).assertExists()
+    }
+
+    /** A pin on an element at the page's edge stays whole on the page (seen on the Fold, half off its left edge). */
+    @Test fun aPinAtThePagesEdgeStaysOnThePage() = runComposeUiTest {
+        val rig = Rig()
+        showWithKeys(rig, mutableStateOf(view("https://vitejs.dev/")))
+        val nav = """{"selector":"div.nav","tag":"div","text":"","label":"div.nav · 800×52","box":{"x":0,"y":0,"w":1,"h":0.1}}"""
+        rig.engines.created.toList().forEach { engine ->
+            engine.evaluateAnswer = { script ->
+                when {
+                    "elementFromPoint" in script -> nav
+                    "querySelector(q)" in script -> """[{"x":0,"y":0,"w":1,"h":0.1}]"""
+                    else -> null
+                }
+            }
+        }
+        onNodeWithTag("browser-pick").performClick()
+        onNodeWithTag("browser-pick-layer").performMouseInput { click(center) }
+        onNodeWithTag("browser-pick-comment").performTextInput("x")
+        onNodeWithTag("browser-pick-comment").performKeyInput { pressKey(Key.Enter) }
+        val page = onNodeWithTag("browser-viewport").fetchSemanticsNode().boundsInRoot
+        val pin = onNodeWithTag("browser-pin-1", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        assertTrue(pin.left >= page.left && pin.top >= page.top, "the pin $pin inside the page $page")
     }
 
     /** No scripts into the page (the web client's iframe): no pick mode at all. */
