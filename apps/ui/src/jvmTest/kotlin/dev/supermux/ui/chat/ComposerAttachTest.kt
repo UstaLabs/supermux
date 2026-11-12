@@ -438,6 +438,54 @@ class ComposerAttachTest {
         assertEquals(0, sendCalls)
     }
 
+    // #122 3b: a Browser tab's comments are several pictures and their text: Send posts them all at once with the
+    // text, once every upload is done.
+    @Test fun externalAttach_severalFiles_sendsThemAllWithTheText() = runComposeUiTest {
+        var sentText: String? = null
+        var sentIds: List<String>? = null
+        var n = 0
+        setPlatformContent(FakePlatform()) {
+            Composer(
+                draft = "",
+                onDraftChange = {},
+                sending = false,
+                agentWorking = false,
+                onSend = { t, ids -> sentText = t; sentIds = ids },
+                onInterrupt = {},
+                onUpload = { _, _, _, _, _ -> "file-${++n}" },
+                externalAttach = ComposerExternalAttach(listOf(picked(tempFile("comment-1.png")), picked(tempFile("comment-2.png"))), "**2 browser comments**"),
+                onExternalAttachConsumed = {},
+            )
+        }
+        waitUntil(timeoutMillis = 5_000L) { sentText != null }
+        assertEquals("**2 browser comments**", sentText)
+        assertEquals(setOf("file-1", "file-2"), sentIds?.toSet())
+    }
+
+    // ⌥Send: the pictures staged and the text in the draft, nothing sent: the user adds to it and sends.
+    @Test fun externalAttach_stageOnly_putsTheTextInTheDraft() = runComposeUiTest {
+        var draft = "earlier words"
+        var sendCalls = 0
+        var consumed = false
+        setPlatformContent(FakePlatform()) {
+            Composer(
+                draft = draft,
+                onDraftChange = { draft = it },
+                sending = false,
+                agentWorking = false,
+                onSend = { _, _ -> sendCalls++ },
+                onInterrupt = {},
+                onUpload = { _, _, _, _, _ -> "file-x" },
+                externalAttach = ComposerExternalAttach(listOf(picked(tempFile("comment-1.png"))), "**1 browser comment**", send = false),
+                onExternalAttachConsumed = { consumed = true },
+            )
+        }
+        waitUntil(timeoutMillis = 5_000L) { consumed }
+        waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag("composer-chip").fetchSemanticsNodes().size == 1 }
+        assertEquals("earlier words\n\n**1 browser comment**", draft)
+        assertEquals(0, sendCalls)
+    }
+
     // A host's own attach chip sits above the field even with nothing staged.
     @Test fun leadingChips_showWithNothingStaged() = runComposeUiTest {
         setPlatformContent(FakePlatform()) {

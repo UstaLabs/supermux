@@ -10,6 +10,15 @@ import dev.supermux.proto.chatSessionId
  */
 fun interface BrowserToChat {
     fun sendImage(png: ByteArray, name: String): Boolean
+
+    /**
+     * A Browser tab's comments (#122 3b): [text] and its [images] (name, PNG) into the same chat; [send] posts them at
+     * once, else they wait in its composer (the text after what is there). False when there is no chat to take them.
+     */
+    fun sendMessage(text: String, images: List<Pair<String, ByteArray>>, send: Boolean): Boolean = false
+
+    /** The chat they go to, by its session's name; null when there is none. */
+    fun recipient(): String? = null
 }
 
 /** The workspace's. Null where a Browser tab can't send pictures to a chat: then it offers no screenshot at all. */

@@ -1975,23 +1975,35 @@ private fun WorkspacePanel(
     // its composer, unsent, so he writes about it first.
     val latestWs by rememberUpdatedState(ws)
     val latestCurrent by rememberUpdatedState(current)
+    // Its comments (#122 3b) go to the same chat: posted at once, or left in its composer.
+    val latestNames by rememberUpdatedState(sessionNames)
     val toChat = remember(current.id, compact) {
-        dev.supermux.ui.browser.BrowserToChat { png, name ->
-            val w = latestWs
-            val chat = dev.supermux.ui.browser.screenshotChat(w.viewsById.values, ui.selectedId, latestCurrent.primarySessionId)
-            val sessionId = chat?.chatSessionId() ?: return@BrowserToChat false
-            if (compact) {
-                wsApp.setActiveView(current.id, chat.id)
-            } else {
-                dev.supermux.workspace.groupIdOf(w.layoutSync.tree, chat.id)?.let { g -> w.layoutSync.edit { dev.supermux.workspace.setActiveViewInGroup(it, g, chat.id) } }
-                w.focusedViewId = chat.id
+        object : dev.supermux.ui.browser.BrowserToChat {
+            fun chat() = dev.supermux.ui.browser.screenshotChat(latestWs.viewsById.values, ui.selectedId, latestCurrent.primarySessionId)
+
+            fun deliver(images: List<Pair<String, ByteArray>>, text: String, send: Boolean): Boolean {
+                val w = latestWs
+                val chat = chat()
+                val sessionId = chat?.chatSessionId() ?: return false
+                if (compact) {
+                    wsApp.setActiveView(current.id, chat.id)
+                } else {
+                    dev.supermux.workspace.groupIdOf(w.layoutSync.tree, chat.id)?.let { g -> w.layoutSync.edit { dev.supermux.workspace.setActiveViewInGroup(it, g, chat.id) } }
+                    w.focusedViewId = chat.id
+                }
+                ui.externalAttach = sessionId to dev.supermux.ui.chat.ComposerExternalAttach(
+                    files = images.map { (name, png) -> dev.supermux.ui.platform.PickedFile(name, "image/png", dev.supermux.net.ByteArrayChunkSource(png)) },
+                    text = text,
+                    send = send,
+                )
+                return true
             }
-            ui.externalAttach = sessionId to dev.supermux.ui.chat.ComposerExternalAttach(
-                file = dev.supermux.ui.platform.PickedFile(name, "image/png", dev.supermux.net.ByteArrayChunkSource(png)),
-                text = "",
-                send = false,
-            )
-            true
+
+            override fun sendImage(png: ByteArray, name: String): Boolean = deliver(listOf(name to png), "", send = false)
+
+            override fun sendMessage(text: String, images: List<Pair<String, ByteArray>>, send: Boolean): Boolean = deliver(images, text, send)
+
+            override fun recipient(): String? = chat()?.chatSessionId()?.let { id -> latestNames[id] }
         }
     }
     CompositionLocalProvider(
