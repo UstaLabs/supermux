@@ -60,7 +60,8 @@ export async function createWorktree(opts: {
   const worktreeDir = join(worktreesRoot(), repoSlug(opts.repoRoot), randomUUID())
   t = performance.now()
   await mkdir(dirname(worktreeDir), { recursive: true })
-  await gitAsync(opts.repoRoot, ["worktree", "add", "-b", sessionBranch, worktreeDir, opts.baseBranch])
+  const start = await freshBase(opts.repoRoot, opts.baseBranch)
+  await gitAsync(opts.repoRoot, ["worktree", "add", "--no-track", "-b", sessionBranch, worktreeDir, start])
   phase?.("add", { ms: msSince(t), branch: sessionBranch })
   t = performance.now()
   const copied = await copyWorktreeIncludes(opts.repoRoot, worktreeDir)
@@ -75,6 +76,40 @@ export async function removeWorktree(repoRoot: string, worktreeDir: string, sess
   try { await gitAsync(repoRoot, ["worktree", "remove", ...(opts?.force ? ["--force"] : []), worktreeDir]) } catch { /* may already be gone */ }
   try { await gitAsync(repoRoot, ["worktree", "prune"]) } catch {}
   if (!opts?.keepBranch) { try { await gitAsync(repoRoot, ["branch", "-D", sessionBranch]) } catch {} }
+}
+
+/** How long a copy waits for its base's upstream before starting from what it already has. */
+const BASE_FETCH_TIMEOUT_MS = 20_000
+
+/**
+ * Card #72: where a new copy starts. The base is explicit (the folder's branch or the one picked); when it
+ * tracks a remote branch, that branch is fetched first and the copy starts from it, but only when it
+ * already holds every commit of the local base, so nothing local is dropped. No upstream, a failed fetch
+ * or a local base with commits of its own: the local base. Never a guessed main.
+ */
+export async function freshBase(repoRoot: string, base: string): Promise<string> {
+  if (!base || base === "HEAD") return base
+  const upstream = await gitAsync(repoRoot, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", `${base}@{upstream}`]).catch(() => "")
+  if (!upstream) return base
+  const remote = await gitAsync(repoRoot, ["config", `branch.${base}.remote`]).catch(() => "")
+  const merge = await gitAsync(repoRoot, ["config", `branch.${base}.merge`]).catch(() => "")
+  if (remote && remote !== "." && merge.startsWith("refs/heads/")) {
+    const t = performance.now()
+    try {
+      await gitAsync(repoRoot, ["fetch", "--no-tags", remote, merge.slice("refs/heads/".length)], {
+        timeoutMs: BASE_FETCH_TIMEOUT_MS, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+      })
+      log.info("base_fetched", { repoRoot, base, upstream, ms: msSince(t) })
+    } catch (err) {
+      log.warn("base_fetch_failed", { repoRoot, base, upstream, err: err instanceof Error ? err.message : String(err) })
+    }
+  }
+  try {
+    await gitAsync(repoRoot, ["merge-base", "--is-ancestor", base, upstream])
+    return upstream
+  } catch {
+    return base
+  }
 }
 
 /** Card #75: a session born asleep gets its branch at Send (so two quick Sends can't pick one name); the checkout waits for its wake. */
@@ -107,15 +142,32 @@ export async function ensureWorktreeAt(opts: {
   await gitAsync(opts.repoRoot, ["worktree", "prune"])
   if ((await existingBranchNames(opts.repoRoot)).has(opts.sessionBranch)) {
     // The branch exists (made at Send, or only the dir was removed): check it out at the same path.
+    await startFromFreshBase(opts.repoRoot, opts.sessionBranch, opts.baseBranch)
     await gitAsync(opts.repoRoot, ["worktree", "add", opts.workdir, opts.sessionBranch], { timeoutMs: CHECKOUT_TIMEOUT_MS })
   } else {
     // Branch was deleted (e.g., after merge) — recreate it from the base so work can continue.
-    await gitAsync(opts.repoRoot, ["worktree", "add", "-b", opts.sessionBranch, opts.workdir, opts.baseBranch], { timeoutMs: CHECKOUT_TIMEOUT_MS })
+    const start = await freshBase(opts.repoRoot, opts.baseBranch)
+    await gitAsync(opts.repoRoot, ["worktree", "add", "--no-track", "-b", opts.sessionBranch, opts.workdir, start], { timeoutMs: CHECKOUT_TIMEOUT_MS })
   }
   opts.onCheckedOut?.()
   await copyWorktreeIncludes(opts.repoRoot, opts.workdir)
   await runSetupHook(opts.repoRoot, opts.workdir, opts.sessionBranch, opts.baseBranch)
   return { created: true }
+}
+
+/** A branch made at Send sits on the local base. Before its first checkout it moves to the fetched base,
+ *  but only while it is untouched: a branch with any commit of its own stays where it is. */
+async function startFromFreshBase(repoRoot: string, branch: string, base: string): Promise<void> {
+  if (!base || base === "HEAD") return
+  const [tip, baseTip] = await Promise.all([
+    gitAsync(repoRoot, ["rev-parse", "--verify", `refs/heads/${branch}`]).catch(() => ""),
+    gitAsync(repoRoot, ["rev-parse", "--verify", base]).catch(() => ""),
+  ])
+  if (!tip || tip !== baseTip) return
+  const start = await freshBase(repoRoot, base)
+  if (start === base) return
+  await gitAsync(repoRoot, ["branch", "--force", "--no-track", branch, start])
+  log.info("session_branch_moved_to_fresh_base", { repoRoot, branch, base, start })
 }
 
 /** Copies the `.worktreeinclude` entries into the new worktree; returns how many it copied. */
