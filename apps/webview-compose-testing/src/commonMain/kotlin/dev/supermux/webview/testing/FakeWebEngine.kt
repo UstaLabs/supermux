@@ -1,5 +1,6 @@
 package dev.supermux.webview.testing
 
+import dev.supermux.webview.DeviceEmulation
 import dev.supermux.webview.FindResult
 import dev.supermux.webview.InspectorResult
 import dev.supermux.webview.WebCookie
@@ -47,6 +48,8 @@ import kotlinx.serialization.json.put
 
 /** How a [FakeWebEngine] behaves. */
 public data class FakeEngineBehavior(
+    /** Whether [FakeWebEngine.emulateDevice] applies (WebView2's device mode); false as most engines. */
+    val emulatesDevices: Boolean = false,
     /** Emit [EngineEvent.FirstPaint] during every load, reload and restore. */
     val paintsOnLoad: Boolean = true,
     /** The page's content height in CSS px, reported after load (for WrapContentHeight); null = never reported. */
@@ -337,6 +340,11 @@ public class FakeWebEngine(
     override fun setZoom(factor: Float): Boolean {
         record("zoom:$factor")
         return allowed("setZoom")
+    }
+
+    override fun emulateDevice(emulation: DeviceEmulation?): Boolean {
+        record("emulate:" + (emulation?.run { "${width}x$height@$deviceScaleFactor mobile=$mobile touch=$touch scale=$scale" } ?: "none"))
+        return behavior.emulatesDevices && allowed("emulateDevice")
     }
 
     override suspend fun setCookie(cookie: WebCookie): Boolean {

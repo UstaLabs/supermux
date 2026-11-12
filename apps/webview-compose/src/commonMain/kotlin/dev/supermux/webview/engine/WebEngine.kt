@@ -368,6 +368,9 @@ public interface WebEngine {
     /** Sets the page's zoom, 1.0 being 100 %. False when the engine can't. */
     public fun setZoom(factor: Float): Boolean = false
 
+    /** Shows the page as [emulation]'s device, or as itself again (null). False when the engine can't (#122). */
+    public fun emulateDevice(emulation: dev.supermux.webview.DeviceEmulation?): Boolean = false
+
     /** Puts [cookie] in the view's profile, done when this returns true. False when the engine can't. */
     public suspend fun setCookie(cookie: WebCookie): Boolean = false
 

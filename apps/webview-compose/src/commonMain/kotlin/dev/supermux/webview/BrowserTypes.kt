@@ -74,3 +74,35 @@ public sealed interface InspectorResult {
 
     public data object Unsupported : InspectorResult
 }
+
+/**
+ * A device for the page to be shown as, as a browser's device mode (#122): its CSS viewport [width] × [height], its
+ * [deviceScaleFactor] (devicePixelRatio), whether it is [mobile] (a mobile viewport: the page's viewport tag, overlay
+ * scrollbars) and has [touch] (touch events and a coarse pointer, the mouse sending touches), drawn at [scale] in a view
+ * of the viewport's size times it. Where the engine has it, the view's own size stops mattering to the page.
+ */
+public class DeviceEmulation(
+    public val width: Int,
+    public val height: Int,
+    public val deviceScaleFactor: Double,
+    public val mobile: Boolean,
+    public val touch: Boolean,
+    public val scale: Float = 1f,
+) {
+    override fun equals(other: Any?): Boolean = this === other || other is DeviceEmulation && width == other.width &&
+        height == other.height && deviceScaleFactor == other.deviceScaleFactor && mobile == other.mobile &&
+        touch == other.touch && scale == other.scale
+
+    override fun hashCode(): Int {
+        var result = width
+        result = 31 * result + height
+        result = 31 * result + deviceScaleFactor.hashCode()
+        result = 31 * result + mobile.hashCode()
+        result = 31 * result + touch.hashCode()
+        result = 31 * result + scale.hashCode()
+        return result
+    }
+
+    override fun toString(): String =
+        "DeviceEmulation(width=$width, height=$height, deviceScaleFactor=$deviceScaleFactor, mobile=$mobile, touch=$touch, scale=$scale)"
+}

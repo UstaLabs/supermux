@@ -75,6 +75,8 @@ internal fun DeviceBar(
     emulation: Boolean = true,
     /** The scale the device is drawn at now, or null where the page can't be fitted: then no Fit at all. */
     scale: Float? = null,
+    /** Whether the engine sets the page's pixel ratio and touch (WebView2): without it, no DPR and no Touch at all. */
+    ratioAndTouch: Boolean = false,
 ) {
     val c = kitColors()
     var menu by remember { mutableStateOf(false) }
@@ -127,6 +129,15 @@ internal fun DeviceBar(
                     choices = listOf(Triple("Fit to pane", "browser-device-fit-auto", mode.fit == null)) +
                         DeviceMode.FITS.map { Triple("$it%", "browser-device-fit-$it", mode.fit == it) },
                 ) { i -> onChange(mode.copy(fit = if (i == 0) null else DeviceMode.FITS[i - 1])) }
+            }
+            if (ratioAndTouch) {
+                BarChoice(
+                    label = "DPR " + ratioLabel(mode.deviceScaleFactor()),
+                    tag = "browser-device-dpr",
+                    choices = listOf(Triple("Default (" + ratioLabel(mode.copy(dpr = null).deviceScaleFactor()) + ")", "browser-device-dpr-default", mode.dpr == null)) +
+                        DeviceMode.DPRS.map { Triple(ratioLabel(it), "browser-device-dpr-${ratioLabel(it)}", mode.dpr == it) },
+                ) { i -> onChange(mode.copy(dpr = if (i == 0) null else DeviceMode.DPRS[i - 1])) }
+                BarButton(KitGlyphs.Touch, if (mode.hasTouch()) "Touch on" else "Touch off", "browser-device-touch", { onChange(mode.copy(touch = !mode.hasTouch())) }, on = mode.hasTouch())
             }
             if (emulation) {
                 BarDivider()
@@ -254,3 +265,6 @@ internal fun DeviceStage(mode: DeviceMode, fit: Boolean = false, onScale: (Float
         }
     }
 }
+
+/** A pixel ratio as Chrome writes it: 3, 2.625. */
+private fun ratioLabel(ratio: Double): String = if (ratio == kotlin.math.floor(ratio)) ratio.toInt().toString() else ratio.toString()

@@ -77,4 +77,14 @@ class DeviceModeTest {
         assertEquals(1.5f, ipad.copy(fit = 150).scaleIn(paneWidth = 100f, paneHeight = 100f))
         assertTrue(DeviceMode.FITS.containsAll(listOf(50, 75, 100, 125, 150)))
     }
+
+    /** #122 2b (Windows): the pixel ratio is the preset's until chosen; touch follows Mobile until chosen. */
+    @Test fun thePixelRatioAndTouchFollowThePresetUntilChosen() {
+        assertEquals(3.0, DeviceMode.Default.deviceScaleFactor())
+        assertEquals(1.0, DeviceMode.Default.resized(width = 500).deviceScaleFactor(), "Responsive: 1")
+        assertEquals(2.0, DeviceMode.Default.copy(dpr = 2.0).deviceScaleFactor())
+        assertTrue(DeviceMode.Default.hasTouch())
+        assertEquals(false, DeviceMode.Default.withMobile(false).hasTouch())
+        assertEquals(true, DeviceMode.Default.withMobile(false).copy(touch = true).hasTouch())
+    }
 }

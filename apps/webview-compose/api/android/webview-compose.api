@@ -69,6 +69,21 @@ public final class dev/supermux/webview/DefaultPlaceholderKt {
 	public static final fun DefaultPlaceholder (Ldev/supermux/webview/WebViewState;ZLandroidx/compose/runtime/Composer;II)V
 }
 
+public final class dev/supermux/webview/DeviceEmulation {
+	public static final field $stable I
+	public fun <init> (IIDZZF)V
+	public synthetic fun <init> (IIDZZFILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDeviceScaleFactor ()D
+	public final fun getHeight ()I
+	public final fun getMobile ()Z
+	public final fun getScale ()F
+	public final fun getTouch ()Z
+	public final fun getWidth ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public abstract interface class dev/supermux/webview/DialogResult {
 }
 
@@ -464,6 +479,7 @@ public final class dev/supermux/webview/WebNavigator {
 	public static final field $stable I
 	public final fun back ()V
 	public final fun clearFind ()V
+	public final fun emulateDevice (Ldev/supermux/webview/DeviceEmulation;)Z
 	public final fun favicon (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun find (Ljava/lang/String;ZLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun find$default (Ldev/supermux/webview/WebNavigator;Ljava/lang/String;ZLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
@@ -972,6 +988,7 @@ public abstract interface class dev/supermux/webview/engine/WebEngine {
 	public abstract fun applyOverlays (Ldev/supermux/webview/runtime/OverlayCutouts;)V
 	public fun clearFind ()V
 	public abstract fun configure (Ldev/supermux/webview/engine/PageSetup;)V
+	public fun emulateDevice (Ldev/supermux/webview/DeviceEmulation;)Z
 	public abstract fun evaluate (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun find (Ljava/lang/String;ZLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun getClient ()Ldev/supermux/webview/engine/EngineClient;
@@ -1004,6 +1021,7 @@ public abstract interface class dev/supermux/webview/engine/WebEngine {
 
 public final class dev/supermux/webview/engine/WebEngine$DefaultImpls {
 	public static fun clearFind (Ldev/supermux/webview/engine/WebEngine;)V
+	public static fun emulateDevice (Ldev/supermux/webview/engine/WebEngine;Ldev/supermux/webview/DeviceEmulation;)Z
 	public static fun find (Ldev/supermux/webview/engine/WebEngine;Ljava/lang/String;ZLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static fun getNeedsCutouts (Ldev/supermux/webview/engine/WebEngine;)Z
 	public static fun getOnUnusable (Ldev/supermux/webview/engine/WebEngine;)Lkotlin/jvm/functions/Function0;

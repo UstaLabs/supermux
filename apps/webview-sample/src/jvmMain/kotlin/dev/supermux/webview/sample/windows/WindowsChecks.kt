@@ -29,6 +29,7 @@ import dev.supermux.webview.NavigationDecision
 import dev.supermux.webview.NavigationRequest
 import dev.supermux.webview.PermissionKind
 import dev.supermux.webview.PermissionRequest
+import dev.supermux.webview.DeviceEmulation
 import dev.supermux.webview.WebContent
 import dev.supermux.webview.WebOrigin
 import dev.supermux.webview.WebProfile
@@ -684,6 +685,22 @@ object WindowsChecks {
                 corners.all { (x, y) -> LinuxChecks.near(0x000000, screenPixel(x, y), 24) } &&
                     inside.all { (x, y) -> LinuxChecks.near(0xffffff, screenPixel(x, y), 24) }
             }
+        },
+        Check("a-device-is-emulated-with-its-size-ratio-and-touch") {
+            // #122 2b: device mode on WebView2 is Chrome's own (DevTools protocol): the page laid out at the device's CSS
+            // size whatever the surface's, at its pixel ratio, with touch and a coarse pointer; and back to itself.
+            val scene = SceneEngine(engine(), solidPage("device", "#ffffff"), ::contentOrigin)
+            compose { Box(Modifier.padding(start = 20.dp, top = 20.dp)) { scene.Surface(Modifier.size(206.dp, 458.dp)) } }
+            scene.awaitPainted()
+            assertEquals("206", scene.engine.evaluate("innerWidth"), "the surface's width before")
+            assertTrue(scene.engine.emulateDevice(DeviceEmulation(412, 915, 2.625, mobile = true, touch = true, scale = 0.5f)))
+            eventually("the page at the device's width") { scene.engine.evaluate("innerWidth") == "412" }
+            assertEquals("2.625", scene.engine.evaluate("devicePixelRatio"), "the device's pixel ratio")
+            assertEquals("5", scene.engine.evaluate("navigator.maxTouchPoints"), "touch")
+            assertEquals("true", scene.engine.evaluate("matchMedia('(pointer: coarse)').matches"), "a coarse pointer")
+            assertTrue(scene.engine.emulateDevice(null))
+            eventually("the page back at the surface's width") { scene.engine.evaluate("innerWidth") == "206" }
+            assertEquals("1", scene.engine.evaluate("devicePixelRatio"), "the window's scale again")
         },
         Check("an-overlay-takes-the-pages-hover") {
             // L28: Compose's hit test routes the mouse: over an overlay the page gets a mouseout and no moves.

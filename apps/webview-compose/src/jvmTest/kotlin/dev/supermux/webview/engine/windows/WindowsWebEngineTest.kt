@@ -341,6 +341,26 @@ class WindowsWebEngineTest {
         rig.close()
     }
 
+    /** #122 2b: device mode on Windows is Chrome's own, through CDP; null takes it off. */
+    @Test fun aDeviceIsEmulatedThroughCdpAndTakenOff() = runTest {
+        val rig = WinRig(this, WebProfile.Default)
+        rig.warm()
+        rig.engine.configure(WebSettings.Default.pageSetup(dark = false, bridgeOrigins = emptySet()))
+        fun sent(method: String) = rig.page.devtools.filter { it.second == method }.map { it.third }
+        assertTrue(rig.engine.emulateDevice(dev.supermux.webview.DeviceEmulation(412, 915, 2.625, mobile = true, touch = true, scale = 0.5f)))
+        assertEquals(
+            "{\"width\":412,\"height\":915,\"deviceScaleFactor\":2.625,\"mobile\":true,\"scale\":0.5}",
+            sent("Emulation.setDeviceMetricsOverride").last(),
+        )
+        assertEquals("{\"enabled\":true,\"maxTouchPoints\":5}", sent("Emulation.setTouchEmulationEnabled").last())
+        assertEquals("{\"enabled\":true,\"configuration\":\"mobile\"}", sent("Emulation.setEmitTouchEventsForMouse").last())
+        assertTrue(rig.engine.emulateDevice(null))
+        assertEquals(listOf("{}"), sent("Emulation.clearDeviceMetricsOverride"))
+        assertEquals("{\"enabled\":false}", sent("Emulation.setTouchEmulationEnabled").last())
+        assertEquals("{\"enabled\":false}", sent("Emulation.setEmitTouchEventsForMouse").last())
+        rig.close()
+    }
+
     @Test fun aHugePageControlledTitleOrUrlCostsNoBacktracking() = runTest {
         // L20: no regex with nested quantifiers on what a page controls.
         val rig = WinRig(this)

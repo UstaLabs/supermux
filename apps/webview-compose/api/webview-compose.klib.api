@@ -149,6 +149,7 @@ abstract interface dev.supermux.webview.engine/WebEngine { // dev.supermux.webvi
     abstract suspend fun saveState(): kotlin/ByteArray? // dev.supermux.webview.engine/WebEngine.saveState|saveState(){}[0]
     abstract suspend fun snapshot(): androidx.compose.ui.graphics/ImageBitmap? // dev.supermux.webview.engine/WebEngine.snapshot|snapshot(){}[0]
     open fun clearFind() // dev.supermux.webview.engine/WebEngine.clearFind|clearFind(){}[0]
+    open fun emulateDevice(dev.supermux.webview/DeviceEmulation?): kotlin/Boolean // dev.supermux.webview.engine/WebEngine.emulateDevice|emulateDevice(dev.supermux.webview.DeviceEmulation?){}[0]
     open fun openInspector(): dev.supermux.webview/InspectorResult // dev.supermux.webview.engine/WebEngine.openInspector|openInspector(){}[0]
     open fun overlaysAtSnapshot(dev.supermux.webview.runtime/OverlayCutouts) // dev.supermux.webview.engine/WebEngine.overlaysAtSnapshot|overlaysAtSnapshot(dev.supermux.webview.runtime.OverlayCutouts){}[0]
     open fun requestFocus() // dev.supermux.webview.engine/WebEngine.requestFocus|requestFocus(){}[0]
@@ -1052,6 +1053,27 @@ final class dev.supermux.webview/ConsoleMessage { // dev.supermux.webview/Consol
     final fun toString(): kotlin/String // dev.supermux.webview/ConsoleMessage.toString|toString(){}[0]
 }
 
+final class dev.supermux.webview/DeviceEmulation { // dev.supermux.webview/DeviceEmulation|null[0]
+    constructor <init>(kotlin/Int, kotlin/Int, kotlin/Double, kotlin/Boolean, kotlin/Boolean, kotlin/Float = ...) // dev.supermux.webview/DeviceEmulation.<init>|<init>(kotlin.Int;kotlin.Int;kotlin.Double;kotlin.Boolean;kotlin.Boolean;kotlin.Float){}[0]
+
+    final val deviceScaleFactor // dev.supermux.webview/DeviceEmulation.deviceScaleFactor|{}deviceScaleFactor[0]
+        final fun <get-deviceScaleFactor>(): kotlin/Double // dev.supermux.webview/DeviceEmulation.deviceScaleFactor.<get-deviceScaleFactor>|<get-deviceScaleFactor>(){}[0]
+    final val height // dev.supermux.webview/DeviceEmulation.height|{}height[0]
+        final fun <get-height>(): kotlin/Int // dev.supermux.webview/DeviceEmulation.height.<get-height>|<get-height>(){}[0]
+    final val mobile // dev.supermux.webview/DeviceEmulation.mobile|{}mobile[0]
+        final fun <get-mobile>(): kotlin/Boolean // dev.supermux.webview/DeviceEmulation.mobile.<get-mobile>|<get-mobile>(){}[0]
+    final val scale // dev.supermux.webview/DeviceEmulation.scale|{}scale[0]
+        final fun <get-scale>(): kotlin/Float // dev.supermux.webview/DeviceEmulation.scale.<get-scale>|<get-scale>(){}[0]
+    final val touch // dev.supermux.webview/DeviceEmulation.touch|{}touch[0]
+        final fun <get-touch>(): kotlin/Boolean // dev.supermux.webview/DeviceEmulation.touch.<get-touch>|<get-touch>(){}[0]
+    final val width // dev.supermux.webview/DeviceEmulation.width|{}width[0]
+        final fun <get-width>(): kotlin/Int // dev.supermux.webview/DeviceEmulation.width.<get-width>|<get-width>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview/DeviceEmulation.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // dev.supermux.webview/DeviceEmulation.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // dev.supermux.webview/DeviceEmulation.toString|toString(){}[0]
+}
+
 final class dev.supermux.webview/DownloadRequest { // dev.supermux.webview/DownloadRequest|null[0]
     constructor <init>(kotlin/String, kotlin/String?, kotlin/String?, kotlin/Long?) // dev.supermux.webview/DownloadRequest.<init>|<init>(kotlin.String;kotlin.String?;kotlin.String?;kotlin.Long?){}[0]
 
@@ -1168,6 +1190,7 @@ final class dev.supermux.webview/WebCookie { // dev.supermux.webview/WebCookie|n
 final class dev.supermux.webview/WebNavigator { // dev.supermux.webview/WebNavigator|null[0]
     final fun back() // dev.supermux.webview/WebNavigator.back|back(){}[0]
     final fun clearFind() // dev.supermux.webview/WebNavigator.clearFind|clearFind(){}[0]
+    final fun emulateDevice(dev.supermux.webview/DeviceEmulation?): kotlin/Boolean // dev.supermux.webview/WebNavigator.emulateDevice|emulateDevice(dev.supermux.webview.DeviceEmulation?){}[0]
     final fun forward() // dev.supermux.webview/WebNavigator.forward|forward(){}[0]
     final fun load(kotlin/String) // dev.supermux.webview/WebNavigator.load|load(kotlin.String){}[0]
     final fun openInspector(): dev.supermux.webview/InspectorResult // dev.supermux.webview/WebNavigator.openInspector|openInspector(){}[0]
@@ -1395,6 +1418,7 @@ final val dev.supermux.webview/dev_supermux_webview_Activation_Eager$stableprop 
 final val dev.supermux.webview/dev_supermux_webview_Activation_OnInteraction$stableprop // dev.supermux.webview/dev_supermux_webview_Activation_OnInteraction$stableprop|#static{}dev_supermux_webview_Activation_OnInteraction$stableprop[0]
 final val dev.supermux.webview/dev_supermux_webview_Activation_WhenVisible$stableprop // dev.supermux.webview/dev_supermux_webview_Activation_WhenVisible$stableprop|#static{}dev_supermux_webview_Activation_WhenVisible$stableprop[0]
 final val dev.supermux.webview/dev_supermux_webview_ConsoleMessage$stableprop // dev.supermux.webview/dev_supermux_webview_ConsoleMessage$stableprop|#static{}dev_supermux_webview_ConsoleMessage$stableprop[0]
+final val dev.supermux.webview/dev_supermux_webview_DeviceEmulation$stableprop // dev.supermux.webview/dev_supermux_webview_DeviceEmulation$stableprop|#static{}dev_supermux_webview_DeviceEmulation$stableprop[0]
 final val dev.supermux.webview/dev_supermux_webview_DialogResult_Confirmed$stableprop // dev.supermux.webview/dev_supermux_webview_DialogResult_Confirmed$stableprop|#static{}dev_supermux_webview_DialogResult_Confirmed$stableprop[0]
 final val dev.supermux.webview/dev_supermux_webview_DialogResult_Dismissed$stableprop // dev.supermux.webview/dev_supermux_webview_DialogResult_Dismissed$stableprop|#static{}dev_supermux_webview_DialogResult_Dismissed$stableprop[0]
 final val dev.supermux.webview/dev_supermux_webview_DialogResult_Text$stableprop // dev.supermux.webview/dev_supermux_webview_DialogResult_Text$stableprop|#static{}dev_supermux_webview_DialogResult_Text$stableprop[0]
@@ -1523,6 +1547,7 @@ final fun dev.supermux.webview/dev_supermux_webview_Activation_Eager$stableprop_
 final fun dev.supermux.webview/dev_supermux_webview_Activation_OnInteraction$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_Activation_OnInteraction$stableprop_getter|dev_supermux_webview_Activation_OnInteraction$stableprop_getter(){}[0]
 final fun dev.supermux.webview/dev_supermux_webview_Activation_WhenVisible$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_Activation_WhenVisible$stableprop_getter|dev_supermux_webview_Activation_WhenVisible$stableprop_getter(){}[0]
 final fun dev.supermux.webview/dev_supermux_webview_ConsoleMessage$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_ConsoleMessage$stableprop_getter|dev_supermux_webview_ConsoleMessage$stableprop_getter(){}[0]
+final fun dev.supermux.webview/dev_supermux_webview_DeviceEmulation$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_DeviceEmulation$stableprop_getter|dev_supermux_webview_DeviceEmulation$stableprop_getter(){}[0]
 final fun dev.supermux.webview/dev_supermux_webview_DialogResult_Confirmed$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_DialogResult_Confirmed$stableprop_getter|dev_supermux_webview_DialogResult_Confirmed$stableprop_getter(){}[0]
 final fun dev.supermux.webview/dev_supermux_webview_DialogResult_Dismissed$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_DialogResult_Dismissed$stableprop_getter|dev_supermux_webview_DialogResult_Dismissed$stableprop_getter(){}[0]
 final fun dev.supermux.webview/dev_supermux_webview_DialogResult_Text$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_DialogResult_Text$stableprop_getter|dev_supermux_webview_DialogResult_Text$stableprop_getter(){}[0]
