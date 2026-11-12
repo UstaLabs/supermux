@@ -62,6 +62,15 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.browser_comment_remove
+import dev.supermux.ui.resources.browser_comment_close
+import dev.supermux.ui.resources.browser_comment_sent
+import dev.supermux.ui.resources.browser_comment_seen
+import dev.supermux.ui.resources.browser_comment_done
+import dev.supermux.ui.resources.browser_comment_answered
+import dev.supermux.ui.resources.browser_comment_dismissed
 import dev.supermux.ui.settings.kit.KitGlyphs
 import dev.supermux.ui.settings.kit.KitTextAction
 import dev.supermux.ui.settings.kit.kitColors
@@ -83,6 +92,9 @@ internal class Pick(val number: Int, element: PageElement) {
     val tapped = element.selector
     var comment by mutableStateOf("")
     var box by mutableStateOf(element.box)
+
+    /** Its id once sent and stored (#122 phase 4): then it's the agent's, and the pin shows what the agent did. */
+    var commentId by mutableStateOf<String?>(null)
 
     /** The element no longer resolves (the page changed): the pin greys out and stays. */
     var gone by mutableStateOf(false)
@@ -115,7 +127,8 @@ internal class PickState {
     }
     private var next = 1
 
-    val commented: List<Pick> get() = picks.filter { it.comment.isNotBlank() }
+    /** The comments still to send: with words, not yet sent. */
+    val commented: List<Pick> get() = picks.filter { it.comment.isNotBlank() && it.commentId == null }
 
     fun add(element: PageElement): Pick = Pick(next++, element).also { picks += it }
 
@@ -168,7 +181,13 @@ internal class PickState {
  * overlay, so a macOS page doesn't), the hover box and its label; always, the pins and the open comment.
  */
 @Composable
-internal fun PickLayers(pick: PickState, navigator: WebNavigator, touch: Boolean = false) {
+internal fun PickLayers(
+    pick: PickState,
+    navigator: WebNavigator,
+    touch: Boolean = false,
+    /** The sent comments' states by id (#122 phase 4), as the agent answers them. */
+    states: Map<String, dev.supermux.net.BrowserCommentDto> = emptyMap(),
+) {
     val c = kitColors()
     val scope = rememberCoroutineScope()
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -310,7 +329,12 @@ internal fun PickLayers(pick: PickState, navigator: WebNavigator, touch: Boolean
         }
 
         for (p in pick.picks) {
-            val tag = "browser-pin-${p.number}" + if (p.gone) "-gone" else ""
+            val status = p.commentId?.let { states[it]?.status ?: "sent" }
+            val tag = "browser-pin-${p.number}" + when {
+                status != null -> "-$status"
+                p.gone -> "-gone"
+                else -> ""
+            }
             Box(
                 Modifier
                     // On its element's corner, but always whole on the page (an element at its edge: seen on the Fold).
@@ -323,7 +347,14 @@ internal fun PickLayers(pick: PickState, navigator: WebNavigator, touch: Boolean
                     .webViewOverlay(CircleShape)
                     .shadow(3.dp, CircleShape)
                     .clip(CircleShape)
-                    .background(if (p.gone) c.faint else c.accent)
+                    .background(
+                        when (status) {
+                            "done" -> c.ok
+                            "dismissed" -> c.faint
+                            null -> if (p.gone) c.faint else c.accent
+                            else -> c.accent
+                        },
+                    )
                     .combinedClickable(
                         onClick = { pick.closeComment(); pick.editing = p },
                         // An invisible shortcut on touch: a long press deletes, as the trash does (§5.2).
@@ -332,11 +363,19 @@ internal fun PickLayers(pick: PickState, navigator: WebNavigator, touch: Boolean
                     .testTag(tag),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("${p.number}", fontSize = 11.sp, color = c.onAccent)
+                // A done comment is a check; the others keep their number.
+                Text(if (status == "done") "✓" else "${p.number}", fontSize = 11.sp, color = c.onAccent)
             }
         }
 
-        pick.editing?.let { open -> if (touch) CommentSheet(open, pick) else CommentPopover(open, pick, w, h) }
+        pick.editing?.let { open ->
+            val sent = open.commentId?.let { states[it] ?: dev.supermux.net.BrowserCommentDto(it, "", "", open.number, selector = open.element.selector, comment = open.comment, status = "sent", createdAt = "", updatedAt = "") }
+            when {
+                sent != null -> SentComment(open, sent, pick, w, h)
+                touch -> CommentSheet(open, pick)
+                else -> CommentPopover(open, pick, w, h)
+            }
+        }
     }
 }
 
@@ -399,6 +438,55 @@ private fun CommentPopover(open: Pick, pick: PickState, w: Dp, h: Dp) {
                 }
             },
         )
+    }
+}
+
+/** A status as the pin's card says it, in the app's language: "Done · padding fixed". */
+@Composable
+internal fun statusLine(c: dev.supermux.net.BrowserCommentDto): String {
+    val word = localized(
+        when (c.status) {
+            "seen" -> Res.string.browser_comment_seen
+            "done" -> Res.string.browser_comment_done
+            "answered" -> Res.string.browser_comment_answered
+            "dismissed" -> Res.string.browser_comment_dismissed
+            else -> Res.string.browser_comment_sent
+        },
+    )
+    return if (c.note.isNullOrBlank()) word else "$word · ${c.note}"
+}
+
+/** A sent comment's card under its element: its words and what the agent did with it; Remove drops the pin. */
+@Composable
+private fun SentComment(open: Pick, comment: dev.supermux.net.BrowserCommentDto, pick: PickState, w: Dp, h: Dp) {
+    val c = kitColors()
+    val shape = RoundedCornerShape(8.dp)
+    val width = 280.dp
+    Column(
+        Modifier
+            .offset {
+                val x = (open.box.x * w.toPx()).coerceIn(0f, (w - width).toPx().coerceAtLeast(0f))
+                val below = (open.box.y + open.box.height) * h.toPx() + 6.dp.toPx()
+                val y = if (below + 90.dp.toPx() < h.toPx()) below else ((open.box.y * h.toPx()) - 96.dp.toPx()).coerceAtLeast(0f)
+                IntOffset(x.roundToInt(), y.roundToInt())
+            }
+            .width(width)
+            .webViewOverlay(shape)
+            .shadow(10.dp, shape)
+            .clip(shape)
+            .background(c.chrome)
+            .border(1.dp, c.line, shape)
+            .padding(10.dp)
+            .testTag("browser-pick-sent"),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text("\u201C${open.comment}\u201D", fontSize = 13.sp, color = c.text)
+        Text(statusLine(comment), fontSize = 12.sp, color = if (comment.status == "done") c.ok else c.dim)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            KitTextAction(localized(Res.string.browser_comment_remove), { pick.remove(open) }, Modifier.testTag("browser-pick-remove"))
+            Spacer(Modifier.width(8.dp))
+            KitTextAction(localized(Res.string.browser_comment_close), { pick.editing = null })
+        }
     }
 }
 

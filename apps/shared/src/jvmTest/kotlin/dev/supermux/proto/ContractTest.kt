@@ -20,7 +20,7 @@ class ContractTest {
             "agent_state", "agent_error", "message_append", "activity_append", "bg_tasks",
             "commands_changed", "finish_job", "session_git", "session_git_remote",
             "sessions_reordered", "session_read",
-            "walkthrough_updated", "review_comment",
+            "walkthrough_updated", "review_comment", "browser_comment",
             "request_open", "request_closed", "error",
             "worktree_sizes", "worktrees_removed", "agent_models_changed", "host_requirements", "keep_awake", "telemetry",
             "subagent_update", "subagents_cleared", "activity_append_subagent", "activity_append_subagent_message",
@@ -67,6 +67,7 @@ class ContractTest {
                 is ServerFrame.FsChanged -> {}
                 is ServerFrame.WalkthroughUpdated -> {}
                 is ServerFrame.ReviewCommentFrame -> {}
+                is ServerFrame.BrowserCommentFrame -> {}
                 is ServerFrame.LspStatus -> {}
                 is ServerFrame.LspReady -> {}
                 is ServerFrame.LspError -> {}
@@ -91,6 +92,7 @@ class ContractTest {
                 is ServerFrame.TelemetryChanged -> {}
                 is ServerFrame.WalkthroughUpdated -> {}
                 is ServerFrame.ReviewCommentFrame -> {}
+                is ServerFrame.BrowserCommentFrame -> {}
                 is ServerFrame.RequestOpen -> {}
                 // The chosen answer has to survive the wire — the transcript line quotes it.
                 is ServerFrame.RequestClosed -> assertEquals("Allow always", frame.answerLabel)

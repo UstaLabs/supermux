@@ -30,4 +30,13 @@
     <string name="general_cache_empty_session">Boş. Görseller ve dosyalar yalnızca bu sayfa kapanana kadar tutulur.</string>
     <string name="general_cache_size_kept">%1$s; anında ve çevrimdışı açılmaları için saklanır.</string>
     <string name="general_cache_size_session">%1$s; yalnızca bu sayfa kapanana kadar tutulur.</string>
+
+    <!-- Browser tab › a sent comment (#122 phase 4) -->
+    <string name="browser_comment_remove">Kaldır</string>
+    <string name="browser_comment_close">Kapat</string>
+    <string name="browser_comment_sent">Gönderildi</string>
+    <string name="browser_comment_seen">Görüldü</string>
+    <string name="browser_comment_done">Tamamlandı</string>
+    <string name="browser_comment_answered">Yanıtlandı</string>
+    <string name="browser_comment_dismissed">Yok sayıldı</string>
 </resources>

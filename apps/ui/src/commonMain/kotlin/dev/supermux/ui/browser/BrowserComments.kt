@@ -24,18 +24,25 @@ internal fun pinMark(number: Int): String = if (number in 1..20) (0x2460 + numbe
  * then each comment with its element (a selector that resolves to it, and its text) and its picture's name. Nothing
  * else from the page: the agent has the code.
  */
-internal fun commentsMessage(url: String?, viewedAs: String?, comments: List<CommentOut>): String = buildString {
+internal fun commentsMessage(url: String?, viewedAs: String?, comments: List<CommentOut>, ids: Map<Int, String>? = null): String = buildString {
     append(if (comments.size == 1) "**1 browser comment**" else "**${comments.size} browser comments**")
     url?.let { append(" · ").append(it) }
     append('\n')
     viewedAs?.let { append("Viewed as ").append(it).append('\n') }
     for (c in comments) {
-        append("\n### ").append(pinMark(c.number)).append(" \"").append(c.comment.trim().replace("\n", " ")).append("\"\n")
+        append("\n### ").append(pinMark(c.number)).append(" \"").append(c.comment.trim().replace("\n", " ")).append('"')
+        ids?.get(c.number)?.let { append(" · id ").append(it) }
+        append('\n')
         append("- element: `").append(c.selector).append('`')
         // The text when it helps tell the element apart: not when empty or already in the selector.
         if (c.text.isNotBlank() && !c.selector.contains(c.text, ignoreCase = true)) append(" · text \"").append(c.text).append('"')
         append('\n')
         c.picture?.let { append("- picture: ").append(it).append('\n') }
+    }
+    // Stored (phase 4): the agent answers each through its mux tools, and the pins follow.
+    if (!ids.isNullOrEmpty()) {
+        append("\nAnswer each with your mux tools: resolve_browser_comment (done, with what you changed), reply_browser_comment ")
+        append("or dismiss_browser_comment, by its id.")
     }
 }.trimEnd()
 

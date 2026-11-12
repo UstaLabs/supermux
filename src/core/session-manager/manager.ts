@@ -52,6 +52,7 @@ import type { WorkspaceDto } from "../workspace/dto"
 import type { ProviderName } from "../display/types"
 import { makeLogger } from "../../shared/log"
 import { computeWorkdirDiff } from "../editor/workdir-diff"
+import type { BrowserCommentStore } from "../browser-comments/store"
 import type { ReviewStore } from "../review/store"
 import type { WalkthroughStore } from "../walkthrough/store"
 import { authorSteps, toWalkthroughDto, type ToolStepInput } from "../walkthrough/author"
@@ -196,6 +197,8 @@ export type SessionManagerPorts = {
     searchStore: Pick<SearchStore, "searchKnowledge" | "searchSessions">
     db: Db
     reviewStore: Pick<ReviewStore, "add" | "get" | "update">
+    /** #122 phase 4: the Browser tab's comments, answered through the mux tools. */
+    browserCommentStore: Pick<BrowserCommentStore, "get" | "listOpen" | "setStatus" | "markdown">
     walkthroughStore: Pick<WalkthroughStore, "replaceCurrent" | "getCurrent">
   }
   /** Resume-flow collaborators that stay in main.ts (the rest are module imports). */
@@ -673,7 +676,7 @@ export class SessionManager {
     // The ops listed here are open to every session. Any other op needs can_orchestrate, which
     // personal assistants have: today that leaves mute_session, set_active and get_active (spec §4).
     // A new tool meant for every session must be added here.
-    const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment", "message_session", "list_models", "spawn_session", "kill_session", "list_sessions", "delegate", "council", "council_round", "council_add", "council_remove", "council_end", "council_report", "preview_avatar", "set_avatar"])
+    const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment", "browser_comments", "resolve_browser_comment", "reply_browser_comment", "dismiss_browser_comment", "message_session", "list_models", "spawn_session", "kill_session", "list_sessions", "delegate", "council", "council_round", "council_add", "council_remove", "council_end", "council_report", "preview_avatar", "set_avatar"])
     if (!s?.can_orchestrate && !NO_ORCHESTRATE_REQUIRED.has(op.name)) {
       return { ok: false, error: "permission denied (can_orchestrate=false)" }
     }
@@ -1079,6 +1082,36 @@ export class SessionManager {
           `📖 Walkthrough ready — ${title} (${n} step${n === 1 ? "" : "s"})`,
         )
         return { ok: true, value: { id: wt.id, revision: wt.revision, steps: results } }
+      }
+      case "browser_comments": {
+        if (!s) return { ok: false, error: "unknown session" }
+        // The session's open comments; reading them is the agent having seen them.
+        const store = this.ports.stores.browserCommentStore
+        const open = store.listOpen(s.id)
+        const now = new Date().toISOString()
+        for (const c of open) {
+          if (c.status !== "sent") continue
+          const seen = store.setStatus(c.id, "seen", null, now)
+          if (seen) this.ports.getWebChannel()?.broadcastToAll({ type: "browser_comment", sessionId: s.id, comment: seen })
+        }
+        return { ok: true, value: store.markdown(store.listOpen(s.id)) }
+      }
+      case "resolve_browser_comment":
+      case "reply_browser_comment":
+      case "dismiss_browser_comment": {
+        if (!s) return { ok: false, error: "unknown session" }
+        const store = this.ports.stores.browserCommentStore
+        const id = stringArg(op.args, "comment_id")
+        const comment = store.get(id)
+        // Only the session it was sent to answers it.
+        if (!comment || comment.sessionId !== s.id) return { ok: false, error: `no browser comment ${id} sent to you` }
+        const [status, key] = op.name === "resolve_browser_comment" ? ["done", "note"] as const
+          : op.name === "reply_browser_comment" ? ["answered", "text"] as const
+          : ["dismissed", "why"] as const
+        const note = stringArg(op.args, key)
+        const updated = store.setStatus(id, status, note, new Date().toISOString())
+        if (updated) this.ports.getWebChannel()?.broadcastToAll({ type: "browser_comment", sessionId: s.id, comment: updated })
+        return { ok: true, value: { id, status } }
       }
       case "reply_comment": {
         const commentId = stringArg(op.args, "comment_id")

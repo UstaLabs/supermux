@@ -4,6 +4,7 @@ import type { Db } from "../../src/core/storage/db"
 import type { SessionManagerPorts } from "../../src/core/session-manager/manager"
 import type { AgentPhase } from "../../src/core/session-manager/agent-state-store"
 import type { FileStore } from "../../src/core/files/store"
+import { BrowserCommentStore } from "../../src/core/browser-comments/store"
 import { ReviewStore } from "../../src/core/review/store"
 import { WalkthroughStore } from "../../src/core/walkthrough/store"
 import { resolveSessionFast } from "../../src/core/models/fast-mode"
@@ -90,6 +91,7 @@ export function fakePorts(db: Db, seams: PortSeams = {}): SessionManagerPorts {
       searchStore: { searchKnowledge: () => [], searchSessions: () => [] },
       db,
       reviewStore: new ReviewStore(db),
+      browserCommentStore: new BrowserCommentStore(db),
       walkthroughStore: new WalkthroughStore(db),
     },
     resume: {
