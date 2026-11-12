@@ -18,7 +18,7 @@ enum class ReleasePlatform(val id: String) {
 }
 
 /** The releases that have an edition, oldest first. A release without one offers nothing. */
-val EDITIONS: List<String> = listOf("0.17.7")
+val EDITIONS: List<String> = listOf("0.18.0")
 
 @Serializable
 data class EditionChapter(val id: String, val on: List<String>? = null)

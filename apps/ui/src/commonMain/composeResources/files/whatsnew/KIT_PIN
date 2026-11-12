@@ -1,7 +1,7 @@
 {
   "repo": "UstaLabs/supermux-website",
-  "sha": "f7ffbc6af11a6e6a2d044ac5bea60d01a0c63750",
-  "sha256": "bff1d41535f343abe8ce49a73a7e8002da57d5e36addc912c143d535a8d1bacc",
+  "sha": "e3ee5974ed814509aee24fb9bd982eaab63a993c",
+  "sha256": "64a7f2b9e91115897e14792621da33815a16c5ddfc70faed2100b08b0c837b9a",
   "files": [
     "assets/fonts/geist-400.woff2",
     "assets/fonts/geist-500.woff2",

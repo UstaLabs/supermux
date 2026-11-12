@@ -46,7 +46,7 @@ class WhatsNewPageTest {
     }
 
     @Test fun the_shipped_edition_carries_the_website_kit() = runTest {
-        val page = loadEdition("0.17.7")
+        val page = loadEdition("0.18.0")
         assertTrue("window.SupermuxSceneKit" in page, "the runner the kit scenes use")
         assertTrue("<!--whatsnew-kit-->" !in page)
     }

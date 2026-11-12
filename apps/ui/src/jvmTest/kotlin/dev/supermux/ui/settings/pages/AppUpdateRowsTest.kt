@@ -61,14 +61,14 @@ class AppUpdateRowsTest {
 
     @Test fun the_running_releases_whats_new_reopens_from_the_app_version_row() = runComposeUiTest {
         var opened: String? = null
-        val platform = FakePlatform(caps = NO_CAPS).also { it.updates = VersionOnlyUpdater("0.17.7") }
+        val platform = FakePlatform(caps = NO_CAPS).also { it.updates = VersionOnlyUpdater("0.18.0") }
         setPlatformContent(platform) {
             androidx.compose.runtime.CompositionLocalProvider(dev.supermux.ui.whatsnew.LocalOpenWhatsNew provides { opened = it }) {
                 AppUpdateRows()
             }
         }
-        onNodeWithText("What's new in v0.17.7").performClick()
-        assertEquals("0.17.7", opened)
+        onNodeWithText("What's new in v0.18.0").performClick()
+        assertEquals("0.18.0", opened)
     }
 
     @Test fun a_release_older_than_every_edition_has_no_whats_new_link() = runComposeUiTest {

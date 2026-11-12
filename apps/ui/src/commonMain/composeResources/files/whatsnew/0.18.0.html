@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>What's new in v0.17.7</title>
+<title>What's new in v0.18.0</title>
 <!-- the website's real-app kit (UstaLabs/supermux-website app/), bundled by scripts/sync-site-kit.ts; the app inlines it here -->
 <!--whatsnew-kit-->
-<!-- What's new (#90), the v0.17.7 edition. The app reads the manifest below for its card and passes the platform
+<!-- What's new (#90), the v0.18.0 edition. The app reads the manifest below for its card and passes the platform
      (data-platform), the actions it can take (data-actions) and its theme (--sm-*). Each chapter shows that platform's
      own UI, rebuilt in HTML; a chapter whose "on" leaves a platform out isn't there at all. -->
 <script type="application/json" id="edition">
-{"version":"0.17.7","chapters":[
+{"version":"0.18.0","chapters":[
   {"id":"browser","title":"Open your app right next to the chat","on":["mac","win","android","iphone"]},
   {"id":"device","title":"See your page at phone size","on":["mac","win"]},
   {"id":"cards","title":"Agents can answer with a live page"},
@@ -402,7 +402,7 @@ const SCENES = {
     html: `<div class="mw"><div class="split"><div class="sn"><div class="srch">${g('search')}<span class="q">Search</span></div>
         <div class="si on" data-s="gen">General</div><div class="si" data-s="app">Appearance</div><div class="si" data-s="ag">Agents</div><div class="si" data-s="no">Notifications</div><div class="si" data-s="ma">This machine</div><div class="si" data-s="wt">Worktrees</div></div>
       <div class="sp2">
-        <div class="pg on" data-p="gen"><h4>General</h4><div class="row">App version<span class="rs">v0.17.7</span></div><div class="row">Download updates in the background<span class="tg on"></span></div><div class="row">Resume after a limit reset<span class="tg on"></span></div></div>
+        <div class="pg on" data-p="gen"><h4>General</h4><div class="row">App version<span class="rs">v0.18.0</span></div><div class="row">Download updates in the background<span class="tg on"></span></div><div class="row">Resume after a limit reset<span class="tg on"></span></div></div>
         <div class="pg" data-p="app"><h4>Appearance</h4><div class="row th">Theme<span class="opts"><span>System</span><span class="l on">Light</span><span class="d">Dark</span></span></div><div class="row">Text size<span class="rs">100%</span></div><div class="row">Compact list<span class="tg"></span></div></div>
         <div class="pg" data-p="wt"><h4>Worktrees</h4>
           <div class="wtr"><span class="cb c1"></span><span class="wn2">feature/old-tabs</span><span class="rs">merged · 2 GB</span></div>
@@ -424,14 +424,14 @@ const SCENES = {
   'signed.win': {
     html: `<div class="wlabel">Before</div>
       <div class="wdlg"><div class="wt">Open File - Security Warning<span>✕</span></div><div class="wb"><div class="q">Do you want to run this file?</div>
-        <dl><dt>Name:</dt><dd>supermux-0.17.7-x64.msi</dd><dt>Publisher:</dt><dd class="pub"><span class="unk">${g('warn')}</span><b class="pn2 unk">Unknown Publisher</b></dd><dt>Type:</dt><dd>Windows Installer Package</dd></dl>
+        <dl><dt>Name:</dt><dd>supermux-0.18.0-x64.msi</dd><dt>Publisher:</dt><dd class="pub"><span class="unk">${g('warn')}</span><b class="pn2 unk">Unknown Publisher</b></dd><dt>Type:</dt><dd>Windows Installer Package</dd></dl>
         <div class="wbt"><span class="df run">Run</span><span>Cancel</span></div></div></div>
       <div class="winst hide">supermux Setup<div class="bar"><i></i></div><span class="ist">Installing…</span></div>${CUR}`,
     steps: [
       [1300, a => { a.$('.wlabel').textContent = 'Now'; const p = a.$('.pub'); p.innerHTML = `<span style="color:#0f7b0f">${g('shield')}</span><b>Open Source Developer Ahmet Hüseyin Dok</b>`; }],
       [1300, a => a.point('.run')], [600, a => a.tap('.run')],
       [250, a => { a.hide('.wdlg'); a.show('.winst'); a.later(40, () => a.$('.winst').classList.add('go')); }],
-      [1600, a => { a.$('.ist').textContent = 'supermux 0.17.7 is installed.'; }],
+      [1600, a => { a.$('.ist').textContent = 'supermux 0.18.0 is installed.'; }],
     ],
   },
   'device.desk': {
