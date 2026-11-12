@@ -6,7 +6,10 @@ import { tmpdir } from "os"
 import { join } from "path"
 import { commit, messageFromFiles, uncommit } from "./commit"
 
-const git = (d: string, ...a: string[]) => execFileSync("git", ["-C", d, ...a], { encoding: "utf-8" }).trim()
+/** Real git, many spawns: slow on Windows (CI), so a longer limit than bun's 5 s. */
+const REAL_GIT_MS = 30_000
+
+const git = (d: string, ...a: string[]) => execFileSync("git", ["-C", d, ...a], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim()
 function repo() {
   const d = mkdtempSync(join(tmpdir(), "mux-commit-"))
   git(d, "init", "-q", "-b", "dev"); git(d, "config", "user.email", "t@t"); git(d, "config", "user.name", "t")
@@ -30,13 +33,13 @@ test("commit takes only what is in the next commit; all takes everything", async
   const all = await commit(d, { all: true })
   expect(all).toMatchObject({ ok: true, subject: "Update b.txt" })
   expect(git(d, "status", "--porcelain")).toBe("")
-})
+}, REAL_GIT_MS)
 
 test("nothing in the next commit is said, not committed", async () => {
   const d = repo()
   writeFileSync(join(d, "a.txt"), "2\n")
   expect(await commit(d, {})).toEqual({ ok: false, reason: "nothing" })
-})
+}, REAL_GIT_MS)
 
 test("amend rewrites the last commit; an empty message keeps its own", async () => {
   const d = repo()
@@ -45,7 +48,7 @@ test("amend rewrites the last commit; an empty message keeps its own", async () 
   expect(await commit(d, { amend: true })).toMatchObject({ ok: true, subject: "first" })
   expect(git(d, "rev-list", "--count", "HEAD")).toBe("2")
   expect(await commit(d, { amend: true, message: "better" })).toMatchObject({ ok: true, subject: "better" })
-})
+}, REAL_GIT_MS)
 
 test("a failing hook says why and commits nothing", async () => {
   const d = repo()
@@ -55,7 +58,7 @@ test("a failing hook says why and commits nothing", async () => {
   expect(r).toMatchObject({ ok: false, reason: "failed" })
   expect((r as any).message).toContain("lint failed")
   expect(git(d, "rev-list", "--count", "HEAD")).toBe("1")
-})
+}, REAL_GIT_MS)
 
 test("undo keeps the changes in the next commit, and refuses the first commit, a merge and a pushed one", async () => {
   const d = repo()
@@ -75,4 +78,4 @@ test("undo keeps the changes in the next commit, and refuses the first commit, a
   expect(await uncommit(d)).toEqual({ ok: true, subject: "local" })
   await commit(d, { message: "local" }); git(d, "push", "-q")
   expect(await uncommit(d)).toMatchObject({ ok: false, reason: "pushed" })
-})
+}, REAL_GIT_MS)
