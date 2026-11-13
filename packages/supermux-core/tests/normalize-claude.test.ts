@@ -34,6 +34,28 @@ describe("claude normalizer", () => {
     expect(n(native({ type: "control_response", response: { subtype: "success", request_id: "r", response: { mode: "plan" } } }))).toEqual([])
   })
 
+  // #129: the initialize reply also lists the account's models (what the Agent SDK's supportedModels() reads), from
+  // Claude's own login: the broker learns the real list with no credential of its own. Shapes from 2.1.308.
+  test("the initialize reply's models become models-update, with each model's effort levels and fast mode", () => {
+    const n = createClaudeNormalizer()
+    const models = [
+      { value: "default", resolvedModel: "claude-opus-5-5", displayName: "Default (recommended)", description: "Opus 5.5 · Best for everyday, complex tasks", supportsEffort: true, supportedEffortLevels: ["low", "high", "max"], supportsFastMode: true },
+      { value: "sonnet", resolvedModel: "claude-sonnet-5-5", displayName: "Sonnet 5.5", description: "Fast", supportsEffort: true, supportedEffortLevels: ["low", "medium", "high"] },
+      { value: "claude-haiku-4-5-20251001", resolvedModel: "claude-haiku-4-5-20251001", displayName: "Haiku 4.5", description: "Small", supportsThinkingOff: true },
+      { displayName: "no value: skipped" },
+    ]
+    expect(n(native({ type: "control_response", response: { subtype: "success", request_id: "r", response: { models } } }))).toEqual([{
+      kind: "models-update",
+      models: [
+        { value: "default", name: "Default (recommended)", description: "Opus 5.5 · Best for everyday, complex tasks", resolved: "claude-opus-5-5", efforts: ["low", "high", "max"], fast: true },
+        { value: "sonnet", name: "Sonnet 5.5", description: "Fast", resolved: "claude-sonnet-5-5", efforts: ["low", "medium", "high"] },
+        { value: "claude-haiku-4-5-20251001", name: "Haiku 4.5", description: "Small", resolved: "claude-haiku-4-5-20251001" },
+      ],
+    }])
+    // An empty list (the commands test above) says nothing about the models.
+    expect(n(native({ type: "control_response", response: { subtype: "success", request_id: "r", response: { models: [] } } }))).toEqual([])
+  })
+
   test("hooks and command_lifecycle produce no event", () => {
     const n = createClaudeNormalizer()
     expect(n(native({ type: "system", subtype: "hook_started" }))).toEqual([])
