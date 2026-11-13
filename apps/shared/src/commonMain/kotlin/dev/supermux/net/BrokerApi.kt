@@ -47,6 +47,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
@@ -462,15 +464,8 @@ data class AddViewBody(
     val groupId: String? = null,
 )
 
-/** A session closed in a workspace (#135): what its New tab page lists to reopen. */
-@Serializable
-data class ClosedSessionDto(val id: String, val name: String, val agent: String, val closedAt: String? = null)
-
-@Serializable
-data class ClosedSessionsResponse(val sessions: List<ClosedSessionDto> = emptyList())
-
-@Serializable
-data class ReopenClosedSessionBody(val groupId: String? = null)
+/** A session closed in a workspace (#135): what its New tab page lists to reopen. Read by hand: no serializer to ship. */
+class ClosedSession(val id: String, val name: String, val agent: String, val closedAt: String?)
 
 @Serializable
 data class PatchViewBody(
@@ -2471,15 +2466,19 @@ class BrokerApi(
         })
 
     /** GET /workspaces/{id}/closed-sessions — the sessions closed in it, newest first (#135). */
-    suspend fun closedSessions(workspaceId: String): List<ClosedSessionDto> =
-        getJson<ClosedSessionsResponse>("$httpBase/workspaces/$workspaceId/closed-sessions").sessions
+    suspend fun closedSessions(workspaceId: String): List<ClosedSession> =
+        getJson<JsonObject>("$httpBase/workspaces/$workspaceId/closed-sessions")["sessions"]?.jsonArray.orEmpty().map { e ->
+            val o = e.jsonObject
+            fun str(k: String) = o[k]?.jsonPrimitive?.contentOrNull
+            ClosedSession(str("id").orEmpty(), str("name").orEmpty(), str("agent").orEmpty(), str("closedAt"))
+        }
 
     /** POST /workspaces/{id}/closed-sessions/{sid}/reopen — the same session back, as a chat tab in [groupId]. */
     suspend fun reopenClosedSession(workspaceId: String, sessionId: String, groupId: String?): ViewDto =
         decode(http.post("$httpBase/workspaces/$workspaceId/closed-sessions/$sessionId/reopen") {
             authHeader()
             contentType(ContentType.Application.Json)
-            setBody(json.encodeToString(ReopenClosedSessionBody(groupId)))
+            setBody(buildJsonObject { if (groupId != null) put("groupId", JsonPrimitive(groupId)) }.toString())
         })
 
     /** PATCH /workspaces/{wid}/views/{vid} */

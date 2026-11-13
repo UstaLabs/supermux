@@ -64,6 +64,8 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.ui.adaptive.LocalHardwareKeyboard
@@ -242,29 +244,8 @@ private fun ChoiceRow(
     onClick: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
-    val source = remember { MutableInteractionSource() }
-    val hovered by source.collectIsHoveredAsState()
-    val pressed by source.collectIsPressedAsState()
-    LaunchedEffect(hovered) { if (hovered) onHover() }
-    val wash = if (cs.surface.luminance() < 0.5f) 0.06f else 0.045f
-    val fill = when {
-        pressed -> cs.onSurface.copy(alpha = wash + 0.03f)
-        selected -> cs.onSurface.copy(alpha = wash)
-        else -> Color.Transparent
-    }
-    val glyph by animateColorAsState(if (selected) cs.primary else cs.onSurfaceVariant, Motion.stateChange(), label = "new-tab-glyph") // i18n-ok: animation label
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .height(if (touch) 52.dp else 40.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(fill)
-            .clickable(interactionSource = source, indication = null, onClick = onClick)
-            .pointerHoverIcon(PointerIcon.Hand)
-            .padding(horizontal = 12.dp)
-            .testTag("new-tab-choice-${c.kind.tag}"),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    PageRow(selected, touch, "new-tab-choice-${c.kind.tag}", onHover, onClick) {
+        val glyph by animateColorAsState(if (selected) cs.primary else cs.onSurfaceVariant, Motion.stateChange(), label = NEW_TAB_GLYPH)
         Icon(c.icon, contentDescription = null, tint = glyph, modifier = Modifier.size(17.dp))
         Spacer(Modifier.width(12.dp))
         Text(
@@ -337,11 +318,11 @@ internal fun PhoneNewTabPage(
 
 // ── #135: the sessions closed in this workspace ─────────────────────────────────────────────────────
 
+/** The kind glyph's animation name: no UI text. */
+private const val NEW_TAB_GLYPH = "new-tab-glyph"
+
 /** A session closed in this workspace, as its row shows it. */
 internal data class ClosedSessionRow(val id: String, val name: String, val agent: String, val ago: ClosedAgo)
-
-/** The fold's glyph animation's name: no UI text. */
-private const val CLOSED_GLYPH = "closed-glyph"
 
 /** How long ago a session was closed, read like a clock. */
 internal sealed interface ClosedAgo {
@@ -369,48 +350,54 @@ private fun agoText(ago: ClosedAgo): String = when (ago) {
     is ClosedAgo.Days -> localizedPlural(Plurals.new_tab_closed_days, ago.n, ago.n)
 }
 
-/** A row's wash, as [ChoiceRow] wears it: none at rest, soft when selected, deeper while pressed. */
+/**
+ * One row of the page: no frame and no fill at rest; the selected row (and the one under the pointer) wears a soft
+ * wash, a shade deeper while pressed — all instant. [start] sets a row in (a closed session under its fold).
+ */
 @Composable
-private fun rowFill(selected: Boolean, pressed: Boolean): Color {
+private fun PageRow(
+    selected: Boolean,
+    touch: Boolean,
+    tag: String,
+    onHover: () -> Unit,
+    onClick: () -> Unit,
+    start: Dp = 12.dp,
+    content: @Composable RowScope.() -> Unit,
+) {
     val cs = MaterialTheme.colorScheme
+    val source = remember { MutableInteractionSource() }
+    val hovered by source.collectIsHoveredAsState()
+    val pressed by source.collectIsPressedAsState()
+    LaunchedEffect(hovered) { if (hovered) onHover() }
     val wash = if (cs.surface.luminance() < 0.5f) 0.06f else 0.045f
-    return when {
+    val fill = when {
         pressed -> cs.onSurface.copy(alpha = wash + 0.03f)
         selected -> cs.onSurface.copy(alpha = wash)
         else -> Color.Transparent
     }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(if (touch) 52.dp else 40.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(fill)
+            .clickable(interactionSource = source, indication = null, onClick = onClick)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .padding(start = start, end = 12.dp)
+            .testTag(tag),
+        verticalAlignment = Alignment.CenterVertically,
+        content = content,
+    )
 }
 
 /** "Recently closed · 3 sessions closed in this workspace", folding its list away until clicked. */
 @Composable
 private fun RecentlyClosedFold(count: Int, unfolded: Boolean, selected: Boolean, touch: Boolean, onHover: () -> Unit, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
-    val source = remember { MutableInteractionSource() }
-    val hovered by source.collectIsHoveredAsState()
-    val pressed by source.collectIsPressedAsState()
-    LaunchedEffect(hovered) { if (hovered) onHover() }
-    val glyph by animateColorAsState(if (selected) cs.primary else cs.onSurfaceVariant, Motion.stateChange(), label = CLOSED_GLYPH)
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .height(if (touch) 52.dp else 40.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(rowFill(selected, pressed))
-            .clickable(interactionSource = source, indication = null, onClick = onClick)
-            .pointerHoverIcon(PointerIcon.Hand)
-            .padding(horizontal = 12.dp)
-            .testTag("new-tab-recently-closed"),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(NewTabGlyphs.Recent, contentDescription = null, tint = glyph, modifier = Modifier.size(17.dp))
+    PageRow(selected, touch, "new-tab-recently-closed", onHover, onClick) {
+        Icon(NewTabGlyphs.Recent, contentDescription = null, tint = if (selected) cs.primary else cs.onSurfaceVariant, modifier = Modifier.size(17.dp))
         Spacer(Modifier.width(12.dp))
-        Text(
-            localized(Str.new_tab_recently_closed),
-            color = cs.onSurface,
-            fontSize = if (touch) 15.sp else 13.5.sp,
-            fontWeight = FontWeight.Medium,
-            maxLines = 1,
-        )
+        Text(localized(Str.new_tab_recently_closed), color = cs.onSurface, fontSize = if (touch) 15.sp else 13.5.sp, fontWeight = FontWeight.Medium, maxLines = 1)
         Spacer(Modifier.width(12.dp))
         Text(
             localizedPlural(Plurals.new_tab_closed_count, count, count),
@@ -428,32 +415,10 @@ private fun RecentlyClosedFold(count: Int, unfolded: Boolean, selected: Boolean,
 @Composable
 private fun ClosedSessionItem(c: ClosedSessionRow, selected: Boolean, touch: Boolean, onHover: () -> Unit, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
-    val source = remember { MutableInteractionSource() }
-    val hovered by source.collectIsHoveredAsState()
-    val pressed by source.collectIsPressedAsState()
-    LaunchedEffect(hovered) { if (hovered) onHover() }
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .height(if (touch) 52.dp else 40.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(rowFill(selected, pressed))
-            .clickable(interactionSource = source, indication = null, onClick = onClick)
-            .pointerHoverIcon(PointerIcon.Hand)
-            .padding(start = 24.dp, end = 12.dp)
-            .testTag("new-tab-closed-${c.id}"),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    PageRow(selected, touch, "new-tab-closed-${c.id}", onHover, onClick, start = 24.dp) {
         AgentLogo(c.agent, 16.dp)
         Spacer(Modifier.width(12.dp))
-        Text(
-            c.name,
-            color = cs.onSurface,
-            fontSize = if (touch) 15.sp else 13.5.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
+        Text(c.name, color = cs.onSurface, fontSize = if (touch) 15.sp else 13.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         Spacer(Modifier.width(12.dp))
         Text(agoText(c.ago), color = cs.onSurfaceVariant, fontSize = 12.sp, maxLines = 1)
     }
