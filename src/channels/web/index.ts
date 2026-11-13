@@ -454,6 +454,11 @@ export interface WebChannelOpts {
   reorderWorkspaces?: (orderedIds: string[]) => void
   addWorkspaceView?: (workspaceId: string, args: { id?: string; kind: string; state: unknown; title?: string; groupId?: string })
     => import("../../core/workspace/dto").ViewDto
+  /** #135: the sessions closed in a workspace, newest first. */
+  getClosedSessions?: (workspaceId: string) => import("../../core/workspace/store").ClosedSession[]
+  /** #135: resume a session closed in a workspace and add its chat tab to [groupId] (or the first pane). */
+  reopenClosedSession?: (workspaceId: string, sessionId: string, groupId?: string)
+    => Promise<import("../../core/workspace/dto").ViewDto>
   /** Look up a view by id, so the route can reject a client-minted duplicate with 409 before insert. */
   getWorkspaceView?: (viewId: string) => import("../../core/workspace/dto").ViewDto | undefined
   patchWorkspaceView?: (viewId: string, patch: { title?: string; state?: unknown })
@@ -4701,6 +4706,28 @@ export class WebChannel implements Channel {
         })
         this.broadcastToAll({ type: "view_added", workspaceId, view })
         // The layout and the active view moved too, so the workspace frame follows.
+        const ws = this.opts.getWorkspace?.(workspaceId)
+        if (ws) this.broadcastToAll({ type: "workspace_changed", workspace: ws })
+        return this.json(view)
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 400)
+      }
+    }
+    if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/closed-sessions$/)) {
+      if (!this.opts.getClosedSessions) return this.json({ error: "not configured" }, 503)
+      const workspaceId = decodeURIComponent(path.split("/")[2]!)
+      return this.json({ sessions: this.opts.getClosedSessions(workspaceId) })
+    }
+    if (method === "POST" && path.match(/^\/workspaces\/[^/]+\/closed-sessions\/[^/]+\/reopen$/)) {
+      if (!this.opts.reopenClosedSession) return this.json({ error: "not configured" }, 503)
+      const parts = path.split("/")
+      const workspaceId = decodeURIComponent(parts[2]!)
+      const sessionId = decodeURIComponent(parts[4]!)
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      const groupId = typeof body.groupId === "string" ? body.groupId : undefined
+      try {
+        const view = await this.opts.reopenClosedSession(workspaceId, sessionId, groupId)
+        this.broadcastToAll({ type: "view_added", workspaceId, view })
         const ws = this.opts.getWorkspace?.(workspaceId)
         if (ws) this.broadcastToAll({ type: "workspace_changed", workspace: ws })
         return this.json(view)

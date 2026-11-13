@@ -3271,6 +3271,9 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       })
       return viewDto(v)
     },
+    getClosedSessions: (workspaceId) => registry.workspaces.closedSessions(workspaceId),
+    reopenClosedSession: async (workspaceId, sessionId, groupId) =>
+      viewDto(await workspaceService.reopenClosedSession(workspaceId, sessionId, groupId)),
     getWorkspaceView: (viewId) => {
       const v = registry.workspaces.getView(viewId)
       return v ? viewDto(v) : undefined
