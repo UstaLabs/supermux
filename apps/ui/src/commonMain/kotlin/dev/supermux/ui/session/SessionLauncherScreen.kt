@@ -320,9 +320,11 @@ fun SessionLauncherScreen(
     // null = no project yet (see the header): never a placeholder path that would load as one.
     var workdir by remember { mutableStateOf<String?>(null) }
     var workdirTouched by remember { mutableStateOf(false) }
-    // #128: the first project chosen, the cursor goes to the message, so the next keystrokes are the first prompt.
+    // The cursor goes to the message, so the next keystrokes are the prompt: when the launcher opens with a pointer
+    // (⌘N, the app's first screen: #134; a phone keeps its keyboard down until tapped), and once a first project is
+    // chosen (#128).
     val messageFocus = remember { androidx.compose.ui.focus.FocusRequester() }
-    var focusMessage by remember { mutableStateOf(false) }
+    var focusMessage by remember { mutableStateOf(pointer) }
     var agent by remember { mutableStateOf("claude") }
     var model by remember { mutableStateOf<String?>(null) } // null == "Default"
     var message by remember { mutableStateOf(TextFieldValue("")) }

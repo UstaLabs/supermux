@@ -1334,6 +1334,8 @@ private fun WorkspacePaneContent(
                 onExternalAttachConsumed = { ui.externalAttach = null },
                 externalDictate = ui.externalDictate,
                 onExternalDictateConsumed = { ui.externalDictate = null },
+                focusComposerFor = ui.composerFocusFor,
+                onComposerFocusConsumed = { ui.composerFocusFor = null },
                 pasteImageFor = ui.selectedId,
                 pasteImageRequestNonce = ui.pasteImageRequestNonce,
                 onPasteImageRequestConsumed = { ui.pasteImageRequestNonce = 0L },

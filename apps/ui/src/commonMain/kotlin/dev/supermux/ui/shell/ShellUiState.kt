@@ -278,6 +278,18 @@ class ShellUiState {
     /** New-session UI: a detail-pane swap on a wide host, a pushed screen under Compact. */
     fun openLauncher(draftId: String? = null) = navigate(Route.NewSession(draftId.orEmpty()))
 
+    /** A one-shot "put the cursor in this chat's composer" (#134), consumed by the chat it names. */
+    var composerFocusFor by mutableStateOf<String?>(null)
+    private var launchFocusDone = false
+
+    /** At launch, with a [pointer], the chat the app opens on gets the cursor, once (#134, ADEMark). */
+    fun focusComposerOnLaunch(pointer: Boolean) {
+        if (launchFocusDone) return
+        launchFocusDone = true
+        val open = selectedId ?: return
+        if (pointer) composerFocusFor = open
+    }
+
     // #128: decided once per launch, the first time the sessions are known.
     private var firstRunDecided = false
 

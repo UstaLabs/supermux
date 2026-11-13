@@ -51,3 +51,24 @@ class FirstRunLauncherTest {
         assertTrue(elsewhere.settingsOpen)
     }
 }
+
+/** #134 (ADEMark): a normal launch is ready to type in the chat it opens on (with a pointer; a phone waits for a tap). */
+class LaunchComposerFocusTest {
+    @Test fun the_open_chat_gets_the_cursor_once_at_launch() {
+        val ui = ShellUiState().apply { selectedId = "s1" }
+        ui.focusComposerOnLaunch(pointer = true)
+        assertEquals("s1", ui.composerFocusFor)
+        ui.composerFocusFor = null
+        ui.focusComposerOnLaunch(pointer = true)
+        assertEquals(null, ui.composerFocusFor, "once per launch, not every time the shell recomposes")
+    }
+
+    @Test fun a_phone_or_no_open_chat_gets_nothing() {
+        val phone = ShellUiState().apply { selectedId = "s1" }
+        phone.focusComposerOnLaunch(pointer = false)
+        assertEquals(null, phone.composerFocusFor)
+        val none = ShellUiState()
+        none.focusComposerOnLaunch(pointer = true)
+        assertEquals(null, none.composerFocusFor)
+    }
+}

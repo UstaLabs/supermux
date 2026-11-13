@@ -30,6 +30,15 @@ class FleetModelTest {
         assertTrue(distinct.size >= 4, "expected variety across the palette, got $distinct")
     }
 
+    // #134 (ADEMark): the sidebar's host dot is the host's identity colour, and a red one sat next to "Running" reading
+    // as an error. No identity hue may be red: errors own that.
+    @Test fun noHostIdentityColourIsRed() {
+        for (slot in 0 until HOST_PALETTE_SIZE) {
+            val h = hostHueDegrees(slot)
+            assertTrue(h in 45.0..330.0, "slot $slot is red-ish at $h°")
+        }
+    }
+
     @Test fun colorIndex_emptySeed_isZero() {
         assertEquals(0, hostColorIndex(""))
     }
