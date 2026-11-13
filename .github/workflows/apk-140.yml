@@ -1,0 +1,54 @@
+# Scratch: three TEST-ONLY debug APKs for #140's Fold update test. Never merge.
+name: apk-140
+on:
+  push:
+    branches: [apk-140]
+jobs:
+  apk:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: updtest-old-vc1121, sha: f528eeec5c26ac8bc23976d0b63a899eb80babde }
+          - { name: updtest-1200, sha: 37b10f99bdf2c2482659840d826c00ad71ed802e }
+          - { name: updtest-1300, sha: 079fb9bb6704a8e169f4358a358886772b6a805d }
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.sha }}
+      - run: git log -1 --format='%H %s'
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - run: sdkmanager --channel=1 "platforms;android-37.0" "build-tools;36.0.0"
+      - run: bun install --frozen-lockfile
+      - run: cp apps/android/google-services.json.example apps/android/google-services.json
+      - run: sdkmanager "ndk;$(python3 -c "import json; print(json.load(open('apps/terminal-core/native/upstream.lock.json'))['targets']['android-arm64']['ndk'])")"
+      - name: Build the terminal engine for Android
+        env:
+          ST_ZIG_JOBS: "4"
+        run: |
+          python3 - <<'PY' > /tmp/abis.txt
+          import re
+          text = open("apps/gradle.properties").read()
+          spec = re.search(r"^supermux\.terminal\.androidAbis=(.*)$", text, re.M).group(1)
+          print("\n".join(e.split("=", 1)[1].strip() for e in spec.split(",")))
+          PY
+          while read -r target; do
+            [ -n "$target" ] || continue
+            bash apps/terminal-core/native/build.sh "$target"
+          done < /tmp/abis.txt
+      - working-directory: apps
+        run: ./gradlew :android:assembleDebug --console=plain -Peditor.allowMissingAndroidNative=true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk-${{ matrix.name }}
+          path: apps/android/build/outputs/apk/debug/*.apk
