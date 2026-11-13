@@ -45,20 +45,19 @@ internal object MacCoverProbe : CoverProbe {
 }
 
 /**
- * True while other windows cover the window (its NSWindow [handle]) entirely. Asked every [periodMs], and only
- * while [watch] (it is showing, not minimised, the screen seen) and [focused] is false: a focused window is the
- * one in front.
+ * True while other windows cover the window (its NSWindow [handle]) entirely. Asked every [periodMs] while [watch]
+ * (it is showing, not minimised, the screen seen). Focus says nothing: a panel that never takes focus can cover
+ * the focused window.
  */
 @Composable
 internal fun rememberWindowCovered(
     handle: () -> Long,
     watch: Boolean,
-    focused: Boolean,
     probe: CoverProbe? = if (isMacOs()) MacCoverProbe else null,
     periodMs: Long = 1_000,
-): State<Boolean> = produceState(false, watch, focused, probe) {
+): State<Boolean> = produceState(false, watch, probe) {
     value = false
-    if (probe == null || !watch || focused) return@produceState
+    if (probe == null || !watch) return@produceState
     while (true) {
         value = probe.covered(handle()) ?: false
         delay(periodMs)

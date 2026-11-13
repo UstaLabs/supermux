@@ -2018,7 +2018,6 @@ fun main() {
                     val windowCovered by rememberWindowCovered(
                         handle = { window.windowHandle },
                         watch = windowVisible && !windowState.isMinimized && screenSeen,
-                        focused = LocalWindowInfo.current.isWindowFocused,
                     )
                     CompositionLocalProvider(
                         // Settings ▸ Hosting reads the app-wide supervisor (null where the app does not host).

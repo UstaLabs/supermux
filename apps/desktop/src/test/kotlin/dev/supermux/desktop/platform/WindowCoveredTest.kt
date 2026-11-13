@@ -24,10 +24,10 @@ class WindowCoveredTest {
         override suspend fun covered(handle: Long): Boolean? { asked++; return answer }
     }
 
-    @Test fun an_unfocused_watched_window_follows_the_probe() = runComposeUiTest {
+    @Test fun a_watched_window_follows_the_probe() = runComposeUiTest {
         val probe = FakeProbe(answer = true)
         var covered = false
-        setContent { covered = rememberWindowCovered({ 7L }, watch = true, focused = false, probe = probe).value }
+        setContent { covered = rememberWindowCovered({ 7L }, watch = true, probe = probe).value }
         waitForIdle()
         assertTrue(covered)
         probe.answer = false
@@ -36,22 +36,22 @@ class WindowCoveredTest {
         assertFalse(covered)
     }
 
-    @Test fun a_focused_or_unwatched_window_is_never_covered_and_never_asked() = runComposeUiTest {
+    @Test fun an_unwatched_window_is_never_covered_and_never_asked() = runComposeUiTest {
         val probe = FakeProbe(answer = true)
-        var focused by mutableStateOf(true)
+        var watch by mutableStateOf(false)
         var covered = true
-        setContent { covered = rememberWindowCovered({ 7L }, watch = true, focused = focused, probe = probe).value }
+        setContent { covered = rememberWindowCovered({ 7L }, watch = watch, probe = probe).value }
         mainClock.advanceTimeBy(3_000)
         assertFalse(covered)
         assertEquals(0, probe.asked)
-        focused = false
+        watch = true
         waitForIdle()
         assertTrue(covered)
     }
 
     @Test fun an_unknown_answer_counts_as_seen() = runComposeUiTest {
         var covered = true
-        setContent { covered = rememberWindowCovered({ 7L }, watch = true, focused = false, probe = FakeProbe(null)).value }
+        setContent { covered = rememberWindowCovered({ 7L }, watch = true, probe = FakeProbe(null)).value }
         waitForIdle()
         assertFalse(covered)
     }
