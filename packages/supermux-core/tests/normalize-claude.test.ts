@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { createClaudeNormalizer } from "../src/claude/normalize.js"
+import { createClaudeNormalizer, initializeReplyForHost } from "../src/claude/normalize.js"
 import type { AgentUpdate } from "../src/types.js"
 
 const native = (value: unknown, extra?: { replay?: boolean }): AgentUpdate => ({
@@ -32,6 +32,41 @@ describe("claude normalizer", () => {
     expect(n(native({ type: "control_response", response: { subtype: "success", request_id: "r", response: { commands, models: [] } } })))
       .toEqual([{ kind: "commands-update", commands: expected }])
     expect(n(native({ type: "control_response", response: { subtype: "success", request_id: "r", response: { mode: "plan" } } }))).toEqual([])
+  })
+
+  // #129: the initialize reply also lists the account's models (what the Agent SDK's supportedModels() reads), from
+  // Claude's own login: the broker learns the real list with no credential of its own. Shapes from 2.1.308.
+  test("the initialize reply's models become models-update, with each model's effort levels and fast mode", () => {
+    const n = createClaudeNormalizer()
+    const models = [
+      { value: "default", resolvedModel: "claude-opus-5-5", displayName: "Default (recommended)", description: "Opus 5.5 · Best for everyday, complex tasks", supportsEffort: true, supportedEffortLevels: ["low", "high", "max"], supportsFastMode: true },
+      { value: "sonnet", resolvedModel: "claude-sonnet-5-5", displayName: "Sonnet 5.5", description: "Fast", supportsEffort: true, supportedEffortLevels: ["low", "medium", "high"] },
+      { value: "claude-haiku-4-5-20251001", resolvedModel: "claude-haiku-4-5-20251001", displayName: "Haiku 4.5", description: "Small", supportsThinkingOff: true, supportedEffortLevels: ["low"] },
+      { displayName: "no value: skipped" },
+    ]
+    // The account rides along in the same reply: nothing of it may reach the event (#129).
+    const account = { email: "someone@example.com", organization: "Example Org", subscriptionType: "Claude Team" }
+    expect(n(native({ type: "control_response", response: { subtype: "success", request_id: "r", response: { models, account } } }))).toEqual([{
+      kind: "models-update",
+      models: [
+        { value: "default", name: "Default (recommended)", description: "Opus 5.5 · Best for everyday, complex tasks", resolved: "claude-opus-5-5", efforts: ["low", "high", "max"], fast: true },
+        { value: "sonnet", name: "Sonnet 5.5", description: "Fast", resolved: "claude-sonnet-5-5", efforts: ["low", "medium", "high"] },
+        { value: "claude-haiku-4-5-20251001", name: "Haiku 4.5", description: "Small", resolved: "claude-haiku-4-5-20251001" },
+      ],
+    }])
+    // An empty list (the commands test above) says nothing about the models.
+    expect(n(native({ type: "control_response", response: { subtype: "success", request_id: "r", response: { models: [] } } }))).toEqual([])
+  })
+
+  // #129 (Muxie): the initialize reply carries the signed-in account (e-mail, organization). The driver forwards the
+  // reply to the host as a native frame, which travels in every event envelope built from it: the account never does.
+  test("the initialize reply goes to the host without its account", () => {
+    const reply = { subtype: "success", request_id: "r", response: { commands: [], models: [{ value: "opus" }], account: { email: "someone@example.com", organization: "Example Org" }, pid: 7 } }
+    const forwarded = initializeReplyForHost(reply)
+    expect(JSON.stringify(forwarded)).not.toContain("someone@example.com")
+    expect(JSON.stringify(forwarded)).not.toContain("Example Org")
+    expect(forwarded).toEqual({ subtype: "success", request_id: "r", response: { commands: [], models: [{ value: "opus" }], pid: 7 } })
+    expect(reply.response.account.email).toBe("someone@example.com") // the driver's own copy is untouched
   })
 
   test("hooks and command_lifecycle produce no event", () => {
