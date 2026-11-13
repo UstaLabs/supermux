@@ -503,6 +503,52 @@ fun trainAppCds(appRoot: File, appLibDir: File, trainingSeconds: Long, log: org.
     return true
 }
 
+/**
+ * #133: drops `Sealed: true` from every packaged jar's manifest before the AppCDS training run. With the archive,
+ * rc.6 died at launch on Ahmet's Mac with "sealing violation: can't seal package com.jetbrains: already defined":
+ * jbr-api (the only sealed jar on the classpath) had its package defined unsealed through the archive, and the next
+ * com.jetbrains class read from the jar then claimed the seal. Sealing only guards against split packages, and
+ * nothing else on the classpath defines com.jetbrains, so the app loses nothing by it.
+ */
+fun unsealPackagedJars(appDir: File): List<File> {
+    if (!appDir.isDirectory) return emptyList()
+    val sealed = Regex("(?im)^Sealed:[ \\t]*true[ \\t]*\\r?\\n")
+    val changed = mutableListOf<File>()
+    for (jar in appDir.listFiles().orEmpty().filter { it.isFile && it.name.endsWith(".jar") }.sorted()) {
+        val tmp = File(jar.parentFile, "${jar.name}.unseal-tmp")
+        val rewritten = ZipFile(jar).use { zip ->
+            val manifest = zip.getEntry("META-INF/MANIFEST.MF") ?: return@use false
+            val text = zip.getInputStream(manifest).use { it.readBytes() }.toString(Charsets.UTF_8)
+            if (!sealed.containsMatchIn(text)) return@use false
+            val unsealed = text.replace(sealed, "").toByteArray()
+            ZipOutputStream(tmp.outputStream().buffered()).use { out ->
+                for (entry in Collections.list(zip.entries())) {
+                    val body = if (entry.name == manifest.name) unsealed else zip.getInputStream(entry).use { it.readBytes() }
+                    val copy = ZipEntry(entry.name).apply {
+                        time = entry.time
+                        if (entry.method == ZipEntry.STORED) {
+                            method = ZipEntry.STORED
+                            size = body.size.toLong()
+                            compressedSize = body.size.toLong()
+                            crc = CRC32().apply { update(body) }.value
+                        }
+                    }
+                    out.putNextEntry(copy)
+                    out.write(body)
+                    out.closeEntry()
+                }
+            }
+            true
+        }
+        if (rewritten) {
+            Files.move(tmp.toPath(), jar.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            logger.lifecycle("AppCDS: unsealed ${jar.name}")
+            changed += jar
+        }
+    }
+    return changed
+}
+
 fun rewritePackagedNativeDigests(appDir: File): List<File> {
     if (!appDir.isDirectory) return emptyList()
     val changed = mutableListOf<File>()
@@ -657,9 +703,11 @@ afterEvaluate {
                 hostOs.contains("win") -> appRoot.resolve("app")
                 else -> appRoot.resolve("lib/app")
             }
-            val rewritten = rewritePackagedNativeDigests(appLibDir.toFile())
-            // After the jar rewrite: the archive records every jar's size and mtime.
-            val trained = macBuildHost && project.findProperty("smAppCdsTrain") == "true" &&
+            val trainCds = macBuildHost && project.findProperty("smAppCdsTrain") == "true"
+            val rewritten = rewritePackagedNativeDigests(appLibDir.toFile()) +
+                if (trainCds) unsealPackagedJars(appLibDir.toFile()) else emptyList()
+            // After the jar rewrites: the archive records every jar's size and mtime.
+            val trained = trainCds &&
                 trainAppCds(
                     appRoot.toFile(), appLibDir.toFile(),
                     (project.findProperty("smAppCdsTrainSeconds") as String?)?.toLongOrNull() ?: 30L, logger,

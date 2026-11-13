@@ -1151,7 +1151,23 @@ jobs:
             echo "::warning::no AppCDS archive in the DMG: the app ships without CDS (see the createDistributable log)"
           fi
           codesign --verify --deep --strict "$(ls -d "$MNT"/*.app)" && echo "bundle signature valid"
-          hdiutil detach "$MNT" -quiet
+          # -version maps the archive but never loads an app class, and rc.6 passed it yet died at launch (a sealing
+          # violation through the archive). So launch the packaged app itself for 20 s: it must still be alive and must
+          # have a main window, not an error dialog. Unlike a missing archive, a crash at launch fails the job.
+          "$(ls -d "$MNT"/*.app)/Contents/MacOS/Supermux Desktop" > "$RUNNER_TEMP/launch.txt" 2>&1 &
+          APP_PID=$!
+          sleep 20
+          # rc.6's failure was an error dialog (740x173) and no main window, so "alive" alone is not enough.
+          MAIN_WINDOW=$(osascript -l JavaScript -e "ObjC.import('CoreGraphics'); const w = ObjC.deepUnwrap(ObjC.castRefToObject(\$.CGWindowListCopyWindowInfo(1|16, 0))); w.some(x => x.kCGWindowOwnerPID == $APP_PID && x.kCGWindowBounds.Height > 300)" 2>&1)
+          echo "main window up: $MAIN_WINDOW"
+          if ! kill -0 "$APP_PID" 2>/dev/null || [ "$MAIN_WINDOW" != "true" ] || grep -Eq "SecurityException|sealing violation|Exception in thread \"main\"" "$RUNNER_TEMP/launch.txt"; then
+            cat "$RUNNER_TEMP/launch.txt"
+            echo "::error::the packaged app did not survive 20 s at launch"
+            kill "$APP_PID" 2>/dev/null; hdiutil detach "$MNT" -force -quiet; exit 1
+          fi
+          echo "the packaged app is up after 20 s"
+          kill "$APP_PID"; sleep 5; pkill -f "$MNT" || true
+          hdiutil detach "$MNT" -quiet || hdiutil detach "$MNT" -force -quiet
       - name: Assert the packaged client engine
         # The DMG has to carry the Ghostty JNI dylib the app loads to draw a terminal, whether or
         # not this Mac is also the host. Signing does not put it there; the build above does.
