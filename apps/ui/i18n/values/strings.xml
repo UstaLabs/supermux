@@ -54,6 +54,8 @@
     <string name="browser_comment_done">Done</string>
     <string name="browser_comment_answered">Answered</string>
     <string name="browser_comment_to">→ %1$s</string>
+    <string name="browser_unavailable">Web pages can't be shown in a tab on this computer.</string>
+    <string name="browser_open_in_browser">Open in your browser</string>
     <string name="browser_comment_dismissed">Dismissed</string>
 
     <!-- After a phone saves an attachment (#95): where it went. -->

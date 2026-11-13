@@ -742,6 +742,9 @@ jobs:
     # Set per packaging job, not workflow-wide: the update-flow e2e builds throwaway binaries.
     env:
       SUPERMUX_REQUIRE_EDITOR_SYNTAX: "1"
+      # #137: the web view's Windows glue is part of the app (every Browser tab and HTML card draws with it): Gradle's
+      # staging fails without it instead of warning, and WinGlueLoadTest runs instead of skipping.
+      WEBVIEW_REQUIRE_WINDOWS_GLUE: "1"
       # #116: a v* tag or an rc-* branch signs (the secrets live in the windows-signing environment, which deploys
       # only from those); any other ref builds the same MSI unsigned.
       SIGN_WINDOWS: ${{ (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/rc-')) && 'true' || 'false' }}
@@ -799,6 +802,25 @@ jobs:
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; else V="0.0.0-dryrun"; fi
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Build the web view's glue (x64)
+        # #137: webview_windows.dll, built with the runner's MSVC against the pinned WebView2 SDK (its logic tests run
+        # first). No release before v0.18.3 had it: the glue was only built by hand on the dev VM (winvm.sh build).
+        # x64 only: the one MSI is x64, and Windows on Arm runs it, and its x64 runtime, emulated.
+        shell: pwsh
+        run: ./webview-compose/native/windows/ci-build.ps1 -Arch x64
+      - name: Load the web view's glue
+        # The staged glue loads as the app loads it: from the jar's resources, its sha256 and ABI checked. The test
+        # skips where WEBVIEW_REQUIRE_WINDOWS_GLUE isn't set, so its report is read back: one test, run, passed.
+        run: |
+          ./gradlew.bat :webview-compose:jvmTest --tests 'dev.supermux.webview.engine.windows.WinGlueLoadTest' --console=plain --no-daemon
+          if ($LASTEXITCODE -ne 0) { throw "WinGlueLoadTest failed" }
+          $report = 'webview-compose/build/test-results/jvmTest/TEST-dev.supermux.webview.engine.windows.WinGlueLoadTest.xml'
+          if (-not (Test-Path $report)) { throw "no WinGlueLoadTest report at ${report}: the test never ran" }
+          $suite = ([xml](Get-Content -Raw $report)).testsuite
+          if ([int]$suite.tests -ne 1 -or [int]$suite.skipped -ne 0 -or [int]$suite.failures -ne 0 -or [int]$suite.errors -ne 0) {
+            throw "WinGlueLoadTest: tests=$($suite.tests) skipped=$($suite.skipped) failures=$($suite.failures) errors=$($suite.errors)"
+          }
+          Write-Host "WinGlueLoadTest ran and passed: $("$($suite.'system-out'.'#cdata-section')".Trim())"
       - name: Test native Windows broker seams
         working-directory: .
         shell: bash
@@ -934,6 +956,12 @@ jobs:
         working-directory: .
         shell: bash
         run: python scripts/check-packaged-editor-syntax.py "$(find apps/desktop/build/compose/binaries/main/app -mindepth 2 -maxdepth 2 -type d -name app | head -1)" windows-x64
+      - name: Assert the packaged web view glue
+        # #137: the webview-compose jar in the app image carries the x64 glue whose bytes match the sha256 and ABI it
+        # was loaded with above; without it every Browser tab and HTML card says it can't show pages.
+        working-directory: .
+        shell: bash
+        run: python scripts/check-packaged-webview-glue.py "$(find apps/desktop/build/compose/binaries/main/app -mindepth 2 -maxdepth 2 -type d -name app | head -1)" x64 apps/webview-compose/native/windows/wv2.h
 
       - name: Stage .msi + checksum
         shell: bash

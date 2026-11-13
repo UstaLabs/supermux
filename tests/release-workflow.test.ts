@@ -274,6 +274,24 @@ test("each desktop distribution carries its client terminal engine", () => {
   }
 })
 
+// #137: no Windows release had the web view's glue, so every Browser tab and HTML card said it can't show pages. The
+// glue is built on the runner, required by Gradle's staging, loaded once, and read back out of the packaged jar.
+test("the Windows desktop carries the web view's glue: built, required, loaded, and read back from the package", () => {
+  expect(windowsJob).toContain('WEBVIEW_REQUIRE_WINDOWS_GLUE: "1"')
+  const build = windowsJob.indexOf("webview-compose/native/windows/ci-build.ps1 -Arch x64")
+  const load = windowsJob.indexOf("--tests 'dev.supermux.webview.engine.windows.WinGlueLoadTest'")
+  const image = windowsJob.indexOf(":desktop:createDistributable")
+  const check = windowsJob.indexOf("scripts/check-packaged-webview-glue.py")
+  expect(build).toBeGreaterThan(-1)
+  expect(load).toBeGreaterThan(build)
+  expect(image).toBeGreaterThan(load)
+  expect(check).toBeGreaterThan(image)
+  expect(windowsJob.slice(check)).toContain("x64 apps/webview-compose/native/windows/wv2.h")
+  // The load test skips where the variable isn't set: the step reads its report back and fails on a skip.
+  expect(windowsJob.slice(load, image)).toContain("TEST-dev.supermux.webview.engine.windows.WinGlueLoadTest.xml")
+  expect(windowsJob.slice(load, image)).toContain("[int]$suite.skipped -ne 0")
+})
+
 test("POSIX desktop packages carry the verified zmx bundle; Windows keeps sessiond", () => {
   for (const job of [linuxDesktopJob, composeMacJob]) {
     expect(job).toContain("check-zmx-bundle.sh")
