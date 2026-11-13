@@ -630,6 +630,8 @@ fun Composer(
     onExternalDictateConsumed: () -> Unit = {},
     models: ModelsResponse? = null,
     reasoning: ReasoningResponse? = null,
+    /** [models] and [reasoning] haven't been fetched yet (a restored session's first moments). */
+    catalogsLoading: Boolean = false,
     sessionModel: String? = null,
     /**
      * The session's stored reasoning/effort level, kept fresh by `session_state` frames and by the
@@ -1686,6 +1688,7 @@ fun Composer(
                                         modifier = Modifier.weight(1f, fill = false),
                                         permission = permissionState,
                                         account = account,
+                                        loading = catalogsLoading,
                                     )
                                 }
                                 if (permissionState?.current?.default == false) {
