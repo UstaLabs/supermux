@@ -37,9 +37,9 @@ test("a store lists only what its platform has, untagged", () => {
 })
 
 test("every chapter of a shipped edition has a title", () => {
-  const html = readFileSync(resolve(import.meta.dir, "..", editionPath("0.17.7")), "utf8")
+  const html = readFileSync(resolve(import.meta.dir, "..", editionPath("0.18.0")), "utf8")
   const edition = readEdition(html)
-  expect(edition.version).toBe("0.17.7")
+  expect(edition.version).toBe("0.18.0")
   for (const c of edition.chapters) expect(c.title?.length ?? 0).toBeGreaterThan(0)
 })
 

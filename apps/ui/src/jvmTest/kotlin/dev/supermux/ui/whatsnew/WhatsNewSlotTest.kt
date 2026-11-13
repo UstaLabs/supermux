@@ -15,7 +15,7 @@ import kotlin.test.assertEquals
 class WhatsNewSlotTest {
 
     private val page = """<script type="application/json" id="edition">
-        {"version":"0.17.7","chapters":[{"id":"a"},{"id":"b","on":["win"]},{"id":"c"}]}</script>"""
+        {"version":"0.18.0","chapters":[{"id":"a"},{"id":"b","on":["win"]},{"id":"c"}]}</script>"""
 
     private fun androidx.compose.ui.test.ComposeUiTest.mount(
         store: FakeSettingsStore,
@@ -24,7 +24,7 @@ class WhatsNewSlotTest {
         platform: ReleasePlatform? = ReleasePlatform.Mac,
     ) =
         setPlatformContent {
-            val whatsNew = rememberWhatsNew(store, "0.17.7", platform, existingInstall = { existing }, load = { page })
+            val whatsNew = rememberWhatsNew(store, "0.18.0", platform, existingInstall = { existing }, load = { page })
             WhatsNewSlot(whatsNew, onOpen = { opened += it })
         }
 
@@ -47,7 +47,7 @@ class WhatsNewSlotTest {
         mount(store, existing = false)
         waitForIdle()
         onNodeWithTag("whats_new_card").assertDoesNotExist()
-        assertEquals("0.17.7", store.map.value[WhatsNewTracker.SEEN_KEY])
+        assertEquals("0.18.0", store.map.value[WhatsNewTracker.SEEN_KEY])
     }
 
     @Test fun explore_opens_the_edition_and_settles_it() = runComposeUiTest {
@@ -57,8 +57,8 @@ class WhatsNewSlotTest {
         waitUntil { onAllNodes(androidx.compose.ui.test.hasTestTag("whats_new_card_explore")).fetchSemanticsNodes().isNotEmpty() }
         onNodeWithTag("whats_new_card_explore").performClick()
         waitForIdle()
-        assertEquals(listOf("0.17.7"), opened)
-        assertEquals("0.17.7", store.map.value[WhatsNewTracker.SEEN_KEY])
+        assertEquals(listOf("0.18.0"), opened)
+        assertEquals("0.18.0", store.map.value[WhatsNewTracker.SEEN_KEY])
         onNodeWithTag("whats_new_card").assertDoesNotExist()
     }
 
@@ -70,6 +70,6 @@ class WhatsNewSlotTest {
         onNodeWithTag("whats_new_card_dismiss").performClick()
         waitForIdle()
         assertEquals(emptyList(), opened)
-        assertEquals("0.17.7", store.map.value[WhatsNewTracker.SEEN_KEY])
+        assertEquals("0.18.0", store.map.value[WhatsNewTracker.SEEN_KEY])
     }
 }

@@ -40,6 +40,17 @@ class WhatsNewPageTest {
         assertNull(whatsNewAction(JsonPrimitive("done")))
     }
 
+    @Test fun an_edition_gets_the_kit_where_it_asks_for_it() {
+        assertEquals("<head><style>kit</style></head>", withKit("<head><!--whatsnew-kit--></head>", "<style>kit</style>"))
+        assertEquals("<head></head>", withKit("<head></head>", "<style>kit</style>"), "a page that doesn't ask gets nothing")
+    }
+
+    @Test fun the_shipped_edition_carries_the_website_kit() = runTest {
+        val page = loadEdition("0.18.0")
+        assertTrue("window.SupermuxSceneKit" in page, "the runner the kit scenes use")
+        assertTrue("<!--whatsnew-kit-->" !in page)
+    }
+
     @Test fun every_shipped_edition_is_bundled_and_names_its_own_version() = runTest {
         for (version in EDITIONS) {
             val edition = parseEdition(loadEdition(version))
