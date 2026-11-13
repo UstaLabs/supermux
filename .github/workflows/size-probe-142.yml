@@ -1,18 +1,21 @@
-# Scratch, NOT for merge (#142 web-size research). Round 2: both jobs build #142's probe branch at
-# db591b53c. (1) a wasm-opt flag sweep over the pre-opt wasm, (2) a compose-lean stageForBroker.
-# Runs only on pushes to this scratch branch.
+# Scratch, NOT for merge (#142 web-size research). Round 3: composeLean pre-opt wasm, one wasm-opt
+# variant per job, at c0557d201. Runs only on pushes to this scratch branch.
 name: size-probe-142
 on:
   push:
     branches: [size-probe-142]
 jobs:
-  sweep:
+  lean-sweep:
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [kgp, kgp+gfx, kgp+gfx+minrec, shrink-Os]
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: db591b53c5a99d96a79cdb93b48cdd6a402204c5
+          ref: c0557d2013f4250700f69086d77025e1fbeb41cc
       - run: sudo apt-get install -y brotli
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
@@ -32,45 +35,12 @@ jobs:
         env:
           ST_ZIG_JOBS: "4"
       - working-directory: apps
-        run: ./gradlew :web:stageForBroker --console=plain 2>&1 | tee ../stageForBroker.log
-      - run: bash tools/size-probe-142/sweep.sh apps/web/build/compileSync/wasmJs/main/productionExecutable/kotlin/supermux-apps-web.wasm sweep-out
+        run: ./gradlew :web:stageForBroker -Psupermux.composeLean=true --console=plain 2>&1 | tee ../stageForBroker.log
+      - run: bash tools/size-probe-142/sweep.sh apps/web/build/compileSync/wasmJs/main/productionExecutable/kotlin/supermux-apps-web.wasm sweep-out "${{ matrix.variant }}"
       - if: always()
         run: mkdir -p sweep-out && cp stageForBroker.log sweep-out/
       - if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: wasm-opt-sweep
+          name: lean-sweep-${{ matrix.variant }}
           path: sweep-out
-  compose-lean:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: db591b53c5a99d96a79cdb93b48cdd6a402204c5
-      - uses: oven-sh/setup-bun@v2
-      - run: bun install --frozen-lockfile
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-      - uses: gradle/actions/setup-gradle@v4
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.local/zig
-            apps/terminal-core/build
-          key: terminal-wasm-${{ runner.os }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json') }}
-          restore-keys: terminal-wasm-${{ runner.os }}-
-      - run: bash apps/terminal-core/wasm/build.sh
-        env:
-          ST_ZIG_JOBS: "4"
-      - working-directory: apps
-        run: ./gradlew :web:stageForBroker -Psupermux.composeLean=true --console=plain 2>&1 | tee ../stageForBroker-composeLean.log
-      - uses: actions/upload-artifact@v4
-        with:
-          name: web-static-composeLean
-          path: src/channels/web/static
-      - uses: actions/upload-artifact@v4
-        with:
-          name: stageForBroker-composeLean-log
-          path: stageForBroker-composeLean.log
