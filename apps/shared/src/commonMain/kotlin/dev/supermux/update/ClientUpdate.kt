@@ -24,7 +24,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 /** Default public manifest polled by native clients (and the broker). */
-const val DEFAULT_VERSIONS_URL = "https://supermux.dev/versions.json"
+const val DEFAULT_VERSIONS_URL = "http://127.0.0.1:8765/versions.json"
 
 /** One-shot GitHub fallback when versions.json is unreachable. */
 const val DEFAULT_GITHUB_LATEST_URL =
