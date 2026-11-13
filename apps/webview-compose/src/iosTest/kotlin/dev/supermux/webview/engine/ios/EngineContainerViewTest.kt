@@ -4,10 +4,16 @@ import androidx.compose.ui.graphics.Color
 import dev.supermux.webview.WebProfile
 import dev.supermux.webview.engine.PageSetup
 import dev.supermux.webview.engine.EngineConfig
+import kotlinx.cinterop.DoubleVar
+import kotlinx.cinterop.alloc
+import kotlinx.cinterop.memScoped
+import kotlinx.cinterop.ptr
 import kotlinx.cinterop.useContents
+import kotlinx.cinterop.value
 import platform.CoreGraphics.CGRectMake
 import platform.UIKit.UIColor
 import platform.UIKit.UIView
+import kotlin.math.abs
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -64,13 +70,23 @@ class EngineContainerViewTest {
         engine.attach(container)
         assertTrue(container.backgroundColor?.isEqual(UIColor.clearColor) == true, "nothing before a lease")
         engine.configure(setup.copy(transparentBackground = true, underlay = chat))
-        val want = UIColor.colorWithRed(0x33 / 255.0, green = 0x66 / 255.0, blue = 0x99 / 255.0, alpha = 1.0)
-        assertTrue(engine.webView.backgroundColor?.isEqual(want) == true, "${engine.webView.backgroundColor}")
-        assertTrue(container.backgroundColor?.isEqual(want) == true, "${container.backgroundColor}")
+        val want = listOf(0x33 / 255.0, 0x66 / 255.0, 0x99 / 255.0, 1.0)
+        assertTrue(engine.webView.backgroundColor.isNear(want), "${engine.webView.backgroundColor}")
+        assertTrue(container.backgroundColor.isNear(want), "${container.backgroundColor}")
         assertFalse(engine.webView.isOpaque())
         engine.configure(setup.copy(transparentBackground = true))
         assertTrue(engine.webView.backgroundColor?.isEqual(UIColor.clearColor) == true, "without one, as before")
         assertTrue(container.backgroundColor?.isEqual(UIColor.clearColor) == true)
+    }
+
+    /**
+     * Whether this colour's sRGB components are [rgba], to a part in 255: never `isEqual`, which wants the same colour
+     * space and the same bits, and Compose's colour is single precision.
+     */
+    private fun UIColor?.isNear(rgba: List<Double>): Boolean = this != null && memScoped {
+        val c = List(4) { alloc<DoubleVar>() }
+        getRed(c[0].ptr, green = c[1].ptr, blue = c[2].ptr, alpha = c[3].ptr) &&
+            c.zip(rgba).all { (got, want) -> abs(got.value - want) < 0.5 / 255 }
     }
 
     private val setup = PageSetup(
