@@ -38,6 +38,7 @@ import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.util.PerfReport
 import dev.supermux.util.PerfTrace
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 
 /** Put this over the app: prints the summaries to the console, and shows the panel when asked. */
 @Composable
@@ -89,6 +90,8 @@ fun PerfPanel(onClose: () -> Unit, modifier: Modifier = Modifier) {
 /**
  * Print the launch summary once it settles (3 s after its last milestone), and each chat open's
  * once it is fully shown, to stdout — the Terminal a hot reload runs in, logcat, the browser console.
+ * It looks again a second later only while something is still to print; otherwise it sleeps until
+ * the next event (#132: an idle app's endless one-second loop was a Swing timer waking it).
  */
 @Composable
 fun PerfConsoleReporter() {
@@ -96,7 +99,7 @@ fun PerfConsoleReporter() {
         var launchPrinted = false
         val printed = HashSet<String>()
         while (true) {
-            delay(1_000)
+            val seen = PerfTrace.version.value
             val now = PerfTrace.elapsedMs()
             if (!launchPrinted) {
                 val events = PerfTrace.events(PerfTrace.launchId)
@@ -112,13 +115,18 @@ fun PerfConsoleReporter() {
                     launchPrinted = true
                 }
             }
+            var waiting = !launchPrinted
             for (trace in PerfTrace.chatTraces(10)) {
                 if (trace in printed) continue
                 val done = PerfTrace.events(trace).firstOrNull { it.name == "chat.complete" } ?: continue
-                if (now - done.t < 1_000) continue
+                if (now - done.t < 1_000) {
+                    waiting = true
+                    continue
+                }
                 println("\n" + PerfReport.chat(trace).joinToString("\n"))
                 printed += trace
             }
+            if (waiting) delay(1_000) else PerfTrace.version.first { it != seen }
         }
     }
 }
