@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # #142 size probe: re-run wasm-opt over Kotlin's pre-opt wasm with flag variants and report the
 # gzip -9 (and brotli) size of each. CI only — each run needs ~1.5 GB RAM and ~1.5 min.
-# usage: sweep.sh <pre-opt.wasm> <out-dir>
+# usage: sweep.sh <pre-opt.wasm> <out-dir> [variant...]   (default: all)
 set -euo pipefail
 in=$1; out=$2; mkdir -p "$out"
 WO=$(ls -d ~/.gradle/binaryen/binaryen-version_*/bin/wasm-opt | tail -1)
@@ -18,11 +18,15 @@ declare -A V=(
   [kgp+gfx]="--generate-global-effects $KGP"
   [kgp+unsubtype]="$KGP --abstract-type-refining --unsubtyping --remove-unused-types -Oz"
   [kgp+minrec]="$KGP --minimize-rec-groups"
+  [kgp+gfx+minrec]="--generate-global-effects $KGP --minimize-rec-groups"
+  [kgp+gfx+Oz]="--generate-global-effects $KGP --generate-global-effects -Oz"
   [shrink-Os]="--type-ssa -O3 --gufa -Os --type-merging -Os -Oz -Oz"
   [kgp-noinl-lambda]="--type-ssa -O3 -O3 --gufa -O3 --type-merging -O3 -Oz --no-inline=*\$lambda*"
 )
 printf "%-18s %12s %10s %10s %8s\n" variant raw gzip9 brotli secs | tee "$out/sweep.txt"
-for k in kgp kgp-names kgp+Oz kgp+converge kgp+gfx kgp+unsubtype kgp+minrec shrink-Os kgp-noinl-lambda; do
+ALL="kgp kgp-names kgp+Oz kgp+converge kgp+gfx kgp+unsubtype kgp+minrec kgp+gfx+minrec kgp+gfx+Oz shrink-Os kgp-noinl-lambda"
+VARS="${*:3}"; [ -n "$VARS" ] || VARS=$ALL
+for k in $VARS; do
   s=$(date +%s)
   if "$WO" "$in" -o "$out/$k.wasm" $COMMON ${V[$k]} 2> "$out/$k.err"; then
     raw=$(stat -c%s "$out/$k.wasm"); gz=$(gzip -9c "$out/$k.wasm" | wc -c)
