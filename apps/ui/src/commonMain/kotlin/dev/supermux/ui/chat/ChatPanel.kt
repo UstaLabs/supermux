@@ -582,10 +582,15 @@ fun ChatPanel(
     // remember(session.id) resets on switch so a stale catalog never flashes.
     var modelsData by remember(session.id) { mutableStateOf<ModelsResponse?>(null) }
     var reasoningData by remember(session.id) { mutableStateOf<ReasoningResponse?>(null) }
+    var catalogsLoaded by remember(session.id) { mutableStateOf(false) }
     var openModelPicker by remember(session.id) { mutableLongStateOf(0L) }
     suspend fun refreshCatalogs() {
-        modelsData = actions.loadModels()
-        reasoningData = actions.loadReasoning()
+        try {
+            modelsData = actions.loadModels()
+            reasoningData = actions.loadReasoning()
+        } finally {
+            catalogsLoaded = true
+        }
     }
     LaunchedEffect(session.id) { refreshCatalogs() }
     // Re-read when the model or a catalog refresh changes; the catalog itself is the host's cache.
@@ -1172,6 +1177,7 @@ fun ChatPanel(
                 onPasteImageRequestConsumed = onPasteImageRequestConsumed,
                 models = modelsData,
                 reasoning = reasoningData,
+                catalogsLoading = !catalogsLoaded,
                 sessionModel = session.model,
                 sessionReasoning = session.reasoningLevel,
                 sessionAgent = session.agent,
