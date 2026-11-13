@@ -1751,6 +1751,10 @@ class HostStore(
             if (isAbsoluteEditorPath(path)) { api.hostFsWrite(path, content); true } else api.workspaceFsWrite(workspaceId, path, content)
         } ?: false
 
+    /** #72: the session's base merged into its branch; null when the broker could not be reached. */
+    suspend fun sessionGitLatest(sessionId: String): dev.supermux.net.LatestResult? =
+        runApi("sessionGitLatest") { api.sessionGitLatest(sessionId) }
+
     /** #72: commit / uncommit; null when the broker could not be reached. */
     suspend fun workspaceGitWrite(workspaceId: String, op: String, body: CommitRequest): GitWriteResult? =
         runApi("workspaceGitWrite") { api.workspaceGitWrite(workspaceId, op, body) }

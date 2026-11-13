@@ -42,4 +42,29 @@
     <string name="git_undo_pushed">That commit is already pushed, so it isn't undone here</string>
     <string name="git_undo_merge">A merge commit isn't undone here</string>
     <string name="git_undo_none">There is no commit to undo</string>
+    <plurals name="git_base_moved_hint">
+        <item quantity="one">%2$s has %1$d new commit since this chat started.</item>
+        <item quantity="other">%2$s has %1$d new commits since this chat started.</item>
+    </plurals>
+    <string name="git_get_latest">Get latest from %1$s</string>
+    <plurals name="git_conflict_banner">
+        <item quantity="one">Getting the latest from %2$s stopped: %1$d file was changed on both sides.</item>
+        <item quantity="other">Getting the latest from %2$s stopped: %1$d files were changed on both sides.</item>
+    </plurals>
+    <string name="git_conflicts_settled">Every clash is settled. Continue the merge to finish it.</string>
+    <string name="git_ask_agent_resolve">Ask the agent to resolve</string>
+    <string name="git_cancel_merge">Cancel the merge</string>
+    <string name="git_use_mine">Use mine</string>
+    <string name="git_use_base">Use %1$s</string>
+    <string name="git_use_both">Use both</string>
+    <string name="git_ask_agent">Ask the agent</string>
+    <string name="git_continue_merge">Continue merge</string>
+    <string name="git_agent_resolve_prompt">Resolve the merge conflicts with %1$s in %2$s. Keep what both sides meant, then tell me what you chose.</string>
+    <string name="git_latest_up_to_date">Already has everything from %1$s</string>
+    <plurals name="git_latest_got">
+        <item quantity="one">Got %1$d commit from %2$s</item>
+        <item quantity="other">Got %1$d commits from %2$s</item>
+    </plurals>
+    <string name="git_latest_failed">Couldn't get the latest: %1$s</string>
+    <string name="git_merge_cancelled">Merge cancelled. Everything is as it was.</string>
 </resources>

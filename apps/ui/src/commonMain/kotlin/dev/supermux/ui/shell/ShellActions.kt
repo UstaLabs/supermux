@@ -134,6 +134,8 @@ class ShellActions(
     val workspaceFsDiff: suspend (workspaceId: String, base: String?) -> FsDiffResult? = { _, _ -> null },
     /** #72: whole files into the next commit, or out of it; null: this host can't stage (no checkboxes). */
     val workspaceStage: (suspend (workspaceId: String, repo: String, paths: List<String>, staged: Boolean) -> Boolean)? = null,
+    /** #72: "Get latest from <base>" for a session; null: this host can't. */
+    val sessionGitLatest: (suspend (sessionId: String) -> dev.supermux.net.LatestResult?)? = null,
     /** #72: commit / uncommit in a workspace repo; null: this host can't (no commit bar). */
     val workspaceGitWrite: (suspend (workspaceId: String, op: String, body: dev.supermux.net.CommitRequest) -> dev.supermux.net.GitWriteResult?)? = null,
     /** A lazy Changes file's base text by blob; null: this host can't load one (no Retry offered). */
@@ -226,6 +228,7 @@ fun rememberShellActions(
             workspaceFsWrite = { wsId, path, content -> app.workspaceFsWrite(wsId, path, content) },
             workspaceStage = { wsId, repo, paths, staged -> app.workspaceStage(wsId, repo, paths, staged) },
             workspaceGitWrite = { wsId, op, body -> app.workspaceGitWrite(wsId, op, body) },
+            sessionGitLatest = { id -> app.sessionGitLatest(id) },
             workspaceFsDiff = { wsId, base -> app.workspaceFsDiff(wsId, base) },
             workspaceChangesBlob = { wsId, repo, sha, force -> app.workspaceChangesBlob(wsId, repo, sha, force) },
             workspaceFsRefs = { wsId -> app.workspaceFsRefs(wsId) },
@@ -293,6 +296,7 @@ fun rememberShellActions(fleet: FleetStore): ShellActions {
             workspaceFsWrite = { wsId, path, content -> fleet.workspaceFsWrite(wsId, path, content) },
             workspaceStage = { wsId, repo, paths, staged -> fleet.workspaceStage(wsId, repo, paths, staged) },
             workspaceGitWrite = { wsId, op, body -> fleet.workspaceGitWrite(wsId, op, body) },
+            sessionGitLatest = { id -> fleet.sessionGitLatest(id) },
             workspaceFsDiff = { wsId, base -> fleet.workspaceFsDiff(wsId, base) },
             workspaceChangesBlob = { wsId, repo, sha, force -> fleet.workspaceChangesBlob(wsId, repo, sha, force) },
             workspaceFsRefs = { wsId -> fleet.workspaceFsRefs(wsId) },

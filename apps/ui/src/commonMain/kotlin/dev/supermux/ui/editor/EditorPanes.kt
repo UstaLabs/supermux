@@ -478,6 +478,11 @@ fun DiffPane(
     stageFiles: (suspend (repo: String, paths: List<String>, staged: Boolean) -> Boolean)? = null,
     /** #72: commit / uncommit (see [DiffView]); null: no commit bar. */
     gitWrite: (suspend (op: String, body: dev.supermux.net.CommitRequest) -> dev.supermux.net.GitWriteResult?)? = null,
+    /** #72: the chat's base by name, how far it moved on, "Get latest", and "Ask the agent" (see [DiffView]). */
+    baseName: String? = null,
+    baseBehind: Int = 0,
+    gitLatest: (suspend () -> dev.supermux.net.LatestResult?)? = null,
+    askAgent: ((String) -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val reviewState = reviewWalkthrough ?: walkthrough
@@ -583,6 +588,10 @@ fun DiffPane(
             retainKey = retainKey,
             stage = stageFiles,
             gitWrite = gitWrite,
+            baseName = baseName,
+            baseBehind = baseBehind,
+            gitLatest = gitLatest,
+            askAgent = askAgent,
         )
         }
     }

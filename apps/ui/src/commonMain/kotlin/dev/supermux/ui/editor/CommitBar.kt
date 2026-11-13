@@ -41,8 +41,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.net.GitWriteResult
+import dev.supermux.net.LatestResult
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.i18n.localizedPlural
+
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
@@ -63,6 +65,14 @@ internal fun CommitBar(
     onCommit: () -> Unit,
     onAmend: () -> Unit,
     onUndo: () -> Unit,
+    /** A line that wins over [last] (what "Get latest" or a cancel did). */
+    note: String? = null,
+    /** Mid-merge: the button continues it, and only once nothing clashes. */
+    merging: Boolean = false,
+    clashing: Int = 0,
+    /** "Get latest from <base>" in the ▾; null: not offered. */
+    getLatestLabel: String? = null,
+    onGetLatest: () -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     var menu by remember { mutableStateOf(false) }
@@ -70,7 +80,7 @@ internal fun CommitBar(
         Modifier.fillMaxWidth().background(cs.surfaceContainer).padding(Space.md).testTag("commit_bar"),
         verticalArrangement = Arrangement.spacedBy(Space.sm),
     ) {
-        if (uncommitted > 0) {
+        if (uncommitted > 0 && !merging) {
             BasicTextField(
                 value = message,
                 onValueChange = onMessage,
@@ -93,14 +103,14 @@ internal fun CommitBar(
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                last?.let { (op, r) -> outcome(op, r) }.orEmpty(),
+                note ?: last?.let { (op, r) -> outcome(op, r) }.orEmpty(),
                 fontSize = 11.sp,
                 color = cs.onSurfaceVariant,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f).padding(end = Space.sm).testTag("commit_outcome"),
             )
-            val canCommit = uncommitted > 0 && !busy
+            val canCommit = (uncommitted > 0 || merging) && clashing == 0 && !busy
             Box {
                 Row(
                     Modifier.height(34.dp).clip(RoundedCornerShape(17.dp)).background(cs.primary),
@@ -118,8 +128,11 @@ internal fun CommitBar(
                     ) {
                         Icon(Icons.Filled.Check, null, tint = cs.onPrimary, modifier = Modifier.size(16.dp))
                         Text(
-                            if (included > 0 || uncommitted == 0) localized(Str.git_commit)
-                            else localizedPlural(Plurals.git_commit_all, uncommitted, uncommitted),
+                            when {
+                                merging -> localized(Str.git_continue_merge)
+                                included > 0 || uncommitted == 0 -> localized(Str.git_commit)
+                                else -> localizedPlural(Plurals.git_commit_all, uncommitted, uncommitted)
+                            },
                             color = cs.onPrimary,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Medium,
@@ -140,6 +153,13 @@ internal fun CommitBar(
                     }
                 }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    if (getLatestLabel != null) {
+                        DropdownMenuItem(
+                            text = { Text(getLatestLabel) },
+                            onClick = { menu = false; onGetLatest() },
+                            modifier = Modifier.testTag("commit_get_latest"),
+                        )
+                    }
                     DropdownMenuItem(
                         text = { Text(localized(Str.git_amend)) },
                         onClick = { menu = false; onAmend() },
@@ -168,4 +188,13 @@ private fun outcome(op: String, r: GitWriteResult?): String {
         r?.reason == "none" -> localized(Str.git_undo_none)
         else -> localized(Str.git_commit_failed, why)
     }
+}
+
+/** What "Get latest from <base>" did, as one line. A clash is said by the banner above, in full. */
+@Composable
+internal fun latestNote(r: LatestResult, base: String): String = when (r.status) {
+    "up_to_date" -> localized(Str.git_latest_up_to_date, base)
+    "clean" -> localizedPlural(Plurals.git_latest_got, r.commits, r.commits, base)
+    "conflict" -> localizedPlural(Plurals.git_conflict_banner, r.files.size, r.files.size, base)
+    else -> localized(Str.git_latest_failed, r.message.orEmpty().lineSequence().firstOrNull().orEmpty())
 }

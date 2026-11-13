@@ -42,4 +42,29 @@
     <string name="git_undo_pushed">Bu commit zaten gönderildi, burada geri alınmaz</string>
     <string name="git_undo_merge">Birleştirme commit'i burada geri alınmaz</string>
     <string name="git_undo_none">Geri alınacak commit yok</string>
+    <plurals name="git_base_moved_hint">
+        <item quantity="one">Bu sohbet başladığından beri %2$s dalında %1$d yeni commit var.</item>
+        <item quantity="other">Bu sohbet başladığından beri %2$s dalında %1$d yeni commit var.</item>
+    </plurals>
+    <string name="git_get_latest">%1$s dalından en sonunu al</string>
+    <plurals name="git_conflict_banner">
+        <item quantity="one">%2$s dalından en son değişiklikleri alma durdu: %1$d dosya iki tarafta da değişmiş.</item>
+        <item quantity="other">%2$s dalından en son değişiklikleri alma durdu: %1$d dosya iki tarafta da değişmiş.</item>
+    </plurals>
+    <string name="git_conflicts_settled">Tüm çakışmalar çözüldü. Bitirmek için birleştirmeye devam edin.</string>
+    <string name="git_ask_agent_resolve">Ajandan çözmesini iste</string>
+    <string name="git_cancel_merge">Birleştirmeyi iptal et</string>
+    <string name="git_use_mine">Benimkini kullan</string>
+    <string name="git_use_base">%1$s sürümünü kullan</string>
+    <string name="git_use_both">İkisini de kullan</string>
+    <string name="git_ask_agent">Ajana sor</string>
+    <string name="git_continue_merge">Birleştirmeye devam et</string>
+    <string name="git_agent_resolve_prompt">%2$s içindeki %1$s ile birleştirme çakışmalarını çöz. İki tarafın da amacını koru, sonra neyi seçtiğini söyle.</string>
+    <string name="git_latest_up_to_date">%1$s dalındaki her şey zaten burada</string>
+    <plurals name="git_latest_got">
+        <item quantity="one">%2$s dalından %1$d commit alındı</item>
+        <item quantity="other">%2$s dalından %1$d commit alındı</item>
+    </plurals>
+    <string name="git_latest_failed">En son değişiklikler alınamadı: %1$s</string>
+    <string name="git_merge_cancelled">Birleştirme iptal edildi. Her şey eskisi gibi.</string>
 </resources>

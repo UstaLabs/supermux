@@ -73,6 +73,10 @@ class DiffViewTest {
         prefs: UiPrefs = UiPrefs(InMemorySettingsStore()),
         stage: (suspend (String, List<String>, Boolean) -> Boolean)? = null,
         gitWrite: (suspend (String, dev.supermux.net.CommitRequest) -> dev.supermux.net.GitWriteResult?)? = null,
+        baseName: String? = null,
+        baseBehind: Int = 0,
+        gitLatest: (suspend () -> dev.supermux.net.LatestResult?)? = null,
+        askAgent: ((String) -> Unit)? = null,
     ): @androidx.compose.runtime.Composable () -> Unit = {
         CompositionLocalProvider(
             LocalUiPrefs provides prefs,
@@ -97,6 +101,10 @@ class DiffViewTest {
                 readFile = readFile,
                 stage = stage,
                 gitWrite = gitWrite,
+                baseName = baseName,
+                baseBehind = baseBehind,
+                gitLatest = gitLatest,
+                askAgent = askAgent,
             )
         }
         }
@@ -180,6 +188,61 @@ class DiffViewTest {
         onNodeWithTag("commit_undo").performClick()
         waitForIdle()
         onNodeWithText("That commit is already pushed, so it isn't undone here").assertExists()
+    }
+
+    private fun midMerge(clash: Boolean) = listOf(
+        RepoDiff(repo = "", merging = true, files = listOf(
+            DiffFile(path = "src/App.jsx", status = "modified", staged = if (clash) "conflict" else "all"),
+            DiffFile(path = "b.txt", status = "modified", staged = "all"),
+        )),
+    )
+
+    @Test
+    fun a_base_that_moved_on_is_named_and_get_latest_says_what_it_got() = runComposeUiTest {
+        var asked = 0
+        setContent(host(noneTicked(), stage = { _, _, _ -> true }, gitWrite = { _, _ -> null }, baseName = "release/2.4", baseBehind = 5,
+            gitLatest = { asked++; dev.supermux.net.LatestResult(status = "clean", from = "origin/release/2.4", commits = 5) }))
+        waitForIdle()
+        onNodeWithText("release/2.4 has 5 new commits since this chat started.").assertExists()
+        onNodeWithTag("git_get_latest_link").performClick()
+        waitForIdle()
+        assertEquals(1, asked)
+        onNodeWithText("Got 5 commits from release/2.4").assertExists()
+    }
+
+    @Test
+    fun a_clash_names_the_base_offers_each_side_and_blocks_continue_until_settled() = runComposeUiTest {
+        val calls = mutableListOf<Pair<String, dev.supermux.net.CommitRequest>>()
+        val asked = mutableListOf<String>()
+        setContent(host(midMerge(clash = true), stage = { _, _, _ -> true }, baseName = "dev",
+            gitWrite = { op, body -> calls += op to body; dev.supermux.net.GitWriteResult(ok = true) }, askAgent = { asked += it }))
+        waitForIdle()
+        onNodeWithText("Getting the latest from dev stopped: 1 file was changed on both sides.").assertExists()
+        onNodeWithText("Continue merge").assertExists()
+        onNodeWithTag("commit_button").performClick()   // still clashing: nothing happens
+        waitForIdle()
+        assertEquals(emptyList(), calls)
+        onNodeWithTag("git_use_base:src/App.jsx").performClick()
+        waitForIdle()
+        assertEquals(listOf("resolve" to dev.supermux.net.CommitRequest("", path = "src/App.jsx", side = "theirs")), calls)
+        onNodeWithTag("git_ask_agent:src/App.jsx").performClick()
+        waitForIdle()
+        assertTrue(asked.single().contains("dev") && asked.single().contains("src/App.jsx"))
+        onNodeWithTag("git_cancel_merge").performClick()
+        waitForIdle()
+        assertEquals("abort", calls.last().first)
+    }
+
+    @Test
+    fun once_nothing_clashes_the_button_continues_the_merge() = runComposeUiTest {
+        val calls = mutableListOf<Pair<String, dev.supermux.net.CommitRequest>>()
+        setContent(host(midMerge(clash = false), stage = { _, _, _ -> true }, baseName = "dev",
+            gitWrite = { op, body -> calls += op to body; dev.supermux.net.GitWriteResult(ok = true, subject = "Merge branch 'dev'") }))
+        waitForIdle()
+        onNodeWithText("Every clash is settled. Continue the merge to finish it.").assertExists()
+        onNodeWithTag("commit_button").performClick()
+        waitForIdle()
+        assertEquals(listOf("commit" to dev.supermux.net.CommitRequest("", null)), calls)
     }
 
     @Test

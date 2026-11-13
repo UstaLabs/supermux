@@ -800,6 +800,9 @@ private fun DiffPaneForWorkspace(
     // The holder is null where the host installed no walkthrough seam (the builder checks the cap).
     val walkthrough = selectedWalkthroughId?.let { actions.walkthroughState(it) }
     val reviewWalkthrough = reviewSessionId?.let { actions.walkthroughState(it) }
+    // #72: the chat's base (its name and how far it moved on) for the merge notes.
+    val sessions by actions.sessions.collectAsState()
+    val reviewGit = reviewSessionId?.let { id -> sessions.firstOrNull { it.id == id }?.git }
     DiffPane(
         diff = diff,
         walkthrough = walkthrough,
@@ -836,6 +839,10 @@ private fun DiffPaneForWorkspace(
         retainKey = "diff:$workspaceId:$viewId",
         stageFiles = actions.workspaceStage?.let { f -> { repo, paths, on -> f(workspaceId, repo, paths, on) } },
         gitWrite = actions.workspaceGitWrite?.let { f -> { op, body -> f(workspaceId, op, body) } },
+        baseName = reviewGit?.compareRef?.takeIf { reviewGit.mode == "base" && it.isNotEmpty() },
+        baseBehind = reviewGit?.takeIf { it.mode == "base" }?.behind ?: 0,
+        gitLatest = reviewSessionId?.let { id -> actions.sessionGitLatest?.let { f -> { f(id) } } },
+        askAgent = reviewSessionId?.let { id -> { text: String -> actions.sendMessage(id, text) } },
         modifier = modifier.fillMaxSize(),
     )
 }

@@ -1207,6 +1207,7 @@ data class RepoDiff(
     val truncated: Boolean = false,
     val total: Int? = null,
     val error: String? = null,
+    val merging: Boolean = false,
 )
 
 @Serializable
@@ -1244,6 +1245,8 @@ data class RepoChanges(
     val truncated: Boolean = false,
     val total: Int = 0,
     val error: String? = null,
+    /** #72: a merge is in progress here (conflicts, or settled and waiting for "Continue merge"). */
+    val merging: Boolean = false,
 )
 
 @Serializable
@@ -1261,7 +1264,25 @@ data class ChangedFile(
 
 /** POST …/git/commit and …/git/uncommit (#72): {repo} plus, for commit, the message and how. */
 @Serializable
-data class CommitRequest(val repo: String, val message: String? = null, val all: Boolean = false, val amend: Boolean = false)
+data class CommitRequest(
+    val repo: String,
+    val message: String? = null,
+    val all: Boolean = false,
+    val amend: Boolean = false,
+    /** resolve: the conflicted file and the side kept (mine | theirs | both). */
+    val path: String? = null,
+    val side: String? = null,
+)
+
+/** POST /sessions/<id>/git/latest: the base merged in (clean | up_to_date), stopped on a clash (conflict), or failed. */
+@Serializable
+data class LatestResult(
+    val status: String = "failed",
+    val from: String? = null,
+    val commits: Int = 0,
+    val files: List<String> = emptyList(),
+    val message: String? = null,
+)
 
 /** What a commit or an undo did: ok with the commit's subject, or why not (nothing | failed | none | merge | pushed). */
 @Serializable
@@ -1290,7 +1311,7 @@ fun ChangesResult.toFsDiffResult(): FsDiffResult = FsDiffResult(
                     baseBlob = f.baseBlob, size = f.size, lazy = true, staged = f.staged,
                 )
             },
-            baseSha = r.baseSha, truncated = r.truncated, total = r.total, error = r.error,
+            baseSha = r.baseSha, truncated = r.truncated, total = r.total, error = r.error, merging = r.merging,
         )
     },
     comments = comments,
@@ -3709,7 +3730,18 @@ class BrokerApi(
     suspend fun workspaceFsDiff(workspaceId: String, base: String? = null): FsDiffResult =
         getJson("$httpBase/workspaces/$workspaceId/fs/diff" + if (base != null) "?base=${urlEncode(base)}" else "")
 
-    /** POST /workspaces/<id>/git/<commit|uncommit>: the broker's answer, a refusal (409) included. */
+    /** POST /sessions/<id>/git/latest: its answer, a refusal (409) included. */
+    suspend fun sessionGitLatest(sessionId: String): LatestResult {
+        val resp = http.post("$httpBase/sessions/$sessionId/git/latest") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody("{}")
+        }
+        val text = resp.bodyAsText()
+        return runCatching { json.decodeFromString<LatestResult>(text) }.getOrElse { LatestResult(message = text.take(200)) }
+    }
+
+    /** POST /workspaces/<id>/git/<commit|uncommit|resolve|abort>: the broker's answer, a refusal (409) included. */
     suspend fun workspaceGitWrite(workspaceId: String, op: String, body: CommitRequest): GitWriteResult {
         val resp = http.post("$httpBase/workspaces/$workspaceId/git/$op") {
             authHeader()
