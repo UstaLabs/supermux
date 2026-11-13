@@ -3,6 +3,7 @@ package dev.supermux.webview.engine.web
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.IntSize
 import dev.supermux.webview.runtime.OverlayCutouts
 import dev.supermux.webview.runtime.n
@@ -217,10 +218,13 @@ internal class WebFrame {
         return true
     }
 
-    /** What `prefers-color-scheme` the page's frame asks for, and whether its background shows through. */
-    fun setTheme(dark: Boolean, transparent: Boolean) {
+    /**
+     * What `prefers-color-scheme` the page's frame asks for, and whether its background shows through: to the host page
+     * under the canvas, or to a transparent page's [underlay], the app's colour behind the view, if it has one.
+     */
+    fun setTheme(dark: Boolean, transparent: Boolean, underlay: Color? = null) {
         styleOf(cut, "color-scheme", if (dark) "dark" else "light")
-        styleOf(cut, "background", if (transparent) "transparent" else "Canvas")
+        styleOf(cut, "background", if (!transparent) "Canvas" else underlay?.let(::cssColorOf) ?: "transparent")
     }
 
     /** Adds [iframe] under the scrims, and under [below] (an older iframe still holding paint) when given. */
@@ -332,4 +336,10 @@ internal class WebFrame {
 
     private fun rgba(color: Color): String =
         "rgba(${(color.red * 255).roundToInt()}, ${(color.green * 255).roundToInt()}, ${(color.blue * 255).roundToInt()}, ${color.alpha})"
+}
+
+/** An opaque [color] as CSS: `rgb(r, g, b)`, in sRGB. */
+internal fun cssColorOf(color: Color): String {
+    val argb = color.toArgb()
+    return "rgb(${(argb shr 16) and 0xFF}, ${(argb shr 8) and 0xFF}, ${argb and 0xFF})"
 }

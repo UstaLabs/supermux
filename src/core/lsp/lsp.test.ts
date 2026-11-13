@@ -4,7 +4,7 @@ import { tmpdir } from "os"
 import { delimiter, join } from "path"
 import { isInstalled } from "./detect"
 import { getCatalogServerById, languageIdForPath, launchCommand, resolveBinPath } from "./catalog"
-import { parseEditorConfig, parseCustomLspServerDef } from "../settings/editor-config"
+import { customToServerSpec, parseEditorConfig, parseCustomLspServerDef } from "../settings/editor-config"
 import { getServerById, resolveServerForPath } from "./registry"
 import { encodeMessage, MessageReader } from "./framing"
 
@@ -70,6 +70,13 @@ test("custom server resolves by extension", () => {
   })
   expect(resolveServerForPath("main.zig", cfg)?.id).toBe("zig")
   expect(getServerById("zig", cfg)?.command).toBe("zls")
+})
+
+// #29 path-shape: a custom server's bin was the command's last "/"-part, so on Windows a full path stayed whole.
+test.skipIf(process.platform !== "win32")("a custom server's bin is its program's file name, a Windows path's too", () => {
+  const spec = customToServerSpec("clangd", parseCustomLspServerDef({ label: "clangd", command: "C:\\tools\\LLVM\\bin\\clangd.exe", extensions: [".c"] }))
+  expect(spec.bin).toBe("clangd.exe")
+  expect(spec.command).toBe("C:\\tools\\LLVM\\bin\\clangd.exe")
 })
 
 test("getServerById round-trips and carries install metadata", () => {

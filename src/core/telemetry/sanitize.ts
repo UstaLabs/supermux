@@ -18,7 +18,7 @@ export function telemetryModel(
   if (!model) return "default"
   if (model.length > 80 || !SLUG.test(model)) return "custom"
   if (agent === "opencode") {
-    const provider = model.split("/")[0] ?? ""
+    const provider = model.split("/")[0] ?? "" // platform-ok: a model id, "provider/model"
     return (OPENCODE_HOSTED_PROVIDERS as readonly string[]).includes(provider) ? model : "custom"
   }
   return lookup(agent).some((m) => m.id === model) ? model : "custom"

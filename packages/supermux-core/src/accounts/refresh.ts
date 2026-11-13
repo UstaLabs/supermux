@@ -50,8 +50,8 @@ export class RefreshCoordinator {
 
   private async lock(id: string): Promise<() => Promise<void>> {
     assertVaultId(id)
-    await mkdir(this.lockDirectory, { recursive: true, mode: 0o700 })
-    await chmod(this.lockDirectory, 0o700)
+    await files.mkdirPrivateAsync(this.lockDirectory)
+    files.makePrivate(this.lockDirectory)
     const path = join(this.lockDirectory, `${id}.lock`)
     const nonce = randomUUID()
     const deadline = Date.now() + LOCK_WAIT_MS

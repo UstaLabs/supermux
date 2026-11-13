@@ -58,17 +58,6 @@ interface IosBridge {
     fun captureVideo(onResult: (IosPickedFile?) -> Unit)
 
     /**
-     * Present the share sheet for [bytes] as a SAVE. [onResult] gets a human-readable destination
-     * (shown in the "Saved to …" notice) or null if the user dismissed it.
-     *
-     * The share sheet and not `UIDocumentPickerViewController(forExporting:)`: iOS has no separate
-     * save dialog, and the picker would offer ONLY the file system, hiding every other app that
-     * can take the file. iOS never reports where a file actually landed, so the destination is
-     * derived from the activity the user chose.
-     */
-    fun saveAs(name: String, mime: String, bytes: ByteArray, onResult: (String?) -> Unit)
-
-    /**
      * Present the share sheet for [bytes] as an OPEN ("Open with…"). [onResult] is true if the
      * sheet was PRESENTED at all — iOS does not report what the user did with it afterwards, and
      * a plain dismissal must not read as a failure to open.
@@ -86,10 +75,17 @@ interface IosBridge {
      * "Save to Files". [onResult] gets the name the copy was saved under, or null if the user
      * dismissed the picker.
      *
-     * The picker and not the share sheet, unlike [saveAs]: a finished download offers Share as an
-     * action of its own, so Save is the file system alone.
+     * The picker and not the share sheet: Share is an action of its own, so Save is the file system
+     * alone (a picture or a clip goes to Photos instead, [saveToPhotos]).
      */
     fun saveFileAt(path: String, onResult: (String?) -> Unit)
+
+    /**
+     * Add the picture (or, [video], the clip) at [path] to Photos (#95), asking for add-only access the first time.
+     * [onResult] is true once it is in the library; false when access is refused or Photos would not take it, and
+     * the caller then exports it to Files instead.
+     */
+    fun saveToPhotos(path: String, video: Boolean, onResult: (Boolean) -> Unit)
 
     /**
      * Present the share sheet for the file at [path] — iOS's "Open in…" is this same sheet.
@@ -279,13 +275,11 @@ object NoopIosBridge : IosBridge {
     override fun pickFiles(kind: String, onResult: (List<IosPickedFile>) -> Unit) = onResult(emptyList())
     override fun captureImage(onResult: (IosPickedFile?) -> Unit) = onResult(null)
     override fun captureVideo(onResult: (IosPickedFile?) -> Unit) = onResult(null)
-    override fun saveAs(name: String, mime: String, bytes: ByteArray, onResult: (String?) -> Unit) =
-        onResult(null)
-
     override fun openExternally(name: String, mime: String, bytes: ByteArray, onResult: (Boolean) -> Unit) =
         onResult(false)
 
     override fun saveFileAt(path: String, onResult: (String?) -> Unit) = onResult(null)
+    override fun saveToPhotos(path: String, video: Boolean, onResult: (Boolean) -> Unit) = onResult(false)
     override fun shareFileAt(path: String, onResult: (Boolean) -> Unit) = onResult(false)
 
     override fun micAvailable(): Boolean = false

@@ -18,7 +18,7 @@ enum class ReleasePlatform(val id: String) {
 }
 
 /** The releases that have an edition, oldest first. A release without one offers nothing. */
-val EDITIONS: List<String> = listOf("0.17.7")
+val EDITIONS: List<String> = listOf("0.18.0")
 
 @Serializable
 data class EditionChapter(val id: String, val on: List<String>? = null)
@@ -79,8 +79,20 @@ val LocalOpenWhatsNew = staticCompositionLocalOf<((String) -> Unit)?> { null }
 /** [version]'s release notes on GitHub, the full list the edition picks from. */
 fun releaseNotesUrl(version: String): String = "https://github.com/UstaLabs/supermux/releases/tag/v$version"
 
-/** The bundled page of [version]'s edition. */
-suspend fun loadEdition(version: String): String = Res.readBytes("files/whatsnew/$version.html").decodeToString()
+private const val KIT_MARK = "<!--whatsnew-kit-->"
+
+/**
+ * [page] with the website's real-app kit (files/whatsnew/kit.html, scripts/sync-site-kit.ts) where it asks for it: an
+ * edition loads from a data: URL and can fetch nothing, so the kit is inlined. A page that doesn't ask gets nothing.
+ */
+fun withKit(page: String, kit: String): String = if (KIT_MARK in page) page.replace(KIT_MARK, kit) else page
+
+/** The bundled page of [version]'s edition, the kit inlined. */
+suspend fun loadEdition(version: String): String {
+    val page = Res.readBytes("files/whatsnew/$version.html").decodeToString()
+    if (KIT_MARK !in page) return page
+    return withKit(page, Res.readBytes("files/whatsnew/kit.html").decodeToString())
+}
 
 /**
  * When a device is offered What's new: once per version, per device, after an update. A first install is offered

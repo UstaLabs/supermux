@@ -22,7 +22,7 @@ function parseOrigin(url: string): { host: string; owner: string; repo: string }
   if (!m) m = url.match(/^https?:\/\/(?:[^@]+@)?([^/]+)\/(.+?)(?:\.git)?$/)
   if (!m) return null
   const host = m[1] ?? ""; const path = m[2] ?? ""
-  const slash = path.lastIndexOf("/")
+  const slash = path.lastIndexOf("/") // platform-ok: a remote URL's path (owner/repo), not a file path
   if (slash < 0) return null
   return { host, owner: path.slice(0, slash), repo: path.slice(slash + 1) }
 }

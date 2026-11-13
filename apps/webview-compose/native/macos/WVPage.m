@@ -841,13 +841,23 @@ static CGImageRef WVLargestImage(NSImage *image) {
     if (!_released && _view.window) [_view.window makeFirstResponder:_webView];
 }
 
+/** argb as an sRGB colour; nil for 0. */
+static NSColor *WVColorOf(int argb) {
+    uint32_t c = (uint32_t)argb;
+    return c == 0 ? nil : [NSColor colorWithSRGBRed:((c >> 16) & 0xFF) / 255.0 green:((c >> 8) & 0xFF) / 255.0
+                                               blue:(c & 0xFF) / 255.0 alpha:((c >> 24) & 0xFF) / 255.0];
+}
+
 /** argb: the page's background, opaque; 0 for no backdrop. */
 - (void)setBackdrop:(int)argb {
     if (_released) return;
-    uint32_t c = (uint32_t)argb;
-    NSColor *color = c == 0 ? nil : [NSColor colorWithSRGBRed:((c >> 16) & 0xFF) / 255.0 green:((c >> 8) & 0xFF) / 255.0
-                                                          blue:(c & 0xFF) / 255.0 alpha:((c >> 24) & 0xFF) / 255.0];
-    [_view setBackdropColor:color];
+    [_view setBackdropColor:WVColorOf(argb)];
+}
+
+/** argb: what lies behind a transparent page, opaque; 0 for nothing. */
+- (void)setUnderlay:(int)argb {
+    if (_released) return;
+    [_view setUnderlayColor:WVColorOf(argb)];
 }
 
 /** Answers what WebKit still waits on with its safe default, and lets go of everything (release). */
@@ -1180,9 +1190,10 @@ JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_attach(JNIEn
 
 JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_detach(JNIEnv *env, jclass type, jlong handle, jlong window) {
     WVPage *page = WVPageOf(handle);
-    NSWindow *from = WVWindow(window);
+    // Only the window's address: the view leaves its window once the composition has let it go, and by then a closed
+    // window may be gone. Made an object, it would be retained, and a window freed is a crash.
     WVOnMain(NO, ^{
-        if (from) [page.view detachFrom:from];
+        if (window) [page.view detachFromWindowAt:window];
     });
 }
 
@@ -1214,6 +1225,13 @@ JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_setBackdrop(
     WVPage *page = WVPageOf(handle);
     WVOnMain(NO, ^{
         [page setBackdrop:argb];
+    });
+}
+
+JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_setUnderlay(JNIEnv *env, jclass type, jlong handle, jint argb) {
+    WVPage *page = WVPageOf(handle);
+    WVOnMain(NO, ^{
+        [page setUnderlay:argb];
     });
 }
 

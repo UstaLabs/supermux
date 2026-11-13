@@ -20,8 +20,8 @@ export function fileVault(directory: string): Vault {
   if (typeof directory !== "string" || !isAbsolute(directory)) throw new CoreError("invalid_options", "Vault directory must be absolute")
   let ready: Promise<void> | undefined
   const ensure = () => ready ??= (async () => {
-    await mkdir(directory, { recursive: true, mode: 0o700 })
-    await chmod(directory, 0o700)
+    await files.mkdirPrivateAsync(directory)
+    files.makePrivate(directory)
   })().catch(error => { ready = undefined; throw error })
   const path = (id: string) => { assertVaultId(id); return join(directory, `${id}.secret`) }
   return {

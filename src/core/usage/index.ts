@@ -12,6 +12,7 @@ import { openCodeDataDir } from "../agents/opencode/auth"
 import { fetchOpenCodePlan, type OpenCodePlan } from "./opencode-go"
 import { openCodeFreeTier } from "./opencode-free"
 import { home } from "../../shared/home"
+import { dirs, host } from "@supermux/platform"
 
 const log = makeLogger("usage")
 
@@ -633,9 +634,8 @@ export async function redeemCodexReset(
 export function cursorAuthPath(): string {
   return authCredPath(AgentKind.Cursor, {
     home: home(),
-    xdgConfigHome: process.env.XDG_CONFIG_HOME,
-    appData: process.env.APPDATA,
-    platform: process.platform,
+    ...dirs.baseDirs(),
+    platform: host.os(),
   })
 }
 

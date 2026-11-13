@@ -33,3 +33,25 @@ test("home on Windows falls back to %HOMEDRIVE%%HOMEPATH% when the runtime has n
   expect(dirs.home({ platform: "win32", env, homedir: none })).toBe("C:\\Users\\ada")
   expect(() => dirs.home({ platform: "linux", env: { HOME: "" }, homedir: none })).toThrow("uv_os_homedir")
 })
+
+// #29 env-dirs: feature code read XDG_CONFIG_HOME, XDG_DATA_HOME, XDG_RUNTIME_DIR and APPDATA itself, in one letter case,
+// and applied a default of its own here and there. The platform layer reads them, as Windows does: in any letter case.
+test("baseDirs are the XDG and %APPDATA% variables as set now, any letter case on Windows, undefined when unset or empty", () => {
+  const env = { XDG_CONFIG_HOME: "/cfg", XDG_DATA_HOME: "", XDG_RUNTIME_DIR: "/run/user/1000", APPDATA: "/ad" }
+  expect(dirs.baseDirs({ platform: "linux", env })).toEqual({ xdgConfigHome: "/cfg", xdgRuntimeDir: "/run/user/1000", appData: "/ad" })
+  expect(dirs.baseDirs({ platform: "win32", env: { AppData: "C:\\Users\\ada\\AppData\\Roaming" } })).toEqual({ appData: "C:\\Users\\ada\\AppData\\Roaming" })
+  expect(dirs.baseDirs({ platform: "linux", env: { appdata: "/x" } })).toEqual({})
+})
+
+test("xdgConfigHome is $XDG_CONFIG_HOME, else the home's .config, on every OS (tools that follow XDG)", () => {
+  expect(dirs.xdgConfigHome({ platform: "linux", env: { HOME: "/home/ada", XDG_CONFIG_HOME: "/cfg" } })).toBe("/cfg")
+  expect(dirs.xdgConfigHome({ platform: "darwin", env: { HOME: "/Users/ada" } })).toBe("/Users/ada/.config")
+  expect(dirs.xdgConfigHome({ platform: "win32", env: { USERPROFILE: "C:\\Users\\ada" } })).toBe("C:\\Users\\ada\\.config")
+})
+
+test("userConfig is %APPDATA% on Windows (else the home's AppData\\Roaming) and the XDG config folder elsewhere", () => {
+  expect(dirs.userConfig({ platform: "win32", env: { USERPROFILE: "C:\\Users\\ada", APPDATA: "D:\\Roaming" } })).toBe("D:\\Roaming")
+  expect(dirs.userConfig({ platform: "win32", env: { USERPROFILE: "C:\\Users\\ada" } })).toBe("C:\\Users\\ada\\AppData\\Roaming")
+  expect(dirs.userConfig({ platform: "linux", env: { HOME: "/home/ada", XDG_CONFIG_HOME: "/cfg", APPDATA: "/ad" } })).toBe("/cfg")
+  expect(dirs.userConfig({ platform: "darwin", env: { HOME: "/Users/ada" } })).toBe("/Users/ada/.config")
+})

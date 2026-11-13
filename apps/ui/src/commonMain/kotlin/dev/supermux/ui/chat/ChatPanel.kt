@@ -222,6 +222,13 @@ internal suspend fun glideToEnd(state: LazyListState) {
     if (state.canScrollForward) state.scrollBy(100_000f)
 }
 
+/**
+ * What the chat panel paints behind its transcript: what shows around a message, and behind an html card's transparent
+ * page (its [dev.supermux.webview.WebSettings.underlay]).
+ */
+internal val androidx.compose.material3.ColorScheme.chatBackground: androidx.compose.ui.graphics.Color
+    get() = surfaceContainerLow
+
 /** Fade, not a rule: a short scrim of the panel's own background. Non-interactive. */
 @Composable
 private fun EdgeFade(bg: androidx.compose.ui.graphics.Color, modifier: Modifier = Modifier) {
@@ -999,7 +1006,7 @@ fun ChatPanel(
     Column(
         modifier
             .fillMaxSize()
-            .background(cs.surfaceContainerLow)
+            .background(cs.chatBackground)
             .onSizeChanged { panelWidth = with(density) { it.width.toDp() } }
             // Hosts without a ShortcutRoot (the assistant overlay) keep the chat's own ⌘F.
             .then(
@@ -1361,7 +1368,7 @@ fun ChatPanel(
                         if (emptySession) starters() else transcript()
                         // Fade, not a rule: a short scrim of the panel's own background so a
                         // message scrolling up dissolves into the header. Non-interactive.
-                        EdgeFade(cs.surfaceContainerLow, Modifier.align(Alignment.TopCenter))
+                        EdgeFade(cs.chatBackground, Modifier.align(Alignment.TopCenter))
                         if (find.open) {
                             ChatFindBar(
                                 find = find,

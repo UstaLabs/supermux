@@ -55,4 +55,10 @@
     <string name="browser_comment_answered">Answered</string>
     <string name="browser_comment_to">→ %1$s</string>
     <string name="browser_comment_dismissed">Dismissed</string>
+
+    <!-- After a phone saves an attachment (#95): where it went. -->
+    <string name="saved_to_photos">Saved to Photos</string>
+    <string name="saved_to_gallery">Saved to Gallery</string>
+    <string name="saved_to_downloads">Saved to Downloads</string>
+    <string name="saved_file">Saved %1$s</string>
 </resources>

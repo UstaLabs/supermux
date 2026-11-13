@@ -7,6 +7,7 @@
 // next to the target → check `cmd\git.exe` → swap into place by rename → add `<target>\cmd` to the
 // user PATH in the registry (once). The broker's re-check (requirement.ts) already looks in the
 // registry PATH and in `%LOCALAPPDATA%\Programs\Git\cmd`, so git is picked up without a restart.
+// platform-ok: builds the Windows install's paths, with win32 on any host so its tests run anywhere
 import { win32 as winPath } from "path"
 import {
   StageError, addToUserPath, downloadBytes, extractZip, localAppData, realUserInstallFs, realUserPathStore, sha256Hex,

@@ -184,7 +184,7 @@ async function identify(entry: string, canonEntry: string, canon: Canon): Promis
 /** Resolve an id to its real folder, strictly two levels inside root. Throws otherwise.
  *  Neither id component may be a symlink (an alias would delete another worktree). */
 export async function resolveId(root: string, id: string): Promise<string> {
-  const parts = id.split("/")
+  const parts = id.split("/") // platform-ok: a worktree id ("<repo-slug>/<uuid>"), not a path
   if (parts.length !== 2 || parts.some((p) => !p || p === "." || p === "..")) throw new Error("invalid worktree id")
   for (const rel of [parts[0]!, id]) {
     const st = await lstat(join(root, rel)).catch(() => { throw new Error("worktree not found") })
@@ -265,7 +265,7 @@ async function probeEntry(
   const mtime = Math.trunc((await stat(e.path).catch(() => undefined))?.mtimeMs ?? 0)
   const p = await probe(e.path, goneCache)
   let base: WorktreeSummary = {
-    id: e.id, path: e.path, repoName: e.id.split("/")[0]!, owners, mtime,
+    id: e.id, path: e.path, repoName: e.id.split("/")[0]!, owners, mtime, // platform-ok: a worktree id ("<repo-slug>/<uuid>"), not a path
     uncommitted: 0, unmerged: null, ignored: [], hasChanges: true,
   }
   if (p.kind === "gone") base = { ...base, repoRoot: p.repoRoot, repoName: basename(p.repoRoot), error: REPO_GONE }
@@ -310,7 +310,7 @@ export async function listWorktrees(root: string, rows: OwnerRow[]): Promise<Wor
 /** One entry, summarized exactly as listWorktrees does; undefined when its folder is gone or
  *  the id is not "<slug>/<name>". */
 export async function summarizeWorktree(root: string, id: string, rows: OwnerRow[]): Promise<WorktreeSummary | undefined> {
-  const parts = id.split("/")
+  const parts = id.split("/") // platform-ok: a worktree id ("<repo-slug>/<uuid>"), not a path
   if (parts.length !== 2 || parts.some((p) => !p || p === "." || p === "..")) return undefined
   const realRoot = await realpath(root).catch(() => undefined)
   if (!realRoot) return undefined
@@ -391,7 +391,7 @@ async function branchCheckedOutElsewhere(repoRoot: string, branch: string, excep
  *  directory (never a symlink), and root/<slug>/<uuid> itself is ENOENT. Deleting it is a
  *  no-op success — gone is the end state the user asked for. */
 async function alreadyGone(root: string, id: string): Promise<boolean> {
-  const parts = id.split("/")
+  const parts = id.split("/") // platform-ok: a worktree id ("<repo-slug>/<uuid>"), not a path
   if (parts.length !== 2 || parts.some((p) => !p || p === "." || p === "..")) return false
   const slug = await lstat(join(root, parts[0]!)).then((st) => st, (e: any) => e?.code === "ENOENT" ? null : undefined)
   if (slug === undefined) return false

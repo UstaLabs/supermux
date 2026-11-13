@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite"
 import { readFileSync, readdirSync, chmodSync, existsSync } from "fs"
 import { join } from "path"
+import { files } from "@supermux/platform"
 
 export type Db = Database
 
@@ -8,7 +9,7 @@ export function openDb(path: string): Db {
   const isMemory = path === ":memory:"
   const exists = isMemory || existsSync(path)
   const db = new Database(path, { create: true })
-  if (!exists) chmodSync(path, 0o600)
+  if (!exists) files.makePrivate(path)
   if (!isMemory) db.exec("PRAGMA journal_mode = WAL")
   db.exec("PRAGMA foreign_keys = ON")
   return db

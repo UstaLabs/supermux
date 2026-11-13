@@ -1749,6 +1749,10 @@ class HostStore(
             if (isAbsoluteEditorPath(path)) { api.hostFsWrite(path, content); true } else api.workspaceFsWrite(workspaceId, path, content)
         } ?: false
 
+    /** #72: puts whole files into the next commit, or takes them out → true on success. */
+    suspend fun workspaceStage(workspaceId: String, repo: String, paths: List<String>, staged: Boolean): Boolean =
+        runApi("workspaceStage") { api.workspaceStage(workspaceId, repo, paths, staged); true } ?: false
+
     /** The Changes list (`/changes`, lazy files); the old full-patch `fs/diff` only on a broker that has no `/changes`. */
     suspend fun workspaceFsDiff(workspaceId: String, base: String? = null): FsDiffResult? {
         if (!noChangesRoute) {

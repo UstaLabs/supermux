@@ -1,5 +1,6 @@
 package dev.supermux.webview
 
+import androidx.compose.ui.graphics.Color
 import dev.supermux.webview.engine.pageSetup
 import kotlin.test.Test
 import kotlin.test.assertFalse
@@ -13,6 +14,13 @@ class AdoptableSetupTest {
         assertTrue(started.adoptableBy(started))
         assertTrue(started.adoptableBy(started.copy(dark = true, inspectable = true)))
         assertTrue(started.adoptableBy(started.copy(bridgeOrigins = started.bridgeOrigins + "https://b.test")))
+    }
+
+    /** The colour behind a transparent page follows the app's theme mid-lease, as the theme does. */
+    @Test fun anotherUnderlayALivePageTakesOn() {
+        val clear = started.copy(transparentBackground = true, underlay = Color.White)
+        assertTrue(clear.adoptableBy(clear.copy(underlay = Color.Black)))
+        assertTrue(clear.adoptableBy(clear.copy(underlay = null)))
     }
 
     /** A view with scripts off never adopts a page running them, nor the other way round. */

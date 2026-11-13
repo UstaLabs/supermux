@@ -1,5 +1,7 @@
 import { accessSync, constants, lstatSync, readlinkSync } from "node:fs"
+// platform-ok: a POSIX trust check (uid, mode, root-owned folders), posix on any host
 import { posix } from "node:path"
+import { host } from "@supermux/platform"
 
 /** What the check needs to know about one path, without following links. */
 export type HostStat = { uid: number; mode: number; isFile(): boolean; isDirectory(): boolean; isSymbolicLink(): boolean }
@@ -63,7 +65,7 @@ function physicalProgram(path: string, fs: HostFs): string | undefined {
   let dir = "/"
   let dirStat = fs.lstat("/")
   if (!dirStat.isDirectory()) return undefined
-  const pending = path.split("/").filter(part => part !== "")
+  const pending = path.split(posix.sep).filter(part => part !== "")
   let links = 0
   while (pending.length > 0) {
     const part = pending.shift()!
@@ -79,11 +81,11 @@ function physicalProgram(path: string, fs: HostFs): string | undefined {
     if (stat.isSymbolicLink()) {
       if (++links > MAX_LINKS) return undefined
       const target = fs.readlink(entry)
-      if (target.startsWith("/")) {
+      if (posix.isAbsolute(target)) {
         dir = "/"
         dirStat = fs.lstat("/")
       }
-      pending.unshift(...target.split("/").filter(part => part !== ""))
+      pending.unshift(...target.split(posix.sep).filter(part => part !== ""))
       continue
     }
     if (stat.isDirectory()) {
@@ -123,5 +125,5 @@ export function resolveHostBinary(name: string, fs: HostFs = nodeHostFs, dirs: r
  * folders hold none that only root controls. POSIX only: undefined on Windows.
  */
 export function trustedHostBinary(name: string): string | undefined {
-  return process.platform === "win32" ? undefined : resolveHostBinary(name)
+  return host.windows() ? undefined : resolveHostBinary(name)
 }

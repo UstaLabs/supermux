@@ -112,6 +112,12 @@ internal interface PageGlue {
      */
     fun setBackdrop(argb: Int)
 
+    /**
+     * What lies behind a transparent page, opaque ARGB, or 0 for nothing: the page's view (under the canvas) is painted in
+     * it, so its hole shows it through the page's clear pixels rather than the window's backing.
+     */
+    fun setUnderlay(argb: Int)
+
     /** A `TICK` at the next display tick of the view's window, or at once if it is in none. */
     fun tick(request: Long)
 
@@ -198,6 +204,8 @@ internal class NativePageGlue(override val token: Long, handle: Long) : PageGlue
         live(Unit) { MacGlue.setInput(it, region.geometry, region.holeCount, density, inputFlags(interactive, shown, wheelToPage)) }
 
     override fun setBackdrop(argb: Int) = live(Unit) { MacGlue.setBackdrop(it, argb) }
+
+    override fun setUnderlay(argb: Int) = live(Unit) { MacGlue.setUnderlay(it, argb) }
 
     override fun tick(request: Long) = live(Unit) { MacGlue.tick(it, request) }
     override fun focus() = live(Unit) { MacGlue.focus(it) }

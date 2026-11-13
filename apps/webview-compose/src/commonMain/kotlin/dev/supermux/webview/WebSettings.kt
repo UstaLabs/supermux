@@ -1,6 +1,8 @@
 package dev.supermux.webview
 
 import androidx.compose.runtime.Immutable
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.isSpecified
 
 public enum class DarkMode { Auto, Light, Dark }
 
@@ -86,7 +88,31 @@ public class WebSettings(
      * names one) and a 1280 px layout viewport. Desktop engines are desktops already. A change gets another lease.
      */
     public val desktopSite: Boolean = false,
+    /**
+     * The opaque colour the app draws behind the view, for a page with [transparentBackground]; null, the default, for
+     * none. Where the page lies under the Compose canvas (macOS, iOS, the web), its transparent pixels show what is
+     * under the canvas, not what the app drew behind the view (on a Mac, the window's black backing): the engine paints
+     * this there from the lease's start, and the runtime's cover of the page lies on it. On Android, Windows and Linux
+     * the page is drawn in Compose's order and is truly transparent: nothing changes there that shows. Ignored for an
+     * opaque page. Taken mid-lease, as a theme is: give the colour of the app's theme of the moment.
+     */
+    public val underlay: Color? = null,
 ) {
+    /** The constructor before [underlay], kept for code built against it. */
+    @Deprecated("Kept for binary compatibility", level = DeprecationLevel.HIDDEN)
+    public constructor(
+        javaScriptEnabled: Boolean = true,
+        inspectable: Boolean = false,
+        darkMode: DarkMode = DarkMode.Auto,
+        transparentBackground: Boolean = false,
+        userAgentSuffix: String? = null,
+        profile: WebProfile? = null,
+        mediaPlaybackRequiresGesture: Boolean = true,
+        bridgeOrigins: Set<String> = emptySet(),
+        userAgent: String? = null,
+        desktopSite: Boolean = false,
+    ) : this(javaScriptEnabled, inspectable, darkMode, transparentBackground, userAgentSuffix, profile, mediaPlaybackRequiresGesture, bridgeOrigins, userAgent, desktopSite, null)
+
     /** The constructor before [desktopSite], kept for code built against it. */
     @Deprecated("Kept for binary compatibility", level = DeprecationLevel.HIDDEN)
     public constructor(
@@ -99,7 +125,7 @@ public class WebSettings(
         mediaPlaybackRequiresGesture: Boolean = true,
         bridgeOrigins: Set<String> = emptySet(),
         userAgent: String? = null,
-    ) : this(javaScriptEnabled, inspectable, darkMode, transparentBackground, userAgentSuffix, profile, mediaPlaybackRequiresGesture, bridgeOrigins, userAgent, false)
+    ) : this(javaScriptEnabled, inspectable, darkMode, transparentBackground, userAgentSuffix, profile, mediaPlaybackRequiresGesture, bridgeOrigins, userAgent, false, null)
 
     /** The constructor before [userAgent], kept for code built against it. */
     @Deprecated("Kept for binary compatibility", level = DeprecationLevel.HIDDEN)
@@ -112,9 +138,12 @@ public class WebSettings(
         profile: WebProfile? = null,
         mediaPlaybackRequiresGesture: Boolean = true,
         bridgeOrigins: Set<String> = emptySet(),
-    ) : this(javaScriptEnabled, inspectable, darkMode, transparentBackground, userAgentSuffix, profile, mediaPlaybackRequiresGesture, bridgeOrigins, null, false)
+    ) : this(javaScriptEnabled, inspectable, darkMode, transparentBackground, userAgentSuffix, profile, mediaPlaybackRequiresGesture, bridgeOrigins, null, false, null)
 
     init {
+        require(underlay == null || (underlay.isSpecified && underlay.alpha == 1f)) {
+            "WebSettings.underlay is the opaque colour the app draws behind the view: $underlay is not one"
+        }
         for (origin in bridgeOrigins) {
             require(isOrigin(origin)) {
                 val canonical = originOf(origin).takeIf { it != "null" }
@@ -137,6 +166,7 @@ public class WebSettings(
         bridgeOrigins: Set<String> = this.bridgeOrigins,
         userAgent: String? = this.userAgent,
         desktopSite: Boolean = this.desktopSite,
+        underlay: Color? = this.underlay,
     ): WebSettings = WebSettings(
         javaScriptEnabled = javaScriptEnabled,
         inspectable = inspectable,
@@ -148,7 +178,23 @@ public class WebSettings(
         bridgeOrigins = bridgeOrigins,
         userAgent = userAgent,
         desktopSite = desktopSite,
+        underlay = underlay,
     )
+
+    /** [copy] before [underlay], kept for code built against it. */
+    @Deprecated("Kept for binary compatibility", level = DeprecationLevel.HIDDEN)
+    public fun copy(
+        javaScriptEnabled: Boolean = this.javaScriptEnabled,
+        inspectable: Boolean = this.inspectable,
+        darkMode: DarkMode = this.darkMode,
+        transparentBackground: Boolean = this.transparentBackground,
+        userAgentSuffix: String? = this.userAgentSuffix,
+        profile: WebProfile? = this.profile,
+        mediaPlaybackRequiresGesture: Boolean = this.mediaPlaybackRequiresGesture,
+        bridgeOrigins: Set<String> = this.bridgeOrigins,
+        userAgent: String? = this.userAgent,
+        desktopSite: Boolean = this.desktopSite,
+    ): WebSettings = copy(javaScriptEnabled, inspectable, darkMode, transparentBackground, userAgentSuffix, profile, mediaPlaybackRequiresGesture, bridgeOrigins, userAgent, desktopSite, underlay)
 
     /** [copy] before [desktopSite], kept for code built against it. */
     @Deprecated("Kept for binary compatibility", level = DeprecationLevel.HIDDEN)
@@ -162,7 +208,7 @@ public class WebSettings(
         mediaPlaybackRequiresGesture: Boolean = this.mediaPlaybackRequiresGesture,
         bridgeOrigins: Set<String> = this.bridgeOrigins,
         userAgent: String? = this.userAgent,
-    ): WebSettings = copy(javaScriptEnabled, inspectable, darkMode, transparentBackground, userAgentSuffix, profile, mediaPlaybackRequiresGesture, bridgeOrigins, userAgent, desktopSite)
+    ): WebSettings = copy(javaScriptEnabled, inspectable, darkMode, transparentBackground, userAgentSuffix, profile, mediaPlaybackRequiresGesture, bridgeOrigins, userAgent, desktopSite, underlay)
 
     /** [copy] before [userAgent], kept for code built against it. */
     @Deprecated("Kept for binary compatibility", level = DeprecationLevel.HIDDEN)
@@ -175,7 +221,7 @@ public class WebSettings(
         profile: WebProfile? = this.profile,
         mediaPlaybackRequiresGesture: Boolean = this.mediaPlaybackRequiresGesture,
         bridgeOrigins: Set<String> = this.bridgeOrigins,
-    ): WebSettings = copy(javaScriptEnabled, inspectable, darkMode, transparentBackground, userAgentSuffix, profile, mediaPlaybackRequiresGesture, bridgeOrigins, userAgent, desktopSite)
+    ): WebSettings = copy(javaScriptEnabled, inspectable, darkMode, transparentBackground, userAgentSuffix, profile, mediaPlaybackRequiresGesture, bridgeOrigins, userAgent, desktopSite, underlay)
 
     override fun equals(other: Any?): Boolean = this === other || other is WebSettings &&
         javaScriptEnabled == other.javaScriptEnabled &&
@@ -187,7 +233,8 @@ public class WebSettings(
         mediaPlaybackRequiresGesture == other.mediaPlaybackRequiresGesture &&
         bridgeOrigins == other.bridgeOrigins &&
         userAgent == other.userAgent &&
-        desktopSite == other.desktopSite
+        desktopSite == other.desktopSite &&
+        underlay == other.underlay
 
     override fun hashCode(): Int {
         var result = javaScriptEnabled.hashCode()
@@ -200,13 +247,15 @@ public class WebSettings(
         result = 31 * result + bridgeOrigins.hashCode()
         result = 31 * result + (userAgent?.hashCode() ?: 0)
         result = 31 * result + desktopSite.hashCode()
+        result = 31 * result + (underlay?.hashCode() ?: 0)
         return result
     }
 
     override fun toString(): String =
         "WebSettings(javaScriptEnabled=$javaScriptEnabled, inspectable=$inspectable, darkMode=$darkMode, " +
             "transparentBackground=$transparentBackground, userAgentSuffix=$userAgentSuffix, profile=$profile, " +
-            "mediaPlaybackRequiresGesture=$mediaPlaybackRequiresGesture, bridgeOrigins=$bridgeOrigins, userAgent=$userAgent, desktopSite=$desktopSite)"
+            "mediaPlaybackRequiresGesture=$mediaPlaybackRequiresGesture, bridgeOrigins=$bridgeOrigins, userAgent=$userAgent, desktopSite=$desktopSite, " +
+            "underlay=$underlay)"
 
     public companion object {
         public val Default: WebSettings = WebSettings()

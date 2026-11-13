@@ -516,6 +516,72 @@ class WebViewComposeTest {
         assertNoViolations(factory)
     }
 
+    /**
+     * The colour the app draws behind a transparent page ([WebSettings.underlay]) reaches its engine, which paints it
+     * where the page lies under the canvas, and follows the app's theme mid-lease, as the theme does: no new lease.
+     */
+    @Test fun anUnderlayReachesTheEngineAndFollowsTheAppsThemeMidLease() = runComposeUiTest {
+        val factory = FakeWebEngineFactory()
+        val runtime = testRuntime(factory)
+        val state = WebViewState(notes)
+        val light = Color(0xFFF4F4F5)
+        val dark = Color(0xFF18181B)
+        var underlay by mutableStateOf(light)
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                WebView(
+                    state,
+                    Modifier.size(100.dp),
+                    settings = WebSettings(darkMode = DarkMode.Light, transparentBackground = true, underlay = underlay),
+                    activation = Activation.Eager,
+                )
+            }
+        }
+        waitFor("live") { state.phase == WebViewPhase.Live }
+        val engine = ui { factory.created.single() }
+        val calls = calls(engine)
+        assertEquals(light, ui { engine.lastSetup?.underlay })
+        assertTrue(calls.indexOf("configure") in 0 until calls.indexOfFirst { it.startsWith("load") }, "before the first document: $calls")
+        underlay = dark
+        waitFor("configured again") { ui { engine.lastSetup?.underlay } == dark }
+        assertEquals(1, ui { factory.created.size }, "the same engine")
+        assertEquals(1, calls(engine).count { it.startsWith("load") }, "the same document")
+        assertNoViolations(factory)
+    }
+
+    /**
+     * A transparent page's snapshot keeps its alpha. Where the page lies under the canvas, the cover over its slot shows
+     * the canvas's hole through it (on a Mac, the window's black backing), so it lies on the page's underlay.
+     */
+    @Test fun aTransparentPagesCoverLiesOnItsUnderlay() = runComposeUiTest {
+        val factory = FakeWebEngineFactory(behavior = FakeEngineBehavior(color = Color.Transparent))
+        val runtime = testRuntime(factory, hiddenReleaseMillis = 50)
+        val state = WebViewState(url)
+        var shown by mutableStateOf(true)
+        val settings = WebSettings(darkMode = DarkMode.Light, transparentBackground = true, underlay = Color.Blue)
+        setContent {
+            ProvideWebViewRuntime(runtime) {
+                Box(Modifier.size(100.dp).clipToBounds().background(Color.Red)) {
+                    WebView(
+                        state,
+                        Modifier.size(100.dp).offset(y = if (shown) 0.dp else 200.dp).testTag("view"),
+                        settings = settings,
+                        activation = Activation.WhenVisible(settleMillis = 0),
+                    )
+                }
+            }
+        }
+        waitFor("live") { state.phase == WebViewPhase.Live }
+        waitFor("a snapshot") { ui { state.snapshotKey != null } }
+        shown = false
+        waitFor("the engine given back") { ui { runtime.pool.liveCount == 0 } }
+        ui { factory.behavior = FakeEngineBehavior(paintsOnLoad = false, color = Color.Transparent) }
+        shown = true
+        waitFor("activating") { state.phase == WebViewPhase.Activating }
+        assertEquals(Color.Blue, centerColor("view"), "the underlay under the snapshot's clear pixels")
+        assertNoViolations(factory)
+    }
+
     @Test fun aDeactivationBeforeFirstPaintKeepsThePreviousSnapshot() = runComposeUiTest {
         val factory = FakeWebEngineFactory()
         val runtime = testRuntime(factory, hiddenReleaseMillis = 50)

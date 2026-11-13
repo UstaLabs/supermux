@@ -170,6 +170,10 @@ internal class FakePageGlue(override val token: Long = 1) : PageGlue {
         calls += "setBackdrop %08x".format(argb)
     }
 
+    override fun setUnderlay(argb: Int) {
+        calls += "setUnderlay %08x".format(argb)
+    }
+
     override fun tick(request: Long) {
         calls += "tick $request"
     }

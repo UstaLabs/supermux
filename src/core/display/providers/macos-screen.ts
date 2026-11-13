@@ -1,4 +1,5 @@
 import type { DisplayProvider, DisplayInstance, ProvisionOpts } from "../types"
+import { host } from "@supermux/platform"
 
 const MACOS_VNC_PORT = 5900
 
@@ -6,7 +7,7 @@ export class MacosScreenProvider implements DisplayProvider {
   readonly name = "macos-screen" as const
 
   unavailableReason(_hasBin: (bin: string) => boolean): string | null {
-    if (process.platform !== "darwin") return "macos-screen provider requires macOS"
+    if (host.os() !== "darwin") return "macos-screen provider requires macOS"
     return null
   }
 

@@ -78,7 +78,7 @@ export function ensureSharedCursorRuntime(
 
   try {
     mkdirSync(dirname(shared), { recursive: true })
-    mkdirSync(dirname(linkPath), { recursive: true, mode: 0o700 })
+    files.mkdirPrivate(dirname(linkPath))
 
     // 1. Make sure the shared copy is populated. Prefer the user's canonical
     //    install (known complete) over adopting this home's runtime, which may

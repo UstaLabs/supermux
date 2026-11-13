@@ -14,6 +14,7 @@ const log = makeLogger("agents/grok/core-host")
 import { HOME } from "../../session-manager/spawn-helper"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
 import { grokAccountEnv } from "../account-env"
+import { host } from "@supermux/platform"
 
 export type GrokDriverFactory = (options: GrokOptions, overrides: SessionConfiguration) => AgentDriver
 
@@ -122,7 +123,7 @@ export function createGrokCoreHost(options: GrokCoreHostOptions): GrokCoreHost {
         credentials: { canonicalAuthPath: join(HOME, ".grok", "auth.json") },
         autoUpdate: false,
         importClaudeConfig: false,
-        platform: process.platform,
+        platform: host.os(),
       })
       return {
         env: prepared.env,

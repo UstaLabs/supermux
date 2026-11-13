@@ -3,10 +3,11 @@ import { join } from "node:path"
 import { ENVIRONMENT_FIELDS, requireSpec, validateMcpServerNames } from "./spec.js"
 import type { ClaudeEnvironmentSpec, McpServerSpec, PreparedEnvironment } from "./types.js"
 import { writeFileNoFollow } from "./write.js"
+import { files as platformFiles } from "@supermux/platform"
 
 function ensureHome(home: string): void {
-  mkdirSync(home, { recursive: true, mode: 0o700 })
-  chmodSync(home, 0o700)
+  platformFiles.mkdirPrivate(home)
+  platformFiles.makePrivate(home)
 }
 
 function renderClaudeMcp(servers: McpServerSpec[]): string {
@@ -43,8 +44,8 @@ export async function prepareClaudeEnvironment(spec: ClaudeEnvironmentSpec): Pro
 
   if (spec.mcpServers.length > 0) {
     const dest = join(spec.home, "mcp.json")
-    writeFileNoFollow(dest, renderClaudeMcp(spec.mcpServers), 0o600)
-    chmodSync(dest, 0o600)
+    writeFileNoFollow(dest, renderClaudeMcp(spec.mcpServers))
+    platformFiles.makePrivate(dest)
     files.push(dest)
     if (spec.strictMcp) args.push("--strict-mcp-config")
     args.push("--mcp-config", dest)

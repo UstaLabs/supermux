@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { dirname, extname, join } from "node:path"
 import { home } from "../../shared/home"
 import { bunGlobalBinDir, muxLspBinDir, muxLspHome } from "./paths"
 import { DART_EXE } from "./install-dart-sdk"
@@ -176,10 +176,9 @@ const LANGUAGE_ID: Record<string, string> = {
   ".html": "html", ".htm": "html",
 }
 
+/** The last name's extension, lower-cased, by the host's path rules (a folder may hold a dot); a dotfile has none. */
 export function extOf(path: string): string {
-  const base = path.split("/").pop() ?? path
-  const dot = base.lastIndexOf(".")
-  return dot <= 0 ? "" : base.slice(dot).toLowerCase()
+  return extname(path).toLowerCase()
 }
 
 export { bunGlobalBinDir }

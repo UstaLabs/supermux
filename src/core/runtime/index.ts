@@ -3,6 +3,7 @@ import { createTmuxSessionBackend } from "./tmux-backend"
 import { SessiondBackend } from "../sessiond/client"
 import { sessiondEndpoint } from "../sessiond/secret"
 import { STATE_DIR } from "../../shared/paths"
+import { host } from "@supermux/platform"
 
 let testBackend: SessionBackend | undefined
 let platformBackend: SessionBackend | undefined
@@ -21,7 +22,7 @@ export function createPlatformSessionBackend(
 
 export function getSessionBackend(): SessionBackend {
   if (testBackend) return testBackend
-  platformBackend ??= createPlatformSessionBackend(process.platform)
+  platformBackend ??= createPlatformSessionBackend(host.os())
   return platformBackend
 }
 

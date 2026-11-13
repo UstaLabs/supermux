@@ -1,0 +1,32 @@
+{
+  "repo": "UstaLabs/supermux-website",
+  "sha": "e3ee5974ed814509aee24fb9bd982eaab63a993c",
+  "sha256": "64a7f2b9e91115897e14792621da33815a16c5ddfc70faed2100b08b0c837b9a",
+  "files": [
+    "assets/fonts/geist-400.woff2",
+    "assets/fonts/geist-500.woff2",
+    "assets/fonts/geist-600.woff2",
+    "assets/fonts/geist-mono-400.woff2",
+    "app/app.css",
+    "app/scene-kit.css",
+    "app/browser-scene.css",
+    "app/device-scene.css",
+    "app/cards-scene.css",
+    "app/offline-scene.css",
+    "app/resume-scene.css",
+    "app/restart-scene.css",
+    "app/settings-scene.css",
+    "app/replay-data.js",
+    "app/agents-data.js",
+    "app/avatar.js",
+    "app/app.js",
+    "app/scene-kit.js",
+    "app/browser-scene.js",
+    "app/device-scene.js",
+    "app/cards-scene.js",
+    "app/offline-scene.js",
+    "app/resume-scene.js",
+    "app/restart-scene.js",
+    "app/settings-scene.js"
+  ]
+}

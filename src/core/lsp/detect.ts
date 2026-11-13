@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs"
+import { basename } from "node:path"
 import { findDartBin, findGoplsBin, findRustAnalyzerBin, resolveBinPath, type LspServerSpec } from "./catalog"
 
 // Whether a binary is available on PATH. Bun.which returns the resolved path
@@ -17,7 +18,8 @@ export function isInstalled(bin: string): boolean {
 // resolved on PATH or under ~/.mux/lsp.
 export function isServerInstalled(spec: LspServerSpec): boolean {
   if (spec.command) {
-    if (spec.command.includes("/")) return existsSync(spec.command)
+    // A path (it names a folder, by the host's rules) is checked where it points; a bare name is found on PATH.
+    if (basename(spec.command) !== spec.command) return existsSync(spec.command)
     return isInstalled(spec.command)
   }
   if (spec.runtime === "node") return existsSync(resolveBinPath(spec))

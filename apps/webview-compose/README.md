@@ -92,7 +92,12 @@ Runtime ([Windows](#windows)), and in a browser, this shows the demo, live once 
     `inspectable`, `darkMode` (`Auto`, `Light`, `Dark`), `transparentBackground`, `userAgentSuffix`, `profile`
     (`Default`, `Named(id)` or `Ephemeral`; unset, `Html` gets `Ephemeral` and the rest `Default`),
     `mediaPlaybackRequiresGesture` and `bridgeOrigins`. Each profile and media setting in use splits the pool
-    ([below](#the-pool-and-memory)). On Windows, `mediaPlaybackRequiresGesture = false` is the profile's autoplay
+    ([below](#the-pool-and-memory)). `underlay`: the opaque colour your app draws behind a view with
+    `transparentBackground`. Where the page lies under the Compose canvas (macOS, iOS, the web) its transparent pixels
+    show what is under the canvas, not your content: a Mac window's black backing, say. The engine paints the underlay
+    there from the lease's start, and the runtime's cover of the page lies on it. On Android, Windows and Linux the page
+    is drawn in Compose's order and is truly transparent; there it changes nothing you'd see. A new underlay is taken
+    mid-lease, as a theme is. On Windows, `mediaPlaybackRequiresGesture = false` is the profile's autoplay
     setting for each origin the engine shows, shared by the engines of that profile on that origin ([Windows](#windows)).
   - `activation`: when the view goes live; `Activation.WhenVisible()` unless you say otherwise ([Activation](#activation)).
   - `keepRunningWhileHidden`: `false` unless you say otherwise; `true` keeps the page running, live and unreleased,
@@ -1195,7 +1200,7 @@ reports `Unavailable(NotImplemented)`.
   would show what is under the canvas: AWT's own view, Swing's light grey (`#EEEEEE`), a white band at the trailing
   edge of every live preview while the chat scrolls (a user's report, 2026-11-01). So a backdrop lies under every page
   view where the page showed in the last quarter second, in the page's own background (the colour along its last
-  snapshot's edges, the theme's before it has one; none for a transparent page), and that band shows the page's
+  snapshot's edges, the theme's before it has one; a transparent page's underlay, or none), and that band shows the page's
   colour. It never covers a page, being under all of them, and a page that leaves its list or its window leaves it
   behind for that quarter second, while Compose's frame still has its hole. What trails inside the view is the page's
   content while the view is resized (strips of WKWebView's own white, up to 16 px, whatever the page's colours), until
@@ -1277,7 +1282,9 @@ reports `Unavailable(NotImplemented)`.
   Compose packages (`createDistributable`, unshrunk) runs as it is (`mac-release-check.sh packaged`).
 - **Windows and backgrounds.** A page needs a Compose window or dialog (`ComposeWindow`, `ComposeDialog`); a
   `ComposePanel` inside a Swing frame isn't supported yet. A transparent page (`transparentBackground`) shows the window's
-  backing under it, not the Compose content behind it.
+  backing under it (black), not the Compose content behind it, unless its settings name an `underlay`: the page's view
+  is then painted in it (its layer's background, under the `WKWebView`, which draws no background of its own), and so
+  is the backdrop where it was a moment ago.
 - **Limits.** An ancestor drawn with alpha below 1, or into an offscreen layer, hides the page: the hole clears only
   that layer. Compose's own text field keeps showing its caret while the page has focus. The engine's test hooks
   (`MacEngineTesting`, the glue's `test*` functions) ship in the library. The VoiceOver bridge can drop out if
