@@ -34,8 +34,10 @@ class TaskCardWidthTest {
         waitForIdle()
         val pill = onNodeWithText("completed").getUnclippedBoundsInRoot()
         val row = onNodeWithTag("activity-task").getUnclippedBoundsInRoot()
-        assertTrue(pill.width > 40.dp, "the status is ${pill.width} wide")
-        assertTrue(pill.height < 24.dp, "the status runs ${pill.height} tall: one line, not a letter a line")
+        val wide = pill.right - pill.left
+        val tall = pill.bottom - pill.top
+        assertTrue(wide > 40.dp, "the status is $wide wide")
+        assertTrue(tall < 24.dp, "the status runs $tall tall: one line, not a letter a line")
         assertTrue(pill.right <= row.right + 0.5.dp, "the status ends at ${pill.right}, past the row's ${row.right}")
     }
 }
