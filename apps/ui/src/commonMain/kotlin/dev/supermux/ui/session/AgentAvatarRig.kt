@@ -5,12 +5,17 @@
 // Mirrors src/core/agents/avatar/renderer.js — keep the two in step.
 package dev.supermux.ui.session
 
+import androidx.compose.animation.core.InfiniteRepeatableSpec
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -349,8 +354,23 @@ private fun mix(a: V, b: V, k: Float): V {
 
 // ── Rendering ────────────────────────────────────────────────────────────────────────────────
 
-/** False while nobody can see the window (hidden, minimised, screen locked): avatars stand still. */
+/**
+ * False while nobody can see the window (hidden, minimised, covered, screen locked): avatars and the other
+ * purely decorative loops (spinners, shimmers, pulses) stand still (#108, #132). Only looks read it, never state.
+ */
 val LocalAvatarsLive = compositionLocalOf { true }
+
+/**
+ * A decorative loop from [initial] to [target] that stands at [initial] while [LocalAvatarsLive] is false, so a
+ * spinner or a pulse nobody can see asks for no frames (#132).
+ */
+@Composable
+fun rememberLiveLoop(initial: Float, target: Float, spec: InfiniteRepeatableSpec<Float>, label: String): State<Float> =
+    if (LocalAvatarsLive.current) {
+        rememberInfiniteTransition(label = label).animateFloat(initial, target, spec, label = label)
+    } else {
+        remember(initial) { mutableFloatStateOf(initial) }
+    }
 
 /**
  * How fast an avatar's clock ticks: smooth under the pointer, slower idle, slowest asleep, still
