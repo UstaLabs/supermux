@@ -33,6 +33,14 @@ export type AgentModelEntry = {
   value: string
   /** The agent's own name for it, e.g. `gpt-5.6-sol`, `Auto`. */
   name: string
+  /** What the agent says the model is for (Claude's initialize reply). */
+  description?: string
+  /** The model an alias stands for now, e.g. `opus` → `claude-opus-5-5` (Claude). */
+  resolved?: string
+  /** The reasoning-effort levels the model takes, as the agent names them (Claude). */
+  efforts?: string[]
+  /** Fast mode is offered on this model (set only when true; Claude). */
+  fast?: true
 }
 
 export type AgentCommandEntry = {

@@ -31,3 +31,18 @@ test("a user agent a library sets is no OS check; reading navigator.userAgent is
   expect(scanText("apps/x/A.kt", "        userAgent = setup.agent(baseUserAgent),", kt)).toEqual([])
   expect(scanText("apps/x/A.kt", '    js("/Mac/.test(navigator.userAgent)")', kt).map(h => h.rule)).toEqual(["os-check-kt"])
 })
+
+// #129, Ahmet: the broker never raises a Keychain or other OS security prompt. Reading the macOS Keychain (the
+// security tool's find-/dump- commands, Bun.secrets, the Security framework's SecItem/SecKeychain calls) can, whatever
+// a given item's ACL says today, so no broker code may do it; only the platform layer's Windows-gated Bun.secrets read.
+test("no broker code reads the macOS Keychain (#129: never a security prompt)", () => {
+  const keychain = RULES.filter(rule => rule.id === "keychain")
+  expect(keychain.length).toBe(1)
+  const caught = (text: string) => scanText("src/core/x.ts", text, keychain).map(h => h.rule)
+  expect(caught(`spawn("/usr/bin/security", ["find-generic-password", "-s", svc, "-w"])`)).toEqual(["keychain"])
+  expect(caught(`await $\`security dump-keychain -a\``)).toEqual(["keychain"])
+  expect(caught(`const v = await Bun.secrets.get({ service, name })`)).toEqual(["keychain"])
+  expect(caught(`const fn = lib.symbols.SecItemCopyMatching`)).toEqual(["keychain"])
+  expect(caught(`// the system's security settings`)).toEqual([])
+  expect(hits.filter(h => h.rule === "keychain").map(h => `${h.file}:${h.line}`)).toEqual([])
+})

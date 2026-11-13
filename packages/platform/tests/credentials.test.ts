@@ -109,3 +109,12 @@ test.skipIf(process.platform !== "win32")("Credential Manager: a generic credent
   }
   expect(credentials.hasGenericCredential("supermux-test", account)).toBe(false)
 })
+
+// #129: on macOS the store is never read: no Keychain access means no Keychain prompt, ever.
+test("on macOS readSecret and hasSecret refuse without touching the Keychain", async () => {
+  let asked = 0
+  const get = async () => { asked++; return "secret" }
+  await expect(credentials.readSecret("Claude Code-credentials", "me", { platform: "darwin", get })).rejects.toBeInstanceOf(Unsupported)
+  expect(() => credentials.hasSecret("Claude Code-credentials", "me", { platform: "darwin", windowsRead: () => { asked++; return true } })).toThrow(Unsupported)
+  expect(asked).toBe(0)
+})
