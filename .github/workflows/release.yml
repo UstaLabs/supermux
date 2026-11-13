@@ -809,8 +809,18 @@ jobs:
         shell: pwsh
         run: ./webview-compose/native/windows/ci-build.ps1 -Arch x64
       - name: Load the web view's glue
-        # The staged glue loads as the app loads it: from the jar's resources, its sha256 and ABI checked.
-        run: ./gradlew.bat :webview-compose:jvmTest --tests 'dev.supermux.webview.engine.windows.WinGlueLoadTest' --console=plain --no-daemon
+        # The staged glue loads as the app loads it: from the jar's resources, its sha256 and ABI checked. The test
+        # skips where WEBVIEW_REQUIRE_WINDOWS_GLUE isn't set, so its report is read back: one test, run, passed.
+        run: |
+          ./gradlew.bat :webview-compose:jvmTest --tests 'dev.supermux.webview.engine.windows.WinGlueLoadTest' --console=plain --no-daemon
+          if ($LASTEXITCODE -ne 0) { throw "WinGlueLoadTest failed" }
+          $report = 'webview-compose/build/test-results/jvmTest/TEST-dev.supermux.webview.engine.windows.WinGlueLoadTest.xml'
+          if (-not (Test-Path $report)) { throw "no WinGlueLoadTest report at ${report}: the test never ran" }
+          $suite = ([xml](Get-Content -Raw $report)).testsuite
+          if ([int]$suite.tests -ne 1 -or [int]$suite.skipped -ne 0 -or [int]$suite.failures -ne 0 -or [int]$suite.errors -ne 0) {
+            throw "WinGlueLoadTest: tests=$($suite.tests) skipped=$($suite.skipped) failures=$($suite.failures) errors=$($suite.errors)"
+          }
+          Write-Host "WinGlueLoadTest ran and passed: $("$($suite.'system-out'.'#cdata-section')".Trim())"
       - name: Test native Windows broker seams
         working-directory: .
         shell: bash

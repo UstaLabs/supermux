@@ -17,6 +17,8 @@ class WinGlueLoadTest {
         val file = WinNativeLoader().load()
         assertTrue(file.isFile, "the glue was extracted to $file")
         assertEquals(WinGlue.ABI, WinGlue.abiVersion(), "the loaded glue's ABI")
+        // Read back by the release's step, which fails on a skipped run: what loaded, from where.
+        println("loaded $file (${file.length()} B), ABI ${WinGlue.abiVersion()}")
     }
 
     private companion object {

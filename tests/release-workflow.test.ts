@@ -287,6 +287,9 @@ test("the Windows desktop carries the web view's glue: built, required, loaded, 
   expect(image).toBeGreaterThan(load)
   expect(check).toBeGreaterThan(image)
   expect(windowsJob.slice(check)).toContain("x64 apps/webview-compose/native/windows/wv2.h")
+  // The load test skips where the variable isn't set: the step reads its report back and fails on a skip.
+  expect(windowsJob.slice(load, image)).toContain("TEST-dev.supermux.webview.engine.windows.WinGlueLoadTest.xml")
+  expect(windowsJob.slice(load, image)).toContain("[int]$suite.skipped -ne 0")
 })
 
 test("POSIX desktop packages carry the verified zmx bundle; Windows keeps sessiond", () => {
