@@ -41,7 +41,8 @@ function claudeModels(value: unknown): AgentModelEntry[] | undefined {
     const row = rec(item)
     const id = str(row?.value)
     if (!row || !id) continue
-    const efforts = Array.isArray(row.supportedEffortLevels)
+    // Effort levels count only on a model that takes an effort.
+    const efforts = row.supportsEffort === true && Array.isArray(row.supportedEffortLevels)
       ? row.supportedEffortLevels.filter((e): e is string => typeof e === "string" && e !== "")
       : []
     out.push({

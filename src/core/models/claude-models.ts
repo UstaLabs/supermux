@@ -20,23 +20,56 @@ export const CLAUDE_MODELS_FRESH_MS = 6 * 3_600_000
 export const CLAUDE_INIT_ARGS = [
   "--print", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--await-initialize",
   "--settings", JSON.stringify({ disableAllHooks: true }),
+  // Only the models are wanted: no MCP server is started for a listing (none is given, and the user's are not read).
+  "--strict-mcp-config",
 ]
+
+/** The probe's env on top of the launch's: no claude.ai connectors, no IDE link (as T3 Code's capability probe). */
+const PROBE_ENV: Record<string, string | undefined> = {
+  ENABLE_CLAUDEAI_MCP_SERVERS: "false",
+  CLAUDE_CODE_AUTO_CONNECT_IDE: "0",
+  CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL: "1",
+  FORCE_CODE_TERMINAL: undefined,
+}
+
+/**
+ * With gateway model discovery on, Claude Code refreshes its model cache in the background after initialize: the
+ * probe lives on that long (CLAUDE_CODE_GATEWAY_MODEL_DISCOVERY_TIMEOUT_MS, else 3 s) before it is stopped.
+ */
+export function gatewayDiscoveryGraceMs(env: Readonly<Record<string, string | undefined>>): number {
+  const on = String(env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY ?? "").trim().toLowerCase()
+  if (!on || on === "0" || on === "false") return 0
+  if (!String(env.ANTHROPIC_BASE_URL ?? "").trim()) return 0
+  const configured = Number(env.CLAUDE_CODE_GATEWAY_MODEL_DISCOVERY_TIMEOUT_MS)
+  return Number.isFinite(configured) && configured > 0 ? configured : 3_000
+}
 
 /**
  * Claude's own model entries as the picker's models. Its "default" is the picker's own Default, so it is left out;
  * each model keeps its effort levels and fast mode.
  */
 export function claudeModelsFromAgent(entries: readonly AgentModelEntry[]): ModelInfo[] {
-  return entries
-    .filter((e) => e.value !== "default")
-    .map((e) => ({
+  const seen = new Set<string>()
+  const out: ModelInfo[] = []
+  for (const e of entries) {
+    // `default` is Claude Code's pointer at its own default model, not a model.
+    if (!e.value || e.value === "default") continue
+    // An alias and a pinned ID that are the same model are listed once, [1m] context suffixes aside.
+    const ids = [e.value, e.resolved ?? ""].map(withoutContextSuffix).filter((id) => id.length > 0)
+    if (ids.some((id) => seen.has(id))) continue
+    for (const id of ids) seen.add(id)
+    out.push({
       id: e.value,
-      displayName: e.name,
+      displayName: e.name.trim() || e.value,
       agent: Agent.Claude,
       ...(e.efforts?.length ? { reasoningLevels: e.efforts.map((id) => ({ id })) } : {}),
       ...(e.fast ? { supportsFast: true as const } : {}),
-    }))
+    })
+  }
+  return out
 }
+
+const withoutContextSuffix = (id: string) => id.replace(/\[[^\]]*\]$/, "").trim().toLowerCase()
 
 /** The initialize reply's raw `models` (Claude Code 2.1.308's shape) as model entries. */
 function entriesFromReply(models: unknown): AgentModelEntry[] {
@@ -45,10 +78,13 @@ function entriesFromReply(models: unknown): AgentModelEntry[] {
   for (const row of models as Record<string, unknown>[]) {
     const value = typeof row?.value === "string" ? row.value : ""
     if (!value) continue
-    const efforts = Array.isArray(row.supportedEffortLevels) ? row.supportedEffortLevels.filter((e): e is string => typeof e === "string" && e !== "") : []
+    const efforts = row.supportsEffort === true && Array.isArray(row.supportedEffortLevels)
+      ? row.supportedEffortLevels.filter((e): e is string => typeof e === "string" && e !== "")
+      : []
     out.push({
       value,
       name: typeof row.displayName === "string" ? row.displayName : value,
+      ...(typeof row.resolvedModel === "string" && row.resolvedModel ? { resolved: row.resolvedModel } : {}),
       ...(efforts.length ? { efforts } : {}),
       ...(row.supportsFastMode === true ? { fast: true as const } : {}),
     })
@@ -96,8 +132,9 @@ const realSpawn: ClaudeControlSpawn = (args, env) => {
  * or does not answer within [timeoutMs].
  */
 export async function discoverClaudeModelsViaCli(opts?: { launch?: DiscoveryLaunch; spawn?: ClaudeControlSpawn; timeoutMs?: number }): Promise<ModelInfo[]> {
-  const env: Record<string, string | undefined> = { ...process.env, ...opts?.launch?.env }
+  const env: Record<string, string | undefined> = { ...process.env, ...opts?.launch?.env, ...PROBE_ENV }
   for (const key of opts?.launch?.unset ?? []) delete env[key]
+  for (const [key, value] of Object.entries(PROBE_ENV)) if (value === undefined) delete env[key]
   const child = (opts?.spawn ?? realSpawn)(CLAUDE_INIT_ARGS, env)
   if (!child) return []
   const requestId = `supermux-models-${Date.now()}`
@@ -116,7 +153,9 @@ export async function discoverClaudeModelsViaCli(opts?: { launch?: DiscoveryLaun
     return claudeModelsFromAgent(entries)
   } finally {
     if (timer) clearTimeout(timer)
-    child.kill()
+    const grace = gatewayDiscoveryGraceMs(env)
+    if (grace > 0) setTimeout(() => child.kill(), grace)
+    else child.kill()
   }
 }
 

@@ -41,7 +41,7 @@ describe("claude normalizer", () => {
     const models = [
       { value: "default", resolvedModel: "claude-opus-5-5", displayName: "Default (recommended)", description: "Opus 5.5 · Best for everyday, complex tasks", supportsEffort: true, supportedEffortLevels: ["low", "high", "max"], supportsFastMode: true },
       { value: "sonnet", resolvedModel: "claude-sonnet-5-5", displayName: "Sonnet 5.5", description: "Fast", supportsEffort: true, supportedEffortLevels: ["low", "medium", "high"] },
-      { value: "claude-haiku-4-5-20251001", resolvedModel: "claude-haiku-4-5-20251001", displayName: "Haiku 4.5", description: "Small", supportsThinkingOff: true },
+      { value: "claude-haiku-4-5-20251001", resolvedModel: "claude-haiku-4-5-20251001", displayName: "Haiku 4.5", description: "Small", supportsThinkingOff: true, supportedEffortLevels: ["low"] },
       { displayName: "no value: skipped" },
     ]
     // The account rides along in the same reply: nothing of it may reach the event (#129).

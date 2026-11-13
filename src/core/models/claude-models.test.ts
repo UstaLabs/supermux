@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { EventEmitter } from "events"
-import { claudeModelsFromAgent, discoverClaude, discoverClaudeModelsViaCli, CLAUDE_INIT_ARGS, type ClaudeControlProcess } from "./claude-models"
+import { claudeModelsFromAgent, discoverClaude, discoverClaudeModelsViaCli, gatewayDiscoveryGraceMs, CLAUDE_INIT_ARGS, type ClaudeControlProcess } from "./claude-models"
 import { followAdapterModels, LearnedModels } from "./learned"
 import { AgentKind } from "../../shared/agents"
 
@@ -25,6 +25,20 @@ test("Claude's own entries become the picker's models: its Default is the picker
     { id: "opus", displayName: "Opus 5.5", agent: AgentKind.Claude, reasoningLevels: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }], supportsFast: true },
     { id: "claude-haiku-4-5-20251001", displayName: "Haiku 4.5", agent: AgentKind.Claude },
   ])
+})
+
+// As T3 Code does: an alias and a pinned ID that are the same model are listed once ([1m] suffixes aside), and effort
+// levels count only on a model that takes an effort.
+test("the same model reported twice is listed once, by value or resolved model; efforts only where effort is supported", () => {
+  const models = claudeModelsFromAgent([
+    { value: "fable", name: "Fable 5.1", resolved: "claude-fable-5-1", efforts: ["low"] },
+    { value: "claude-fable-5-1", name: "Fable 5.1 (pinned)", resolved: "claude-fable-5-1" },
+    { value: "sonnet[1m]", name: "Sonnet 1M", resolved: "claude-sonnet-5-5[1m]" },
+    { value: "claude-sonnet-5-5", name: "Sonnet 5.5", resolved: "claude-sonnet-5-5" },
+    { value: "claude-haiku-4-5-20251001", name: "Haiku 4.5", efforts: [] },
+  ])
+  expect(models.map((m) => m.id)).toEqual(["fable", "sonnet[1m]", "claude-haiku-4-5-20251001"])
+  expect(models[2]!.reasoningLevels).toBeUndefined()
 })
 
 test("a live Claude session's initialize models are learned for Claude", () => {
@@ -65,7 +79,7 @@ function fakeClaude(answer: "models" | "silent" | "exit", models: unknown[] = []
 const ACCOUNT = { email: "someone@example.com", organization: "Example Org", subscriptionType: "Claude Team", apiProvider: "firstParty" }
 
 const RAW = [
-  { value: "opus", displayName: "Opus 5.5", resolvedModel: "claude-opus-5-5", supportedEffortLevels: ["low", "high"], supportsFastMode: true },
+  { value: "opus", displayName: "Opus 5.5", resolvedModel: "claude-opus-5-5", supportsEffort: true, supportedEffortLevels: ["low", "high"], supportsFastMode: true },
   { value: "sonnet", displayName: "Sonnet 5.5", resolvedModel: "claude-sonnet-5-5" },
 ]
 
@@ -79,6 +93,28 @@ test("a control-only claude: hooks off, one initialize and nothing else (no turn
   expect(CLAUDE_INIT_ARGS.join(" ")).toContain(`--settings {"disableAllHooks":true}`)
   expect(fake.calls.written.map((l) => JSON.parse(l).request.subtype)).toEqual(["initialize"])
   expect(fake.calls.killed).toBe(1)
+})
+
+test("the probe starts no MCP server, no claude.ai connector and no IDE link (only the models are wanted)", async () => {
+  const fake = fakeClaude("models", RAW)
+  await discoverClaudeModelsViaCli({ spawn: fake.spawn, timeoutMs: 1000 })
+  expect(CLAUDE_INIT_ARGS).toContain("--strict-mcp-config")
+  expect(fake.calls.env.ENABLE_CLAUDEAI_MCP_SERVERS).toBe("false")
+  expect(fake.calls.env.CLAUDE_CODE_AUTO_CONNECT_IDE).toBe("0")
+  expect(fake.calls.env.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL).toBe("1")
+})
+
+// With gateway model discovery on, Claude Code refreshes its model cache after initialize: the probe lives that long.
+test("with gateway model discovery on, the probe is stopped only after the gateway's discovery time", async () => {
+  const fake = fakeClaude("models", RAW)
+  const launch = { env: { CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: "1", ANTHROPIC_BASE_URL: "https://gw.example", CLAUDE_CODE_GATEWAY_MODEL_DISCOVERY_TIMEOUT_MS: "80" } }
+  await discoverClaudeModelsViaCli({ spawn: fake.spawn, timeoutMs: 1000, launch })
+  expect(fake.calls.killed).toBe(0)
+  await new Promise((r) => setTimeout(r, 150))
+  expect(fake.calls.killed).toBe(1)
+  expect(gatewayDiscoveryGraceMs({ CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: "1" })).toBe(0)
+  expect(gatewayDiscoveryGraceMs({ CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: "true", ANTHROPIC_BASE_URL: "https://gw" })).toBe(3000)
+  expect(gatewayDiscoveryGraceMs({ CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: "false", ANTHROPIC_BASE_URL: "https://gw" })).toBe(0)
 })
 
 test("an account's discovery runs claude with that account's env", async () => {
