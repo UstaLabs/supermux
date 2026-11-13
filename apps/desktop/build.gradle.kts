@@ -569,6 +569,22 @@ afterEvaluate {
         val image = tasks.named<AbstractJPackageTask>("createDistributable")
         dependsOn(image)
         appImage.set(image.flatMap { it.destinationDir.dir(it.packageName) })
+        // #136: the wizard's last page gets a ticked "Launch supermux" box (packaging/msi-launch-after-install.ps1,
+        // which reads its edit back and fails here when it didn't stick). Before the release job signs the MSI.
+        val launchScript = project.file("packaging/msi-launch-after-install.ps1")
+        inputs.file(launchScript)
+        doLast {
+            val msis = destinationDir.get().asFile.listFiles().orEmpty().filter { it.isFile && it.name.endsWith(".msi") }
+            if (msis.size != 1) throw GradleException("expected one .msi, found ${msis.map { it.name }}")
+            val root = System.getenv("SystemRoot")?.takeIf { it.isNotBlank() } ?: "C:\\Windows"
+            val proc = ProcessBuilder(
+                "$root\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
+                "-ExecutionPolicy", "Bypass", "-File", launchScript.absolutePath, "-Msi", msis.single().absolutePath,
+            ).redirectErrorStream(true).start()
+            val out = proc.inputStream.bufferedReader().readText()
+            if (proc.waitFor() != 0) throw GradleException("msi-launch-after-install.ps1 failed: $out")
+            logger.lifecycle(out.trim())
+        }
     }
     tasks.named<AbstractJPackageTask>("createDistributable") {
         doLast {
