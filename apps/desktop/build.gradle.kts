@@ -1,6 +1,7 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask
 import org.jetbrains.compose.reload.gradle.ComposeHotRun
+import dev.supermux.desktop.packaging.BundleVersion
 import dev.supermux.desktop.packaging.DebLauncherEntry
 import dev.supermux.desktop.packaging.MsiVersion
 import java.net.URI
@@ -349,6 +350,10 @@ compose.desktop {
             // `packageName` here is mac-only; Linux/Windows keep "supermux" from the block above.
             macOS {
                 bundleID = "dev.supermux.desktop"
+                // #139: CFBundleVersion is the MSI mapping (numeric, above every old copy's 1.0.0, so LaunchServices
+                // prefers the newest). CFBundleShortVersionString, which jpackage keeps at 1.0.0 since it refuses a
+                // 0.x app version, is set to the release in createDistributable's doLast below. A dev build keeps both.
+                BundleVersion.macBuildVersion(supermuxVersion)?.let { packageBuildVersion = it }
                 dockName = "Supermux Desktop"
                 appCategory = "public.app-category.developer-tools"
                 iconFile.set(project.file("icons/supermux.icns"))
@@ -500,8 +505,12 @@ fun rewritePackagedNativeDigests(appDir: File): List<File> {
  * the task action, and jpackage keeps the last value of a repeated option), so the entry is fixed
  * in the built package instead: unpack, edit (DebLauncherEntry, packaging/src), rebuild
  * root-owned. Fails the build when the entry is missing or still lacks the line.
+ *
+ * #139: the same pass sets DEBIAN/control's Version to [debVersion] (BundleVersion.debVersion, e.g.
+ * `1:0.18.2`; null keeps jpackage's 1.0.0), read back with `dpkg-deb -f`. jpackage's own
+ * --app-version can't carry it: the version is in the .deb's file name too, and `:` breaks uploads.
  */
-fun addStartupWmClassToDebs(debDir: File) {
+fun addStartupWmClassToDebs(debDir: File, debVersion: String?) {
     fun run(vararg argv: String) {
         val proc = ProcessBuilder(*argv).redirectErrorStream(true).start()
         val out = proc.inputStream.bufferedReader().readText()
@@ -541,7 +550,24 @@ fun addStartupWmClassToDebs(debDir: File) {
             if (entries.none { DebLauncherEntry.hasStartupWmClass(it.readText()) }) {
                 throw GradleException("addStartupWmClassToDebs: no launcher entry in ${deb.name} has StartupWMClass")
             }
+            // #139: the release's version (BundleVersion.debVersion) instead of jpackage's 1.0.0; null for a dev build.
+            if (debVersion != null) {
+                val control = File(work, "DEBIAN/control")
+                val after = BundleVersion.withDebVersion(control.readText(), debVersion)
+                if (after != control.readText()) {
+                    control.writeText(after)
+                    changed = true
+                }
+            }
             if (changed) run("dpkg-deb", "--root-owner-group", "-b", work.absolutePath, deb.absolutePath)
+            if (debVersion != null) {
+                val proc = ProcessBuilder("dpkg-deb", "-f", deb.absolutePath, "Version").redirectErrorStream(true).start()
+                val stamped = proc.inputStream.bufferedReader().readText().trim()
+                if (proc.waitFor() != 0 || stamped.substringBeforeLast('-') != debVersion) {
+                    throw GradleException("addStartupWmClassToDebs: ${deb.name} says Version $stamped, not $debVersion")
+                }
+                logger.lifecycle("deb: ${deb.name} is version $stamped")
+            }
         } finally {
             work.deleteRecursively()
         }
@@ -559,7 +585,7 @@ afterEvaluate {
         runtimeImage.finalizeValue()
         // The .deb's launcher entry gets StartupWMClass (see addStartupWmClassToDebs).
         if (targetFormat == TargetFormat.Deb) {
-            doLast { addStartupWmClassToDebs(destinationDir.get().asFile) }
+            doLast { addStartupWmClassToDebs(destinationDir.get().asFile, BundleVersion.debVersion(supermuxVersion)) }
         }
     }
     // #116: the MSI wraps the app image createDistributable made, which the Windows release job signs first (the host
@@ -597,9 +623,24 @@ afterEvaluate {
                 else -> appRoot.resolve("lib/app")
             }
             val rewritten = rewritePackagedNativeDigests(appLibDir.toFile())
-            if (rewritten.isNotEmpty() && macBuildHost) {
-                // jpackage already sealed the bundle; a rewritten jar under Contents/app invalidates
-                // that seal, so re-sign with the same identity and options Compose signs with
+            // #139: Get Info / About show the release, not jpackage's 1.0.0 (BundleVersion; a dev build keeps it).
+            val shortVersion = BundleVersion.macShortVersion(supermuxVersion)?.takeIf { macBuildHost }
+            if (shortVersion != null) {
+                val plist = appRoot.resolve("Contents/Info.plist").toFile().absolutePath
+                fun plutil(vararg args: String): String {
+                    val proc = ProcessBuilder("plutil", *args).redirectErrorStream(true).start()
+                    val out = proc.inputStream.bufferedReader().readText()
+                    check(proc.waitFor() == 0) { "plutil ${args.joinToString(" ")} failed: $out" }
+                    return out.trim()
+                }
+                plutil("-replace", "CFBundleShortVersionString", "-string", shortVersion, plist)
+                val stamped = plutil("-extract", "CFBundleShortVersionString", "raw", plist)
+                check(stamped == shortVersion) { "Info.plist says CFBundleShortVersionString $stamped, not $shortVersion" }
+                logger.lifecycle("macOS: ${appRoot.fileName} is version $stamped (${plutil("-extract", "CFBundleVersion", "raw", plist)})")
+            }
+            if ((rewritten.isNotEmpty() || shortVersion != null) && macBuildHost) {
+                // jpackage already sealed the bundle; a rewritten jar under Contents/app (or the edited Info.plist)
+                // invalidates that seal, so re-sign with the same identity and options Compose signs with
                 // (ad-hoc for an unsigned local build — jpackage's own default on arm64).
                 val identity = (project.findProperty("smMacSignIdentity") as String?)?.takeIf { it.isNotBlank() } ?: "-"
                 val argv = mutableListOf(
@@ -614,7 +655,7 @@ afterEvaluate {
                 val proc = ProcessBuilder(argv).redirectErrorStream(true).start()
                 val out = proc.inputStream.bufferedReader().readText()
                 check(proc.waitFor() == 0) { "re-sealing the app after rewriting ${rewritten.size} jar(s) failed: $out" }
-                logger.lifecycle("terminal-core: re-sealed ${appRoot.fileName} after rewriting ${rewritten.joinToString { it.name }}")
+                logger.lifecycle("re-sealed ${appRoot.fileName} after rewriting ${(rewritten.map { it.name } + listOfNotNull(shortVersion?.let { "Info.plist" })).joinToString()}")
             }
         }
     }
