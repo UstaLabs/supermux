@@ -705,7 +705,7 @@ class BrowserPaneTest {
         engines.created.toList().forEach { engine ->
             engine.evaluateAnswer = { script ->
                 when {
-                    "elementFromPoint" in script && "i<1&&" in script ->
+                    "elementFromPoint" in script && ",up=1;" in script ->
                         """{"selector":"aside.summary","tag":"aside","text":"Order summary","label":"aside.summary · 360×240","box":{"x":0,"y":0.4,"w":1,"h":0.3}}"""
                     "elementFromPoint" in script -> pay
                     "querySelector(q)" in script -> if (gone()) "[null]" else """[{"x":0.25,"y":0.5,"w":0.5,"h":0.1}]"""

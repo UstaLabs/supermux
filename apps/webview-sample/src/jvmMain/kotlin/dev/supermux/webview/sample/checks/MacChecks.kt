@@ -323,6 +323,12 @@ button{display:block;width:100%;height:15vh;margin-top:8vh}</style></head>
                 val second = assertNotNull(nav.elementAt(0.5f, 0.35f), "the second of two alike")
                 assertEquals("li.row:nth-of-type(2)", second.selector)
                 assertEquals("#title", nav.elementAt(0.5f, 0.05f)?.selector, "an id says it all")
+                // Over its own text a block's box hugs the text, not its empty width (Ahmet, 2026-11-12: "big for no
+                // reason"); one up is the block's own box; the selector is the block's either way.
+                val words = assertNotNull(nav.elementAt(0.05f, 0.03f), "the title's words")
+                val block = assertNotNull(nav.elementAt(0.05f, 0.03f, up = 1), "the title's block")
+                assertEquals("#title" to "#title", words.selector to block.selector)
+                assertTrue(words.box.width < 0.8f && block.box.width > 0.98f, "the words ${words.box}, the block ${block.box}")
                 // Never a bare tag (Tally, 2026-11-12: "h3" and "input" can't be acted on): the nearest classed
                 // ancestor, or the element's own placeholder.
                 assertEquals("section.cart > h3", nav.elementAt(0.25f, 0.55f)?.selector)
