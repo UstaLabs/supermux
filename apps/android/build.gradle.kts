@@ -20,8 +20,8 @@ val keystoreProps = Properties().apply {
 // Local/dev defaults. CI release builds override both via Gradle properties
 // (-PsupermuxVersionCode / -PsupermuxVersionName) so every published APK gets a
 // strictly higher versionCode without a manual bump — see release.yml build-android.
-val defaultVersionCode = 32
-val defaultVersionName = "0.9.8"
+val defaultVersionCode = 1200
+val defaultVersionName = "0.18.3"
 val supermuxVersionCode = (findProperty("supermuxVersionCode") as String?)
     ?.toIntOrNull()
     ?.takeIf { it > 0 }
@@ -46,7 +46,7 @@ android {
     namespace = "dev.supermux.android"
     compileSdk = libs.versions.androidCompileSdk.get().toInt()
     defaultConfig {
-        applicationId = "dev.supermux.android"
+        applicationId = "dev.supermux.android.updtest"
         minSdk = libs.versions.androidMinSdk.get().toInt()
         targetSdk = libs.versions.androidTargetSdk.get().toInt()
         versionCode = supermuxVersionCode
