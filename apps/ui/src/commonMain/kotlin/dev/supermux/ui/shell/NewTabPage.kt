@@ -68,22 +68,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.ui.adaptive.LocalHardwareKeyboard
 import dev.supermux.ui.adaptive.LocalPointerAvailable
+import dev.supermux.ui.i18n.Plurals
 import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Motion
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.i18n.localizedPlural
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.new_tab_closed_count
-import dev.supermux.ui.resources.new_tab_closed_days
-import dev.supermux.ui.resources.new_tab_closed_hours
-import dev.supermux.ui.resources.new_tab_closed_just_now
-import dev.supermux.ui.resources.new_tab_closed_minutes
-import dev.supermux.ui.resources.new_tab_recently_closed
 import dev.supermux.ui.session.AgentLogo
 import dev.supermux.workspace.NewViewKind
-import dev.supermux.ui.i18n.localized
 
 /**
  * A New tab's page: where it opens ([workspace], [branch]) and a row per view kind ([choices]).
@@ -370,10 +363,10 @@ internal fun closedAgo(nowMs: Long, closedAtMs: Long): ClosedAgo {
 
 @Composable
 private fun agoText(ago: ClosedAgo): String = when (ago) {
-    ClosedAgo.JustNow -> localized(Res.string.new_tab_closed_just_now)
-    is ClosedAgo.Minutes -> localizedPlural(Res.plurals.new_tab_closed_minutes, ago.n, ago.n)
-    is ClosedAgo.Hours -> localizedPlural(Res.plurals.new_tab_closed_hours, ago.n, ago.n)
-    is ClosedAgo.Days -> localizedPlural(Res.plurals.new_tab_closed_days, ago.n, ago.n)
+    ClosedAgo.JustNow -> localized(Str.new_tab_closed_just_now)
+    is ClosedAgo.Minutes -> localizedPlural(Plurals.new_tab_closed_minutes, ago.n, ago.n)
+    is ClosedAgo.Hours -> localizedPlural(Plurals.new_tab_closed_hours, ago.n, ago.n)
+    is ClosedAgo.Days -> localizedPlural(Plurals.new_tab_closed_days, ago.n, ago.n)
 }
 
 /** A row's wash, as [ChoiceRow] wears it: none at rest, soft when selected, deeper while pressed. */
@@ -412,7 +405,7 @@ private fun RecentlyClosedFold(count: Int, unfolded: Boolean, selected: Boolean,
         Icon(NewTabGlyphs.Recent, contentDescription = null, tint = glyph, modifier = Modifier.size(17.dp))
         Spacer(Modifier.width(12.dp))
         Text(
-            localized(Res.string.new_tab_recently_closed),
+            localized(Str.new_tab_recently_closed),
             color = cs.onSurface,
             fontSize = if (touch) 15.sp else 13.5.sp,
             fontWeight = FontWeight.Medium,
@@ -420,7 +413,7 @@ private fun RecentlyClosedFold(count: Int, unfolded: Boolean, selected: Boolean,
         )
         Spacer(Modifier.width(12.dp))
         Text(
-            localizedPlural(Res.plurals.new_tab_closed_count, count, count),
+            localizedPlural(Plurals.new_tab_closed_count, count, count),
             color = cs.onSurfaceVariant,
             fontSize = if (touch) 14.sp else 13.sp,
             maxLines = 1,
