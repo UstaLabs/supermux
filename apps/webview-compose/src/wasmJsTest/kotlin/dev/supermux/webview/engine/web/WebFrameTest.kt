@@ -97,7 +97,8 @@ class WebFrameTest {
         waitUntil("the page to load") { loadsOf(iframe) == 1 }
         assertEquals("visible", styleValue(frame.outer, "visibility"))
         val opacity = styleValue(frame.outer, "opacity").toDouble()
-        assertTrue(opacity < 1.0 && opacity >= 0.999, "a shown frame at $opacity")
+        // Chrome keeps opacity in 8 bits: under 255 there, and a level at most off any colour.
+        assertTrue(kotlin.math.round(opacity * 255) == 254.0, "a shown frame at $opacity")
         TestViewport.clear()
         frame.remove()
     }
