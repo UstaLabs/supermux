@@ -150,7 +150,7 @@ test("a nested repo is listed with its repo path and its blob loads", async () =
   const res = await get(token, `/workspaces/ws-1/changes/blob?repo=sub&sha=${r.files[0].baseBlob}`)
   expect(res.status).toBe(200)
   expect(await res.text()).toBe("old\n")
-})
+}, 30_000)   // two repos of real git: slow on Windows CI
 
 test("a matching If-None-Match is 304 with the cache headers and no body", async () => {
   const { dir, base, token } = await setup()
@@ -228,4 +228,23 @@ test("commit refuses a bad message and an unknown repo", async () => {
   expect((await post(token, "/workspaces/ws-1/git/commit", { repo: "", message: 5 })).status).toBe(400)
   expect((await post(token, "/workspaces/ws-1/git/commit", { repo: "nope", all: true })).status).toBe(404)
   expect((await post(token, "/workspaces/ws-1/git/nope", { repo: "" })).status).not.toBe(200)
+})
+
+test("get latest needs the chat's own base; resolve and abort refuse bad input", async () => {
+  const { token } = await setup()
+  expect((await post(token, "/sessions/s-1/git/latest", {})).status).toBe(409)   // no base known here: no guess
+  expect((await post(token, "/workspaces/ws-1/git/resolve", { repo: "", path: "a.txt", side: "left" })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/resolve", { repo: "", path: "../a.txt", side: "mine" })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/abort", { repo: "" })).status).toBe(409)   // no merge in progress
+})
+
+test("history lists commits; revert/branch/tag refuse bad input", async () => {
+  const { token } = await setup()
+  const h = await (await get(token, "/workspaces/ws-1/git/history?repo=")).json() as any
+  expect(h.chat[0].subject).toBe("base")
+  expect(h.base).toBeNull()
+  expect((await get(token, "/workspaces/ws-1/git/history?repo=nope")).status).toBe(404)
+  expect((await post(token, "/workspaces/ws-1/git/revert", { repo: "", sha: "zzz" })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/branch", { repo: "", sha: h.chat[0].sha, name: "-bad" })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/tag", { repo: "", sha: h.chat[0].sha, name: "v1" })).status).toBe(200)
 })

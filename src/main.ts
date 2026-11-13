@@ -1759,7 +1759,7 @@ async function interruptSessionById(sessionId: string): Promise<{ ok: boolean; r
   return r
 }
 
-type FinishRequest = { action: FinishAction; skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string }
+type FinishRequest = { action: FinishAction; skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string; /** #72: never archive the chat after a merge (the new UI's merge leaves it open). */ keep?: boolean }
 
 async function finishSessionById(sessionId: string, req: FinishRequest): Promise<FinishJob | { error: string }> {
   const s = registry.get(sessionId)
@@ -1776,15 +1776,15 @@ async function finishSessionById(sessionId: string, req: FinishRequest): Promise
   return startFinishJob(session, opts, {
     onUpdate: (job) => webChannel?.broadcastToAll({ type: "finish_job", session: sessionId, job }),
     persist: (job) => { try { registry.sessions.setFinishJob(sessionId, job) } catch {} },
-    notify: (job) => { void onFinishTerminal(sessionId, sessionName, job) },
+    notify: (job) => { void onFinishTerminal(sessionId, sessionName, job, req.keep === true) },
   })
 }
 
-async function onFinishTerminal(sessionId: string, sessionName: string, job: FinishJob): Promise<void> {
+async function onFinishTerminal(sessionId: string, sessionName: string, job: FinishJob, keep = false): Promise<void> {
   fireFinishPush(sessionName, sessionId, job)
   const status = job.outcome?.status
   const s = registry.get(sessionId)
-  const archiveMerge = job.action === "merge" && status === "integrated" && (!s?.repo_root || loadFinishConfig(s.repo_root).archiveOnMerge)
+  const archiveMerge = !keep && job.action === "merge" && status === "integrated" && (!s?.repo_root || loadFinishConfig(s.repo_root).archiveOnMerge)
   const archiveDiscard = job.action === "discard" && status === "discarded"
   if (archiveMerge || archiveDiscard) {
     try {
@@ -3353,6 +3353,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     startDisplay: (args) => displayManager.start({ sessionDisplayName: args.sessionName, provider: args.provider as any, device: args.device, width: args.width, height: args.height }),
     stopDisplay: (id) => displayManager.stop(id),
     getSessionWorkdir: (id) => registry.get(id)?.workdir,
+    getSessionGitBase: (id) => {
+      const s = registry.get(id)
+      return s?.repo_root && s.base_branch && s.base_branch !== "HEAD" ? { repoRoot: s.repo_root, base: s.base_branch } : undefined
+    },
     folderReady: (path) => folderReady({
       sessions: () => registry.list(),
       pending: (id) => sessionChain.pending(id),

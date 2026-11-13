@@ -30,11 +30,13 @@ async function stagedPaths(repo: string): Promise<string[]> {
 export async function commit(repo: string, opts: { message?: string; all?: boolean; amend?: boolean }): Promise<CommitResult> {
   try {
     if (opts.all) await gitAsync(repo, ["add", "-A"])
+    const merging = await gitAsync(repo, ["rev-parse", "-q", "--verify", "MERGE_HEAD"]).then(() => true, () => false)
     const paths = await stagedPaths(repo)
-    if (!paths.length && !opts.amend) return { ok: false, reason: "nothing" }
+    if (!paths.length && !opts.amend && !merging) return { ok: false, reason: "nothing" }
     const msg = opts.message?.trim()
     const args = ["commit", "--quiet"]
     if (opts.amend) args.push("--amend", ...(msg ? ["-m", msg] : ["--no-edit"]))
+    else if (merging && !msg) args.push("--no-edit")   // "Continue merge": git's own merge message
     else args.push("-m", msg || messageFromFiles(paths))
     await gitAsync(repo, args, { timeoutMs: 120_000, env: { ...process.env, GIT_EDITOR: "true" } })
     const [sha, subject] = (await gitAsync(repo, ["log", "-1", "--format=%H%x00%s"])).split("\0")

@@ -28,6 +28,8 @@ import { computeWorkdirDiff, listRepoRefs } from "../../core/editor/workdir-diff
 import { listChanges, readBaseBlob, discoverReposCached } from "../../core/editor/changes"
 import { safeRepoPath, setStaged } from "../../core/git/stage"
 import { commit as gitCommit, uncommit as gitUncommit } from "../../core/git/commit"
+import { abortMerge, getLatest, resolveConflict } from "../../core/git/latest"
+import { createRef, history, revert } from "../../core/git/history"
 import { reanchor } from "../../core/review/anchor"
 import { formatInstantComment, matchingStep, toWalkthroughDto } from "../../core/walkthrough/author"
 import { LspConnection } from "../../core/lsp/bridge"
@@ -392,7 +394,7 @@ export interface WebChannelOpts {
   respondRequest?: (sessionId: string, requestId: string, answer: unknown) => Promise<{ ok: true } | { ok: false; error: string }>
   getSessionAgent?: (name: string) => { agent: AgentKind; model?: string; reasoningLevel?: string } | undefined
   interruptSession?: (id: string) => Promise<{ ok: boolean; reason?: string }>
-  finishSession?: (id: string, req: { action: "merge"|"pr"|"keep"|"discard"; skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string }) => Promise<import("../../core/worktree/finish-job").FinishJob | { error: string }>
+  finishSession?: (id: string, req: { action: "merge"|"pr"|"keep"|"discard"; skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string; keep?: boolean }) => Promise<import("../../core/worktree/finish-job").FinishJob | { error: string }>
   finishReadiness?: (id: string) => import("../../core/worktree/readiness").FinishReadiness | { error: string }
   reviewList?: (id: string) => import("../../core/review/store").Comment[]
   reviewAdd?: (id: string, c: Omit<import("../../core/review/store").NewComment, "sessionId">) => import("../../core/review/store").Comment
@@ -565,6 +567,8 @@ export interface WebChannelOpts {
   updateProxy?: (domain: string, isPublic: boolean) => { domain: string; sessionName: string; port: number; createdAt: string; isPublic: boolean }
   terminalManager?: import("../../core/terminal/manager").TerminalManager
   getSessionWorkdir?: (name: string) => string | undefined
+  /** #72: a worktree session's repo root and explicit base, for "Get latest from <base>". */
+  getSessionGitBase?: (id: string) => { repoRoot: string; base: string } | undefined
   /**
    * Card #75: resolves once a folder the broker is making exists (a session born asleep has its
    * worktree checked out on its first wake), at once for any other path. The files routes, folder
@@ -2355,10 +2359,12 @@ export class WebChannel implements Channel {
    * POST …/git/{stage,commit,uncommit} (#72), all with {repo}:
    * stage {paths, staged} puts whole files into the next commit or takes them out;
    * commit {message?, all?, amend?} commits it (an empty message is written from the files);
-   * uncommit undoes the last commit and keeps its changes in the next one.
+   * uncommit undoes the last commit and keeps its changes in the next one;
+   * resolve {path, side: mine|theirs|both} settles one conflicted file; abort cancels the merge;
+   * revert {sha} adds a commit that undoes one; branch|tag {sha, name} names one, moving nothing.
    */
   private async gitWrite(workdir: string, op: string, req: Request): Promise<Response> {
-    let body: { repo?: unknown; paths?: unknown; staged?: unknown; message?: unknown; all?: unknown; amend?: unknown }
+    let body: { repo?: unknown; paths?: unknown; staged?: unknown; message?: unknown; all?: unknown; amend?: unknown; path?: unknown; side?: unknown; sha?: unknown; name?: unknown }
     try { body = (await req.json()) as typeof body } catch { return this.json({ error: "bad json" }, 400) }
     if (!body || typeof body !== "object") return this.json({ error: "bad request" }, 400)
     const repo = typeof body.repo === "string" ? body.repo : ""
@@ -2382,6 +2388,22 @@ export class WebChannel implements Channel {
       if (body.message !== undefined && typeof body.message !== "string") return this.json({ error: "bad request" }, 400)
       const r = await gitCommit(found.absPath, { message: body.message as string | undefined, all: body.all === true, amend: body.amend === true })
       return r.ok ? this.json(r) : this.json(r, 409)
+    }
+    if (op === "resolve") {
+      const side = body.side
+      if (!safeRepoPath(body.path) || (side !== "mine" && side !== "theirs" && side !== "both")) return this.json({ error: "bad request" }, 400)
+      try { await resolveConflict(found.absPath, body.path, side); return this.json({ ok: true }) }
+      catch (err) { return this.json({ ok: false, reason: "failed", message: err instanceof Error ? err.message : String(err) }, 409) }
+    }
+    if (op === "revert" || op === "branch" || op === "tag") {
+      const sha = typeof body.sha === "string" ? body.sha : ""
+      const r = op === "revert" ? await revert(found.absPath, sha)
+        : await createRef(found.absPath, op, typeof body.name === "string" ? body.name : "", sha)
+      return r.ok ? this.json(r) : this.json(r, r.reason === "bad" ? 400 : 409)
+    }
+    if (op === "abort") {
+      try { await abortMerge(found.absPath); return this.json({ ok: true }) }
+      catch (err) { return this.json({ ok: false, reason: "failed", message: err instanceof Error ? err.message : String(err) }, 409) }
     }
     const r = await gitUncommit(found.absPath)
     return r.ok ? this.json(r) : this.json(r, 409)
@@ -3738,7 +3760,29 @@ export class WebChannel implements Channel {
       }))
       return this.json({ repos, comments })
     }
-    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/(stage|commit|uncommit)$/)) {
+    if (method === "GET" && path.match(/^\/(sessions|workspaces)\/[^/]+\/git\/history$/)) {
+      const [, scope, rawId] = path.split("/")
+      const id = decodeURIComponent(rawId!)
+      const workdir = scope === "sessions" ? this.opts.getSessionWorkdir?.(id) : this.opts.getWorkspaceWorkdir?.(id)
+      if (!workdir) return this.json({ error: `${scope === "sessions" ? "session" : "workspace"} not found` }, 404)
+      const repo = url.searchParams.get("repo") ?? ""
+      const found = (await discoverReposCached(workdir)).find((r) => r.relPath === repo)
+        ?? (await discoverReposCached(workdir, { fresh: true })).find((r) => r.relPath === repo)
+      if (!found) return this.json({ error: "repo not found" }, 404)
+      // The chat's own base, only for the chat's own repo; a workspace has none of its own.
+      const base = scope === "sessions" && repo === "" ? this.opts.getSessionGitBase?.(id)?.base ?? null : null
+      return this.json(await history(found.absPath, base))
+    }
+    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/latest$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getSessionWorkdir?.(id)
+      if (!workdir) return this.json({ error: "session not found" }, 404)
+      const g = this.opts.getSessionGitBase?.(id)
+      if (!g) return this.json({ status: "failed", message: "this chat has no base branch" }, 409)
+      const r = await getLatest(workdir, g.repoRoot, g.base)
+      return this.json(r, r.status === "failed" ? 409 : 200)
+    }
+    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/(stage|commit|uncommit|resolve|abort|revert|branch|tag)$/)) {
       const workdir = this.opts.getSessionWorkdir?.(decodeURIComponent(path.split("/")[2]!))
       if (!workdir) return this.json({ error: "session not found" }, 404)
       return this.gitWrite(workdir, path.split("/")[4]!, req)
@@ -3844,7 +3888,7 @@ export class WebChannel implements Channel {
       const { repos } = await listChanges(workdir, base?.baseCommits ?? {}, base?.createdAt, url.searchParams.get("base") ?? undefined)
       return this.json({ repos, comments: [] })
     }
-    if (method === "POST" && path.match(/^\/workspaces\/[^/]+\/git\/(stage|commit|uncommit)$/)) {
+    if (method === "POST" && path.match(/^\/workspaces\/[^/]+\/git\/(stage|commit|uncommit|resolve|abort|revert|branch|tag)$/)) {
       const workdir = this.opts.getWorkspaceWorkdir?.(decodeURIComponent(path.split("/")[2]!))
       if (!workdir) return this.json({ error: "workspace not found" }, 404)
       return this.gitWrite(workdir, path.split("/")[4]!, req)
@@ -4050,6 +4094,7 @@ export class WebChannel implements Channel {
         prRequiresGreen: body.prRequiresGreen === true,
         prTitle: typeof body.prTitle === "string" ? body.prTitle : undefined,
         prBody: typeof body.prBody === "string" ? body.prBody : undefined,
+        keep: body.keep === true,
       })
       if (result && typeof result === "object" && "error" in result) return this.json(result, 400)
       return this.json(result)
