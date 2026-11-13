@@ -151,7 +151,7 @@ import dev.supermux.workspace.collectViewIds
 import dev.supermux.workspace.firstGroupId
 import dev.supermux.workspace.groupIdOf
 import dev.supermux.chat.parseChatTs
-import dev.supermux.net.ClosedSession
+import dev.supermux.net.ClosedSessionDto
 import dev.supermux.workspace.isBrowserView
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
@@ -1595,7 +1595,7 @@ private fun NewTabView(newTab: ViewDto, hostId: String, current: WorkspaceDto, w
     val layoutSync = ws.layoutSync
     var opening by remember { mutableStateOf<NewViewKind?>(null) }
     // #135: the sessions closed in this workspace, asked for once per New tab.
-    var closed by remember { mutableStateOf<List<ClosedSession>>(emptyList()) }
+    var closed by remember { mutableStateOf<List<ClosedSessionDto>>(emptyList()) }
     LaunchedEffect(current.id) { closed = runCatching { app.api.closedSessions(current.id) }.getOrDefault(emptyList()) }
     val now = remember(closed) { Clock.System.now().toEpochMilliseconds() }
     NewTabPage(
