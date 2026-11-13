@@ -184,7 +184,7 @@ function hostOrigin(req: Request): string | undefined {
 /** Largest body PUT /fs/write accepts (the editor reads at most 1 MB). */
 const FS_WRITE_MAX_BYTES = 8 * 1024 * 1024
 
-const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/archived-workspaces", "/projects", "/project-catalog", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/accounts", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views", "/worktrees", "/search", "/html"]
+const API_PREFIXES = ["/api", "/ports", "/sessions", "/archived-sessions", "/archived-workspaces", "/projects", "/project-catalog", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/accounts", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views", "/worktrees", "/search", "/html"]
 const MAX_CLIENT_LOG_RING = 800
 // randomUUID() shape: version 4, RFC 4122 variant. A client-minted view id must
 // match what the store would have generated itself — it ends up in layout trees
@@ -403,6 +403,8 @@ export interface WebChannelOpts {
   /** #122 phase 4: store a Browser tab's comments in a session (and tell every client); its stored ones. */
   browserCommentsAdd?: (sessionId: string, batch: import("../../core/browser-comments/store").BrowserCommentBatch) => import("../../core/browser-comments/store").BrowserComment[] | null
   browserCommentsList?: (sessionId: string) => import("../../core/browser-comments/store").BrowserComment[]
+  /** #122 phase 4: the session whose process listens on [port] (its dev server), or null. */
+  portOwner?: (port: number) => { sessionId: string; sessionName: string } | null
   reviewSubmit?: (id: string) => Promise<{ ok: boolean; delivered: number; reason?: string }>
   sendUserMessage?: (id: string, text: string) => Promise<{ ok: boolean; reason?: string }>
   getWalkthrough?: (id: string) => import("../../core/walkthrough/store").Walkthrough | undefined
@@ -4175,6 +4177,14 @@ export class WebChannel implements Channel {
       const content = String(body.content ?? "")
       if (!content.trim()) return this.json({ error: "content required" }, 400)
       return this.json(this.opts.verifySave(id, content))
+    }
+    // #122 phase 4: whose dev server a port's preview is, so its comments go to that session by default.
+    if (method === "GET" && path.match(/^\/ports\/\d+\/owner$/)) {
+      const port = Number(path.split("/")[2])
+      if (!Number.isInteger(port) || port < 1 || port > 65535) return this.json({ error: "not a port" }, 400)
+      if (!this.opts.portOwner) return this.json({ error: "not configured" }, 503)
+      const owner = this.opts.portOwner(port)
+      return owner ? this.json(owner) : this.json({ error: "no session listens on that port" }, 404)
     }
     // #122 phase 4: a Browser tab's comments, sent to a session; its agent answers each through its mux tools.
     if (method === "GET" && path.match(/^\/sessions\/[^/]+\/browser\/comments$/)) {

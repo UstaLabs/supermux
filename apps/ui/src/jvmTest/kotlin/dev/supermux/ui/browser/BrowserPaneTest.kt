@@ -86,7 +86,8 @@ class BrowserPaneTest {
         fun loads(): List<String> = calls.filter { it.startsWith("load:") && "url:" in it }.map { it.substringAfter("url:") }
     }
 
-    private fun Rig.actions(previews: List<ProxyDto> = emptyList(), cookie: PreviewCookieDto? = null, byPort: String? = null) = BrowserActions(
+    private fun Rig.actions(previews: List<ProxyDto> = emptyList(), cookie: PreviewCookieDto? = null, byPort: String? = null, portOwner: (Int) -> String? = { null }) = BrowserActions(
+        portOwner = { portOwner(it) },
         saveView = { _, _, state, title -> writes += state to title; true },
         proxies = { previews },
         byPort = { byPort },
@@ -843,6 +844,21 @@ class BrowserPaneTest {
         showWithChat(rig, mutableStateOf(view("https://relay.test/p/p-5173/")), sink, rig.actions(previews = listOf(owned), cookie = cookie))
         pickPay(rig, "x")
         onNodeWithTag("browser-pick-recipient").assertTextContains("Docs agent", substring = true)
+        onNodeWithTag("browser-pick-send").performClick()
+        waitUntil(timeoutMillis = 5_000) { sink.messages.isNotEmpty() }
+        assertEquals(listOf<String?>("s2"), sink.sentTo)
+    }
+
+    /** A by-port preview's comments go to the session whose process listens on that port (the broker finds it). */
+    @Test fun aByPortPreviewsCommentsGoToTheSessionListeningOnIt() = runComposeUiTest {
+        val rig = Rig()
+        val sink = ChatSink(stores = true)
+        showWithChat(
+            rig, mutableStateOf(view("http://localhost:3000/app")), sink,
+            rig.actions(byPort = "https://relay.test/p/{port}/", cookie = cookie, portOwner = { port -> if (port == 3000) "Docs agent" else null }),
+        )
+        pickPay(rig, "x")
+        waitUntil(timeoutMillis = 5_000) { runCatching { onNodeWithTag("browser-pick-recipient").assertTextContains("Docs agent", substring = true) }.isSuccess }
         onNodeWithTag("browser-pick-send").performClick()
         waitUntil(timeoutMillis = 5_000) { sink.messages.isNotEmpty() }
         assertEquals(listOf<String?>("s2"), sink.sentTo)
