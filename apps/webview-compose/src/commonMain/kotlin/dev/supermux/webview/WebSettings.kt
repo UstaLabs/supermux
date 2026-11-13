@@ -90,10 +90,11 @@ public class WebSettings(
     public val desktopSite: Boolean = false,
     /**
      * The opaque colour the app draws behind the view, for a page with [transparentBackground]; null, the default, for
-     * none. Where the page lies under the Compose canvas (macOS, iOS, the web), its transparent pixels show what is
-     * under the canvas, not what the app drew behind the view (on a Mac, the window's black backing): the engine paints
-     * this there from the lease's start, and the runtime's cover of the page lies on it. On Android, Windows and Linux
-     * the page is drawn in Compose's order and is truly transparent: nothing changes there that shows. Ignored for an
+     * none. Where the page lies under the Compose canvas (macOS, iOS), its transparent pixels show what is under the
+     * canvas, not what the app drew behind the view (on a Mac, the window's black backing): the engine paints this
+     * there from the lease's start, and the runtime's cover of the page lies on it. On Android, Windows and Linux the
+     * page is drawn in Compose's order, and on the web above the canvas: it is truly transparent, and the underlay
+     * changes nothing that shows. Ignored for an
      * opaque page. Taken mid-lease, as a theme is: give the colour of the app's theme of the moment.
      */
     public val underlay: Color? = null,
