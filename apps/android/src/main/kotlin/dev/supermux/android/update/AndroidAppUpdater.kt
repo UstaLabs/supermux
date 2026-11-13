@@ -4,6 +4,7 @@
 // over both that a SHARED update screen (cluster G5) drives.
 package dev.supermux.android.update
 
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.os.Build
@@ -31,7 +32,7 @@ import java.io.File
  * update (`POST /api/update/run`).
  *
  * Every phase also posts to the status bar through [AppUpdateNotifier] exactly where it always did:
- * a silent ongoing progress bar while downloading, a short "installing" state, and a
+ * a silent ongoing progress bar while downloading, a "tap to install" state once the APK is on disk, and a
  * default-importance alert on failure — including the "install unknown apps is off" refusal, which
  * additionally raises [UpdateStatus.needsInstallPermission] so the screen can offer the settings
  * jump.
@@ -57,6 +58,8 @@ class AndroidAppUpdater(
         val result = runCatching { AndroidUpdateSource.check(http, appContext) }
         val next = result.fold(
             onSuccess = { s ->
+                // Already on the latest (the update went in): a leftover "tap to install" would only reinstall it.
+                if (!s.updateAvailable) AppUpdateNotifier.cancel(appContext)
                 UpdateStatus(
                     phase = if (s.updateAvailable) UpdatePhase.Available else UpdatePhase.UpToDate,
                     release = s,
@@ -144,6 +147,10 @@ class AndroidAppUpdater(
             state.value = state.value.copy(phase = UpdatePhase.Failed, error = msg)
             return@withContext null
         }
+        // The download is done whoever is still waiting for it (#140): the "Downloading 100%" bar becomes "tap to
+        // install", which opens the installer from the shade even when no screen ever calls install() — the page
+        // was left (#95's downloads carry on in the background) or the app is not in front.
+        AppUpdateNotifier.showReadyToInstall(appContext, installerIntent(apk), alert = !inForeground())
         DownloadedInstaller(location = apk.absolutePath, kind = "apk")
         } catch (e: CancellationException) {
             // Cancelled from the activity bar (the DownloadCenter cancels this job), or the caller went away: the
@@ -161,19 +168,17 @@ class AndroidAppUpdater(
     override suspend fun install(installer: DownloadedInstaller): String? = withContext(Dispatchers.Main) {
         state.value = state.value.copy(phase = UpdatePhase.Installing, error = null)
         try {
-            val uri = FileProvider.getUriForFile(
-                appContext,
-                "${appContext.packageName}.fileprovider",
-                File(installer.location),
-            )
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "application/vnd.android.package-archive")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val intent = installerIntent(File(installer.location))
+            if (inForeground()) {
+                appContext.startActivity(intent)
+                AppUpdateNotifier.showReadyToInstall(appContext, intent, alert = false)
+            } else {
+                // Android drops an activity start from the background without a word (#140: 0.17.6 finished the
+                // download behind another app, the installer never came, and the user downloaded it again and
+                // again). A notification's tap is the start Android allows.
+                AppUpdateNotifier.showReadyToInstall(appContext, intent, alert = true)
             }
-            appContext.startActivity(intent)
-            AppUpdateNotifier.showInstalling(appContext)
-            // The system installer is up; this process keeps running until the APK replaces it, so
+            // The installer is up (or one tap away); this process keeps running until the APK replaces it, so
             // the page settles back to a usable state (the old `installing = false`) instead of
             // sitting in Installing with every CTA disabled.
             state.value = state.value.settled()
@@ -184,6 +189,23 @@ class AndroidAppUpdater(
             state.value = state.value.copy(phase = UpdatePhase.Failed, error = msg)
             msg
         }
+    }
+
+    /** The system installer for [apk], read through our FileProvider. */
+    private fun installerIntent(apk: File): Intent {
+        val uri = FileProvider.getUriForFile(appContext, "${appContext.packageName}.fileprovider", apk)
+        return Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+    }
+
+    /** A window of ours is on screen, so Android lets this process start the installer itself. */
+    private fun inForeground(): Boolean {
+        val info = ActivityManager.RunningAppProcessInfo()
+        ActivityManager.getMyMemoryState(info)
+        return info.importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
     }
 
     override fun openReleaseNotes() {
