@@ -183,6 +183,12 @@ class LauncherFirstRunTest {
         onNodeWithTag("launcher_message").assertIsDisplayed()
     }
 
+    // #134 (ADEMark): ⌘N opens the launcher ready to type.
+    @Test fun the_launcher_opens_with_the_cursor_in_the_message() = runComposeUiTest {
+        pointer { Launcher(projects = { listOf("/home/u/alpha") }, draft = LauncherDraft(workdir = "/home/u/alpha")) }
+        waitFor { onNodeWithTag("launcher_message").assertIsFocused() }
+    }
+
     // #128: once the first project is there, typing goes straight into the message.
     @Test fun the_first_project_puts_the_cursor_in_the_message() = runComposeUiTest {
         pointer { Launcher(createLocalRepo = { "/home/u/projects/$it" }) }

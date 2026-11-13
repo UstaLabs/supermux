@@ -124,6 +124,17 @@ class ShortcutDispatcher(
         return false
     }
 
+    /**
+     * For a menu item that is no app command (Edit › Copy, #134): within a second of a press of [chord] its action is
+     * the macOS menu echoing that press, which the focused field already handled. True then, and the press is used up;
+     * false for a click.
+     */
+    fun isMenuEcho(chord: KeyChord): Boolean {
+        menuKeyPresses[chord]?.takeIf { it.elapsedNow() < 1.seconds } ?: return false
+        menuKeyPresses.remove(chord)
+        return true
+    }
+
     /** Forgets the keys held down, for a window that lost the focus: their releases go to another window. */
     fun forgetHeldKeys() {
         taken.clear()

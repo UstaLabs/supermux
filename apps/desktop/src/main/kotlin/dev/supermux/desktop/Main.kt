@@ -149,6 +149,8 @@ import dev.supermux.desktop.shell.DetachedWorkspaceWindow
 import dev.supermux.ui.shell.windows.extraWindowTitle
 import dev.supermux.ui.shell.RAIL_WIDTH
 import dev.supermux.desktop.shell.DesktopMenuBar
+import dev.supermux.desktop.shell.editMenu
+import dev.supermux.desktop.shell.sendMenuKey
 import dev.supermux.desktop.shell.LinuxSidebarChrome
 import dev.supermux.desktop.shell.LinuxTitleBarHeight
 import dev.supermux.desktop.shell.LinuxWindowChrome
@@ -485,8 +487,16 @@ fun main() {
         // receiver-bound — purely so the tray icon's click handler can un-minimize the SAME
         // WindowState instance passed to Window below.
         // 1440×900, or ~90% of a smaller screen, centred (InitialWindow.kt).
-        val initialWindow = remember { dev.supermux.desktop.platform.initialWindow(dev.supermux.desktop.platform.usableScreenBounds()) }
+        // Or, since #134, where and how big it was last time, when that is still on a screen.
+        val initialWindow = remember {
+            dev.supermux.desktop.platform.restoredWindow(
+                ShellStateStore().load().mainWindow,
+                dev.supermux.desktop.platform.usableScreens(),
+                dev.supermux.desktop.platform.initialWindow(dev.supermux.desktop.platform.usableScreenBounds()),
+            )
+        }
         val windowState = rememberWindowState(
+            placement = if (initialWindow.maximized) androidx.compose.ui.window.WindowPlacement.Maximized else androidx.compose.ui.window.WindowPlacement.Floating,
             width = initialWindow.width.dp,
             height = initialWindow.height.dp,
             position = if (initialWindow.x != null && initialWindow.y != null) {
@@ -661,11 +671,18 @@ fun main() {
                     SwingUtilities.invokeLater { requestQuit() }
                 }
             }
+            // macOS's app menu owns ⌘, through its built-in Preferences item, which stays disabled (and swallows the key)
+            // until a handler is set (#134, ADEMark): "supermux › Settings… ⌘," then opens Settings, the native way.
+            val settingsHandled = desktop != null && desktop.isSupported(Desktop.Action.APP_PREFERENCES)
+            if (settingsHandled) {
+                desktop.setPreferencesHandler { SwingUtilities.invokeLater { showWindow(); pairedUi?.openSettings() } }
+            }
             val reopen = AppReopenedListener { SwingUtilities.invokeLater { showWindow() } }
             val reopenHandled = desktop != null && desktop.isSupported(Desktop.Action.APP_EVENT_REOPENED)
             if (reopenHandled) desktop.addAppEventListener(reopen)
             onDispose {
                 if (quitHandled) runCatching { desktop.setQuitHandler(null) }
+                if (settingsHandled) runCatching { desktop.setPreferencesHandler(null) }
                 if (reopenHandled) runCatching { desktop.removeAppEventListener(reopen) }
             }
         }
@@ -765,15 +782,27 @@ fun main() {
         // sidebar, selection and collapsed groups: carry those fields forward UNTOUCHED rather than
         // erasing them on the first window move. Same rule cluster F1 used for the collapsed paths.
         LaunchedEffect(uiStore, legacyDrained) {
-            snapshotFlow { desktopWindows.persistedExtras() }
-                .collectLatest { extras ->
+            // The main window's place and size too (#134): its last floating bounds, and whether it was maximised.
+            var floating: dev.supermux.desktop.platform.SavedWindow? = persistedUi.mainWindow
+            snapshotFlow {
+                val maximized = windowState.placement == androidx.compose.ui.window.WindowPlacement.Maximized
+                val pos = windowState.position
+                if (!maximized && pos.isSpecified && windowState.placement == androidx.compose.ui.window.WindowPlacement.Floating) {
+                    floating = dev.supermux.desktop.platform.SavedWindow(
+                        pos.x.value.toInt(), pos.y.value.toInt(),
+                        windowState.size.width.value.toInt(), windowState.size.height.value.toInt(),
+                    )
+                }
+                desktopWindows.persistedExtras() to floating?.copy(maximized = maximized)
+            }
+                .collectLatest { (extras, main) ->
                     delay(500)
                     withContext(Dispatchers.IO) {
                         uiStore.save(
                             if (legacyDrained) {
-                                PersistedUiState(windows = extras)
+                                PersistedUiState(windows = extras, mainWindow = main)
                             } else {
-                                persistedUi.copy(windows = extras)
+                                persistedUi.copy(windows = extras, mainWindow = main)
                             },
                         )
                     }
@@ -1016,7 +1045,8 @@ fun main() {
                         MainMenuEntry.Action("Archived…") { ui.openArchived() },
                         MainMenuEntry.Action("Displays…") { ui.openDisplays() },
                         MainMenuEntry.Action("Usage…") { ui.openUsage() },
-                        MainMenuEntry.Action("Settings…", menuShortcutFor(AppCommands.OpenSettings), enabled = shortcuts.rememberCanInvoke(AppCommands.OpenSettings)) { shortcuts.invokeFromMenu(AppCommands.OpenSettings) },
+                        // On a Mac ⌘, is the app menu's (above): File's item shows no key, so the key isn't claimed twice.
+                        MainMenuEntry.Action("Settings…", if (isMacOs()) null else menuShortcutFor(AppCommands.OpenSettings), enabled = shortcuts.rememberCanInvoke(AppCommands.OpenSettings)) { shortcuts.invokeFromMenu(AppCommands.OpenSettings) },
                         // Existing items keep working — they open the Settings hub focused on
                         // that page (same overlay as Settings…, not a separate stack): Coding, at
                         // its code-intelligence row (#97; once "Editor / LSP…").
@@ -1026,14 +1056,13 @@ fun main() {
                         MainMenuEntry.Action("Unpair…") { showUnpairConfirm = true },
                     ),
                 ),
-                MainMenuGroup(
-                    "Edit",
-                    'E',
-                    listOf(
-                        // ⌘V / Ctrl+V in the composer pastes an image itself (Composer.kt); the menu item has no
-                        // key, or it would take every paste from the code editor.
-                        MainMenuEntry.Action("Paste image") { ui.requestPasteImage() },
-                    ),
+                // The standard set, then Paste image (#134). ⌘V / Ctrl+V in the composer pastes an image itself
+                // (Composer.kt), so Paste image has no key.
+                editMenu(
+                    dev.supermux.ui.keys.currentKeyOs,
+                    isEcho = shortcuts::isMenuEcho,
+                    sendKey = { s -> sendMenuKey(window, s) },
+                    pasteImage = { ui.requestPasteImage() },
                 ),
                 MainMenuGroup(
                     "View",
