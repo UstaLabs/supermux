@@ -1,17 +1,17 @@
-# Scratch: three TEST-ONLY debug APKs for #140's Fold update test. Never merge.
-name: apk-140
+# Scratch: two TEST-ONLY debug APKs for #123's Fold cold-start before/after the i18n catalog.
+# applicationId gets the suffix .i18nprobe so they install beside the real app. Never merge.
+name: apk-123
 on:
   push:
-    branches: [apk-140]
+    branches: [apk-123]
 jobs:
   apk:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: updtest-old-vc1121, sha: f528eeec5c26ac8bc23976d0b63a899eb80babde }
-          - { name: updtest-1200, sha: 37b10f99bdf2c2482659840d826c00ad71ed802e }
-          - { name: updtest-1300, sha: 079fb9bb6704a8e169f4358a358886772b6a805d }
+          - { name: i18nprobe-before-d33a15a8e, sha: d33a15a8e8d3d8fac790073cac4167d0b9840211 }
+          - { name: i18nprobe-after-c82feb7b5, sha: c82feb7b5173f828f055962863088f6d31ca7302 }
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -31,6 +31,23 @@ jobs:
       - run: sdkmanager --channel=1 "platforms;android-37.0" "build-tools;36.0.0"
       - run: bun install --frozen-lockfile
       - run: cp apps/android/google-services.json.example apps/android/google-services.json
+      - name: Suffix the debug applicationId with .i18nprobe
+        run: |
+          python3 - <<'PY2'
+          import json, re
+          g = "apps/android/build.gradle.kts"
+          s = open(g).read()
+          s2 = s.replace('getByName("debug") {', 'getByName("debug") {\n            applicationIdSuffix = ".i18nprobe"', 1)
+          assert s2 != s, "debug block not found"
+          open(g, "w").write(s2)
+          j = "apps/android/google-services.json"
+          d = json.load(open(j))
+          c = json.loads(json.dumps(d["client"][0]))
+          c["client_info"]["android_client_info"]["package_name"] = "dev.supermux.android.i18nprobe"
+          d["client"].append(c)
+          json.dump(d, open(j, "w"), indent=2)
+          PY2
+          git diff --stat
       - run: sdkmanager "ndk;$(python3 -c "import json; print(json.load(open('apps/terminal-core/native/upstream.lock.json'))['targets']['android-arm64']['ndk'])")"
       - name: Build the terminal engine for Android
         env:
