@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
 
 /**
  * The Android app updating itself: polls versions.json / GitHub latest, downloads the release APK,
@@ -105,28 +106,41 @@ class AndroidAppUpdater(
 
         var lastReportedPct = -1
         var lastReportedBytes = -1L
-        val bytes = try {
-            ClientUpdateChecker(http).download(url) { received, total ->
-                val pct = AppUpdateNotifier.progressPercent(received, total)
-                // Throttle status-bar + UI updates: every whole percent, or every 256 KiB when
-                // Content-Length is unknown (verbatim from the old downloadAndInstall).
-                val shouldEmit = when {
-                    pct != null -> pct != lastReportedPct
-                    else -> received - lastReportedBytes >= 256 * 1024 || lastReportedBytes < 0
+        // Straight to disk (#140): the APK in the heap, twice over, was enough for a low-RAM phone to kill the
+        // app at 100%. The bytes land in a .part file that becomes the APK only once complete, so a cut-off
+        // download is never handed to the installer.
+        val dir = File(appContext.cacheDir, "updates").apply { mkdirs() }
+        val apk = File(dir, "supermux-update.apk")
+        val part = File(dir, "supermux-update.apk.part")
+        val size = try {
+            FileDownloadSink(part).use { sink ->
+                ClientUpdateChecker(http).downloadTo(url, sink) { received, total ->
+                    val pct = AppUpdateNotifier.progressPercent(received, total)
+                    // Throttle status-bar + UI updates: every whole percent, or every 256 KiB when
+                    // Content-Length is unknown (verbatim from the old downloadAndInstall).
+                    val shouldEmit = when {
+                        pct != null -> pct != lastReportedPct
+                        else -> received - lastReportedBytes >= 256 * 1024 || lastReportedBytes < 0
+                    }
+                    if (shouldEmit) {
+                        if (pct != null) lastReportedPct = pct
+                        lastReportedBytes = received
+                        AppUpdateNotifier.showProgress(appContext, received, total)
+                        emit(onProgress, received, total)
+                    }
                 }
-                if (shouldEmit) {
-                    if (pct != null) lastReportedPct = pct
-                    lastReportedBytes = received
-                    AppUpdateNotifier.showProgress(appContext, received, total)
-                    emit(onProgress, received, total)
-                }
+            }.also {
+                apk.delete()
+                if (!part.renameTo(apk)) throw IOException("Could not save the downloaded APK")
             }
         } catch (e: CancellationException) {
             // Not a failure: the CALLER went away (navigating off the page). Let it propagate so
             // the `finally` settles the phase instead of leaving a spurious "Download failed"
             // alert under a frozen percentage and a disabled CTA.
+            part.delete()
             throw e
         } catch (e: Throwable) {
+            part.delete()
             val msg = e.message ?: "Download failed"
             AppUpdateNotifier.showError(appContext, msg)
             state.value = state.value.copy(phase = UpdatePhase.Failed, error = msg)
@@ -134,19 +148,9 @@ class AndroidAppUpdater(
         }
 
         // Final 100% tick when the length was known (or a last size tick when it was not).
-        AppUpdateNotifier.showProgress(appContext, bytes.size.toLong(), bytes.size.toLong())
-        emit(onProgress, bytes.size.toLong(), bytes.size.toLong())
+        AppUpdateNotifier.showProgress(appContext, size, size)
+        emit(onProgress, size, size)
 
-        val dir = File(appContext.cacheDir, "updates").apply { mkdirs() }
-        val apk = File(dir, "supermux-update.apk")
-        try {
-            apk.writeBytes(bytes)
-        } catch (e: Throwable) {
-            val msg = e.message ?: "Could not write APK"
-            AppUpdateNotifier.showError(appContext, msg)
-            state.value = state.value.copy(phase = UpdatePhase.Failed, error = msg)
-            return@withContext null
-        }
         // The download is done whoever is still waiting for it (#140): the "Downloading 100%" bar becomes "tap to
         // install", which opens the installer from the shade even when no screen ever calls install() — the page
         // was left (#95's downloads carry on in the background) or the app is not in front.
