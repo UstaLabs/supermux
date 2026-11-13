@@ -18,3 +18,17 @@ plugins {
     // is loaded once for the whole build rather than per-subproject classloader.
     alias(libs.plugins.compose.hot.reload) apply false
 }
+
+// #142 size probe: `-Psupermux.composeLean=true` builds without the Compose compiler's
+// source-information and trace-marker strings (and the calls that carry them).
+// Off by default; the CI size probe flips it to measure what it saves in the web wasm.
+if (providers.gradleProperty("supermux.composeLean").orNull == "true") {
+    subprojects {
+        plugins.withId("org.jetbrains.kotlin.plugin.compose") {
+            extensions.configure<org.jetbrains.kotlin.compose.compiler.gradle.ComposeCompilerGradlePluginExtension> {
+                includeSourceInformation.set(false)
+                includeTraceMarkers.set(false)
+            }
+        }
+    }
+}
