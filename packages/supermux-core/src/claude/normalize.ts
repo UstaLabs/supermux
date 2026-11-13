@@ -1,6 +1,6 @@
 /** Claude headless stream-json mapper. */
 import type { AgentUpdate, SubagentSnapshot } from "../types.js"
-import type { AgentCommandEntry, NormalizedBody, PlanEntryStatus, SubagentEndedBy, SubagentStats, TaskKind } from "../events/normalized.js"
+import type { AgentCommandEntry, AgentModelEntry, NormalizedBody, PlanEntryStatus, SubagentEndedBy, SubagentStats, TaskKind } from "../events/normalized.js"
 import { ACCOUNT_UNAVAILABLE_ERROR, NOT_SIGNED_IN_ERROR } from "../accounts/policy.js"
 import { REASON, SUBAGENT_STATE_METHOD, actionFields, actionsKey, endedReason, shortReason, type SubagentActions } from "../subagent-actions.js"
 
@@ -21,6 +21,29 @@ function num(value: unknown): number | undefined {
  * Claude's command list (the `initialize` / `reload_plugins` reply and the `commands_changed` push):
  * `{name, description, argumentHint, aliases, builtin}` rows. Undefined when `value` is not a list.
  */
+/** The models an initialize reply lists (Claude Code 2.1.308's shape); undefined when it lists none. */
+function claudeModels(value: unknown): AgentModelEntry[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const out: AgentModelEntry[] = []
+  for (const item of value) {
+    const row = rec(item)
+    const id = str(row?.value)
+    if (!row || !id) continue
+    const efforts = Array.isArray(row.supportedEffortLevels)
+      ? row.supportedEffortLevels.filter((e): e is string => typeof e === "string" && e !== "")
+      : []
+    out.push({
+      value: id,
+      name: str(row.displayName) ?? id,
+      ...(typeof row.description === "string" ? { description: row.description } : {}),
+      ...(str(row.resolvedModel) ? { resolved: str(row.resolvedModel)! } : {}),
+      ...(efforts.length ? { efforts } : {}),
+      ...(row.supportsFastMode === true ? { fast: true as const } : {}),
+    })
+  }
+  return out.length ? out : undefined
+}
+
 function claudeCommands(value: unknown): AgentCommandEntry[] | undefined {
   if (!Array.isArray(value)) return undefined
   const out: AgentCommandEntry[] = []
@@ -796,9 +819,15 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
       return []
     }
     if (type === "control_response") {
-      // The driver forwards the replies that list commands (initialize, reload_plugins).
-      const commands = claudeCommands(rec(rec(frame.response)?.response)?.commands)
-      return commands ? [{ kind: "commands-update", commands }] : []
+      // The driver forwards the replies that list commands (initialize, reload_plugins). The initialize reply also
+      // lists the account's models (#129), read with Claude's own login.
+      const reply = rec(rec(frame.response)?.response)
+      const commands = claudeCommands(reply?.commands)
+      const models = claudeModels(reply?.models)
+      return [
+        ...(commands ? [{ kind: "commands-update" as const, commands }] : []),
+        ...(models ? [{ kind: "models-update" as const, models }] : []),
+      ]
     }
     return []
   }

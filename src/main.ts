@@ -189,6 +189,7 @@ import { join, dirname, resolve, isAbsolute, sep } from "path"
 import { fileURLToPath } from "url"
 import type { AgentAdapter, LiveDeltaEvent, LiveEndEvent, RequestOpenEvent, SubagentActivityEvent, SubagentEvent, SubagentSnapshotEvent, TaskEvent, TurnCompleteEvent, TurnFailedEvent } from "./core/agents/types"
 import { ModelCache } from "./core/models/cache"
+import { discoverClaude, discoverClaudeModelsViaCli } from "./core/models/claude-models"
 import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels, discoverWithAccounts, type DiscoveryLaunch, type ModelInfo } from "./core/models/discovery"
 import { followAdapterModels, LearnedModels } from "./core/models/learned"
 import { discoverGrokModels } from "./core/agents/grok/model-discovery"
@@ -1061,7 +1062,14 @@ function accountAware(agent: AgentKind, discover: (launch?: DiscoveryLaunch) => 
 }
 
 const modelDiscoverers: ModelDiscoverers = {
-  [AgentKind.Claude]: accountAware(AgentKind.Claude, (launch) => discoverClaudeModels({ launch })),
+  // #129: Claude's list from Claude Code itself (a live session's initialize, else a control-only claude), the API as
+  // the fallback: no credential of ours, so a Mac's Keychain login lists its models without any prompt.
+  [AgentKind.Claude]: () => discoverClaude({
+    learned: learnedModels,
+    cli: (launch) => discoverClaudeModelsViaCli({ launch }),
+    api: (launch) => discoverClaudeModels({ launch }),
+    accounts: () => accountDiscoveryLaunches(AgentKind.Claude),
+  }),
   [AgentKind.Codex]: accountAware(AgentKind.Codex, (launch) => discoverCodexModels({ launch })),
   [AgentKind.Cursor]: accountAware(AgentKind.Cursor, (launch) => discoverCursorModels({ launch, learned: () => learnedModels.get(AgentKind.Cursor) })),
   [AgentKind.OpenCode]: accountAware(AgentKind.OpenCode, (launch) => discoverOpenCodeModels({ launch })),
