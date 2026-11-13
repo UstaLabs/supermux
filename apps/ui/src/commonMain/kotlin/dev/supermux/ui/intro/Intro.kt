@@ -1151,7 +1151,7 @@ fun FirstRunIntroOverlay(
     }
 
     // Hard-blinking block cursor (threshold below), independent of the main timeline.
-    val blink by rememberLiveLoop(0f, 1f, infiniteRepeatable(tween(530, easing = LinearEasing), RepeatMode.Restart), label = "caret")
+    val blink by rememberLiveLoop(0f, 1f, infiniteRepeatable(tween(530, easing = LinearEasing), RepeatMode.Restart), label = "caret") // i18n-ok: animation label
     val cursorOn = blink < 0.5f
 
     val measurer = rememberTextMeasurer()
