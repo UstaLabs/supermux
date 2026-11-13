@@ -3,7 +3,6 @@ package dev.supermux.webview.engine.web
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.IntSize
 import dev.supermux.webview.runtime.OverlayCutouts
 import dev.supermux.webview.runtime.n
@@ -13,6 +12,17 @@ import kotlin.math.roundToInt
 
 /** The z-index of the last frame a surface showed: the newest surface goes on top. */
 private var topZ = 0
+
+/**
+ * A shown frame's opacity: never quite 1, so the compositor never takes the frame for an opaque layer. Chrome (148,
+ * headless, with SwiftShader's GL and with software compositing) culls the WebGL canvas under an opaque layer at the
+ * layer's place mirrored top to bottom: a card at y 217–517 of a 956 px window took the canvas out at
+ * 439–739, and what the card didn't cover of that, 517–739, showed the host page's black over the next message. A
+ * page that paints its own background (an opaque page, or a card's) made its frame opaque all the same. Chrome keeps
+ * the opacity in 8 bits: 0.999 rounds to 255 and is opaque still; 0.996 is 254, a level at most off any colour.
+ * Checked from the screen by `browser-check/frame-over-canvas.test.ts`.
+ */
+internal const val SHOWN_OPACITY = "0.996"
 
 /**
  * One engine's place on the page (spec §6, §7): [outer], a div in a viewport's layer, and [cut] inside it, which holds
@@ -38,6 +48,7 @@ private var topZ = 0
  *   place in the style update that shows it again. Chrome (156) keeps what a hidden frame drew only while its box is
  *   in the viewport: one hidden out of it (a pager's page off screen, a view bound but scrolled away) came back with a
  *   blank first frame, the box's background, where one hidden in place comes back with the page as it was.
+ * - Shown, it is at [SHOWN_OPACITY], not 1: an opaque frame makes Chrome drop canvas pixels elsewhere.
  * - While [covered] (the runtime's cover on the canvas must show) it is `opacity: 0` instead, and takes no clicks: the
  *   page draws in its place, unseen, so its frame is ready when the cover goes.
  * - Only the surface that attached last moves it, so a surface that is late to leave can't fight the new one.
@@ -219,12 +230,13 @@ internal class WebFrame {
     }
 
     /**
-     * What `prefers-color-scheme` the page's frame asks for, and whether its background shows through: to the host page
-     * under the canvas, or to a transparent page's [underlay], the app's colour behind the view, if it has one.
+     * What `prefers-color-scheme` the page's frame asks for, and whether its background shows through. The frame lies
+     * above the canvas, so a transparent page shows the app's content through it: it takes no underlay
+     * ([dev.supermux.webview.engine.PageSetup.underlay]).
      */
-    fun setTheme(dark: Boolean, transparent: Boolean, underlay: Color? = null) {
+    fun setTheme(dark: Boolean, transparent: Boolean) {
         styleOf(cut, "color-scheme", if (dark) "dark" else "light")
-        styleOf(cut, "background", if (!transparent) "Canvas" else underlay?.let(::cssColorOf) ?: "transparent")
+        styleOf(cut, "background", if (!transparent) "Canvas" else "transparent")
     }
 
     /** Adds [iframe] under the scrims, and under [below] (an older iframe still holding paint) when given. */
@@ -325,7 +337,7 @@ internal class WebFrame {
         place()
         styleOf(outer, "visibility", if (visible) "visible" else "hidden")
         // Covered, it draws in its place unseen, and takes no clicks: the cover on the canvas below shows.
-        styleOf(outer, "opacity", if (covered) "0" else "1")
+        styleOf(outer, "opacity", if (covered) "0" else SHOWN_OPACITY)
         styleOf(cut, "pointer-events", if (covered || scrims.isNotEmpty()) "none" else "auto")
         val became = nowDisplayed && !displayed
         displayed = nowDisplayed
@@ -336,10 +348,4 @@ internal class WebFrame {
 
     private fun rgba(color: Color): String =
         "rgba(${(color.red * 255).roundToInt()}, ${(color.green * 255).roundToInt()}, ${(color.blue * 255).roundToInt()}, ${color.alpha})"
-}
-
-/** An opaque [color] as CSS: `rgb(r, g, b)`, in sRGB. */
-internal fun cssColorOf(color: Color): String {
-    val argb = color.toArgb()
-    return "rgb(${(argb shr 16) and 0xFF}, ${(argb shr 8) and 0xFF}, ${argb and 0xFF})"
 }

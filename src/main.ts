@@ -259,7 +259,7 @@ import { deriveName, ensureUnique } from "./core/session-manager/naming"
 import { InboxStore } from "./core/inbox/store"
 import { InboxCursorStore } from "./core/inbox/cursor"
 import { InboxDelivery } from "./core/inbox/delivery"
-import { dirs, files as platformFiles, host, paths, proc } from "@supermux/platform"
+import { dirs, files as platformFiles, host, paths, ports, proc } from "@supermux/platform"
 
 const log = makeLogger("main")
 // Under the desktop app's Windows Scheduled Task loop? Captured once and removed from the env so
@@ -1759,7 +1759,7 @@ async function interruptSessionById(sessionId: string): Promise<{ ok: boolean; r
   return r
 }
 
-type FinishRequest = { action: FinishAction; skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string }
+type FinishRequest = { action: FinishAction; skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string; /** #72: never archive the chat after a merge (the new UI's merge leaves it open). */ keep?: boolean }
 
 async function finishSessionById(sessionId: string, req: FinishRequest): Promise<FinishJob | { error: string }> {
   const s = registry.get(sessionId)
@@ -1776,15 +1776,15 @@ async function finishSessionById(sessionId: string, req: FinishRequest): Promise
   return startFinishJob(session, opts, {
     onUpdate: (job) => webChannel?.broadcastToAll({ type: "finish_job", session: sessionId, job }),
     persist: (job) => { try { registry.sessions.setFinishJob(sessionId, job) } catch {} },
-    notify: (job) => { void onFinishTerminal(sessionId, sessionName, job) },
+    notify: (job) => { void onFinishTerminal(sessionId, sessionName, job, req.keep === true) },
   })
 }
 
-async function onFinishTerminal(sessionId: string, sessionName: string, job: FinishJob): Promise<void> {
+async function onFinishTerminal(sessionId: string, sessionName: string, job: FinishJob, keep = false): Promise<void> {
   fireFinishPush(sessionName, sessionId, job)
   const status = job.outcome?.status
   const s = registry.get(sessionId)
-  const archiveMerge = job.action === "merge" && status === "integrated" && (!s?.repo_root || loadFinishConfig(s.repo_root).archiveOnMerge)
+  const archiveMerge = !keep && job.action === "merge" && status === "integrated" && (!s?.repo_root || loadFinishConfig(s.repo_root).archiveOnMerge)
   const archiveDiscard = job.action === "discard" && status === "discarded"
   if (archiveMerge || archiveDiscard) {
     try {
@@ -3353,6 +3353,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     startDisplay: (args) => displayManager.start({ sessionDisplayName: args.sessionName, provider: args.provider as any, device: args.device, width: args.width, height: args.height }),
     stopDisplay: (id) => displayManager.stop(id),
     getSessionWorkdir: (id) => registry.get(id)?.workdir,
+    getSessionGitBase: (id) => {
+      const s = registry.get(id)
+      return s?.repo_root && s.base_branch && s.base_branch !== "HEAD" ? { repoRoot: s.repo_root, base: s.base_branch } : undefined
+    },
     folderReady: (path) => folderReady({
       sessions: () => registry.list(),
       pending: (id) => sessionChain.pending(id),
@@ -3470,6 +3474,12 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       return added
     },
     browserCommentsList: (id) => browserCommentStore.list(id),
+    portOwner: (port) => {
+      const byPid = new Map(registry.list().filter((s) => s.pid > 0).map((s) => [s.pid, s] as const))
+      const pid = ports.ownerAmong(port, new Set(byPid.keys()))
+      const owner = pid === null ? undefined : byPid.get(pid)
+      return owner ? { sessionId: owner.id, sessionName: owner.name } : null
+    },
     reviewAdd: (id, c) => {
       const comment = reviewStore.add({ ...c, sessionId: id })
       webChannel?.broadcastToAll({ type: "review_comment", sessionId: id, comment })
@@ -4601,6 +4611,14 @@ agentStateStore.on("change", (sessionId: string, state) => {
   gitStatusService.scheduleRecompute(sessionId)
   const workdir = registry.get(sessionId)?.workdir
   if (workdir) worktreeService.touchWorkdir(workdir)
+})
+// #122 phase 4: a turn the agent starts after a Browser tab's comments were sent is it having seen them: their pins say so.
+agentStateStore.on("change", (sessionId: string, state: { phase: string; workingSince?: number }) => {
+  if (state.phase !== "thinking" && state.phase !== "running") return
+  if (state.workingSince === undefined) return
+  for (const comment of browserCommentStore.markSeen(sessionId, state.workingSince, new Date().toISOString())) {
+    webChannel?.broadcastToAll({ type: "browser_comment", sessionId, comment })
+  }
 })
 agentStateStore.on("thoughtComplete", (sessionId: string, durationMs: number, now: number) => {
   const sec = Math.max(1, Math.round(durationMs / 1000))

@@ -4,7 +4,7 @@ import { execFileSync } from "child_process"
 import { mkdtempSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { indexState, safeRepoPath, setStaged, stagedOf } from "./stage"
+import { indexState, parseIndexState, safeRepoPath, setStaged, stagedOf } from "./stage"
 
 /** Real git, many spawns: slow on Windows (CI), so a longer limit than bun's 5 s. */
 const REAL_GIT_MS = 30_000
@@ -13,6 +13,7 @@ const git = (dir: string, ...a: string[]) => execFileSync("git", ["-C", dir, ...
 function repo(commit = true) {
   const d = mkdtempSync(join(tmpdir(), "mux-stage-"))
   git(d, "init", "-q", "-b", "dev"); git(d, "config", "user.email", "t@t"); git(d, "config", "user.name", "t")
+  git(d, "config", "core.autocrlf", "false")   // Windows CI: files git writes keep "\n"
   writeFileSync(join(d, "a.txt"), "1\n2\n"); writeFileSync(join(d, "b.txt"), "b\n")
   if (commit) { git(d, "add", "."); git(d, "commit", "-qm", "base") }
   return d
@@ -58,4 +59,19 @@ test("a repo with no commit yet can still take files out of the next commit", as
 test("only repo-relative paths are accepted", () => {
   for (const ok of ["a.txt", "src/x.ts", ".env", "a..b"]) expect(safeRepoPath(ok)).toBe(true)
   for (const bad of ["", "/etc/passwd", "../x", "src/../../x", "C:\\x", "a\0b", 5, null]) expect(safeRepoPath(bad)).toBe(false)
+})
+
+test("one status call reads staged, unstaged and conflicted; paths keep their spaces", () => {
+  const s = parseIndexState([
+    "1 M. N... 100644 100644 100644 aaa bbb staged only.txt",
+    "1 .M N... 100644 100644 100644 aaa aaa work only.txt",
+    "1 MM N... 100644 100644 100644 aaa bbb both.txt",
+    "1 A. N... 000000 100644 100644 000 bbb new.txt",
+    "1 D. N... 100644 000000 000000 aaa 000 gone.txt",
+    "u UU N... 100644 100644 100644 100644 a b c clash me.txt",
+    "",
+  ].join("\0"))
+  expect([...s.staged].sort()).toEqual(["both.txt", "gone.txt", "new.txt", "staged only.txt"])
+  expect([...s.unstaged].sort()).toEqual(["both.txt", "work only.txt"])
+  expect([...s.conflicted!]).toEqual(["clash me.txt"])
 })

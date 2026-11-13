@@ -364,7 +364,7 @@ private fun CardPageView(entryId: String, content: WebContent.Html, card: HtmlCa
     val live = state.phase == WebViewPhase.Live
     LaunchedEffect(state, theme, live) { if (live) state.bridge.post("theme", theme.toJson()) }
     LaunchedEffect(state, live) { if (live) state.bridge.post(CARD_TOUCH_EVENT) }
-    // The page has no background of its own. Where it lies under the Compose canvas (a Mac, iOS, the web), its clear
+    // The page has no background of its own. Where it lies under the Compose canvas (a Mac, iOS), its clear
     // pixels would show what is under the canvas (a Mac window's black backing), not the chat: its underlay is the
     // chat's background, which the engine paints behind it.
     val underlay = MaterialTheme.colorScheme.chatBackground

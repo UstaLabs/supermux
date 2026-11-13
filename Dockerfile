@@ -163,7 +163,10 @@ RUN apt-get update \
 # channels re-shows the "Bypass Permissions mode" prompt (despite the pre-accept
 # flag) — the broker's consent Enter then hits its "No, exit" default and the PA
 # dies on every spawn. 2.1.162 fixes it. Bump this pin to adopt newer Claude.
-RUN npm install -g @anthropic-ai/claude-code@2.1.162 @openai/codex
+RUN npm install -g @anthropic-ai/claude-code@2.1.308 @openai/codex
+# #126: the pinned CLI must accept every flag the broker launches Claude with (2.1.162 rejected --await-initialize).
+COPY scripts/claude-cli-smoke.sh /tmp/claude-cli-smoke.sh
+RUN sh /tmp/claude-cli-smoke.sh && rm /tmp/claude-cli-smoke.sh
 # Cursor CLI installs to /root/.local/bin; make it available on PATH.
 RUN curl -fsS https://cursor.com/install | bash || echo "cursor-agent install failed (non-fatal)"
 ENV PATH="/root/.local/bin:${PATH}"

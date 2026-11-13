@@ -8,6 +8,13 @@ class PairedHostStore(
 ) {
     private val hosts: MutableList<PairedHost> = persistence.loadAll().toMutableList()
 
+    /**
+     * Whether any host was stored when this store was loaded, i.e. before this launch did anything. A first install pairs
+     * "This computer" during its very first launch (the desktop host wizard), so [list] being non-empty can't tell an
+     * install from an update; this can (What's new, #90).
+     */
+    val hadHostsAtStart: Boolean = hosts.isNotEmpty()
+
     fun list(): List<PairedHost> = hosts.toList()
 
     fun add(displayName: String, token: String, relayUrl: String? = null,

@@ -479,13 +479,22 @@ fun SupermuxApp(
     val projectImageScope = rememberCoroutineScope()
     val projectImageCache = remember(fleet, projectImageScope) { ProjectImageCache(projectImageScope) }
     val uiPrefs = LocalUiPrefs.current
+    // #128: no sessions at all → open on starting one, once, as soon as the sessions are known.
+    val noSessions by fleet.noSessions.collectAsState()
+    // #134: otherwise, with a pointer, the chat the app opens on is ready to type in.
+    val launchPointer = dev.supermux.ui.adaptive.LocalPointerAvailable.current
+    LaunchedEffect(noSessions) {
+        noSessions?.let { none ->
+            if (!ui.openLauncherOnFirstRun(loaded = true, hasSessions = !none)) ui.focusComposerOnLaunch(launchPointer)
+        }
+    }
     // What's new (#90): the sidebar card after an update, and its page.
     val appPlatform = LocalPlatform.current
     val whatsNew = rememberWhatsNew(
         uiPrefs.settings,
         appPlatform.updates.currentVersion,
         appPlatform.releasePlatform,
-        existingInstall = { fleet.store.list().isNotEmpty() },
+        existingInstall = { fleet.store.hadHostsAtStart },
     )
     val onCollapsedPathsChange: (Set<String>) -> Unit = { paths ->
         ui.collapsedProjectPaths = paths

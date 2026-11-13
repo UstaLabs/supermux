@@ -75,17 +75,32 @@ private fun FrameSurface(frame: WebFrame, modifier: Modifier) {
 
 class WebFrameTest {
     /**
-     * The frame lies under the canvas: a transparent page's clear pixels show what is under it, the host page, not the
-     * app's content. With an underlay, the frame's own box is painted in it.
+     * The frame lies above the canvas: a transparent page shows the app's content through it, so its box takes no
+     * underlay and stays clear. An opaque page's box is the page's own colour.
      */
-    @Test fun aTransparentPagesFrameIsPaintedInItsUnderlay() {
+    @Test fun aTransparentPagesFrameStaysClear() {
         val frame = WebFrame()
         frame.setTheme(dark = false, transparent = true)
-        assertEquals("transparent", styleValue(frame.cut, "background-color"), "without one, as before")
-        frame.setTheme(dark = false, transparent = true, underlay = Color(0xFF336699))
-        assertEquals("rgb(51, 102, 153)", styleValue(frame.cut, "background-color"))
-        frame.setTheme(dark = true, transparent = false, underlay = Color(0xFF336699))
+        assertEquals("transparent", styleValue(frame.cut, "background-color"))
+        frame.setTheme(dark = true, transparent = false)
         assertEquals("canvas", styleValue(frame.cut, "background-color").lowercase(), "an opaque page paints its own")
+    }
+
+    /**
+     * A shown frame is never quite opaque: Chrome culls the canvas under an opaque layer at the layer's place mirrored
+     * top to bottom, which left a black band over the chat under a card ([SHOWN_OPACITY]).
+     */
+    @Test fun aShownFrameIsNeverOpaque() = runTest(timeout = 1.minutes) {
+        val (frame, iframe) = frameWithPage("shown")
+        frame.covered = false
+        TestViewport.show { FrameSurface(frame, Modifier.offset(40.dp, 40.dp).size(600.dp, 400.dp)) }
+        waitUntil("the page to load") { loadsOf(iframe) == 1 }
+        assertEquals("visible", styleValue(frame.outer, "visibility"))
+        val opacity = styleValue(frame.outer, "opacity").toDouble()
+        // Chrome keeps opacity in 8 bits: under 255 there, and a level at most off any colour.
+        assertTrue(kotlin.math.round(opacity * 255) == 254.0, "a shown frame at $opacity")
+        TestViewport.clear()
+        frame.remove()
     }
 
     private val page = Rect(40f, 40f, 640f, 440f)
@@ -343,7 +358,7 @@ class WebFrameTest {
         assertEquals("compose", hitAt(100.0, 100.0))
         frame.covered = false
         assertEquals("visible", styleValue(frame.outer, "visibility"))
-        assertEquals("1", styleValue(frame.outer, "opacity"))
+        assertEquals(SHOWN_OPACITY, styleValue(frame.outer, "opacity"))
         assertEquals("auto", styleValue(frame.cut, "pointer-events"))
         assertEquals("iframe:covered", hitAt(100.0, 100.0))
         TestViewport.clear()

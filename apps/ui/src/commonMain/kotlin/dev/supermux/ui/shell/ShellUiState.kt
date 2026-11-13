@@ -278,6 +278,35 @@ class ShellUiState {
     /** New-session UI: a detail-pane swap on a wide host, a pushed screen under Compact. */
     fun openLauncher(draftId: String? = null) = navigate(Route.NewSession(draftId.orEmpty()))
 
+    /** A one-shot "put the cursor in this chat's composer" (#134), consumed by the chat it names. */
+    var composerFocusFor by mutableStateOf<String?>(null)
+    private var launchFocusDone = false
+
+    /** At launch, with a [pointer], the chat the app opens on gets the cursor, once (#134, ADEMark). */
+    fun focusComposerOnLaunch(pointer: Boolean) {
+        if (launchFocusDone) return
+        launchFocusDone = true
+        val open = selectedId ?: return
+        if (pointer) composerFocusFor = open
+    }
+
+    // #128: decided once per launch, the first time the sessions are known.
+    private var firstRunDecided = false
+
+    /**
+     * With no sessions, the app opens on starting one (#128): the launcher, whose first-run step is "Where should your
+     * agents work?", instead of an empty "select a session" pane. Decided once per launch, when the sessions have
+     * [loaded]: someone with sessions is never taken anywhere (not even after archiving the last), closing the launcher
+     * keeps it closed, and a selection or another open page is left alone. True when it opened the launcher.
+     */
+    fun openLauncherOnFirstRun(loaded: Boolean, hasSessions: Boolean): Boolean {
+        if (firstRunDecided || !loaded) return false
+        firstRunDecided = true
+        if (hasSessions || selectedId != null || currentRoute !is Route.Home) return false
+        openLauncher()
+        return true
+    }
+
     /** New-session UI preselecting persistent project [projectId] of host [hostId]. */
     fun openLauncherInProject(hostId: String, projectId: String) =
         navigate(Route.NewSession(projectHostId = hostId, projectId = projectId))

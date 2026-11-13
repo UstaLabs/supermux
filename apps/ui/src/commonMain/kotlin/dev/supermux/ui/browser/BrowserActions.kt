@@ -27,6 +27,8 @@ class BrowserActions(
     val previewCookie: suspend () -> PreviewCookieDto? = { null },
     /** Whether this app runs on the host, so a `localhost` address is the host's own. */
     val onHost: Boolean = false,
+    /** #122 phase 4: the name of the session whose process listens on [port] on the host, or null. */
+    val portOwner: suspend (port: Int) -> String? = { null },
 )
 
 /** [BrowserActions] against one paired host. */
@@ -46,6 +48,7 @@ fun rememberBrowserActions(app: HostStore): BrowserActions = remember(app) {
         previewCookie = { cookies.get() },
         // A broker reached over loopback runs on this machine: a desktop that is the host reaches its own that way.
         onHost = TransportPolicy.isLoopback(app.baseUrl),
+        portOwner = { port -> runCatching { app.api.portOwner(port)?.sessionName }.getOrNull() },
     )
 }
 

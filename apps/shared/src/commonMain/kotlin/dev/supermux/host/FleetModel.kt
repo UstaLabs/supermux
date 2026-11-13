@@ -120,7 +120,9 @@ fun filterSessions(
 // ── Fixed OKLCH dot palette (shared so Android + iOS paint the identical color per slot) ──────────
 // Six fixed hues spread around the wheel; L/C tuned per theme for a legible small dot. Held FIXED
 // across any dynamic/wallpaper color — a host's dot color is its identity.
-private val HOST_HUES = doubleArrayOf(195.0, 300.0, 70.0, 22.0, 250.0, 150.0)
+// No red: the dot is a host's identity, and a red one reads as an error beside "Running" (#134, ADEMark). 110° took
+// 22°'s slot, so a host there changes colour once.
+private val HOST_HUES = doubleArrayOf(195.0, 300.0, 70.0, 110.0, 250.0, 150.0)
 
 /** Hue (degrees) for a badge color slot — wraps into the palette. */
 fun hostHueDegrees(colorIndex: Int): Double =

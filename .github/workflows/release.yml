@@ -1090,11 +1090,17 @@ jobs:
           IDENTITY=$(security find-identity -v -p codesigning "$MACOS_COMPOSE_KEYCHAIN" | awk -v label="$DEVELOPER_ID_APPLICATION" 'index($0, label) { print $2; exit }')
           res=apps/desktop/resources/macos-arm64
           for helper in supermux-broker tmux zmx mux-zmx-helper; do
-            codesign --force --options runtime --timestamp \
+            # The broker (a compiled Bun binary) dlopens native addons Bun extracts at runtime, which
+            # library validation refuses unless it carries its entitlements (entitlements.broker.plist).
+            ent=()
+            if [ "$helper" = supermux-broker ]; then ent=(--entitlements apps/desktop/entitlements.broker.plist); fi
+            codesign --force --options runtime --timestamp "${ent[@]}" \
               --keychain "$MACOS_COMPOSE_KEYCHAIN" \
               --sign "$IDENTITY" "$res/$helper"
             codesign --verify --strict --verbose=2 "$res/$helper"
           done
+          # Prove the broker kept them: a fresh Mac's first boot depends on disable-library-validation.
+          codesign -d --entitlements :- "$res/supermux-broker" | grep -q "com.apple.security.cs.disable-library-validation"
           # Signing rewrites zmx and mux-zmx-helper, and the broker refuses both unless their
           # sha256 matches zmx-manifest.json (src/core/terminal/zmx/helper.ts). Re-stamp the
           # two digests to the signed bytes; everything else in the manifest (zmx commit,
