@@ -9,8 +9,11 @@ import androidx.compose.runtime.produceState
 import com.sun.jna.NativeLibrary
 import com.sun.jna.Pointer
 import dev.supermux.desktop.overlay.MacOverlayNative
+import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /** NSWindowOcclusionStateVisible: some of the window can be seen. */
@@ -47,19 +50,23 @@ internal object MacCoverProbe : CoverProbe {
 /**
  * True while other windows cover the window (its NSWindow [handle]) entirely. Asked every [periodMs] while [watch]
  * (it is showing, not minimised, the screen seen). Focus says nothing: a panel that never takes focus can cover
- * the focused window.
+ * the focused window. The wait runs in [context], off the UI thread: there each `delay` is a Swing timer that
+ * wakes the event thread too.
  */
 @Composable
 internal fun rememberWindowCovered(
     handle: () -> Long,
     watch: Boolean,
     probe: CoverProbe? = if (isMacOs()) MacCoverProbe else null,
-    periodMs: Long = 1_000,
+    periodMs: Long = 2_000,
+    context: CoroutineContext = Dispatchers.IO,
 ): State<Boolean> = produceState(false, watch, probe) {
     value = false
     if (probe == null || !watch) return@produceState
-    while (true) {
-        value = probe.covered(handle()) ?: false
-        delay(periodMs)
+    withContext(context) {
+        while (true) {
+            value = probe.covered(handle()) ?: false
+            delay(periodMs)
+        }
     }
 }
