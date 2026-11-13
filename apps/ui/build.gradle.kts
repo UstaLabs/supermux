@@ -122,11 +122,6 @@ val generateI18n = tasks.register("generateI18n") {
             appendLine("    const val STRINGS = ${stringKeys.size}")
             appendLine("    const val PLURALS = ${pluralKeys.size}")
             appendLine("    val LANGUAGES: List<String> = listOf(${langs.keys.joinToString { q(it) }})")
-            appendLine("    /** Settings search finds its rows' labels by name; only `search_` keys can be looked up so. */")
-            appendLine("    fun searchKey(name: String): Int = when (name) {")
-            stringKeys.filter { it.startsWith("search_") }.forEach { appendLine("        ${q(it)} -> ${sIndex.getValue(it)}") }
-            appendLine("        else -> -1")
-            appendLine("    }")
             appendLine("}")
         }
         val file = keysOut.get().asFile.resolve("dev/supermux/ui/i18n/Keys.kt")

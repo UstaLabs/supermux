@@ -101,10 +101,6 @@ class CatalogTest {
         onNodeWithText("Ayarlar / Back").assertExists()
     }
 
-    @Test fun search_labels_are_found_by_name_and_nothing_else_is() {
-        assertTrue(I18nFiles.searchKey("search_general_theme") >= 0)
-        assertEquals(-1, I18nFiles.searchKey("settings_title"))
-    }
 
     @Test fun the_web_url_of_a_catalog_carries_its_version_and_nothing_else_changes() {
         assertTrue(versionedResourcePath("files/i18n/tr.txt").startsWith("files/i18n/tr.txt?v="))

@@ -101,6 +101,14 @@ fun localized(key: StringKey): String {
     return lookup(key, l.chosen, l.english)
 }
 
+/** [localized] with one placeholder: the commonest shape, kept off the vararg so no call site builds an array. */
+@Composable
+@ReadOnlyComposable
+fun localized(key: StringKey, arg: Any): String {
+    val l = loadedLanguage()
+    return formatCatalogText(lookup(key, l.chosen, l.english), arrayOf(arg))
+}
+
 /** [localized] with `%1$s` / `%1$d` placeholders filled from [args]. */
 @Composable
 @ReadOnlyComposable
@@ -109,22 +117,20 @@ fun localized(key: StringKey, vararg args: Any): String {
     return formatCatalogText(lookup(key, l.chosen, l.english), args)
 }
 
+/** A count's string whose only placeholder is the count itself (the commonest shape: `localizedPlural(k, n, n)`). */
+@Composable
+@ReadOnlyComposable
+fun localizedPlural(key: PluralKey, count: Int, arg: Any): String {
+    val l = loadedLanguage()
+    return formatCatalogText(lookupPlural(key, l.language, count, l.chosen, l.english), arrayOf(arg))
+}
+
 /** A count's string in the app's language, with that language's plural rules. */
 @Composable
 @ReadOnlyComposable
 fun localizedPlural(key: PluralKey, count: Int, vararg args: Any): String {
     val l = loadedLanguage()
     return formatCatalogText(lookupPlural(key, l.language, count, l.chosen, l.english), args)
-}
-
-/** A Settings search label (a `search_` key) looked up by name, or null when there is no such key. */
-@Composable
-@ReadOnlyComposable
-fun localizedOrNull(name: String): String? {
-    val id = I18nFiles.searchKey(name)
-    if (id < 0) return null
-    val l = loadedLanguage()
-    return lookup(StringKey(id), l.chosen, l.english)
 }
 
 /** Each option's label in the app's language, looked up once so a plain `(T) -> String` (a kit's optionLabel) can read it. */
