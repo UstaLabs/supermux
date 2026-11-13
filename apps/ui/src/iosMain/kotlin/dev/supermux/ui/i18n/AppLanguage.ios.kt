@@ -14,8 +14,11 @@ internal actual fun applyPlatformLanguage(tag: String?) {
 }
 
 /** The device's own list (the global domain), not this app's override, which persists across launches. */
-internal actual fun systemLanguage(): String {
-    val global = NSUserDefaults(suiteName = NSGlobalDomain).arrayForKey(APPLE_LANGUAGES)?.firstOrNull() as? String
+internal actual fun systemLanguage(): String = runCatching {
+    // Not NSUserDefaults(suiteName = NSGlobalDomain): Apple documents that as returning nil, and it crashed the app
+    // at launch (an NPE in ios-tests). The global domain's own list is read through persistentDomainForName.
+    val global = (NSUserDefaults.standardUserDefaults.persistentDomainForName(NSGlobalDomain)?.get(APPLE_LANGUAGES) as? List<*>)
+        ?.firstOrNull() as? String
     val tag = global ?: NSLocale.preferredLanguages.firstOrNull() as? String ?: "en"
-    return tag.substringBefore('-').substringBefore('_')
-}
+    tag.substringBefore('-').substringBefore('_')
+}.getOrDefault("en")
