@@ -847,6 +847,19 @@ jobs:
           "SIGNTOOL=$($st.FullName)" >> $env:GITHUB_ENV
       - name: Build the distributable image
         run: ./gradlew.bat :desktop:createDistributable --console=plain --no-daemon -PsupermuxVersion="${{ steps.ver.outputs.version }}"
+      - name: Highlight a file with the packaged editor (#138)
+        # The load test above runs in Gradle's JDK. This runs the IMAGE's own runtime and jars, as the installed app
+        # does: the grammar library loads from the jar and highlights, or the release fails here instead of every
+        # Windows editor silently showing plain text.
+        shell: pwsh
+        run: |
+          $image = "desktop/build/compose/binaries/main/app"
+          $java = @(Get-ChildItem $image -Recurse -File -Filter java.exe | Where-Object { $_.Directory.Name -eq "bin" -and $_.Directory.Parent.Name -eq "runtime" })
+          if ($java.Count -ne 1) { throw "expected one runtime\bin\java.exe in the app image, found $($java.Count)" }
+          $appDir = Join-Path $java[0].Directory.Parent.Parent.FullName "app"
+          if (-not @(Get-ChildItem $appDir -File -Filter "editor-syntax*.jar")) { throw "no editor-syntax jar in $appDir" }
+          & $java[0].FullName -cp "$appDir\*" dev.supermux.editor.syntax.SyntaxSelfCheck
+          if ($LASTEXITCODE -ne 0) { throw "the packaged editor cannot highlight on Windows (see above)" }
       # #116: our own Certum SimplySign client (scripts/certum-sign) logs in once per step with the account's e-mail and
       # a one-time code from the seed; signtool's digest mode builds each signature and adds Certum's RFC 3161 timestamp.
       - name: Sign the host helpers and the launcher in the app image
