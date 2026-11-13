@@ -1154,7 +1154,10 @@ jobs:
           # -version maps the archive but never loads an app class, and rc.6 passed it yet died at launch (a sealing
           # violation through the archive). So launch the packaged app itself for 20 s: it must still be alive and must
           # have a main window, not an error dialog. Unlike a missing archive, a crash at launch fails the job.
-          "$(ls -d "$MNT"/*.app)/Contents/MacOS/Supermux Desktop" > "$RUNNER_TEMP/launch.txt" 2>&1 &
+          # From a ditto copy, the way a user installs it (ditto keeps the mtimes the archive checks).
+          LAUNCH_DIR="$RUNNER_TEMP/launch-check"; rm -rf "$LAUNCH_DIR"; mkdir -p "$LAUNCH_DIR"
+          ditto "$(ls -d "$MNT"/*.app)" "$LAUNCH_DIR/Supermux Desktop.app"
+          "$LAUNCH_DIR/Supermux Desktop.app/Contents/MacOS/Supermux Desktop" > "$RUNNER_TEMP/launch.txt" 2>&1 &
           APP_PID=$!
           sleep 20
           # rc.6's failure was an error dialog (740x173) and no main window, so "alive" alone is not enough.
@@ -1166,7 +1169,7 @@ jobs:
             kill "$APP_PID" 2>/dev/null; hdiutil detach "$MNT" -force -quiet; exit 1
           fi
           echo "the packaged app is up after 20 s"
-          kill "$APP_PID"; sleep 5; pkill -f "$MNT" || true
+          kill "$APP_PID"; sleep 5; pkill -f "$LAUNCH_DIR" || true
           hdiutil detach "$MNT" -quiet || hdiutil detach "$MNT" -force -quiet
       - name: Assert the packaged client engine
         # The DMG has to carry the Ghostty JNI dylib the app loads to draw a terminal, whether or
