@@ -44,6 +44,12 @@ class WhatsNewCardTest {
         onNodeWithText("8 new things you can do.").assertExists()
     }
 
+    @Test fun the_card_names_the_version_the_app_was_updated_to_not_its_edition() = runComposeUiTest {
+        // a 0.18.1 build shows 0.18.0's edition: it was updated to 0.18.1
+        setPlatformContent { WhatsNewCard(WhatsNewOffer("0.18.0", 7, ReleasePlatform.Mac, appVersion = "0.18.1"), onExplore = {}, onDismiss = {}) }
+        onNodeWithText("Updated to v0.18.1").assertExists()
+    }
+
     @Test fun one_thing_is_one_thing() = runComposeUiTest {
         setPlatformContent { WhatsNewCard(WhatsNewOffer("0.17.8", 1, ReleasePlatform.IPhone), onExplore = {}, onDismiss = {}) }
         onNodeWithText("1 new thing you can do on this iPhone.").assertExists()

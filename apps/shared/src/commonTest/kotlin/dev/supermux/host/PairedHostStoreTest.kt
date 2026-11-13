@@ -25,6 +25,16 @@ class PairedHostStoreTest {
     private fun store(vararg h: PairedHost) =
         PairedHostStore(FakePersistence(h.toMutableList())) { "gen-${counter++}" }
 
+    // What's new (#90): a first install pairs "This computer" in its very first launch (the desktop host wizard), so
+    // "has hosts now" can't tell an install from an update; what was stored when the app started can.
+    @Test fun itKnowsWhetherItHadHostsWhenTheAppStarted() {
+        val fresh = store()
+        fresh.add(displayName = "This computer", token = "t", hostId = "local")
+        assertEquals(false, fresh.hadHostsAtStart, "a host paired during this launch is not an earlier install")
+        val earlier = store(PairedHost(recordId = "r1", hostId = "h", displayName = "box", token = "t"))
+        assertEquals(true, earlier.hadHostsAtStart)
+    }
+
     @Test fun addAppendsAndPersists() {
         val s = store()
         s.add(displayName = "box", token = "t", relayUrl = "https://h-x.relay.supermux.dev", hostId = "x")

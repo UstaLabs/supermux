@@ -67,8 +67,11 @@ import org.jetbrains.compose.resources.StringResource
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.i18n.localizedPlural
 
-/** What the card offers: the newest edition's [version] and how many of its chapters [platform] has. */
-data class WhatsNewOffer(val version: String, val chapters: Int, val platform: ReleasePlatform?)
+/**
+ * What the card offers: the newest edition's [version] and how many of its chapters [platform] has. [appVersion] is
+ * the version the app was updated to, which the card names: a 0.18.1 build shows 0.18.0's edition.
+ */
+data class WhatsNewOffer(val version: String, val chapters: Int, val platform: ReleasePlatform?, val appVersion: String? = null)
 
 private fun ReleasePlatform.place(): StringResource = when (this) {
     ReleasePlatform.Mac -> Res.string.whatsnew_place_mac
@@ -114,7 +117,7 @@ private fun WhatsNewCardBody(offer: WhatsNewOffer, onExplore: () -> Unit, onDism
             Icon(Icons.Outlined.Redeem, contentDescription = null, tint = cs.onSurface, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(10.dp))
             Text(
-                localized(Res.string.whatsnew_card_title, offer.version),
+                localized(Res.string.whatsnew_card_title, offer.appVersion ?: offer.version),
                 color = cs.onSurface,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Medium,
@@ -163,6 +166,7 @@ private fun WhatsNewCardBody(offer: WhatsNewOffer, onExplore: () -> Unit, onDism
 @Stable
 class WhatsNewState internal constructor(
     private val tracker: WhatsNewTracker,
+    private val currentVersion: String,
     private val platform: ReleasePlatform?,
     private val load: suspend (String) -> String,
     private val scope: CoroutineScope,
@@ -177,7 +181,7 @@ class WhatsNewState internal constructor(
         val newest = offered.firstOrNull() ?: return
         val chapters = parseEdition(runCatching { load(newest) }.getOrDefault(""))?.chaptersFor(platform)?.size ?: return
         editions = offered
-        offer = WhatsNewOffer(newest, chapters, platform)
+        offer = WhatsNewOffer(newest, chapters, platform, appVersion = currentVersion)
     }
 
     /** Opened or dismissed: the card goes, and this version isn't offered again on this device. */
@@ -187,7 +191,10 @@ class WhatsNewState internal constructor(
     }
 }
 
-/** [WhatsNewState] for this launch; nothing where [platform] is unknown. [existingInstall] is asked once: does the device already have machines paired? */
+/**
+ * [WhatsNewState] for this launch; nothing where [platform] is unknown. [existingInstall] is asked once: did the device
+ * already have machines paired when the app started (not now: a first install pairs one during its first launch)?
+ */
 @Composable
 fun rememberWhatsNew(
     settings: SettingsStore,
@@ -199,7 +206,7 @@ fun rememberWhatsNew(
 ): WhatsNewState {
     val scope = rememberCoroutineScope()
     val state = remember(settings, currentVersion, platform) {
-        WhatsNewState(WhatsNewTracker(settings, currentVersion, editions), platform, load, scope)
+        WhatsNewState(WhatsNewTracker(settings, currentVersion, editions), currentVersion, platform, load, scope)
     }
     // A build that doesn't say which it is gets nothing: every edition is written per platform.
     LaunchedEffect(state) { if (currentVersion.isNotBlank() && platform != null) state.start(existingInstall()) }
