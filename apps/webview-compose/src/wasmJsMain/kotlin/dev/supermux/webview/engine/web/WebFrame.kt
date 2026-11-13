@@ -18,10 +18,11 @@ private var topZ = 0
  * headless, with SwiftShader's GL and with software compositing) culls the WebGL canvas under an opaque layer at the
  * layer's place mirrored top to bottom: a card at y 217–517 of a 956 px window took the canvas out at
  * 439–739, and what the card didn't cover of that, 517–739, showed the host page's black over the next message. A
- * page that paints its own background (an opaque page, or a card's) made its frame opaque all the same. 0.999 changes
- * no colour by a level.
+ * page that paints its own background (an opaque page, or a card's) made its frame opaque all the same. Chrome keeps
+ * the opacity in 8 bits: 0.999 rounds to 255 and is opaque still; 0.996 is 254, a level at most off any colour.
+ * Checked from the screen by `browser-check/frame-over-canvas.test.ts`.
  */
-internal const val SHOWN_OPACITY = "0.999"
+internal const val SHOWN_OPACITY = "0.996"
 
 /**
  * One engine's place on the page (spec §6, §7): [outer], a div in a viewport's layer, and [cut] inside it, which holds

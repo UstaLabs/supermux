@@ -914,9 +914,11 @@ measured the risky parts first. The numbers are below.
   - A page is placed in the same layout pass that moves its view, and clipped to what its scroll container shows.
   - It is never moved to another parent, because an iframe that moves reloads. Compose's `HtmlElementView`
     re-inserts its element when Compose stops placing it, and that reloaded pages in the test.
-  - A shown frame is at opacity 0.999, never 1. Chrome (148) culls the canvas under an opaque layer at the layer's
+  - A shown frame is at opacity 0.996, never 1. Chrome (148) culls the canvas under an opaque layer at the layer's
     place mirrored top to bottom: a card at y 217–517 of a 956 px window blacked out the canvas from 517 to 739, over
-    the next message. An opaque page, or a box painted any opaque colour, did it alike; 0.999 changes no colour.
+    the next message. An opaque page, or a box painted any opaque colour, did it alike. Chrome keeps opacity in 8
+    bits, so 0.999 is still opaque; 0.996 is 254 of 255. `WEBVIEW_PIXELS=1 bun test apps/webview-compose/browser-check`
+    reads it from the screen.
 - **Overlays.** Compose can't draw over the page, so the page cuts out what is drawn over it.
   - Every `Modifier.webViewOverlay` becomes a hole. It uses `clip-path`, which clips clicks too.
   - A `Modifier.webViewScrim` dims the page, and the page takes no clicks under it.
