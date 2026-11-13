@@ -347,6 +347,9 @@ internal fun PhoneNewTabPage(
 /** A session closed in this workspace, as its row shows it. */
 internal data class ClosedSessionRow(val id: String, val name: String, val agent: String, val ago: ClosedAgo)
 
+/** The fold's glyph animation's name: no UI text. */
+private const val CLOSED_GLYPH = "closed-glyph"
+
 /** How long ago a session was closed, read like a clock. */
 internal sealed interface ClosedAgo {
     data object JustNow : ClosedAgo
@@ -393,7 +396,7 @@ private fun RecentlyClosedFold(count: Int, unfolded: Boolean, selected: Boolean,
     val hovered by source.collectIsHoveredAsState()
     val pressed by source.collectIsPressedAsState()
     LaunchedEffect(hovered) { if (hovered) onHover() }
-    val glyph by animateColorAsState(if (selected) cs.primary else cs.onSurfaceVariant, Motion.stateChange(), label = "closed-glyph") // i18n-ok: an animation label
+    val glyph by animateColorAsState(if (selected) cs.primary else cs.onSurfaceVariant, Motion.stateChange(), label = CLOSED_GLYPH)
     Row(
         Modifier
             .fillMaxWidth()
