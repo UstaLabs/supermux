@@ -263,8 +263,8 @@ fun DiffView(
         val b = baseName
         if (f.staged != "conflict" || gitWrite == null || b == null) null
         else { {
-            val ask = askAgent?.let { a -> { a(localized(Str.git_agent_resolve_prompt, b, f.path)) } }
-            ConflictChoices(f.path, b, !staging, { side -> mergeOp("resolve", repoId, f.path, side) }, ask?.let { { it() } })
+            val prompt = localized(Str.git_agent_resolve_prompt, b, f.path)
+            ConflictChoices(f.path, b, !staging, { side -> mergeOp("resolve", repoId, f.path, side) }, askAgent?.let { a -> { a(prompt) } })
         } }
     }
     val includeBox: (String, DiffFile) -> (@Composable () -> Unit)? = { repoId, f ->
