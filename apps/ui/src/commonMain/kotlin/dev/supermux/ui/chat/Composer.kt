@@ -50,6 +50,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -705,6 +706,8 @@ fun Composer(
     onMicError: ((String?) -> Unit)? = null,
     /** A muted strip inside the card under the toolbar — chat puts the branch + detail footer here. */
     tray: (@Composable () -> Unit)? = null,
+    /** Lets the screen put the cursor in the message (the launcher, once a first project is chosen: #128). */
+    focusRequester: androidx.compose.ui.focus.FocusRequester? = null,
 ) {
     val platform = LocalPlatform.current
     val pointer = LocalPointerAvailable.current
@@ -1517,6 +1520,7 @@ fun Composer(
                     )
                 }
                 val fieldModifier = Modifier
+                    .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
                     .fillMaxWidth()
                     .padding(horizontal = 10.dp)
                     .heightIn(min = chrome.fieldMinHeight, max = chrome.fieldMaxHeight)

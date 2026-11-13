@@ -22,6 +22,11 @@ data class HostState(
      * lands, the sidebar cannot tell an archived-only project from a new empty one, so it hides both.
      */
     val archivedPending: Boolean = false,
+    /**
+     * The broker's first snapshot has arrived, so [sessions] is what it holds, not the empty list of a store that has
+     * heard nothing yet (#128: "no sessions" opens the launcher only once this is known).
+     */
+    val snapshotLoaded: Boolean = false,
     val messages: Map<String, List<LogEntry>> = emptyMap(),
     /**
      * Sessions whose [messages] hold the full page the broker serves, not just a snapshot tail
