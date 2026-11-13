@@ -450,11 +450,17 @@ val PACKAGED_NATIVE_ROOTS = listOf("dev/supermux/terminal/native/", "dev/supermu
 /**
  * #133: the AppCDS training run. Starts the packaged app the way its jpackage launcher would (the image's own
  * runtime, the .cfg's classpath and java-options with $APPDIR expanded) plus -XX:ArchiveClassesAtExit, lets it
- * reach its first screen, then stops it with SIGTERM: the JVM writes the archive while it exits. The archive is
+ * compose its main window and settle, then stops it with SIGTERM: the JVM writes the archive while it exits. The archive is
  * then checked with -Xshare:on (which refuses to start on any mismatch) before it goes into [appLibDir].
  * Never fails the build: on any problem it logs a warning and the app ships without CDS, as before.
  */
-fun trainAppCds(appRoot: File, appLibDir: File, trainingSeconds: Long, log: org.gradle.api.logging.Logger): Boolean {
+fun trainAppCds(
+    appRoot: File,
+    appLibDir: File,
+    trainingSeconds: Long,
+    settleSeconds: Long,
+    log: org.gradle.api.logging.Logger,
+): Boolean {
     val cfg = appLibDir.listFiles { f -> f.name.endsWith(".cfg") }?.singleOrNull()
     val javaBin = appRoot.resolve("Contents/runtime/Contents/Home/bin/java")
     if (cfg == null || !javaBin.canExecute()) {
@@ -479,7 +485,18 @@ fun trainAppCds(appRoot: File, appLibDir: File, trainingSeconds: Long, log: org.
     val app = ProcessBuilder(listOf(javaBin.absolutePath) + options + listOf(
         "-XX:ArchiveClassesAtExit=${archive.absolutePath}", "-cp", classpath, mainClass,
     )).redirectErrorStream(true).redirectOutput(logFile).start()
-    val exitedEarly = app.waitFor(trainingSeconds, TimeUnit.SECONDS)
+    // rc.6's archive came from a run that never composed the main window, so the window chrome's JBR API classes
+    // were missing and the real launch read them from the jar. Wait for the chrome's own breadcrumb (MacWindowChrome
+    // prints "[MacWindowChrome] …" once the main window composes), then let the app settle before dumping.
+    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(trainingSeconds)
+    var composed = false
+    while (!composed && app.isAlive && System.nanoTime() < deadline) {
+        Thread.sleep(500)
+        composed = logFile.isFile && logFile.readLines().any { it.startsWith("[MacWindowChrome]") }
+    }
+    if (composed) Thread.sleep(TimeUnit.SECONDS.toMillis(settleSeconds))
+    val exitedEarly = !app.isAlive
+    log.lifecycle("AppCDS: training run composed the main window: $composed")
     val children = app.toHandle().descendants().toList()
     if (!exitedEarly) app.destroy() // SIGTERM: a normal JVM exit, which writes the archive
     val exited = app.waitFor(120, TimeUnit.SECONDS)
@@ -498,8 +515,11 @@ fun trainAppCds(appRoot: File, appLibDir: File, trainingSeconds: Long, log: org.
         log.warn("AppCDS: the trained archive does not map (-Xshare:on failed); shipping without CDS:\n$verifyOut")
         return false
     }
+    if (!composed) {
+        log.warn("AppCDS: the training run never composed the main window, so the archive covers startup only. Last output:\n$tail")
+    }
     archive.copyTo(appLibDir.resolve(appCdsArchiveName), overwrite = true)
-    log.lifecycle("AppCDS: trained ${appCdsArchiveName} (${archive.length() / 1_048_576} MB) in ${trainingSeconds}s")
+    log.lifecycle("AppCDS: trained $appCdsArchiveName (${archive.length() / 1_048_576} MB), main window composed: $composed")
     work.deleteRecursively()
     return true
 }
@@ -711,7 +731,8 @@ afterEvaluate {
             val trained = trainCds &&
                 trainAppCds(
                     appRoot.toFile(), appLibDir.toFile(),
-                    (project.findProperty("smAppCdsTrainSeconds") as String?)?.toLongOrNull() ?: 30L, logger,
+                    (project.findProperty("smAppCdsTrainSeconds") as String?)?.toLongOrNull() ?: 120L,
+                    (project.findProperty("smAppCdsSettleSeconds") as String?)?.toLongOrNull() ?: 20L, logger,
                 )
             if ((rewritten.isNotEmpty() || trained) && macBuildHost) {
                 // jpackage already sealed the bundle; a rewritten jar or the new archive under Contents/app
