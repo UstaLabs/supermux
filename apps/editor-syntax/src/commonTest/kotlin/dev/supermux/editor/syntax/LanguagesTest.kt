@@ -8,6 +8,18 @@ import kotlin.test.assertTrue
 class LanguagesTest {
     private val registry = LanguageRegistry.default
 
+    // #138: generated on the Windows runner, every key was "kotlin\highlights", so query() found nothing and every
+    // file on Windows was plain text. The keys must be "<lang>/<kind>" whichever OS ran the build.
+    @Test fun bundledQueryKeysUseForwardSlashesAndResolve() {
+        assertTrue(BundledQueries.keys.isNotEmpty())
+        for (key in BundledQueries.keys) {
+            assertTrue(Regex("[a-z_]+/(highlights|injections|folds)").matches(key), "bundled query key $key")
+        }
+        for (language in listOf("kotlin", "javascript", "python", "haskell")) {
+            assertTrue(registry.query(language, QueryKind.HIGHLIGHTS) != null, "no highlights query for $language")
+        }
+    }
+
     /**
      * Transcribed from the old CodeMirror bundle's langFor `switch (ext)` (deleted in the M5
      * cutover): every extension it recognised, with the grammar it gets here (null: no tree-sitter

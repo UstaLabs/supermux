@@ -160,7 +160,7 @@ abstract class GenerateBundledQueries : DefaultTask() {
         val out = outputDir.get().asFile
         out.deleteRecursively()
         val pkg = File(out, "dev/supermux/editor/syntax").apply { mkdirs() }
-        val files = root.walkTopDown().filter { it.isFile && it.extension == "scm" }.sortedBy { it.relativeTo(root).path }.toList()
+        val files = root.walkTopDown().filter { it.isFile && it.extension == "scm" }.sortedBy { it.relativeTo(root).invariantSeparatorsPath }.toList()
         fun lit(s: String) = buildString {
             append('"')
             for (c in s) when {
@@ -180,10 +180,10 @@ abstract class GenerateBundledQueries : DefaultTask() {
         sb.appendLine("package dev.supermux.editor.syntax").appendLine()
         sb.appendLine("internal object BundledQueries {")
         sb.appendLine("    /** Every bundled query, as \"<lang>/<kind>\". */")
-        sb.appendLine("    val keys: List<String> = listOf(" + files.joinToString(", ") { lit(it.relativeTo(root).path.removeSuffix(".scm")) } + ")")
+        sb.appendLine("    val keys: List<String> = listOf(" + files.joinToString(", ") { lit(it.relativeTo(root).invariantSeparatorsPath.removeSuffix(".scm")) } + ")")
         sb.appendLine()
         sb.appendLine("    fun get(language: String, kind: QueryKind): String? = when (language + \"/\" + kind.file) {")
-        files.forEachIndexed { i, f -> sb.appendLine("        ${lit(f.relativeTo(root).path.removeSuffix(".scm"))} -> Q$i.text") }
+        files.forEachIndexed { i, f -> sb.appendLine("        ${lit(f.relativeTo(root).invariantSeparatorsPath.removeSuffix(".scm"))} -> Q$i.text") }
         sb.appendLine("        else -> null")
         sb.appendLine("    }")
         sb.appendLine("}")
