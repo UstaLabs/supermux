@@ -21,6 +21,18 @@ function num(value: unknown): number | undefined {
  * Claude's command list (the `initialize` / `reload_plugins` reply and the `commands_changed` push):
  * `{name, description, argumentHint, aliases, builtin}` rows. Undefined when `value` is not a list.
  */
+/**
+ * An initialize (or reload_plugins) reply as it goes to the host: everything but the signed-in `account` (its e-mail,
+ * organization, plan), which the reply carries and which no event, record, log or client may hold (#129).
+ */
+export function initializeReplyForHost(reply: unknown): unknown {
+  const outer = rec(reply)
+  const inner = rec(outer?.response)
+  if (!outer || !inner || !("account" in inner)) return reply
+  const { account: _account, ...rest } = inner
+  return { ...outer, response: rest }
+}
+
 /** The models an initialize reply lists (Claude Code 2.1.308's shape); undefined when it lists none. */
 function claudeModels(value: unknown): AgentModelEntry[] | undefined {
   if (!Array.isArray(value)) return undefined

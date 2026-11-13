@@ -1,7 +1,7 @@
 // #129: Claude's model list comes from Claude Code itself: the `models` its initialize reply lists, read with its own
 // login (on a Mac, its own Keychain item), so the broker needs no credential and can never raise a prompt.
 import { afterEach, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "fs"
+import { mkdtempSync, readFileSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { EventEmitter } from "events"
@@ -50,7 +50,8 @@ function fakeClaude(answer: "models" | "silent" | "exit", models: unknown[] = []
       write(line) {
         calls.written.push(line)
         const req = JSON.parse(line)
-        if (answer === "models") queueMicrotask(() => onLine(JSON.stringify({ type: "control_response", response: { subtype: "success", request_id: req.request_id, response: { models } } })))
+        // As Claude Code answers: the account rides along with the models (#129: it must never be kept).
+        if (answer === "models") queueMicrotask(() => onLine(JSON.stringify({ type: "control_response", response: { subtype: "success", request_id: req.request_id, response: { models, account: ACCOUNT } } })))
         if (answer === "exit") queueMicrotask(() => onExit())
       },
       onLine(fn) { onLine = fn },
@@ -60,6 +61,8 @@ function fakeClaude(answer: "models" | "silent" | "exit", models: unknown[] = []
   }
   return { spawn, calls }
 }
+
+const ACCOUNT = { email: "someone@example.com", organization: "Example Org", subscriptionType: "Claude Team", apiProvider: "firstParty" }
 
 const RAW = [
   { value: "opus", displayName: "Opus 5.5", resolvedModel: "claude-opus-5-5", supportedEffortLevels: ["low", "high"], supportsFastMode: true },
@@ -90,6 +93,17 @@ test("a claude that never answers, or exits, gives an empty list and is stopped"
     expect(await discoverClaudeModelsViaCli({ spawn: fake.spawn, timeoutMs: 50 })).toEqual([])
     expect(fake.calls.killed).toBe(1)
   }
+})
+
+// Muxie: the reply's account (e-mail, organization) is never kept, logged or shipped; only the models are.
+test("only the models are kept: the reply's account never reaches the learned record", async () => {
+  const dir = learnedDir()
+  const learned = new LearnedModels(dir)
+  const fake = fakeClaude("models", RAW)
+  await discoverClaude({ learned, now: () => 0, cli: () => discoverClaudeModelsViaCli({ spawn: fake.spawn, timeoutMs: 1000 }), api: async () => [], accounts: async () => [] })
+  const record = readFileSync(join(dir, "claude.json"), "utf8")
+  for (const leak of [ACCOUNT.email, ACCOUNT.organization, "email", "organization", "subscriptionType"]) expect(record).not.toContain(leak)
+  expect(JSON.parse(record).models.map((m: { id: string }) => m.id)).toEqual(["opus", "sonnet"])
 })
 
 test("discovery order: a fresh list from a live session; else the control-only claude (learned); else the API", async () => {
