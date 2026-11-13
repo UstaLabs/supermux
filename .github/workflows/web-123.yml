@@ -1,0 +1,49 @@
+# Scratch, NOT for merge (#123 first-frame before/after the i18n catalog): builds the staged web
+# bundle at two exact commits and uploads each. Runs only on pushes to this scratch branch.
+name: web-123
+on:
+  push:
+    branches: [web-123]
+jobs:
+  web:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: before-d33a15a8e, sha: d33a15a8e8d3d8fac790073cac4167d0b9840211 }
+          - { name: after-c82feb7b5, sha: c82feb7b5173f828f055962863088f6d31ca7302 }
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.sha }}
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Cache the zig toolchain and the terminal wasm tree
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/zig
+            apps/terminal-core/build
+          key: terminal-wasm-${{ runner.os }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json') }}
+          restore-keys: terminal-wasm-${{ runner.os }}-
+      - run: bash apps/terminal-core/wasm/build.sh
+        env:
+          ST_ZIG_JOBS: "4"
+      - working-directory: apps
+        run: ./gradlew :web:stageForBroker --console=plain 2>&1 | tee ../stageForBroker.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-static-${{ matrix.name }}
+          path: src/channels/web/static
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: log-${{ matrix.name }}
+          path: stageForBroker.log
+          retention-days: 3
