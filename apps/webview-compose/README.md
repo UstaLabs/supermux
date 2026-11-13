@@ -93,10 +93,11 @@ Runtime ([Windows](#windows)), and in a browser, this shows the demo, live once 
     (`Default`, `Named(id)` or `Ephemeral`; unset, `Html` gets `Ephemeral` and the rest `Default`),
     `mediaPlaybackRequiresGesture` and `bridgeOrigins`. Each profile and media setting in use splits the pool
     ([below](#the-pool-and-memory)). `underlay`: the opaque colour your app draws behind a view with
-    `transparentBackground`. Where the page lies under the Compose canvas (macOS, iOS, the web) its transparent pixels
-    show what is under the canvas, not your content: a Mac window's black backing, say. The engine paints the underlay
+    `transparentBackground`. Where the page lies under the Compose canvas (macOS, iOS) its transparent pixels show
+    what is under the canvas, not your content: a Mac window's black backing, say. The engine paints the underlay
     there from the lease's start, and the runtime's cover of the page lies on it. On Android, Windows and Linux the page
-    is drawn in Compose's order and is truly transparent; there it changes nothing you'd see. A new underlay is taken
+    is drawn in Compose's order, and on the web its frame lies above the canvas: it is truly transparent, and the
+    underlay changes nothing you'd see. A new underlay is taken
     mid-lease, as a theme is. On Windows, `mediaPlaybackRequiresGesture = false` is the profile's autoplay
     setting for each origin the engine shows, shared by the engines of that profile on that origin ([Windows](#windows)).
   - `activation`: when the view goes live; `Activation.WhenVisible()` unless you say otherwise ([Activation](#activation)).
@@ -913,6 +914,9 @@ measured the risky parts first. The numbers are below.
   - A page is placed in the same layout pass that moves its view, and clipped to what its scroll container shows.
   - It is never moved to another parent, because an iframe that moves reloads. Compose's `HtmlElementView`
     re-inserts its element when Compose stops placing it, and that reloaded pages in the test.
+  - A shown frame is at opacity 0.999, never 1. Chrome (148) culls the canvas under an opaque layer at the layer's
+    place mirrored top to bottom: a card at y 217–517 of a 956 px window blacked out the canvas from 517 to 739, over
+    the next message. An opaque page, or a box painted any opaque colour, did it alike; 0.999 changes no colour.
 - **Overlays.** Compose can't draw over the page, so the page cuts out what is drawn over it.
   - Every `Modifier.webViewOverlay` becomes a hole. It uses `clip-path`, which clips clicks too.
   - A `Modifier.webViewScrim` dims the page, and the page takes no clicks under it.
