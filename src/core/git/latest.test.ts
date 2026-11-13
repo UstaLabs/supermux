@@ -19,6 +19,7 @@ function setup() {
   const root = mkdtempSync(join(tmpdir(), "mux-latest-"))
   const repo = join(root, "repo"), wt = join(root, "wt")
   execFileSync("git", ["init", "-q", "-b", "dev", repo]); git(repo, "config", "user.email", "t@t"); git(repo, "config", "user.name", "t")
+  git(repo, "config", "core.autocrlf", "false")   // Windows CI: files git writes keep "\n"
   put(repo, "a.txt", "one\ntwo\nthree\n"); put(repo, "b.txt", "b\n"); git(repo, "add", "."); git(repo, "commit", "-qm", "base")
   git(repo, "worktree", "add", "-q", "-b", "mux/chat", wt, "dev")
   return { repo, wt }

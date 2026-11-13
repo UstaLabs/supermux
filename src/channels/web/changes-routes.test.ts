@@ -150,7 +150,7 @@ test("a nested repo is listed with its repo path and its blob loads", async () =
   const res = await get(token, `/workspaces/ws-1/changes/blob?repo=sub&sha=${r.files[0].baseBlob}`)
   expect(res.status).toBe(200)
   expect(await res.text()).toBe("old\n")
-})
+}, 30_000)   // two repos of real git: slow on Windows CI
 
 test("a matching If-None-Match is 304 with the cache headers and no body", async () => {
   const { dir, base, token } = await setup()

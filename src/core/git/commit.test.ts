@@ -13,6 +13,7 @@ const git = (d: string, ...a: string[]) => execFileSync("git", ["-C", d, ...a], 
 function repo() {
   const d = mkdtempSync(join(tmpdir(), "mux-commit-"))
   git(d, "init", "-q", "-b", "dev"); git(d, "config", "user.email", "t@t"); git(d, "config", "user.name", "t")
+  git(d, "config", "core.autocrlf", "false")   // Windows CI: files git writes keep "\n"
   writeFileSync(join(d, "a.txt"), "1\n"); git(d, "add", "."); git(d, "commit", "-qm", "base")
   return d
 }

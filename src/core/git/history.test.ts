@@ -14,6 +14,7 @@ const commit = (d: string, f: string, t: string, m: string) => { writeFileSync(j
 function repo() {
   const d = mkdtempSync(join(tmpdir(), "mux-history-"))
   git(d, "init", "-q", "-b", "dev"); git(d, "config", "user.email", "t@t"); git(d, "config", "user.name", "Deniz")
+  git(d, "config", "core.autocrlf", "false")   // Windows CI: files git writes keep "\n"
   commit(d, "a.txt", "1\n", "Base one"); commit(d, "a.txt", "2\n", "Base two")
   git(d, "switch", "-q", "-c", "mux/chat")
   return d
