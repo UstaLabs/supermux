@@ -6,12 +6,7 @@ package dev.supermux.ui.session
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -84,30 +79,23 @@ internal fun AgentAvatar(
     val voice = if (listening || speaking) level.coerceIn(0f, 1f) else 0f
     val idle = look.states.idle
     val speed = state.speed ?: idle.speed ?: 3600
-    // Read inside the drawing, so a tick redraws without recomposing.
-    val clockOf: () -> Float
-    val bounceOf: () -> Float
-    if (timeMs != null) {
-        clockOf = { (timeMs % speed).toFloat() / speed * TAU }
-        bounceOf = {
-            val p = (timeMs % 1800L).toFloat() / 900f
-            FastOutSlowInEasing.transform(if (p <= 1f) p else 2f - p)
-        }
-    } else {
-        val t = rememberInfiniteTransition(label = "agent-avatar")
-        val clock = t.animateFloat(0f, TAU, infiniteRepeatable(tween(speed, easing = LinearEasing)), label = "clock")
-        val bounce = t.animateFloat(
-            0f, 1f, infiniteRepeatable(tween(900, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "bounce",
-        )
-        clockOf = { clock.value }
-        bounceOf = { bounce.value }
+    // Without a host's clock it keeps its own, capped like a rig avatar's (#108) and still while nobody
+    // can see the window (#132), never one redraw per screen refresh.
+    val live = LocalAvatarsLive.current
+    val ownFps = if (timeMs != null) 0 else avatarFps(if (online || listening) "idle" else "asleep", hovered || listening || speaking, live)
+    val ownClock = rememberAvatarClock(ownFps)
+    val time = timeMs ?: ownClock
+    val clockOf: () -> Float = { (time % speed).toFloat() / speed * TAU }
+    val bounceOf: () -> Float = {
+        val p = (time % 1800L).toFloat() / 900f
+        FastOutSlowInEasing.transform(if (p <= 1f) p else 2f - p)
     }
     val perk by animateFloatAsState(if ((hovered && online) || listening) 1f else 0f, spring(dampingRatio = 0.45f), label = "perk")
     val dim by animateFloatAsState(if (state.desaturate) 1f else 0f, tween(500), label = "dim")
 
     val blink = remember { Animatable(1f) }
-    LaunchedEffect(name, look.eyes.blink, blinking) {
-        if (!look.eyes.blink || !blinking) return@LaunchedEffect
+    LaunchedEffect(name, look.eyes.blink, blinking, live) {
+        if (!look.eyes.blink || !blinking || !live) return@LaunchedEffect
         val rnd = Random(name.hashCode())
         while (true) {
             delay(1800L + rnd.nextLong(3200))

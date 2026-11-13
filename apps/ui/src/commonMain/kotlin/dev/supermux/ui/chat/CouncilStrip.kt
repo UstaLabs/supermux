@@ -12,9 +12,7 @@ package dev.supermux.ui.chat
 
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -64,6 +62,7 @@ import dev.supermux.proto.CouncilMember
 import dev.supermux.proto.CouncilView
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.session.AgentLogo
+import dev.supermux.ui.session.rememberLiveLoop
 import dev.supermux.ui.theme.IconSize
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
@@ -215,13 +214,7 @@ private fun Avatar(c: CouncilView, m: CouncilMember, activity: String?) {
         contentAlignment = Alignment.Center,
     ) {
         if (working) {
-            val pulse = rememberInfiniteTransition(label = "council-strip-ring")
-            val alpha by pulse.animateFloat(
-                initialValue = 1f,
-                targetValue = 0.25f,
-                animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse),
-                label = "council-strip-ring-alpha",
-            )
+            val alpha by rememberLiveLoop(1f, 0.25f, infiniteRepeatable(tween(600), RepeatMode.Reverse), label = "council-strip-ring")
             Box(Modifier.size(26.dp).alpha(alpha).border(1.5.dp, cs.primary, CircleShape))
         } else {
             Box(Modifier.size(26.dp).border(1.dp, ring, CircleShape))
