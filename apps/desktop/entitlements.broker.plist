@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The hardened-runtime entitlements for the supermux-broker helper (a compiled Bun binary),
+  signed separately from the app in release.yml's "Sign host helper binaries" step.
+  • disable-library-validation — LOAD-BEARING. Bun extracts native addons (@resvg/resvg-js) at runtime
+    and dlopens them; they are not signed by our team, so with library validation on the dlopen is
+    refused ("different Team IDs") and the broker could not start on a fresh Mac (v0.17.0 – v0.18.0).
+  • allow-jit, allow-unsigned-executable-memory, disable-executable-page-protection,
+    allow-dyld-environment-variables — Bun's documented set for a compiled binary under the hardened runtime
+    (JavaScriptCore's JIT).
+  tmux, zmx and mux-zmx-helper load no third-party code and keep the plain hardened runtime.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-executable-page-protection</key>
+    <true/>
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>
