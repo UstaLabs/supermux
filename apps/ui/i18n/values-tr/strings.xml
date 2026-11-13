@@ -56,4 +56,23 @@
     <string name="saved_to_gallery">Galeri'ye kaydedildi</string>
     <string name="saved_to_downloads">İndirilenler'e kaydedildi</string>
     <string name="saved_file">%1$s kaydedildi</string>
+    <!-- #135: the New tab page's sessions closed in its workspace -->
+    <string name="new_tab_recently_closed">Son kapatılanlar</string>
+    <plurals name="new_tab_closed_count">
+        <item quantity="one">Bu çalışma alanında kapatılan %1$d oturum</item>
+        <item quantity="other">Bu çalışma alanında kapatılan %1$d oturum</item>
+    </plurals>
+    <string name="new_tab_closed_just_now">az önce</string>
+    <plurals name="new_tab_closed_minutes">
+        <item quantity="one">%1$d dk önce</item>
+        <item quantity="other">%1$d dk önce</item>
+    </plurals>
+    <plurals name="new_tab_closed_hours">
+        <item quantity="one">%1$d sa önce</item>
+        <item quantity="other">%1$d sa önce</item>
+    </plurals>
+    <plurals name="new_tab_closed_days">
+        <item quantity="one">dün</item>
+        <item quantity="other">%1$d gün önce</item>
+    </plurals>
 </resources>

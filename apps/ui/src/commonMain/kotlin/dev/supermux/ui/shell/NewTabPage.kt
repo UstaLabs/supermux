@@ -38,6 +38,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -71,6 +72,16 @@ import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Motion
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.localizedPlural
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.new_tab_closed_count
+import dev.supermux.ui.resources.new_tab_closed_days
+import dev.supermux.ui.resources.new_tab_closed_hours
+import dev.supermux.ui.resources.new_tab_closed_just_now
+import dev.supermux.ui.resources.new_tab_closed_minutes
+import dev.supermux.ui.resources.new_tab_recently_closed
+import dev.supermux.ui.session.AgentLogo
 import dev.supermux.workspace.NewViewKind
 import dev.supermux.ui.i18n.localized
 
@@ -95,16 +106,27 @@ internal fun NewTabPage(
     onPick: (NewViewKind) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    /** #135: the sessions closed in this workspace, newest first; folded under one row, none hides it. */
+    closed: List<ClosedSessionRow> = emptyList(),
+    onReopen: (sessionId: String) -> Unit = {},
 ) {
     val keyboard = LocalHardwareKeyboard.current && LocalPointerAvailable.current
     val touch = !LocalPointerAvailable.current
     var selected by remember { mutableIntStateOf(0) }
+    var unfolded by remember { mutableStateOf(false) }
+    // The rows ↑/↓ walk: the kinds, then the fold, then (unfolded) its sessions.
+    val foldAt = choices.size
+    val rowCount = choices.size + (if (closed.isEmpty()) 0 else 1 + if (unfolded) closed.size else 0)
     val focus = remember { FocusRequester() }
     // Not on touch: focus would bring up a soft keyboard nobody asked for.
     LaunchedEffect(Unit) { if (keyboard) runCatching { focus.requestFocus() } }
 
     fun pick(i: Int) {
-        if (opening == null) choices.getOrNull(i)?.let { onPick(it.kind) }
+        when {
+            i < choices.size -> if (opening == null) onPick(choices[i].kind)
+            i == foldAt -> unfolded = !unfolded
+            else -> closed.getOrNull(i - foldAt - 1)?.let { onReopen(it.id) }
+        }
     }
 
     val keys = Modifier.onPreviewKeyEvent { e ->
@@ -113,7 +135,7 @@ internal fun NewTabPage(
         val plain = !e.isMetaPressed && !e.isCtrlPressed && !e.isAltPressed
         when {
             digit != null && plain && digit < choices.size -> { pick(digit); true }
-            e.key == Key.DirectionDown -> { selected = (selected + 1).coerceAtMost(choices.size - 1); true }
+            e.key == Key.DirectionDown -> { selected = (selected + 1).coerceAtMost(rowCount - 1); true }
             e.key == Key.DirectionUp -> { selected = (selected - 1).coerceAtLeast(0); true }
             e.key == Key.Enter || e.key == Key.NumPadEnter -> { pick(selected); true }
             e.key == Key.Escape -> { onClose(); true }
@@ -146,6 +168,28 @@ internal fun NewTabPage(
                         onHover = { selected = i },
                         onClick = { pick(i) },
                     )
+                }
+                if (closed.isNotEmpty()) {
+                    Spacer(Modifier.height(14.dp))
+                    RecentlyClosedFold(
+                        count = closed.size,
+                        unfolded = unfolded,
+                        selected = selected == foldAt,
+                        touch = touch,
+                        onHover = { selected = foldAt },
+                        onClick = { pick(foldAt) },
+                    )
+                    if (unfolded) {
+                        closed.forEachIndexed { i, c ->
+                            ClosedSessionItem(
+                                c,
+                                selected = selected == foldAt + 1 + i,
+                                touch = touch,
+                                onHover = { selected = foldAt + 1 + i },
+                                onClick = { pick(foldAt + 1 + i) },
+                            )
+                        }
+                    }
                 }
                 if (keyboard) {
                     Spacer(Modifier.height(14.dp))
@@ -295,5 +339,126 @@ internal fun PhoneNewTabPage(
             }
         }
         NewTabPage(choices, workspace, branch, opening = null, onPick = onPick, onClose = onClose, modifier = Modifier.weight(1f))
+    }
+}
+
+// ── #135: the sessions closed in this workspace ─────────────────────────────────────────────────────
+
+/** A session closed in this workspace, as its row shows it. */
+internal data class ClosedSessionRow(val id: String, val name: String, val agent: String, val ago: ClosedAgo)
+
+/** How long ago a session was closed, read like a clock. */
+internal sealed interface ClosedAgo {
+    data object JustNow : ClosedAgo
+    data class Minutes(val n: Int) : ClosedAgo
+    data class Hours(val n: Int) : ClosedAgo
+    data class Days(val n: Int) : ClosedAgo
+}
+
+internal fun closedAgo(nowMs: Long, closedAtMs: Long): ClosedAgo {
+    val minutes = ((nowMs - closedAtMs).coerceAtLeast(0) / 60_000).toInt()
+    return when {
+        minutes < 1 -> ClosedAgo.JustNow
+        minutes < 60 -> ClosedAgo.Minutes(minutes)
+        minutes < 24 * 60 -> ClosedAgo.Hours(minutes / 60)
+        else -> ClosedAgo.Days(minutes / (24 * 60))
+    }
+}
+
+@Composable
+private fun agoText(ago: ClosedAgo): String = when (ago) {
+    ClosedAgo.JustNow -> localized(Res.string.new_tab_closed_just_now)
+    is ClosedAgo.Minutes -> localizedPlural(Res.plurals.new_tab_closed_minutes, ago.n, ago.n)
+    is ClosedAgo.Hours -> localizedPlural(Res.plurals.new_tab_closed_hours, ago.n, ago.n)
+    is ClosedAgo.Days -> localizedPlural(Res.plurals.new_tab_closed_days, ago.n, ago.n)
+}
+
+/** A row's wash, as [ChoiceRow] wears it: none at rest, soft when selected, deeper while pressed. */
+@Composable
+private fun rowFill(selected: Boolean, pressed: Boolean): Color {
+    val cs = MaterialTheme.colorScheme
+    val wash = if (cs.surface.luminance() < 0.5f) 0.06f else 0.045f
+    return when {
+        pressed -> cs.onSurface.copy(alpha = wash + 0.03f)
+        selected -> cs.onSurface.copy(alpha = wash)
+        else -> Color.Transparent
+    }
+}
+
+/** "Recently closed · 3 sessions closed in this workspace", folding its list away until clicked. */
+@Composable
+private fun RecentlyClosedFold(count: Int, unfolded: Boolean, selected: Boolean, touch: Boolean, onHover: () -> Unit, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val source = remember { MutableInteractionSource() }
+    val hovered by source.collectIsHoveredAsState()
+    val pressed by source.collectIsPressedAsState()
+    LaunchedEffect(hovered) { if (hovered) onHover() }
+    val glyph by animateColorAsState(if (selected) cs.primary else cs.onSurfaceVariant, Motion.stateChange(), label = "closed-glyph") // i18n-ok: an animation label
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(if (touch) 52.dp else 40.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(rowFill(selected, pressed))
+            .clickable(interactionSource = source, indication = null, onClick = onClick)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .padding(horizontal = 12.dp)
+            .testTag("new-tab-recently-closed"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(NewTabGlyphs.Recent, contentDescription = null, tint = glyph, modifier = Modifier.size(17.dp))
+        Spacer(Modifier.width(12.dp))
+        Text(
+            localized(Res.string.new_tab_recently_closed),
+            color = cs.onSurface,
+            fontSize = if (touch) 15.sp else 13.5.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+        )
+        Spacer(Modifier.width(12.dp))
+        Text(
+            localizedPlural(Res.plurals.new_tab_closed_count, count, count),
+            color = cs.onSurfaceVariant,
+            fontSize = if (touch) 14.sp else 13.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Text(if (unfolded) "▾" else "▸", color = cs.onSurfaceVariant, fontSize = 12.sp) // i18n-ok: a disclosure mark
+    }
+}
+
+/** One closed session under the fold: its agent's mark, its name, how long ago it was closed. */
+@Composable
+private fun ClosedSessionItem(c: ClosedSessionRow, selected: Boolean, touch: Boolean, onHover: () -> Unit, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val source = remember { MutableInteractionSource() }
+    val hovered by source.collectIsHoveredAsState()
+    val pressed by source.collectIsPressedAsState()
+    LaunchedEffect(hovered) { if (hovered) onHover() }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(if (touch) 52.dp else 40.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(rowFill(selected, pressed))
+            .clickable(interactionSource = source, indication = null, onClick = onClick)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .padding(start = 24.dp, end = 12.dp)
+            .testTag("new-tab-closed-${c.id}"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        AgentLogo(c.agent, 16.dp)
+        Spacer(Modifier.width(12.dp))
+        Text(
+            c.name,
+            color = cs.onSurface,
+            fontSize = if (touch) 15.sp else 13.5.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(12.dp))
+        Text(agoText(c.ago), color = cs.onSurfaceVariant, fontSize = 12.sp, maxLines = 1)
     }
 }
