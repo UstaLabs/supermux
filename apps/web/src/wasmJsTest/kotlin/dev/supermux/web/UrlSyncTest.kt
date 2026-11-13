@@ -7,6 +7,7 @@ import dev.supermux.web.nav.UrlTarget
 import dev.supermux.web.nav.applyTarget
 import dev.supermux.web.nav.parsePath
 import dev.supermux.web.nav.pathFor
+import dev.supermux.web.nav.replacesHistoryEntry
 import dev.supermux.web.nav.shouldApplyInitialUrl
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -26,21 +27,26 @@ class UrlSyncTest {
         "/new?draft=d1",
         "/add-host",
         "/usage",
-        "/devices",
         "/archived",
-        "/proxies",
         "/displays",
-        "/agents",
+        // Not "/devices" or "/proxies": the machine page's parts since #97 Step 2, they land on /settings/machine
+        // (UrlSyncTest.anOldSlugLandsWithItsAnchor…).
+        // Not "/agents": that page was removed and lands Home (UrlRoutesTest.theRemovedAgentsPagesHaveNoRoute),
+        // so it cannot round-trip.
+        "/settings",
+        "/settings/general",
         "/settings/providers",
-        "/settings/devices",
-        "/settings/system",
-        "/settings/git-hosting",
-        "/settings/proxies",
-        "/settings/curator",
+        "/settings/providers/claude",
         "/settings/voice",
-        "/settings/editor",
-        "/settings/appearance",
-        "/settings/updates",
+        "/settings/voice/glossary",
+        "/settings/coding",
+        "/settings/memory",
+        "/settings/privacy",
+        "/settings/machine",
+        "/settings/machine/computer",
+        "/settings/machine/worktrees",
+        // Not Step 1's /settings/machine/status|devices|links: parts of the machine page now (as above).
+        // Not "/settings/appearance" or "/settings/updates": old slugs, they land on General (below).
     )
 
     @Test fun everyPathSurvivesTheRoundTrip() {
@@ -48,6 +54,14 @@ class UrlSyncTest {
             val ui = ShellUiState()
             applyTarget(ui, parsePath(path))
             assertEquals(path, pathFor(ui.currentRoute, ui.selectedId), "round trip of $path")
+        }
+    }
+
+    @Test fun theOldAppearanceAndUpdatesSlugsLandOnGeneral() {
+        for (path in listOf("/settings/appearance", "/settings/updates")) {
+            val ui = ShellUiState()
+            applyTarget(ui, parsePath(path))
+            assertEquals("/settings/general", pathFor(ui.currentRoute, ui.selectedId), path)
         }
     }
 
@@ -77,11 +91,41 @@ class UrlSyncTest {
         assertEquals("/", pathFor(ui.currentRoute, ui.selectedId))
     }
 
-    @Test fun bareSettingsNormalisesToProviders() {
+    @Test fun bareSettingsIsJustSettings() {
+        // #97: no section — the index on a phone, General on a wide window — and the URL stays `/settings`.
         val ui = ShellUiState()
         applyTarget(ui, parsePath("/settings"))
-        assertEquals(Route.Settings(SettingsSection.Providers), ui.currentRoute)
-        assertEquals("/settings/providers", pathFor(ui.currentRoute, ui.selectedId))
+        assertEquals(Route.Settings(), ui.currentRoute)
+        assertEquals("/settings", pathFor(ui.currentRoute, ui.selectedId))
+    }
+
+    @Test fun anOldSlugLandsWithItsAnchorAndItsCanonicalUrlReplacesTheEntry() {
+        // `/settings/editor` opens Coding at the code-intelligence row; the address bar then shows `/settings/coding`.
+        val ui = ShellUiState()
+        applyTarget(ui, parsePath("/settings/editor"))
+        assertEquals(Route.Settings(SettingsSection.Coding, anchor = "code-intelligence"), ui.currentRoute)
+        val canonical = pathFor(ui.currentRoute, ui.selectedId)
+        assertEquals("/settings/coding", canonical)
+        // REPLACED, not pushed: one history entry for Settings, so Back leaves Settings instead of re-applying the
+        // old slug (which would canonicalise and push again — a Back loop).
+        assertTrue(replacesHistoryEntry(current = "/settings/editor", path = canonical))
+        val history = mutableListOf("/s/abc", "/settings/editor")
+        if (replacesHistoryEntry(history.last(), canonical)) history[history.lastIndex] = canonical else history += canonical
+        history.removeAt(history.lastIndex) // Back
+        applyTarget(ui, parsePath(history.last()))
+        assertEquals(listOf(Route.Home), ui.backStack.toList())
+        assertEquals("abc", ui.selectedId)
+        // Every old slug canonicalises by replacing.
+        val olds = listOf("accounts", "agents", "curator", "editor", "git-hosting", "system", "devices", "proxies", "worktrees")
+            .map { "/settings/$it" } +
+            listOf("/settings/machine/status", "/settings/machine/devices", "/settings/machine/links", "/devices", "/proxies")
+        for (path in olds) {
+            val ui2 = ShellUiState()
+            applyTarget(ui2, parsePath(path))
+            assertTrue(replacesHistoryEntry(path, pathFor(ui2.currentRoute, null)), path)
+        }
+        // A real move to another page still pushes.
+        assertFalse(replacesHistoryEntry("/settings/coding", "/settings/voice"))
     }
 
     @Test fun theWizardsPathParsesHomeButIsNeverAppliedAsAnInitialUrl() {

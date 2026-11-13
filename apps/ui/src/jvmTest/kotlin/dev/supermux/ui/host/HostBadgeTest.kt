@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -45,6 +46,7 @@ class HostBadgeTest {
         onAdd: () -> Unit = {},
         onRename: (String, String) -> Unit = { _, _ -> },
         onForget: (String) -> Unit = {},
+        onOpen: ((String) -> Unit)? = null,
     ): @androidx.compose.runtime.Composable () -> Unit = {
         HostSwitcher(
             hosts = hostList,
@@ -55,6 +57,7 @@ class HostBadgeTest {
             onAddHost = onAdd,
             onRenameHost = onRename,
             onForgetHost = onForget,
+            onOpenHost = onOpen,
             nowMs = nowMs,
         )
     }
@@ -105,6 +108,28 @@ class HostBadgeTest {
         onNodeWithTag("host_switcher").performClick()
         onNodeWithTag("host_switcher_rename").assertDoesNotExist()
         onNodeWithTag("host_switcher_forget").assertDoesNotExist()
+    }
+
+    @Test fun switcher_opensTheCurrentHostsMachinePage() = runComposeUiTest {
+        var opened: String? = null
+        var selected by mutableStateOf<String?>("h1")
+        setContent { switcher(selected = selected, onOpen = { opened = it })() }
+        onNodeWithTag("host_switcher").performClick()
+        onNodeWithTag("host_switcher_open").assertTextEquals("Open MacBook")
+        onNodeWithTag("host_switcher_open").performClick()
+        assertEquals("h1", opened)
+        // "All hosts" names no machine: nothing to open.
+        selected = null
+        onNodeWithTag("host_switcher").performClick()
+        onNodeWithTag("host_switcher_open").assertDoesNotExist()
+    }
+
+    @Test fun switcher_withASingleHostOpensIt() = runComposeUiTest {
+        var opened: String? = null
+        setContent(switcher(hostList = hosts.take(1), onOpen = { opened = it }))
+        onNodeWithTag("host_switcher").performClick()
+        onNodeWithTag("host_switcher_open").performClick()
+        assertEquals("h1", opened)
     }
 
     @Test fun renameDialog_reportsTheTrimmedNewName() = runComposeUiTest {

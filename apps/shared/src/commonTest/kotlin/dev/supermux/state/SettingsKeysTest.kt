@@ -12,4 +12,10 @@ class SettingsKeysTest {
     @Test fun collapsedProjectPathsIsOneKeyForBothApps() {
         assertEquals("sessionList:collapsedPaths", SettingsKeys.SESSION_LIST_COLLAPSED_PATHS)
     }
+
+    /**
+     * #97: the voice keys (`voice:stt`/`cleanup`/`tts`) are gone with the old Voice screen; the dynamic-colour key
+     * stays only because Android's one-time appearance migration still carries an old choice into it.
+     */
+    @Test fun dynamicColorStaysForAndroidsMigration() { assertEquals("appearance:dynamicColor", SettingsKeys.DYNAMIC_COLOR) }
 }

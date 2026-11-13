@@ -1,6 +1,7 @@
 package dev.supermux.ui.accounts
 
 import dev.supermux.net.AccountDto
+import dev.supermux.net.AccountRemovalPlanDto
 import dev.supermux.net.AccountIdentityDto
 import dev.supermux.net.AccountLoginStateDto
 import dev.supermux.net.AccountUnavailableDto
@@ -118,5 +119,26 @@ class AccountsModelTest {
         assertTrue(signInExpired(base.copy(unavailable = AccountUnavailableDto("x", "y", code = "account_expired"))))
         assertFalse(signInExpired(base.copy(unavailable = AccountUnavailableDto("x", "y"))))
         assertFalse(signInExpired(base))
+    }
+
+    @Test fun sign_in_again_names_the_accounts_email_only_for_claude_and_removal_says_where_chats_go() {
+        val claude = AccountDto(id = "claude-s", agent = "claude", method = "subscription", identity = AccountIdentityDto(email = "support@supermux.dev"))
+        assertEquals("support@supermux.dev", signInAgainEmail(claude))
+        assertNull(signInAgainEmail(claude.copy(agent = "cursor", id = "cursor-s")))
+        assertNull(signInAgainEmail(claude.copy(identity = null)))
+        assertEquals("Its 3 chats move to 4@supermux.dev.", removalSentence(AccountRemovalPlanDto("claude-s", 3, "claude-4", "4@supermux.dev")))
+        assertEquals("Its chat moves to System login.", removalSentence(AccountRemovalPlanDto("claude-s", 1, "claude:system", "System login")))
+        assertNull(removalSentence(AccountRemovalPlanDto("claude-s", 0, "claude:system", "System login")))
+        assertNull(removalSentence(null))
+    }
+
+    /** #97 copy rules: the only command on screen is the copyable one in the token step, never in a hint. */
+    @Test fun no_add_option_hint_spells_out_a_command() {
+        for (agent in listOf("claude", "codex", "opencode", "antigravity", "cursor", "grok")) {
+            for (o in AddAccountOption.entries) {
+                val hint = addOptionHint(agent, o)
+                assertFalse("setup-token" in hint || "claude " in hint, "$agent/$o: $hint")
+            }
+        }
     }
 }

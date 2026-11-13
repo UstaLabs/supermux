@@ -85,6 +85,73 @@ test("Windows release preserves stable MSI and checksum names", () => {
   position("supermux-windows.msi.sha256")
 })
 
+// #116: every shipped Windows binary is Authenticode-signed with the Certum (SimplySign) certificate and an RFC 3161
+// timestamp, through our own cloud client (scripts/certum-sign) and signtool's digest mode. The host helpers and the
+// launcher are signed inside the app image, which the MSI then wraps; then the MSI. Two logins, one per signing step.
+test("Windows release signs the app image's binaries, then the MSI built from that image, then verifies", () => {
+  const stage = position("../scripts/stage-desktop-binaries.sh windows-x64")
+  const image = position(":desktop:createDistributable")
+  const signImage = position("Sign the host helpers and the launcher in the app image")
+  const msi = position(":desktop:packageMsi")
+  const signMsi = position("Sign the .msi")
+  const verify = position("Verify the Windows signatures")
+  const checksum = position("supermux-windows.msi.sha256")
+  expect(stage).toBeLessThan(image)
+  expect(image).toBeLessThan(signImage)
+  expect(signImage).toBeLessThan(msi)
+  expect(msi).toBeLessThan(signMsi)
+  expect(signMsi).toBeLessThan(verify)
+  // The checksum is of the signed MSI.
+  expect(verify).toBeLessThan(checksum)
+  for (const file of ["supermux-broker.exe", "mux-sessiond.exe", "supermux.exe"]) {
+    expect(windowsJob.slice(signImage, msi)).toContain(file)
+  }
+})
+
+// jpackage leaves its launcher read-only in the app image: signtool /dg then fails with "Access is denied" (rc.18/rc.19).
+test("the app image's binaries are made writable before they are signed", () => {
+  const step = windowsJob.slice(position("Sign the host helpers and the launcher in the app image"), position("Build the .msi from the signed image"))
+  expect(step).toContain(".IsReadOnly = $false")
+  expect(step.indexOf(".IsReadOnly = $false")).toBeLessThan(step.indexOf("bun ../scripts/certum-sign/sign.ts"))
+})
+
+test("the MSI wraps the signed app image: packaging does not rebuild it", () => {
+  const msiLine = windowsJob.split("\n").find((l) => l.includes(":desktop:packageMsi"))!
+  expect(msiLine).toContain("-x :desktop:createDistributable")
+  const gradle = readFileSync(resolve(import.meta.dir, "..", "apps", "desktop", "build.gradle.kts"), "utf8")
+  // Looked up lazily: packageMsi only exists where Compose registers it (not on a macOS host, whose iOS build
+  // configures :desktop too). An eager tasks.named("packageMsi") broke that configuration (train2, #116).
+  expect(gradle).toMatch(/matching \{ it\.name == "packageMsi" \}\.configureEach \{[\s\S]*?appImage\.set\(/)
+  expect(gradle).not.toContain('named<AbstractJPackageTask>("packageMsi")')
+})
+
+test("signing runs our own client with the secrets, serialized and gated, and is verified with signtool", () => {
+  position("bun ../scripts/certum-sign/sign.ts")
+  position("secrets.SIMPLYSIGN_EMAIL")
+  position("secrets.SIMPLYSIGN_OTP_URI")
+  position("signtool verify /pa")
+  position("Open Source Developer Ahmet")
+  expect(windowsJob).toContain("'certum-simplysign'")
+  expect(windowsJob).toContain("cancel-in-progress: false")
+  expect(windowsJob).toContain("&& 'windows-signing' || ''")
+  // No third-party action or tool in the signing path.
+  expect(windowsJob).not.toMatch(/uses: .*(simply|certum|ssign)/i)
+  // Never in CI: every PR and push would spend signatures (5000 a month) and expose the secrets.
+  expect(ci).not.toContain("SIMPLYSIGN")
+})
+
+// The signing secrets live only in the windows-signing environment, which deploys from v* tags and rc-* branches: a dry
+// run from any other branch still builds, unsigned, instead of failing at the environment check.
+test("only a v* tag or an rc-* branch signs; any other ref builds an unsigned MSI", () => {
+  const signs = "startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/rc-')"
+  expect(windowsJob).toContain(signs)
+  for (const step of ["Sign the host helpers and the launcher in the app image", "Sign the .msi", "Verify the Windows signatures"]) {
+    const at = position(`- name: ${step}`)
+    const next = windowsJob.indexOf("\n      - ", at + 1)
+    expect(windowsJob.slice(at, next), step).toContain("if: env.SIGN_WINDOWS == 'true'")
+  }
+})
+
 test("Android release auto-injects monotonic versionCode and tag versionName", () => {
   expect(androidStart).toBeGreaterThanOrEqual(0)
   expect(androidEnd).toBeGreaterThan(androidStart)
@@ -338,8 +405,10 @@ test("publish-website builds on the published manifest and leaves the pinned com
 
 test("every desktop installer is built with the tag as the app's version", () => {
   const packaging = workflow.split("\n").filter((l) => /gradlew(\.bat)? :desktop:(package|createDistributable)/.test(l))
-  expect(packaging.length).toBe(4)
-  expect(workflow.match(/-PsupermuxVersion="\$\{\{ steps\.ver\.outputs\.version \}\}"/g)?.length).toBe(4)
+  // Windows builds its image and its MSI in two invocations (#116: the image is signed in between); both carry it.
+  expect(packaging.length).toBe(5)
+  // The five desktop packaging steps carry the tag, and so does the web client's build (#97: Settings shows its version).
+  expect(workflow.match(/-PsupermuxVersion="\$\{\{ steps\.ver\.outputs\.version \}\}"/g)?.length).toBe(6)
   expect(publishJob).toContain('CLIENT_DESKTOP_VERSION="$V"')
 })
 
@@ -366,4 +435,19 @@ test("every CI run tests the Windows desktop host and broker seams, with the rel
   expect(job).toContain(hostTests)
   expect(workflow).toContain(hostTests)
   for (const f of ["tests/windows-staging.test.ts", "src/core/sessiond/session-store.test.ts", "src/core/process/launcher.test.ts"]) expect(job).toContain(f)
+})
+
+test("a release with a What's new edition takes its notes from it: GitHub's list and TestFlight's iPhone text (#90)", () => {
+  const release = jobBetween(workflow, "  release:", "\n  publish-website:")
+  // The edition first; the release PR's bullets only for a release without one.
+  expect(release).toContain('highlights=$(bun scripts/whatsnew-notes.ts "${GITHUB_REF_NAME}")')
+  expect(release).toMatch(/if \[ -z "\$highlights" \]; then\s+highlights=\$\(gh api/)
+  expect(release).toContain("uses: oven-sh/setup-bun@v2")
+  const testflight = jobBetween(workflow, "  assign-testflight:", "\n  release:")
+  expect(testflight).toContain('bun scripts/whatsnew-notes.ts "$GITHUB_REF_NAME" --store iphone')
+})
+
+test("a tag stays off TestFlight when the repo variable TESTFLIGHT_ON_TAG is off", () => {
+  expect(workflow).toContain('if [ "${{ vars.TESTFLIGHT_ON_TAG }}" = "off" ]; then')
+  expect(workflow).toContain('{ [ "$tag_upload" = 1 ] || [ "${{ inputs.ios_testflight_upload }}" = "true" ]; }')
 })

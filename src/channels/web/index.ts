@@ -1,6 +1,6 @@
 import type { Channel, ChannelCapabilities, InboundAttachment, InboundMessage, OutboundAction, OutboundContext, OutboundResult } from "../channel"
 import { checkAvatar, readAvatar, writeAvatar } from "../../core/agents/avatar"
-import { DeviceStore } from "./device-store"
+import { DeviceStore, DEVICE_NAME_MAX } from "./device-store"
 import { timingSafeEqual } from "node:crypto"
 import { LiveReplies, type LiveKind, type LiveSocket } from "./live-replies"
 import { watchRowExtras } from "./watch-session-row"
@@ -12,22 +12,28 @@ import { MUX_HOME, isMuxInternalPath } from "../../shared/paths"
 import { existsSync, writeFileSync, mkdirSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join, resolve, sep } from "path"
+import { CardSendGuard } from "../../core/show-html/card-send"
 import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
 import { PayloadTooLargeError, EmptyUploadError, OffsetConflictError, UploadOverflowError, UploadNotFoundError } from "../../core/files/store"
-import { extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie } from "./proxy"
-import { authToken, authedViaBearer, buildAuthCookie, buildClearCookie, sameOriginOk } from "./cookies"
+import { buildProxyPublicUrl, extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie, portFromSlug } from "./proxy"
+import { AUTH_COOKIE, PREVIEW_COOKIE, authToken, authedViaBearer, bearerToken, buildAuthCookie, buildClearCookie, crossSiteRefusal, previewCookieSpec, previewCookieToken, sameOriginOk } from "./cookies"
+import { browserStateError } from "../../core/workspace/browser-state"
+
+const isEmptyObject = (v: unknown): boolean => typeof v === "object" && v !== null && !Array.isArray(v) && Object.keys(v).length === 0
 import { FileSystemService } from "../../core/fs/file-system-service"
 import { toFsError } from "../../core/fs/errors"
 import { WorkdirFs } from "../../core/fs/legacy"
 import { UnsupportedAudioError } from "../../core/transcription/wav"
 import { computeWorkdirDiff, listRepoRefs } from "../../core/editor/workdir-diff"
 import { listChanges, readBaseBlob, discoverReposCached } from "../../core/editor/changes"
+import { safeRepoPath, setStaged } from "../../core/git/stage"
+import { commit as gitCommit, uncommit as gitUncommit } from "../../core/git/commit"
 import { reanchor } from "../../core/review/anchor"
 import { formatInstantComment, matchingStep, toWalkthroughDto } from "../../core/walkthrough/author"
 import { LspConnection } from "../../core/lsp/bridge"
 import { encodeTouch, encodeKey, encodeText, TouchAction } from "../../core/display/scrcpy/control"
 import { redactAppConfig } from "../../core/settings/app-config"
-import { pairJsonResponse } from "./pair-json"
+import { pairJsonResponse, pairingRefusal } from "./pair-json"
 import { parseClientInfo, featureForRequest, featureForUpgrade, featureNeedsBody, type FeatureContext, type FeatureUse } from "../../core/telemetry/sanitize"
 import { parseTelemetryBody, type TelemetryState } from "../../core/telemetry/config"
 import type { EventName, Surface } from "../../core/telemetry/events"
@@ -98,6 +104,10 @@ const RATE_LIMIT_MAX = 16
 // raised too. See src/channels/web/serve-idle-timeout.test.ts.
 export const SERVE_IDLE_TIMEOUT_SECONDS = 255
 
+/** What a proxied WebSocket may send before its upstream socket has opened: past either bound the client is closed with 1009. */
+export const PROXY_WS_PENDING_MAX_BYTES = 1024 * 1024
+export const PROXY_WS_PENDING_MAX_MESSAGES = 256
+
 // Only a proxy we actually sit behind may name the peer for us. The relay tunnel and the nginx
 // exposure recipe both forward from loopback and set X-Forwarded-For; anyone else reaching
 // the port directly is quoting a header they invented. Trusting it from every caller let a
@@ -140,6 +150,12 @@ function clientMessageIdOf(value: unknown): string | undefined {
   return typeof value === "string" && /^web-[A-Za-z0-9._:-]{1,120}$/.test(value) ? value : undefined
 }
 
+/** #104: the send a card refusal answers, as the app named it, for the error frame. */
+function cardSendId(value: unknown): { client_message_id?: string } {
+  const id = clientMessageIdOf(value)
+  return id ? { client_message_id: id } : {}
+}
+
 // Auth-failure rate-limit state is now per-WebChannel-instance (see the
 // `authFailures` field on the class), so there is no process-global bucket to
 // clear. Kept as an exported no-op for tests that build a fresh channel per
@@ -147,6 +163,15 @@ function clientMessageIdOf(value: unknown): string | undefined {
 export function __resetAuthFailures(): void {}
 
 /** `scheme://host` of the request itself, from its Host header (undefined when absent). */
+/**
+ * The base previews are served on, which their links (GET /proxies/by-port) and the preview cookie both use, so a Browser
+ * tab's cookie is for the host its pages load from: the relay's (named proxies' links), else MUX_WEB_PUBLIC_URL, else the
+ * host the request reached (#105: with no public URL the cookie had no host, and /p/<port>/ asked to pair).
+ */
+function previewLinksBase(o: { proxyLinksBaseUrl?: () => string | undefined; publicUrl?: string }, req: Request): string | undefined {
+  return o.proxyLinksBaseUrl?.() ?? o.publicUrl ?? hostOrigin(req)
+}
+
 function hostOrigin(req: Request): string | undefined {
   const host = req.headers.get("host")
   if (!host) return undefined
@@ -157,7 +182,7 @@ function hostOrigin(req: Request): string | undefined {
 /** Largest body PUT /fs/write accepts (the editor reads at most 1 MB). */
 const FS_WRITE_MAX_BYTES = 8 * 1024 * 1024
 
-const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/archived-workspaces", "/projects", "/project-catalog", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/accounts", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views", "/worktrees", "/search"]
+const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/archived-workspaces", "/projects", "/project-catalog", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/accounts", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views", "/worktrees", "/search", "/html"]
 const MAX_CLIENT_LOG_RING = 800
 // randomUUID() shape: version 4, RFC 4122 variant. A client-minted view id must
 // match what the store would have generated itself — it ends up in layout trees
@@ -288,13 +313,23 @@ export interface WebAccountsApi {
   list(agent?: string): Promise<unknown[]>
   add(body: Record<string, unknown>): Promise<unknown>
   remove(id: string, options: { deleteHome?: boolean }): Promise<void>
+  /** What removing the account would do: how many chats move, and to which account (#106). */
+  removalPlan(id: string): Promise<unknown>
+  /** Debug (#106): mark a login signed out, as a refused sign-in does; false when there is no such account. */
+  markExpired?(id: string): Promise<boolean>
   startLogin(body: Record<string, unknown>): unknown
   loginState(loginId: string): unknown | undefined
   submitCode(loginId: string, code: string): void
   cancelLogin(loginId: string): void
   setSessionAccount(sessionId: string, account: string): Promise<unknown>
-  getSettings(): { autoSwitch: boolean }
-  setSettings(patch: Record<string, unknown>): { autoSwitch: boolean }
+  /** #92: drop the session's wait for a limit reset; false when it had none. */
+  cancelLimitWait?(sessionId: string): boolean
+  /** #92: resume a waiting session now; false when it had no wait. */
+  resumeLimitWait?(sessionId: string): Promise<boolean>
+  /** #92 demo: a real wait on the session, resuming in `minutes`; false when there is no such session. */
+  forceLimitWait?(sessionId: string, minutes: number): boolean
+  getSettings(): { autoSwitch: boolean; autoResume?: boolean }
+  setSettings(patch: Record<string, unknown>): { autoSwitch: boolean; autoResume?: boolean }
 }
 
 export interface WebChannelOpts {
@@ -329,6 +364,10 @@ export interface WebChannelOpts {
   setMute: (name: string, muted: boolean) => void
   onSendFromWeb: (msg: InboundMessage) => void
   fileStore?: import("../../core/files/store").FileStore
+  /** show_html pages (#104) for GET /html/<id>. */
+  htmlPages?: { read(id: string): string | undefined }
+  /** The html card with this id in the session's log, for a `send` frame from a card. */
+  findCard?: (session: string, cardId: string) => { title: string } | undefined
   pushStore?: import("../../core/push/subscriptions").PushSubscriptionStore
   deviceTokenStore?: import("../../core/push/device-tokens").DevicePushTokenStore
   vapidPublicKey?: string
@@ -359,6 +398,9 @@ export interface WebChannelOpts {
   reviewAdd?: (id: string, c: Omit<import("../../core/review/store").NewComment, "sessionId">) => import("../../core/review/store").Comment
   reviewUpdate?: (commentId: string, patch: { status?: "open" | "submitted" | "resolved"; body?: string; resolvedBy?: string }) => void
   reviewDelete?: (commentId: string) => void
+  /** #122 phase 4: store a Browser tab's comments in a session (and tell every client); its stored ones. */
+  browserCommentsAdd?: (sessionId: string, batch: import("../../core/browser-comments/store").BrowserCommentBatch) => import("../../core/browser-comments/store").BrowserComment[] | null
+  browserCommentsList?: (sessionId: string) => import("../../core/browser-comments/store").BrowserComment[]
   reviewSubmit?: (id: string) => Promise<{ ok: boolean; delivered: number; reason?: string }>
   sendUserMessage?: (id: string, text: string) => Promise<{ ok: boolean; reason?: string }>
   getWalkthrough?: (id: string) => import("../../core/walkthrough/store").Walkthrough | undefined
@@ -486,6 +528,8 @@ export interface WebChannelOpts {
   proxyMainHost?: string
   proxyLookup?: (domain: string) => { port: number; sessionName: string; isPublic: boolean } | undefined
   proxyAuth?: (token: string) => boolean
+  /** The base URL named proxies' links are built on (main.ts: the relay's, else MUX_WEB_PUBLIC_URL); GET /proxies/by-port builds on it too. Defaults to [publicUrl]. */
+  proxyLinksBaseUrl?: () => string | undefined
   internalSecret?: string
   /**
    * The per-boot token of POST /internal/stop (src/core/session-manager/stop-token.ts). With [onStopRequest], a request
@@ -499,6 +543,12 @@ export interface WebChannelOpts {
    * restartService), for `supermux connect --restart`. False when nothing would bring it back (answered 409).
    */
   onRestartRequest?: () => boolean
+  /**
+   * With [stopToken]: POST /internal/expect-restart says the broker's next stop is a restart (update/apply.ts
+   * expectRestart), so its graceful shutdown leaves the agents running. The desktop app's Restart sends it before it
+   * restarts the broker itself.
+   */
+  onExpectRestart?: () => void
   getCuratorSettings?: () => { config: unknown; nextRun: string | null }
   setCuratorSettings?: (cfg: unknown) => { config: unknown; nextRun: string | null }
   runCuratorNow?: () => Promise<void>
@@ -635,6 +685,7 @@ export class WebChannel implements Channel {
   private heartbeatTimer?: NodeJS.Timeout
   private readonly store: DeviceStore
   private readonly fileStore?: import("../../core/files/store").FileStore
+  private readonly cardSends: CardSendGuard
   private readonly pushStore?: import("../../core/push/subscriptions").PushSubscriptionStore
   private readonly deviceTokenStore?: import("../../core/push/device-tokens").DevicePushTokenStore
   private readonly pushWatch?: PushRegistrationWatch
@@ -675,6 +726,7 @@ export class WebChannel implements Channel {
   constructor(private readonly opts: WebChannelOpts) {
     this.store = new DeviceStore(opts.devicesFile)
     this.fileStore = opts.fileStore
+    this.cardSends = new CardSendGuard((session, id) => opts.findCard?.(session, id))
     this.pushStore = opts.pushStore
     this.deviceTokenStore = opts.deviceTokenStore
     if (opts.deviceTokenStore) this.pushWatch = new PushRegistrationWatch(opts.deviceTokenStore, log)
@@ -774,7 +826,11 @@ export class WebChannel implements Channel {
     }
     if (this.deviceTokenStore) {
       this.store.addRevokeListener((name) => { this.deviceTokenStore!.remove(name) })
+      this.store.addRenameListener((from, to) => { this.deviceTokenStore!.rename(from, to) })
     }
+    if (this.pushStore) this.store.addRenameListener((from, to) => { this.pushStore!.rename(from, to) })
+    if (this.fileStore) this.store.addRenameListener((from, to) => { this.fileStore!.renameDevice(from, to) })
+    this.store.addRenameListener((from, to) => this.onDeviceRenamed(from, to))
     auditPushTargets({ paired: new Set(this.store.list().map((d) => d.name)), deviceTokenStore: this.deviceTokenStore, pushStore: this.pushStore, log })
     this.server = Bun.serve<WSData>(this.buildServeOptions())
     this.heartbeatTimer = setInterval(() => this.pingAll(), HEARTBEAT_MS)
@@ -819,6 +875,13 @@ export class WebChannel implements Channel {
               ? new WebSocket(wsUrl, protocols)
               : new WebSocket(wsUrl)
             ;(ws.data as any)._proxyWs = upstream
+            // A client that speaks first sends before this dial has finished; keep those frames and flush them on open.
+            const pending: { frames: Array<string | Buffer>; bytes: number } = { frames: [], bytes: 0 }
+            ;(ws.data as any)._proxyPending = pending
+            upstream.addEventListener("open", () => {
+              for (const frame of pending.frames.splice(0)) { try { upstream.send(frame) } catch {} }
+              pending.bytes = 0
+            })
             upstream.addEventListener("message", (e) => { try { ws.send(e.data) } catch {} })
             upstream.addEventListener("close", () => { try { ws.close() } catch {} })
             upstream.addEventListener("error", () => { try { ws.close() } catch {} })
@@ -836,6 +899,20 @@ export class WebChannel implements Channel {
         message: (ws, msg) => {
           if ((ws.data as any)?._proxyWs) {
             const upstream = (ws.data as any)._proxyWs as WebSocket
+            if (upstream.readyState === WebSocket.CONNECTING) {
+              const pending = (ws.data as any)._proxyPending as { frames: Array<string | Buffer>; bytes: number }
+              const size = typeof msg === "string" ? Buffer.byteLength(msg) : msg.byteLength
+              if (pending.frames.length >= PROXY_WS_PENDING_MAX_MESSAGES || pending.bytes + size > PROXY_WS_PENDING_MAX_BYTES) {
+                pending.frames.length = 0
+                pending.bytes = 0
+                try { upstream.close() } catch {}
+                try { ws.close(1009, "too much sent before the app's socket opened") } catch {}
+                return
+              }
+              pending.frames.push(typeof msg === "string" ? msg : Buffer.from(msg)) // a copy: the socket reuses its buffer
+              pending.bytes += size
+              return
+            }
             try { upstream.send(msg) } catch {}
             return
           }
@@ -1063,25 +1140,31 @@ export class WebChannel implements Channel {
   private async routeRequestOrUpgrade(req: Request, server: import("bun").Server<WSData>): Promise<Response | undefined> {
     this.classifyPeer(req, server)
     const url = new URL(req.url)
-    if (this.opts.proxyBaseDomain) {
-      const host = req.headers.get("host") ?? ""
-      const sub = extractSubdomain(host, this.opts.proxyBaseDomain, this.opts.proxyMainHost)
-      if (sub) {
-        return this.handleProxyRoute(req, sub, server)
+    const sub = this.opts.proxyBaseDomain
+      ? extractSubdomain(req.headers.get("host") ?? "", this.opts.proxyBaseDomain, this.opts.proxyMainHost)
+      : undefined
+    // Path-based proxy (active only when no base domain is configured). A digits slug is a port and needs no lookup.
+    const pathMatch = !this.opts.proxyBaseDomain ? matchProxyPath(url.pathname) : null
+    const pm = pathMatch && (this.opts.proxyLookup || portFromSlug(pathMatch.slug) !== undefined) ? pathMatch : undefined
+    // Before any route, so a new route can't miss it (cookies.ts explains the rules).
+    const appOrigins = [this.opts.publicUrl, this.getRelayUrl?.(), hostOrigin(req)]
+    if (crossSiteRefusal(req, { appOrigins, proxied: Boolean(sub || pm) })) {
+      return new Response("bad origin", { status: 403 })
+    }
+    if (sub) {
+      return this.handleProxyRoute(req, sub, server)
+    }
+    if (pm) {
+      // A digits slug that is not a usable port is a 404 whatever follows it (no 301 on the way to one).
+      if (portFromSlug(pm.slug) !== undefined && !this.proxyTarget(pm.slug)) return new Response("not found", { status: 404 })
+      if (pm.rest === null) {
+        // bare /p/<slug> → 301 so the browser anchors relative URLs correctly
+        return new Response(null, { status: 301, headers: { location: `/p/${pm.slug}/${url.search}` } })
       }
-    } else if (this.opts.proxyLookup) {
-      // Path-based proxy (active only when no base domain is configured).
-      const pm = matchProxyPath(url.pathname)
-      if (pm) {
-        if (pm.rest === null) {
-          // bare /p/<slug> → 301 so the browser anchors relative URLs correctly
-          return new Response(null, { status: 301, headers: { location: `/p/${pm.slug}/${url.search}` } })
-        }
-        return this.handleProxyRoute(req, pm.slug, server, {
-          prefix: `/p/${pm.slug}`,
-          upstreamPath: pm.rest + url.search,
-        })
-      }
+      return this.handleProxyRoute(req, pm.slug, server, {
+        prefix: `/p/${pm.slug}`,
+        upstreamPath: pm.rest + url.search,
+      })
     }
     if (url.pathname === "/ws") {
       const authStart = performance.now()
@@ -1311,6 +1394,21 @@ export class WebChannel implements Channel {
     if (!t) return
     t.record("client.connected", client)
     if (this.newlyPairedTokens.delete(dev.token)) t.record("feature.used", { feature: "pair.device", variant: client.surface })
+  }
+
+  /**
+   * A renamed device's open sockets still carry its old name, which its next upload would no longer match:
+   * they reconnect as the new name (#97). Terminal and display sockets keep their old name until they close.
+   */
+  private onDeviceRenamed(from: string, to: string): void {
+    const surface = this.surfaceByDeviceName.get(from)
+    if (surface) { this.surfaceByDeviceName.delete(from); this.surfaceByDeviceName.set(to, surface) }
+    for (const c of [...this.wsConnections]) {
+      if (c.deviceName !== from) continue
+      const d = c.ws.data
+      if (d.terminal || d.display || d.scrcpy) continue
+      try { c.ws.close(WS_CLOSE_RESYNC, "device renamed") } catch { /* already closing */ }
+    }
   }
 
   /** The app a device last connected from, for turn.requested. Undefined when it never said. */
@@ -1961,6 +2059,23 @@ export class WebChannel implements Channel {
       return
     }
     if (frame.type === "send" && frame.session && frame.op === "reply") {
+      // #104: a click in an html card. Only an existing card of this session may speak, once a second, in 2000 characters.
+      const fromCardId = frame.args?.from_card?.id
+      let fromCard: { id: string; title: string } | undefined
+      if (frame.args?.from_card !== undefined) {
+        // A refusal names the send it refuses, so the card can tell its page why.
+        const refuse = (reason: string) => ws.send(JSON.stringify({ type: "error", reason, ...cardSendId(frame.client_message_id) }))
+        const ok = this.cardSends.check(String(frame.session), fromCardId, frame.args?.text)
+        if (!ok.ok) {
+          refuse(ok.reason)
+          return
+        }
+        if (Array.isArray(frame.args?.attachments) && frame.args.attachments.length > 0) {
+          refuse("a card message carries no attachments")
+          return
+        }
+        fromCard = { id: fromCardId, title: ok.title }
+      }
       const requestedIds: string[] = Array.isArray(frame.args?.attachments) ? frame.args.attachments : []
       let attachments: InboundAttachment[] | undefined = undefined
       if (requestedIds.length > 0) {
@@ -2004,6 +2119,7 @@ export class WebChannel implements Channel {
         text: frame.args?.text,
         target_session_id: frame.session,
         ...(attachments && attachments.length > 0 ? { attachments } : {}),
+        ...(fromCard ? { from_card: fromCard } : {}),
       }
       this.opts.onSendFromWeb(msg)
       for (const h of this.inboundHandlers) h(msg)
@@ -2235,6 +2351,42 @@ export class WebChannel implements Channel {
     }
   }
 
+  /**
+   * POST …/git/{stage,commit,uncommit} (#72), all with {repo}:
+   * stage {paths, staged} puts whole files into the next commit or takes them out;
+   * commit {message?, all?, amend?} commits it (an empty message is written from the files);
+   * uncommit undoes the last commit and keeps its changes in the next one.
+   */
+  private async gitWrite(workdir: string, op: string, req: Request): Promise<Response> {
+    let body: { repo?: unknown; paths?: unknown; staged?: unknown; message?: unknown; all?: unknown; amend?: unknown }
+    try { body = (await req.json()) as typeof body } catch { return this.json({ error: "bad json" }, 400) }
+    if (!body || typeof body !== "object") return this.json({ error: "bad request" }, 400)
+    const repo = typeof body.repo === "string" ? body.repo : ""
+    const found = (await discoverReposCached(workdir)).find((r) => r.relPath === repo)
+      ?? (await discoverReposCached(workdir, { fresh: true })).find((r) => r.relPath === repo)
+    if (op === "stage") {
+      const paths = Array.isArray(body.paths) ? body.paths : []
+      if (!paths.length || paths.length > 5000 || !paths.every(safeRepoPath) || typeof body.staged !== "boolean") {
+        return this.json({ error: "bad request" }, 400)
+      }
+      if (!found) return this.json({ error: "repo not found" }, 404)
+      try {
+        await setStaged(found.absPath, paths as string[], body.staged)
+        return this.json({ ok: true })
+      } catch (err) {
+        return this.json({ error: err instanceof Error ? err.message : String(err) }, 409)
+      }
+    }
+    if (!found) return this.json({ error: "repo not found" }, 404)
+    if (op === "commit") {
+      if (body.message !== undefined && typeof body.message !== "string") return this.json({ error: "bad request" }, 400)
+      const r = await gitCommit(found.absPath, { message: body.message as string | undefined, all: body.all === true, amend: body.amend === true })
+      return r.ok ? this.json(r) : this.json(r, 409)
+    }
+    const r = await gitUncommit(found.absPath)
+    return r.ok ? this.json(r) : this.json(r, 409)
+  }
+
   /** GET …/changes/blob for a resolved workdir (spec §2.2). */
   private async changesBlob(workdir: string, url: URL, req: Request): Promise<Response> {
     const repo = url.searchParams.get("repo") ?? ""
@@ -2458,14 +2610,28 @@ export class WebChannel implements Channel {
     })
   }
 
+  /**
+   * What a preview slug opens. A digits slug is a PORT on this host (never a name; Registry.addProxy refuses digits-only
+   * names), always private. It is looked up nowhere, so a digits-only named proxy stored before that rule is shadowed:
+   * the by-port route wins. Nothing for a digits slug that is no usable port, nor for this broker's own port: a request
+   * forwarded to it would arrive from loopback with Host 127.0.0.1 and no forwarding header, which classifyPeer takes
+   * for the desktop app on this computer and answers GET /host with the local-only facts (state dir, install mode).
+   */
+  private proxyTarget(slug: string): { port: number; sessionName: string; isPublic: boolean } | undefined {
+    const port = portFromSlug(slug)
+    if (port === undefined) return this.opts.proxyLookup?.(slug)
+    if (port === null || port === this.boundPort || port === this.opts.port) return undefined
+    return { port, sessionName: `port ${port}`, isPublic: false }
+  }
+
   private async handleProxyRoute(
     req: Request,
     slug: string,
     server?: import("bun").Server<WSData>,
     pathOpts?: { prefix: string; upstreamPath: string },
   ): Promise<Response | undefined> {
-    if (!this.opts.proxyLookup) return new Response("proxy not configured", { status: 500 })
-    const upstream = this.opts.proxyLookup(slug)
+    if (!this.opts.proxyLookup && portFromSlug(slug) === undefined) return new Response("proxy not configured", { status: 500 })
+    const upstream = this.proxyTarget(slug)
     if (!upstream) return new Response("not found", { status: 404 })
 
     if (!upstream.isPublic) {
@@ -2473,7 +2639,8 @@ export class WebChannel implements Channel {
       // (subdomain mode), so a paired device already sends it here. A static
       // 401 (no reflected input) replaces the old /proxy-auth redirect dance.
       const token = authToken(req)
-      if (!token || !this.opts.proxyAuth?.(token)) {
+      const preview = previewCookieToken(req)
+      if (!(token && this.opts.proxyAuth?.(token)) && !(preview && this.store.verifyPreview(preview))) {
         const mainUrl = this.opts.publicUrl.replace(/\/$/, "")
         return new Response(
           `<!DOCTYPE html><meta charset="utf-8"><title>Not paired</title><body style="font-family:system-ui;background:#0a0a0a;color:#e5e5e5;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0"><p>Pair this device in the <a style="color:#6ea8fe" href="${mainUrl}/">main app</a> first, then reload.</p></body>`,
@@ -2499,7 +2666,7 @@ export class WebChannel implements Channel {
       return upgraded ? undefined : new Response("ws upgrade failed", { status: 500 })
     }
 
-    return handleProxyRequest(req, upstream, pathOpts)
+    return handleProxyRequest(req, upstream, pathOpts, { cookies: [AUTH_COOKIE, PREVIEW_COOKIE], isOwnBearer: (t) => !!this.store.verify(t) })
   }
 
   private async routeRequest(req: Request): Promise<Response> {
@@ -2556,7 +2723,8 @@ export class WebChannel implements Channel {
     }
 
     // Machine-to-machine: the desktop app or the CLI (same user) read the token from the state directory. Nothing else
-    // knows it. /internal/stop stops the broker gracefully; /internal/restart restarts it under what runs it.
+    // knows it. /internal/stop stops the broker gracefully; /internal/restart restarts it under what runs it;
+    // /internal/expect-restart says the stop coming next is a restart.
     const stopTokenGiven = (kind: string): boolean => {
       const given = req.headers.get("x-supermux-stop-token") ?? ""
       const expected = this.opts.stopToken ?? ""
@@ -2579,6 +2747,13 @@ export class WebChannel implements Channel {
       if (!this.opts.onRestartRequest()) return new Response("not under a service manager", { status: 409 })
       log.info("restart_request_accepted")
       return new Response("restarting", { status: 202 })
+    }
+    if (path === "/internal/expect-restart" && this.opts.stopToken && this.opts.onExpectRestart) {
+      if (method !== "POST") return new Response("method not allowed", { status: 405 })
+      if (!stopTokenGiven("expect_restart")) return new Response("forbidden", { status: 403 })
+      this.opts.onExpectRestart()
+      log.info("restart_expected")
+      return new Response(null, { status: 204 })
     }
 
     if (method === "POST" && path.startsWith("/internal/agent-hook/")) {
@@ -2872,6 +3047,25 @@ export class WebChannel implements Channel {
       return linked ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 })
     }
 
+    // #104: a show_html page, as TEXT inside JSON. Never text/html: a page served from here would run on the
+    // broker's origin, with the login cookie. The app puts the string in its own sandboxed blob: frame.
+    if (method === "GET" && path.startsWith("/html/")) {
+      const auth = this.requireAuth(req)
+      if (!auth.ok) return this.authFailureResponse(auth)
+      let id = ""
+      try { id = decodeURIComponent(path.slice("/html/".length)) } catch { return new Response("not found", { status: 404 }) }
+      const html = this.opts.htmlPages?.read(id)
+      if (html === undefined) return new Response("not found", { status: 404 })
+      return new Response(JSON.stringify({ id, html }), {
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          "x-content-type-options": "nosniff",
+          "content-security-policy": "sandbox",
+          "cache-control": "private, max-age=3600",
+        },
+      })
+    }
+
     if (method === "GET" && path.startsWith("/files/")) {
       const auth = this.requireAuth(req)
       if (!auth.ok) return this.authFailureResponse(auth)
@@ -2899,22 +3093,26 @@ export class WebChannel implements Channel {
     // cookie; the token never reaches JS.
     if (method === "GET" && path === "/pair") {
       const t = url.searchParams.get("t") ?? ""
-      if (t && this.store.verify(t)) {
+      // A pairing link pairs once, within 10 minutes (#119).
+      const claim = this.store.claimPairing(t)
+      if (claim.ok) {
         this.store.touch(t)
         return new Response(null, {
           status: 302,
           headers: { location: "/", "set-cookie": buildAuthCookie(t, { publicUrl: this.opts.publicUrl, proxyBaseDomain: this.opts.proxyBaseDomain }) },
         })
       }
+      const message = claim.reason === "unknown" ? "This pairing link is not valid. Make a new one." : pairingRefusal(claim.reason).error
       return new Response(
-        `<!DOCTYPE html><meta charset="utf-8"><title>Pairing failed</title><body style="font-family:system-ui;background:#0a0a0a;color:#e5e5e5;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0"><p>Pairing link is invalid or expired. Generate a new one.</p></body>`,
+        `<!DOCTYPE html><meta charset="utf-8"><title>Pairing failed</title><body style="font-family:system-ui;background:#0a0a0a;color:#e5e5e5;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0"><p>${message}</p></body>`,
         { status: 401, headers: { "content-type": "text/html" } },
       )
     }
     if (method === "GET" && path === "/pair.json") {
       const t = url.searchParams.get("t") ?? ""
-      this.store.touch(t)
-      return pairJsonResponse(t, this.store)
+      const res = pairJsonResponse(t, this.store)
+      if (res.ok) this.store.touch(t)
+      return res
     }
     // Logout: clear the cookie (Origin-checked as a mutating route above).
     if (method === "POST" && path === "/logout") {
@@ -3302,6 +3500,37 @@ export class WebChannel implements Channel {
       return this.json({ ok: true })
     }
 
+    // ── #92 demo: force a wait for a usage-limit reset on a session (paired clients only, like every /debug route) ──
+    if (path === "/debug/limit-wait" && method === "POST" && this.opts.accounts?.forceLimitWait) {
+      const body = (await req.json().catch(() => ({}))) as { session?: unknown; minutes?: unknown }
+      const minutes = Number(body.minutes)
+      if (typeof body.session !== "string" || !body.session || !Number.isFinite(minutes) || minutes <= 0 || minutes > 24 * 60) {
+        return this.json({ error: "session and minutes (1..1440) required" }, 400)
+      }
+      return this.opts.accounts.forceLimitWait(body.session, minutes) ? this.json({ ok: true }) : this.json({ error: "no such session" }, 404)
+    }
+
+    // ── a session's wait for a usage-limit reset (#92): Cancel, Resume now ──
+    const limitWait = path.match(/^\/sessions\/([^/]+)\/limit-wait(\/resume)?$/)
+    if (limitWait) {
+      const api = this.opts.accounts
+      const id = decodeURIComponent(limitWait[1]!)
+      if (method === "DELETE" && !limitWait[2] && api?.cancelLimitWait) {
+        return api.cancelLimitWait(id) ? this.json({ ok: true }) : this.json({ error: "no limit wait" }, 404)
+      }
+      if (method === "POST" && limitWait[2] && api?.resumeLimitWait) {
+        return (await api.resumeLimitWait(id)) ? this.json({ ok: true }) : this.json({ error: "no limit wait" }, 404)
+      }
+      return this.json({ error: "not found" }, 404)
+    }
+
+    // ── #106 demo: mark a login signed out to try that state (paired clients only, like every /debug route) ──
+    if (path === "/debug/account-expired" && method === "POST" && this.opts.accounts?.markExpired) {
+      const body = (await req.json().catch(() => ({}))) as { account?: unknown }
+      if (typeof body.account !== "string" || !body.account) return this.json({ error: "account required" }, 400)
+      return (await this.opts.accounts.markExpired(body.account)) ? this.json({ ok: true }) : this.json({ error: "no such account" }, 404)
+    }
+
     // ── accounts (one registry for every agent; secrets go in, never out) ──
     if (path === "/accounts" || path.startsWith("/accounts/") || path === "/settings/accounts" || path.match(/^\/sessions\/[^/]+\/account$/)) {
       const api = this.opts.accounts
@@ -3337,6 +3566,8 @@ export class WebChannel implements Channel {
             return this.json({ ok: true })
           }
         }
+        const removal = path.match(/^\/accounts\/([^/]+)\/removal$/)
+        if (removal && method === "GET") return this.json(await api.removalPlan(decodeURIComponent(removal[1]!)))
         const one = path.match(/^\/accounts\/([^/]+)$/)
         if (one && method === "DELETE") {
           const deleteHome = url.searchParams.get("deleteHome")
@@ -3507,6 +3738,11 @@ export class WebChannel implements Channel {
       }))
       return this.json({ repos, comments })
     }
+    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/(stage|commit|uncommit)$/)) {
+      const workdir = this.opts.getSessionWorkdir?.(decodeURIComponent(path.split("/")[2]!))
+      if (!workdir) return this.json({ error: "session not found" }, 404)
+      return this.gitWrite(workdir, path.split("/")[4]!, req)
+    }
     if (method === "GET" && path.match(/^\/sessions\/[^/]+\/changes\/blob$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
@@ -3607,6 +3843,11 @@ export class WebChannel implements Channel {
       const base = this.opts.getWorkspaceDiffBase?.(id)
       const { repos } = await listChanges(workdir, base?.baseCommits ?? {}, base?.createdAt, url.searchParams.get("base") ?? undefined)
       return this.json({ repos, comments: [] })
+    }
+    if (method === "POST" && path.match(/^\/workspaces\/[^/]+\/git\/(stage|commit|uncommit)$/)) {
+      const workdir = this.opts.getWorkspaceWorkdir?.(decodeURIComponent(path.split("/")[2]!))
+      if (!workdir) return this.json({ error: "workspace not found" }, 404)
+      return this.gitWrite(workdir, path.split("/")[4]!, req)
     }
     if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/changes\/blob$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
@@ -3889,6 +4130,39 @@ export class WebChannel implements Channel {
       const content = String(body.content ?? "")
       if (!content.trim()) return this.json({ error: "content required" }, 400)
       return this.json(this.opts.verifySave(id, content))
+    }
+    // #122 phase 4: a Browser tab's comments, sent to a session; its agent answers each through its mux tools.
+    if (method === "GET" && path.match(/^\/sessions\/[^/]+\/browser\/comments$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      if (!this.opts.browserCommentsList) return this.json({ error: "not configured" }, 503)
+      return this.json({ comments: this.opts.browserCommentsList(id) })
+    }
+    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/browser\/comments$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      if (!this.opts.browserCommentsAdd) return this.json({ error: "not configured" }, 503)
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>
+      const str = (v: unknown) => (typeof v === "string" ? v : null)
+      const raw = Array.isArray(b.comments) ? b.comments as Record<string, unknown>[] : []
+      const comments = raw.map((c, i) => ({
+        number: typeof c.number === "number" && Number.isInteger(c.number) && c.number > 0 ? c.number : i + 1,
+        comment: str(c.comment)?.trim() ?? "",
+        selector: str(c.selector)?.trim() ?? "",
+        text: str(c.text) ?? "",
+        picture: str(c.picture),
+      }))
+      if (!comments.length || comments.length > 50) return this.json({ error: "a batch is 1 to 50 comments" }, 400)
+      if (comments.some((c) => !c.comment || !c.selector || c.comment.length > 4000 || c.selector.length > 2000)) {
+        return this.json({ error: "each comment needs its words and its element's selector" }, 400)
+      }
+      // A picture is its attachment's file name (the picture itself goes to the chat as an attachment): short, a name.
+      if (comments.some((c) => c.picture !== null && (c.picture.length > 200 || !/^[\w.-]+$/.test(c.picture) || c.picture.startsWith(".")))) {
+        return this.json({ error: "a comment's picture is its file's name, such as comment-1.png" }, 400)
+      }
+      const url = str(b.url), viewedAs = str(b.viewedAs)
+      if ((url?.length ?? 0) > 4000 || (viewedAs?.length ?? 0) > 200) return this.json({ error: "url or viewedAs too long" }, 400)
+      const added = this.opts.browserCommentsAdd(id, { url, viewedAs, comments })
+      if (!added) return this.json({ error: "session not found" }, 404)
+      return this.json({ comments: added })
     }
     if (method === "GET" && path.match(/^\/sessions\/[^/]+\/review\/comments$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
@@ -4345,10 +4619,14 @@ export class WebChannel implements Channel {
       const workspaceId = decodeURIComponent(path.split("/")[2]!)
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
       const kind = body.kind as string | undefined
-      if (!kind || !["chat", "terminal", "editor", "display"].includes(kind)) {
+      if (!kind || !["chat", "terminal", "editor", "display", "browser", "new"].includes(kind)) {
         return this.json({ error: `unknown view kind: ${String(kind)}` }, 400)
       }
       if (body.state == null) return this.json({ error: "state required" }, 400)
+      const browserError = kind === "browser" ? browserStateError(body.state) : undefined
+      if (browserError) return this.json({ error: browserError }, 400)
+      // A New tab holds nothing: a pick replaces it with a real view.
+      if (kind === "new" && !isEmptyObject(body.state)) return this.json({ error: "a new tab's state is {}" }, 400)
       const rawId = body.id
       if (rawId !== undefined && typeof rawId !== "string") {
         return this.json({ error: "id must be a string" }, 400)
@@ -4381,6 +4659,10 @@ export class WebChannel implements Channel {
       const workspaceId = decodeURIComponent(parts[2]!)
       const viewId = decodeURIComponent(parts[4]!)
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      if (body.state !== undefined && this.opts.getWorkspaceView?.(viewId)?.kind === "browser") {
+        const browserError = browserStateError(body.state)
+        if (browserError) return this.json({ error: browserError }, 400)
+      }
       try {
         const view = this.opts.patchWorkspaceView(viewId, {
           title: body.title as string | undefined,
@@ -4617,19 +4899,44 @@ export class WebChannel implements Channel {
       }
     }
     if (method === "GET" && path === "/devices") {
-      return this.json(this.store.list().map((d) => ({ name: d.name, created_at: d.created_at, last_seen_at: d.last_seen_at })))
+      // `current` marks the device whose token made this request, so a client can label its own row and keep it unrevocable.
+      return this.json(this.store.list().map((d) => ({ name: d.name, created_at: d.created_at, last_seen_at: d.last_seen_at, current: d.name === auth.device.name })))
     }
     if (method === "POST" && path === "/devices") {
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
       const requested = ((body.name as string | undefined) ?? "").trim()
       if (!requested) return this.json({ error: "name required" }, 400)
-      const { token, name: finalName } = this.store.mint(requested)
+      // A pending device: its link pairs once, within 10 minutes; this device's next code revokes it (#119).
+      const { token, name: finalName } = this.store.mintPairing(requested, { by: auth.device.name })
       // A desktop host normally listens on localhost and publishes through the built-in
       // relay. Pairing links leave the host, so prefer the relay's LIVE URL; using the
       // configured localhost publicUrl here produces a perfectly valid but unusable QR.
       const pairBase = this.getRelayUrl?.() ?? this.opts.publicUrl
       const url = `${pairBase.replace(/\/$/, "")}/pair?t=${token}`
       return this.json({ url, name: finalName })
+    }
+    if (method === "POST" && path === "/devices/preview-token") {
+      // Native apps only: the web app never shows private previews, and a token in page JavaScript is one to lose.
+      if (!authedViaBearer(req)) return this.json({ error: "preview tokens are for the native apps" }, 403)
+      const token = this.store.mintPreview(bearerToken(req))
+      if (!token) return this.json({ error: "unknown device" }, 401)
+      const linksBase = previewLinksBase(this.opts, req)
+      if (!linksBase) return this.json({ error: "this broker has no address its previews are served on" }, 503)
+      return this.json({ token, cookie: previewCookieSpec(token, { publicUrl: linksBase, proxyBaseDomain: this.opts.proxyBaseDomain }) })
+    }
+    if (method === "PATCH" && path.startsWith("/devices/")) {
+      let name: string
+      try { name = decodeURIComponent(path.slice("/devices/".length)) } catch { return this.json({ error: "unknown device" }, 404) }
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      if (typeof body.name !== "string") return this.json({ error: "name required", code: "name_invalid" }, 400)
+      const r = this.store.rename(name, body.name)
+      if (!r.ok) {
+        if (r.reason === "unknown") return this.json({ error: "unknown device" }, 404)
+        if (r.reason === "taken") return this.json({ error: "Another device already has that name.", code: "name_taken" }, 409)
+        return this.json({ error: body.name.trim() ? `Use a name of ${DEVICE_NAME_MAX} characters or fewer.` : "name required", code: "name_invalid" }, 400)
+      }
+      const d = r.device
+      return this.json({ name: d.name, created_at: d.created_at, last_seen_at: d.last_seen_at, current: name === auth.device.name })
     }
     if (method === "DELETE" && path.startsWith("/devices/")) {
       const name = decodeURIComponent(path.slice("/devices/".length))
@@ -4690,6 +4997,15 @@ export class WebChannel implements Channel {
       }
     }
 
+    // The by-port URL as a template, `{port}` where the port goes, built the way a named proxy's URL is.
+    if (method === "GET" && path === "/proxies/by-port") {
+      return this.json({
+        url: buildProxyPublicUrl("{port}", {
+          baseDomain: this.opts.proxyBaseDomain,
+          publicUrl: previewLinksBase(this.opts, req),
+        }),
+      })
+    }
     if (method === "GET" && path === "/proxies") {
       const proxies = this.opts.listProxies?.() ?? []
       return this.json(proxies)

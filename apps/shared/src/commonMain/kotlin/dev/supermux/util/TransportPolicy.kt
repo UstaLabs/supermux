@@ -35,6 +35,9 @@ object TransportPolicy {
         }
     }
 
+    /** True when [url]'s host is this machine (`localhost`, `127.0.0.0/8`, `::1`): a broker reached there runs here. */
+    fun isLoopback(url: String): Boolean = isLoopbackHost(hostOf(url))
+
     /** The host of an `scheme://` URL: strips userinfo, path/query/fragment, port, and IPv6 brackets. */
     private fun hostOf(url: String): String {
         val authority = url.substringAfter("://", "")

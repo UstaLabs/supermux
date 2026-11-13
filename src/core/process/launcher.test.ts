@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { resolveCommand, spawnCommand, spawnCommandSync, windowsCmdCommandLine } from "./launcher"
+import { resolveCommand, spawnCommand, spawnCommandSync, spawnProcess, spawnProcessSync, windowsCmdCommandLine } from "./launcher"
 
 const windowsFs = (...files: string[]) => ({
   fileExists: (path: string) => files.some((file) => file.toLowerCase() === path.toLowerCase()),
@@ -88,6 +88,36 @@ describe("spawnCommand", () => {
       "-File", "C:\\Tools\\opencode.ps1", "serve", "value; Remove-Item C:\\\\*",
     ])
   })
+
+  // #29: grok, opencode and cursor register bare names. On Windows an npm install of one is <name>.cmd on PATH, which
+  // the runtime refuses to start (EINVAL) and only cmd.exe, every argument escaped, may run.
+  test("on Windows a bare name is found on its env's PATH first: an npm shim runs through cmd.exe, sync too", () => {
+    const calls: unknown[][] = []
+    const record = ((...args: unknown[]) => { calls.push(args); return { pid: 1, status: 0 } }) as never
+    const npm = "C:\\Users\\Ana\\AppData\\Roaming\\npm"
+    const env = { Path: `C:\\Windows\\System32;${npm}`, ComSpec: "C:\\Windows\\System32\\cmd.exe" }
+    const { fileExists } = windowsFs(`${npm}\\opencode.cmd`)
+    spawnCommand("opencode", ["acp", "--cwd", "C:\\work dir"], { platform: "win32", env, fileExists, spawn: record })
+    spawnCommandSync("opencode", ["--version"], { platform: "win32", env, fileExists, spawnSync: record })
+    expect(calls.map((call) => call.slice(0, 2))).toEqual([
+      ["C:\\Windows\\System32\\cmd.exe", ["/d", "/v:off", "/s", "/c", windowsCmdCommandLine(`${npm}\\opencode.cmd`, ["acp", "--cwd", "C:\\work dir"])]],
+      ["C:\\Windows\\System32\\cmd.exe", ["/d", "/v:off", "/s", "/c", windowsCmdCommandLine(`${npm}\\opencode.cmd`, ["--version"])]],
+    ])
+    expect(calls.map((call) => (call[2] as { windowsVerbatimArguments?: boolean }).windowsVerbatimArguments)).toEqual([true, true])
+  })
+
+  test("a bare name found as an .exe starts by its path; one found nowhere, and any name on another OS, as given", () => {
+    const calls: unknown[][] = []
+    const record = ((...args: unknown[]) => { calls.push(args); return { pid: 1 } }) as never
+    spawnCommand("git", ["status"], { platform: "win32", env: { PATH: "C:\\Git\\cmd" }, ...windowsFs("C:\\Git\\cmd\\git.exe"), spawn: record })
+    spawnCommand("grok", ["acp"], { platform: "win32", env: { PATH: "C:\\Git\\cmd" }, ...windowsFs(), spawn: record })
+    spawnCommand("opencode", ["acp"], { platform: "linux", env: { PATH: "/usr/bin" }, fileExists: () => true, spawn: record })
+    expect(calls.map((call) => call.slice(0, 2))).toEqual([
+      ["C:\\Git\\cmd\\git.exe", ["status"]],
+      ["grok", ["acp"]],
+      ["opencode", ["acp"]],
+    ])
+  })
 })
 
 describe("windowsCmdCommandLine hardening", () => {
@@ -148,5 +178,22 @@ describe("spawnCommandSync", () => {
       spawnSync: ((...args: unknown[]) => { calls.push(args); return { status: 0 } }) as never,
     })
     expect(calls).toEqual([["/usr/local/bin/codex", ["plugin", "remove", "mux@mux"], { env: { PATH: "/usr/local/bin" }, windowsHide: true }]])
+  })
+})
+
+// #29: Bun.spawn without `env` passes the environment this process started with, and windowsHide is false by default.
+// spawnProcess is Bun.spawn with this layer's defaults first; the caller's own options still win.
+describe("spawnProcess", () => {
+  test("a child gets the environment as it is now, and the caller's own env wins, sync and async", async () => {
+    const key = `SUPERMUX_LIVE_ENV_${process.pid}`
+    process.env[key] = "now"
+    try {
+      const echo = [process.execPath, "-e", `process.stdout.write(process.env.${key} ?? "unset")`]
+      expect(await new Response(spawnProcess(echo, { stdout: "pipe" }).stdout).text()).toBe("now")
+      expect(spawnProcessSync(echo).stdout.toString()).toBe("now")
+      expect(spawnProcessSync(echo, { env: { PATH: process.env.PATH ?? "" } }).stdout.toString()).toBe("unset")
+    } finally {
+      delete process.env[key]
+    }
   })
 })

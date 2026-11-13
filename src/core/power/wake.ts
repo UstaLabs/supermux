@@ -1,3 +1,4 @@
+import { host } from "@supermux/platform"
 // Sleep/wake detection by clock gaps (spec 2026-09-30-desktop-hosting-lifecycle-design, "Wake
 // reconnect, sleep ≠ idle"). A 5 s interval notes the wall clock and the monotonic clock
 // (`performance.now()`) at every tick.
@@ -12,7 +13,7 @@ export const WAKE_TICK_MS = 5_000
 export const SLEEP_GAP_MS = 30_000
 
 export interface WakeDetectorDeps {
-  /** Which rule applies (default: process.platform). */
+  /** Which rule applies (default: host.os()). */
   platform?: NodeJS.Platform
   /** The wall clock (default Date.now). */
   now?: () => number
@@ -104,7 +105,7 @@ export class WakeDetector {
     const monoDeltaMs = mono - prevMono
     const threshold = this.deps.thresholdMs ?? SLEEP_GAP_MS
     let sleptMs: number
-    if ((this.deps.platform ?? process.platform) === "linux") {
+    if ((this.deps.platform ?? host.os()) === "linux") {
       sleptMs = wallDeltaMs - monoDeltaMs
       if (sleptMs <= threshold) return undefined
     } else {

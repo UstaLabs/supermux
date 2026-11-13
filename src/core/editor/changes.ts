@@ -3,10 +3,12 @@
 // a cheap per-repo file list with counts and base blob SHAs, and base texts by blob on demand.
 // Everything here is async — the broker is one event loop.
 
-import { spawn } from "node:child_process"
 import { lstat, open } from "fs/promises"
 import { join } from "path"
 import { gitAsync } from "../git/exec"
+import { indexState, stagedOf, type Staged } from "../git/stage"
+import { proc } from "@supermux/platform"
+import { spawnCommand } from "../process/launcher"
 import { mapLimit } from "../fs/pool"
 import { discoverRepos, parseBaseSpec, resolveSpecBase, REPO_CONCURRENCY } from "./workdir-diff"
 
@@ -20,6 +22,8 @@ export interface ChangedFile {
   baseBlob: string | null
   /** Working-copy bytes; null for a deleted file. Filled by listChanges, not by the parser. */
   size?: number | null
+  /** #72: how much of it is in the next commit; absent when it holds nothing uncommitted. */
+  staged?: Staged
 }
 
 const ZERO_SHA = /^0+$/
@@ -119,9 +123,9 @@ function listUntracked(repoAbs: string, keep: number): Promise<{ paths: string[]
     let rest = ""
     let error: string | undefined
     let done = false
-    const child = spawn("git", ["ls-files", "--others", "--exclude-standard", "-z"], { cwd: repoAbs, stdio: ["ignore", "pipe", "ignore"] })
+    const child = spawnCommand("git", ["ls-files", "--others", "--exclude-standard", "-z"], { cwd: repoAbs, stdio: ["ignore", "pipe", "ignore"] })
     const take = (p: string) => {
-      if (!p || p.endsWith("/")) return
+      if (!p || p.endsWith("/")) return // platform-ok: a git-listed path (git writes / on every OS; a folder ends in /)
       total++
       if (paths.length < keep) paths.push(p)
     }
@@ -131,9 +135,9 @@ function listUntracked(repoAbs: string, keep: number): Promise<{ paths: string[]
       clearTimeout(timer)
       resolve({ paths, total, ...(error ? { error } : {}) })
     }
-    const timer = setTimeout(() => { error = "git ls-files timed out"; child.kill("SIGKILL") }, LS_FILES_TIMEOUT_MS)
-    child.stdout.setEncoding("utf-8")
-    child.stdout.on("data", (chunk: string) => {
+    const timer = setTimeout(() => { error = "git ls-files timed out"; proc.stop(child) }, LS_FILES_TIMEOUT_MS)
+    child.stdout!.setEncoding("utf-8")
+    child.stdout!.on("data", (chunk: string) => {
       const parts = (rest + chunk).split("\0")
       rest = parts.pop() ?? ""
       for (const p of parts) take(p)
@@ -182,9 +186,10 @@ async function untrackedEntry(repoAbs: string, path: string): Promise<ChangedFil
 
 async function repoChanges(repoAbs: string, relPath: string, baseSha: string): Promise<RepoChanges> {
   try {
-    const [raw, numstat] = await Promise.all([
+    const [raw, numstat, index] = await Promise.all([
       gitAsync(repoAbs, ["diff", "--raw", "-z", "--no-abbrev", "-M", baseSha], { trim: false }),
       gitAsync(repoAbs, ["diff", "--numstat", "-z", "-M", baseSha], { trim: false }),
+      indexState(repoAbs).catch(() => null),
     ])
     const tracked = parseRawNumstat(raw, numstat)
     const keptTracked = tracked.slice(0, MAX_LIST_FILES)
@@ -198,7 +203,11 @@ async function repoChanges(repoAbs: string, relPath: string, baseSha: string): P
       })),
       mapLimit(others.paths, UNTRACKED_CONCURRENCY, (p) => untrackedEntry(repoAbs, p)),
     ])
-    const files = [...trackedSized, ...untracked]
+    const withStage = (f: ChangedFile, untracked: boolean): ChangedFile => {
+      const st = index && stagedOf(f.path, index, untracked)
+      return st ? { ...f, staged: st } : f
+    }
+    const files = [...trackedSized.map((f) => withStage(f, false)), ...untracked.map((f) => withStage(f, true))]
     return { repo: relPath, baseSha, files, truncated: total > files.length, total, ...(others.error ? { error: others.error } : {}) }
   } catch (err) {
     return { repo: relPath, baseSha, files: [], truncated: false, total: 0, error: err instanceof Error ? err.message : String(err) }

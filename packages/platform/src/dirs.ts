@@ -45,3 +45,48 @@ export function posixShellHome(options: HomeOptions = {}): string | undefined {
   if (!shellHome) return undefined
   return flavor(platform).relative(home({ platform, env }), shellHome) === "" ? undefined : shellHome
 }
+
+/** The base-folder variables tools read, as set at the call; each undefined when unset or empty. */
+export interface BaseDirs {
+  /** $XDG_CONFIG_HOME */
+  xdgConfigHome?: string
+  /** $XDG_DATA_HOME */
+  xdgDataHome?: string
+  /** $XDG_RUNTIME_DIR: set by a Linux login session (systemd --user needs it) */
+  xdgRuntimeDir?: string
+  /** %APPDATA%: Windows' roaming application data */
+  appData?: string
+}
+
+/**
+ * The XDG and %APPDATA% variables as set at the call, read the way the OS reads them (any letter case on Windows), for
+ * code that applies a tool's own defaults ([xdgConfigHome] and [userConfig] apply the common ones).
+ */
+export function baseDirs(options: HomeOptions = {}): BaseDirs {
+  const platform = options.platform ?? process.platform
+  const env = options.env ?? process.env
+  const read = (name: string) => envValue(env, name, platform) || undefined
+  const found: BaseDirs = {
+    xdgConfigHome: read("XDG_CONFIG_HOME"),
+    xdgDataHome: read("XDG_DATA_HOME"),
+    xdgRuntimeDir: read("XDG_RUNTIME_DIR"),
+    appData: read("APPDATA"),
+  }
+  return Object.fromEntries(Object.entries(found).filter(([, value]) => value !== undefined)) as BaseDirs
+}
+
+/** The XDG config folder: $XDG_CONFIG_HOME, else the home's .config. The rule tools that follow XDG keep on every OS. */
+export function xdgConfigHome(options: HomeOptions = {}): string {
+  const platform = options.platform ?? process.platform
+  return baseDirs(options).xdgConfigHome ?? flavor(platform).join(home(options), ".config")
+}
+
+/**
+ * Where a user's tools keep their settings (cursor-agent among them): %APPDATA% on Windows, else the home's
+ * AppData\Roaming; the XDG config folder elsewhere ([xdgConfigHome]).
+ */
+export function userConfig(options: HomeOptions = {}): string {
+  const platform = options.platform ?? process.platform
+  if (platform !== "win32") return xdgConfigHome(options)
+  return baseDirs(options).appData ?? flavor(platform).join(home(options), "AppData", "Roaming")
+}

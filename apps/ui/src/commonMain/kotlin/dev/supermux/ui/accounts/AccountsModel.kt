@@ -4,6 +4,7 @@
 package dev.supermux.ui.accounts
 
 import dev.supermux.net.AccountDto
+import dev.supermux.net.AccountRemovalPlanDto
 import dev.supermux.net.AccountLoginStateDto
 import dev.supermux.net.AccountUsageWindowDto
 import dev.supermux.ui.usage.formatResetIso
@@ -50,11 +51,12 @@ fun addOptionHint(agent: String, option: AddAccountOption): String = when (optio
         "antigravity" -> "Sign in with your Google account; paste the code the page shows."
         else -> "A subscription login, kept on this machine."
     }
-    AddAccountOption.Token -> "A long-lived token from claude setup-token."
+    // The command itself is the next step's copyable line, the only command Settings shows (#97 spec §6).
+    AddAccountOption.Token -> "A long-lived token you make once in a terminal."
     AddAccountOption.ApiKey -> when (agent) {
         "claude" -> "An Anthropic API key, billed per token."
         "codex" -> "An OpenAI API key, billed per token."
-        "opencode" -> "A provider key for OpenCode."
+        "opencode" -> "An OpenCode key from opencode.ai/auth, for Zen and Go."
         "antigravity" -> "A Gemini API key."
         else -> "Billed per token."
     }
@@ -154,6 +156,21 @@ fun accountUnavailableText(account: AccountDto): String? =
         if (u.code == SIGN_IN_EXPIRED) "Sign-in expired"
         else u.reason.trim().ifBlank { null }?.let { "Refused: $it" } ?: "Refused by the agent's API"
     }
+
+/** The email a "Sign in again" login asks for (#106): Claude's login takes one, so it signs in as this account. */
+fun signInAgainEmail(account: AccountDto): String? =
+    account.identity?.email?.takeIf { account.agent == "claude" && it.isNotBlank() }
+
+/** What a removal does to the account's chats (#106), from GET /accounts/<id>/removal; null when it moves none. */
+fun removalSentence(plan: AccountRemovalPlanDto?): String? = when {
+    plan == null || plan.sessions <= 0 -> null
+    plan.sessions == 1 -> "Its chat moves to ${plan.toLabel}."
+    else -> "Its ${plan.sessions} chats move to ${plan.toLabel}."
+}
+
+/** An account's name in a sentence: the user's label, else the signed-in email, else its id. */
+fun accountDisplayName(account: AccountDto): String =
+    if (account.system) "System login" else account.label.ifBlank { account.identity?.email?.takeIf { it.isNotBlank() } ?: account.id }
 
 // ── guided login ───────────────────────────────────────────────────────────────────────────────
 

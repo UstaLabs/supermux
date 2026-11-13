@@ -45,18 +45,18 @@ import dev.supermux.ui.push.PushTapHandle
 import dev.supermux.ui.push.notificationCancelSessionIds
 import dev.supermux.ui.push.pushTapHandleDecision
 import dev.supermux.ui.push.resolvePushTap
-import dev.supermux.ui.settings.FleetSettingsExtra
 import dev.supermux.ui.settings.FleetSettingsSection
 import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.ui.shell.SupermuxApp
 import dev.supermux.ui.shell.visibleWorkspaceChatIdsAt
 import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.ui.theme.nextAppearance
+import dev.supermux.ui.theme.paintedAppearance
 import dev.supermux.workspace.toDomainOrNull
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -159,10 +159,7 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
         // state the toggle can flip, so resolve it to what is actually on screen first — the
         // icon and the flip then match what the user sees.
         val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
-        val effectiveAppearance = when (appearance) {
-            AppearanceMode.SYSTEM -> if (systemDark) AppearanceMode.DARK else AppearanceMode.LIGHT
-            else -> appearance
-        }
+        val effectiveAppearance = paintedAppearance(appearance, AppearanceMode.SYSTEM, systemDark)
 
         IosTheme(
             platform = platform,
@@ -254,12 +251,12 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
             }
             var groupByProject by remember { mutableStateOf(readGroupByProject(defaults)) }
             val foreground by IosAppState.foreground.collectAsState()
+            // Card #121: going to the background writes the offline cache now; iOS may end the app before the next sample.
+            LaunchedEffect(foreground) { if (!foreground) fleet.writeSnapshots() }
 
-            // Silence read-aloud when the app leaves the screen, the way Android stops it on
-            // ON_STOP. Without this an utterance keeps talking out of a phone the user has put
-            // away — and iOS, unlike Android, never destroys the composition that owns it, so
-            // nothing else would ever stop it.
-            LaunchedEffect(foreground) { if (!foreground) MessageTts.stop(platform.tts) }
+            // Read-aloud goes on with the app in the background (#118 car 3b), as the audio player does: the app has
+            // `UIBackgroundModes: audio` and the voice the .playback session; the lock screen's ❚❚ or the dock's ✕
+            // stops it.
 
             // A `supermux://pair` link that arrives while ALREADY paired adds a second host rather
             // than re-entering the gate. It goes to the shared Add host screen through
@@ -352,9 +349,8 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
                 // icon: `SupermuxApp` defaults `onToggleTheme` to `{}`, so nothing was wired.
                 appearance = effectiveAppearance,
                 onToggleTheme = {
-                    val next =
-                        if (effectiveAppearance == AppearanceMode.DARK) AppearanceMode.LIGHT
-                        else AppearanceMode.DARK
+                    // The opposite of what is painted (#97 spec §10.6).
+                    val next = nextAppearance(appearance, AppearanceMode.SYSTEM, systemDark)
                     appScope.launch { uiPrefs.putAppearance(next) }
                 },
                 defaultDeviceName = UIDevice.currentDevice.name,
@@ -377,8 +373,7 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
                 // `FleetSettingsSection` is the same function Android calls, which is the point:
                 // the mapping is decided by `SettingsSection` and `FleetStore`, and both are
                 // shared. `Caps` still filters the extras, so `AppUpdate` is unreachable here.
-                settingsExtra = { extra, scope -> FleetSettingsExtra(extra, scope) },
-                settingsSection = { section, scope -> FleetSettingsSection(section, scope, fleet) },
+                settingsSection = { place, scope -> FleetSettingsSection(place, scope, fleet) },
                 // No `chatFallback`: that slot IS the host-specific escape hatch, and iOS has no
                 // screen to put in it. `UnavailableSessionPane` (H3.7) is what covers its absence.
             )
@@ -440,18 +435,8 @@ private fun buildFleet(deps: HostStoreDeps, scope: CoroutineScope): FleetStore {
         },
     )
     fleet.bindMessageTts()
-    scope.launch {
-        combine(fleet.sessions, fleet.sessionHost) { sessions, owners -> sessions to owners }
-            .collect { (sessions, owners) ->
-                val records = fleet.store.list()
-                snapshots.retainOnly(records.map { it.recordId })
-                val now = deps.nowMs()
-                records.forEach { host ->
-                    val mine = sessions.filter { owners[it.id] == host.recordId }
-                    if (mine.isNotEmpty()) snapshots.replace(host.recordId, mine, now, host.version)
-                }
-            }
-    }
+    // Card #121: the chat list and recent chats, cached for an instant (and offline) next launch.
+    scope.launch { fleet.keepSnapshots() }
     return fleet
 }
 

@@ -76,6 +76,9 @@ import dev.supermux.net.CodexResetResult
 import dev.supermux.net.CodexUsage
 import dev.supermux.net.CursorUsage
 import dev.supermux.net.GrokUsage
+import dev.supermux.chat.localUtcOffsetMs
+import dev.supermux.net.OpenCodeGoMeter
+import dev.supermux.net.OpenCodePlan
 import dev.supermux.net.OpenCodeUsage
 import dev.supermux.net.UsageResponse
 import dev.supermux.state.FleetStore
@@ -715,35 +718,109 @@ fun CursorUsageCard(
     }
 }
 
-/** opencode has no subscription quota, so this shows cumulative local token/cost
- *  stats — same shape as the web UsageView card. */
+/**
+ * OpenCode: the OpenCode Go plan's 5-hour / weekly / monthly windows when the login has one, a plain line when it
+ * doesn't, then the local spend and activity opencode records. An older broker sends no plan: local totals only,
+ * spend as the badge, as before.
+ */
 @Composable
 fun OpenCodeUsageCard(
     opencode: OpenCodeUsage?,
     error: String?,
     asOf: String? = null,
     refreshing: Boolean = false,
+    now: Long = nowMs(),
+    onSignIn: (() -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
+    val plan = opencode?.plan
+    val go = plan?.go?.takeIf { plan.status == "active" }
     UsageCard(
         title = "opencode",
-        subtitle = "Local usage · all time",
+        subtitle = when {
+            go != null -> listOfNotNull("OpenCode Go", plan.email?.ifBlank { null }).joinToString(" · ")
+            plan != null -> "OpenCode"
+            else -> "Local usage · all time"
+        },
         enabled = opencode != null,
         modifier = Modifier.testTag("usage_card_opencode"),
         asOf = asOf,
         asOfTag = "usage_as_of_opencode",
         refreshing = refreshing,
         refreshingTag = "usage_refreshing_opencode",
-        badge = opencode?.let { u -> { Text(dollars(u.totalCostUsd), color = cs.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp) } },
+        badge = opencode?.takeIf { plan == null }?.let { u -> { Text(dollars(u.totalCostUsd), color = cs.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp) } },
     ) {
         if (opencode == null) {
             Text(error ?: "Not available", color = cs.onSurfaceVariant, fontSize = 12.sp)
-        } else {
+            return@UsageCard
+        }
+        if (go != null) {
+            OpenCodeGoWindow("5 hours", go.rolling, now)
+            OpenCodeGoWindow("Weekly", go.weekly, now)
+            OpenCodeGoWindow("Monthly", go.monthly, now)
+        } else if (plan != null) {
+            OpenCodePlanLine(plan, onSignIn)
+        }
+        plan?.free?.let { free ->
+            val reset = freeResetLabel(free.resetsAtIso, now)
+            UsageFooterRow(
+                "Free models",
+                listOf(if (free.reached) "Limit reached" else "Daily limit", reset).filter { it.isNotEmpty() }.joinToString(" · "),
+                valueColor = if (free.reached) cs.error else null,
+            )
+        }
+        if (plan == null) {
             UsageFooterRow("Input", tokens(opencode.inputTokens))
             UsageFooterRow("Output", tokens(opencode.outputTokens))
             UsageFooterRow("Cache read", tokens(opencode.cacheReadTokens))
             UsageFooterRow("Cache write", tokens(opencode.cacheWriteTokens))
-            UsageFooterRow("Activity", "${opencode.sessions} sessions · ${opencode.messages} messages")
+        } else {
+            UsageFooterRow("Local spend", dollars(opencode.totalCostUsd))
+        }
+        UsageFooterRow("Activity", "${opencode.sessions} sessions · ${opencode.messages} messages")
+    }
+}
+
+/**
+ * When OpenCode's free allowance starts over, in the viewer's own clock: "resets 19:00" today, "resets tomorrow 03:00"
+ * on the next local day (00:00 UTC is 03:00 in Istanbul). "" when [iso] is unreadable.
+ */
+internal fun freeResetLabel(iso: String?, now: Long, offsetMs: Long? = null): String {
+    val at = iso?.let { parseIsoMillis(it) } ?: return ""
+    val offset = offsetMs ?: localUtcOffsetMs(at)
+    val day = 86_400_000L
+    val local = at + offset
+    val atDay = local.floorDiv(day)
+    val nowDay = (now + offset).floorDiv(day)
+    val minute = local.mod(day) / 60_000L
+    val hhmm = "${(minute / 60).toString().padStart(2, '0')}:${(minute % 60).toString().padStart(2, '0')}"
+    return when (atDay) {
+        nowDay -> "resets $hhmm"
+        nowDay + 1 -> "resets tomorrow $hhmm"
+        else -> formatResetIso(iso, now)
+    }
+}
+
+@Composable
+private fun OpenCodeGoWindow(label: String, meter: OpenCodeGoMeter, now: Long) {
+    val reset = formatResetIso(meter.resetsAtIso, now)
+    UsageWindowRow(label, meter.percent, if (meter.limited) listOf("Limit reached", reset).filter { it.isNotEmpty() }.joinToString(" · ") else reset)
+}
+
+/** The plan's one line when there are no meters: no Go plan, signed out, expired (with a sign-in), or unreadable. */
+@Composable
+private fun OpenCodePlanLine(plan: OpenCodePlan, onSignIn: (() -> Unit)?) {
+    val cs = MaterialTheme.colorScheme
+    val (line, action) = when (plan.status) {
+        "none" -> "No OpenCode Go plan." to null
+        "signed_out" -> "Not signed in to OpenCode." to "Sign in"
+        "expired" -> "OpenCode sign-in expired." to "Sign in again"
+        else -> "Couldn't read OpenCode Go limits${plan.error?.let { ": $it" } ?: "."}" to null
+    }
+    Text(line, color = cs.onSurface, fontSize = 12.sp)
+    if (action != null && onSignIn != null) {
+        OutlinedButton(onClick = onSignIn, modifier = Modifier.padding(top = Space.sm).testTag("usage_sign_in_opencode")) {
+            Text(action, color = cs.onSurface, fontSize = 13.sp)
         }
     }
 }
@@ -1156,6 +1233,8 @@ private fun UsageBody(
                         usage?.errors?.get("opencode"),
                         asOf = formatFetchedAt(usage?.fetchedAt?.get("opencode"), now),
                         refreshing = usage?.refreshing?.contains("opencode") == true,
+                        now = now,
+                        onSignIn = signInFor("opencode"),
                     )
                     AccountUsageCards(usage, "opencode", now, onSignIn)
                     GrokUsageCard(

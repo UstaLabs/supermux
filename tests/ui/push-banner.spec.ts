@@ -13,7 +13,7 @@ import { mkdtempSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { Database } from "bun:sqlite"
-import { browserLaunchOptions, uiFixture } from "./fixture-env"
+import { browserLaunchOptions, uiFixture, freshPairLink } from "./fixture-env"
 import { waitReady } from "./compose-dom"
 
 declare const window: object
@@ -68,7 +68,8 @@ export async function main(): Promise<void> {
       }
     })
 
-    await page.goto(`${fixture.baseUrl}/pair?t=${encodeURIComponent(fixture.token)}`, { waitUntil: "domcontentloaded" })
+    const paired = await freshPairLink(fixture)
+    await page.goto(paired.url, { waitUntil: "domcontentloaded" })
     // The wasm bundle boots in ~6 s and then syncs its accessibility mirror on a
     // ~100 ms debounce, so wait for the home list (either shape) rather than a
     // fixed timeout.
@@ -116,7 +117,7 @@ export async function main(): Promise<void> {
     const db = new Database(dbPath, { readonly: true })
     let found = false
     for (let i = 0; i < 80; i++) {
-      const row = db.prepare("SELECT device FROM push_subscriptions WHERE device = ?").get(fixture.deviceName)
+      const row = db.prepare("SELECT device FROM push_subscriptions WHERE device = ?").get(paired.name)
       if (row) { found = true; break }
       await new Promise((r) => setTimeout(r, 500))
     }

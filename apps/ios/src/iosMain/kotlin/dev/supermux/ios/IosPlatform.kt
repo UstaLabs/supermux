@@ -8,7 +8,8 @@ import dev.supermux.ui.platform.Caps
 import dev.supermux.ui.platform.ClipboardAccess
 import dev.supermux.ui.platform.FileAccess
 import dev.supermux.ui.platform.MicCapture
-import dev.supermux.ui.platform.NoAppUpdater
+import dev.supermux.ui.platform.VersionOnlyUpdater
+import platform.Foundation.NSBundle
 import dev.supermux.ui.platform.NoticeChannel
 import dev.supermux.ui.platform.NoopNotificationManager
 import dev.supermux.ui.platform.NotificationManager
@@ -100,8 +101,15 @@ class IosPlatform(
      */
     override fun videoDecoder(): VideoSurfaceFactory? = null
 
-    /** The App Store and TestFlight own updating this app; there is nothing for the app to do. */
-    override val updates: AppUpdater = NoAppUpdater
+    /**
+     * The App Store and TestFlight own updating this app; there is nothing for the app to do but say which build it
+     * is (General ▸ App version), from the bundle as `MainViewController`'s client info reads it.
+     */
+    override val releasePlatform: dev.supermux.ui.whatsnew.ReleasePlatform = dev.supermux.ui.whatsnew.ReleasePlatform.IPhone
+    override val updates: AppUpdater = VersionOnlyUpdater(
+        currentVersion = NSBundle.mainBundle.infoDictionary?.get("CFBundleShortVersionString") as? String ?: "",
+        currentVersionCode = (NSBundle.mainBundle.infoDictionary?.get("CFBundleVersion") as? String)?.toIntOrNull(),
+    )
 
     /**
      * The app raises no notifications itself: agent replies arrive as APNs pushes, which the system
@@ -207,6 +215,12 @@ class IosPlatform(
 
     override val tts: TtsEngine = IosTtsEngine(bridge)
 
+    /** AVAudioPlayer for the app's audio (#118), as on the Mac: the library's AVPlayer wants a video track. */
+    override val audioOutputs: dev.supermux.work.AudioOutputs = IosAudioOutputs()
+
+    /** The lock screen's and Control Center's Now Playing for what the audio player plays (#118 car 3b). */
+    override val systemNowPlaying: dev.supermux.work.SystemNowPlaying get() = IosNowPlaying.shared
+
 }
 
 /**
@@ -248,6 +262,8 @@ val IOS_CAPS: Caps = Caps(
     // description beside it.
     terminal = true,
     scrcpy = false,
+    // WKWebView's pageZoom: device mode's fit on an iPad (#122).
+    pageFit = true,
 )
 
 /**

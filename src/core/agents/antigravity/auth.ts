@@ -4,6 +4,7 @@ import { delimiter, join } from "node:path"
 import { resolveCommand } from "../../process/launcher"
 import { ptyLoginSpawnCommand, type LoginSpawnCommand } from "../login/spawn-command"
 import { antigravityUpdaterEnv } from "../../../../packages/supermux-core/src/antigravity/updater.js"
+import { files, host } from "@supermux/platform"
 
 /** No-op stand-ins for the browser openers agy calls directly (xdg-open on Linux, open on macOS);
  * BROWSER/DISPLAY do not stop it. The user opens the URL on their own device, never the broker host. */
@@ -30,9 +31,9 @@ export function browserlessScratch(
   const cwd = join(root, "cwd")
   const bin = join(root, ".bin")
   try {
-    mkdirSync(cwd, { mode: 0o700 })
-    mkdirSync(bin, { mode: 0o700 })
-    if (platform !== "win32") for (const name of BROWSER_OPENERS) writeFileSync(join(bin, name), "#!/bin/sh\nexit 0\n", { mode: 0o700 })
+    files.mkdirPrivate(cwd, { recursive: false })
+    files.mkdirPrivate(bin, { recursive: false })
+    if (platform !== "win32") for (const name of BROWSER_OPENERS) files.writeExecutable(join(bin, name), "#!/bin/sh\nexit 0\n", { private: true })
   } catch (err) {
     rmSync(root, { recursive: true, force: true })
     throw err
@@ -47,7 +48,7 @@ export function browserlessScratch(
  * the no-op openers do not apply and agy may also open the host's browser.
  * agy prints an accounts.google.com OAuth URL, then waits ~60s for the pasted authorization code.
  * The login is a real one-word model turn, so it runs in a throwaway empty cwd ([browserlessScratch]). */
-export function loginSpawnCommand(platform = process.platform): LoginSpawnCommand | null {
+export function loginSpawnCommand(platform = host.os()): LoginSpawnCommand | null {
   const env = { ...process.env } as Record<string, string>
   delete env.GEMINI_API_KEY
   Object.assign(env, antigravityUpdaterEnv(platform))

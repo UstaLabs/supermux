@@ -8,6 +8,7 @@ import { MIGRATIONS } from "../storage/migrations"
 import { Registry } from "../session-manager/registry"
 import { SessionManager, type SessionManagerPorts } from "../session-manager/manager"
 import { ReviewStore } from "../review/store"
+import { BrowserCommentStore } from "../browser-comments/store"
 import { WalkthroughStore } from "./store"
 import type { FileStore } from "../files/store"
 
@@ -77,6 +78,7 @@ function ports(db: ReturnType<typeof openDb>, frames: object[], cards: string[])
       db,
       reviewStore,
       walkthroughStore,
+      browserCommentStore: new BrowserCommentStore(db),
     },
     resume: {
       bind: async () => {},

@@ -4,7 +4,8 @@ import { existsSync } from "node:fs"
 import { mkdir, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { muxLspHome } from "./paths"
-import { proc } from "@supermux/platform"
+import { spawnProcess } from "../process/launcher"
+import { host } from "@supermux/platform"
 
 export function dartArch(): "arm64" | "x64" {
   return process.arch === "arm64" ? "arm64" : "x64"
@@ -31,7 +32,7 @@ export function extractZipArgv(zip: string, into: string, platform: NodeJS.Platf
 }
 
 // platform-ok: which Dart SDK build to download and how to unpack it (an artifact per OS)
-const HOST = process.platform
+const HOST = host.os()
 
 /** This host's dart binary name (dart.exe on Windows), for finding an installed SDK. */
 export const DART_EXE = dartExecutable(HOST)
@@ -54,8 +55,7 @@ async function main(): Promise<void> {
   await Bun.write(zipPath, res)
   console.log("Extracting…")
   await rm(sdkDir, { recursive: true, force: true })
-  const unzip = Bun.spawn(extractZipArgv(zipPath, home, HOST), {
-    ...proc.spawnDefaults(),
+  const unzip = spawnProcess(extractZipArgv(zipPath, home, HOST), {
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",

@@ -3,7 +3,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path"
 import { requireSpec } from "./spec.js"
 import type { AntigravityEnvironmentSpec, McpServerSpec, PreparedEnvironment } from "./types.js"
 import { lstatSafe, writeFileNoFollow } from "./write.js"
-import { Unsupported, files, paths } from "@supermux/platform"
+import { files, host, paths, Unsupported } from "@supermux/platform"
 
 /**
  * agy finds its config only through $HOME and its shell tool inherits $HOME, so each session runs
@@ -76,7 +76,7 @@ function refuseRealLocation(real: string, dir: string, userHome: string, platfor
  * Guard for an account's cli dir BEFORE anything creates it: not a symlink, not the real HOME or an
  * ancestor of it, not inside the real ~/.gemini (checked on the resolved path of what exists).
  */
-export function assertAccountCliDir(accountCliDir: string, userHome: string, platform: NodeJS.Platform = process.platform): void {
+export function assertAccountCliDir(accountCliDir: string, userHome: string, platform: NodeJS.Platform = host.os()): void {
   if (!isAbsolute(accountCliDir)) throw new TypeError(`antigravity account cli dir must be absolute: ${accountCliDir}`)
   if (lstatSafe(accountCliDir)?.isSymbolicLink()) throw new TypeError(`antigravity account cli dir must not be a symlink: ${accountCliDir}`)
   const real = realpathLoose(accountCliDir)
@@ -86,7 +86,7 @@ export function assertAccountCliDir(accountCliDir: string, userHome: string, pla
 }
 
 /** Guard shared by every writer: `shadowHome` is an existing, non-symlink, safe shadow home. */
-export function assertShadowHome(shadowHome: string, userHome: string, platform: NodeJS.Platform = process.platform): void {
+export function assertShadowHome(shadowHome: string, userHome: string, platform: NodeJS.Platform = host.os()): void {
   const st = lstatSafe(shadowHome)
   if (!st) throw new Error(`antigravity shadow home ${shadowHome} does not exist`)
   if (st.isSymbolicLink()) throw new TypeError(`antigravity shadow home must not be a symlink: ${shadowHome}`)
@@ -132,7 +132,7 @@ function linkOrCopy(target: string, path: string, platform: NodeJS.Platform): vo
 /** A real (non-symlink) dir under the shadow home; a symlink in its place is removed (never followed). */
 function ensureRealDir(path: string): void {
   if (lstatSafe(path)?.isSymbolicLink()) unlinkSync(path)
-  mkdirSync(path, { recursive: true, mode: 0o700 })
+  files.mkdirPrivate(path)
 }
 
 /** Refuses when a shadow path component would lead out of the shadow home via a symlink. */
@@ -187,7 +187,7 @@ export async function prepareAntigravityEnvironment(spec: AntigravityEnvironment
   // Pre-check before mkdir so a bad target is never created (mkdir could land in the real ~/.gemini).
   refuseRealLocation(realpathLoose(home), home, userHome, platform)
   if (lstatSafe(home)?.isSymbolicLink()) throw new TypeError(`antigravity shadow home must not be a symlink: ${home}`)
-  mkdirSync(home, { recursive: true, mode: 0o700 })
+  files.mkdirPrivate(home)
   assertShadowHome(home, userHome, platform)
 
   syncLinks(home, userHome, (n) => n === ".gemini", () => false, platform)
@@ -222,12 +222,12 @@ export function linkAntigravityCli(
   shadowHome: string,
   cliDir: string,
   userHome: string,
-  platform: NodeJS.Platform = process.platform,
+  platform: NodeJS.Platform = host.os(),
 ): void {
   assertShadowHome(shadowHome, userHome, platform)
   assertNoLinkedParents(shadowHome, [".gemini"])
   const gemini = join(shadowHome, ".gemini")
-  mkdirSync(gemini, { recursive: true, mode: 0o700 })
+  files.mkdirPrivate(gemini)
   const path = join(gemini, "antigravity-cli")
   const current = lstatSafe(path)
   if (current?.isSymbolicLink()) {
@@ -248,7 +248,7 @@ export function shareAntigravityHistory(
   accountCliDir: string,
   userCliDir: string,
   names: string[] = DEFAULT_SHARED_HISTORY,
-  platform: NodeJS.Platform = process.platform,
+  platform: NodeJS.Platform = host.os(),
 ): void {
   const st = lstatSafe(accountCliDir)
   if (!st) throw new Error(`antigravity account cli dir ${accountCliDir} does not exist`)
@@ -312,10 +312,10 @@ export function writeAntigravityMcpConfig(opts: { shadowHome: string; userHome: 
   }
   assertNoLinkedParents(opts.shadowHome, [".gemini", "config"])
   const dir = join(opts.shadowHome, ".gemini", "config")
-  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  files.mkdirPrivate(dir)
   const path = join(dir, "mcp_config.json")
   if (lstatSafe(path)?.isSymbolicLink()) unlinkSync(path)
-  writeFileNoFollow(path, JSON.stringify({ ...base, mcpServers: { ...user, ...out } }, null, 2) + "\n", 0o600)
+  writeFileNoFollow(path, JSON.stringify({ ...base, mcpServers: { ...user, ...out } }, null, 2) + "\n")
   return { path, aliases }
 }
 
@@ -352,12 +352,12 @@ export function writeAntigravityPlugins(opts: {
   wrappers: AntigravityPluginWrapper[]
   platform?: NodeJS.Platform
 }): string[] {
-  const platform = opts.platform ?? process.platform
+  const platform = opts.platform ?? host.os()
   validateWrappers(opts.wrappers)
   assertShadowHome(opts.shadowHome, opts.userHome, platform)
   assertNoLinkedParents(opts.shadowHome, [".gemini", "config", "plugins"])
   const dir = join(opts.shadowHome, ".gemini", "config", "plugins")
-  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  files.mkdirPrivate(dir)
   for (const name of readdirSafe(dir)) {
     if (!name.startsWith(ANTIGRAVITY_RESERVED_PREFIX)) continue
     const path = join(dir, name)
@@ -368,12 +368,12 @@ export function writeAntigravityPlugins(opts: {
   const paths: string[] = []
   for (const w of opts.wrappers) {
     const path = join(dir, w.name)
-    mkdirSync(path, { recursive: true, mode: 0o700 })
-    writeFileNoFollow(join(path, "plugin.json"), JSON.stringify({ name: w.name }, null, 2) + "\n", 0o600)
+    files.mkdirPrivate(path)
+    writeFileNoFollow(join(path, "plugin.json"), JSON.stringify({ name: w.name }, null, 2) + "\n")
     if (w.skills) files.linkDirectory(w.skills, join(path, "skills"))
     if (w.mcpServers.length) {
       const mcpServers = Object.fromEntries(w.mcpServers.map((s) => [s.name, nativeServer(s)]))
-      writeFileNoFollow(join(path, "mcp_config.json"), JSON.stringify({ mcpServers }, null, 2) + "\n", 0o600)
+      writeFileNoFollow(join(path, "mcp_config.json"), JSON.stringify({ mcpServers }, null, 2) + "\n")
     }
     paths.push(path)
   }

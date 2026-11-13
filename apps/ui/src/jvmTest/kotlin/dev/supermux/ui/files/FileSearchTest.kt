@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -25,6 +26,10 @@ import androidx.compose.ui.unit.dp
 import dev.supermux.fs.FileSystemService
 import dev.supermux.fs.SearchHit
 import dev.supermux.net.BrokerApi
+import dev.supermux.ui.keys.AppCommands
+import dev.supermux.ui.keys.RegisterCommand
+import dev.supermux.ui.keys.ShortcutDispatcher
+import dev.supermux.ui.keys.ShortcutRoot
 import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.prefs.InMemorySettingsStore
@@ -47,6 +52,7 @@ import kotlin.test.assertTrue
 
 @OptIn(ExperimentalTestApi::class)
 class FileSearchTest {
+    private val mod = if (dev.supermux.editor.compose.isApplePlatform) Key.MetaLeft else Key.CtrlLeft
 
     // ── pure ──────────────────────────────────────────────────────────────────────────────────
 
@@ -107,16 +113,6 @@ class FileSearchTest {
         assertEquals("/w/a/b.kt", e.absolutePath)
         assertEquals("b.kt", e.name)
         assertEquals("a", e.folder)
-    }
-
-    @Test fun onlyPlainCmdOrCtrlPIsTheChord() {
-        assertTrue(isGoToFileChord('P', ctrlOrMeta = true, shift = false, alt = false))
-        assertTrue(isGoToFileChord('p', ctrlOrMeta = true, shift = false, alt = false))
-        assertFalse(isGoToFileChord('P', ctrlOrMeta = false, shift = false, alt = false))
-        assertFalse(isGoToFileChord('P', ctrlOrMeta = true, shift = true, alt = false))
-        assertFalse(isGoToFileChord('P', ctrlOrMeta = true, shift = false, alt = true))
-        assertFalse(isGoToFileChord('O', ctrlOrMeta = true, shift = false, alt = false))
-        assertFalse(isGoToFileChord(null, ctrlOrMeta = true, shift = false, alt = false))
     }
 
     @Test fun recentsKeepTheLastTenNewestFirstWithoutDuplicates() {
@@ -210,13 +206,14 @@ class FileSearchTest {
         assertEquals("", view.query)
     }
 
-    @Test fun cmdOrCtrlPInThePaneFocusesTheField() = runComposeUiTest {
+    @Test fun theGoToFileKeyFocusesTheField() = runComposeUiTest {
         val view = TreeViewState("/w")
         val focus = FocusRequester()
         val inner = FocusRequester()
         setContent(
             host {
-                Box(Modifier.goToFileShortcut { focus.requestFocus() }) {
+                ShortcutRoot(remember { ShortcutDispatcher() }) {
+                    RegisterCommand(AppCommands.GoToFile) { focus.requestFocus(); true }
                     FileSearch(null, view, "/w", onOpen = {}, focusRequester = focus) {
                         Box(Modifier.size(10.dp).focusRequester(inner).focusable().testTag("tree_stub"))
                     }
@@ -224,7 +221,7 @@ class FileSearchTest {
             },
         )
         runOnIdle { inner.requestFocus() }
-        onNodeWithTag("tree_stub").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.P) } }
+        onNodeWithTag("tree_stub").performKeyInput { withKeyDown(mod) { pressKey(Key.P) } }
         waitForIdle()
         onNodeWithTag("files_search_field").assertIsFocused()
     }

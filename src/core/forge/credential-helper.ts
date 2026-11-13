@@ -1,4 +1,4 @@
-import { execFileSync } from "child_process"
+import { runSyncOrThrow } from "../git/exec-sync"
 import type { Scheme } from "./host"
 
 /** The git credential-helper command string. The broker resolves <connId>'s token at fill time. */
@@ -13,7 +13,7 @@ export function helperCommand(helperPath: string, connectionId: string): string 
  *  `scheme` must match the remote's scheme — git scopes credentials per-URL, so a helper
  *  registered under https:// is never consulted for an http:// remote. */
 export function bindHttpsCredentials(repoPath: string, host: string, connectionId: string, helperPath: string, scheme: Scheme = "https"): void {
-  execFileSync("git", ["-C", repoPath, "config", "--local", `credential.${scheme}://${host}.helper`, helperCommand(helperPath, connectionId)])
+  runSyncOrThrow("git", ["-C", repoPath, "config", "--local", `credential.${scheme}://${host}.helper`, helperCommand(helperPath, connectionId)], { timeoutMs: 30_000 })
 }
 
 /** Produce git's credential-fill stdout for a connection. `lookup` returns the live token from the store. */

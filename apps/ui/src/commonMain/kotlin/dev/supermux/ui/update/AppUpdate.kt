@@ -1,26 +1,7 @@
-// The one "the app updates itself" screen + sidebar card for both apps (cluster G5).
-//
-// Base = desktop's `update/AppUpdateUi.kt` (screen + startup strip) over the G1 `AppUpdater` seam;
-// Android's `AppUpdatePage`/`AppUpdateBanner` are the Compact/Touch branch of the SAME composables.
-// Everything either side had is unioned rather than picked:
-//
-//  - release notes, Recheck, the check spinner, "You're up to date", the failure texts — both had
-//    them, and the wording that survives is the one both already showed;
-//  - the version block gains Android's `versionCode` line, printed only where the platform HAS a
-//    version code (desktop's is null by contract);
-//  - the download CTA gains Android's live "Downloading 42%…" label (desktop showed a bare
-//    "Downloading…") and its "no installer file was published" branch (Android's wording named
-//    an APK, which is a lie on every other host);
-//  - the unknown-sources refusal becomes a VISIBLE row with its own action rather than only an
-//    instant jump to Settings: the jump is kept (Android's behaviour, verbatim) and the row lets a
-//    user who came back without granting it try again. It is driven by
-//    [UpdateStatus.needsInstallPermission], which only a platform that has the gate ever raises.
-//
-// The chrome follows the cluster-E rule `(standalone || compact) && !topBarShown`: the Settings hub
-// paints title + Back for its detail, desktop's `Route.AppUpdate` overlay passes `standalone = true`
-// so it keeps the Back + title row it has always drawn at Expanded, and nobody paints two bars or
-// registers two Back owners. Android's status-bar progress/alert notifications are NOT here — they
-// live inside `AndroidAppUpdater`, on the far side of the seam.
+// The app updating itself (cluster G5): the sidebar's update card, the labels it and General's App version row
+// (`ui/settings/pages/AppUpdateRows.kt`, #97) share, the shell's check, and the download on the fleet's downloads
+// (#95). The full-pane update page is gone since #97: the card's "open the page" and File ▸ "Check for Updates…"
+// land on General's App version row, which runs the same flow inline over the same [AppUpdater] seam.
 package dev.supermux.ui.update
 
 import androidx.compose.animation.AnimatedVisibility
@@ -59,24 +40,15 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -86,25 +58,33 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.backhandler.BackHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.ui.adaptive.LocalWindowWidthClass
-import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.platform.AppUpdater
+import dev.supermux.ui.platform.DownloadedInstaller
 import dev.supermux.ui.platform.LocalPlatform
-import dev.supermux.ui.platform.UpdatePhase
+import dev.supermux.ui.whatsnew.highlightsFor
 import dev.supermux.ui.platform.UpdateStatus
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.Stroke
-import dev.supermux.ui.widgets.SettingsCaption
-import dev.supermux.ui.widgets.SettingsDetailMaxWidth
-import dev.supermux.ui.widgets.SettingsSectionHeader
-import dev.supermux.ui.widgets.SwipeBackHandler
+import dev.supermux.ui.work.rememberDownloads
+import dev.supermux.work.DownloadCenter
+import dev.supermux.work.DownloadPurpose
+import dev.supermux.work.DownloadSource
+import dev.supermux.work.DownloadState
+import dev.supermux.work.DownloadedFile
 import kotlin.math.roundToLong
 import kotlinx.coroutines.launch
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.hours
+import kotlinx.coroutines.delay
+import dev.supermux.ui.platform.NoticeChannel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
+import dev.supermux.ui.platform.InFlightWork
 
 // ── Pure labels ───────────────────────────────────────────────────────────────
 
@@ -158,315 +138,31 @@ fun installerKindFrom(downloadUrl: String?): String? {
 /** Hoisted so the set is built once, not on every recomposition that renders the caption. */
 private val INSTALLER_EXTENSIONS = setOf("deb", "msi", "dmg", "apk", "exe", "pkg", "appimage")
 
-// ── Screen ────────────────────────────────────────────────────────────────────
-
 /**
- * "Check for updates": the running build, what the release feed says, and one CTA that downloads
- * the installer and hands it to the OS.
- *
- * @param onBack leave the screen (the hub's `SettingsSlotScope.onClose`, or the shell's `goBack`).
- * @param topBarShown a hub above already painted a `TopAppBar` for this detail — the page then
- *   drops its own bar and its `BackHandler` and keeps Recheck as a body action.
- * @param standalone the screen is its own destination (desktop's `Route.AppUpdate` overlay) rather
- *   than a hub section, so it owns title + Back at EVERY width.
- * @param updater the seam under test; production always reads `LocalPlatform.current.updates`, and
- *   both the sidebar card and this screen read the SAME one, so what either shows is one check.
+ * The shell's update check: once per launch, then, where the host downloads updates in the background (desktop,
+ * #113), a quiet prepare now and every [every] while the app runs, so a long-open app still finds a new release.
  */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
-@Composable
-fun AppUpdateScreen(
-    modifier: Modifier = Modifier,
-    onBack: () -> Unit = {},
-    topBarShown: Boolean = false,
-    standalone: Boolean = false,
-    updater: AppUpdater = LocalPlatform.current.updates,
-) {
-    val cs = MaterialTheme.colorScheme
-    val scope = rememberCoroutineScope()
-    val update by updater.status.collectAsState()
-    val loading = update.phase == UpdatePhase.Checking || update.phase == UpdatePhase.Idle
-    val installing = update.busy
-    val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
-    val ownChrome = (standalone || compact) && !topBarShown
-
-    val refresh: () -> Unit = remember(scope, updater) { { scope.launch { updater.check() } } }
-
-    // The seam no-ops a check while a download/install owns the phase, so entering the page mid
-    // download neither clobbers the progress nor re-enables the CTA.
-    LaunchedEffect(updater) { updater.check() }
-    SwipeBackHandler(enabled = ownChrome, onBack = onBack)
-
-    if (ownChrome) {
-        Scaffold(
-            modifier = modifier.testTag("app_update_overlay"),
-            topBar = {
-                TopAppBar(
-                    title = { Text("Check for updates", color = cs.onSurface) },
-                    navigationIcon = {
-                        IconButton(onClick = onBack, modifier = Modifier.testTag("app_update_back")) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back",
-                                tint = cs.onSurface,
-                            )
-                        }
-                    },
-                    actions = { RecheckButton(refresh, enabled = !loading && !installing) },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
-                )
-            },
-            containerColor = cs.background,
-        ) { padding ->
-            AppUpdateBody(Modifier.padding(padding), updater, refresh, showRecheck = false)
-        }
-    } else {
-        Surface(
-            modifier.fillMaxSize().testTag("app_update_overlay"),
-            color = cs.background,
-        ) {
-            AppUpdateBody(Modifier, updater, refresh, showRecheck = true)
-        }
-    }
-}
-
-@Composable
-private fun RecheckButton(onClick: () -> Unit, enabled: Boolean) {
-    TextButton(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = Modifier.testTag("app_update_recheck"),
-    ) {
-        Text("Recheck")
+suspend fun AppUpdater.keepUpdated(every: Duration = 6.hours) {
+    check()
+    if (!offersBackgroundUpdates) return
+    while (true) {
+        prepareInBackground()
+        delay(every)
     }
 }
 
 /**
- * @param showRecheck the page painted no bar of its own, so Recheck rides in the body (whoever
- *   painted the bar above has no room for this page's actions).
+ * The updated app's one-time message (#113): "Updated to vX · all sessions reconnected" once [reconnected] says the
+ * sessions are back, or plain "Updated to vX" if they aren't within [waitMs]. Nothing on a launch that wasn't an update.
  */
-@Composable
-private fun AppUpdateBody(
-    modifier: Modifier,
-    updater: AppUpdater,
-    refresh: () -> Unit,
-    showRecheck: Boolean,
-) {
-    val cs = MaterialTheme.colorScheme
-    val scope = rememberCoroutineScope()
-    val update by updater.status.collectAsState()
-    val status = update.release
-    val loading = update.phase == UpdatePhase.Checking || update.phase == UpdatePhase.Idle
-    val installing = update.busy
-    val downloadLabel =
-        if (installing) formatUpdateProgress(update.bytesReceived, update.contentLength) else null
-
-    if (loading && status == null) {
-        Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(color = cs.primary)
-        }
-        return
-    }
-
-    Column(
-        modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .testTag("app_update_screen"),
-    ) {
-        Column(
-            Modifier.widthIn(max = SettingsDetailMaxWidth).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            if (showRecheck) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    RecheckButton(refresh, enabled = !loading && !installing)
-                }
-            }
-            SettingsSectionHeader("APP")
-            val s = status
-            Column {
-                Text(
-                    "supermux ${s?.currentVersion ?: updater.currentVersion}",
-                    color = cs.onSurface,
-                    fontSize = 14.sp,
-                    modifier = Modifier.testTag("app_update_version"),
-                )
-                // Desktop packages carry no version code; only a platform that has one prints it.
-                (s?.currentVersionCode ?: updater.currentVersionCode)?.let {
-                    Text("versionCode $it", color = cs.onSurfaceVariant, fontSize = 12.sp)
-                }
-            }
-
-            when {
-                s == null -> Text(
-                    "Couldn't check for updates.",
-                    color = cs.error,
-                    fontSize = 13.sp,
-                    modifier = Modifier.testTag("app_update_message"),
-                )
-
-                s.lastError != null && s.latestVersion == null -> Text(
-                    s.lastError!!,
-                    color = cs.error,
-                    fontSize = 12.sp,
-                    modifier = Modifier.testTag("app_update_message"),
-                )
-
-                s.updateAvailable -> {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        Icon(
-                            Icons.Default.Download,
-                            contentDescription = null,
-                            tint = cs.primary,
-                            modifier = Modifier.size(16.dp),
-                        )
-                        Text(
-                            "Update available: ${s.latestVersion}",
-                            color = cs.onSurface,
-                            fontSize = 14.sp,
-                            modifier = Modifier.testTag("app_update_message"),
-                        )
-                    }
-                    if (s.highlights.isNotEmpty()) {
-                        Column(
-                            Modifier.testTag("app_update_whats_new"),
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            SettingsSectionHeader("WHAT'S NEW")
-                            s.highlights.forEach { line ->
-                                Row(verticalAlignment = Alignment.Top) {
-                                    Text("•", color = cs.primary, fontSize = 14.sp)
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(line, color = cs.onSurface, fontSize = 14.sp)
-                                }
-                            }
-                        }
-                    }
-                    s.notesUrl?.let {
-                        Row(
-                            Modifier
-                                .clickable { updater.openReleaseNotes() }
-                                .testTag("app_update_notes"),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            Text("Release notes", color = cs.primary, fontSize = 14.sp)
-                            Icon(
-                                Icons.AutoMirrored.Filled.OpenInNew,
-                                contentDescription = null,
-                                tint = cs.primary,
-                                modifier = Modifier.size(14.dp),
-                            )
-                        }
-                    }
-                    if (s.canInstall && s.downloadUrl != null) {
-                        Button(
-                            onClick = {
-                                scope.launch {
-                                    // The seam publishes progress and the failure text on its own
-                                    // status; a refused install (unknown sources off) also raises
-                                    // needsInstallPermission, which jumps to Settings exactly as
-                                    // Android's "need-permission" return used to.
-                                    val installer = updater.download { _, _ -> }
-                                    if (installer != null) {
-                                        updater.install(installer)
-                                    } else if (updater.status.value.needsInstallPermission) {
-                                        updater.openInstallPermissionSettings()
-                                    }
-                                }
-                            },
-                            enabled = !installing,
-                            modifier = Modifier.fillMaxWidth().testTag("app_update_install"),
-                        ) {
-                            if (installing) {
-                                CircularProgressIndicator(
-                                    color = cs.onPrimary,
-                                    strokeWidth = 2.dp,
-                                    modifier = Modifier.size(16.dp),
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Text(downloadLabel ?: "Downloading…")
-                            } else {
-                                Icon(
-                                    Icons.Default.Download,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp),
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Text("Download & install")
-                            }
-                        }
-                        SettingsCaption(installCaption(installerKindFrom(s.downloadUrl)))
-                    } else {
-                        Text(
-                            // Deliberately installer-agnostic: this branch fires on every host,
-                            // and only one of them ships an APK.
-                            "Update is available but no installer file was published for this release.",
-                            color = cs.onSurfaceVariant,
-                            fontSize = 12.sp,
-                        )
-                    }
-                }
-
-                else -> Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Icon(
-                        Icons.Default.Check,
-                        contentDescription = null,
-                        tint = cs.primary,
-                        modifier = Modifier.size(16.dp),
-                    )
-                    Text(
-                        "You're up to date",
-                        color = cs.onSurfaceVariant,
-                        fontSize = 14.sp,
-                        modifier = Modifier.testTag("app_update_message"),
-                    )
-                }
-            }
-
-            if (update.needsInstallPermission) {
-                // Only a platform with an unknown-sources gate ever raises this (Android). The CTA
-                // already jumped to Settings once; this row is what the user comes back to.
-                Row(
-                    Modifier.fillMaxWidth().testTag("app_update_permission"),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text(
-                        update.error ?: "Allow installing apps from this source, then try again.",
-                        color = cs.error,
-                        fontSize = 12.sp,
-                        modifier = Modifier.weight(1f),
-                    )
-                    TextButton(
-                        onClick = { updater.openInstallPermissionSettings() },
-                        modifier = Modifier.testTag("app_update_permission_action"),
-                    ) {
-                        Text("Allow")
-                    }
-                }
-            } else {
-                // The permission row above already IS the error text; printing it twice was the one
-                // thing neither original had to worry about (neither drew the row).
-                update.error?.let {
-                    Text(
-                        it,
-                        color = cs.error,
-                        fontSize = 12.sp,
-                        modifier = Modifier.testTag("app_update_error"),
-                    )
-                }
-            }
-        }
-    }
+suspend fun AppUpdater.announceUpdate(notices: NoticeChannel, reconnected: Flow<Boolean>, waitMs: Long = 60_000) {
+    val version = justUpdatedTo ?: return
+    val back = withTimeoutOrNull(waitMs) { reconnected.first { it } } == true
+    notices.show(if (back) "Updated to v$version · all sessions reconnected" else "Updated to v$version")
+    acknowledgeUpdated()
 }
 
+/** The caption under a Download: what it will open on this host. */
 fun installCaption(kind: String?): String = when (kind) {
     // Android's wording — the notifier that posts this progress lives behind the seam.
     "apk" -> "One-tap installs the latest release APK over this build. " +
@@ -475,11 +171,75 @@ fun installCaption(kind: String?): String = when (kind) {
     else -> "Downloads the latest .$kind and opens it."
 }
 
+// ── The download (#95) ────────────────────────────────────────────────────────
+
+/**
+ * [updater]'s download of [version] as one of the fleet's downloads (#95): the installer's file,
+ * carrying the [DownloadedInstaller] itself as its handle — the activity bar's Install hands that
+ * back to the updater. The updater keeps publishing its own status meanwhile, so the page still
+ * shows its percentage. The transfer runs inside `fetch`, so cancelling the job (the bar's Cancel,
+ * the app closing) stops it and the updater's own `finally` settles its phase: no `cancel` here.
+ */
+internal fun updaterSource(updater: AppUpdater, version: String): DownloadSource = object : DownloadSource {
+    override suspend fun fetch(progress: (received: Long, total: Long?) -> Unit): DownloadedFile? {
+        var size = 0L
+        val installer = updater.download { received, total ->
+            size = received
+            progress(received, total)
+        } ?: return null
+        return DownloadedFile(updateName(version), INSTALLER_MIME, size, installer.location, handle = installer)
+    }
+}
+
+/**
+ * Download [release]'s installer as one of the fleet's [downloads] — or join the one already
+ * running or done, so a finished download is never fetched twice — and, while the caller is still
+ * here when it finishes, hand it to the OS at once, as before (R1). Leaving releases the claim:
+ * the download carries on and waits in the activity bar. [onFailed] hears a download that failed
+ * while the caller waited (the updater's status says why); the bar's Cancel is no failure.
+ */
+internal suspend fun downloadUpdate(
+    downloads: DownloadCenter,
+    updater: AppUpdater,
+    release: ClientUpdateStatus,
+    onFailed: () -> Unit,
+) {
+    // A newer release names its version; the fallback only keeps the key well formed.
+    val version = release.latestVersion ?: "update"
+    val key = "app-update:$version"
+    val source = updaterSource(updater, version)
+    val claim = downloads.start(key, updateName(version), INSTALLER_MIME, DownloadPurpose.Installer, source)
+    try {
+        val installer = claim.await()?.handle as? DownloadedInstaller
+        when {
+            installer != null -> updater.install(installer)
+            downloads.items.value.firstOrNull { it.key == key }?.state is DownloadState.Failed -> onFailed()
+        }
+    } finally {
+        claim.release()
+    }
+}
+
+/** What the activity bar calls an update: "Supermux 1.1.0 is ready to install". */
+private fun updateName(version: String) = "Supermux $version"
+
+private const val INSTALLER_MIME = "application/octet-stream"
+
 // ── Sidebar card ──────────────────────────────────────────────────────────────
 
-/** Whether [AppUpdateCard] draws for this status: a check found a newer, undismissed release. */
+/**
+ * Whether [AppUpdateCard] draws for this status: a check found a newer, undismissed release. With background updates
+ * on (#113) it waits, quietly, until that release is downloaded and [UpdateStatus.ready].
+ */
 val UpdateStatus.showsUpdateCard: Boolean
-    get() = release?.updateAvailable == true && !dismissed
+    get() = release?.updateAvailable == true && !dismissed && (!background || ready != null)
+
+/** What a waiting "Restart to update" says (#113): an upload first, as the likelier and the longer. */
+fun finishingLabel(work: List<InFlightWork.Kind>): String =
+    if (InFlightWork.Kind.Upload in work || work.isEmpty()) "Finishing upload…" else "Finishing recording…"
+
+/** The ready card's line where the installer reopens the app (#113): the agents carry on through the restart. */
+const val RESTART_CAPTION = "Restart to update: supermux closes, installs it and opens again. Your sessions carry on."
 
 /**
  * The card's one muted line: what pressing Install will actually do on this host. Not a warning —
@@ -498,10 +258,13 @@ fun updateCardCaption(kind: String?): String = when (kind) {
  * and **Install** (download, then hand the installer to the OS). It replaced the strip that used
  * to run across the top of the whole app.
  *
- * The seam is the one [AppUpdateScreen] reads, so dismissing here settles there. The card never
+ * The seam is the one General's App version row reads, so dismissing here settles there. The card never
  * checks on its own — the shell does, once per launch — because on a phone the sidebar is
  * recomposed every time the list comes back, and each of those would be another poll (and another
  * GitHub API read for the notes).
+ *
+ * Install's download is one of the fleet's (#95): it goes on when the card goes away (a phone opens
+ * a chat over the sidebar) and then waits in the activity bar, whose Install finishes the job.
  *
  * @param onOpenPage where a failed download goes: the card has no room for the error text.
  */
@@ -533,8 +296,15 @@ private fun UpdateCardBody(
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
+    val downloads = rememberDownloads()
     val installing = update.busy
-    val canInstall = release.canInstall && release.downloadUrl != null
+    // #113: downloaded in the background; Windows' installer then closes, updates and reopens the app by itself.
+    val ready = update.ready
+    val restarts = ready != null && updater.restartsToUpdate
+    // "Restart to update" pressed while the app's own work runs: it waits, saying what for.
+    var waiting by remember { mutableStateOf(false) }
+    val work by InFlightWork.active.collectAsState()
+    val canInstall = ready != null || (release.canInstall && release.downloadUrl != null)
     val shape = RoundedCornerShape(Radii.md)
     Column(
         Modifier
@@ -555,7 +325,7 @@ private fun UpdateCardBody(
             )
             Spacer(Modifier.width(10.dp))
             Text(
-                "Update available",
+                if (ready != null) "Update ready" else "Update available",
                 color = cs.onSurface,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Medium,
@@ -578,7 +348,7 @@ private fun UpdateCardBody(
         Spacer(Modifier.height(Space.sm))
         Column(Modifier.padding(end = Space.sm)) {
             Text(
-                "v${release.latestVersion} is ready to install.",
+                if (ready != null) "v${release.latestVersion} is downloaded." else "v${release.latestVersion} is ready to install.",
                 color = cs.onSurface,
                 fontSize = 13.sp,
                 lineHeight = 18.sp,
@@ -587,7 +357,7 @@ private fun UpdateCardBody(
             if (canInstall) {
                 Spacer(Modifier.height(Space.sm))
                 Text(
-                    updateCardCaption(installerKindFrom(release.downloadUrl)),
+                    if (restarts) RESTART_CAPTION else updateCardCaption(installerKindFrom(release.downloadUrl)),
                     color = cs.onSurfaceVariant,
                     fontSize = 13.sp,
                     lineHeight = 18.sp,
@@ -604,18 +374,32 @@ private fun UpdateCardBody(
                     Button(
                         onClick = {
                             scope.launch {
-                                val installer = updater.download { _, _ -> }
-                                val after = updater.status.value
-                                when {
-                                    installer != null -> updater.install(installer)
-                                    after.needsInstallPermission -> updater.openInstallPermissionSettings()
-                                    // The failure text is on the status (and in the status bar on
-                                    // Android); the card has no room for it, so open the page.
-                                    else -> onOpenPage()
+                                if (ready != null) {
+                                    // The app's own work first (#113): an upload or a recording finishes, then the
+                                    // restart goes ahead by itself. No dialog.
+                                    waiting = true
+                                    try {
+                                        InFlightWork.active.first { it.isEmpty() }
+                                    } finally {
+                                        waiting = false
+                                    }
+                                    // Downloaded in the background: no second download. The card has no room for an
+                                    // error: a failed hand-off opens the page.
+                                    if (updater.install(ready) != null) onOpenPage()
+                                    return@launch
+                                }
+                                downloadUpdate(downloads, updater, release) {
+                                    val after = updater.status.value
+                                    when {
+                                        after.needsInstallPermission -> updater.openInstallPermissionSettings()
+                                        // The failure text is on the status (and in the status bar on
+                                        // Android); the card has no room for it, so open the page.
+                                        else -> onOpenPage()
+                                    }
                                 }
                             }
                         },
-                        enabled = !installing,
+                        enabled = !installing && !waiting,
                         shape = RoundedCornerShape(Radii.sm),
                         // Inverse ink: the one solid thing on the card, without a brand colour.
                         colors = ButtonDefaults.buttonColors(
@@ -629,7 +413,12 @@ private fun UpdateCardBody(
                         modifier = buttonHeight.weight(1f).testTag("app_update_card_update"),
                     ) {
                         Text(
-                            if (installing) formatUpdateProgress(update.bytesReceived, update.contentLength) else "Install",
+                            when {
+                                installing -> formatUpdateProgress(update.bytesReceived, update.contentLength)
+                                waiting -> finishingLabel(work)
+                                restarts -> "Restart to update"
+                                else -> "Install"
+                            },
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Medium,
                             maxLines = 1,
@@ -648,11 +437,12 @@ private fun UpdateCardBody(
 @Composable
 private fun WhatsNewButton(release: ClientUpdateStatus, updater: AppUpdater, modifier: Modifier) {
     val cs = MaterialTheme.colorScheme
+    val highlights = highlightsFor(release.highlights, LocalPlatform.current.releasePlatform)
     var open by remember { mutableStateOf(false) }
     Box(modifier) {
         OutlinedButton(
             onClick = {
-                if (release.highlights.isNotEmpty()) open = true else updater.openReleaseNotes()
+                if (highlights.isNotEmpty()) open = true else updater.openReleaseNotes()
             },
             shape = RoundedCornerShape(Radii.sm),
             border = BorderStroke(Stroke.hairline, cs.onSurface.copy(alpha = 0.16f)),
@@ -682,7 +472,7 @@ private fun WhatsNewButton(release: ClientUpdateStatus, updater: AppUpdater, mod
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
                 )
-                release.highlights.forEach { HighlightLine(it) }
+                highlights.forEach { HighlightLine(it) }
                 if (release.notesUrl != null) {
                     Row(
                         Modifier

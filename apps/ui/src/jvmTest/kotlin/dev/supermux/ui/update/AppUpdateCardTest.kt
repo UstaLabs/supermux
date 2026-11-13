@@ -25,7 +25,9 @@ import dev.supermux.ui.platform.FakeAppUpdater
 import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.platform.NO_CAPS
 import dev.supermux.ui.platform.UpdateStatus
+import dev.supermux.ui.settings.pages.AppUpdateRows
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -120,17 +122,6 @@ class AppUpdateCardTest {
         onNodeWithTag("app_update_card_whats_new").performClick()
         waitForIdle()
         onNodeWithTag("app_update_card_notes").assertIsDisplayed()
-        notes.forEach { onNodeWithText(it).assertIsDisplayed() }
-    }
-
-    @Test fun the_page_lists_every_highlight() = runComposeUiTest {
-        val notes = listOf("Agent lanes", "Windows sessions start", "No console windows", "Faster sidebar")
-        val updater = FakeAppUpdater(release = release(highlights = notes))
-        setPlatformContent(platform(updater), widthClass = WindowWidthClass.Expanded) {
-            AppUpdateScreen(standalone = true)
-        }
-        waitForIdle()
-        onNodeWithTag("app_update_whats_new").assertIsDisplayed()
         notes.forEach { onNodeWithText(it).assertIsDisplayed() }
     }
 
@@ -265,16 +256,16 @@ class AppUpdateCardTest {
         setPlatformContent(platform(updater), widthClass = WindowWidthClass.Expanded) {
             Column(Modifier.fillMaxSize()) {
                 CheckedCard(updater)
-                AppUpdateScreen(standalone = true)
+                AppUpdateRows()
             }
         }
         waitForIdle()
         onNodeWithTag("app_update_card").assertIsDisplayed()
-        onNodeWithTag("app_update_message").assertTextEquals("Update available: 1.1.0")
+        onNodeWithTag("app_update_version").assertTextEquals("supermux 1.0.0 · 1.1.0 is ready")
         onNodeWithTag("app_update_card_dismiss").performClick()
         waitForIdle()
         onNodeWithTag("app_update_card").assertDoesNotExist()
-        // Dismissal is about the CARD; the page still offers the update.
+        // Dismissal is about the CARD; General still offers the update.
         onNodeWithTag("app_update_install").assertIsDisplayed()
     }
 
@@ -283,5 +274,97 @@ class AppUpdateCardTest {
         assertFalse(UpdateStatus(release = release(available = false)).showsUpdateCard)
         assertTrue(UpdateStatus(release = release()).showsUpdateCard)
         assertFalse(UpdateStatus(release = release(), dismissed = true).showsUpdateCard)
+    }
+
+    // ── #113: background updates, "Restart to update" ─────────────────────────────────────────
+
+    @Test fun a_background_update_shows_no_card_until_it_is_downloaded() {
+        val found = UpdateStatus(release = release(), background = true)
+        assertFalse(found.showsUpdateCard, "quiet while it downloads")
+        assertTrue(found.copy(ready = dev.supermux.ui.platform.DownloadedInstaller("/tmp/u.msi", "msi")).showsUpdateCard)
+        assertTrue(found.copy(background = false).showsUpdateCard, "switched off: today's card")
+    }
+
+    @Test fun a_ready_update_restarts_to_update_without_downloading_again() = runComposeUiTest {
+        val updater = FakeAppUpdater(release = release()).also { it.restartsToUpdate = true }
+        setPlatformContent(platform(updater)) {
+            LaunchedEffect(updater) { updater.check(); updater.becomeReady() }
+            AppUpdateCard()
+        }
+        waitForIdle()
+        onNodeWithText("Update ready").assertIsDisplayed()
+        onNodeWithTag("app_update_card_version", useUnmergedTree = true).assertTextEquals("v1.1.0 is downloaded.")
+        onNodeWithTag("app_update_card_update").assertTextEquals("Restart to update")
+        onNodeWithTag("app_update_card_update").performClick()
+        waitForIdle()
+        assertEquals(listOf("/tmp/ready.msi"), updater.installed.map { it.location })
+    }
+
+    @Test fun a_ready_update_that_cannot_restart_the_app_says_install() = runComposeUiTest {
+        val updater = FakeAppUpdater(release = release())
+        setPlatformContent(platform(updater)) {
+            LaunchedEffect(updater) { updater.check(); updater.becomeReady(dev.supermux.ui.platform.DownloadedInstaller("/tmp/ready.dmg", "dmg")) }
+            AppUpdateCard()
+        }
+        waitForIdle()
+        onNodeWithTag("app_update_card_update").assertTextEquals("Install")
+        onNodeWithTag("app_update_card_update").performClick()
+        waitForIdle()
+        assertEquals(listOf("/tmp/ready.dmg"), updater.installed.map { it.location })
+    }
+
+    // The shell's launch check: once, then (desktop) a background prepare now and every 6 hours while the app runs.
+    @Test fun the_launch_check_prepares_in_the_background_and_again_every_six_hours() = kotlinx.coroutines.test.runTest {
+        val updater = FakeAppUpdater(release = release()).also { it.offersBackgroundUpdates = true }
+        val job = launch { updater.keepUpdated() }
+        testScheduler.runCurrent()
+        assertEquals(1, updater.checks)
+        assertEquals(1, updater.prepares)
+        testScheduler.advanceTimeBy(6 * 60 * 60 * 1000L + 1)
+        assertEquals(2, updater.prepares)
+        job.cancel()
+    }
+
+    @Test fun where_nothing_downloads_in_the_background_the_launch_check_is_the_only_one() = kotlinx.coroutines.test.runTest {
+        val updater = FakeAppUpdater(release = release())
+        updater.keepUpdated()
+        assertEquals(1, updater.checks)
+        assertEquals(0, updater.prepares)
+    }
+
+    // ── #113: the updated app says so once, after its sessions are back ───────────────────────
+
+    private class Said : dev.supermux.ui.platform.NoticeChannel {
+        val lines = mutableListOf<String>()
+        override fun show(text: String) { lines += text }
+    }
+
+    @Test fun the_updated_app_says_so_once_its_sessions_are_back() = kotlinx.coroutines.test.runTest {
+        val updater = FakeAppUpdater().also { it.justUpdatedTo = "1.1.0" }
+        val said = Said()
+        val back = kotlinx.coroutines.flow.MutableStateFlow(false)
+        val job = launch { updater.announceUpdate(said, back) }
+        testScheduler.runCurrent()
+        assertTrue(said.lines.isEmpty(), "not before the sessions are back")
+        back.value = true
+        job.join()
+        assertEquals(listOf("Updated to v1.1.0 · all sessions reconnected"), said.lines)
+        assertEquals(1, updater.acknowledged)
+    }
+
+    @Test fun sessions_that_stay_away_get_the_update_named_without_the_claim() = kotlinx.coroutines.test.runTest {
+        val updater = FakeAppUpdater().also { it.justUpdatedTo = "1.1.0" }
+        val said = Said()
+        updater.announceUpdate(said, kotlinx.coroutines.flow.MutableStateFlow(false))
+        assertEquals(listOf("Updated to v1.1.0"), said.lines)
+        assertEquals(1, updater.acknowledged)
+    }
+
+    @Test fun a_launch_that_was_not_an_update_says_nothing() = kotlinx.coroutines.test.runTest {
+        val updater = FakeAppUpdater()
+        val said = Said()
+        updater.announceUpdate(said, kotlinx.coroutines.flow.MutableStateFlow(true))
+        assertTrue(said.lines.isEmpty())
+        assertEquals(0, updater.acknowledged)
     }
 }

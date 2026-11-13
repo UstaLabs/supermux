@@ -19,6 +19,7 @@ import { accountMethod, isSystemAccount } from "../accounts/broker-accounts"
 import { shimSpawnSpec } from "../session-manager/shim-spawn"
 import { CLAUDE_SHIM_SERVER } from "../session-manager/trust"
 import { muxShimModeFor } from "../mux-tools/mode"
+import { files, host } from "@supermux/platform"
 
 /** Codex: no session copy of ~/.codex/auth.json on an account; a fresh one when back on the system login. */
 export function syncCodexSessionCredential(opts: { sessionHome: string; canonicalHome: string; account: string | undefined; systemApiKey: string | undefined }): void {
@@ -33,7 +34,7 @@ export function syncCodexSessionCredential(opts: { sessionHome: string; canonica
 
 /** Cursor: same rule for the session copy of cursor/auth.json. */
 export function syncCursorSessionCredential(opts: { sessionHome: string; userConfigDir: string; account: string | undefined; systemApiKey: string | undefined }): void {
-  const base = process.platform === "win32" ? join(opts.sessionHome, "AppData", "Roaming") : join(opts.sessionHome, ".config")
+  const base = host.windows() ? join(opts.sessionHome, "AppData", "Roaming") : join(opts.sessionHome, ".config")
   const sessionCopy = join(base, "cursor", "auth.json")
   const canonical = join(opts.userConfigDir, "cursor", "auth.json")
   if (!isSystemAccount(opts.account)) {
@@ -67,9 +68,9 @@ export async function claudeAccountArgs(args: string[], opts: { sessionHome: str
   if (muxShimModeFor("claude") === "host") return args
   if ((await accountMethod(opts.account)) !== "subscription") return args
   const spec = shimSpawnSpec()
-  mkdirSync(opts.sessionHome, { recursive: true, mode: 0o700 })
+  files.mkdirPrivate(opts.sessionHome)
   const file = join(opts.sessionHome, "mcp-account.json")
-  writeFileSync(file, JSON.stringify({ mcpServers: { [CLAUDE_SHIM_SERVER]: { type: "stdio", command: spec.shimCommand, args: spec.shimArgs, env: {} } } }, null, 2), { mode: 0o600 })
+  files.writePrivate(file, JSON.stringify({ mcpServers: { [CLAUDE_SHIM_SERVER]: { type: "stdio", command: spec.shimCommand, args: spec.shimArgs, env: {} } } }, null, 2))
   const at = args.indexOf("--mcp-config")
   if (at >= 0 && at + 1 < args.length) return [...args.slice(0, at + 2), file, ...args.slice(at + 2)]
   return [...args, "--mcp-config", file]

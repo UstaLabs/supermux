@@ -118,6 +118,21 @@ interface Platform {
     /** The assistant overlay's system side (#62); null where there is none. */
     val assistantOverlay: AssistantOverlayHost? get() = null
 
+    /**
+     * The app's audio player's outputs (#118) where this platform has its own — AVAudioPlayer on macOS and iOS, whose
+     * video library cannot play an audio-only file there — or null for the library's
+     * ([dev.supermux.ui.work.LibraryAudioOutputs]). One instance, shared by every player that asks: its
+     * [dev.supermux.work.AudioOutputs.close] must leave it usable.
+     */
+    val audioOutputs: dev.supermux.work.AudioOutputs? get() = null
+
+    /**
+     * The system's Now Playing for what the audio player plays (#118 cars 3b/3c): the lock screen and Control Center on
+     * iOS, the Mac's Now Playing and media keys, Windows's media keys. Null where there is none (Android has its media
+     * session in its outputs). One for the process.
+     */
+    val systemNowPlaying: dev.supermux.work.SystemNowPlaying? get() = null
+
     /** Read-aloud output (OS synthesiser + broker audio playback). */
     val tts: TtsEngine
 
@@ -168,6 +183,15 @@ interface Platform {
      * Storage (size + Clear). Null hides that row: a host that caches nothing has nothing to clear.
      */
     val mediaCache: dev.supermux.media.MediaCache? get() = null
+
+    /**
+     * Whether every open Browser tab's page stays live, hidden, while another tab is in front, as a desktop browser's
+     * tabs do (#105, Ahmet's call: tabs never freeze). Phones keep only the tab in front and park the rest.
+     */
+    val keepsBrowserTabsLive: Boolean get() = false
+
+    /** Which build this is, as a What's new edition names it (#90); null where none says. */
+    val releasePlatform: dev.supermux.ui.whatsnew.ReleasePlatform? get() = null
 }
 
 /** Default [Platform.pickFiles] requester for screens that only ever have one picker in play. */
@@ -234,8 +258,30 @@ data class Caps(
      */
     val trackpadMomentum: Boolean = false,
     /** The assistant overlay (#62): the default Agent can float over other apps (Android's
-     *  "Display over other apps"). Gates the Appearance switch; see [Platform.assistantOverlay]. */
+     *  "Display over other apps"). Gates the Privacy & labs switch; see [Platform.assistantOverlay]. */
     val assistantOverlay: Boolean = false,
+    /**
+     * A link from chat opens in a Browser tab of the workspace (#105). False on the web client, where a link opens a
+     * tab of the browser the app runs in (Ahmet's Q5).
+     */
+    val linksInBrowserTabs: Boolean = true,
+    /** A Browser tab can picture its page (#122's screenshot to chat). False on the web client, whose iframe can't. */
+    val pageScreenshots: Boolean = true,
+    /**
+     * A Browser tab can give its page another user agent and colour scheme (#122's device mode). False on the web
+     * client, whose iframe has the browser's own.
+     */
+    val pageEmulation: Boolean = true,
+    /**
+     * A Browser tab's engine has a page zoom, so device mode can fit a big device in the pane at its own CSS size (#122
+     * 2b). macOS and iOS (WebKit's pageZoom); not Android, whose zoom is text zoom, nor Windows, Linux or the web yet.
+     */
+    val pageFit: Boolean = false,
+    /**
+     * A Browser tab can run its picker's reads in the page (#122 pick and comment). False on the web client, whose
+     * cross-origin iframe takes no script from the app.
+     */
+    val pagePick: Boolean = true,
 )
 
 /**

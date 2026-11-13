@@ -45,3 +45,4 @@ test("gitAsync: a git that runs past its timeout says it timed out", async () =>
   await expect(gitAsync(dir, ["cat-file", "--batch"], { timeoutMs: 200 })).rejects.toThrow("git cat-file timed out after 200 ms")
   rmSync(dir, { recursive: true, force: true })
 })
+

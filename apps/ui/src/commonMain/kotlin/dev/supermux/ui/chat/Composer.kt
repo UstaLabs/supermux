@@ -145,6 +145,8 @@ import dev.supermux.proto.SlashCommand
 import dev.supermux.ui.TestIds
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.files.GoToEntry
+import dev.supermux.ui.keys.KeyOs
+import dev.supermux.ui.keys.currentKeyOs
 import dev.supermux.ui.prefs.LocalUiPrefsOrNull
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.files.GoToFileDebounceMs
@@ -212,7 +214,10 @@ data class ComposerAttachment(
  * file is only staged, as if picked: the user writes the message and sends it (the assistant
  * overlay's "Share what's on screen").
  */
-data class ComposerExternalAttach(val file: PickedFile?, val text: String, val send: Boolean = true)
+data class ComposerExternalAttach(val files: List<PickedFile>, val text: String, val send: Boolean = true) {
+    /** One file, or none (a path that wasn't a file). */
+    constructor(file: PickedFile?, text: String, send: Boolean = true) : this(listOfNotNull(file), text, send)
+}
 
 /** One-shot "transcribe these bytes and append the cleaned text to the draft" request — the
  *  `SM_DICTATE` headless hook, which proves the real POST→append round-trip under Xvfb where there
@@ -269,11 +274,6 @@ class ComposerActions(
     /** Live dictation as a stream (`/transcribe/stream`): the broker hears the pauses and owns the
      *  text. Used only when the broker says it can ([VoiceCaps.streaming]). */
     val openDictationStream: OpenDictationStream? = null,
-    /** Git ops for [ComposerFooter]; null hides the branch chip's menu (the label still renders). */
-    val gitFetch: (suspend () -> dev.supermux.net.GitOpResult?)? = null,
-    val gitPull: (suspend () -> dev.supermux.net.GitOpResult?)? = null,
-    val gitPush: (suspend () -> dev.supermux.net.GitOpResult?)? = null,
-    val gitPublish: (suspend () -> dev.supermux.net.GitOpResult?)? = null,
     /**
      * The `@` menu's rows: one folder of the session's workdir, or a fuzzy search across it (see
      * [MentionLookup]); null rows = the host could not answer. Null = no `@` menu at all.
@@ -314,10 +314,6 @@ fun rememberComposerActions(
         transcribeWarm = { id -> app.transcribeWarm(id) },
         openDictationStream = { id, session -> app.openDictationStream(sessionId, id, session) },
         consumePendingFirst = { id -> app.consumePendingFirst(id)?.let { it.text to it.attachments } },
-        gitFetch = { app.gitFetch(sessionId) },
-        gitPull = { app.gitPull(sessionId) },
-        gitPush = { app.gitPush(sessionId) },
-        gitPublish = { app.gitPublish(sessionId) },
         mentionFiles = workdir?.takeIf { it.isNotBlank() }?.let { dir ->
             { lookup -> lookupMentionFiles(app.fileSystem, dir, lookup) }
         },
@@ -469,10 +465,9 @@ internal fun composerKind(mime: String): String? =
     if (mime.startsWith("audio")) "voice" else null
 
 /**
- * Pure Ctrl/Cmd+V paste-key predicate: `true` only for a KeyDown V with Ctrl OR Meta held
- * (Windows/Linux vs macOS) and Shift **not** held. Ctrl and Meta are **separate** flags so tests can
- * prove each modifier path distinctly. Ctrl/Cmd+Shift+V is the conventional "paste as plain text"
- * chord and must fall through to the text field.
+ * Pure paste-image key predicate: `true` only for a KeyDown V with this platform's primary modifier (⌘ on Apple,
+ * Ctrl elsewhere, never the other one, #96) and Shift **not** held. Ctrl/Cmd+Shift+V is the conventional "paste
+ * as plain text" chord and must fall through to the text field.
  */
 internal fun isComposerPasteKey(
     key: Key,
@@ -480,11 +475,12 @@ internal fun isComposerPasteKey(
     ctrlPressed: Boolean,
     metaPressed: Boolean,
     shiftPressed: Boolean = false,
+    os: KeyOs = currentKeyOs,
 ): Boolean =
     type == KeyEventType.KeyDown &&
         key == Key.V &&
-        (ctrlPressed || metaPressed) &&
-        !shiftPressed
+        !shiftPressed &&
+        if (os == KeyOs.Apple) metaPressed && !ctrlPressed else ctrlPressed && !metaPressed
 
 /**
  * Whether a paste-image gesture should consume the key and stage: the upload seam must be bound
@@ -504,12 +500,13 @@ internal fun handleComposerPasteKey(
     ctrlPressed: Boolean,
     metaPressed: Boolean,
     shiftPressed: Boolean,
+    os: KeyOs = currentKeyOs,
     uploadBound: Boolean,
     /** Lazily evaluated so the clipboard is only probed after the paste-key chord matches. */
     likelyHasImage: () -> Boolean,
     onPasteImage: () -> Unit,
 ): Boolean {
-    if (!isComposerPasteKey(key, type, ctrlPressed, metaPressed, shiftPressed)) return false
+    if (!isComposerPasteKey(key, type, ctrlPressed, metaPressed, shiftPressed, os)) return false
     if (uploadBound && likelyHasImage()) {
         onPasteImage()
         return true
@@ -796,6 +793,8 @@ fun Composer(
         val seq = ++ids.nextSeq
         val att = attachments[idx].copy(state = UploadState.Uploading(0f), runSeq = seq)
         attachments[idx] = att
+        // The app's own work: "Restart to update" waits for it (#113).
+        val endWork = dev.supermux.ui.platform.InFlightWork.begin(dev.supermux.ui.platform.InFlightWork.Kind.Upload)
         uploadScope.launch {
             val fileId = up(att.source, att.name, att.mime, att.kind) { sent, total ->
                 val pct = if (total > 0) (sent.toFloat() / total).coerceIn(0f, 1f) else 0f
@@ -820,7 +819,7 @@ fun Composer(
                 if (fileId != null) it.copy(state = UploadState.Done(fileId))
                 else it.copy(state = UploadState.Failed)
             }
-        }
+        }.invokeOnCompletion { endWork() }
     }
 
     /** Stage ONE picked/captured/pasted/dropped file — the single funnel every source shares, so a
@@ -1062,26 +1061,26 @@ fun Composer(
     // the recomposition that updates it.
     LaunchedEffect(externalAttach) {
         val request = externalAttach ?: return@LaunchedEffect
-        val file = request.file
-        if (onUpload == null || file == null) {
+        if (onUpload == null || request.files.isEmpty()) {
             onExternalAttachConsumed()
             return@LaunchedEffect
         }
-        val newId = stage(file)
+        val newIds = request.files.map { stage(it) }
         if (!request.send) {
+            // Staged, and its text in the draft after what is there (#122's ⌥Send): the user sends it with theirs.
+            if (request.text.isNotEmpty()) setText(if (text.isBlank()) request.text else text + "\n\n" + request.text)
             onExternalAttachConsumed()
             return@LaunchedEffect
         }
-        // Poll (200ms) for the new chip to leave Uploading — up to 60s (a resumable chunk loop, not
+        // Poll (200ms) for the new chips to leave Uploading — up to 60s (a resumable chunk loop, not
         // a single request; generous so a slow/large file doesn't false-time-out).
         var waited = 0L
-        var current = attachments.firstOrNull { it.id == newId }
-        while (current != null && current.state is UploadState.Uploading && waited < 60_000) {
+        fun current() = newIds.map { id -> attachments.firstOrNull { it.id == id } }
+        while (current().any { it != null && it.state is UploadState.Uploading } && waited < 60_000) {
             delay(200)
             waited += 200
-            current = attachments.firstOrNull { it.id == newId }
         }
-        if (current?.state is UploadState.Done) sendWith(request.text)
+        if (current().all { it?.state is UploadState.Done }) sendWith(request.text)
         onExternalAttachConsumed()
     }
 
@@ -1245,9 +1244,6 @@ fun Composer(
     val cs = MaterialTheme.colorScheme
     val inputInteraction = remember { MutableInteractionSource() }
     val inputFocused by inputInteraction.collectIsFocusedAsState()
-    // Where Ctrl/Cmd+V means "paste an image" (desktop's Edit ▸ Paste image accelerator): only here.
-    androidx.compose.runtime.LaunchedEffect(inputFocused) { ChatInputFocus.report(inputInteraction, inputFocused) }
-    androidx.compose.runtime.DisposableEffect(inputInteraction) { onDispose { ChatInputFocus.report(inputInteraction, false) } }
     // Focus moving away means Space's key-up will be delivered somewhere else: end the gesture here.
     LaunchedEffect(inputFocused) { if (!inputFocused) applySpaceHold(spaceHold.cancel()) }
     var ownDragOver by remember(sessionKey) { mutableStateOf(false) }

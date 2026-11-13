@@ -1,0 +1,158 @@
+// Click-to-send on the web, in real Chrome: a send goes through only from a real click or tap in that card, once.
+import { afterAll, beforeAll, expect, test } from "bun:test"
+import type { Browser } from "playwright"
+import { findBrowser } from "./check"
+import { clickRoundTrip, deliveries, forged, launchPlaywright, openCards } from "./click"
+
+let browser: Browser | undefined
+beforeAll(async () => { browser = await launchPlaywright() }, 30_000)
+afterAll(async () => { await browser?.close() })
+// Real Chrome, on demand: SHOW_HTML_EVALS=1 bun test evals/show-html
+const run = findBrowser() && process.env.SHOW_HTML_EVALS === "1" ? test : test.skip
+
+const card = (body: string) => `<!doctype html><html><head></head><body>${body}</body></html>`
+run("a real click sends, once", async () => {
+  const page = await openCards(browser!, { a: card(`<button id="b" onclick="supermux.send('real')">Use</button>`) })
+  const f = page.frames().find((fr) => fr.url().startsWith("blob:"))!
+  await f.locator("#b").click()
+  await page.waitForTimeout(200)
+  expect(await deliveries(page)).toEqual([{ card: "a", text: "real", ok: true }])
+  await page.close()
+}, 30_000)
+
+run("refused: on load, from a timer, from a script click, after the window, a second send from one click", async () => {
+  const page = await openCards(browser!, { a: card(`
+    <button id="real" onclick="supermux.send('real')">real</button>
+    <button id="twice" onclick="supermux.send('first'); supermux.send('second')">twice</button>
+    <button id="late" onclick="setTimeout(() => supermux.send('late'), 1300)">late</button>
+    <script>
+      supermux.send('on load');
+      setTimeout(() => supermux.send('timer'), 150);
+      setTimeout(() => document.getElementById('real').click(), 250);
+      setTimeout(() => document.getElementById('real').dispatchEvent(new MouseEvent('click', { bubbles: true })), 300);
+    </script>`) })
+  await page.waitForTimeout(500)
+  const f = page.frames().find((fr) => fr.url().startsWith("blob:"))!
+  await f.locator("#twice").click()
+  await page.waitForTimeout(150)
+  await f.locator("#late").click()
+  await page.waitForTimeout(1600)
+  const d = await deliveries(page)
+  const byText = (t: string) => d.filter((x) => x.text === t)
+  expect(byText("on load")).toEqual([{ card: "a", text: "on load", ok: false, reason: "no click on a button" }])
+  expect(byText("timer")[0]!.ok).toBe(false)
+  expect(byText("real").every((x) => !x.ok)).toBe(true)
+  expect(byText("real").length).toBe(2)
+  expect(byText("first")).toEqual([{ card: "a", text: "first", ok: true }])
+  expect(byText("second")[0]!.ok).toBe(false)
+  expect(byText("late")[0]).toMatchObject({ ok: false, reason: "too late after the click" })
+  await page.close()
+}, 30_000)
+
+run("refused: a send from a different card than the one clicked", async () => {
+  const page = await openCards(browser!, {
+    a: card(`<button id="b">just a button</button>`),
+    b: card(`<script>addEventListener('message', () => {}); setInterval(() => supermux.send('from b'), 100)</script>`),
+  })
+  const f = page.frames().filter((fr) => fr.url().startsWith("blob:"))
+  const a = f[0]!
+  await a.locator("#b").click()
+  await page.waitForTimeout(400)
+  const d = await deliveries(page)
+  expect(d.filter((x) => x.card === "b").length).toBeGreaterThan(0)
+  expect(d.filter((x) => x.card === "b").every((x) => !x.ok)).toBe(true)
+  await page.close()
+}, 30_000)
+
+run("refused: the user typed in the app after touching the card", async () => {
+  const page = await openCards(browser!, { a: card(`<button id="b" onclick="setTimeout(() => supermux.send('later'), 400)">x</button>`) })
+  const f = page.frames().find((fr) => fr.url().startsWith("blob:"))!
+  await f.locator("#b").click()
+  await page.locator("#composer").click()
+  await page.waitForTimeout(600)
+  const d = await deliveries(page)
+  expect(d).toEqual([{ card: "a", text: "later", ok: false, reason: "the user touched the app since" }])
+  await page.close()
+}, 30_000)
+
+run("the round trip on an agent's page: clicking its controls gets the choice back", async () => {
+  const r = await clickRoundTrip(browser!, card(`
+    <div>Palette A</div><button onclick="supermux.send('Use palette A')">Use A</button>
+    <div>Palette B</div><button onclick="supermux.send('Use palette B')">Use B</button>`))
+  expect(r.clicked).toBe(2)
+  expect(r.sent).toEqual(["Use palette A", "Use palette B"])
+}, 30_000)
+
+
+run("refused: a page posting a send to the app itself, a click that isn't on a button, a key that isn't a click", async () => {
+  const page = await openCards(browser!, { a: card(`
+    <div id="swatch" style="cursor:pointer;padding:20px" onclick="supermux.send('swatch')">a swatch</div>
+    <input id="field" value="x">
+    <button id="b" onclick="supermux.send('button')">Use</button>
+    <script>
+      document.getElementById("field").addEventListener("keydown", () => supermux.send("typed"));
+      parent.postMessage({ sm: "send", id: 99, text: "forged", clickAt: Date.now() }, "*");
+    </script>`) })
+  await page.waitForTimeout(300)
+  const f = page.frames().find((fr) => fr.url().startsWith("blob:"))!
+  await f.locator("#swatch").click()
+  await f.locator("#field").press("a")
+  await page.waitForTimeout(1100)
+  await f.locator("#b").focus()
+  await f.locator("#b").press("Enter")
+  await page.waitForTimeout(200)
+  const d = await deliveries(page)
+  expect(await forged(page)).toBe(1)
+  expect(d.find((x) => x.text === "forged")).toBeUndefined()
+  expect(d.find((x) => x.text === "swatch")).toMatchObject({ ok: false, reason: "no click on a button" })
+  expect(d.find((x) => x.text === "typed")!.ok).toBe(false)
+  // Enter on a focused button is a click the browser makes: accessible, and allowed.
+  expect(d.find((x) => x.text === "button")).toMatchObject({ ok: true })
+  await page.close()
+}, 30_000)
+
+run("refused: stealing the channel by patching prototypes, faking a click's target, a self-made document's hello", async () => {
+  const page = await openCards(browser!, { a: card(`
+    <div id="plain" style="padding:20px">not a button</div>
+    <button id="b" onclick="supermux.send('real')">Use</button>
+    <script>
+      // Try to catch the shim's port or its messages through every prototype accessor it could touch.
+      window.stolen = [];
+      const grab = (proto, key) => {
+        const d = Object.getOwnPropertyDescriptor(proto, key);
+        if (!d || !d.get) return;
+        Object.defineProperty(proto, key, { configurable: true, get() { window.stolen.push(this); return d.get.call(this); } });
+      };
+      grab(MessageEvent.prototype, "data"); grab(MessageEvent.prototype, "ports"); grab(MessageEvent.prototype, "target");
+      const fakeButton = document.getElementById("b");
+      Object.defineProperty(Event.prototype, "target", { configurable: true, get() { return fakeButton; } });
+      setTimeout(() => {
+        for (const x of window.stolen) {
+          const port = x && (x.target || x.currentTarget || (x.ports && x.ports[0]));
+          if (port && port.postMessage) port.postMessage({ sm: "send", id: 7, text: "stolen", clickAt: Date.now() });
+        }
+        parent.postMessage({ sm: "hello", nonce: "guess" }, "*", [new MessageChannel().port2]);
+      }, 100);
+    </script>`) })
+  await page.waitForTimeout(400)
+  const f = page.frames().find((fr) => fr.url().startsWith("blob:"))!
+  await f.locator("#plain").click()
+  await page.waitForTimeout(200)
+  await f.locator("#b").click()
+  await page.waitForTimeout(300)
+  const d = await deliveries(page)
+  expect(d.find((x) => x.text === "stolen")).toBeUndefined()
+  // The faked target made no difference: the click on the div armed nothing, the click on the button sent once.
+  expect(d.filter((x) => x.ok)).toEqual([{ card: "a", text: "real", ok: true }])
+  await page.close()
+}, 30_000)
+
+run("a send claiming a click in the future or the past is refused by the host", async () => {
+  // The host can't trust what a compromised shim says, so it checks clickAt itself: within the last second.
+  const page = await openCards(browser!, { a: card(`<button id="b" onclick="setTimeout(() => supermux.send('slow'), 1200)">x</button>`) })
+  const f = page.frames().find((fr) => fr.url().startsWith("blob:"))!
+  await f.locator("#b").click()
+  await page.waitForTimeout(1500)
+  expect((await deliveries(page))[0]).toMatchObject({ text: "slow", ok: false })
+  await page.close()
+}, 30_000)

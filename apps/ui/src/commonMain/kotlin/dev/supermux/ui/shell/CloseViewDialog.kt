@@ -96,12 +96,13 @@ fun closeConfirmText(view: ViewDto, sessionName: String?): String = when (view.k
 }
 
 /**
- * True for the kinds whose close ends real work. An editor close is silent.
+ * True for the kinds whose close ends real work. An editor close is silent. A Browser tab's close is
+ * silent too: its page is a link, and closing it stops nothing.
  *
  * Desktop's rule (`kind != "editor"`) is the union: Android listed chat/terminal/display and let
  * an UNKNOWN kind close without a question, which is the wrong way round for a kind this client
  * does not understand yet.
  */
-fun closeNeedsConfirmation(kind: String): Boolean = kind != "editor"
+fun closeNeedsConfirmation(kind: String): Boolean = kind != "editor" && kind != "browser" && kind != NEW_TAB_KIND
 
 fun ViewDto.closeNeedsConfirmation(): Boolean = closeNeedsConfirmation(kind)

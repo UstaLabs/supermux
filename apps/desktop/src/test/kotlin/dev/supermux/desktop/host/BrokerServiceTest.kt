@@ -686,6 +686,22 @@ class BrokerServiceTest {
         }
     }
 
+    // #29: the app restarts its broker itself (launchctl, systemctl, a child it stops and starts again), so the broker
+    // cannot tell that stop from a plain one. It is told first, and its graceful shutdown leaves the agents running.
+    @Test fun expectRestartTellsTheBrokerWithItsToken() {
+        val state = createTempDirectory()
+        val env = FakeOsEnv(os = DesktopOs.LINUX, home = createTempDirectory())
+        assertFalse(BrokerService.expectRestart(env, state, 9898), "no token yet: nothing to tell")
+        assertTrue(env.posts.isEmpty())
+        state.resolve("stop-token").writeText("tok\n")
+        env.postAnswer = { 204 }
+        assertTrue(BrokerService.expectRestart(env, state, 9898))
+        assertEquals(listOf("http://127.0.0.1:9898/internal/expect-restart"), env.posts)
+        assertEquals(mapOf("x-supermux-stop-token" to "tok"), env.postHeaders.single())
+        env.postAnswer = { 404 } // a broker from before #29: restarted as before
+        assertFalse(BrokerService.expectRestart(env, state, 9898))
+    }
+
     @Test fun windowsStopAsksTheBrokerToStopAndSucceedsWhenItsLockIsGone() {
         val state = createTempDirectory()
         state.resolve("stop-token").writeText("tok")
@@ -1107,15 +1123,28 @@ class FakeOsEnv(
     override fun selfCgroup(): String? = cgroup
     val ran = mutableListOf<List<String>>()
     val sleeps = mutableListOf<Long>()
+    /** Every local POST ([OsEnv.postLocal]) by url, with its headers in [postHeaders]; [postAnswer] answers them. */
+    val posts = mutableListOf<String>()
+    val postHeaders = mutableListOf<Map<String, String>>()
+    var postAnswer: (String) -> Int? = { null }
+    /** Commands run and POSTs sent, together, in the order they happened. */
+    val log = mutableListOf<String>()
     private val calls = mutableMapOf<List<String>, Int>()
     override fun hasCommand(name: String) = name in commands
     override fun run(argv: List<String>): Boolean = runResult(argv).exit == 0
+    override fun postLocal(url: String, headers: Map<String, String>): Int? {
+        posts += url
+        postHeaders += headers
+        log += "POST $url"
+        return postAnswer(url)
+    }
     override fun runResult(argv: List<String>): OsEnv.RunResult {
         ran += argv
+        log += argv.joinToString(" ")
         val n = calls.merge(argv, 1, Int::plus)!! - 1
         scripted[argv]?.getOrNull(n)?.let { return it }
         return if (argv in failing || failIf(argv)) OsEnv.RunResult(1, "", "failed") else OsEnv.RunResult(0, "", "")
     }
-    override fun runCapture(argv: List<String>): String? { ran += argv; return captures[argv] }
+    override fun runCapture(argv: List<String>): String? { ran += argv; log += argv.joinToString(" "); return captures[argv] }
     override fun sleep(ms: Long) { sleeps += ms }
 }

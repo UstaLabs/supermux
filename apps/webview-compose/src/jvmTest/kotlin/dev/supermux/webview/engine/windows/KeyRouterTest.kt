@@ -47,4 +47,61 @@ class KeyRouterTest {
         assertEquals(KeyEvent.VK_F13, KeyRouter.awtKeyCode(0x7C))
         assertEquals(KeyEvent.VK_K, KeyRouter.awtKeyCode('K'.code))
     }
+
+    // #122 (page-first keys): a key the page may use goes to it first; the app gets it only if the page leaves it unused.
+    private val timers = mutableListOf<Runnable>()
+    private fun pageFirstRouter() = KeyRouter(
+        target = { canvas },
+        onEdt = { it.run() },
+        dispatch = { _, e ->
+            seen += e
+            if (e.keyCode == KeyEvent.VK_K && e.isControlDown) e.consume()
+        },
+        pageFirst = { _, _ -> true },
+        later = { _, run -> timers += run },
+    )
+
+    @Test fun aPageFirstKeyGoesToThePageAndWaits() {
+        assertFalse(pageFirstRouter().offer('K'.code, 0x25, flags = 1))
+        assertTrue(seen.isEmpty(), "nothing offered to the app yet")
+    }
+
+    @Test fun aKeyThePageLeftUnusedReachesTheApp() {
+        val router = pageFirstRouter()
+        router.offer('K'.code, 0x25, flags = 1)
+        router.verdict(used = false, vk = 'K'.code)
+        assertEquals(listOf(KeyEvent.KEY_PRESSED, KeyEvent.KEY_RELEASED), seen.map { it.id })
+        assertTrue(seen.first().isControlDown)
+    }
+
+    @Test fun aKeyThePageUsedStaysThePages() {
+        val router = pageFirstRouter()
+        router.offer('K'.code, 0x25, flags = 1)
+        router.verdict(used = true, vk = 'K'.code)
+        assertTrue(seen.isEmpty())
+    }
+
+    @Test fun aPageThatNeverAnswersDoesNotKeepTheKey() {
+        val router = pageFirstRouter()
+        router.offer('K'.code, 0x25, flags = 1)
+        timers.single().run()
+        assertEquals(KeyEvent.KEY_PRESSED, seen.first().id)
+        router.verdict(used = false, vk = 'K'.code) // late: already the app's
+        assertEquals(2, seen.size)
+    }
+
+    /**
+     * The VM (2026-11-12): the page's keydowns for Ctrl and Shift answered before the K's did, and their "unused" gave
+     * the app a Ctrl+Shift+K the page then took. Only the answer for the pending key counts.
+     */
+    @Test fun anotherKeysAnswerLeavesThePendingKeyAlone() {
+        val router = pageFirstRouter()
+        router.offer('K'.code, 0x25, flags = 1 or 2)
+        router.verdict(used = false, vk = 0x11) // Ctrl's own keydown
+        router.verdict(used = false, vk = 0x10) // Shift's
+        assertTrue(seen.isEmpty(), "still waiting for the K")
+        router.verdict(used = true, vk = 'K'.code)
+        timers.single().run()
+        assertTrue(seen.isEmpty(), "the page kept it")
+    }
 }

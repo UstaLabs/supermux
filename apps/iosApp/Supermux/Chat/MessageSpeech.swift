@@ -9,10 +9,6 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
 
     private let synth = AVSpeechSynthesizer()
     private var audioPlayer: AVAudioPlayer?
-    /// The progressive-MP3 player (`/speak/audio/…`) and what watches it end.
-    private var urlPlayer: AVPlayer?
-    private var urlObservers: [NSObjectProtocol] = []
-    private var urlStatus: NSKeyValueObservation?
     /// Holds the playing chunk's delegate alive — `AVAudioPlayer.delegate` is weak.
     private var finishBox: FinishBox?
 
@@ -72,7 +68,6 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         if synth.isSpeaking { synth.stopSpeaking(at: .immediate) }
         audioPlayer?.stop()
         audioPlayer = nil
-        stopURLPlayer()
         finishPending()
         let u = AVSpeechUtterance(string: text)
         u.voice = AVSpeechSynthesisVoice(language: Locale.current.identifier)
@@ -80,6 +75,7 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         u.rate = AVSpeechUtteranceDefaultSpeechRate
         arm(onDone)
         currentUtterance = u
+        Self.activatePlayback()
         synth.speak(u)
     }
 
@@ -88,7 +84,6 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
     /// once rather than stalling the queue.
     func playChunk(_ data: Data, onDone: @escaping () -> Void) {
         finishPending()
-        stopURLPlayer()
         guard let player = try? AVAudioPlayer(data: data) else { return onDone() }
         audioPlayer = player
         let myGen = arm(onDone)
@@ -97,45 +92,22 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         }
         finishBox = box
         player.delegate = box
+        Self.activatePlayback()
         if !player.play() { finishPending(gen: myGen) }
     }
 
-    /// Stream the broker's progressive MP3 at `url`: `AVPlayer` starts on the first frames while
-    /// the rest is still being synthesized. `onDone` fires when it plays out, fails or is stopped.
-    func playURL(_ url: URL, onDone: @escaping () -> Void) {
-        finishPending()
-        audioPlayer?.stop()
-        audioPlayer = nil
-        stopURLPlayer()
-        let item = AVPlayerItem(url: url)
-        let player = AVPlayer(playerItem: item)
-        // Start on the first buffered frames instead of waiting to "minimize stalling": the
-        // stream arrives several times faster than it plays.
-        player.automaticallyWaitsToMinimizeStalling = false
-        urlPlayer = player
-        let myGen = arm(onDone)
-        let end: @Sendable (Notification) -> Void = { [weak self] _ in
-            Task { @MainActor in self?.finishPending(gen: myGen) }
+    /// Read-aloud goes on with the app in the background (#118 car 3b): `UIBackgroundModes: audio`
+    /// keeps the app running only while its session is a playback one, and active. It also speaks
+    /// with the ringer switch on silent, as the audio player's notes do. A recording or dictation in
+    /// progress ([AudioCapture.live]) keeps its own category: the voice is heard through it. Its
+    /// category alone is no sign of one: a dictation that ended once left `.record` behind, which
+    /// cannot sound, and every read-aloud after it was silent.
+    static func activatePlayback() {
+        let session = AVAudioSession.sharedInstance()
+        if !AudioCapture.live {
+            try? session.setCategory(.playback, mode: .spokenAudio)
         }
-        let nc = NotificationCenter.default
-        urlObservers = [
-            nc.addObserver(forName: AVPlayerItem.didPlayToEndTimeNotification, object: item, queue: .main, using: end),
-            nc.addObserver(forName: AVPlayerItem.failedToPlayToEndTimeNotification, object: item, queue: .main, using: end),
-        ]
-        urlStatus = item.observe(\.status) { [weak self] item, _ in
-            guard item.status == .failed else { return }
-            Task { @MainActor in self?.finishPending(gen: myGen) }
-        }
-        player.play()
-    }
-
-    private func stopURLPlayer() {
-        urlPlayer?.pause()
-        urlPlayer = nil
-        urlStatus?.invalidate()
-        urlStatus = nil
-        for o in urlObservers { NotificationCenter.default.removeObserver(o) }
-        urlObservers = []
+        try? session.setActive(true)
     }
 
     /// Release the synthesiser and the audio session — the app is going away.
@@ -171,7 +143,6 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         if synth.isSpeaking { synth.stopSpeaking(at: .immediate) }
         audioPlayer?.stop()
         audioPlayer = nil
-        stopURLPlayer()
         speakingKey = nil
         // A Compose-side `speak` awaiting this utterance must be released, or the message it
         // belongs to keeps its speaking state after the user has silenced it.
@@ -237,4 +208,10 @@ private final class FinishBox: NSObject, AVAudioPlayerDelegate {
         done = true
         onFinish()
     }
+}
+
+/// Whether the mic is capturing right now (a dictation or a voice clip): read-aloud is heard through its session then.
+@MainActor
+enum AudioCapture {
+    static var live = false
 }

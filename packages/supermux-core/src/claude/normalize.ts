@@ -1,7 +1,7 @@
 /** Claude headless stream-json mapper. */
 import type { AgentUpdate, SubagentSnapshot } from "../types.js"
 import type { AgentCommandEntry, NormalizedBody, PlanEntryStatus, SubagentEndedBy, SubagentStats, TaskKind } from "../events/normalized.js"
-import { ACCOUNT_UNAVAILABLE_ERROR } from "../accounts/policy.js"
+import { ACCOUNT_UNAVAILABLE_ERROR, NOT_SIGNED_IN_ERROR } from "../accounts/policy.js"
 import { REASON, SUBAGENT_STATE_METHOD, actionFields, actionsKey, endedReason, shortReason, type SubagentActions } from "../subagent-actions.js"
 
 function rec(value: unknown): Record<string, unknown> | undefined {
@@ -216,6 +216,11 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
   const foregroundTasks = new Map<string, BackgroundTask>()
   /** Listed by background_tasks_changed before their task_started arrived. */
   const listedTasks = new Set<string>()
+  /**
+   * Claude's own synthetic message for an API error that ends the turn (`is_api_error_message`, e.g. "Not logged
+   * in · Please run /login"): its result repeats the text as the turn's error, so it is held, not a reply (#110).
+   */
+  let apiError: { code?: string; bodies: NormalizedBody[] } | undefined
 
   function take(kind: "assistant" | "reasoning"): NormalizedBody[] {
     const map = kind === "assistant" ? assistant : reasoning
@@ -733,6 +738,11 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
     if (type === "assistant") {
       const message = rec(frame.message)
       if (!message) return []
+      if (frame.is_api_error_message === true) {
+        const bodies = mapAssistantContent(message)
+        apiError = { code: str(frame.error), bodies: [...(apiError?.bodies ?? []), ...bodies.filter(b => b.kind === "assistant-message")] }
+        return bodies.filter(b => b.kind !== "assistant-message")
+      }
       return mapAssistantContent(message)
     }
     if (type === "user") {
@@ -764,7 +774,11 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
       // An interrupted turn (Claude's abort signal fired) ends as error_during_execution with only Claude's own
       // "[ede_diagnostic] ..." line: no failure. The driver settles the turn as cancelled.
       const aborted = frame.terminal_reason === "aborted_streaming" || frame.terminal_reason === "aborted_tools"
-      if (frame.is_error === true && !aborted) {
+      const failed = frame.is_error === true && !aborted
+      const held = apiError
+      apiError = undefined
+      if (held && !failed) out.splice(out.length - 1, 0, ...held.bodies)
+      if (failed) {
         const message = Array.isArray(frame.errors) ? frame.errors.find(x => typeof x === "string") as string | undefined : undefined
         // 401/403 from the API (e.g. `oauth_not_allowed_for_organization` after a cancelled
         // subscription): the account itself is refused, which Core's account switch acts on.
@@ -772,7 +786,7 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
         out.push({
           kind: "error",
           message: message ?? (typeof frame.result === "string" ? frame.result : "Claude turn failed"),
-          ...(refused ? { errorType: ACCOUNT_UNAVAILABLE_ERROR } : {}),
+          ...(refused ? { errorType: ACCOUNT_UNAVAILABLE_ERROR } : held?.code === "authentication_failed" ? { errorType: NOT_SIGNED_IN_ERROR } : {}),
         })
       }
       return out
@@ -797,7 +811,8 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
   }) as ClaudeNormalizer
 
   normalize.flush = () => {
-    const out = [...take("reasoning"), ...take("assistant")]
+    const out = [...take("reasoning"), ...take("assistant"), ...(apiError?.bodies ?? [])]
+    apiError = undefined
     return out
   }
   normalize.subagentForTool = (toolUseId: string) => childTools.get(toolUseId)

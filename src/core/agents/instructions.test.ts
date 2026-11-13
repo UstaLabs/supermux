@@ -4,6 +4,7 @@ import { SESSION_INBOX_DIR } from "../../shared/paths"
 import { bindCreatedBy, inboxInstructions, sessionInstructions, setSessionRoleLookup } from "./instructions"
 import { AGENT_KINDS } from "../../shared/agents"
 import { readEnvironmentMd } from "./environment"
+import { interactiveHtmlInstructions } from "../show-html/description"
 
 test("the inbox block names the session id, its inbox file and message_session", () => {
   const text = inboxInstructions("7c1d2e9a-0000", "/home/u/.mux/session_inboxes")
@@ -156,4 +157,12 @@ test("a creator with no model is named by its agent alone", () => {
   } finally {
     unbind()
   }
+})
+
+test("every session's instructions carry the Interactive HTML section after Diagrams (#104)", () => {
+  const text = sessionInstructions({ agent: "claude", sessionName: "n", workdir: "/w", sessionId: "w-9" })
+  expect(text).toContain(interactiveHtmlInstructions())
+  expect(text.indexOf("## Diagrams")).toBeGreaterThan(-1)
+  expect(text.indexOf("## Interactive HTML")).toBeGreaterThan(text.indexOf("## Diagrams"))
+  expect(text).toContain("show_html")
 })

@@ -83,7 +83,8 @@ class WebKitScriptsTest {
         val relay = scripts.relay(origins)
         assertContains(relay, "BURST = ${WebKitScripts.PAGE_MESSAGE_BURST}, RATE = ${WebKitScripts.PAGE_MESSAGES_PER_SECOND}")
         assertContains(relay, JsonPrimitive(WebBridge.READY_PREFIX).toString())
-        assertContains(relay, "if (typeof text === 'string' && text.length <= MAX && allowed(text)) send('msg ' + text);")
+        assertContains(relay, "if (typeof text !== 'string' || text.length > MAX || !allowed(text)) return;")
+        assertContains(relay, "if (text !== null && text.length <= MAX) send('msg ' + text);")
     }
 
     @Test fun originsAreQuotedAsJavaScriptStrings() {

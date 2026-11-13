@@ -42,6 +42,7 @@ import dev.supermux.ui.display.DisplayActions
 import dev.supermux.ui.display.rememberDisplayActions
 import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.work.DownloadSource
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -66,6 +67,8 @@ class ShellActions(
      * from [DisplayActions.displays] and hands the whole thing to `DisplayPanel`.
      */
     val display: DisplayActions = DisplayActions(),
+    /** The Browser tab's seams (#105): its view writes, the host's previews, its preview cookie. */
+    val browser: dev.supermux.ui.browser.BrowserActions = dev.supermux.ui.browser.BrowserActions(),
 
     // ── chat + session controls (the header overflow and the composer's mute row) ──────────────
     val sendMessage: (sessionId: String, text: String) -> Unit = { _, _ -> },
@@ -129,6 +132,8 @@ class ShellActions(
     val workspaceFsWrite: suspend (workspaceId: String, path: String, content: String) -> Boolean =
         { _, _, _ -> false },
     val workspaceFsDiff: suspend (workspaceId: String, base: String?) -> FsDiffResult? = { _, _ -> null },
+    /** #72: whole files into the next commit, or out of it; null: this host can't stage (no checkboxes). */
+    val workspaceStage: (suspend (workspaceId: String, repo: String, paths: List<String>, staged: Boolean) -> Boolean)? = null,
     /** A lazy Changes file's base text by blob; null: this host can't load one (no Retry offered). */
     val workspaceChangesBlob: (suspend (workspaceId: String, repo: String, sha: String, force: Boolean) -> BlobText)? = null,
     val workspaceFsRefs: suspend (workspaceId: String) -> FsRefsResult? = { null },
@@ -136,6 +141,12 @@ class ShellActions(
     val fileSystemFor: (workspaceId: String) -> dev.supermux.fs.FileSystemService? = { null },
     /** The host file-system service owning [sessionId]'s host (Android's session-scoped editor). */
     val sessionFileSystem: (sessionId: String) -> dev.supermux.fs.FileSystemService? = { null },
+    /**
+     * A host file by ABSOLUTE [path] as one of the fleet's downloads (#95, Files "Save and open…"): its key and
+     * source from the host owning [workspaceId], or null where that host keeps no downloads (or is gone) — the
+     * editor then reads the bytes, as before.
+     */
+    val hostFileDownloadFor: (workspaceId: String, path: String) -> Pair<String, DownloadSource>? = { _, _ -> null },
 
     // ── LSP (still session-keyed in this phase) ────────────────────────────────────────────────
     val lspStatus: StateFlow<Map<String, ServerFrame.LspStatus>> = MutableStateFlow(emptyMap()),
@@ -172,10 +183,11 @@ fun rememberShellActions(
 ): ShellActions {
     val walkthroughCap = LocalPlatform.current.caps.walkthrough
     val displayActions = rememberDisplayActions(app)
+    val browserActions = dev.supermux.ui.browser.rememberBrowserActions(app)
     // The router is a CALLBACK, not state: keying the bundle on it would rebuild every lambda
     // whenever the caller passed a fresh one (the F1 rule for nav callbacks).
     val routeToHost by rememberUpdatedState(appForSession)
-    return remember(app, walkthroughCap, displayActions) {
+    return remember(app, walkthroughCap, displayActions, browserActions) {
         // A session-keyed suspend call needs the SessionInfo the store's review/LSP API takes;
         // resolving it from the store's live list is what every desktop call site did inline.
         fun session(id: String): SessionInfo? = app.sessions.value.firstOrNull { it.id == id }
@@ -183,6 +195,7 @@ fun rememberShellActions(
             sessions = app.sessions,
             finishJobs = app.finishJobs,
             display = displayActions,
+            browser = browserActions,
             sendMessage = { id, text -> app.sendMessage(id, text) },
             rename = { id, name -> app.rename(id, name) },
             kill = { id -> app.kill(id) },
@@ -209,11 +222,13 @@ fun rememberShellActions(
             connectWorkspaceTerminal = { wsId, terminalId -> app.connectWorkspaceTerminal(wsId, terminalId) },
             workspaceFsRead = { wsId, path -> app.workspaceFsRead(wsId, path) },
             workspaceFsWrite = { wsId, path, content -> app.workspaceFsWrite(wsId, path, content) },
+            workspaceStage = { wsId, repo, paths, staged -> app.workspaceStage(wsId, repo, paths, staged) },
             workspaceFsDiff = { wsId, base -> app.workspaceFsDiff(wsId, base) },
             workspaceChangesBlob = { wsId, repo, sha, force -> app.workspaceChangesBlob(wsId, repo, sha, force) },
             workspaceFsRefs = { wsId -> app.workspaceFsRefs(wsId) },
             fileSystemFor = { app.fileSystem },
             sessionFileSystem = { app.fileSystem },
+            hostFileDownloadFor = { _, path -> app.hostFileDownload(path, version = null) },
             lspStatus = app.lspStatus,
             lspRpc = app.lspRpc,
             lspStatusQuery = { id, path -> session(id)?.let { app.lspStatusQuery(it, path) } },
@@ -273,11 +288,13 @@ fun rememberShellActions(fleet: FleetStore): ShellActions {
             connectWorkspaceTerminal = { wsId, terminalId -> fleet.connectWorkspaceTerminal(wsId, terminalId) },
             workspaceFsRead = { wsId, path -> fleet.workspaceFsRead(wsId, path) },
             workspaceFsWrite = { wsId, path, content -> fleet.workspaceFsWrite(wsId, path, content) },
+            workspaceStage = { wsId, repo, paths, staged -> fleet.workspaceStage(wsId, repo, paths, staged) },
             workspaceFsDiff = { wsId, base -> fleet.workspaceFsDiff(wsId, base) },
             workspaceChangesBlob = { wsId, repo, sha, force -> fleet.workspaceChangesBlob(wsId, repo, sha, force) },
             workspaceFsRefs = { wsId -> fleet.workspaceFsRefs(wsId) },
             fileSystemFor = { wsId -> fleet.appForWorkspace(wsId)?.fileSystem },
             sessionFileSystem = { sid -> fleet.appFor(sid)?.fileSystem },
+            hostFileDownloadFor = { wsId, path -> fleet.appForWorkspace(wsId)?.hostFileDownload(path, version = null) },
             lspStatus = fleet.lspStatus,
             lspRpc = fleet.lspRpc,
             lspStatusQuery = { id, path -> fleet.lspStatusQuery(id, path) },

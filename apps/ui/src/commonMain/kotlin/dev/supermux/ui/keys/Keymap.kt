@@ -1,6 +1,10 @@
 package dev.supermux.ui.keys
 
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.type
 import dev.supermux.editor.compose.isApplePlatform
+import dev.supermux.editor.compose.keyChordOf
 import dev.supermux.editor.core.KeyChord
 
 /**
@@ -38,6 +42,9 @@ internal fun bind(keys: String, command: AppCommand, mac: String = keys, appFirs
 internal fun bindOther(keys: String, command: AppCommand, appFirst: Boolean = false, overOwner: Boolean = false) =
     AppBinding(command.id, null, KeyChord.parse(keys, apple = false), appFirst, overOwner)
 
+/** A key that exists only on Apple. */
+internal fun bindApple(keys: String, command: AppCommand) = AppBinding(command.id, KeyChord.parse(keys, apple = true), null)
+
 class Keymap(val bindings: List<AppBinding>) {
     fun bindingsFor(chord: KeyChord, os: KeyOs): List<AppBinding> = bindings.filter { it.chord(os) == chord }
 
@@ -54,10 +61,12 @@ val DefaultKeymap = Keymap(
         bind("Mod-n", AppCommands.NewSession),
         bind("Mod-Shift-n", AppCommands.MoveToNewWindow, overOwner = true),
         bind("Mod-t", AppCommands.NewTerminal),
+        // Before New terminal's Ctrl+Shift+T: the reopen key's handler makes the terminal itself where it should (#122).
+        bind("Mod-Shift-t", AppCommands.ReopenClosedTab, overOwner = true),
         bindOther("Ctrl-Shift-t", AppCommands.NewTerminal, overOwner = true),
         bind("Mod-b", AppCommands.ToggleSidebar),
         bind("Mod-p", AppCommands.GoToFile),
-        bind("Mod-f", AppCommands.FindInChat),
+        bind("Mod-f", AppCommands.Find),
         bind("Mod-,", AppCommands.OpenSettings, overOwner = true),
         bind("Mod-/", AppCommands.ShowShortcuts),
         // The composer runs this key itself (Composer.kt); listed for the shortcuts screen and the conflict test.
@@ -66,5 +75,53 @@ val DefaultKeymap = Keymap(
         bind("Mod-v", AppCommands.PasteImage, appFirst = true),
         bind("Mod-\\", AppCommands.SplitRight, appFirst = true),
         bind("Mod-Alt-\\", AppCommands.SplitDown),
+        bind("Mod-w", AppCommands.CloseTab),
+        bindOther("Ctrl-Shift-w", AppCommands.CloseTab, overOwner = true),
+        // Chrome's tab keys (#122). Chrome's Ctrl+Tab on a Mac is left out: on Apple the app's keys are ⌘ only (#96).
+        bindApple("Mod-Shift-]", AppCommands.TabNext),
+        bindOther("Ctrl-Tab", AppCommands.TabNext),
+        bindOther("Ctrl-PageDown", AppCommands.TabNext),
+        bindApple("Mod-Shift-[", AppCommands.TabPrevious),
+        bindOther("Ctrl-Shift-Tab", AppCommands.TabPrevious),
+        bindOther("Ctrl-PageUp", AppCommands.TabPrevious),
+        *(1..9).map { bind("Mod-$it", AppCommands.tabNumber(it)) }.toTypedArray(),
+        // The Browser tab's keys: only its pane registers them, so they never reach a chat, editor or terminal.
+        bind("Mod-l", AppCommands.BrowserFocusAddress),
+        bind("Mod-r", AppCommands.BrowserReload),
+        bind("Mod-[", AppCommands.BrowserBack),
+        bind("Mod-]", AppCommands.BrowserForward),
+        bind("Mod-=", AppCommands.BrowserZoomIn),
+        bind("Mod--", AppCommands.BrowserZoomOut),
+        bind("Mod-0", AppCommands.BrowserZoomReset),
+        bind("Mod-Shift-o", AppCommands.BrowserOpenExternally),
+        // The one key with two meanings by scope (#122, Q1): in a Browser tab ⌘T is a new Browser tab (the deeper scope
+        // wins); everywhere else New terminal.
+        bind("Mod-t", AppCommands.BrowserNewTab),
+        // Chrome's own keys for a tab (#122), as aliases: its Windows/Linux list off Apple, its ⌘ keys on Apple.
+        bindOther("F5", AppCommands.BrowserReload),
+        bindOther("Alt-ArrowLeft", AppCommands.BrowserBack),
+        bindOther("Alt-ArrowRight", AppCommands.BrowserForward),
+        bindOther("Alt-d", AppCommands.BrowserFocusAddress),
+        bindOther("F6", AppCommands.BrowserFocusAddress),
+        bind("Mod-Shift-=", AppCommands.BrowserZoomIn),
+        bind("Mod-+", AppCommands.BrowserZoomIn),
+        bindOther("F12", AppCommands.BrowserInspect),
+        bindOther("Ctrl-Shift-i", AppCommands.BrowserInspect),
+        bindApple("Mod-Alt-i", AppCommands.BrowserInspect),
+        bind("Escape", AppCommands.BrowserStop),
+        bind("Mod-Shift-s", AppCommands.BrowserScreenshot),
+        bind("Mod-Shift-m", AppCommands.BrowserDeviceMode),
+        bind("Mod-Shift-c", AppCommands.BrowserPick),
+        bind("Mod-g", AppCommands.FindNext),
+        bindOther("F3", AppCommands.FindNext),
+        bind("Mod-Shift-g", AppCommands.FindPrevious),
+        bindOther("Shift-F3", AppCommands.FindPrevious),
     ),
 )
+
+/**
+ * Whether [event] is a key-down of one of this command's keys on [os] (for a widget that runs a command itself,
+ * outside a [ShortcutRoot]).
+ */
+fun AppCommand.matchesKey(event: KeyEvent, os: KeyOs = currentKeyOs, keymap: Keymap = DefaultKeymap): Boolean =
+    event.type == KeyEventType.KeyDown && keyChordOf(event)?.let { it in keymap.chordsFor(this, os) } == true

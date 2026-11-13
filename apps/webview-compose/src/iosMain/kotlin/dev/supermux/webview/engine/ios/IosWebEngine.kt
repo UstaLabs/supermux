@@ -1,13 +1,23 @@
 package dev.supermux.webview.engine.ios
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.colorspace.ColorSpaces
+import androidx.compose.ui.input.nestedscroll.NestedScrollDispatcher
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.viewinterop.UIKitInteropInteractionMode
 import androidx.compose.ui.viewinterop.UIKitInteropProperties
 import androidx.compose.ui.viewinterop.UIKitView
 import dev.supermux.webview.DialogResult
+import dev.supermux.webview.FindResult
+import dev.supermux.webview.InspectorResult
+import dev.supermux.webview.WebCookie
 import dev.supermux.webview.DownloadRequest
 import dev.supermux.webview.NavigationDecision
 import dev.supermux.webview.NewWindowDecision
@@ -19,6 +29,9 @@ import dev.supermux.webview.WebDialog
 import dev.supermux.webview.WebError
 import dev.supermux.webview.WebOrigin
 import dev.supermux.webview.WebProfile
+import dev.supermux.webview.bridge.InputStamp
+import dev.supermux.webview.bridge.UserInputSource
+import dev.supermux.webview.bridge.inputClock
 import dev.supermux.webview.engine.EmbeddingMode
 import dev.supermux.webview.engine.EngineClient
 import dev.supermux.webview.engine.EngineConfig
@@ -95,7 +108,9 @@ import platform.WebKit.WKUserScript
 import platform.WebKit.WKUserScriptInjectionTime
 import platform.WebKit.WKWebView
 import platform.WebKit.WKWebViewConfiguration
+import platform.WebKit.WKContentMode
 import platform.WebKit.WKWebpagePreferences
+import platform.WebKit.WKFindConfiguration
 import platform.WebKit.WKWebsiteDataStore
 import platform.darwin.NSObject
 import kotlin.coroutines.resume
@@ -137,7 +152,16 @@ internal class IosWebEngine private constructor(
     private val uiDelegate: UiDelegate,
     private val scope: CoroutineScope,
     private val ticks: Ticks,
-) : WebEngine {
+) : WebEngine, UserInputSource {
+    /**
+     * When the user last tapped, clicked or typed in the page, for [UserInputSource]: the relay's `gesture`, which it
+     * sends from trusted events only, in its own content world, so no page script can make or forge it. A new document
+     * starts with none. Taps by VoiceOver or Voice Control reach the page as clicks with no touch (spec open decision 4).
+     */
+    private val inputStamp = InputStamp()
+
+    override fun consumeUserInput(): Boolean = inputStamp.consume(inputClock())
+
     /** A question the engine asked its client, which WebKit waits on: answered once, by the client or by default. */
     private inner class Pending(private val byDefault: () -> Unit) {
         var job: Job? = null
@@ -176,6 +200,10 @@ internal class IosWebEngine private constructor(
     /** The epoch each navigation WebKit reported started in. */
     private val navigations = NavigationEpochs()
     private var lease: Job = SupervisorJob(scope.coroutineContext[Job])
+    /** A sideways drag past the page's edge goes to the views around it (the phone's tab swipe). */
+    private val sideSwipe = PageSideSwipe(webView.scrollView) { script, done ->
+        webView.evaluateJavaScript(script) { result, _ -> done((result as? Boolean)?.toString()) }
+    }
 
     private var released = false
     private var crashed = false
@@ -335,16 +363,19 @@ internal class IosWebEngine private constructor(
         webView.overrideUserInterfaceStyle =
             if (setup.dark) UIUserInterfaceStyle.UIUserInterfaceStyleDark else UIUserInterfaceStyle.UIUserInterfaceStyleLight
         val background = when {
-            setup.transparentBackground -> UIColor.clearColor
+            setup.transparentBackground -> underlayColor()
             setup.dark -> UIColor.blackColor
             else -> UIColor.whiteColor
         }
+        // A transparent page stays non-opaque, so its own colours win, over its underlay ([PageSetup.underlay]): its view
+        // lies under the Compose canvas, and without one its hole showed what is under the canvas, not the app's content.
         webView.setOpaque(!setup.transparentBackground)
         webView.backgroundColor = background
+        container?.backgroundColor = underlayColor()
         // The scroll view is WebKit's to paint: an opaque page's own background (clear for a transparent one). It shows
         // where WebKit hasn't drawn the page yet, as in the strip a wider view gains until the page is laid out at its
         // new width: painted white, that strip flashed light over a dark page for a frame.
-        webView.customUserAgent = setup.userAgentSuffix?.let { suffix -> listOfNotNull(baseUserAgent, suffix).joinToString(" ") }
+        webView.customUserAgent = setup.agent(baseUserAgent)
         if (osAtLeast(16, 4)) webView.setInspectable(setup.inspectable)
         val controller = webView.configuration.userContentController
         controller.removeAllUserScripts()
@@ -424,6 +455,49 @@ internal class IosWebEngine private constructor(
     override fun stop() {
         if (!released) webView.stopLoading()
     }
+
+    /** WebKit's find (iOS 16): found or not, never a count; selects the match. Null before iOS 16, or for no query. */
+    override suspend fun find(query: String, backwards: Boolean): FindResult? {
+        if (released || query.isEmpty() || !osAtLeast(16)) return null
+        val found = awaitWebKit<Boolean> { waiter ->
+            val configuration = WKFindConfiguration()
+            configuration.backwards = backwards
+            configuration.caseSensitive = false
+            configuration.wraps = true
+            webView.findString(query, configuration) { result -> waiter.answer(result?.matchFound ?: false) }
+        } ?: return null
+        return FindResult(found = found)
+    }
+
+    /** WebKit's find selects the match: clearing it is clearing the selection. */
+    override fun clearFind() {
+        if (released) return
+        webView.evaluateJavaScript("getSelection().removeAllRanges()", inFrame = null, inContentWorld = WKContentWorld.defaultClientWorld) { _, _ -> }
+    }
+
+    override fun setZoom(factor: Float): Boolean {
+        if (released) return false
+        webView.pageZoom = factor.toDouble()
+        return true
+    }
+
+    /** Into the view's own data store, its profile's, once WebKit has it. */
+    override suspend fun setCookie(cookie: WebCookie): Boolean = awaitWebKit<Boolean> { waiter ->
+        val httpCookie = httpCookieOf(cookie)
+        if (httpCookie == null) {
+            waiter.answer(false)
+        } else {
+            webView.configuration.websiteDataStore.httpCookieStore.setCookie(httpCookie) { waiter.answer(true) }
+        }
+    } ?: false
+
+    /** WebKit opens its inspector only from Safari on a Mac: an inspectable page (iOS 16.4) is listed in its Develop menu. */
+    override fun openInspector(): InspectorResult =
+        if (!released && osAtLeast(16, 4) && setup?.inspectable == true) {
+            InspectorResult.Elsewhere("Safari ▸ Develop on a Mac, with the device connected")
+        } else {
+            InspectorResult.Unsupported
+        }
 
     override suspend fun evaluate(script: String): String? = if (released) null else evaluateIn(WKContentWorld.pageWorld, script)
 
@@ -550,19 +624,31 @@ internal class IosWebEngine private constructor(
     override fun Surface(modifier: Modifier) {
         if (released) return
         val inList = LocalWebSurfaceHints.current.inScrollingList
-        val properties = remember(inList) {
-            UIKitInteropProperties(
-                // An embed in a list lets a drag that starts on it scroll the list; a pane gives its page every touch.
-                interactionMode = if (inList) UIKitInteropInteractionMode.Cooperative() else UIKitInteropInteractionMode.NonCooperative,
-                isNativeAccessibilityEnabled = true,
+        val dispatcher = remember { NestedScrollDispatcher() }
+        val density = LocalDensity.current.density
+        DisposableEffect(dispatcher, density) {
+            sideSwipe.dispatcher = dispatcher
+            sideSwipe.density = density
+            onDispose { if (sideSwipe.dispatcher === dispatcher) sideSwipe.dispatcher = null }
+        }
+        // UIKitView takes its properties when it creates its interop view, not after: a hint that changes (an embed
+        // whose page turns out to take touches itself, made a pane) gets a new container, which adopts the web view.
+        // attach and detach compare containers, so the old one's release, before or after, doesn't undo the new one.
+        key(inList) {
+            val properties = remember {
+                UIKitInteropProperties(
+                    // An embed in a list lets a drag that starts on it scroll the list; a pane gives its page every touch.
+                    interactionMode = if (inList) UIKitInteropInteractionMode.Cooperative() else UIKitInteropInteractionMode.NonCooperative,
+                    isNativeAccessibilityEnabled = true,
+                )
+            }
+            UIKitView(
+                factory = { EngineContainerView(this).also(::attach) },
+                modifier = modifier.nestedScroll(NoNestedScroll, dispatcher),
+                onRelease = ::detach,
+                properties = properties,
             )
         }
-        UIKitView(
-            factory = { EngineContainerView(this).also(::attach) },
-            modifier = modifier,
-            onRelease = ::detach,
-            properties = properties,
-        )
     }
 
     // --- Reuse ---
@@ -575,6 +661,7 @@ internal class IosWebEngine private constructor(
         queue.advance(reset = true)
         client = null
         setup = null
+        container?.backgroundColor = UIColor.clearColor
         content = null
         bundles.bundle = null
         answerAllByDefault()
@@ -658,6 +745,7 @@ internal class IosWebEngine private constructor(
         answerAllByDefault()
         released = true
         client = null
+        sideSwipe.remove()
         scope.cancel()
         ticks.cancel()
         bundles.bundle = null
@@ -686,9 +774,15 @@ internal class IosWebEngine private constructor(
 
     /** [view], the surface's container, takes the web view: composed, or in a test's window. */
     internal fun attach(view: EngineContainerView) {
+        // Where the web view doesn't reach yet (a container not laid out), the transparent page's underlay too.
+        view.backgroundColor = underlayColor()
         view.adopt(webView)
         container = view
     }
+
+    /** What lies behind a transparent page: its lease's underlay ([PageSetup.underlay]), else nothing. */
+    internal fun underlayColor(): UIColor =
+        setup?.underlay?.takeIf { setup?.transparentBackground == true }?.let(::uiColorOf) ?: UIColor.clearColor
 
     /** [view] lets the web view go: its composition ended (the page parked, or released). */
     internal fun detach(view: EngineContainerView) {
@@ -807,6 +901,8 @@ internal class IosWebEngine private constructor(
         val cancel = WKNavigationActionPolicy.WKNavigationActionPolicyCancel
         if (released) return decisionHandler(cancel, preferences)
         preferences.allowsContentJavaScript = setup?.javaScriptEnabled ?: true
+        // "Desktop site" (#122): WebKit's own desktop content mode, as Safari's "Request Desktop Website".
+        preferences.preferredContentMode = if (setup?.desktopSite == true) WKContentMode.WKContentModeDesktop else WKContentMode.WKContentModeRecommended
         val url = action.request.URL?.absoluteString
         val target = action.targetFrame
         val isMainFrame = target?.isMainFrame ?: true
@@ -1053,6 +1149,7 @@ internal class IosWebEngine private constructor(
         if (!gesture) return
         gestureAt = clock()
         gestureDocument = current
+        inputStamp.mark(inputClock())
     }
 
     /**
@@ -1256,6 +1353,7 @@ internal class IosWebEngine private constructor(
     /** A new document of [content] starts: nothing an earlier one caused is delivered from now on. */
     private fun startDocument(content: WebContent): Int {
         val epoch = queue.advance()
+        inputStamp.clear()
         loadSize = webViewSize()
         this.content = content
         bundles.bundle = content as? WebContent.Bundle
@@ -1389,3 +1487,9 @@ internal suspend fun awaitFloor(loaded: Deferred<Boolean>, millis: Long, settleM
         }
         shown
     } ?: false
+
+/** [color] as UIKit's, in sRGB. */
+internal fun uiColorOf(color: Color): UIColor {
+    val srgb = color.convert(ColorSpaces.Srgb)
+    return UIColor.colorWithRed(srgb.red.toDouble(), green = srgb.green.toDouble(), blue = srgb.blue.toDouble(), alpha = srgb.alpha.toDouble())
+}

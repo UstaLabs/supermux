@@ -1,6 +1,6 @@
 import { chmod, lstat, mkdir, open, readdir, readFile, rename, rm, unlink } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
-import { dirname, join, resolve } from "node:path"
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path"
 import { CoreError } from "../errors.js"
 import { adapterFor } from "./adapters/index.js"
 import { ensureHome, homePath } from "./homes.js"
@@ -63,9 +63,17 @@ export class AccountRegistry {
     return { id: systemAccountId(agent), agent, method: "system", createdAt: SYSTEM_CREATED_AT }
   }
 
-  add(options: AddAccountOptions): Promise<Account> {
+  /**
+   * `repair`: a rotating login of an identity a registered account of the same method already has
+   * replaces that account's secret (same id) instead of being refused; the system login is never repaired.
+   */
+  add(options: AddAccountOptions, { repair = false }: { repair?: boolean } = {}): Promise<Account> {
     return this.serialize(async () => {
-      const { input, account, accounts, adapter } = await this.prepare(options)
+      const { input, account, accounts, adapter, existing } = await this.prepare(options, repair)
+      if (existing) {
+        await this.vault.put(existing.id, input.secret!)
+        return structuredClone(existing)
+      }
       const needsSecret = input.method === "api_key" || input.method === "token"
       if (input.method === "subscription") await ensureHome(this.homesDirectory, account, adapter.layout?.(this.roots))
       if (needsSecret) await this.vault.put(account.id, input.secret!)
@@ -81,20 +89,34 @@ export class AccountRegistry {
    * Adds a subscription account whose login was made in `source` (a directory on the same
    * filesystem): duplicate check, then entries under shared names are dropped from `source` (login
    * leftovers), `source` is renamed into the account home and the shared links are created.
-   * `source` is left untouched when the account is refused.
+   * `source` is left untouched when the account is refused. `repair` (the login's credential file in
+   * `source`): a login of an identity a registered subscription account already has moves that file into
+   * the account's home instead (same id, one home per identity: a second copy would log the first out), and
+   * `source` is removed.
    */
-  adoptHome(options: AddAccountOptions, source: string): Promise<Account> {
+  adoptHome(options: AddAccountOptions, source: string, { repair }: { repair?: { credential: string } } = {}): Promise<Account> {
     return this.serialize(async () => {
       if (options?.method !== "subscription") throw new CoreError("invalid_input", "Only subscription logins become account homes")
-      const { account, accounts, adapter } = await this.prepare(options)
+      const { account, accounts, adapter, existing } = await this.prepare(options, repair !== undefined)
+      if (existing) {
+        const credential = relative(resolve(source), resolve(repair!.credential))
+        if (!credential || credential.startsWith("..") || isAbsolute(credential)) throw new CoreError("invalid_input", "The login's credential file must be inside its directory")
+        const home = await ensureHome(this.homesDirectory, existing, adapterFor(existing.agent).layout?.(this.roots))
+        // Inside the account home, which is private (0700) already.
+        await mkdir(dirname(join(home, credential)), { recursive: true })
+        await files.replace(join(source, credential), join(home, credential))
+        await rm(source, { recursive: true, force: true })
+        return structuredClone(existing)
+      }
       const home = homePath(this.homesDirectory, account)
       if (await exists(home)) throw new CoreError("account_home_conflict", `${home} already exists (left by a removed account?); remove it or choose another id`)
       // Entries the login run left under shared names (CLI defaults, never user data) would block the links.
       const layout = account.isolated ? undefined : adapter.layout?.(this.roots)
       for (const entry of layout?.shared ?? []) {
-        if (entry.name && !entry.name.includes("/") && entry.name !== "." && entry.name !== "..") await rm(join(source, entry.name), { recursive: true, force: true })
+        // One name in the source folder, by the host's own rule (on Windows a \ would leave it as much as a /).
+        if (entry.name && basename(entry.name) === entry.name && entry.name !== "." && entry.name !== "..") await rm(join(source, entry.name), { recursive: true, force: true })
       }
-      await mkdir(dirname(home), { recursive: true, mode: 0o700 })
+      await files.mkdirPrivateAsync(dirname(home))
       await rename(source, home)
       try {
         await ensureHome(this.homesDirectory, account, adapter.layout?.(this.roots))
@@ -108,7 +130,7 @@ export class AccountRegistry {
   }
 
   /** Validation, id and the rotating-login duplicate check shared by add and adoptHome. */
-  private async prepare(options: AddAccountOptions): Promise<{ input: AddAccountOptions; account: Account; accounts: Map<string, Account>; adapter: AuthAdapter }> {
+  private async prepare(options: AddAccountOptions, repair = false): Promise<{ input: AddAccountOptions; account: Account; accounts: Map<string, Account>; adapter: AuthAdapter; existing?: Account }> {
     const input = structuredClone(options)
     if (!input || typeof input !== "object") throw new CoreError("invalid_input", "Account options are required")
     if (!this.agents.includes(input.agent)) throw new CoreError("unknown_agent", `Agent ${input.agent} is not registered`)
@@ -134,6 +156,7 @@ export class AccountRegistry {
         const otherAccount = await this.withIdentity(structuredClone(other))
         if (!otherAccount.identity || !sameIdentity(identity, otherAccount.identity)) continue
         if (!await this.rotates(other.method, other.agent, other.method === "token" ? await this.vault.get(other.id) : undefined)) continue
+        if (repair && other.method === input.method && accounts.has(other.id)) return { input, account: other, accounts, adapter, existing: other }
         throw new CoreError("account_exists", `Account ${other.id} is already logged in as this identity; a second copy of a rotating login would log one of them out`)
       }
     }
@@ -258,8 +281,8 @@ export class AccountRegistry {
   }
 
   private async save(accounts: Map<string, Account>): Promise<void> {
-    await mkdir(this.directory, { recursive: true, mode: 0o700 })
-    await chmod(this.directory, 0o700)
+    await files.mkdirPrivateAsync(this.directory)
+    files.makePrivate(this.directory)
     const temp = `${this.file}.${randomUUID()}.tmp`
     try {
       const file = await open(temp, "wx", 0o600)

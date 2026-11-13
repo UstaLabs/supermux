@@ -121,6 +121,82 @@ test("reload across restart: active and suspended sessions keep their proxies", 
   expect(b.getProxy("sp")?.sessionName).toBe("susp-sess")
 })
 
+// A digits-only slug means a PORT: /p/5173/ opens localhost:5173 with no registration. So a named proxy must never be
+// one, and addProxy is where every way of naming a proxy (expose_port, Settings > Proxies / POST /proxies, /proxy) lands.
+test("addProxy refuses a digits-only name: /p/<digits>/ means a port", () => {
+  const { registry, db } = reg()
+  const s = addSession(registry, "alpha")
+  for (const name of ["5173", "0", "007", "65535", "70000", "1234567890"]) {
+    expect(() => registry.addProxy({ domain: name, sessionId: s.id, port: 3000 })).toThrow(
+      `proxy names can't be only digits: /p/${name}/ means a port`,
+    )
+  }
+  // Refused means nothing was written: not in the working set, not in the table.
+  expect(registry.listProxies()).toEqual([])
+  expect(db.query("SELECT domain FROM proxies").all()).toEqual([])
+})
+
+test("addProxy still accepts a name with digits plus anything else", () => {
+  const { registry } = reg()
+  const s = addSession(registry, "alpha")
+  // "px-12345678" is the random default whose eight hex characters all happen to be digits.
+  const names = ["px-1234", "app5173", "5173a", "a5173", "1-2", "5173-app", "px-12345678"]
+  for (const name of names) {
+    expect(registry.addProxy({ domain: name, sessionId: s.id, port: 3000 }).domain).toBe(name)
+  }
+  expect(registry.listProxies().map((p) => p.domain).sort()).toEqual([...names].sort())
+})
+
+test("addProxy refuses a name that is not a string, so a number can't become a digits-only one", () => {
+  // POST /proxies casts the JSON body's domain with `as string`, so a number or a boolean can arrive. The name check is
+  // a regex, and a regex coerces: 5173 reads as "5173" and true as "true". SQLite then stores `true` as the name "1".
+  const { registry, db } = reg()
+  const s = addSession(registry, "alpha")
+  for (const name of [5173, true, 1, ["5173"]]) {
+    expect(() => registry.addProxy({ domain: name as unknown as string, sessionId: s.id, port: 3000 })).toThrow(/invalid domain/)
+  }
+  expect(registry.listProxies()).toEqual([])
+  expect(db.query("SELECT domain FROM proxies").all()).toEqual([])
+})
+
+test("a digits-only proxy stored before the rule still loads, can be made public and removed; only creating one is refused", () => {
+  const db = freshDb()
+  const s = addSession(new Registry(db), "alpha")
+  // What an older broker could have written: the table itself has no rule about names.
+  db.run("INSERT INTO proxies (domain, session_id, port, created_at, is_public) VALUES (?, ?, ?, ?, 0)", [
+    "5173", s.id, 3000, "2026-01-01T00:00:00.000Z",
+  ])
+
+  const registry = new Registry(db) // a broker restart
+  expect(registry.getProxy("5173")).toMatchObject({ domain: "5173", sessionName: "alpha", port: 3000, isPublic: false })
+  expect(registry.setProxyPublic("5173", true).isPublic).toBe(true)
+  // Exposing is an upsert, and the rule is about the name, so it can't be re-exposed either.
+  expect(() => registry.addProxy({ domain: "5173", sessionId: s.id, port: 4000 })).toThrow(/only digits/)
+  expect(registry.getProxy("5173")?.port).toBe(3000)
+  registry.removeProxy("5173")
+  expect(registry.getProxy("5173")).toBeUndefined()
+})
+
+// A proxy forwarded to the broker's own port arrives from loopback with Host 127.0.0.1 and no forwarding header, which the
+// broker takes for the desktop app on this computer: GET /host then answers with the local-only facts (state dir, install mode).
+test("addProxy refuses a port the broker has said is its own, and accepts every other", () => {
+  const { registry, db } = reg()
+  const s = addSession(registry, "alpha")
+  registry.refuseProxyPort(9898)
+  expect(() => registry.addProxy({ domain: "app", sessionId: s.id, port: 9898 })).toThrow("can't expose port 9898: that is the broker itself")
+  expect(registry.listProxies()).toEqual([])
+  expect(db.query("SELECT domain FROM proxies").all()).toEqual([])
+  for (const port of [9897, 9899, 3000, 1, 65535]) {
+    expect(registry.addProxy({ domain: `app${port}`, sessionId: s.id, port }).port).toBe(port)
+  }
+})
+
+test("a registry that was told no port refuses none", () => {
+  const { registry } = reg()
+  const s = addSession(registry, "alpha")
+  expect(registry.addProxy({ domain: "app", sessionId: s.id, port: 9898 }).port).toBe(9898)
+})
+
 test("reload across restart: archived (killed) session's proxy is dropped and the row deleted", () => {
   const db = freshDb()
   const a = new Registry(db)

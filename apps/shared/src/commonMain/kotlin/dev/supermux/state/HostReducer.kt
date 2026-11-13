@@ -198,7 +198,7 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
         val kept = if (echo == null) prev else prev.filterNot { it.id == echo }
         // An entry that is already there (the same frame twice) is replaced where it is, not shown twice.
         val at = kept.indexOfFirst { it.id == entry.id }
-        val next = if (at < 0) kept + entry else kept.toMutableList().also { it[at] = entry }
+        val next = if (at < 0) kept + entry else kept.toMutableList().also { it[at] = entry.keepingStreamOf(it[at]) }
         // The transcript moved on, so the just-answered receipts have served their purpose;
         // the "answered: …" line the close wrote is the record that stays.
         state.copy(
@@ -217,6 +217,9 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
         if (state.lastRead[frame.session] == next) state
         else state.copy(lastRead = state.lastRead + (frame.session to next))
     }
+    is ServerFrame.LimitWait -> state.copy(
+        sessions = state.sessions.map { s -> if (s.id == frame.session) s.copy(limitWait = frame.wait) else s },
+    )
     is ServerFrame.SessionState -> state.copy(
         sessions = state.sessions.map { s ->
             if (s.id != frame.session) s
@@ -416,14 +419,23 @@ private fun keepsLoadedLog(state: HostState, id: String, tail: List<LogEntry>): 
 
 private fun snapshotMessages(state: HostState, frame: ServerFrame.Snapshot): Map<String, List<LogEntry>> {
     val partial = frame.partialLogs?.toSet() ?: return frame.logs
-    return frame.logs.mapValues { (id, log) ->
-        if (id !in partial || !keepsLoadedLog(state, id, log)) {
-            log
-        } else {
-            val newest = log.last()
-            state.messages.getValue(id).map { if (it.id == newest.id) newest else it }
-        }
+    return frame.logs.mapValues { (id, tail) ->
+        val held = state.messages[id]?.filterNot { it.id.startsWith("local-") }
+        if (id !in partial || held.isNullOrEmpty()) tail else withTail(held, tail)
     }
+}
+
+/**
+ * Card #121: a chat we already hold (fetched, or seeded from the offline cache) never shrinks to a
+ * snapshot's tail. The tail's copies of entries we hold win (they may have been edited), and its
+ * entries newer than ours are appended; the chat's own fetch fills any gap. Local echoes are left
+ * out: the outbox re-echoes whatever is still unsent after the snapshot.
+ */
+private fun withTail(held: List<LogEntry>, tail: List<LogEntry>): List<LogEntry> {
+    val byId = tail.associateBy { it.id }
+    val newestTs = held.last().ts
+    val known = held.mapTo(HashSet()) { it.id }
+    return held.map { h -> byId[h.id]?.keepingStreamOf(h) ?: h } + tail.filter { it.id !in known && it.ts > newestTs }
 }
 
 private fun snapshotCompleteLogs(state: HostState, frame: ServerFrame.Snapshot): Set<String> {
@@ -484,8 +496,18 @@ fun newClientMessageId(): String = CLIENT_MESSAGE_ID_PREFIX + Uuid.random().toSt
 fun mergeFetchedLog(fetched: List<LogEntry>, current: List<LogEntry>): List<LogEntry> {
     val newestTs = fetched.lastOrNull()?.ts ?: return current
     val known = fetched.mapTo(HashSet()) { it.id }
-    return fetched + current.filter { it.id !in known && (it.ts > newestTs || it.id.startsWith("local-")) }
+    val held = current.filter { it.stream != null }.associateBy { it.id }
+    val page = if (held.isEmpty()) fetched else fetched.map { f -> held[f.id]?.let { f.keepingStreamOf(it) } ?: f }
+    return page + current.filter { it.id !in known && (it.ts > newestTs || it.id.startsWith("local-")) }
 }
+
+/**
+ * Card #121: a copy of a row we hold (the history page's, a snapshot's) keeps the held row's live stream. The stream
+ * is the row's key in the transcript (#76) and is never stored, so a copy without it changed the key: the
+ * transcript lost its row and kept only its index, near the top of a longer list (bottom → top → bottom).
+ */
+internal fun LogEntry.keepingStreamOf(held: LogEntry): LogEntry =
+    if (stream == null && held.stream != null) copy(stream = held.stream) else this
 
 /** What a broker answers a frame it doesn't know with (`src/channels/web/index.ts`). */
 internal const val UNKNOWN_FRAME_TYPE = "unknown frame type"

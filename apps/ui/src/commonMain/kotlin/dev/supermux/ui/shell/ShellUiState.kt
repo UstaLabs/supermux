@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.supermux.ui.nav.Route
 import dev.supermux.ui.nav.SettingsSection
+import dev.supermux.ui.settings.canonicalRoute
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.workspace.LayoutNode
 import kotlinx.serialization.json.Json
@@ -174,7 +175,6 @@ class ShellUiState {
     val archivedOpen: Boolean get() = currentRoute is Route.Archived
     val displaysOpen: Boolean get() = currentRoute is Route.Displays
     val settingsOpen: Boolean get() = currentRoute is Route.Settings
-    val appUpdateOpen: Boolean get() = currentRoute is Route.AppUpdate
     val addHostOpen: Boolean get() = currentRoute is Route.AddHost
     /** The New-Session launcher is showing (a detail-pane swap on a wide host). */
     val launcherOpen: Boolean get() = currentRoute is Route.NewSession
@@ -215,21 +215,39 @@ class ShellUiState {
     }
     /** The Usage card is showing (an anchored popover on a wide host). */
     val usageOpen: Boolean get() = currentRoute is Route.Usage
+    /** Settings is on Coding — where File ▸ "Coding…" (once "Editor / LSP…") lands (#97). */
     val lspSettingsOpen: Boolean
-        get() = (currentRoute as? Route.Settings)?.section == SettingsSection.EditorLsp
+        get() = (currentRoute as? Route.Settings)?.section == SettingsSection.Coding
 
     /**
-     * Settings rail section. When Settings is on the stack, reads/writes that route's section;
-     * when closed, remembers the last section for the next open (and for tests).
+     * The page Settings shows (null = just Settings). When Settings is on the stack, reads/writes that route's
+     * section — writing it is a rail click: a new page, no sub-page or anchor; when closed, remembers the last
+     * section for the next open (and for tests).
      */
-    var settingsSection: SettingsSection
-        get() = (currentRoute as? Route.Settings)?.section ?: lastSettingsSection
+    var settingsSection: SettingsSection?
+        get() = when (val r = currentRoute) {
+            is Route.Settings -> r.section
+            else -> lastSettingsSection
+        }
         set(value) {
             lastSettingsSection = value
             val i = backStack.indexOfLast { it is Route.Settings }
             if (i >= 0) backStack[i] = Route.Settings(value)
         }
-    private var lastSettingsSection by mutableStateOf(SettingsSection.Providers)
+    private var lastSettingsSection by mutableStateOf<SettingsSection?>(null)
+
+    /** The sub-page Settings shows (a provider, the glossary, a machine screen); null when on a page or closed. */
+    val settingsSub: String? get() = (currentRoute as? Route.Settings)?.sub
+
+    /**
+     * A wide Settings hub moved to [section]'s [sub] (or the page itself): the route follows, with no anchor — the
+     * hub already shows the place, so it is not a new landing. The web's address bar and Back then follow sub-pages.
+     */
+    fun moveSettings(section: SettingsSection, sub: String?) {
+        lastSettingsSection = section
+        val i = backStack.indexOfLast { it is Route.Settings }
+        if (i >= 0) backStack[i] = Route.Settings(section, sub)
+    }
 
     /**
      * Push [route]. [Route.Home] clears everything above it; any other route REPLACES whatever is
@@ -237,7 +255,9 @@ class ShellUiState {
      * exclusive on both hosts, which is what desktop's booleans encoded and what Android's
      * single-level pushes did in practice.
      */
-    fun navigate(route: Route) {
+    fun navigate(to: Route) {
+        // The old Devices / Proxies pages and Step 1's machine screens are the machine page's parts now (#97).
+        val route = canonicalRoute(to)
         popToHome()
         if (route is Route.Home) return
         if (route is Route.Settings) lastSettingsSection = route.section
@@ -280,6 +300,8 @@ class ShellUiState {
 
     // Menu / chrome conveniences → navigate
     fun openArchived() = navigate(Route.Archived)
+    /** The sidebar card's Explore (#90): [version]'s edition. */
+    fun openWhatsNew(version: String) = navigate(Route.WhatsNew(version))
     fun openDisplays() = navigate(Route.Displays)
     fun openAddHost() = navigate(Route.AddHost)
 
@@ -296,10 +318,20 @@ class ShellUiState {
         if (usageOpen) goBack()
     }
 
-    fun openSettings(section: SettingsSection = SettingsSection.Providers) =
-        navigate(Route.Settings(section))
-    fun openLspSettings() = openSettings(SettingsSection.EditorLsp)
-    fun openAppUpdate() = navigate(Route.AppUpdate)
+    /**
+     * Open Settings: no [section] is "just Settings" (the phone's index, General on a wide window); [sub] a
+     * second-level page of the section, [anchor] a row on it to land on (#97).
+     */
+    fun openSettings(section: SettingsSection? = null, sub: String? = null, anchor: String? = null) =
+        navigate(Route.Settings(section, sub, anchor))
+
+    /** The active machine's page (#97): the host pill's "Open ‹machine›" and the footer's Devices icon; [anchor] a part on it. */
+    fun openMachine(anchor: String? = null) = openSettings(SettingsSection.Machine, anchor = anchor)
+
+    /** File ▸ "Coding…" and every "language servers" link: Coding, at its code-intelligence row. */
+    fun openLspSettings() = openSettings(SettingsSection.Coding, anchor = "code-intelligence")
+    /** File ▸ "Check for Updates…" and the sidebar card's open: General, at its App version row (#97). */
+    fun openAppUpdate() = openSettings(SettingsSection.General, anchor = "app-version")
 
     /**
      * The session list's legacy string-keyed navigation callback (`onNavigate("settings")`).
@@ -310,10 +342,10 @@ class ShellUiState {
             "new" -> openLauncher()
             "settings" -> openSettings()
             "usage" -> openUsage()
-            "devices" -> navigate(Route.Devices)
+            "devices" -> openMachine("devices")
             "archived" -> openArchived()
-            "proxies" -> navigate(Route.Proxies)
-            "appearance" -> navigate(Route.Appearance)
+            "proxies" -> openMachine("links")
+            "appearance" -> openSettings(SettingsSection.General)
             "displays" -> openDisplays()
             "addhost" -> openAddHost()
         }
@@ -348,6 +380,30 @@ class ShellUiState {
     var externalAttach by mutableStateOf<Pair<String, dev.supermux.ui.chat.ComposerExternalAttach>?>(null)
 
     /**
+     * What's new's "Ask an agent for a card" (#90): back to the open chat with [text] in its composer, unsent. False
+     * (and nothing done) with no chat open.
+     */
+    fun askAgentForCard(text: String): Boolean {
+        val session = selectedId ?: return false
+        popToHome()
+        externalAttach = session to dev.supermux.ui.chat.ComposerExternalAttach(emptyList(), text, send = false)
+        return true
+    }
+
+    /** What's new's "Open a Browser tab" (#90): home, and the workspace on show opens an empty Browser tab once. */
+    var browserTabRequested by mutableStateOf(false)
+        private set
+
+    fun requestBrowserTab() {
+        popToHome()
+        browserTabRequested = true
+    }
+
+    fun consumeBrowserTabRequest() {
+        browserTabRequested = false
+    }
+
+    /**
      * One-shot "transcribe this WAV file into the chat composer's draft" request (session id +
      * `ComposerExternalDictate`), consumed by the matching pane's Composer.
      */
@@ -371,12 +427,6 @@ class ShellUiState {
     var forceArchivedOpenFor by mutableStateOf<String?>(null)
 
     /**
-     * Opens a terminal tab in the workspace on screen (Ctrl/Cmd+T). Registered by the active
-     * workspace panel while it is shown; null when no workspace is.
-     */
-    var newTerminalAction: (() -> Unit)? = null
-
-    /**
      * One-shot "open a view of this kind in the workspace on screen" request (view kind → its
      * initial `state`). Set by the off-by-default `SM_DIFF` / `SM_DISPLAY` headless hooks.
      */
@@ -397,7 +447,9 @@ class ShellUiState {
         val SIDEBAR_MIN = 220.dp
         val SIDEBAR_MAX = 560.dp
 
-        private val routeJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
+        // coerceInputValues: a section name an older build saved ("Curator") decodes as null — plain Settings —
+        // instead of failing the whole saved back stack (#97).
+        private val routeJson = Json { ignoreUnknownKeys = true; explicitNulls = false; coerceInputValues = true }
 
         /**
          * Android's holder: the shell survives a rotation AND process death.
@@ -432,7 +484,8 @@ class ShellUiState {
                             routeJson.decodeFromString(ListSerializer(Route.serializer()), raw)
                         }.getOrNull()?.takeIf { it.isNotEmpty() }?.let { restored ->
                             backStack.clear()
-                            backStack.addAll(restored)
+                            // A stack saved before #97's Step 2 may name an old machine screen.
+                            backStack.addAll(restored.map(::canonicalRoute))
                         }
                     }
                     selectedId = (parts.getOrNull(1) as? String)?.takeIf { it.isNotBlank() }

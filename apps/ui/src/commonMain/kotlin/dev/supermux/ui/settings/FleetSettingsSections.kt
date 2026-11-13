@@ -18,107 +18,112 @@
 package dev.supermux.ui.settings
 
 import androidx.compose.runtime.Composable
-import dev.supermux.ui.update.AppUpdateScreen
 import dev.supermux.state.FleetStore
 import dev.supermux.ui.nav.SettingsSection
+import dev.supermux.ui.settings.pages.CodingPage
+import dev.supermux.ui.settings.pages.GeneralPage
+import dev.supermux.ui.settings.pages.GlossaryPage
+import dev.supermux.ui.settings.pages.MachinePage
+import dev.supermux.ui.settings.pages.rememberMachineChats
+import dev.supermux.ui.settings.pages.KeyboardShortcutsPage
+import dev.supermux.ui.settings.pages.MemoryPage
+import dev.supermux.ui.settings.pages.rememberCuratorSettingsActions
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.ui.usage.rememberUsageActions
+import dev.supermux.ui.settings.pages.PrivacyLabsPage
+import dev.supermux.ui.settings.pages.ProviderDetailPage
+import dev.supermux.ui.settings.pages.ProvidersPage
+import dev.supermux.ui.settings.pages.rememberProvidersState
+import dev.supermux.ui.accounts.rememberAccountsActions
+import dev.supermux.ui.settings.pages.VoicePage
+import dev.supermux.ui.settings.pages.WorktreesPage
+import dev.supermux.ui.settings.pages.rememberVoiceSettingsActions
 
-/** Renders [section] against the fleet's active host. Called from the hub's `content` slot. */
+/**
+ * Renders [place] against the fleet's active host. Called from the hub's `content` slot.
+ *
+ * #97: every section is its page; the machine page holds the machine's own parts. Accounts
+ * live on each provider's page (`Providers/‹agent›`, where Usage's and the composer's "Sign in again" land) and Git
+ * hosting is Coding's `github` anchor.
+ */
 @Composable
 fun FleetSettingsSection(
-    section: SettingsSection,
+    place: SettingsPlace,
     scope: SettingsSlotScope,
     fleet: FleetStore,
 ) {
-    when (section) {
-        SettingsSection.Providers -> AgentSettingsScreen(
-            actions = rememberAgentSettingsActions(fleet),
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
+    when (place.section) {
+        SettingsSection.General -> GeneralPage(
+            // What these hosts paint when nothing is stored: the system's choice (spec §10.6).
+            defaultAppearance = AppearanceMode.SYSTEM,
+            anchor = place.anchor,
+            onAnchorShown = scope.onAnchorShown,
         )
-        SettingsSection.Accounts -> dev.supermux.ui.accounts.AccountsSettingsScreen(
-            actions = dev.supermux.ui.accounts.rememberAccountsActions(fleet),
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-            onSignInAgain = { scope.onOpenSection(SettingsSection.Providers) },
+        SettingsSection.KeyboardShortcuts -> KeyboardShortcutsPage(
+            anchor = place.anchor,
+            onAnchorShown = scope.onAnchorShown,
         )
-        SettingsSection.Curator -> CuratorSettingsScreen(
-            actions = rememberCuratorSettingsActions(fleet),
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
-        SettingsSection.Voice -> VoiceSettingsScreen(
-            actions = rememberVoiceSettingsActions(fleet),
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
-        SettingsSection.EditorLsp -> EditorSettingsScreen(
-            lspLoad = { fleet.lspLoad() },
-            lspToggle = { id, enabled -> fleet.lspToggle(id, enabled) },
-            lspInstall = { id -> fleet.lspInstall(id) },
-            lspInstallLog = fleet.lspInstallLog,
-            lspInstallDone = fleet.lspInstallDone,
-            lspAddCustom = { args ->
-                fleet.lspAddCustom(
-                    args.id, args.label, args.command, args.extensions, args.args,
-                    args.languageId, args.installCmd,
+        SettingsSection.Providers -> {
+            val agents = rememberAgentSettingsActions(fleet)
+            val accounts = rememberAccountsActions(fleet)
+            // Above the list and the provider pages, so a login or an install keeps going between them.
+            val providers = rememberProvidersState(agents)
+            when (val agent = place.sub) {
+                null -> ProvidersPage(
+                    providers,
+                    accounts,
+                    onOpenProvider = { scope.onOpen(SettingsPlace(SettingsSection.Providers, it)) },
+                    anchor = place.anchor,
+                    onAnchorShown = scope.onAnchorShown,
                 )
-            },
-            lspRemoveCustom = { id -> fleet.lspRemoveCustom(id) },
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
+                else -> ProviderDetailPage(agent, providers, agents, accounts, onBack = scope.onClose)
+            }
+        }
+        SettingsSection.Voice -> {
+            val voice = rememberVoiceSettingsActions(fleet)
+            if (place.sub == GLOSSARY_SUB) {
+                GlossaryPage(voice, onBack = scope.onClose)
+            } else {
+                VoicePage(
+                    actions = voice,
+                    anchor = place.anchor,
+                    onAnchorShown = scope.onAnchorShown,
+                    onOpenSub = { scope.onOpen(SettingsPlace(SettingsSection.Voice, it)) },
+                )
+            }
+        }
+        SettingsSection.Coding -> CodingPage(
+            forges = rememberGitHostingActions(fleet),
+            lsp = rememberCodeIntelligenceActions(fleet),
+            anchor = place.anchor,
+            onAnchorShown = scope.onAnchorShown,
         )
-        SettingsSection.GitHosting -> GitHostingScreen(
-            actions = rememberGitHostingActions(fleet),
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
+        SettingsSection.Memory -> MemoryPage(
+            actions = rememberCuratorSettingsActions(fleet),
+            anchor = place.anchor,
+            onAnchorShown = scope.onAnchorShown,
         )
-        SettingsSection.System -> SystemSettingsScreen(
-            actions = rememberSystemSettingsActions(fleet),
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
+        SettingsSection.PrivacyLabs -> PrivacyLabsPage(
+            system = rememberSystemSettingsActions(fleet),
+            anchor = place.anchor,
+            onAnchorShown = scope.onAnchorShown,
         )
-        // Devices and Proxies are standalone routes too (Route.Devices / Route.Proxies) — the same
-        // screens, which paint their own chrome there via `standalone = true`.
-        SettingsSection.Devices -> DevicesSettingsScreen(
-            actions = rememberDevicesSettingsActions(fleet),
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
-        SettingsSection.Proxies -> ProxiesSettingsScreen(
-            actions = rememberProxiesSettingsActions(fleet),
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
-        SettingsSection.Worktrees -> WorktreesSettingsScreen(
-            actions = rememberWorktreesSettingsActions(fleet),
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
-    }
-}
-
-/**
- * Renders one host-local [SettingsExtra] row's page. Appearance is shared since E7 and the in-app
- * updater since G5; the ROWS are still host-local — the hub filters them by `Caps` — so a host
- * reaches only the ones it advertises. iOS never reaches `AppUpdate`: `Caps.appUpdate` is false
- * there because the App Store owns updates.
- */
-@Composable
-fun FleetSettingsExtra(extra: SettingsExtra, scope: SettingsSlotScope) {
-    when (extra) {
-        // Desktop-only: `Caps.localBroker` hides the row everywhere this renderer is used.
-        SettingsExtra.Hosting -> Unit
-        SettingsExtra.Appearance -> AppearanceSettingsScreen(
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
-        SettingsExtra.AppUpdate -> AppUpdateScreen(
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
-        SettingsExtra.Storage -> StorageSettingsScreen(
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
+        // Hosting is desktop-only, so a `Machine/computer` link lands on the machine page here too.
+        SettingsSection.Machine -> if (place.sub == MachineSub.WORKTREES) {
+            WorktreesPage(rememberWorktreesSettingsActions(fleet), onBack = scope.onClose)
+        } else {
+            MachinePage(
+                system = rememberSystemSettingsActions(fleet),
+                chats = rememberMachineChats(fleet),
+                devices = rememberDevicesSettingsActions(fleet),
+                links = rememberProxiesSettingsActions(fleet),
+                worktrees = rememberWorktreesSettingsActions(fleet),
+                usage = rememberUsageActions(fleet),
+                onOpenUsage = scope.onOpenUsage,
+                onOpenWorktrees = { scope.onOpen(SettingsPlace(SettingsSection.Machine, MachineSub.WORKTREES)) },
+                anchor = place.anchor,
+                onAnchorShown = scope.onAnchorShown,
+            )
+        }
     }
 }

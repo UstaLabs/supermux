@@ -64,15 +64,44 @@ class KeymapConflictTest {
 
     /** A focused terminal keeps its find and paste ([terminalKeeps]): these app keys reach the app only when it leaves them. */
     private val terminalAllowed = setOf(
-        AppCommands.FindInChat.id to "Mod-f",
+        AppCommands.Find.id to "Mod-f",
         AppCommands.PasteImage.id to "Mod-v",
+        // The zoom keys are the terminal's own, but only the Browser pane registers them.
+        AppCommands.BrowserZoomIn.id to "Mod-=",
+        AppCommands.BrowserZoomOut.id to "Mod--",
+        AppCommands.BrowserZoomReset.id to "Mod-0",
+        AppCommands.BrowserZoomIn.id to "Mod-Shift-=",
+        AppCommands.BrowserZoomIn.id to "Mod-+",
+        // DevTools' device-mode key (#122 phase 2): only the Browser pane registers it, where no editor is.
+        AppCommands.BrowserDeviceMode.id to "Mod-Shift-m",
+        // DevTools' inspect-element key, the Browser tab's pick (#122 3a): a terminal's copy, but only the Browser pane
+        // registers it, and no terminal is in one.
+        AppCommands.BrowserPick.id to "Mod-Shift-c",
     )
 
     /** ⌘/ and ⌘F stay the editor's (the deeper scope wins); paste-image is handled only by a composer. */
     private val editorAllowed = setOf(
         AppCommands.ShowShortcuts.id to "Mod-/",
-        AppCommands.FindInChat.id to "Mod-f",
+        AppCommands.Find.id to "Mod-f",
         AppCommands.PasteImage.id to "Mod-v",
+        // Indent and zoom are the editor's, but only the Browser pane registers these.
+        AppCommands.BrowserBack.id to "Mod-[",
+        AppCommands.BrowserForward.id to "Mod-]",
+        AppCommands.BrowserZoomIn.id to "Mod-=",
+        AppCommands.BrowserZoomOut.id to "Mod--",
+        AppCommands.BrowserZoomReset.id to "Mod-0",
+        // #122's Chrome keys: the editor's go-to-definition (F12) and Esc are its own, and only the Browser pane
+        // (and, later, a chat's find) registers these; the deeper editor wins anyway.
+        AppCommands.BrowserInspect.id to "F12",
+        AppCommands.BrowserStop.id to "Escape",
+        AppCommands.FindNext.id to "Mod-g",
+        AppCommands.FindNext.id to "F3",
+        AppCommands.FindPrevious.id to "Mod-Shift-g",
+        AppCommands.FindPrevious.id to "Shift-F3",
+        AppCommands.BrowserZoomIn.id to "Mod-Shift-=",
+        AppCommands.BrowserZoomIn.id to "Mod-+",
+        // DevTools' device-mode key (#122 phase 2): only the Browser pane registers it, where no editor is.
+        AppCommands.BrowserDeviceMode.id to "Mod-Shift-m",
     )
 
     private fun isAllowed(b: AppBinding, os: KeyOs, allowed: Set<Pair<String, String>>) =
@@ -84,7 +113,13 @@ class KeymapConflictTest {
 
     @Test fun noChordIsBoundTwice() {
         for (os in KeyOs.entries) {
-            val twice = DefaultKeymap.bindings.mapNotNull { it.chord(os) }.groupingBy { it }.eachCount().filterValues { it > 1 }
+            // ⌘T / Ctrl+T is New terminal, and a new Browser tab inside a Browser tab (#122, Q1): the deeper scope wins.
+            // Off Apple Ctrl+Shift+T is the reopen key, which makes New terminal's terminal itself where it should.
+            val byScope = setOfNotNull(
+                KeyChord.parse("Mod-t", apple = os == KeyOs.Apple),
+                KeyChord.parse("Ctrl-Shift-t", apple = false).takeIf { os == KeyOs.Other },
+            )
+            val twice = DefaultKeymap.bindings.mapNotNull { it.chord(os) }.groupingBy { it }.eachCount().filterValues { it > 1 } - byScope
             assertTrue(twice.isEmpty(), "$os: ${twice.keys}")
         }
     }

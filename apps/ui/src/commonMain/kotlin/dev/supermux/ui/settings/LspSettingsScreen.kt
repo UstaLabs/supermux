@@ -1,210 +1,156 @@
-// The one LSP settings screen for both apps (cluster C, task C3). Desktop's standalone
-// `LspSettingsScreen` is the base — it is the richer of the two (its own back row + title, a
-// spinner-centred loading state, the full test-tag set, `internal` pure helpers) — and Android's
-// former `EditorLspSection` is now this same composable with `showTopBar = false`, embedded in the
-// Editor settings page exactly where the section used to be.
+// Code intelligence (#97 spec §2.2, §10.8): the machine's language servers, Coding's last section. Today's LSP screen
+// restyled in place with the Settings kit: one item per server with its toggle, Install (the live log while it runs,
+// "Installing…", a failure with Show log) and Remove for your own; then the "Add your own language server" fold with
+// today's seven fields, validation and save.
 //
-// What each side contributed:
-//   - Desktop: the standalone chrome, the centred spinner (Android's inline "Loading…" row is
-//     dropped), all tags, and the DROP of Android's `lspError` branch — `lspLoad()` never throws
-//     (HostStore degrades to emptyList() internally), so that state was never set and the branch
-//     was dead code.
-//   - Android: `KeyboardOptions(autoCorrectEnabled = false, capitalization = …)` on the add-custom
-//     fields (a server id or a shell command is not a sentence) — harmless on a hardware keyboard,
-//     and the `scrollable = false` embedding, since the Android page already scrolls around it.
-//   - Both: the header/caption/field composables each app had inlined are the shared
-//     `dev.supermux.ui.widgets` ones (they came from the same source in cluster A, task A5).
-//
-// Icons are Material (`Icons.Filled.Delete/Download/Check/Close`) — Android's `painterResource`
-// drawables do not exist off Android, and the two glyph sets match.
+// The section owns its server list (loaded on first composition, then patched in place by toggle / install / add /
+// remove); the install log and result are the store's live per-server streams, only observed. The add form is kept for
+// the page on display (#89), and its save runs on the fleet's scope.
 package dev.supermux.ui.settings
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Download
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.ui.text.input.KeyboardCapitalization
-import dev.supermux.ui.retain.rememberRetainedOnPage
-import dev.supermux.ui.retain.rememberRetainedScope
-import dev.supermux.ui.theme.LocalSemantics
-import dev.supermux.ui.widgets.SettingsCaption
-import dev.supermux.ui.widgets.SettingsSectionHeader
-import dev.supermux.ui.widgets.settingsFieldColors
-import dev.supermux.ui.theme.Radii
-import dev.supermux.ui.theme.Space
+import dev.supermux.net.AddCustomLspArgs
 import dev.supermux.net.LspInstallResult
 import dev.supermux.net.LspMutationResult
 import dev.supermux.net.LspServer
 import dev.supermux.proto.ServerFrame
+import dev.supermux.state.FleetStore
+import dev.supermux.state.HostStore
+import dev.supermux.ui.retain.rememberRetainedOnPage
+import dev.supermux.ui.retain.rememberRetainedScope
+import dev.supermux.ui.settings.kit.KitButtons
+import dev.supermux.ui.settings.kit.KitFold
+import dev.supermux.ui.settings.kit.KitGhostButton
+import dev.supermux.ui.settings.kit.KitItem
+import dev.supermux.ui.settings.kit.KitItemList
+import dev.supermux.ui.settings.kit.KitMark
+import dev.supermux.ui.settings.kit.KitNote
+import dev.supermux.ui.settings.kit.KitSheet
+import dev.supermux.ui.settings.kit.KitTextAction
+import dev.supermux.ui.settings.kit.KitTextField
+import dev.supermux.ui.settings.kit.KitToggle
+import dev.supermux.ui.settings.kit.LocalSettingsMachines
+import dev.supermux.ui.settings.kit.kitAnchor
+import dev.supermux.ui.settings.kit.kitColors
+import dev.supermux.ui.theme.MonoFontFamily
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import dev.supermux.net.AddCustomLspArgs
 
 /**
- * The LSP settings overlay: a back row + title, then per-server rows (enable Switch + state badge
- * + install with a streamed log + remove for custom servers) and an add-custom-server form. Owns
- * its OWN server-list state (loads via [lspLoad] on first composition, then mutates it in place on
- * toggle/install-reload/add/remove) — unlike the Usage/Archived overlays, where AppShell owns
- * a single point-in-time snapshot, because every mutation here needs to patch the list in place
- * (mirrors Android's EditorLspSection exactly). [lspInstallLog]/[lspInstallDone] are the LIVE
- * per-server install stream (HostStore, folded from lsp_install_progress/lsp_install_done
- * frames) — not reloaded, just observed.
+ * Every call the Code intelligence section makes, in one holder. [lspInstallLog]/[lspInstallDone] are the store's
+ * live per-server install streams (folded from its install frames), observed, never reloaded.
+ */
+@Immutable
+class CodeIntelligenceActions(
+    val lspLoad: suspend () -> List<LspServer> = { emptyList() },
+    val lspToggle: suspend (id: String, enabled: Boolean) -> List<LspServer>? = { _, _ -> null },
+    val lspInstall: suspend (id: String) -> LspInstallResult? = { null },
+    val lspInstallLog: StateFlow<Map<String, List<String>>> = MutableStateFlow(emptyMap()),
+    val lspInstallDone: StateFlow<Map<String, ServerFrame.LspInstallDone>> = MutableStateFlow(emptyMap()),
+    val lspAddCustom: suspend (AddCustomLspArgs) -> LspMutationResult? = { null },
+    val lspRemoveCustom: suspend (id: String) -> LspMutationResult? = { null },
+)
+
+/** [CodeIntelligenceActions] against one paired host — desktop's wiring. */
+@Composable
+fun rememberCodeIntelligenceActions(app: HostStore): CodeIntelligenceActions = remember(app) {
+    CodeIntelligenceActions(
+        lspLoad = { app.lspLoad() },
+        lspToggle = { id, enabled -> app.lspToggle(id, enabled) },
+        lspInstall = { id -> app.lspInstall(id) },
+        lspInstallLog = app.lspInstallLog,
+        lspInstallDone = app.lspInstallDone,
+        lspAddCustom = { a -> app.lspAddCustom(a.id, a.label, a.command, a.extensions, a.args, a.languageId, a.installCmd) },
+        lspRemoveCustom = { id -> app.lspRemoveCustom(id) },
+    )
+}
+
+/** [CodeIntelligenceActions] against the fleet's ACTIVE host — Android's and iOS's wiring. */
+@Composable
+fun rememberCodeIntelligenceActions(fleet: FleetStore): CodeIntelligenceActions = remember(fleet) {
+    CodeIntelligenceActions(
+        lspLoad = { fleet.lspLoad() },
+        lspToggle = { id, enabled -> fleet.lspToggle(id, enabled) },
+        lspInstall = { id -> fleet.lspInstall(id) },
+        lspInstallLog = fleet.lspInstallLog,
+        lspInstallDone = fleet.lspInstallDone,
+        lspAddCustom = { a -> fleet.lspAddCustom(a.id, a.label, a.command, a.extensions, a.args, a.languageId, a.installCmd) },
+        lspRemoveCustom = { id -> fleet.lspRemoveCustom(id) },
+    )
+}
+
+/** The machine as a sentence names it mid-way: its name, or "this machine" when Settings knows none. */
+@Composable
+private fun machineInSentence(): String = LocalSettingsMachines.current?.current?.name ?: "this machine"
+
+/**
+ * One item per language server, then "Add your own language server". Loads on first composition; the caller re-keys
+ * it on the machine.
  */
 @Composable
-fun LspSettingsScreen(
-    lspLoad: suspend () -> List<LspServer>,
-    lspToggle: suspend (id: String, enabled: Boolean) -> List<LspServer>?,
-    lspInstall: suspend (id: String) -> LspInstallResult?,
-    lspInstallLog: StateFlow<Map<String, List<String>>>,
-    lspInstallDone: StateFlow<Map<String, ServerFrame.LspInstallDone>>,
-    lspAddCustom: suspend (AddCustomLspArgs) -> LspMutationResult?,
-    lspRemoveCustom: suspend (id: String) -> LspMutationResult?,
-    onBack: () -> Unit,
-    /** When false (Settings hub / the Android Editor page), omit the nested Back/title chrome —
-     *  the host owns navigation. */
-    showTopBar: Boolean = true,
-    /** False when the HOST already scrolls (Android's Editor settings page): the screen then wraps
-     *  its content height instead of filling and scrolling, since a vertical scroll nested in a
-     *  vertical scroll measures to zero height. */
-    scrollable: Boolean = true,
-) {
-    val cs = MaterialTheme.colorScheme
+fun CodeIntelligenceSection(actions: CodeIntelligenceActions, modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
+    val machine = machineInSentence()
 
     var servers by remember { mutableStateOf<List<LspServer>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
+    var loaded by remember { mutableStateOf(false) }
     var toggling by remember { mutableStateOf<String?>(null) }
     var installing by remember { mutableStateOf<String?>(null) }
     var removing by remember { mutableStateOf<String?>(null) }
-    // The "Add language server" form, open or not, what is typed in it and its save, kept for the
-    // page on display (#89): a rotation closed it with seven fields of typing gone. The save runs
-    // on the fleet's scope and leaves the new list in [LspAddForm.added] for the screen on display.
+    var logFor by remember { mutableStateOf<String?>(null) }
+    // The add form and its save, kept for the page on display (#89): a rotation lost seven fields of typing. The save
+    // runs on the fleet's scope and leaves the new list in [LspAddForm.added] for the section on display.
     val add = rememberRetainedOnPage("lsp:add") { LspAddForm() }
     val saves = rememberRetainedScope()
-    var showAddForm by add::open
     LaunchedEffect(add, add.added) {
         val list = add.added ?: return@LaunchedEffect
         add.added = null
         servers = list
     }
 
-    val installLog by lspInstallLog.collectAsState()
-    val installDone by lspInstallDone.collectAsState()
+    val installLog by actions.lspInstallLog.collectAsState()
+    val installDone by actions.lspInstallDone.collectAsState()
     var dismissedResults by remember { mutableStateOf<Set<String>>(emptySet()) }
 
     suspend fun reload() {
-        loading = true
-        servers = lspLoad()
-        loading = false
+        servers = actions.lspLoad()
+        loaded = true
     }
 
     LaunchedEffect(Unit) { reload() }
 
-    Column(
-        (if (scrollable) Modifier.fillMaxSize() else Modifier.fillMaxWidth())
-            // Only the standalone overlay paints its own ground; embedded (Android's Editor page,
-            // the desktop hub's detail pane) the host owns the background and a second one here
-            // would draw a band across the middle of the page.
-            .then(if (showTopBar) Modifier.background(cs.surfaceContainerHigh) else Modifier)
-            .testTag("lsp_settings_screen"),
-    ) {
-        if (showTopBar) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = Space.lg, vertical = Space.md),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                IconButton(onClick = onBack, modifier = Modifier.testTag("lsp_settings_back")) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        tint = cs.onSurface,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
-                Spacer(Modifier.width(Space.sm))
-                Text(
-                    "Language servers",
-                    color = cs.onSurface,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-        }
-        Box(if (scrollable) Modifier.fillMaxSize() else Modifier.fillMaxWidth()) {
-            if (loading) {
-                CircularProgressIndicator(
-                    color = cs.primary,
-                    modifier = Modifier
-                        .align(if (scrollable) Alignment.Center else Alignment.TopCenter)
-                        .padding(Space.lg)
-                        .testTag("lsp_settings_spinner"),
-                )
-            } else {
-                Column(
-                    (if (scrollable) {
-                        Modifier.fillMaxSize().verticalScroll(rememberScrollState())
-                    } else {
-                        Modifier.fillMaxWidth()
-                    })
-                        .padding(start = Space.lg, end = Space.lg, top = Space.sm, bottom = Space.xl),
-                ) {
-                    // Android's section header, kept: without the top bar nothing else in this
-                    // composable names what the rows are.
-                    if (!showTopBar) SettingsSectionHeader("LANGUAGE SERVERS")
-                    SettingsCaption(
-                        "Language servers run on the broker host.",
-                        modifier = Modifier.padding(bottom = Space.sm),
-                    )
-                    servers.forEach { server ->
-                        HorizontalDivider(color = cs.outlineVariant)
-                        LspServerRow(
+    Column(modifier.fillMaxWidth().testTag("lsp_settings_screen")) {
+        if (loaded && servers.isNotEmpty()) {
+            KitItemList {
+                servers.forEach { server ->
+                    key(server.id) {
+                        LspServerItem(
                             server = server,
+                            machine = machine,
                             toggling = toggling == server.id,
                             installing = installing == server.id,
                             removing = removing == server.id,
@@ -215,7 +161,7 @@ fun LspSettingsScreen(
                                 if (toggling == null) {
                                     scope.launch {
                                         toggling = server.id
-                                        val updated = lspToggle(server.id, enabled)
+                                        val updated = actions.lspToggle(server.id, enabled)
                                         if (updated != null) servers = updated
                                         toggling = null
                                     }
@@ -226,7 +172,7 @@ fun LspSettingsScreen(
                                     scope.launch {
                                         installing = server.id
                                         dismissedResults = dismissedResults - server.id
-                                        lspInstall(server.id)
+                                        actions.lspInstall(server.id)
                                         reload()
                                         installing = null
                                     }
@@ -236,7 +182,7 @@ fun LspSettingsScreen(
                                 if (removing == null) {
                                     scope.launch {
                                         removing = server.id
-                                        val r = lspRemoveCustom(server.id)
+                                        val r = actions.lspRemoveCustom(server.id)
                                         if (r?.ok == true) {
                                             servers = r.lsp?.servers ?: servers.filterNot { it.id == server.id }
                                         }
@@ -244,44 +190,68 @@ fun LspSettingsScreen(
                                     }
                                 }
                             },
+                            onShowLog = { logFor = server.id },
                             onDismissResult = { dismissedResults = dismissedResults + server.id },
                         )
                     }
-                    HorizontalDivider(color = cs.outlineVariant)
-
-                    if (!showAddForm) {
-                        TextButton(onClick = { showAddForm = true }, modifier = Modifier.testTag("lsp_add_toggle")) {
-                            Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp), tint = cs.primary)
-                            Spacer(Modifier.width(Space.xs))
-                            Text("Add language server", color = cs.primary)
-                        }
-                    } else {
-                        AddLspForm(
-                            form = add,
-                            onCancel = { add.close() },
-                            onSubmit = { args, onResult ->
-                                saves.launch {
-                                    val r = lspAddCustom(args)
-                                    if (r?.ok == true && r.lsp != null) {
-                                        add.close()
-                                        add.added = r.lsp!!.servers
-                                        onResult(null)
-                                    } else {
-                                        onResult(r?.error ?: "Couldn't add language server")
-                                    }
-                                }
-                            },
-                        )
-                    }
                 }
+            }
+        }
+
+        // A new fold after each save, so a saved server leaves it closed; open from the start while it holds typing.
+        if (loaded) key(add.saved) {
+            KitFold(
+                "Add your own language server",
+                modifier = Modifier.kitAnchor("add-language-server"),
+                anchors = setOf("add-language-server"),
+                tag = "lsp_add_toggle",
+                initiallyOpen = add.hasTyping(),
+            ) {
+                AddLspForm(
+                    form = add,
+                    machine = machine,
+                    onCancel = { add.clear() },
+                    onSubmit = { args ->
+                        saves.launch {
+                            val r = actions.lspAddCustom(args)
+                            add.saving = false
+                            if (r?.ok == true && r.lsp != null) {
+                                add.clear()
+                                add.saved++
+                                add.added = r.lsp!!.servers
+                            } else {
+                                add.addError = r?.error ?: "Couldn't add the language server."
+                            }
+                        }
+                    },
+                )
+            }
+        }
+    }
+
+    logFor?.let { id ->
+        val server = servers.firstOrNull { it.id == id }
+        val result = installDone[id]
+        KitSheet(
+            title = "Installing ${server?.label ?: id}",
+            onDismiss = { logFor = null },
+            description = result?.error,
+            tag = "lsp_install_log_sheet",
+            buttons = { KitGhostButton("Close", onClick = { logFor = null }) },
+        ) {
+            val lines = installLog[id].orEmpty()
+            Column(Modifier.padding(top = 10.dp)) {
+                if (lines.isEmpty()) KitNote("Nothing was logged.")
+                lines.forEach { line -> Text(line, fontSize = 11.sp, fontFamily = MonoFontFamily, color = kitColors().dim) }
             }
         }
     }
 }
 
 @Composable
-private fun LspServerRow(
+private fun LspServerItem(
     server: LspServer,
+    machine: String,
     toggling: Boolean,
     installing: Boolean,
     removing: Boolean,
@@ -291,102 +261,69 @@ private fun LspServerRow(
     onToggle: (Boolean) -> Unit,
     onInstall: () -> Unit,
     onRemove: () -> Unit,
+    onShowLog: () -> Unit,
     onDismissResult: () -> Unit,
 ) {
-    val cs = MaterialTheme.colorScheme
-    val semantics = LocalSemantics.current
+    val c = kitColors()
     val ready = server.state == "ready"
-
-    Column(
-        Modifier.fillMaxWidth().padding(vertical = Space.sm).testTag("lsp_server_row_${server.id}"),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(server.label, color = cs.onSurface, fontSize = 14.sp)
-                    if (server.custom) {
-                        Text("CUSTOM", color = cs.onSurfaceVariant, fontSize = 9.sp, fontWeight = FontWeight.SemiBold)
-                    }
-                }
-                if (server.extensions.isNotEmpty()) {
-                    Text(extSummary(server.extensions), color = cs.onSurfaceVariant, fontSize = 11.sp)
-                }
-                Text(stateLabel(server), color = if (ready) semantics.success else semantics.warning, fontSize = 11.sp)
-            }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (server.custom) {
-                    IconButton(onClick = onRemove, enabled = !removing, modifier = Modifier.testTag("lsp_remove_${server.id}")) {
-                        if (removing) {
-                            CircularProgressIndicator(color = cs.error, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
-                        } else {
-                            Icon(Icons.Filled.Delete, contentDescription = "Remove", tint = cs.error, modifier = Modifier.size(18.dp))
-                        }
-                    }
-                }
-                Switch(
-                    checked = server.enabled,
-                    onCheckedChange = onToggle,
-                    enabled = !toggling,
-                    modifier = Modifier.testTag("lsp_toggle_${server.id}"),
+    Column(Modifier.fillMaxWidth().testTag("lsp_server_row_${server.id}")) {
+        KitItem(
+            server.label,
+            subtitle = if (ready && server.extensions.isNotEmpty()) extSummary(server.extensions) else stateLabel(server, machine),
+            mark = KitMark.Letters(lspMark(server.label)),
+        ) {
+            if (server.enabled && server.installable && !ready) {
+                KitGhostButton(
+                    if (installing) "Installing…" else (server.installLabel ?: "Install"),
+                    onClick = onInstall,
+                    modifier = Modifier.testTag("lsp_install_${server.id}"),
+                    enabled = !installBlocked,
                 )
             }
-        }
-
-        // Install affordance (enabled + installable + not ready).
-        if (server.enabled && server.installable && !ready) {
-            TextButton(onClick = onInstall, enabled = !installBlocked, modifier = Modifier.testTag("lsp_install_${server.id}")) {
-                if (installing) {
-                    CircularProgressIndicator(color = cs.primary, strokeWidth = 2.dp, modifier = Modifier.size(14.dp))
-                } else {
-                    Icon(Icons.Filled.Download, contentDescription = null, tint = cs.primary, modifier = Modifier.size(14.dp))
-                }
-                Spacer(Modifier.width(Space.xs))
-                Text(server.installLabel ?: "Install", color = cs.primary, fontSize = 12.sp)
+            if (server.custom) {
+                KitGhostButton(
+                    if (removing) "Removing…" else "Remove",
+                    onClick = onRemove,
+                    modifier = Modifier.testTag("lsp_remove_${server.id}"),
+                    enabled = !removing,
+                    destructive = true,
+                )
             }
+            KitToggle(
+                checked = server.enabled,
+                onCheckedChange = onToggle,
+                label = "Use ${server.label}",
+                modifier = Modifier.testTag("lsp_toggle_${server.id}"),
+                enabled = !toggling,
+            )
         }
 
-        // Live install log (while installing this server).
+        // The live install log, while this server installs.
         if (installing && installLines.isNotEmpty()) {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(Radii.sm))
-                    .background(cs.surfaceContainerLowest)
-                    .padding(Space.sm)
-                    .testTag("lsp_install_log_${server.id}"),
-            ) {
+            Column(Modifier.padding(start = 38.dp, bottom = 8.dp).testTag("lsp_install_log_${server.id}")) {
                 installLines.takeLast(6).forEach { line ->
-                    Text(line, color = cs.onSurfaceVariant, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                    Text(line, fontSize = 11.sp, fontFamily = MonoFontFamily, color = c.dim, maxLines = 1)
                 }
             }
         }
 
-        // Terminal install result (until dismissed).
+        // How the last install ended, until dismissed.
         installResult?.let { result ->
             Row(
+                Modifier.fillMaxWidth().padding(start = 38.dp, bottom = 8.dp).testTag("lsp_install_result_${server.id}"),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                modifier = Modifier.testTag("lsp_install_result_${server.id}"),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Icon(
-                    if (result.ok) Icons.Filled.Check else Icons.Filled.Close,
-                    contentDescription = null,
-                    tint = if (result.ok) semantics.success else cs.error,
-                    modifier = Modifier.size(14.dp),
-                )
                 Text(
-                    if (result.ok) (installLines.lastOrNull() ?: "Installed") else (result.error ?: "Install failed"),
-                    color = cs.onSurfaceVariant,
-                    fontSize = 11.sp,
+                    if (result.ok) "Installed." else "Couldn't install ${server.label}.",
+                    fontSize = 12.sp,
+                    color = if (result.ok) c.dim else c.danger,
                     modifier = Modifier.weight(1f),
                 )
-                IconButton(
-                    onClick = onDismissResult,
-                    modifier = Modifier.size(24.dp).testTag("lsp_install_dismiss_${server.id}"),
-                ) {
-                    Icon(Icons.Filled.Close, contentDescription = "Dismiss", tint = cs.onSurfaceVariant, modifier = Modifier.size(12.dp))
+                if (!result.ok) {
+                    KitTextAction("Show log", onClick = onShowLog, modifier = Modifier.testTag("lsp_install_show_log_${server.id}"))
                 }
+                KitTextAction("Dismiss", onClick = onDismissResult, modifier = Modifier.testTag("lsp_install_dismiss_${server.id}"))
             }
         }
     }
@@ -395,10 +332,10 @@ private fun LspServerRow(
 @Composable
 private fun AddLspForm(
     form: LspAddForm,
+    machine: String,
     onCancel: () -> Unit,
-    onSubmit: (AddCustomLspArgs, onResult: (String?) -> Unit) -> Unit,
+    onSubmit: (AddCustomLspArgs) -> Unit,
 ) {
-    val cs = MaterialTheme.colorScheme
     var label by form::label
     var id by form::id
     var command by form::command
@@ -406,77 +343,60 @@ private fun AddLspForm(
     var extensions by form::extensions
     var languageId by form::languageId
     var installCmd by form::installCmd
-    var saving by form::saving
-    var addError by form::addError
+    val saving = form.saving
+
+    fun save() {
+        val idStr = id.trim().ifEmpty { slugId(label) }
+        val labelStr = label.trim()
+        val commandStr = command.trim()
+        val extStr = extensions.trim()
+        if (labelStr.isEmpty() || commandStr.isEmpty() || extStr.isEmpty()) {
+            form.addError = "Fill in the name, command and file extensions."
+            return
+        }
+        form.saving = true
+        form.addError = null
+        onSubmit(
+            AddCustomLspArgs(
+                id = idStr,
+                label = labelStr,
+                command = commandStr,
+                extensions = extStr.split(",").map { it.trim() }.filter { it.isNotEmpty() },
+                args = args.trim().split(" ").map { it.trim() }.filter { it.isNotEmpty() },
+                languageId = languageId.trim().ifEmpty { null },
+                installCmd = installCmd.trim().ifEmpty { null },
+            ),
+        )
+    }
 
     Column(
-        Modifier.fillMaxWidth().padding(vertical = Space.sm).testTag("lsp_add_form"),
+        Modifier.fillMaxWidth().padding(top = 4.dp).testTag("lsp_add_form"),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        // The form's own heading is a title, not a settings section label — both apps drew it at
-        // 15sp SemiBold onSurface and it keeps that weight here.
-        Text("Add language server", color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-        addError?.let { Text(it, color = cs.error, fontSize = 12.sp, modifier = Modifier.testTag("lsp_add_error")) }
-
-        LspField("Display name", "Zig", label, mono = false, testTag = "lsp_add_label") {
+        KitNote("Name, command, file extensions — for languages we don't list.")
+        LspField("Short name", "zig", id, "lsp_add_id", enabled = !saving) { id = it }
+        LspField("Name", "Zig", label, "lsp_add_label", mono = false, enabled = !saving) {
             label = it
-            // Auto-slug the id from the label until the user edits it directly.
+            // The short name follows the name until it is typed in itself.
             if (id.isBlank() && it.isNotBlank()) id = slugId(it)
         }
-        LspField("Server id", "zig", id, mono = true, testTag = "lsp_add_id") { id = it }
-        LspField("Command on broker", "zls", command, mono = true, testTag = "lsp_add_command") { command = it }
-        LspField("Args (optional)", "--stdio", args, mono = true, testTag = "lsp_add_args") { args = it }
-        LspField("Extensions", ".zig, .zon", extensions, mono = true, testTag = "lsp_add_extensions") { extensions = it }
-        LspField("Language id (optional)", "zig", languageId, mono = true, testTag = "lsp_add_language_id") { languageId = it }
-        LspField("Install command (optional)", "apt install -y zls", installCmd, mono = true, testTag = "lsp_add_install_cmd") { installCmd = it }
-
-        SettingsCaption("Install command runs as the broker user — do not use sudo.")
-
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(
-                onClick = {
-                    val idStr = id.trim().ifEmpty { slugId(label) }
-                    val labelStr = label.trim()
-                    val commandStr = command.trim()
-                    val extStr = extensions.trim()
-                    if (idStr.isEmpty() || labelStr.isEmpty() || commandStr.isEmpty() || extStr.isEmpty()) {
-                        addError = "Fill in display name, command, and extensions"
-                        return@Button
-                    }
-                    val argsList = args.trim().split(" ").map { it.trim() }.filter { it.isNotEmpty() }
-                    val extList = extStr.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-                    saving = true
-                    addError = null
-                    onSubmit(
-                        AddCustomLspArgs(
-                            id = idStr,
-                            label = labelStr,
-                            command = commandStr,
-                            extensions = extList,
-                            args = argsList,
-                            languageId = languageId.trim().ifEmpty { null },
-                            installCmd = installCmd.trim().ifEmpty { null },
-                        ),
-                    ) { err ->
-                        form.saving = false
-                        if (err != null) form.addError = err
-                    }
-                },
+        LspField("Command", "zls", command, "lsp_add_command", enabled = !saving) { command = it }
+        LspField("Arguments", "--stdio", args, "lsp_add_args", enabled = !saving) { args = it }
+        LspField("File extensions", ".zig, .zon", extensions, "lsp_add_extensions", enabled = !saving) { extensions = it }
+        LspField("Language name (optional)", "zig", languageId, "lsp_add_language_id", enabled = !saving) { languageId = it }
+        LspField("Install command (optional)", null, installCmd, "lsp_add_install_cmd", enabled = !saving) { installCmd = it }
+        KitNote("The install command runs as your user on $machine, without sudo.")
+        form.addError?.let {
+            Text(it, fontSize = 12.sp, color = kitColors().danger, modifier = Modifier.testTag("lsp_add_error"))
+        }
+        KitButtons {
+            KitGhostButton(
+                if (saving) "Adding…" else "Add",
+                onClick = { save() },
+                modifier = Modifier.testTag("lsp_add_save"),
                 enabled = !saving,
-                modifier = Modifier.weight(1f).testTag("lsp_add_save"),
-                colors = ButtonDefaults.buttonColors(containerColor = cs.primary),
-            ) {
-                if (saving) {
-                    CircularProgressIndicator(color = cs.onPrimary, strokeWidth = 2.dp, modifier = Modifier.size(14.dp))
-                    Spacer(Modifier.width(Space.sm))
-                    Text("Saving…", color = cs.onPrimary)
-                } else {
-                    Text("Save", color = cs.onPrimary)
-                }
-            }
-            OutlinedButton(onClick = onCancel, enabled = !saving, modifier = Modifier.testTag("lsp_add_cancel")) {
-                Text("Cancel", color = cs.onSurface)
-            }
+            )
+            KitGhostButton("Cancel", onClick = onCancel, modifier = Modifier.testTag("lsp_add_cancel"), enabled = !saving)
         }
     }
 }
@@ -484,40 +404,34 @@ private fun AddLspForm(
 @Composable
 private fun LspField(
     label: String,
-    placeholder: String,
+    placeholder: String?,
     value: String,
-    mono: Boolean,
-    testTag: String,
+    tag: String,
+    mono: Boolean = true,
+    enabled: Boolean = true,
     onValueChange: (String) -> Unit,
 ) {
-    OutlinedTextField(
+    KitTextField(
         value = value,
         onValueChange = onValueChange,
-        label = { Text(label) },
-        placeholder = { Text(placeholder) },
-        modifier = Modifier.fillMaxWidth().testTag(testTag),
-        singleLine = true,
-        // Android's: a server id, a command or an extension list is not a sentence. Inert where
-        // there is no soft keyboard.
+        label = label,
+        placeholder = placeholder,
+        enabled = enabled,
+        mono = mono,
+        // A short name, a command or an extension list is not a sentence. Inert where there is no soft keyboard.
         keyboardOptions = KeyboardOptions(
             autoCorrectEnabled = false,
             capitalization = if (mono) KeyboardCapitalization.None else KeyboardCapitalization.Sentences,
         ),
-        textStyle = if (mono) {
-            MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace)
-        } else {
-            MaterialTheme.typography.bodyMedium
-        },
-        colors = settingsFieldColors(),
+        fieldTag = tag,
     )
 }
 
-/** "Ready" / "Ready · <command>" (custom) / "Needs <requires>" / "Not installed" /
- *  "Binary not found on broker" (custom) — port of Android's `stateLabel`. */
-internal fun stateLabel(server: LspServer): String = when (server.state) {
+/** "Ready" / "Ready · ‹command›" (yours) / "Needs ‹what› on ‹machine›" / "Not installed" / "Not found on ‹machine›" (yours). */
+internal fun stateLabel(server: LspServer, machine: String): String = when (server.state) {
     "ready" -> if (server.custom && server.command != null) "Ready · ${server.command}" else "Ready"
-    "prereq-missing" -> "Needs ${server.requires ?: "toolchain"}"
-    else -> if (server.custom) "Binary not found on broker" else "Not installed"
+    "prereq-missing" -> "Needs ${server.requires ?: "its toolchain"} on $machine"
+    else -> if (server.custom) "Not found on $machine" else "Not installed"
 }
 
 /** Up to 6 unique extensions, comma-joined, with a trailing "…" if more were truncated. */
@@ -528,8 +442,15 @@ internal fun extSummary(exts: List<String>): String {
     return shown.joinToString(", ") + tail
 }
 
-/** Lowercase + hyphenate a display name into a server id; falls back to "server" if nothing
- *  alphanumeric survives. */
+/** The item's two letters: a name's capitals ("TypeScript" → "TS"), else its first two letters ("Pyright" → "Py"). */
+internal fun lspMark(label: String): String {
+    val caps = label.filter { it.isUpperCase() }
+    if (caps.length >= 2) return caps.take(2)
+    val letters = label.filter { it.isLetterOrDigit() }
+    return letters.take(1).uppercase() + letters.drop(1).take(1).lowercase()
+}
+
+/** Lowercase + hyphenate a name into a short name; falls back to "server" if nothing alphanumeric survives. */
 internal fun slugId(label: String): String {
     val slug = label
         .lowercase()
@@ -543,12 +464,10 @@ internal fun slugId(label: String): String {
 }
 
 /**
- * The "Add language server" form, kept for the page on display (`rememberRetainedOnPage`, #89):
- * open or not, the fields, and a save in flight, which leaves the broker's new list in [added].
- * Cancel and a save close it and empty it, as the form's own composition went before.
+ * The "Add your own language server" form, kept for the page on display (`rememberRetainedOnPage`, #89): the fields
+ * and a save in flight, which leaves the new list in [added]. [saved] counts saves, so the fold closes after one.
  */
 private class LspAddForm {
-    var open by mutableStateOf(false)
     var label by mutableStateOf("")
     var id by mutableStateOf("")
     var command by mutableStateOf("")
@@ -558,11 +477,14 @@ private class LspAddForm {
     var installCmd by mutableStateOf("")
     var saving by mutableStateOf(false)
     var addError by mutableStateOf<String?>(null)
-    /** The servers after a save, for the screen on display. */
+    var saved by mutableIntStateOf(0)
+    /** The servers after a save, for the section on display. */
     var added by mutableStateOf<List<LspServer>?>(null)
 
-    fun close() {
-        open = false
+    fun hasTyping(): Boolean =
+        listOf(label, id, command, args, extensions, languageId, installCmd).any { it.isNotEmpty() }
+
+    fun clear() {
         label = ""
         id = ""
         command = ""

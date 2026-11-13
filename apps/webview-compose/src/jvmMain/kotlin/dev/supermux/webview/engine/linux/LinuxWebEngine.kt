@@ -15,6 +15,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.nativeKeyCode
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEvent
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
 import dev.supermux.webview.DownloadRequest
 import dev.supermux.webview.DialogResult
@@ -29,6 +30,9 @@ import java.net.URI
 import dev.supermux.webview.NavigationDecision
 import dev.supermux.webview.NavigationRequest
 import dev.supermux.webview.WebContent
+import dev.supermux.webview.bridge.InputStamp
+import dev.supermux.webview.bridge.UserInputSource
+import dev.supermux.webview.bridge.inputClock
 import dev.supermux.webview.WebError
 import dev.supermux.webview.WebOrigin
 import dev.supermux.webview.WebProfile
@@ -98,7 +102,15 @@ internal class LinuxWebEngine(
     private val scripts: WebKitScripts,
     private val scope: CoroutineScope,
     private val clipboard: WpeClipboard,
-) : WebEngine {
+) : WebEngine, UserInputSource {
+
+    /**
+     * When the user last gave this view real input, for [UserInputSource]. A press or a key Compose delivered to the surface counts; nothing the page does can mark it (it only sees input WPE gets from here). A new document starts with none.
+     */
+    internal val inputStamp = InputStamp()
+
+    override fun consumeUserInput(): Boolean = inputStamp.consume(inputClock())
+
     private class Pending(val byDefault: () -> Unit, val holdsPage: Boolean) {
         var job: Job? = null
         private var answered = false
@@ -235,7 +247,7 @@ internal class LinuxWebEngine(
             setup.dark -> 0xFF000000.toInt()
             else -> 0xFFFFFFFF.toInt()
         }
-        val agent = setup.userAgentSuffix?.let { suffix -> listOfNotNull(baseUserAgent, suffix).joinToString(" ") }
+        val agent = setup.agent(baseUserAgent)
         view.configure(
             scripts.relay(origins), if (setup.javaScriptEnabled) scripts.shim(origins) else null, WebEngineWorld.WORLD,
             scripts.handlerName, setup.javaScriptEnabled, setup.inspectable, background, agent,
@@ -655,11 +667,13 @@ internal class LinuxWebEngine(
     }
 
     internal fun pointer(event: PointerEvent, density: Float) {
+        if (!released && !crashed && event.type == PointerEventType.Press) inputStamp.mark(inputClock())
         if (!released && !crashed) forwardPointer(view, event, density.toDouble(), WpeDefaults.SCROLL_SIGN)
     }
 
     internal fun key(event: KeyEvent): Boolean {
         if (released || crashed) return false
+        if (event.type == KeyEventType.KeyDown) inputStamp.mark(inputClock())
         // The clipboard as it is now, before the page can paste it: the glue answers WebKit without asking the JVM.
         if (event.type == KeyEventType.KeyDown && WpeClipboard.isPaste(event.key.nativeKeyCode, event.isCtrlPressed, event.isShiftPressed)) clipboard.sync()
         return forwardKey(view, event)
@@ -1319,6 +1333,7 @@ internal class LinuxWebEngine(
     /** A new document of [content] starts: nothing an earlier one caused is delivered from now on. */
     private fun startDocument(content: WebContent): Int {
         val epoch = queue.advance()
+        inputStamp.clear()
         this.content = content
         frames.hideUntil(Long.MAX_VALUE)
         documentPainted = false

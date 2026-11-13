@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { AGENT_KINDS } from "../shared/agents"
-import { callTool, listTools, RPC_TOOLS, shimTools, toolRoute } from "./tools"
+import { SHOW_HTML_DESCRIPTION } from "../core/show-html/description"
+import { callTool, listTools, RPC_TOOLS, shimTools, toolResult, toolRoute } from "./tools"
 
 describe("shim tools", () => {
   test("spawn_session schema includes every agent kind", () => {
@@ -86,4 +87,22 @@ test("with the broker's choices, spawn_session / delegate / council / council_ad
   // Other tools, and the list without choices, are unchanged.
   expect(tools.find((t) => t.name === "attach")).toEqual(listTools().find((t) => t.name === "attach"))
   expect((listTools().find((t) => t.name === "council")!.inputSchema as any).properties.members.items.properties.access).toEqual({ type: "string" })
+})
+
+test("show_html: an outbound, read-only-hinted tool with the description and the schema of #104", () => {
+  const tool = listTools().find((t) => t.name === "show_html") as any
+  expect(tool.description).toBe(SHOW_HTML_DESCRIPTION)
+  expect(tool.annotations).toEqual({ readOnlyHint: true })
+  expect(tool.inputSchema.required).toEqual(["title"])
+  expect(tool.inputSchema.properties.title).toMatchObject({ type: "string", minLength: 1, maxLength: 80 })
+  expect(tool.inputSchema.properties.height).toMatchObject({ minimum: 80, maximum: 2000 })
+  expect(Object.keys(tool.inputSchema.properties).sort()).toEqual(["file", "height", "html", "title"])
+  expect(toolRoute("show_html")).toEqual({ kind: "outbound", op: "show_html" })
+  expect(toolRoute("show_html", true)).toBeUndefined()
+  expect(shimTools("mux-shim")!.find((t) => t.name === "show_html")!.route).toEqual({ kind: "outbound", op: "show_html" })
+})
+
+test("show_html's result reaches the agent as the sentence, an error as an error", () => {
+  expect(toolResult("show_html", { ok: true, value: "shown (id: ab)" })).toEqual({ content: [{ type: "text", text: "shown (id: ab)" }] })
+  expect(toolResult("show_html", { ok: false, error: "file must be inside" })).toEqual({ isError: true, content: [{ type: "text", text: "file must be inside" }] })
 })

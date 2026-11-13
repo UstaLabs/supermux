@@ -64,6 +64,7 @@ jobs:
       zmx: ${{ steps.f.outputs.zmx }}
       terminal: ${{ steps.f.outputs.terminal }}
       webview: ${{ steps.f.outputs.webview }}
+      webview_lib: ${{ steps.f.outputs.webview_lib }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -89,6 +90,14 @@ jobs:
             # toolchain (apps/gradle, the root build and settings) is `shared`, which starts the kotlin lane too.
             webview:
               - 'apps/webview-*/**'
+            # The library alone and what pins its toolchain (card #112): what starts its macOS job. The sample and the
+            # labs don't build for iOS here.
+            webview_lib:
+              - 'apps/webview-compose/**'
+              - 'apps/webview-compose-testing/**'
+              - 'apps/gradle/**'
+              - 'apps/build.gradle.kts'
+              - 'apps/settings.gradle.kts'
             # The browser client: :ui compiled to Kotlin/Wasm and staged into
             # src/channels/web/static. `apps/ui` and `apps/shared` are most of
             # what it compiles, and `apps/gradle` pins the toolchain, so any of
@@ -98,9 +107,12 @@ jobs:
               - 'apps/ui/**'
               - 'apps/shared/**'
               - 'apps/gradle/**'
+              # :ui depends on the webview library (#105): a change to it can break the app.
+              - 'apps/webview-compose/**'
             desktop:
               - 'apps/desktop/**'
               - 'apps/ui/**'
+              - 'apps/webview-compose/**'
             ios:
               - 'apps/iosApp/**'
               # The Kotlin half of the iOS app, which this lane could not see before. `apps/ios` is
@@ -110,6 +122,7 @@ jobs:
               # lane through the `wire` filter below.)
               - 'apps/ios/**'
               - 'apps/ui/**'
+              - 'apps/webview-compose/**'
             # The POSIX workspace-terminal backend: the vendored zmx patch, the
             # Zig helper, the TypeScript that drives them, and the build script
             # that produces the binaries the suite refuses to run without.
@@ -556,6 +569,8 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - name: Platform guard (no OS decisions outside the platform layer)
         run: bun test ./tests/platform-boundary.test.ts
+      - name: Language guard (no new hard-coded UI text; every translation complete)
+        run: bun test ./tests/i18n-strings.test.ts
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -627,6 +642,77 @@ jobs:
             apps/*/build/reports/tests/**
             apps/*/build/test-results/**
           retention-days: 7
+
+  # ── the webview library's browser and simulator suites (card #112) ──────────
+  # Its own job rather than a kotlin-lane step until a train run shows how long it takes: Karma runs commonTest and
+  # wasmJsTest (the bridge shim, run by a real browser) in the runner's own headless Chrome. The default compiler
+  # daemon: Kotlin 2.4's in-process strategy crashed the library's wasm test compile.
+  webview-wasm:
+    needs: changes
+    if: >-
+      github.event_name == 'pull_request' ||
+      needs.changes.outputs.shared == 'true' ||
+      needs.changes.outputs.webview == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Webview library (wasm, headless Chrome)
+        working-directory: apps
+        run: ./gradlew :webview-compose:wasmJsBrowserTest --build-cache --console=plain
+
+  # The library's iOS suites in a simulator: what needs no page (a Kotlin/Native test process isn't an app, so no
+  # WKWebView loads one); the engine's conformance checks run in the sample app on a device. It links nothing native
+  # of supermux's, so unlike ios-tests it builds no zig, terminal or grammar tree.
+  # Cost: the repo is public, so the minutes are free, but the plan runs at most five macOS jobs at once, shared with
+  # ios-tests and release.yml. So it starts only on a PR or a change to the library or its toolchain, never for the
+  # sample or the labs.
+  webview-ios:
+    needs: changes
+    if: >-
+      github.event_name == 'pull_request' ||
+      needs.changes.outputs.webview_lib == 'true'
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      # As ios-tests does: any available iPhone, downloading the iOS platform only when the image has none. The
+      # module's default device ("sm-iPhone") exists only on Ahmet's Mac.
+      - name: Pick an iPhone simulator
+        id: sim
+        run: |
+          pick() {
+            xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          rts = json.load(sys.stdin)["devices"]
+          ios = sorted((r for r in rts if ".iOS-" in r), key=lambda r: [int(x) for x in r.rsplit(".iOS-", 1)[1].split("-")])
+          for r in reversed(ios):
+              phones = [d for d in rts[r] if d["name"].startswith("iPhone")]
+              if phones:
+                  print(phones[-1]["udid"]); break'
+          }
+          udid="$(pick)"
+          if [ -z "$udid" ]; then
+            echo "no iPhone simulator for $(xcodebuild -version | head -1); downloading the iOS platform"
+            xcodebuild -downloadPlatform iOS
+            udid="$(pick)"
+          fi
+          [ -n "$udid" ] || { echo "::error::still no iPhone simulator"; xcrun simctl list runtimes; exit 1; }
+          xcrun simctl list devices | grep "$udid"
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+      - name: Webview library (iOS simulator)
+        working-directory: apps
+        run: ./gradlew :webview-compose:iosSimulatorArm64Test -Pwebview.simulator=${{ steps.sim.outputs.udid }} --build-cache --console=plain
 
   # ── Android device journey: the app driven on a real emulator ───────────────
   # PR only. An emulator boot plus an APK build is 8–12 minutes: a reasonable
@@ -778,6 +864,13 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      # Kotlin/Native compiles and links the app's framework inside the Gradle daemon, which apps/gradle.properties
+      # caps at 2 GB: the iOS link ran out there (#122, train 3). The runner's own ~/.gradle/gradle.properties wins
+      # over the project's, so this job gets 4 GB and the box's default stays as it is.
+      - name: Give the Gradle daemon 4 GB for the Kotlin/Native link
+        run: |
+          mkdir -p ~/.gradle
+          echo "org.gradle.jvmargs=-Xmx4g" >> ~/.gradle/gradle.properties
       - uses: gradle/actions/setup-gradle@v4
       - name: Install XcodeGen
         run: brew install xcodegen

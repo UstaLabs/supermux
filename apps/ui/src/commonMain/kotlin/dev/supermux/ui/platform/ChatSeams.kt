@@ -1,5 +1,6 @@
 package dev.supermux.ui.platform
 
+import dev.supermux.work.DownloadedFile
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -45,6 +46,9 @@ interface ClipboardAccess {
  * Both take the bytes rather than a path, because the caller (a timeline attachment) has them in
  * memory and neither host can be given a path it may write: Android has no browsable file system
  * ([Caps.fileSystem]), only the SAF URI the user just picked.
+ *
+ * A finished download (#95) is handed over as the FILE it already is — [saveFile], [openFile],
+ * [shareFile] — so a big one never has to fit in memory.
  */
 interface FileAccess {
     /**
@@ -96,16 +100,49 @@ interface FileAccess {
      * makes none (the clip's tile then waits for the viewer's frame, or shows ▶ and its length).
      */
     fun posterJpeg(preview: Any?): ByteArray? = null
+
+    /** The [FileAction]s this host offers for a finished download. Empty: none (the default). */
+    val fileActions: Set<FileAction> get() = emptySet()
+
+    /** Ask where to put [file] and copy it there, streamed — never through memory. Null: cancelled, failed or unsupported. */
+    suspend fun saveFile(file: DownloadedFile): SavedFile? = null
+
+    /** Hand [file] to whatever opens its type, under its real name. False when nothing took it. */
+    suspend fun openFile(file: DownloadedFile): Boolean = false
+
+    /** The system share sheet for [file]. False where there is none. */
+    suspend fun shareFile(file: DownloadedFile): Boolean = false
 }
+
+/**
+ * What a host can do with a finished download (#95) — only what that platform really has: desktop Open and
+ * Save; Android Open, Save and Share; iOS Save and Share (its "open in…" is the share sheet); the web Save and
+ * Open (a new tab).
+ */
+enum class FileAction { Open, Save, Share }
 
 /**
  * Where a [FileAccess.saveAs] actually landed.
  *
  * [location] is deliberately opaque to shared code — an absolute path on desktop, a SAF document
  * URI on Android — and is only ever handed back to [FileAccess.openSaved]. [name] is the leaf the
- * user ended up with, which is the only part a screen may show.
+ * user ended up with, which is the only part a screen may show. [place] is where a phone put it on its own, which
+ * is what it tells the user; [SavedPlace.Chosen] where the user picked the spot.
  */
-data class SavedFile(val name: String, val location: String)
+data class SavedFile(val name: String, val location: String, val place: SavedPlace = SavedPlace.Chosen)
+
+/**
+ * Where a save landed. A phone puts a picture or a video in its gallery and any other file in its files, without a
+ * dialog where it can (Ahmet, #95): iOS Photos, Android's Pictures/Movies ([Gallery]) and Downloads. [Chosen]: a
+ * save dialog's answer.
+ */
+enum class SavedPlace { Chosen, Photos, Gallery, Downloads }
+
+/** Whether a file of [mime] belongs in the phone's gallery: a picture or a video it can show. SVG is a document there. */
+fun isGalleryMedia(mime: String?): Boolean {
+    val m = mime?.lowercase()?.substringBefore(';')?.trim() ?: return false
+    return (m.startsWith("image/") && m != "image/svg+xml") || m.startsWith("video/")
+}
 
 /** One finished recording, ready to POST to the broker's transcribe endpoint. */
 data class CapturedAudio(

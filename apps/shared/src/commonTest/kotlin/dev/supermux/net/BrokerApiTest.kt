@@ -259,6 +259,15 @@ class BrokerApiTest {
         assertEquals("my-phone", d.name)
         assertEquals(null, d.created_at)
         assertEquals(null, d.last_seen_at)
+        // An older broker never sends `current`: no row is marked, so every Revoke stays enabled.
+        assertEquals(false, d.current)
+    }
+
+    @Test
+    fun device_dto_reads_the_current_mark() {
+        val raw = """[{"name":"laptop","current":false},{"name":"phone","current":true}]"""
+        val list = json.decodeFromString<List<DeviceDto>>(raw)
+        assertEquals(listOf(false, true), list.map { it.current })
     }
 
     @Test

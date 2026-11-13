@@ -8,6 +8,8 @@ import { paneSessionId } from "./core/session-manager/pane-owner"
 import { TelegramChannel } from "./channels/telegram"
 import { WhatsAppChannel } from "./channels/whatsapp"
 import { WebChannel, WEB_CAPABILITIES, type WebChannelOpts } from "./channels/web"
+import { checkPage } from "./core/show-html/check"
+import { FsHtmlPageStore, showHtml, type HtmlCard } from "./core/show-html/service"
 import { buildProxyPublicUrl } from "./channels/web/proxy"
 import { EMBEDDED_STATIC } from "./channels/web/static-manifest.generated"
 import { requireAtLeastOneChannel } from "./shared/channels"
@@ -69,14 +71,16 @@ import {
   BrokerAccounts,
   SETTINGS_KEY_ACCOUNTS,
   isSystemAccount,
+  markSignInExpired,
   migrateSettingsCredentials,
   parseAccountsSettings,
   setAccountsAutoSwitchSource,
   setAccountsChangedListener,
   sharedAccounts,
-  toApiError,
   type AccountAgent,
 } from "./core/accounts/broker-accounts"
+import { setSessionAccount as moveSessionAccount } from "./core/accounts/session-account"
+import { LimitWaits, clockTime, resumeAfterLimit, type LimitWait } from "./core/accounts/limit-wait"
 import { getSessionBackend } from "./core/runtime"
 import { createAgentRpc } from "./core/agent-rpc"
 import { buildRpcPrompt } from "./core/agent-rpc/prompts"
@@ -131,7 +135,8 @@ import { sweepRuntimeAssets } from "./core/runtime-assets-gc"
 import { BUILD_VERSION, BUILD_COMMIT, IS_COMPILED, versionString } from "./shared/build-info"
 import { createCheckoutWatch } from "./core/checkout-watch"
 import { gitAsync } from "./core/git/exec"
-import { captureWindowsTaskFlag, restartService } from "./core/update/apply"
+import { runSyncOrThrow } from "./core/git/exec-sync"
+import { agentsCloseMode, captureWindowsTaskFlag, expectRestart, restartService } from "./core/update/apply"
 import { installMinGit, realMinGitDeps } from "./core/git/mingit"
 import { loadOrCreateHostKey } from "./core/host-identity"
 import { ClaimStore } from "./channels/web/pair-claim"
@@ -143,6 +148,7 @@ import { detectInstallMode, detectUpdateMode } from "./core/update/mode"
 import { TelemetryService } from "./core/telemetry/service"
 import { resolveTelemetry, mergeTelemetrySetting, telemetryEnv, SETTINGS_KEY_TELEMETRY } from "./core/telemetry/config"
 import { telemetryModel, telemetryEffort } from "./core/telemetry/sanitize"
+import { BrowserCommentStore } from "./core/browser-comments/store"
 import { ReviewStore } from "./core/review/store"
 import { WalkthroughStore } from "./core/walkthrough/store"
 import { formatInstantComment, matchingStep, toWalkthroughDto } from "./core/walkthrough/author"
@@ -157,16 +163,16 @@ import { createRelayClient } from "./core/push/relay-adapter"
 import { ViewingTracker } from "./core/push/viewing-tracker"
 import { usesFilesystemEndpoint } from "./core/local-endpoint"
 import {
-  MUX_HOME, MUX_HOME_NOTE, STATE_DIR, PID_FILE, SOCKETS_DIR, ENV_FILE, INBOX_DIR, SESSION_INBOX_DIR, DEVICES_FILE, HOST_KEY_FILE,
+  MUX_HOME, MUX_HOME_NOTE, STATE_DIR, PID_FILE, SOCKETS_DIR, ENV_FILE, INBOX_DIR, HTML_DIR, SESSION_INBOX_DIR, DEVICES_FILE, HOST_KEY_FILE,
 } from "./shared/paths"
 import { validateWebEnv } from "./shared/web-env"
 import { readEnvText } from "./shared/env-file"
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, readdirSync, cpSync, chmodSync, statSync, unlinkSync } from "fs"
 import { watchDir } from "./core/fs/dir-watchers"
 import { randomBytes, randomUUID } from "crypto"
-import { spawn as nodeSpawn, execFileSync } from "child_process"
+import type { ChildProcess } from "child_process"
 import { makeLogger } from "./shared/log"
-import { resolveCommand, spawnCommand } from "./core/process/launcher"
+import { resolveCommand, spawnCommand, spawnCommandSync } from "./core/process/launcher"
 import { checkPreflight, hasBinary, workspaceTerminalReadiness } from "./shared/preflight"
 import { AgentNotInstalledError, applySignInExpiry, detectAllAgents, detectAgent, hasStoredCredential } from "./core/agents/detect"
 import { startFailureNotice, wakeFailureNotice } from "./core/agents/start-failure"
@@ -177,7 +183,6 @@ import {
   GitInstaller, GitRequirementMonitor, bunWhich, readRegistryPath,
   setTmuxGlobalPath, spawnDetached, xcodeSelectExit,
 } from "./core/git/requirement"
-import { spawnSync as spawnSyncForGit } from "child_process"
 import { hostname, tmpdir } from "os"
 import { home } from "./shared/home"
 import { join, dirname, resolve, isAbsolute, sep } from "path"
@@ -185,12 +190,16 @@ import { fileURLToPath } from "url"
 import type { AgentAdapter, LiveDeltaEvent, LiveEndEvent, RequestOpenEvent, SubagentActivityEvent, SubagentEvent, SubagentSnapshotEvent, TaskEvent, TurnCompleteEvent, TurnFailedEvent } from "./core/agents/types"
 import { ModelCache } from "./core/models/cache"
 import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels, discoverWithAccounts, type DiscoveryLaunch, type ModelInfo } from "./core/models/discovery"
+import { followAdapterModels, LearnedModels } from "./core/models/learned"
 import { discoverGrokModels } from "./core/agents/grok/model-discovery"
 import { grokHasScheduledTasks } from "./core/agents/grok/scheduled-tasks"
 import { keeperAgentRunning } from "../packages/supermux-core/src/keeper/index.js"
 import { discoverAntigravityModels } from "./core/agents/antigravity/model-discovery"
 import { refreshModelCache, type ModelDiscoverers } from "./core/models/refresh"
 import { listOpenCodeProviders, setOpenCodeApiKey, startOpenCodeOAuth, finishOpenCodeOAuth } from "./core/agents/opencode/auth-ops"
+import { openCodeConsoleFingerprint } from "./core/agents/opencode/console"
+import { onOpenCodeFreeLimit } from "./core/usage/opencode-free"
+import { openCodeDataDir } from "./core/agents/opencode/auth"
 import { resolveSessionEffort } from "./core/models/session-agent-settings"
 import { resolveSessionFast, supportsFastMode } from "./core/models/fast-mode"
 import { supportedReasoningLevels, shouldShowReasoningControl } from "./core/models/reasoning-levels"
@@ -250,7 +259,7 @@ import { deriveName, ensureUnique } from "./core/session-manager/naming"
 import { InboxStore } from "./core/inbox/store"
 import { InboxCursorStore } from "./core/inbox/cursor"
 import { InboxDelivery } from "./core/inbox/delivery"
-import { paths, proc } from "@supermux/platform"
+import { dirs, files as platformFiles, host, paths, proc } from "@supermux/platform"
 
 const log = makeLogger("main")
 // Under the desktop app's Windows Scheduled Task loop? Captured once and removed from the env so
@@ -296,14 +305,14 @@ process.env.PATH = withAgentBinDirs(process.env.PATH, home())
 // broker and every session it starts get a plain error. While missing it is re-checked every 10 s;
 // once found, the shim leaves PATH and git features turn on (no restart).
 const gitRequirement = new GitRequirementMonitor({
-  platform: process.platform,
+  platform: host.os(),
   // Windows: the one-click install is MinGit, per user (core/git/mingit.ts).
-  minGit: process.platform === "win32",
+  minGit: host.windows(),
   which: bunWhich,
   // Synchronous only for the boot check (before listen); every re-check is async.
   runXcodeSelectSync: () => {
     try {
-      return spawnSyncForGit("xcode-select", ["-p"], { stdio: "ignore", timeout: 5_000 }).status ?? 1
+      return spawnCommandSync("xcode-select", ["-p"], { stdio: "ignore", timeout: 5_000 }).status ?? 1
     } catch {
       return 1
     }
@@ -319,7 +328,7 @@ const gitRequirement = new GitRequirementMonitor({
 })
 /** POST /system/install-git, debounced (60 s cooldown; a running winget blocks a second one). */
 const gitInstaller = new GitInstaller({
-  platform: process.platform,
+  platform: host.os(),
   requirement: () => gitRequirement.git,
   hasWinget: () => bunWhich("winget", process.env.PATH ?? "") !== null,
   spawn: (cmd) => {
@@ -327,7 +336,7 @@ const gitInstaller = new GitInstaller({
     return spawnDetached(cmd, (event, data) => log.warn(event, data))
   },
   onStatus: (status) => gitRequirement.setInstallStatus(status),
-  installMinGit: process.platform === "win32"
+  installMinGit: host.windows()
     ? async () => {
         log.info("install_git_started", { cmd: "mingit" })
         try {
@@ -353,7 +362,7 @@ const gitInstaller = new GitInstaller({
 // of thing a user should learn from the log, not from a terminal that will not
 // open half an hour later.
 const workspaceTerminals = workspaceTerminalReadiness()
-const preflight = checkPreflight(hasBinary, process.platform, workspaceTerminals)
+const preflight = checkPreflight(hasBinary, host.os(), workspaceTerminals)
 if (workspaceTerminals.ok) log.info("preflight", { workspaceTerminals: workspaceTerminals.detail })
 for (const w of preflight.warnings) log.warn("preflight", { warning: w })
 if (preflight.fatal.length) {
@@ -369,8 +378,8 @@ if (preflight.fatal.length) {
 // only when it is wrong, so the common path does no syscall it does not need.
 const tighten = (dir: string): void => {
   try {
-    mkdirSync(dir, { recursive: true, mode: 0o700 })
-    if ((statSync(dir).mode & 0o077) !== 0) chmodSync(dir, 0o700)
+    platformFiles.mkdirPrivate(dir)
+    if ((statSync(dir).mode & 0o077) !== 0) platformFiles.makePrivate(dir)
   } catch (error) {
     log.warn("state_dir_mode", { dir, error: error instanceof Error ? error.message : String(error) })
   }
@@ -471,6 +480,8 @@ try {
   log.error("projects_reconcile_failed", { err: String(err) })
 }
 const reviewStore = new ReviewStore(db)
+// #122 phase 4: a Browser tab's comments, answered by agents through their mux tools.
+const browserCommentStore = new BrowserCommentStore(db)
 const walkthroughStore = new WalkthroughStore(db)
 const settings = new SettingsStore(db)
 
@@ -492,7 +503,7 @@ const telemetry = new TelemetryService({
   settings,
   url: process.env.MUX_TELEMETRY_URL ?? "https://telemetry.supermux.dev/v1/batch",
   isEnabled: () => telemetryState().enabled,
-  common: { version: BUILD_VERSION, commit: BUILD_COMMIT, installMode: detectUpdateMode(), env: telemetryEnv(BUILD_VERSION, process.env.MUX_TELEMETRY_ENV), os: process.platform, arch: process.arch },
+  common: { version: BUILD_VERSION, commit: BUILD_COMMIT, installMode: detectUpdateMode(), env: telemetryEnv(BUILD_VERSION, process.env.MUX_TELEMETRY_ENV), os: host.os(), arch: process.arch },
   heartbeat: () => {
     const since = Date.now() - 24 * 3600 * 1000
     return { ...brokerTelemetryProps(), activeSessions24h: [...lastTurnAt.values()].filter((t) => t >= since).length }
@@ -578,12 +589,12 @@ async function withModelSwitchTelemetry<T extends { ok: boolean }>(sessionId: st
 // battery" is off). Default on for a desktop-managed broker; MUX_KEEP_AWAKE=1|0 overrides that.
 const keepAwakeLog = makeLogger("core/power/keep-awake")
 const keepAwake = new KeepAwake({
-  platform: process.platform,
+  platform: host.os(),
   spawn: spawnInhibitor,
   which: (bin) => bunWhich(bin, process.env.PATH ?? ""),
-  onBattery: batteryProbe(process.platform),
+  onBattery: batteryProbe(host.os()),
   // Linux: a denial at boot (no active session yet) is re-tried once loginctl shows one.
-  ...(process.platform === "linux" ? { sessionActive: loginSessionProbe(process.getuid?.()) } : {}),
+  ...(host.os() === "linux" ? { sessionActive: loginSessionProbe(process.getuid?.()) } : {}),
   log: (event, data) => keepAwakeLog.info(event, data),
 }, settings.getKeepAwake(process.env))
 keepAwake.start()
@@ -669,6 +680,14 @@ const brokerAccounts = new BrokerAccounts({
   },
   // Auto (decision #18) picks by fresh usage: the agent's system login and added accounts, where stale.
   refreshUsage: async (agent) => { if (isUsageProvider(agent)) await getUsageStore().refreshAgent(agent) },
+  // Card #106: a removal first moves the account's sessions; an archived one just takes the account for its unarchive.
+  sessionsOn: (account) => registry.sessions.onAccount(account),
+  rehome: async (sessionId, account) => {
+    if (registry.sessions.getById(sessionId)?.status === "archived") registry.sessions.setAccount(sessionId, isSystemAccount(account) ? null : account)
+    else await setSessionAccount(sessionId, account)
+  },
+  // #92: a wait for a removed account's reset is dropped (or re-targeted) with it.
+  onRemoved: (account) => { limitWaits.dropAccount(account) },
 })
 // Provider usage reaches the account policy (decision #18): Auto and the limit switch pick by it. It merges
 // once the saved windows are loaded (a fetch can land first at boot). A provider that refused the login
@@ -717,16 +736,15 @@ function sessionAccountFields(s: { agent?: string; account?: string | null }): {
 /** Every agent kind's install/auth status — GET /agents/status and the /agents/models catalog. A login
  *  its provider refused reads as signed out (`signInExpired`), whatever credential file is still on disk. */
 const detectAgentStatuses = () => applySignInExpiry(detectAllAgents(
-  { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, process.platform), fileExists: existsSync, hasCredential: agentHasCredential },
+  { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, host.os()), fileExists: existsSync, hasCredential: agentHasCredential },
   {
-    home: home(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME,
-    appData: process.env.APPDATA, platform: process.platform,
+    home: home(), ...dirs.baseDirs(), platform: host.os(),
     env: process.env,
   },
 ), (kind) => systemSignInExpired(sharedAccounts().usage, kind))
 /** Throws [AgentNotInstalledError] when [kind]'s CLI is not on PATH. Every agent spawn calls it. */
 function assertAgentInstalled(kind: AgentKind): void {
-  const probes = { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, process.platform), fileExists: existsSync }
+  const probes = { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, host.os()), fileExists: existsSync }
   if (!detectAgent(kind, probes, { home: home() }).installed) throw new AgentNotInstalledError(kind)
 }
 const TG_TOKEN = appConfig.telegramBotToken || undefined
@@ -796,6 +814,7 @@ if (existsSync(REGISTRY_FILE)) {
 
 const filesDir = join(STATE_DIR, "files")
 const fileStore = new FileStore(db, filesDir)
+const htmlPages = new FsHtmlPageStore(HTML_DIR)
 const messageLog = new MessageStore(db, fileStore)
 const searchStore = new SearchStore(db, MUX_HOME)
 try {
@@ -810,6 +829,38 @@ messageLog.on("append", (sessionId: string, entry: any) => {
 })
 const activityStore = new ActivityStore()
 const agentStateStore = new AgentStateStore()
+// Card #92: a session whose every account is out waits for the first reset, then carries on by itself.
+// Saved under the accounts directory; loaded once the broker is up (end of boot).
+const limitWaits = new LimitWaits({
+  file: join(sharedAccounts().registry.directory, "limit-waits.json"),
+  now: () => Date.now(),
+  setTimer: (fn, ms) => setTimeout(fn, ms),
+  clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
+  enabled: () => accountsSettings().autoResume,
+  changed: (sessionId, wait) => webChannel?.broadcastToAll({ type: "limit_wait", session: sessionId, wait: limitWaitFields(wait) }),
+  onError: (sessionId, err) => log.warn("limit_wait_failed", { session: sessionId, err: String(err) }),
+  resume: (wait, how) => resumeAfterLimit(wait, {
+    exists: (id) => !!registry.get(id),
+    busy: (id) => { const phase = agentStateStore.get(id).phase; return phase === "thinking" || phase === "running" },
+    account: (id) => { const s = registry.get(id); return s?.account || `${s?.agent ?? "claude"}:system` },
+    registered: async (account) => isSystemAccount(account) || !!(await brokerAccounts.get(account)),
+    switchAccount: async (id, account) => {
+      // A live session reopens on it; a sleeping one wakes on it.
+      if (runtimes.get(id)?.adapter) await setSessionAccount(id, account)
+      else applySessionAccount(id, account)
+    },
+    label: (account) => brokerAccounts.label(account),
+    notify: (id, text) => notifySession(id, text),
+    deliver: async (id, text) => {
+      const sent = await deliverToSession(id, text, { channel: "web", chat_id: "web", message_id: `limit-reset-${Date.now()}` })
+      if (sent.handed) await sent.turn
+    },
+  }, how),
+})
+/** A session's wait as clients see it (null: none). */
+function limitWaitFields(wait: LimitWait | undefined) {
+  return wait ? { resumeAt: wait.resumeAt, resetsAt: wait.resetsAt ?? null, account: wait.account, accountLabel: brokerAccounts.label(wait.account) } : null
+}
 const bgTaskStore = new BackgroundTaskStore()
 // Survives broker restarts: subagent cards (views + each subagent's conversation) come back.
 const subagentStore = new SubagentStore({ file: join(STATE_DIR, "subagents.json") })
@@ -951,8 +1002,8 @@ function bgOpenCount(sessionId: string): number {
 
 function resolveGitDirs(workdir: string): { gitDir: string; commonDir: string } | null {
   try {
-    const gitDir = execFileSync("git", ["rev-parse", "--absolute-git-dir"], { cwd: workdir, encoding: "utf-8" }).trim()
-    const raw = execFileSync("git", ["rev-parse", "--git-common-dir"], { cwd: workdir, encoding: "utf-8" }).trim()
+    const gitDir = runSyncOrThrow("git", ["rev-parse", "--absolute-git-dir"], { cwd: workdir, timeoutMs: 10_000 })
+    const raw = runSyncOrThrow("git", ["rev-parse", "--git-common-dir"], { cwd: workdir, timeoutMs: 10_000 })
     return { gitDir, commonDir: isAbsolute(raw) ? raw : resolve(workdir, raw) }
   } catch { return null }
 }
@@ -986,6 +1037,8 @@ function stopClaudeTailer(sessionUuid: string): void {
 }
 
 const modelCache = new ModelCache()
+/** Model lists an agent reported at a session start (#102: Cursor's ACP options), kept across restarts. */
+const learnedModels = new LearnedModels(join(STATE_DIR, "learned-models"))
 
 /**
  * The added (non-system) accounts of `agent` as launch envs for model discovery: ones the API has
@@ -1010,7 +1063,7 @@ function accountAware(agent: AgentKind, discover: (launch?: DiscoveryLaunch) => 
 const modelDiscoverers: ModelDiscoverers = {
   [AgentKind.Claude]: accountAware(AgentKind.Claude, (launch) => discoverClaudeModels({ launch })),
   [AgentKind.Codex]: accountAware(AgentKind.Codex, (launch) => discoverCodexModels({ launch })),
-  [AgentKind.Cursor]: accountAware(AgentKind.Cursor, (launch) => discoverCursorModels({ launch })),
+  [AgentKind.Cursor]: accountAware(AgentKind.Cursor, (launch) => discoverCursorModels({ launch, learned: () => learnedModels.get(AgentKind.Cursor) })),
   [AgentKind.OpenCode]: accountAware(AgentKind.OpenCode, (launch) => discoverOpenCodeModels({ launch })),
   [AgentKind.Grok]: accountAware(AgentKind.Grok, (launch) => discoverGrokModels({ launch })),
   [AgentKind.Antigravity]: accountAware(AgentKind.Antigravity, (launch) => discoverAntigravityModels({ launch })),
@@ -1145,7 +1198,7 @@ const channels: Record<string, Channel> = {
 // Session inboxes (inbox spec §1). Created up front: Antigravity gets it as --add-dir (agy has no
 // read-only flag), Claude a read-only --allowedTools Read rule and OpenCode an external_directory
 // allow, so it must exist before any session launches.
-mkdirSync(SESSION_INBOX_DIR, { recursive: true, mode: 0o700 })
+platformFiles.mkdirPrivate(SESSION_INBOX_DIR)
 // Assigned right after the SessionManager below (its deps need the manager); the getInbox port is a lazy thunk.
 let inboxDelivery: InboxDelivery | undefined
 const inboxStore = new InboxStore(SESSION_INBOX_DIR)
@@ -1287,6 +1340,17 @@ const sessionManager = new SessionManager(registry, {
   outbound: {
     onAssistantMessage,
     getChannel: (name) => channels[name],
+    showHtml: (sessionId, args) => showHtml(sessionId, args, {
+      workdir: (id) => registry.get(id)?.workdir,
+      check: (html) => checkPage(html),
+      store: htmlPages,
+      post: async (id, card) => {
+        const r = await onAssistantMessage(id, { text: "", card })
+        return r.ok ? { ok: true } : { ok: false, error: r.error }
+      },
+      // The broker's own state (tokens, the database) is never a card's source, even from an agent's folder.
+      forbidden: [STATE_DIR],
+    }),
     telegramApi: telegram ? { token: TG_TOKEN!, getFile: (id: string) => telegram.getFile(id) } : undefined,
   },
   orchestration: {
@@ -1329,7 +1393,7 @@ const sessionManager = new SessionManager(registry, {
       return report
     },
   },
-  stores: { fileStore, messageLog, searchStore, db, reviewStore, walkthroughStore },
+  stores: { fileStore, messageLog, searchStore, db, reviewStore, walkthroughStore, browserCommentStore },
   resume: {
     bind: (sid) => server.bind(sid),
     ensureSessionWorktree: (s) => ensureSessionWorktree(s),
@@ -1432,7 +1496,7 @@ const commandRegistry: CommandRegistry = new CommandRegistry({
   },
 })
 
-const unregisterSession = (id: string) => sessionManager.unregister(id)   // also forgets its reply target
+const unregisterSession = (id: string) => { limitWaits.cancel(id); return sessionManager.unregister(id) }   // also forgets its reply target
 
 // Resolve an inbound attachment file_id to a local path, for codex/cursor
 // sessions. Claude gets attachments via the download_attachment MCP tool; the
@@ -1456,7 +1520,7 @@ export type DispatchResult = { ok: true; delivered: number } | { ok: false; erro
 
 async function onAssistantMessage(
   sessionId: string,
-  ev: { text: string; reply_to?: string; files?: string[]; format?: "text" | "markdownv2"; keyboard?: string[]; error?: boolean; system?: boolean; stream?: string },
+  ev: { text: string; reply_to?: string; files?: string[]; format?: "text" | "markdownv2"; keyboard?: string[]; error?: boolean; system?: boolean; stream?: string; card?: HtmlCard },
 ): Promise<DispatchResult> {
   // A broker notice ("Resuming session…") is not the agent finishing a turn.
   if (!ev.system) agentStateStore.applyEvent(sessionId, "Stop")
@@ -1519,8 +1583,9 @@ async function onAssistantMessage(
       log.warn("dispatch_unknown_channel", { sessionName, chat_id, channel: channelName })
       continue
     }
+    // A card has no text of its own: the web app draws it, so any other channel gets the title.
     const initial: OutboundAction = {
-      op: "reply", chat_id, text: ev.text,
+      op: "reply", chat_id, text: ev.card && !ev.text && channelName !== WEB_CHANNEL ? ev.card.title : ev.text,
       reply_to: ev.reply_to, files: resolvedFiles, format: ev.format, keyboard: ev.keyboard,
     }
     try {
@@ -1547,6 +1612,8 @@ async function onAssistantMessage(
         error: ev.error,
         // Card #76: the app swaps the live text with this stream id for this stored reply.
         ...(ev.stream ? { stream: ev.stream } : {}),
+        // #104: an html card (show_html); the app fetches the page by this id.
+        ...(ev.card ? { card: ev.card } : {}),
         attachments: action.attachments?.map((a) => ({
           file_id: a.file_id, kind: a.kind, mime: a.mime, size: a.size, name: a.name,
         })),
@@ -1616,23 +1683,18 @@ function applySessionAccount(sessionId: string, account: string): void {
   webChannel?.broadcastToAll({ type: "session_state", session: s.id, ...sessionAccountFields({ agent: s.agent, account }) })
 }
 
-/** Manual account switch of a running session (Core resume { account }: shutdown + reopen). */
-async function setSessionAccount(sessionId: string, account: string): Promise<{ ok: true; session: string; account: string; accountLabel: string }> {
-  const s = registry.get(sessionId)
-  if (!s) throw new AccountsApiError(404, "session not found", "session_not_found")
-  const resolved = (await brokerAccounts.resolveSessionAccount(s.agent, account))!
-  const adapter = runtimes.get(s.id)?.adapter as (AgentAdapter & { setAccount?: (id: string) => Promise<void> }) | undefined
-  if (!adapter || typeof adapter.setAccount !== "function") {
-    throw new AccountsApiError(409, "the session is not running; start it first", "session_not_running")
-  }
-  try {
-    await adapter.setAccount(resolved)
-  } catch (err) {
-    throw toApiError(err)
-  }
-  // The adapter's "account" event already persisted a real switch; same-account is a no-op there.
-  applySessionAccount(s.id, resolved)
-  return { ok: true, session: s.id, ...sessionAccountFields({ agent: s.agent, account: resolved }) }
+/** Manual account switch: a running session reopens on it now, a sleeping one takes it on its next wake (#106). */
+async function setSessionAccount(sessionId: string, account: string): Promise<{ ok: true; session: string; account: string; accountLabel: string; applied: "now" | "next_wake" }> {
+  const r = await moveSessionAccount({
+    session: (id) => registry.get(id),
+    resolve: (agent, id) => brokerAccounts.resolveSessionAccount(agent, id),
+    adapter: (id) => runtimes.get(id)?.adapter as (AgentAdapter & { setAccount?: (id: string) => Promise<void> }) | undefined,
+    waking: (id) => sessionChain.waking(id),
+    // The adapter's "account" event already persisted a real switch; same-account is a no-op there.
+    store: applySessionAccount,
+  }, sessionId, account)
+  const s = registry.get(r.session)!
+  return { ok: true, session: r.session, ...sessionAccountFields({ agent: s.agent, account: r.account }), applied: r.applied }
 }
 
 async function notifyAgentError(sessionId: string, sessionName: string, errorType: string, errorMessage: string): Promise<void> {
@@ -2009,7 +2071,7 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   // pushed to every client and said in the chat; so is an account the API refused, and an
   // auto-switch that found no other account. A refused account's mark (set or cleared) reaches the
   // Accounts screens through accounts_changed.
-  adapter.on("account", (ev: { event: string; from?: string; to?: string; reason?: string; account?: string }) => {
+  adapter.on("account", (ev: { event: string; from?: string; to?: string; reason?: string; account?: string; resetsAt?: Date; background?: boolean }) => {
     if (ev.event === "switched" && ev.to) {
       applySessionAccount(sessionId, ev.to)
       const why = ev.reason === "limit" ? "usage limit reached"
@@ -2017,8 +2079,16 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
         : "switched manually"
       void notifySession(sessionId, `Switched to ${brokerAccounts.label(ev.to)} — ${why}`)
     } else if (ev.event === "exhausted") {
+      // A limit with auto-resume on: the "waiting" event that follows says it, with the time.
+      if (ev.reason === "limit" && accountsSettings().autoResume) return
       const what = ev.reason === "unavailable" ? `${brokerAccounts.label(ev.account)} is unavailable` : `Usage limit reached on ${brokerAccounts.label(ev.account)}`
       void notifySession(sessionId, `${what} — no other ${adapter.kind} account is available`)
+    } else if (ev.event === "waiting" && ev.account) {
+      const wait = limitWaits.wait(sessionId, { account: ev.account, resetsAt: ev.resetsAt, background: ev.background === true })
+      const label = brokerAccounts.label(ev.account)
+      if (!wait) void notifySession(sessionId, `Usage limit reached on ${label} — automatic resume is off`)
+      else if (wait.resetsAt) void notifySession(sessionId, `Usage limit reached — resumes automatically on ${label} at ${clockTime(wait.resumeAt)}`)
+      else void notifySession(sessionId, `Usage limit reached — no reset time was given, trying again on ${label} at ${clockTime(wait.resumeAt)}`)
     } else if (ev.event === "unavailable") {
       brokerAccounts.notifyChanged()
       void notifySession(sessionId, `${brokerAccounts.label(ev.account)} is unavailable: ${ev.reason ?? "refused by the API"}. Check it in Settings ▸ Accounts.`)
@@ -2095,6 +2165,16 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
       })
     }
   })
+  // Cursor's own model list (#102): its ACP selects only these, so the picker offers exactly them from now on.
+  followAdapterModels({
+    agent: registry.get(sessionId)?.agent,
+    adapter: adapter as unknown as Parameters<typeof followAdapterModels>[0]["adapter"],
+    learned: learnedModels,
+    onLearned: (agent, models) => {
+      modelCache.set(agent, models)
+      announceAgentModelsChanged([agent])
+    },
+  })
   adapter.on("commands-update", () => {
     const name = registry.get(sessionId)?.name
     if (name) {
@@ -2127,7 +2207,7 @@ function announceAgentAvatar(id: string): void {
 // Hand edits (an editor, git pull) are picked up too: watch agent-memory/ for *.avatar.json.
 try {
   const dir = join(getMuxHome(), "agent-memory")
-  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  platformFiles.mkdirPrivate(dir)
   const pending = new Map<string, ReturnType<typeof setTimeout>>()
   watchDir(dir, (file) => {
     const m = file ? /^([A-Za-z0-9_-]+)\.avatar\.json$/.exec(file) : null
@@ -2173,6 +2253,9 @@ const displayManager = new DisplayManager({
 // Workspace behaviour layer: close-a-view side effects and create-for-session.
 // archiveSession closes over killSession/unregisterSession/webChannel, which are
 // only invoked after startup wiring.
+// New tabs an app left behind (it crashed, or lost the broker) only ask what to show: none outlives a restart.
+const droppedNewTabs = registry.workspaces.dropNewTabs()
+if (droppedNewTabs > 0) log.info("new_tabs_dropped", { count: droppedNewTabs })
 const workspaceService = new WorkspaceService(
   registry.workspaces,
   {
@@ -2324,6 +2407,7 @@ function sessionAddedPayload(entry: Session) {
     fastMode: sessionFast(entry),
     permissionMode: resolvePermissionMode(entry.agent, entry.permissionMode),
     ...sessionAccountFields(entry),
+    limitWait: limitWaitFields(limitWaits.get(entry.id)),
     repo_root: entry.repo_root || undefined,
     session_branch: entry.session_branch || undefined,
     finish_job: entry.finish_job,
@@ -2437,7 +2521,7 @@ function spawnLoginProc(kind: string) {
   }
   // Windows PTY logins (claude, agy): the account login's ConPTY spawner.
   if (spec.conpty) return conptyLoginProc(spec, env, cleanup, (err) => log.warn("login_spawn_failed", { kind, cmd, err }))
-  let child: ReturnType<typeof nodeSpawn>
+  let child: ChildProcess
   try {
     // The launcher spawner equals a plain spawn on POSIX and only wraps the
     // Windows shim formats (.cmd/.ps1) — safe for every kind. PTY needs are
@@ -2502,7 +2586,7 @@ const advanceRead = makeReadAdvancer({
 const hostIdentity = loadOrCreateHostKey(HOST_KEY_FILE)
 const claimStore = new ClaimStore()
 setInterval(() => claimStore.sweep(), 60_000).unref()
-const hostPlatform = process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : "linux"
+const hostPlatform = host.os() === "darwin" ? "macos" : host.windows() ? "windows" : "linux"
 const advertisedHostName = process.env.MUX_HOST_NAME?.trim() || hostname()
 
 // Relay data plane (frp, in-process). Fresh native CLI + desktop setups enable the hosted
@@ -2541,7 +2625,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   // One install job per agent; "installed" is re-probed (binary on PATH) after
   // the installer exits. Referenced lazily by the startAgentInstall closures.
   const installManager = createInstallManager({
-    isInstalled: (kind) => detectAgent(kind, { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, process.platform), fileExists: existsSync }, { home: home() }).installed,
+    isInstalled: (kind) => detectAgent(kind, { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, host.os()), fileExists: existsSync }, { home: home() }).installed,
     // Windows: an installer that set the user PATH (codex, cursor, …) changed only the registry —
     // fold its dirs into ours so detection and new sessions/terminals see the agent, no restart.
     refreshPath: async () => {
@@ -2718,6 +2802,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     onStopRequest: () => { void gracefulShutdown("stop-request") },
     // `supermux connect --restart`: under whatever runs this broker (systemd, launchd, the desktop app's task).
     onRestartRequest: () => restartService(),
+    // The desktop app's Restart (it restarts this broker itself): its stop, coming next, leaves the agents running.
+    onExpectRestart: () => expectRestart(),
     getCuratorSettings: () => ({ config: settings.getCurator(), nextRun: curatorScheduler?.nextRun()?.toISOString() ?? null }),
     setCuratorSettings: (cfg) => {
       const c = parseCuratorConfig(cfg, settings.getCurator())
@@ -2784,6 +2870,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         fastMode: sessionFast(s),
         permissionMode: resolvePermissionMode(s.agent, s.permissionMode),
         ...sessionAccountFields(s),
+        limitWait: limitWaitFields(limitWaits.get(s.id)),
         status: s.status,
         session_branch: s.session_branch || undefined,
         repo_root: s.repo_root || undefined,
@@ -2858,6 +2945,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     },
     onSendFromWeb: () => {},                                // wired below via webChannel.on('inbound')
     fileStore,
+    htmlPages,
+    findCard: (session, id) => messageLog.findCard(session, id),
     pushStore,
     deviceTokenStore,
     relayUrl,
@@ -3221,6 +3310,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       return { port: entry.port, sessionName: entry.sessionName, isPublic: entry.isPublic }
     },
     proxyAuth: (token: string) => !!proxyDeviceStore.verify(token),
+    proxyLinksBaseUrl: exposedProxyLinksBaseUrl,
     listProxies: () => registry.listProxies().map((e) => proxyWsPayload(e, proxyLivenessMonitor.getStatus(e.domain))),
     createProxy: (args) => {
       const session = registry.resolveName(args.sessionName)
@@ -3319,16 +3409,35 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       list: (agent) => brokerAccounts.list(agent),
       add: (body) => brokerAccounts.add(body),
       remove: (id, options) => brokerAccounts.remove(id, options),
+      removalPlan: (id) => brokerAccounts.removalPlan(id),
+      markExpired: async (id) => {
+        if (!(await brokerAccounts.get(id))) return false
+        // Cleared like a real one: by a usage fetch that works, or by signing in again.
+        markSignInExpired(id, "Marked signed out from /debug/account-expired (#106 demo)")
+        return true
+      },
       startLogin: (body) => brokerAccounts.startLogin(body),
       loginState: (loginId) => brokerAccounts.loginState(loginId),
       submitCode: (loginId, code) => brokerAccounts.submitLoginCode(loginId, code),
       cancelLogin: (loginId) => brokerAccounts.cancelLogin(loginId),
       setSessionAccount: (sessionId, account) => setSessionAccount(sessionId, account),
-      getSettings: () => ({ autoSwitch: accountsSettings().autoSwitch }),
+      cancelLimitWait: (sessionId) => limitWaits.cancel(sessionId),
+      resumeLimitWait: (sessionId) => limitWaits.resumeNow(sessionId),
+      forceLimitWait: (sessionId, minutes) => {
+        const s = registry.get(sessionId)
+        if (!s) return false
+        const account = s.account || `${s.agent}:system`
+        return !!limitWaits.wait(s.id, { account, resetsAt: new Date(Date.now() + minutes * 60_000), background: false })
+      },
+      getSettings: () => ({ autoSwitch: accountsSettings().autoSwitch, autoResume: accountsSettings().autoResume }),
       setSettings: (patch) => {
         if (patch.autoSwitch !== undefined && typeof patch.autoSwitch !== "boolean") throw new AccountsApiError(400, "autoSwitch must be a boolean", "invalid_input")
+        if (patch.autoResume !== undefined && typeof patch.autoResume !== "boolean") throw new AccountsApiError(400, "autoResume must be a boolean", "invalid_input")
         if (typeof patch.autoSwitch === "boolean") settings.set(SETTINGS_KEY_ACCOUNTS, { ...accountsSettings(), autoSwitch: patch.autoSwitch })
-        const next = { autoSwitch: accountsSettings().autoSwitch }
+        if (typeof patch.autoResume === "boolean") settings.set(SETTINGS_KEY_ACCOUNTS, { ...accountsSettings(), autoResume: patch.autoResume })
+        // Turned off: nothing that waits now resumes by itself.
+        if (patch.autoResume === false) for (const wait of limitWaits.list()) limitWaits.cancel(wait.sessionId)
+        const next = { autoSwitch: accountsSettings().autoSwitch, autoResume: accountsSettings().autoResume }
         webChannel?.broadcastToAll({ type: "accounts_settings", ...next })
         return next
       },
@@ -3354,6 +3463,13 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       } catch (e: any) { return { reachable: false, error: e?.message ?? String(e) } }
     },
     reviewList: (id) => reviewStore.list(id),
+    browserCommentsAdd: (id, batch) => {
+      if (!registry.get(id)) return null
+      const added = browserCommentStore.addBatch(id, batch, new Date().toISOString())
+      for (const comment of added) webChannel?.broadcastToAll({ type: "browser_comment", sessionId: id, comment })
+      return added
+    },
+    browserCommentsList: (id) => browserCommentStore.list(id),
     reviewAdd: (id, c) => {
       const comment = reviewStore.add({ ...c, sessionId: id })
       webChannel?.broadcastToAll({ type: "review_comment", sessionId: id, comment })
@@ -3378,7 +3494,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         mkdirSync(dir, { recursive: true })
         const p = join(dir, "verify.sh")
         writeFileSync(p, content.endsWith("\n") ? content : content + "\n")
-        chmodSync(p, 0o755)
+        platformFiles.makeExecutable(p)
         return { ok: true }
       } catch (err: any) { return { ok: false, reason: err?.message ?? String(err) } }
     },
@@ -3568,8 +3684,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   // (the `let` binding) — they run at request time, by which point loginManager is assigned.
   loginManager = new LoginManager({
     paths: {
-      home: home(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME,
-      appData: process.env.APPDATA, platform: process.platform,
+      home: home(), ...dirs.baseDirs(), platform: host.os(),
     },
     fileExists: existsSync,
     // Every kind answers with the stored-settings oracle, so a stored
@@ -3582,6 +3697,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     hasCredential: (kind) =>
       agentHasCredential(kind) || (kind === AgentKind.Claude && (claudeCliIsAuthenticated() || claudeStoredLoginPresent()))
         || (kind === AgentKind.Antigravity && antigravityKeyringLogin()),
+    // OpenCode's Console (Go) sign-in lives in opencode.db beside any API key in auth.json.
+    signInProbe: (kind) => kind === AgentKind.OpenCode
+      ? () => openCodeConsoleFingerprint(join(openCodeDataDir({ home: home() }), "opencode.db"))
+      : undefined,
     spawnLogin: spawnLoginProc,
     onChange: (kind, st) => {
       webChannel?.broadcastToAll({ type: "agent_login_state", kind, state: st })
@@ -3593,6 +3712,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   })
   channels.web = webChannel as Channel
   getUsageStore().on("updated", (snap) => webChannel?.broadcastToAll({ type: "usage_updated", usage: snap }))
+  // A session hit OpenCode's free limit: the usage card says so now, not on its next 5-minute refresh.
+  onOpenCodeFreeLimit(() => { void getUsageStore().refresh(["opencode"], { force: true }) })
 }
 void getUsageStore().seedFromLocal()
 
@@ -3741,6 +3862,8 @@ async function deliverInbound(sessionId: string, text: string, meta: any): Promi
  * the wake failed, which the chain reports in the chat once. Nothing is re-sent on its own.
  */
 async function deliverToSession(sessionId: string, text: string, meta: any): Promise<ChainDelivery<InboundDeliveryResult>> {
+  // #92: a message carries the session on now; a limit it hits again makes a new wait.
+  limitWaits.cancel(sessionId)
   // This message's chat is where anything about it goes, a failed wake included.
   if (typeof meta?.chat_id === "string" && meta.chat_id) replyTargets.note(sessionId, meta.chat_id)
   return deliverOnChain(sessionChain, sessionId, () => deliverInbound(sessionId, text, meta))
@@ -4600,7 +4723,7 @@ if (webChannel) {
           },
         })
         // The draft row was restored just above, so the session exists again and the notice has a home.
-        await notifySession(draftSnapshot.id, startFailureNotice("start", draftSnapshot.name, err))
+        await notifySession(draftSnapshot.id, startFailureNotice("start", draftSnapshot.name, err, undefined, draftSnapshot.agent))
         return
       }
     }
@@ -4823,7 +4946,14 @@ try {
   if (swept.length) log.info("runtime_assets_swept", { removed: swept })
 } catch (err) { log.warn("runtime_assets_sweep_failed", { err: String(err) }) }
 await refreshTelegramMenu()
-if (webChannel) await webChannel.start()
+if (webChannel) {
+  // No named proxy may point at the broker itself (Registry.refuseProxyPort says why). Both: the configured port, and the
+  // one actually bound (they differ only for port 0).
+  if (MUX_WEB_PORT) registry.refuseProxyPort(MUX_WEB_PORT)
+  await webChannel.start()
+  registry.refuseProxyPort(webChannel.boundPort)
+}
+log.info("limit_waits_loaded", limitWaits.load())
 telemetry.start()
 {
   const t = telemetryState()
@@ -4928,6 +5058,12 @@ const modelRefreshInterval = IS_TEST_BROKER ? undefined : setInterval(() => {
   }
 }
 
+// The graceful shutdown's listeners, before the channels start: Telegram's long poll below never returns until
+// shutdown, and listeners registered after it were never registered at all (#29). A broker with Telegram on then
+// died at every SIGTERM without its graceful shutdown, and stopped or restarted alike.
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"))
+process.on("SIGINT",  () => gracefulShutdown("SIGINT"))
+
 // Telegram long-polling (grammy bot.start()) does not resolve until shutdown, so it
 // MUST be the last awaited call at boot — anything awaited after it never runs.
 // WhatsApp's start() is quick (bind webhook + one status probe), so start it BEFORE
@@ -4938,7 +5074,10 @@ if (telegram) await telegram.start()
 async function gracefulShutdown(signal: string) {
   if (shuttingDown) return
   shuttingDown = true
-  log.info("graceful_shutdown", { signal })
+  // A restart (one this broker scheduled, or one the desktop app announced before restarting it) leaves the agents to
+  // the broker that comes back; a plain stop shuts them down.
+  const agents = agentsCloseMode()
+  log.info("graceful_shutdown", { signal, agents })
   try {
     terminalManager.shutdown()
   } catch (err: any) { log.warn("terminal_shutdown_failed", { err: err?.message }) }
@@ -4974,22 +5113,22 @@ async function gracefulShutdown(signal: string) {
     brokerAccounts.close()
   } catch (err: any) { log.warn("accounts_close_failed", { err: err?.message ?? String(err) }) }
   try {
-    await closeGrokCoreHost()
+    await closeGrokCoreHost(agents)
   } catch (err: any) { log.warn("grok_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
-    await closeAntigravityCoreHost()
+    await closeAntigravityCoreHost(agents)
   } catch (err: any) { log.warn("antigravity_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
-    await closeCodexCoreHost()
+    await closeCodexCoreHost(agents)
   } catch (err: any) { log.warn("codex_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
-    await closeOpenCodeCoreHost()
+    await closeOpenCodeCoreHost(agents)
   } catch (err: any) { log.warn("opencode_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
-    await closeCursorCoreHost()
+    await closeCursorCoreHost(agents)
   } catch (err: any) { log.warn("cursor_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
-    await closeClaudeCoreHost()
+    await closeClaudeCoreHost(agents)
   } catch (err: any) { log.warn("claude_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
     curatorScheduler?.stop()
@@ -5006,5 +5145,3 @@ async function gracefulShutdown(signal: string) {
   } catch (err: any) { log.warn("db_close_failed", { err: err?.message ?? String(err) }) }
   process.exit(0)
 }
-process.on("SIGTERM", () => gracefulShutdown("SIGTERM"))
-process.on("SIGINT",  () => gracefulShutdown("SIGINT"))

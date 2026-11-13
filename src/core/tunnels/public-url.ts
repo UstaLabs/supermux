@@ -13,6 +13,7 @@ import type { AppConfig } from "../settings/app-config"
 import type { Println } from "./types"
 import { STOP_TOKEN_FILE } from "../session-manager/stop-token"
 import { envText, readEnvText } from "../../shared/env-file"
+import { files } from "@supermux/platform"
 
 /**
  * Upsert MUX_WEB_PORT + MUX_WEB_PUBLIC_URL in `<stateDir>/.env`, CLOBBERING any
@@ -26,7 +27,7 @@ export function writeEnvPublicUrl(
   url: string,
   proxyBaseDomain?: string,
 ): void {
-  mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+  files.mkdirPrivate(stateDir)
   const envPath = join(stateDir, ".env")
   const map = existsSync(envPath) ? readEnvText(readFileSync(envPath, "utf8")) : new Map<string, string>()
   map.set("MUX_WEB_PORT", port)
@@ -37,19 +38,19 @@ export function writeEnvPublicUrl(
   if (proxyBaseDomain) map.set("MUX_PROXY_BASE_DOMAIN", proxyBaseDomain)
   else map.delete("MUX_PROXY_BASE_DOMAIN")
   writeFileSync(envPath, envText(map))
-  chmodSync(envPath, 0o600)
+  files.makePrivate(envPath)
 }
 
 /** Enable/disable the hosted relay without deleting the key. Keeping an empty
  * value records an explicit opt-out, so a later idempotent `supermux setup`
  * does not silently turn it back on. */
 export function setEnvRelayDomain(stateDir: string, domain: string): void {
-  mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+  files.mkdirPrivate(stateDir)
   const envPath = join(stateDir, ".env")
   const map = existsSync(envPath) ? readEnvText(readFileSync(envPath, "utf8")) : new Map<string, string>()
   map.set("MUX_RELAY_DOMAIN", domain)
   writeFileSync(envPath, envText(map))
-  chmodSync(envPath, 0o600)
+  files.makePrivate(envPath)
 }
 
 /**
@@ -84,7 +85,8 @@ export function mintPairLink(
   publicUrl: string,
 ): { url: string; token: string; name: string } {
   const store = new DeviceStore(join(stateDir, "devices.json"))
-  const { token, name: finalName } = store.mint(name)
+  // The link pairs once, within 10 minutes (#119).
+  const { token, name: finalName } = store.mintPairing(name)
   const url = `${publicUrl.replace(/\/$/, "")}/pair?t=${token}`
   return { url, token, name: finalName }
 }
@@ -96,27 +98,51 @@ export function printPairLink(link: { url: string; name: string }, println: Prin
   qrcode.generate(link.url, { small: true })
 }
 
+/** The running broker's local port: [flagPort], else MUX_WEB_PORT in [stateDir]'s .env, else 8787. */
+export function localBrokerPort(stateDir: string, flagPort?: string): string {
+  if (flagPort) return flagPort
+  try {
+    const port = readEnvText(readFileSync(join(stateDir, ".env"), "utf8")).get("MUX_WEB_PORT")?.trim()
+    if (port) return port
+  } catch {
+    /* no .env yet */
+  }
+  return "8787"
+}
+
+/**
+ * What the running broker answered POST /internal/restart: "restarting" (202), "unsupervised" (409: nothing would
+ * bring it back), "unreachable" (no token in the state directory, or no answer), or any other HTTP status.
+ */
+export type BrokerRestartAnswer = "restarting" | "unsupervised" | "unreachable" | number
+
 /**
  * Asks the running broker to restart itself under whatever runs it: systemd, launchd, or the desktop app's unit, agent
  * or Windows task (update/apply.ts restartService knows which; this process does not). Uses its local
- * /internal/restart with the per-boot token in [stateDir]. False, with what to do, when it cannot.
+ * /internal/restart with the per-boot token in [stateDir]. A restart the broker scheduled leaves its agents running.
  */
-export async function restartBroker(stateDir: string, port: string, println: Println, fetchImpl: typeof fetch = fetch): Promise<boolean> {
-  const later = "The broker is not running; it picks the new settings up when it starts."
+export async function askBrokerToRestart(stateDir: string, port: string, fetchImpl: typeof fetch = fetch): Promise<BrokerRestartAnswer> {
   let token: string
-  try { token = readFileSync(join(stateDir, STOP_TOKEN_FILE), "utf8").trim() } catch { println(later); return false }
+  try { token = readFileSync(join(stateDir, STOP_TOKEN_FILE), "utf8").trim() } catch { return "unreachable" }
   try {
     const r = await fetchImpl(`http://127.0.0.1:${port}/internal/restart`, { method: "POST", headers: { "x-supermux-stop-token": token } })
-    if (r.status === 202) {
-      println("Restarted the broker ✔")
-      return true
-    }
-    println(r.status === 409
-      ? "The broker does not run under a service manager, so it cannot restart itself: restart it yourself (quit and reopen the supermux app, or run it again)."
-      : `Could not restart the broker (HTTP ${r.status}): restart it yourself.`)
-    return false
+    return r.status === 202 ? "restarting" : r.status === 409 ? "unsupervised" : r.status
   } catch {
-    println(later)
-    return false
+    return "unreachable"
   }
+}
+
+/** [askBrokerToRestart], for `supermux connect --restart`: says what happened, and what to do when it could not. */
+export async function restartBroker(stateDir: string, port: string, println: Println, fetchImpl: typeof fetch = fetch): Promise<boolean> {
+  const answer = await askBrokerToRestart(stateDir, port, fetchImpl)
+  if (answer === "restarting") {
+    println("Restarted the broker ✔")
+    return true
+  }
+  println(answer === "unreachable"
+    ? "The broker is not running; it picks the new settings up when it starts."
+    : answer === "unsupervised"
+      ? "The broker does not run under a service manager, so it cannot restart itself: restart it yourself (quit and reopen the supermux app, or run it again)."
+      : `Could not restart the broker (HTTP ${answer}): restart it yourself.`)
+  return false
 }

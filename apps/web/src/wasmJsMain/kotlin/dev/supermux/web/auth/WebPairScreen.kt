@@ -88,7 +88,7 @@ fun WebPairScreen(
                                 "unreachable from this network — nothing is wrong with this browser."
                         is SessionState.Unpaired ->
                             "This broker is already set up (${state.reason}). From a paired device open " +
-                                "Settings › Devices, add a device, and open the link it shows here — or " +
+                                "your machine's page in Settings (Devices), add a device, and open the link it shows here — or " +
                                 "paste it below."
                         is SessionState.Paired -> ""
                     },

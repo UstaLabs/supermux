@@ -3,6 +3,9 @@ package dev.supermux.webview.testing
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import dev.supermux.webview.DialogResult
+import dev.supermux.webview.InspectorResult
+import dev.supermux.webview.WebCookie
+import dev.supermux.webview.FindResult
 import dev.supermux.webview.DownloadRequest
 import dev.supermux.webview.FileChooserRequest
 import dev.supermux.webview.NavigationDecision
@@ -791,5 +794,27 @@ class FakeWebEngineTest {
         assertTrue(heard.isEmpty(), "$heard")
         job.cancel()
         other.cancel()
+    }
+
+    @Test fun browserOperationsAreRecordedAndAnswered() = runTest {
+        val engine = FakeWebEngine(1)
+        assertNull(engine.find("x", backwards = false))
+        engine.findAnswer = { q, _ -> FindResult(found = q.isNotEmpty(), count = 3, current = 1) }
+        assertEquals(FindResult(true, 3, 1), engine.find("word", backwards = false))
+        assertTrue(engine.setZoom(1.25f))
+        val c = WebCookie(name = "n", value = "v", url = "https://h.test/")
+        assertTrue(engine.setCookie(c))
+        assertEquals(listOf(c), engine.cookies)
+        engine.inspectorAnswer = InspectorResult.Elsewhere("Safari ▸ Develop")
+        assertEquals(InspectorResult.Elsewhere("Safari ▸ Develop"), engine.openInspector())
+        assertEquals(listOf("find:x:false", "find:word:false", "zoom:1.25", "cookie:n", "inspector"), engine.calls.takeLast(5))
+    }
+
+    @Test fun browserOperationsAfterReleaseAreViolations() = runTest {
+        val engine = FakeWebEngine(1)
+        engine.release()
+        assertFalse(engine.setZoom(2f))
+        assertFalse(engine.setCookie(WebCookie(name = "n", value = "v", url = "https://h.test/")))
+        assertTrue(engine.violations.any { it.startsWith("setZoom after release") }, "${engine.violations}")
     }
 }

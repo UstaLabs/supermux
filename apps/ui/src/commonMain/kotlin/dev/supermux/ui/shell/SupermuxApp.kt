@@ -21,6 +21,7 @@
 // session-only chat for a session that belongs to no workspace ([chatFallback]).
 package dev.supermux.ui.shell
 
+import dev.supermux.webview.runtime.ProvideWebViewOverlays
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.animation.AnimatedContent
@@ -133,6 +134,12 @@ import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.host.AddHostScreen
 import dev.supermux.ui.host.HostScopePicker
 import dev.supermux.ui.host.HostSwitcher
+import dev.supermux.ui.keys.AppCommands
+import dev.supermux.ui.keys.LocalKeyScope
+import dev.supermux.ui.keys.LocalKeyScopeActive
+import dev.supermux.ui.keys.RegisterCommand
+import dev.supermux.ui.keys.ShortcutDispatcher
+import dev.supermux.ui.keys.ShortcutRoot
 import dev.supermux.ui.nav.Route
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.notify.NotificationController
@@ -158,17 +165,26 @@ import dev.supermux.ui.session.rememberArchivedActions
 import dev.supermux.ui.session.rememberLauncherActions
 import dev.supermux.ui.session.rememberSessionListActions
 import dev.supermux.ui.session.withWorkspaceOps
-import dev.supermux.ui.settings.AppearanceSettingsScreen
-import dev.supermux.ui.settings.DevicesSettingsScreen
-import dev.supermux.ui.settings.ProxiesSettingsScreen
-import dev.supermux.ui.settings.SettingsExtra
 import dev.supermux.ui.settings.SettingsHub
+import dev.supermux.ui.whatsnew.LocalOpenWhatsNew
+import dev.supermux.ui.resources.whatsnew_card_prompt
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.whatsnew.WhatsNewAction
+import dev.supermux.ui.whatsnew.WhatsNewPage
+import dev.supermux.ui.whatsnew.WhatsNewSlot
+import dev.supermux.ui.whatsnew.rememberWhatsNew
+import dev.supermux.ui.whatsnew.releaseNotesUrl
+import dev.supermux.ui.settings.SettingsPlace
 import dev.supermux.ui.settings.SettingsSlotScope
-import dev.supermux.ui.settings.rememberDevicesSettingsActions
-import dev.supermux.ui.settings.rememberProxiesSettingsActions
+import dev.supermux.ui.settings.kit.KitMachine
+import dev.supermux.ui.settings.kit.SettingsMachines
+import dev.supermux.ui.settings.kit.THIS_COMPUTER_ID
+import dev.supermux.host.formatLastSeen
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.update.AppUpdateCard
-import dev.supermux.ui.update.AppUpdateScreen
+import dev.supermux.ui.update.announceUpdate
+import dev.supermux.ui.update.keepUpdated
 import dev.supermux.ui.usage.UsagePopover
 import dev.supermux.ui.usage.UsageScreen
 import dev.supermux.ui.usage.rememberUsageActions
@@ -181,6 +197,8 @@ import dev.supermux.ui.widgets.iosSwipeUnderLayer
 import dev.supermux.ui.widgets.iosSwipedLayer
 import dev.supermux.ui.widgets.keepAlivePanel
 import dev.supermux.ui.widgets.rememberIosBackSwipe
+import dev.supermux.ui.work.ActivityRailIcon
+import dev.supermux.ui.work.LocalDownloads
 import dev.supermux.ui.workspace.WorkspaceSession
 import dev.supermux.ui.workspace.rememberWorkspaceSession
 import dev.supermux.workspace.LayoutNode
@@ -190,12 +208,12 @@ import dev.supermux.workspace.groupWorkspaces
 import dev.supermux.ui.panes.TAB_STRIP_HEIGHT
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.firstGroupId
-import dev.supermux.workspace.groupIdOf
 import dev.supermux.workspace.NewViewKind
 import dev.supermux.workspace.toDomainOrNull
 import dev.supermux.workspace.toDto
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
@@ -295,8 +313,11 @@ fun SupermuxApp(
     onAddedHost: () -> Unit = {},
     /** Whether a broker identity (`GET /host` hostId) is the broker this app runs itself. */
     isLocalHost: (hostId: String?) -> Boolean = { false },
-    settingsExtra: @Composable (SettingsExtra, SettingsSlotScope) -> Unit = { _, _ -> },
-    settingsSection: @Composable (SettingsSection, SettingsSlotScope) -> Unit = { _, _ -> },
+    settingsSection: @Composable (SettingsPlace, SettingsSlotScope) -> Unit = { _, _ -> },
+    /** The text of the key that focuses Settings' search ("⌘F" on a Mac); null where there is no keyboard shortcut. */
+    settingsSearchShortcut: String? = null,
+    /** This window's keyboard. A desktop host passes its own, to drive its menu bar through it. */
+    shortcuts: ShortcutDispatcher = remember { ShortcutDispatcher() },
 ) {
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
     // The anchored popover needs a pointer (UsagePopover draws nothing without one), so a wide
@@ -334,6 +355,35 @@ fun SupermuxApp(
     val hostViews by fleet.hostViews.collectAsState()
     val sessionHost by fleet.sessionHost.collectAsState()
     val activeHostId by fleet.activeHost.collectAsState()
+    // The machines Settings shows as cards and its pages' scope lines pick from (#97).
+    val localBrokerCap = LocalPlatform.current.caps.localBroker
+    // "last seen 2h ago" moves on with the clock, nudged once a minute.
+    val settingsClock = rememberRailClock()
+    val settingsMachines = remember(hostViews, activeHostId, localBrokerCap, settingsClock) {
+        val now = settingsClock
+        val paired = hostViews.map { h ->
+            val seen = formatLastSeen(now, h.lastSeenAt)
+            KitMachine(
+                id = h.recordId,
+                name = h.displayLabel,
+                local = isLocalHost(h.hostId),
+                online = h.online,
+                status = when {
+                    h.online -> "Running"
+                    seen.isEmpty() -> "Offline"
+                    else -> "Offline · last seen $seen"
+                },
+                lastSeen = seen,
+            )
+        }
+        // Desktop can always host: with no local host paired, a "This computer" card still opens Hosting (spec §11).
+        val all = if (localBrokerCap && paired.none { it.local }) {
+            listOf(KitMachine(THIS_COMPUTER_ID, "This computer", local = true, online = false, status = "Not hosting")) + paired
+        } else {
+            paired
+        }
+        SettingsMachines(all, activeHostId, onPick = fleet::setActiveHost)
+    }
     // Hosts whose broker refuses agent sessions until git is installed (`host_requirements`).
     val hostRequirements by fleet.hostRequirements.collectAsState()
     val lastBySession = remember(messages) { messages.mapValues { it.value.lastOrNull() } }
@@ -402,6 +452,11 @@ fun SupermuxApp(
     val notices = LocalPlatform.current.notices
 
     val listActions = rememberSessionListActions(fleet)
+    // The host pill's "Open ‹machine›": that machine's page in Settings, with it the one Settings is about (#97).
+    val openHostPage: (String) -> Unit = { id ->
+        fleet.setActiveHost(id)
+        ui.openMachine()
+    }
 
     // Persistent projects, host-qualified by recordId — the same id space [workspaceHostOf] and
     // sessionHost use, so a workspace's projectId only ever matches its own broker's catalog.
@@ -418,6 +473,14 @@ fun SupermuxApp(
     val projectImageScope = rememberCoroutineScope()
     val projectImageCache = remember(fleet, projectImageScope) { ProjectImageCache(projectImageScope) }
     val uiPrefs = LocalUiPrefs.current
+    // What's new (#90): the sidebar card after an update, and its page.
+    val appPlatform = LocalPlatform.current
+    val whatsNew = rememberWhatsNew(
+        uiPrefs.settings,
+        appPlatform.updates.currentVersion,
+        appPlatform.releasePlatform,
+        existingInstall = { fleet.store.list().isNotEmpty() },
+    )
     val onCollapsedPathsChange: (Set<String>) -> Unit = { paths ->
         ui.collapsedProjectPaths = paths
         overlayScope.launch { uiPrefs.putCollapsedProjectPaths(paths) }
@@ -528,6 +591,12 @@ fun SupermuxApp(
                 muted = target?.mute ?: false,
             )
         }
+    }
+
+    // A download that finished with nobody waiting for it (#95, decision 2a) opens nothing: it waits in the activity
+    // bar, and a small notice says so.
+    LaunchedEffect(fleet) {
+        fleet.downloads.unclaimedCompletions.collect { notices.show("${it.name} downloaded") }
     }
 
     // Sessions changed: reconcile the selection against the live set (empty-guarded) and prune
@@ -729,11 +798,6 @@ fun SupermuxApp(
         }
     }
 
-    // Root focus so the shortcuts (Ctrl/Cmd B/N) resolve even before the user clicks into a pane;
-    // once the composer/terminal is focused, key events still bubble up here.
-    val rootFocus = remember { FocusRequester() }
-    LaunchedEffect(Unit) { runCatching { rootFocus.requestFocus() } }
-
     // ── ONE back handler for the whole app: Android's `PhoneLayerBack` plus the two per-layer
     //    handlers, folded together. Panes that own BACK themselves — the editor's search overlay
     //    and its tree drawer — register their own handler deeper in the tree, and Compose
@@ -767,6 +831,7 @@ fun SupermuxApp(
         dev.supermux.ui.chat.ChatSearchHost(
             searchAll = { q -> fleet.searchMessages(q) },
             openSession = { sid -> ui.focusChatTab(sid) },
+            hasSession = { sid -> fleet.sessions.value.any { it.id == sid } },
         )
     }
     // Staged attachment chips and their uploads, for a host that keeps none of its own (#89):
@@ -779,37 +844,74 @@ fun SupermuxApp(
                 dev.supermux.ui.chat.ComposerAttachmentStore(scope = fleet.retainedUi.scope)
             }
         }
+    // The fleet's audio (#118): the platform's own outputs where it has them (AVAudioPlayer on macOS and iOS), else
+    // the library the clips play through. One set of outputs for the fleet, kept with it, so a recreated shell (an
+    // Android rotation) finds the item still playing.
+    val platformAudio = LocalPlatform.current.audioOutputs
+    val audioOutputs = remember(fleet) {
+        fleet.retainedUi.getOrPut<dev.supermux.work.AudioOutputs>("audio.outputs") {
+            platformAudio ?: dev.supermux.ui.work.LibraryAudioOutputs(fleet.retainedUi.scope)
+        }
+            .also { if (!fleet.audio.hasOutputs) fleet.audio.useOutputs(it) }
+    }
+    // What plays, on the lock screen / the Mac's Now Playing, driven by its media keys: one follower for the fleet.
+    val platformNowPlaying = LocalPlatform.current.systemNowPlaying
+    remember(fleet) {
+        platformNowPlaying?.let { system ->
+            fleet.retainedUi.getOrPut("audio.nowPlaying") {
+                dev.supermux.work.SystemMediaControls(fleet.audio, system).also { it.start(fleet.retainedUi.scope) }
+            }
+        }
+    }
     CompositionLocalProvider(
         dev.supermux.ui.chat.LocalChatSearch provides chatSearch,
         dev.supermux.ui.retain.LocalRetainedUiState provides fleet.retainedUi,
         dev.supermux.ui.chat.LocalComposerAttachmentStore provides attachmentStore,
+        // The fleet's downloads (#95): one a screen starts outlives it, as its retained state does.
+        LocalDownloads provides fleet.downloads,
+        dev.supermux.ui.work.LocalAudioPlayer provides fleet.audio,
+        // Card #121: the offline / reconnecting strip above the chat list and the composer.
+        LocalConnectionStatus provides rememberConnectionStatus(hostViews, fleet::retryNow),
     ) {
+    // This window's one overlay registry (webview-compose): a menu, the find bar or a popup anywhere in the shell is an
+    // overlay of every page under it, so on macOS, where a press goes to what is natively under the pointer, the page
+    // doesn't take its clicks (#122: the Browser tab's ⋯ menu did nothing on Ahmet's Mac).
+    ProvideWebViewOverlays {
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .focusRequester(rootFocus)
-                .focusable()
-                // Gate the pane/sidebar shortcuts OFF while any destination above Home is up: it
-                // is modal, so a chord it leaves unhandled must NOT bubble here and silently
-                // mutate the layout behind it.
-                .then(
-                    if (ui.overlayOpen) Modifier
-                    else Modifier.shellShortcuts(ui, onNewSession, onMoveToNewWindow).newTerminalShortcut(ui),
-                ),
-        ) {
+        // The web's player element, unseen, at the root: what plays outlives every screen change.
+        dev.supermux.ui.work.AudioSurfaceHost(fleet.audio, audioOutputs)
+        ShortcutRoot(shortcuts, Modifier.fillMaxSize()) {
+            // The window's commands. Those that change the layout are off while a page is up (Settings, Archived,
+            // New session…): it is modal, so a key must not change the layout behind it. New session and Settings
+            // open a page of their own, so they work over another page.
+            RegisterCommand(AppCommands.NewSession, enabled = !ui.launcherOpen) { onNewSession(); true }
+            RegisterCommand(AppCommands.MoveToNewWindow, enabled = !ui.overlayOpen) { onMoveToNewWindow(); true }
+            RegisterCommand(AppCommands.ToggleSidebar, enabled = !ui.overlayOpen) {
+                ui.sidebarCollapsed = !ui.sidebarCollapsed
+                true
+            }
+            RegisterCommand(AppCommands.OpenSettings, enabled = !ui.settingsOpen) { ui.openSettings(); true }
+            // ⌘/ (Ctrl+/): Settings › Keyboard shortcuts. The editor's "comment line" and a terminal's own Ctrl+/ win
+            // where they have the focus (the registry's scopes, #96).
+            RegisterCommand(AppCommands.ShowShortcuts, enabled = ui.settingsSection != SettingsSection.KeyboardShortcuts || !ui.settingsOpen) {
+                ui.openSettings(SettingsSection.KeyboardShortcuts)
+                true
+            }
             // One update check per launch, here rather than in the sidebar's card: on a phone the
             // sidebar comes and goes with every chat, and each return would be another poll.
             val appUpdater = LocalPlatform.current.updates
-            LaunchedEffect(appUpdater) { appUpdater.check() }
+            LaunchedEffect(appUpdater) { appUpdater.keepUpdated() }
+            // After the app's own update (#113): say so once, when the sessions are back.
+            val notices = LocalPlatform.current.notices
+            LaunchedEffect(appUpdater) { appUpdater.announceUpdate(notices, fleet.sessions.map { it.isNotEmpty() }) }
             Box(Modifier.fillMaxSize()) {
                 Box(Modifier.fillMaxSize()) {
 
                     val usageActions = rememberUsageActions(fleet)
-                    // A card whose login was refused: the system login signs in again under
-                    // Providers (the CLI's own login flow), an added account under Accounts.
-                    val usageSignIn: (String, String?) -> Unit = { _, accountId ->
-                        ui.openSettings(if (accountId == null) SettingsSection.Providers else SettingsSection.Accounts)
+                    // A card whose login was refused signs in again on that provider's page, which
+                    // holds both its own login and the added ones (#97).
+                    val usageSignIn: (String, String?) -> Unit = { agent, _ ->
+                        ui.openSettings(SettingsSection.Providers, sub = agent)
                     }
                     // Body shared by the wide footer-anchored popover and the Compact destination.
                     val usagePopoverBody: @Composable () -> Unit = {
@@ -938,15 +1040,11 @@ fun SupermuxApp(
                                 },
                                 footer = run {
                                     {
-                                        // The update card sits on the footer rail, not across the
-                                        // top of the app; it draws nothing until a newer release
-                                        // is found.
-                                        AppUpdateCard(onOpenPage = { ui.openAppUpdate() })
                                         SessionListFooter(
                                             appearance = appearance,
                                             onToggleTheme = onToggleTheme,
                                             onUsage = { ui.openUsage() },
-                                            onDevices = { ui.openSettings(SettingsSection.Devices) },
+                                            onDevices = { ui.openMachine() },
                                             onSettings = { ui.openSettings() },
                                             usageOpen = ui.usageOpen,
                                             onUsageDismiss = { ui.closeUsage() },
@@ -966,7 +1064,17 @@ fun SupermuxApp(
                                                     onAddHost = { ui.openAddHost() },
                                                     onRenameHost = listActions.renameHost,
                                                     onForgetHost = listActions.forgetHost,
+                                                    onOpenHost = openHostPage,
                                                 )
+                                            },
+                                            // The update card sits on the footer rail, not across the
+                                            // top of the app; it draws nothing until a newer release
+                                            // is found. The downloads' list (#95) stands on both.
+                                            card = {
+                                                Column {
+                                                    WhatsNewSlot(whatsNew, onOpen = { ui.openWhatsNew(it) })
+                                                    AppUpdateCard(onOpenPage = { ui.openAppUpdate() })
+                                                }
                                             },
                                         )
                                     }
@@ -999,6 +1107,12 @@ fun SupermuxApp(
                             onNewSession = onNewSession,
                             onOpenSession = { sid -> ui.selectSession(sid) },
                             onShowSidebar = { ui.sidebarCollapsed = false },
+                            // Downloads (#95): the bottom bar's ring, on the rail's own tone above its sheet.
+                            // And the player (#118), above them, while something plays.
+                            aboveFooter = {
+                                dev.supermux.ui.work.AudioRailIcon()
+                                ActivityRailIcon()
+                            },
                             footer = {
                                 HostSwitcher(
                                     hosts = hostViews,
@@ -1012,13 +1126,14 @@ fun SupermuxApp(
                                     onAddHost = { ui.openAddHost() },
                                     onRenameHost = listActions.renameHost,
                                     onForgetHost = listActions.forgetHost,
+                                    onOpenHost = openHostPage,
                                     compact = true,
                                 )
                                 RailSettingsButton(
                                     appearance = appearance,
                                     onToggleTheme = onToggleTheme,
                                     onUsage = { ui.openUsage() },
-                                    onDevices = { ui.openSettings(SettingsSection.Devices) },
+                                    onDevices = { ui.openMachine() },
                                     onSettings = { ui.openSettings() },
                                     usageOpen = ui.usageOpen,
                                     onUsageDismiss = { ui.closeUsage() },
@@ -1036,7 +1151,7 @@ fun SupermuxApp(
                     }
                     val currentRouteOnBack by rememberUpdatedState(routeOnBack)
                     val routeBack = remember(routeSwipe) { RouteBack(routeSwipe) { currentRouteOnBack() } }
-                    CompositionLocalProvider(LocalRouteBack provides routeBack) {
+                    CompositionLocalProvider(LocalRouteBack provides routeBack, LocalOpenWhatsNew provides { ui.openWhatsNew(it) }) {
                     NavDisplay(
                         backStack = ui.backStack,
                         modifier = Modifier.fillMaxSize(),
@@ -1108,6 +1223,39 @@ fun SupermuxApp(
                                 }
                             }
 
+                            entry<Route.WhatsNew>(
+                                metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
+                            ) { route ->
+                                EscapeBox("whats_new_overlay", onEscape = { ui.goBack() }) {
+                                    val cardPrompt = localized(Res.string.whatsnew_card_prompt)
+                                    // A "Try it" is offered only where it can work: a Browser tab needs a workspace on show
+                                    // (and an app whose links open in its own tabs), a card prompt an open chat.
+                                    val actions = WhatsNewAction.entries.filterTo(mutableSetOf()) { a ->
+                                        when (a) {
+                                            WhatsNewAction.Browser -> activeWorkspace != null && appPlatform.caps.linksInBrowserTabs
+                                            WhatsNewAction.CardPrompt -> ui.selectedId != null
+                                            else -> true
+                                        }
+                                    }
+                                    WhatsNewPage(
+                                        version = route.version,
+                                        platform = appPlatform.releasePlatform,
+                                        actions = actions,
+                                        onAction = { action ->
+                                            when (action) {
+                                                WhatsNewAction.Done -> ui.goBack()
+                                                WhatsNewAction.Notes -> appPlatform.openUrl(releaseNotesUrl(route.version))
+                                                WhatsNewAction.Settings -> ui.openSettings()
+                                                WhatsNewAction.ResumeSetting -> ui.openSettings(SettingsSection.Providers, anchor = "limit-resume")
+                                                WhatsNewAction.Browser -> ui.requestBrowserTab()
+                                                WhatsNewAction.CardPrompt -> ui.askAgentForCard(cardPrompt)
+                                            }
+                                        },
+                                        onBack = { ui.goBack() },
+                                    )
+                                }
+                            }
+
                             entry<Route.AddHost>(
                                 metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
                             ) {
@@ -1148,31 +1296,27 @@ fun SupermuxApp(
                                 metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
                             ) { route ->
                                 EscapeBox(
-                                    tag = when (route.section) {
-                                        SettingsSection.EditorLsp -> "lsp_settings_overlay"
-                                        else -> "settings_overlay"
-                                    },
+                                    tag = if (route.section == SettingsSection.Coding) "lsp_settings_overlay" else "settings_overlay",
                                     onEscape = { settingsTryClose?.invoke() ?: run { ui.goBack() } },
                                 ) {
-                                    HostScopedPage(hostViews, activeHostId, fleet::setActiveHost) {
-                                        // Keyed on the HOST only: `route.section` here would
-                                        // remount the hub on every section change — the same
-                                        // mistake the `clazzContentKey` above exists to prevent
-                                        // one level up (E1 review).
-                                        key(activeHostId) {
-                                            SettingsHub(
-                                                section = route.section,
-                                                onSectionChange = { ui.settingsSection = it },
-                                                onBack = { ui.goBack() },
-                                                onRegisterCloseHandler = { settingsTryClose = it },
-                                                // Already inside `key(activeHostId)`, so the hub's
-                                                // own host scoping has nothing left to reset.
-                                                hostKey = null,
-                                                extraContent = settingsExtra,
-                                                content = settingsSection,
-                                            )
-                                        }
-                                    }
+                                    // No hub-wide host picker and no `key(activeHostId)` (#97): every machine is a card in the
+                                    // hub, a page about one machine names it in its scope line, and a pick reloads only the
+                                    // page (the hub keys its slot by the machine). Never `route.section` as a key either —
+                                    // that would remount the hub on every page change, the mistake `clazzContentKey`
+                                    // above exists to prevent (E1 review).
+                                    SettingsHub(
+                                        section = route.section,
+                                        sub = route.sub,
+                                        anchor = route.anchor,
+                                        onSectionChange = { ui.settingsSection = it },
+                                        onPlaceChange = { s, sub -> ui.moveSettings(s, sub) },
+                                        onBack = { ui.goBack() },
+                                        onRegisterCloseHandler = { settingsTryClose = it },
+                                        machines = settingsMachines,
+                                        searchShortcut = settingsSearchShortcut,
+                                        onOpenUsage = { ui.openUsage() },
+                                        content = settingsSection,
+                                    )
                                 }
                             }
 
@@ -1214,7 +1358,7 @@ fun SupermuxApp(
                                                 onProjectSettings = { ref -> projectSettingsTarget = ref.hostId to ref.project.id },
                                                 // Every full-pane route paints its own title +
                                                 // Back at every width (G5's `standalone` rule for
-                                                // `Route.AppUpdate`, now applied to all of them):
+                                                // the old update page, now applied to all of them):
                                                 // Escape is not an affordance on a phone, and a
                                                 // wide window with no visible way out was the G4
                                                 // review's blocker.
@@ -1244,63 +1388,6 @@ fun SupermuxApp(
                                     }
                                 }
                             }
-
-                            entry<Route.Devices>(
-                                metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
-                            ) {
-                                EscapeBox("devices_overlay", onEscape = { ui.goBack() }) {
-                                    HostScopedPage(hostViews, activeHostId, fleet::setActiveHost) {
-                                        key(activeHostId) {
-                                            // The same page as the hub's Devices section, so its
-                                            // dialogs and a minted link survive a rotation (#89).
-                                            RetainedPage {
-                                                DevicesSettingsScreen(
-                                                    actions = rememberDevicesSettingsActions(fleet),
-                                                    onBack = { ui.goBack() },
-                                                    standalone = true,
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            entry<Route.Proxies>(
-                                metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
-                            ) {
-                                EscapeBox("proxies_overlay", onEscape = { ui.goBack() }) {
-                                    HostScopedPage(hostViews, activeHostId, fleet::setActiveHost) {
-                                        key(activeHostId) {
-                                            // As Devices above: the page keeps its dialogs (#89).
-                                            RetainedPage {
-                                                ProxiesSettingsScreen(
-                                                    actions = rememberProxiesSettingsActions(fleet),
-                                                    onBack = { ui.goBack() },
-                                                    standalone = true,
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            entry<Route.Appearance>(
-                                metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
-                            ) {
-                                EscapeBox("appearance_overlay", onEscape = { ui.goBack() }) {
-                                    AppearanceSettingsScreen(onBack = { ui.goBack() }, standalone = true)
-                                }
-                            }
-
-                            entry<Route.AppUpdate>(
-                                metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
-                            ) {
-                                EscapeBox("app_update_overlay", onEscape = { ui.goBack() }) {
-                                    // `standalone`: a full-pane ROUTE, not a hub detail, so the
-                                    // page paints its own title + Back at every width.
-                                    AppUpdateScreen(onBack = { ui.goBack() }, standalone = true)
-                                }
-                            }
                         },
                     )
                     }
@@ -1320,6 +1407,7 @@ fun SupermuxApp(
                 }
             }
         }
+    }
     }
     }
     // Last, so that it is added after every handler above even when the keyboard is already up
@@ -1618,7 +1706,10 @@ private fun ShellHome(
                         val visible = sessionId == ui.selectedId && activeWorkspace == null
                         key(sessionId) {
                             Box(Modifier.keepAlivePanel(visible)) {
-                                chatFallback(session, visible) { ui.selectedId = null }
+                                // Hidden, a chat registers no commands (its find would take ⌘F from the one shown).
+                                CompositionLocalProvider(LocalKeyScopeActive provides (LocalKeyScopeActive.current && visible)) {
+                                    chatFallback(session, visible) { ui.selectedId = null }
+                                }
                             }
                         }
                     }
@@ -1825,6 +1916,8 @@ private fun WorkspacePanel(
     panesBind.launcherPane = launcherPane
     panesBind.sessionNames = sessionNames
     panesBind.unreadSessions = unreadSessions
+    panesBind.downloads = LocalDownloads.current
+    panesBind.audio = dev.supermux.ui.work.LocalAudioPlayer.current
     ui.panesBinds[current.id] = panesBind
     androidx.compose.runtime.DisposableEffect(panesBind) {
         panesBind.holders++
@@ -1877,77 +1970,179 @@ private fun WorkspacePanel(
         ui.forceWorkspaceView = null
     }
 
-    // Ctrl/Cmd+T: a terminal tab in the pane last pressed (else the first), the way "+ → Terminal"
-    // adds one there.
+    // ⌘T / Ctrl+T (Ctrl+Shift+T in a terminal off Apple): a terminal tab in the pane last pressed
+    // (else the first), the way "+ → Terminal" adds one there.
     if (isActive) {
         val addTerminal by rememberUpdatedState {
             if (compact) {
                 addPhoneView(current, ws, wsApp, NewViewKind.TERMINAL)
             } else {
-                val hostId = ui.windows.mainHostId
-                val tree = ui.windows.layoutFor(hostId, layoutSync.tree)
-                val gid = ws.focusedViewId?.let { groupIdOf(tree, it) }
-                    ?: ws.focusedFileViewId?.let { groupIdOf(tree, it) }
-                    ?: firstGroupId(tree)
-                if (gid != null) {
-                    wsApp.addWorkspaceView(current.id, NewViewKind.TERMINAL, gid) { newViewId ->
-                        ui.windows.expandClaim(hostId, setOf(newViewId), layoutSync.tree)
-                    }
-                }
+                addTerminalInWindow(ui, ui.windows.mainHostId, ws, wsApp, current.id)
             }
         }
-        androidx.compose.runtime.DisposableEffect(ui) {
-            val action = { addTerminal() }
-            ui.newTerminalAction = action
-            onDispose { if (ui.newTerminalAction === action) ui.newTerminalAction = null }
+        RegisterCommand(AppCommands.NewTerminal, enabled = !ui.overlayOpen, scope = LocalKeyScope.current?.root) {
+            addTerminal()
+            true
         }
     }
 
-    if (compact) {
-        PhoneWorkspacePanes(
-            current = current,
-            session = workspaceSession,
-            ws = ws,
-            app = wsApp,
-            appFor = appFor,
-            ui = ui,
-            drafts = drafts,
-            shell = rememberShellActions(wsApp, appFor),
-            launcherPane = launcherPane,
-            sessionNames = sessionNames,
-            unreadSessions = unreadSessions,
-            modifier = Modifier.fillMaxSize(),
-        )
-        return
+    // ⌘⇧T / Ctrl+Shift+T (#122): the workspace's last closed Browser tab back, in the pane it left. The workspace's
+    // Browser tabs are watched on every composition, so a tab closed anywhere (its ×, another device) is remembered.
+    val closedTabs = remember(current.id) { dev.supermux.workspace.ClosedBrowserTabs() }
+    val browserPages = ws.viewsById.values.filter { it.kind == "browser" }.associate { v ->
+        v.id to (dev.supermux.browser.BrowserViewState.from(v.state) as? dev.supermux.browser.BrowserViewState.Page)?.url
+    }
+    val layoutNow = ws.layoutSync.tree
+    SideEffect { closedTabs.update(browserPages) { dev.supermux.workspace.groupIdOf(layoutNow, it) } }
+    if (isActive) {
+        val tracker = dev.supermux.ui.keys.LocalKeyScopeTracker.current
+        val reopenTerminal by rememberUpdatedState {
+            if (compact) addPhoneView(current, ws, wsApp, NewViewKind.TERMINAL) else addTerminalInWindow(ui, ui.windows.mainHostId, ws, wsApp, current.id)
+        }
+        RegisterCommand(AppCommands.ReopenClosedTab, enabled = !ui.overlayOpen, scope = LocalKeyScope.current?.root) {
+            when (reopenKeyAction(dev.supermux.ui.keys.currentKeyOs, tracker?.focusIsOpaque == true, !closedTabs.isEmpty)) {
+                ReopenKeyAction.Reopen -> {
+                    val tab = closedTabs.pop()
+                    val opener = ws.browserOpener
+                    if (tab != null && opener != null) {
+                        opener.reopen(tab.url, tab.groupId, onPlaced = { id -> if (compact) wsApp.setActiveView(current.id, id) })
+                    }
+                    tab != null && opener != null
+                }
+                ReopenKeyAction.NewTerminal -> { reopenTerminal(); true }
+                ReopenKeyAction.Nothing -> false
+            }
+        }
     }
 
-    // `tablet_pane_host` is Android's name for "the TREE renderer is mounted, not the phone tab
-    // strip"; `workspace_layout_host` (on the `PaneHost` itself, below) is desktop's name for the
-    // tree. Both survive the merge because they sit on different nodes — Compose's `TestTag` merge
-    // policy keeps the outermost value, so stacking them on one node would silently drop one.
-    Column(Modifier.fillMaxSize().testTag("tablet_pane_host")) {
-        val hostedLayout = ui.windows.layoutFor(ui.windows.mainHostId, localLayout)
-        WorkspacePanes(
-            hostId = ui.windows.mainHostId,
-            layout = hostedLayout,
-            current = current,
-            session = workspaceSession,
-            ws = ws,
-            app = wsApp,
-            appFor = appFor,
-            ui = ui,
-            drafts = drafts,
-            overlayScope = overlayScope,
-            launcherPane = launcherPane,
-            tabDragState = tabDragState,
-            closeCandidate = panesKept.closingViewId?.let { ws.viewsById[it] },
-            onCloseCandidate = { panesKept.askToClose(it) },
-            sessionNames = sessionNames,
-            unreadSessions = unreadSessions,
-            modifier = Modifier.weight(1f).fillMaxWidth().testTag("workspace_layout_host"),
-            onTearOutTab = onTearOutTab,
-            stripChrome = stripChrome,
-        )
+    // What's new's "Open a Browser tab" (#90): an empty one in the focused pane, else the first.
+    if (isActive) {
+        LaunchedEffect(ui.browserTabRequested) {
+            if (!ui.browserTabRequested) return@LaunchedEffect
+            ui.consumeBrowserTabRequest()
+            val opener = ws.browserOpener ?: return@LaunchedEffect
+            val tree = ws.layoutSync.tree
+            val group = ws.focusedViewId?.let { dev.supermux.workspace.groupIdOf(tree, it) }
+                ?: dev.supermux.workspace.firstGroupId(tree)
+                ?: return@LaunchedEffect
+            opener.openEmpty(group, onPlaced = { id -> if (compact) wsApp.setActiveView(current.id, id) })
+        }
+    }
+
+    // Chat links open in this workspace's Browser tabs (#105). The opener is rebuilt every composition, so the
+    // LinkOpener reads the latest one: a new LinkOpener each time would recompose every chat under it.
+    val browserOpener by rememberUpdatedState(ws.browserOpener)
+    val linksInTabs = LocalPlatform.current.caps.linksInBrowserTabs
+    val linkOpener = remember(linksInTabs, current.id, compact) {
+        if (!linksInTabs) null
+        else dev.supermux.ui.browser.LinkOpener { url, source, modified ->
+            browserOpener?.open(url, source, modified, onPlaced = { id -> if (compact) wsApp.setActiveView(current.id, id) })
+        }
+    }
+    val browserIcons = remember(current.id) { mutableStateMapOf<String, String>() }
+    // A Browser tab's screenshot (#122) goes to this workspace's chat: it comes forward with the picture attached in
+    // its composer, unsent, so he writes about it first.
+    val latestWs by rememberUpdatedState(ws)
+    val latestCurrent by rememberUpdatedState(current)
+    // Its comments (#122 3b) go to the same chat: posted at once, or left in its composer.
+    val latestNames by rememberUpdatedState(sessionNames)
+    val toChat = remember(current.id, compact) {
+        object : dev.supermux.ui.browser.BrowserToChat {
+            fun chat() = dev.supermux.ui.browser.screenshotChat(latestWs.viewsById.values, ui.selectedId, latestCurrent.primarySessionId)
+
+            /** The chat view of [sessionId] in this workspace, or the default chat. */
+            fun chatFor(sessionId: String?) = sessionId
+                ?.let { id -> latestWs.viewsById.values.firstOrNull { it.kind == "chat" && it.chatSessionId() == id } }
+                ?: chat()
+
+            fun deliver(images: List<Pair<String, ByteArray>>, text: String, send: Boolean, sessionId: String? = null): Boolean {
+                val w = latestWs
+                val chat = chatFor(sessionId)
+                val sessionId = chat?.chatSessionId() ?: return false
+                if (compact) {
+                    wsApp.setActiveView(current.id, chat.id)
+                } else {
+                    dev.supermux.workspace.groupIdOf(w.layoutSync.tree, chat.id)?.let { g -> w.layoutSync.edit { dev.supermux.workspace.setActiveViewInGroup(it, g, chat.id) } }
+                    w.focusedViewId = chat.id
+                }
+                ui.externalAttach = sessionId to dev.supermux.ui.chat.ComposerExternalAttach(
+                    files = images.map { (name, png) -> dev.supermux.ui.platform.PickedFile(name, "image/png", dev.supermux.net.ByteArrayChunkSource(png)) },
+                    text = text,
+                    send = send,
+                )
+                return true
+            }
+
+            override fun sendImage(png: ByteArray, name: String): Boolean = deliver(listOf(name to png), "", send = false)
+
+            override fun sendMessage(text: String, images: List<Pair<String, ByteArray>>, send: Boolean, sessionId: String?): Boolean =
+                deliver(images, text, send, sessionId)
+
+            override fun recipient(): String? = chat()?.chatSessionId()?.let { id -> latestNames[id] }
+
+            // Phase 4: stored in the chat's session on its host, which tells every client how the agent answers.
+            override suspend fun storeComments(body: dev.supermux.net.BrowserCommentsBody, sessionId: String?): List<dev.supermux.net.BrowserCommentDto>? {
+                val sessionId = chatFor(sessionId)?.chatSessionId() ?: return null
+                return runCatching { wsApp.api.addBrowserComments(sessionId, body) }.getOrNull()?.also(wsApp::rememberBrowserComments)
+            }
+
+            override fun commentStates() = wsApp.browserComments
+
+            override fun chats(): List<Pair<String, String>> =
+                latestWs.viewsById.values.filter { it.kind == "chat" }.mapNotNull { v -> v.chatSessionId()?.let { id -> id to (latestNames[id] ?: id) } }
+                    .distinctBy { it.first }
+        }
+    }
+    CompositionLocalProvider(
+        dev.supermux.ui.browser.LocalLinkOpener provides linkOpener,
+        dev.supermux.ui.browser.LocalBrowserIcons provides browserIcons,
+        dev.supermux.ui.browser.LocalBrowserToChat provides toChat,
+    ) {
+        if (compact) {
+            PhoneWorkspacePanes(
+                current = current,
+                session = workspaceSession,
+                ws = ws,
+                app = wsApp,
+                appFor = appFor,
+                ui = ui,
+                drafts = drafts,
+                shell = rememberShellActions(wsApp, appFor),
+                launcherPane = launcherPane,
+                sessionNames = sessionNames,
+                unreadSessions = unreadSessions,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            // `tablet_pane_host` is Android's name for "the TREE renderer is mounted, not the phone tab
+            // strip"; `workspace_layout_host` (on the `PaneHost` itself, below) is desktop's name for the
+            // tree. Both survive the merge because they sit on different nodes — Compose's `TestTag` merge
+            // policy keeps the outermost value, so stacking them on one node would silently drop one.
+            Column(Modifier.fillMaxSize().testTag("tablet_pane_host")) {
+                val hostedLayout = ui.windows.layoutFor(ui.windows.mainHostId, localLayout)
+                WorkspacePanes(
+                    hostId = ui.windows.mainHostId,
+                    layout = hostedLayout,
+                    current = current,
+                    session = workspaceSession,
+                    ws = ws,
+                    app = wsApp,
+                    appFor = appFor,
+                    ui = ui,
+                    drafts = drafts,
+                    overlayScope = overlayScope,
+                    launcherPane = launcherPane,
+                    tabDragState = tabDragState,
+                    closeCandidate = panesKept.closingViewId?.let { ws.viewsById[it] },
+                    onCloseCandidate = { panesKept.askToClose(it) },
+                    sessionNames = sessionNames,
+                    unreadSessions = unreadSessions,
+                    modifier = Modifier.weight(1f).fillMaxWidth().testTag("workspace_layout_host"),
+                    onTearOutTab = onTearOutTab,
+                    stripChrome = stripChrome,
+                )
+            }
+        }
     }
 }
 
@@ -2036,13 +2231,13 @@ internal fun rememberHostWorkspaceSession(
     ),
     fsRead = { p -> wsApp.workspaceFsRead(current.id, p) },
     fsWrite = { p, content -> wsApp.workspaceFsWrite(current.id, p, content) },
-    postView = { id, state, groupId ->
+    postView = { id, kind, state, groupId ->
         val created = runCatching {
             wsApp.api.addView(
                 current.id,
-                AddViewBody(kind = "editor", state = state, id = id, groupId = groupId),
+                AddViewBody(kind = kind, state = state, id = id, groupId = groupId),
             )
-        }.onFailure { println("[SupermuxApp] open file view failed: $it") }.getOrNull()?.id
+        }.onFailure { println("[SupermuxApp] open $kind view failed: $it") }.getOrNull()?.id
         if (created != null && activateOpenedFile) wsApp.setActiveView(current.id, created)
         created
     },

@@ -160,7 +160,8 @@ static NSArray<NSString *> *WVTrailModes(void) {
     NSMutableArray<NSNumber *> *_waiting;
     int _ticksWaited;                // display ticks the waiting ticks waited for a placement on its way
     WVBackdropView *_backdrop;       // a sibling under every page view, in its superview while this view is
-    NSColor *_backdropColor;         // nil: no backdrop (a transparent page)
+    NSColor *_backdropColor;         // nil: no backdrop (a transparent page without an underlay)
+    NSColor *_underlayColor;         // behind a transparent page, in this view's own layer; nil: none
     NSRect _shownNow;                // where the page shows, points from the content's top-left; empty: nowhere yet
     NSMutableArray<NSValue *> *_trail;       // where it showed before, the same
     NSMutableArray<NSNumber *> *_trailTimes; // when it left each place, CACurrentMediaTime
@@ -218,8 +219,9 @@ static NSArray<NSString *> *WVTrailModes(void) {
     WVInstallAccessibilityBridge(window);
 }
 
-- (void)detachFrom:(NSWindow *)window {
-    if (self.window == window) [self removeFromSuperview];
+- (void)detachFromWindowAt:(jlong)window {
+    // A window that has gone took its content view with it, and this view is in no window now.
+    if ((intptr_t)(__bridge void *)self.window == (intptr_t)window) [self removeFromSuperview];
 }
 
 - (void)viewDidMoveToSuperview {
@@ -380,6 +382,23 @@ static NSArray<NSString *> *WVTrailModes(void) {
     [_trailTimes removeAllObjects];
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(trimTrail) object:nil];
     if (!_backdrop.hidden) _backdrop.hidden = YES;
+}
+
+- (void)setUnderlayColor:(NSColor *)color {
+    _underlayColor = color;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    self.layer.backgroundColor = color.CGColor;
+    [CATransaction commit];
+}
+
+/** The underlay is the backing layer's background: kept there whenever AppKit updates the layer. */
+- (BOOL)wantsUpdateLayer {
+    return YES;
+}
+
+- (void)updateLayer {
+    self.layer.backgroundColor = _underlayColor.CGColor;
 }
 
 - (void)setBackdropColor:(NSColor *)color {

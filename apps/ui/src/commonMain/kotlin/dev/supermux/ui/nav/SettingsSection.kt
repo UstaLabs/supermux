@@ -1,23 +1,18 @@
 package dev.supermux.ui.nav
 
 /**
- * Sections of the Settings hub, in rail order. Moved verbatim out of desktop's `shell/AppShell.kt`
- * — Android reaches most of these through its own top-level routes today ([Route.Usage],
- * [Route.Devices], [Route.Proxies], [Route.Appearance]) and both models stay valid: a section is
- * *where inside Settings* you land, a route is *what full screen* is on the stack.
+ * The pages of Settings (#97, structure C, with #96's Keyboard shortcuts second), in rail order. [Machine] is the active machine's own page: opened from
+ * a machine card or the footer's Devices icon, never a rail row. A route's `section` of null means "just
+ * Settings" (the index on a phone, General on a wide window) — see [Route.Settings].
  */
 enum class SettingsSection(val label: String) {
-    Providers("Providers"),
-    /** Extra logins per agent, picked per chat; auto-switch on a usage limit (slice A3b). */
-    Accounts("Accounts"),
-    Devices("Devices"),
-    System("System"),
-    GitHosting("Git hosting"),
-    Proxies("Proxies"),
-    /** Session worktrees on disk: size, age, owner, manual cleanup (spec 2026-09-22-explicit-worktree-cleanup). */
-    Worktrees("Worktrees"),
-    /** Nightly ~/.mux curator schedule + run-now. */
-    Curator("Curator"),
+    General("General"),
+    /** Every app command and its keys (#96). A rail row only with a hardware keyboard; ⌘/ opens it. */
+    KeyboardShortcuts("Keyboard shortcuts"),
+    Providers("Providers & accounts"),
     Voice("Voice"),
-    EditorLsp("Editor / LSP"),
+    Coding("Coding"),
+    Memory("Memory"),
+    PrivacyLabs("Privacy & labs"),
+    Machine("Machine"),
 }

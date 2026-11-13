@@ -1,0 +1,72 @@
+// The language guards (card #123; scripts/i18n-strings.ts has the rules). A count that rises is new hard-coded UI
+// text; a count that falls means the baseline should be lowered:
+//   bun scripts/i18n-strings.ts --write
+import { expect, test } from "bun:test"
+import { readFileSync } from "node:fs"
+import { catalogs, kotlinSources, repoPath, compare, countHits, parityProblems, parseCatalog, readBaseline, scanRepo, scanText, type Change } from "../scripts/i18n-strings"
+
+const hits = scanRepo()
+const drift = compare(countHits(hits), readBaseline())
+
+function explain(change: Change): string {
+  const lines = hits.filter(h => h.file === change.file).map(h => `    ${h.file}:${h.line}  ${h.text}`)
+  return [`${change.file} ${change.was} → ${change.now}: move the text into composeResources/values/strings.xml`, ...lines].join("\n")
+}
+
+test("no new hard-coded UI text", () => {
+  expect(drift.rose.map(explain)).toEqual([])
+})
+
+test("the baseline only shrinks: lower it when a count falls (bun scripts/i18n-strings.ts --write)", () => {
+  expect(drift.fell.map(c => `${c.file} ${c.was} → ${c.now}`)).toEqual([])
+})
+
+test("every translation has exactly the English keys, with the same placeholders", () => {
+  const all = catalogs()
+  expect(all.length).toBeGreaterThan(0)
+  const problems = all.flatMap(({ english, translations }) => {
+    const en = parseCatalog(readFileSync(english, "utf8"))
+    return Object.entries(translations).flatMap(([lang, path]) =>
+      parityProblems(en, parseCatalog(readFileSync(path, "utf8"))).map(p => `${path} (${lang}): ${p}`),
+    )
+  })
+  expect(problems).toEqual([])
+})
+
+test("strings go through localized(), which follows the language picked in Settings", () => {
+  const direct = kotlinSources()
+    .filter(f => !f.includes("/ui/i18n/"))
+    .flatMap(f => readFileSync(f, "utf8").split("\n").map((t, i) => ({ f, i, t })))
+    .filter(({ t }) => /\b(?:plural)?[sS]tringResource\(/.test(t) && !/^\s*(\/\/|\*)/.test(t))
+    .map(({ f, i, t }) => `${f}:${i + 1}  ${t.trim()}`)
+  expect(direct).toEqual([])
+})
+
+test("paths use / on every OS, as the baseline's keys do (Bun's Glob answers with \\ on Windows)", () => {
+  expect(repoPath("apps\\ui\\src\\commonMain\\kotlin\\A.kt")).toBe("apps/ui/src/commonMain/kotlin/A.kt")
+  expect(kotlinSources().every(f => !f.includes("\\"))).toBe(true)
+})
+
+test("the ui module ships Turkish", () => {
+  expect(catalogs().find(c => c.dir === "apps/ui/src/commonMain/composeResources")?.translations.tr).toBeDefined()
+})
+
+test("UI literals are found; tags, templates and marked lines are not", () => {
+  const kt = (s: string) => scanText("apps/x/A.kt", s).length
+  expect(kt('        Text("Hello there")')).toBe(1)
+  expect(kt('    label = "Theme",')).toBe(1)
+  expect(kt('    KitSectionHead("This app")')).toBe(1)
+  expect(kt('    KitToggleRow(stringResource(Res.string.x),')).toBe(0)
+  expect(kt('    Modifier.testTag("general_theme")')).toBe(0)
+  expect(kt('    Text("${count}")')).toBe(0)
+  expect(kt('    Text("$a · $b")')).toBe(0)
+  expect(kt('    Text("Supermux") // i18n-ok: the brand')).toBe(0)
+  expect(kt('    Text("Supermux") // i18n-ok')).toBe(1)
+  expect(kt('    // Text("old")')).toBe(0)
+})
+
+test("parity reports missing, extra and placeholder drift", () => {
+  const en = parseCatalog('<resources><string name="a">A %1$s</string><string name="b">B</string><plurals name="n"><item quantity="one">%d x</item><item quantity="other">%d xs</item></plurals></resources>')
+  const tr = parseCatalog('<resources><string name="a">A</string><string name="c">C</string><plurals name="n"><item quantity="other">%d x</item></plurals></resources>')
+  expect(parityProblems(en, tr).sort()).toEqual(["missing: b", "not in English: c", "placeholders differ: a (%1$s vs )"])
+})

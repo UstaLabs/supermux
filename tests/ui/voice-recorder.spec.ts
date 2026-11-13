@@ -13,7 +13,7 @@
  */
 
 import type { Browser } from "playwright"
-import { launchBrowser, uiFixture } from "./fixture-env"
+import { launchBrowser, uiFixture, freshPairLink } from "./fixture-env"
 import { byTag, openSeededSession, tap, waitForTextWithin } from "./compose-dom"
 import { forceVoiceStreaming } from "./dictation-stream.spec"
 
@@ -57,7 +57,7 @@ export async function main(): Promise<void> {
       })
     })
 
-    await page.goto(`${fixture.baseUrl}/pair?t=${encodeURIComponent(fixture.token)}`, {
+    await page.goto((await freshPairLink(fixture)).url, {
       waitUntil: "domcontentloaded",
     })
     await openSeededSession(page, fixture.sessionId)

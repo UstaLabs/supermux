@@ -9,7 +9,7 @@ import dev.supermux.ui.platform.ClipboardAccess
 import dev.supermux.ui.platform.FileAccess
 import dev.supermux.ui.platform.FlowNotices
 import dev.supermux.ui.platform.MicCapture
-import dev.supermux.ui.platform.NoAppUpdater
+import dev.supermux.ui.platform.VersionOnlyUpdater
 import dev.supermux.ui.platform.NoopNotificationManager
 import dev.supermux.ui.platform.NotificationManager
 import dev.supermux.ui.platform.PickKind
@@ -51,7 +51,7 @@ val WEB_CAPS = Caps(
     localBroker = false, multiWindow = false, fileSystem = false,
     clipboardImages = true, saveAs = true, walkthrough = true, appearanceControls = true,
     dynamicColor = false, appUpdate = false, terminal = true, scrcpy = false,
-    setupWizard = true,
+    setupWizard = true, linksInBrowserTabs = false, pageScreenshots = false, pageEmulation = false, pagePick = false,
 )
 
 /**
@@ -112,7 +112,9 @@ class WebPlatform(
      *  hashes it, so the package default already resolves to the hashed asset. */
     override fun terminalView(): TerminalViewFactory = WebTerminal
     override fun videoDecoder(): VideoSurfaceFactory? = null
-    override val updates: AppUpdater = NoAppUpdater
+    /** The machine that serves this page updates it; the app only says which build it is (General ▸ App version). */
+    override val updates: AppUpdater = VersionOnlyUpdater(WEB_APP_VERSION)
+    override val releasePlatform: dev.supermux.ui.whatsnew.ReleasePlatform = dev.supermux.ui.whatsnew.ReleasePlatform.Web
     override val notifications: NotificationManager = NoopNotificationManager
     override val windows: WindowHostController? = null
     /**

@@ -1,6 +1,11 @@
 package dev.supermux.ui.chat
 
 import dev.supermux.ui.platform.TtsEngine
+import dev.supermux.ui.work.AudioDockTest
+import dev.supermux.work.AudioItem
+import dev.supermux.work.AudioPlayer
+import dev.supermux.work.DownloadOrigin
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -11,18 +16,39 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** A [TtsEngine] that records the ORDER of what it was asked to do. */
 private class RecordingTts : TtsEngine {
     val events = mutableListOf<String>()
-    override suspend fun speak(text: String) { events.add("speak:$text") }
-    override suspend fun playAudioChunk(bytes: ByteArray) { events.add("chunk:${bytes.size}") }
-    override fun stop() { events.add("stop") }
+
+    /** Speech (and each chunk) lasts until [stop], as a real voice does, instead of ending at once. */
+    var hold = false
+    private var gate = CompletableDeferred<Unit>()
+
+    override suspend fun speak(text: String) {
+        events.add("speak:$text")
+        if (hold) gate.await()
+    }
+    override suspend fun playAudioChunk(bytes: ByteArray) {
+        events.add("chunk:${bytes.size}")
+        if (hold) gate.await()
+    }
+    override fun stop() {
+        events.add("stop")
+        gate.complete(Unit)
+        gate = CompletableDeferred()
+    }
     override fun shutdown() { events.add("shutdown") }
     var urlCapable = false
     override val canPlayUrl: Boolean get() = urlCapable
-    override suspend fun playUrl(url: String) { events.add("url:$url") }
+    override suspend fun playUrl(url: String) {
+        events.add("url:$url")
+        if (hold) gate.await()
+    }
     override fun prepareForTap() { events.add("prepare") }
 }
 
@@ -112,5 +138,242 @@ class MessageTtsStateTest {
         assertTrue(streamed, "fell back to the stream")
         assertTrue(tts.events.none { it.startsWith("url:") }, "got ${tts.events}")
         assertTrue(tts.events.contains("chunk:2"), "got ${tts.events}")
+    }
+
+    // ── read-aloud through the app's player (#118 car 2) ───────────────────────────────────────
+
+    private val origin = DownloadOrigin("s1", "m7")
+    private val note = AudioItem("voice-note.m4a", "/cache/voice-note.m4a", origin, chat = "demo-day-recap", key = "att:h/1")
+
+    @Test fun theOsVoiceIsThePlayersItemWithItsChat() = runTest(dispatcher) {
+        val tts = RecordingTts().apply { hold = true }
+        val player = AudioPlayer(AudioDockTest.FakeOutputs())
+        MessageTts.toggle(tts, "read me please", player, origin, "demo-day-recap")
+        testScheduler.advanceUntilIdle()
+
+        val now = assertNotNull(player.state.value, "reading is what plays")
+        assertEquals("Read aloud · read me please", now.item.title)
+        assertEquals(origin, now.item.origin)
+        assertEquals("demo-day-recap", now.item.chat)
+        assertTrue(now.stopOnly, "the OS voice has no pause, seek or speed")
+        assertTrue(MessageTts.isSpeaking("read me please"))
+        assertTrue(tts.events.contains("speak:read me please"), "got ${tts.events}")
+    }
+
+    @Test fun aLongMessageIsNamedByItsFirstWords() = runTest(dispatcher) {
+        val tts = RecordingTts().apply { hold = true }
+        val player = AudioPlayer(AudioDockTest.FakeOutputs())
+        MessageTts.toggle(tts, "Here is the plan for the demo on Friday and the week after it", player, origin, "chat")
+        testScheduler.advanceUntilIdle()
+        val title = assertNotNull(player.state.value).item.title
+        assertTrue(title.startsWith("Read aloud · Here is the plan"), title)
+        assertTrue(title.endsWith("…"), title)
+        assertTrue(title.length <= 50, title)
+    }
+
+    @Test fun thePlayersCrossStopsTheVoice() = runTest(dispatcher) {
+        val tts = RecordingTts().apply { hold = true }
+        val player = AudioPlayer(AudioDockTest.FakeOutputs())
+        MessageTts.toggle(tts, "read me please", player, origin, "chat")
+        testScheduler.advanceUntilIdle()
+        tts.events.clear()
+
+        player.stop()
+        testScheduler.advanceUntilIdle()
+        assertEquals(listOf("stop"), tts.events, "✕ silences the engine")
+        assertFalse(MessageTts.isSpeaking("read me please"), "the row's 🔊 follows the player")
+        assertNull(player.state.value)
+    }
+
+    @Test fun playingAnAttachmentStopsReadAloud() = runTest(dispatcher) {
+        val tts = RecordingTts().apply { hold = true }
+        val outputs = AudioDockTest.FakeOutputs()
+        val player = AudioPlayer(outputs)
+        MessageTts.toggle(tts, "read me please", player, origin, "chat")
+        testScheduler.advanceUntilIdle()
+        tts.events.clear()
+
+        player.play(note)
+        testScheduler.advanceUntilIdle()
+        assertEquals(listOf("stop"), tts.events)
+        assertFalse(MessageTts.isSpeaking("read me please"))
+        assertEquals(note, player.state.value?.item)
+        assertEquals(listOf("open /cache/voice-note.m4a", "play"), outputs.made.single().calls, "the note plays on")
+    }
+
+    @Test fun readAloudStopsAPlayingAttachment() = runTest(dispatcher) {
+        val tts = RecordingTts().apply { hold = true }
+        val outputs = AudioDockTest.FakeOutputs()
+        val player = AudioPlayer(outputs).apply { play(note) }
+        MessageTts.toggle(tts, "read me please", player, origin, "chat")
+        testScheduler.advanceUntilIdle()
+        assertEquals("release", outputs.made.single().calls.last(), "one thing plays at a time")
+        assertEquals("Read aloud · read me please", player.state.value?.item?.title)
+    }
+
+    @Test fun theEndOfTheVoiceEmptiesThePlayer() = runTest(dispatcher) {
+        val tts = RecordingTts()
+        val player = AudioPlayer(AudioDockTest.FakeOutputs())
+        MessageTts.toggle(tts, "read me please", player, origin, "chat")
+        testScheduler.advanceUntilIdle()
+        assertNull(player.state.value)
+        assertFalse(MessageTts.isSpeaking("read me please"))
+    }
+
+    @Test fun theRowsSpeakerStopsThePlayersReading() = runTest(dispatcher) {
+        val tts = RecordingTts().apply { hold = true }
+        val player = AudioPlayer(AudioDockTest.FakeOutputs())
+        MessageTts.toggle(tts, "read me please", player, origin, "chat")
+        testScheduler.advanceUntilIdle()
+        MessageTts.toggle(tts, "read me please", player, origin, "chat")
+        testScheduler.advanceUntilIdle()
+        assertNull(player.state.value)
+        assertFalse(MessageTts.isSpeaking("read me please"))
+    }
+
+    /** The codex voice's progressive URL plays in the app's player: ❚❚, seek and speed as an attachment. */
+    @Test fun theCodexUrlPlaysThroughThePlayersOutput() = runTest(dispatcher) {
+        val tts = RecordingTts()
+        val outputs = AudioDockTest.FakeOutputs()
+        val player = AudioPlayer(outputs)
+        MessageTts.resolveEngine = { "codex" }
+        MessageTts.speakRemoteStream = { _, _ -> }
+        MessageTts.speakRemoteUrl = { "http://h/speak/audio/x.mp3" }
+        MessageTts.toggle(tts, "read me please", player, origin, "chat")
+        testScheduler.advanceUntilIdle()
+
+        assertTrue(tts.events.none { it.startsWith("url:") }, "not the engine's own player: ${tts.events}")
+        val now = assertNotNull(player.state.value)
+        assertEquals("Read aloud · read me please", now.item.title)
+        assertFalse(now.stopOnly)
+        val out = outputs.made.single()
+        assertEquals(listOf("open http://h/speak/audio/x.mp3", "play"), out.calls)
+        assertTrue(MessageTts.isSpeaking("read me please"))
+
+        player.toggle()
+        player.seek(5_000)
+        player.setSpeed(1.5f)
+        assertEquals(listOf("pause", "seek 5000", "rate 1.5"), out.calls.drop(2))
+        assertTrue(MessageTts.isSpeaking("read me please"), "paused is still this message's reading")
+
+        out.events.onEnded()
+        testScheduler.advanceUntilIdle()
+        assertNull(player.state.value)
+        assertFalse(MessageTts.isSpeaking("read me please"), "the row's 🔊 follows the player")
+    }
+
+    /** Outputs that play local files only (macOS's AVAudioPlayer): they cannot stream the codex voice's URL. */
+    private class FilesOnlyOutputs : dev.supermux.work.AudioOutputs {
+        val inner = AudioDockTest.FakeOutputs()
+        override val canStreamUrl: Boolean get() = false
+        override fun create(events: dev.supermux.work.AudioOutput.Events) = inner.create(events)
+    }
+
+    /**
+     * REGRESSION (#118 car 2 on macOS): where the player's outputs cannot stream a URL, the codex voice plays as before
+     * the player — the engine's own URL player — and the dock shows the reading with ✕ only, as the OS voice.
+     */
+    @Test fun theCodexUrlGoesToTheEngineWhereTheOutputsCannotStream() = runTest(dispatcher) {
+        val tts = RecordingTts().apply { urlCapable = true; hold = true }
+        val outputs = FilesOnlyOutputs()
+        val player = AudioPlayer(outputs)
+        MessageTts.resolveEngine = { "codex" }
+        MessageTts.speakRemoteStream = { _, _ -> }
+        MessageTts.speakRemoteUrl = { "http://h/speak/audio/x.mp3" }
+        MessageTts.toggle(tts, "read me please", player, origin, "chat")
+        testScheduler.advanceUntilIdle()
+
+        assertTrue(tts.events.contains("url:http://h/speak/audio/x.mp3"), "the engine plays it: ${tts.events}")
+        assertTrue(outputs.inner.made.isEmpty(), "not the player's output")
+        val now = assertNotNull(player.state.value, "the dock shows the reading")
+        assertEquals("Read aloud · read me please", now.item.title)
+        assertTrue(now.stopOnly, "✕ only")
+        assertTrue(MessageTts.isSpeaking("read me please"))
+
+        player.stop()
+        testScheduler.advanceUntilIdle()
+        assertTrue(tts.events.contains("stop"), "✕ silences the engine: ${tts.events}")
+        assertFalse(MessageTts.isSpeaking("read me please"))
+    }
+
+    /** Neither the outputs nor the engine can play a URL: the chunk stream, still shown in the dock with ✕. */
+    @Test fun theCodexVoiceFallsBackToChunksWhereNothingStreams() = runTest(dispatcher) {
+        val tts = RecordingTts().apply { hold = true }
+        val outputs = FilesOnlyOutputs()
+        val player = AudioPlayer(outputs)
+        var asked = false
+        MessageTts.resolveEngine = { "codex" }
+        MessageTts.speakRemoteStream = { _, onChunk -> onChunk(byteArrayOf(1, 2, 3)) }
+        MessageTts.speakRemoteUrl = { asked = true; "http://h/speak/audio/x.mp3" }
+        MessageTts.toggle(tts, "read me please", player, origin, "chat")
+        repeat(100) {
+            testScheduler.advanceUntilIdle()
+            if (tts.events.contains("chunk:3")) return@repeat
+            Thread.sleep(10)
+        }
+        assertFalse(asked, "no URL to ask for")
+        assertTrue(tts.events.contains("chunk:3"), "got ${tts.events}")
+        assertTrue(outputs.inner.made.isEmpty())
+        assertTrue(assertNotNull(player.state.value).stopOnly)
+    }
+
+    @Test fun anAttachmentReplacesTheCodexUrl() = runTest(dispatcher) {
+        val tts = RecordingTts()
+        val outputs = AudioDockTest.FakeOutputs()
+        val player = AudioPlayer(outputs)
+        MessageTts.resolveEngine = { "codex" }
+        MessageTts.speakRemoteStream = { _, _ -> }
+        MessageTts.speakRemoteUrl = { "http://h/speak/audio/x.mp3" }
+        MessageTts.toggle(tts, "read me please", player, origin, "chat")
+        testScheduler.advanceUntilIdle()
+        player.play(note)
+        testScheduler.advanceUntilIdle()
+        assertEquals("release", outputs.made[0].calls.last())
+        assertFalse(MessageTts.isSpeaking("read me please"))
+    }
+
+    /** iOS and the web stop read-aloud when the app goes to the background: the player's reading stops too. */
+    @Test fun stoppingReadAloudStopsThePlayersReading() = runTest(dispatcher) {
+        val tts = RecordingTts()
+        val outputs = AudioDockTest.FakeOutputs()
+        val player = AudioPlayer(outputs)
+        MessageTts.resolveEngine = { "codex" }
+        MessageTts.speakRemoteStream = { _, _ -> }
+        MessageTts.speakRemoteUrl = { "http://h/speak/audio/x.mp3" }
+        MessageTts.toggle(tts, "read me please", player, origin, "chat")
+        testScheduler.advanceUntilIdle()
+        MessageTts.stop(tts)
+        assertNull(player.state.value)
+        assertEquals("release", outputs.made.single().calls.last())
+    }
+
+    @Test fun stoppingReadAloudLeavesAnAttachmentPlaying() = runTest(dispatcher) {
+        val tts = RecordingTts()
+        val player = AudioPlayer(AudioDockTest.FakeOutputs())
+        MessageTts.toggle(tts, "read me please", player, origin, "chat")
+        testScheduler.advanceUntilIdle()
+        player.play(note)
+        MessageTts.stop(tts)
+        assertEquals(note, player.state.value?.item)
+    }
+
+    /** The chunk stream (an older broker) is the player's item too, with ✕ only. */
+    @Test fun theCodexChunksAreAStopOnlyItem() = runTest(dispatcher) {
+        val tts = RecordingTts().apply { hold = true }
+        val player = AudioPlayer(AudioDockTest.FakeOutputs())
+        MessageTts.resolveEngine = { "codex" }
+        MessageTts.speakRemoteStream = { _, onChunk -> onChunk(byteArrayOf(1, 2)) }
+        MessageTts.speakRemoteUrl = { null }
+        MessageTts.toggle(tts, "read me please", player, origin, "chat")
+        repeat(100) {
+            testScheduler.advanceUntilIdle()
+            if (tts.events.contains("chunk:2")) return@repeat
+            Thread.sleep(10)
+        }
+        val now = assertNotNull(player.state.value)
+        assertTrue(now.stopOnly)
+        tts.events.clear()
+        player.stop()
+        assertTrue(tts.events.contains("stop"), "got ${tts.events}")
     }
 }

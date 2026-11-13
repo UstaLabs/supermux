@@ -5,6 +5,7 @@ import dev.supermux.desktop.testDeps
 
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -209,29 +210,31 @@ class SystemSettingsHubTest {
     }
 
     @Test fun settings_hub_opens_system_section_and_loads() = runComposeUiTest {
-        val ui = ShellUiState().apply { openSettings(SettingsSection.System) }
+        // #97 Step 2: System is the machine page's header; the old address lands there.
+        val ui = ShellUiState().apply { openSettings(SettingsSection.Machine, sub = "status") }
         val app = appForSystem()
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                TestAppShell(app, ui)
+                TestAppShell(app, ui, online = true)
             }
         }
         waitForIdle()
         onNodeWithTag("settings_overlay").assertIsDisplayed()
         onNodeWithTag("settings_hub").assertIsDisplayed()
-        onNodeWithTag("system_settings_screen").assertIsDisplayed()
+        onNodeWithTag("machine_page").assertIsDisplayed()
         waitUntil(timeoutMillis = 5_000) {
             try {
-                onNodeWithText("supermux 1.2.3").assertIsDisplayed()
+                onNodeWithTag("machine_status").assertTextContains("supermux 1.2.3", substring = true)
                 true
             } catch (_: Throwable) {
                 false
             }
         }
-        onNodeWithTag("settings_section_system").assertIsDisplayed()
+        onNodeWithTag("settings_section_machine").assertDoesNotExist()
+        assertEquals(SettingsSection.Machine, ui.settingsSection)
     }
 
-    @Test fun rail_switches_from_agents_to_system() = runComposeUiTest {
+    @Test fun the_machine_page_opens_status_from_agents() = runComposeUiTest {
         val ui = ShellUiState().apply { openSettings(SettingsSection.Providers) }
         val engine = MockEngine { req ->
             val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
@@ -260,7 +263,7 @@ class SystemSettingsHubTest {
         )
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                TestAppShell(app, ui)
+                TestAppShell(app, ui, online = true)
             }
         }
         waitForIdle()
@@ -272,24 +275,26 @@ class SystemSettingsHubTest {
                 false
             }
         }
-        onNodeWithTag("settings_section_system").performClick()
+        // #97 Step 2: the status is the machine page's own header now, not a sub-page.
+        ui.openSettings(SettingsSection.Machine)
         waitForIdle()
-        assertEquals(SettingsSection.System, ui.settingsSection)
+        assertEquals(SettingsSection.Machine, ui.settingsSection)
         waitUntil(timeoutMillis = 5_000) {
             try {
-                onNodeWithText("supermux 4.5.6").assertIsDisplayed()
+                onNodeWithTag("machine_status").assertTextContains("supermux 4.5.6", substring = true)
                 true
             } catch (_: Throwable) {
                 false
             }
         }
-        onNodeWithTag("settings_hub_back").assertIsDisplayed()
+        onNodeWithTag("machine_restart").assertIsDisplayed()
     }
 
     @Test fun multi_host_keying_reloads_system_per_active_host() = runComposeUiTest {
         val statusA = """{"current":"host-a-1.0","commit":"aaaaaaaa","mode":"binary","state":"idle","updateAvailable":false}"""
         val statusB = """{"current":"host-b-2.0","commit":"bbbbbbbb","mode":"docker","state":"idle","updateAvailable":false}"""
         val scope = TestScope(UnconfinedTestDispatcher())
+        val conns = mutableListOf<(Boolean) -> Unit>()
         val store = PairedHostStore(
             object : HostPersistence {
                 var hosts = mutableListOf(
@@ -319,6 +324,7 @@ class SystemSettingsHubTest {
             scope = scope,
             deps = testDeps(),
             appFactory = { url, token, onConn ->
+                conns += onConn
                 val statusJson = when {
                     url.contains("a.relay") -> statusA
                     else -> statusB
@@ -343,7 +349,9 @@ class SystemSettingsHubTest {
                 )
             },
         )
-        val ui = ShellUiState().apply { openSettings(SettingsSection.System) }
+        // The machine page loads a machine's parts only while it is online.
+        conns.forEach { it(true) }
+        val ui = ShellUiState().apply { openMachine("updates") }
         val primary = fleet.appForRecord("h1")!!
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
@@ -353,7 +361,7 @@ class SystemSettingsHubTest {
         waitForIdle()
         waitUntil(timeoutMillis = 5_000) {
             try {
-                onNodeWithText("supermux host-a-1.0").assertIsDisplayed()
+                onNodeWithTag("machine_status").assertTextContains("supermux host-a-1.0", substring = true)
                 true
             } catch (_: Throwable) {
                 false
@@ -362,32 +370,23 @@ class SystemSettingsHubTest {
         fleet.setActiveHost("h2")
         waitUntil(timeoutMillis = 5_000) {
             try {
-                onNodeWithText("supermux host-b-2.0").assertIsDisplayed()
+                onNodeWithTag("machine_status").assertTextContains("supermux host-b-2.0", substring = true)
                 true
             } catch (_: Throwable) {
                 false
             }
         }
-        onNodeWithText("supermux host-a-1.0").assertDoesNotExist()
+        onNodeWithTag("machine_status").assertTextContains("supermux host-b-2.0", substring = true)
         fleet.close()
     }
 
     @Test fun open_settings_system_selects_section() {
         val ui = ShellUiState()
-        ui.openSettings(SettingsSection.System)
+        ui.openSettings(SettingsSection.Machine, sub = "status")
+        assertEquals(dev.supermux.ui.nav.Route.Settings(SettingsSection.Machine, anchor = "updates"), ui.currentRoute)
         assertTrue(ui.settingsOpen)
-        assertEquals(SettingsSection.System, ui.settingsSection)
+        assertEquals(SettingsSection.Machine, ui.settingsSection)
         assertTrue(ui.overlayOpen)
         assertFalse(ui.launcherOpen)
-        assertFalse(ui.appUpdateOpen)
-    }
-
-    @Test fun open_settings_system_closes_app_update_overlay() {
-        val ui = ShellUiState()
-        ui.openAppUpdate()
-        assertTrue(ui.appUpdateOpen)
-        ui.openSettings(SettingsSection.System)
-        assertTrue(ui.settingsOpen)
-        assertFalse(ui.appUpdateOpen)
     }
 }

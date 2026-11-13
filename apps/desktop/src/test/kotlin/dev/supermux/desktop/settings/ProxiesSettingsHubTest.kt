@@ -1,6 +1,5 @@
-// Cluster E4 moved [dev.supermux.ui.settings.ProxiesSettingsScreen] and its screen-level suite into
-// `:ui` (`ProxiesSettingsScreenTest`). What stays here is the `AppShell` settings overlay opening
-// on the Proxies section — desktop-only chrome.
+// The machine page's Shared links (#97 Step 2) through desktop's `AppShell` settings overlay: the old Proxies
+// address lands on the machine page and its links load. The page's own behaviour is `:ui`'s `MachinePartsTest`.
 package dev.supermux.desktop.settings
 
 import dev.supermux.desktop.testDeps
@@ -95,19 +94,21 @@ class ProxiesSettingsHubTest {
     }
 
     @Test fun settings_hub_opens_proxies_section() = runComposeUiTest {
-        val ui = ShellUiState().apply { openSettings(SettingsSection.Proxies) }
+        // #97 Step 2: Proxies is the machine page's Shared links; the old address lands there.
+        val ui = ShellUiState().apply { openSettings(SettingsSection.Machine, sub = "links") }
         val (app, _) = appForProxies()
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                TestAppShell(app, ui)
+                TestAppShell(app, ui, online = true)
             }
         }
         waitForIdle()
         onNodeWithTag("settings_overlay").assertIsDisplayed()
-        onNodeWithTag("settings_section_proxies").assertIsDisplayed()
+        onNodeWithTag("settings_section_machine").assertDoesNotExist()
         waitUntil(timeoutMillis = 5_000) {
             try {
-                onNodeWithTag("proxies_settings_screen").assertIsDisplayed()
+                onNodeWithTag("machine_page").assertIsDisplayed()
+                onNodeWithTag("proxy_row_app.example.local").assertExists()
                 true
             } catch (_: Throwable) {
                 false

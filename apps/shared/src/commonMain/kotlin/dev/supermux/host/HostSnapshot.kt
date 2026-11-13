@@ -33,4 +33,12 @@ data class HostSnapshot(
     val workspaces: List<WorkspaceDto> = emptyList(),
     val projects: List<ProjectDto> = emptyList(),
     val lastMessages: Map<String, LogEntry> = emptyMap(),
+    /**
+     * Card #121: the newest messages of the most recently active chats ([recentLogs]), so opening
+     * one draws its conversation at once, even offline. A chat not in here shows its [lastMessages]
+     * entry until its history loads.
+     */
+    val recentLogs: Map<String, List<LogEntry>> = emptyMap(),
+    /** Card #121: each chat's read mark (ISO), so a saved chat does not show unread until the snapshot says so. */
+    val lastRead: Map<String, String> = emptyMap(),
 )

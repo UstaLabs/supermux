@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "fs"
 import { extname, basename, join, normalize, sep } from "path"
 import { randomBytes } from "crypto"
 import type { FileStore } from "../files/store"
+import { files } from "@supermux/platform"
 
 export type DownloadableApi = {
   token?: string
@@ -35,7 +36,13 @@ export async function resolveDownloadAttachment(opts: {
   return { path, via: "telegram" }
 }
 
-const TELEGRAM_FILE_BASE = "https://api.telegram.org/file/bot"
+/**
+ * The Telegram Bot API server the bot talks to and fetches its files from: MUX_TELEGRAM_API_ROOT (a self-hosted Bot
+ * API server, a test's stub), else Telegram's own.
+ */
+export function telegramApiRoot(env: Record<string, string | undefined> = process.env): string {
+  return env.MUX_TELEGRAM_API_ROOT?.trim().replace(/\/+$/, "") || "https://api.telegram.org"
+}
 
 export async function downloadAttachment(api: DownloadableApi, file_id: string, inboxDir: string): Promise<string> {
   const meta = await api.getFile(file_id)
@@ -44,7 +51,7 @@ export async function downloadAttachment(api: DownloadableApi, file_id: string, 
   // Telegram's file_path is server-controlled but should be a relative subpath.
   // Reject traversal attempts — defense in depth.
   const fp = meta.file_path
-  if (fp.startsWith("/") || fp.includes("..") || normalize(fp) !== fp.split("/").join(sep)) {
+  if (fp.startsWith("/") || fp.includes("..") || normalize(fp) !== fp.split("/").join(sep)) { // platform-ok: Telegram's file_path, a URL path (/ by definition)
     throw new Error(`invalid file_path from telegram: ${JSON.stringify(fp)}`)
   }
 
@@ -53,16 +60,16 @@ export async function downloadAttachment(api: DownloadableApi, file_id: string, 
     bytes = await api.fetchFile(fp)
   } else {
     if (!api.token) throw new Error("downloadAttachment: no token and no fetchFile")
-    const url = `${TELEGRAM_FILE_BASE}${api.token}/${fp}`
+    const url = `${telegramApiRoot()}/file/bot${api.token}/${fp}`
     const res = await fetch(url)
     if (!res.ok) throw new Error(`telegram file fetch failed: ${res.status} ${res.statusText}`)
     bytes = Buffer.from(await res.arrayBuffer())
   }
 
-  mkdirSync(inboxDir, { recursive: true, mode: 0o700 })
+  files.mkdirPrivate(inboxDir)
   const ext = extname(basename(fp)) || ""
   const unique = `${Date.now()}-${randomBytes(4).toString("hex")}${ext}`
   const outPath = join(inboxDir, unique)
-  writeFileSync(outPath, bytes, { mode: 0o600 })
+  files.writePrivate(outPath, bytes)
   return outPath
 }

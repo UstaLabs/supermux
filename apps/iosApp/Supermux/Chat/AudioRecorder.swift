@@ -37,6 +37,7 @@ final class AudioRecorder {
             try session.setCategory(.playAndRecord, mode: .default)
             try session.setActive(true)
         } catch { return false }
+        AudioCapture.live = true
 
         let file = FileManager.default.temporaryDirectory
             .appendingPathComponent("voice-\(UUID().uuidString).wav")
@@ -113,6 +114,7 @@ final class AudioRecorder {
         if let url { try? FileManager.default.removeItem(at: url) }
         recorder = nil; url = nil
         isRecording = false; elapsed = 0
+        AudioCapture.live = false
         let session = AVAudioSession.sharedInstance()
         try? session.setActive(false, options: .notifyOthersOnDeactivation)
         // Hand the category back. `.playAndRecord` routes playback to the receiver rather than the

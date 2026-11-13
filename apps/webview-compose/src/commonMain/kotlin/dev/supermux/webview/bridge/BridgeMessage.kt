@@ -12,7 +12,12 @@ import kotlinx.serialization.json.put
 
 /** One message on the page↔host bridge (spec §5). Both sides can call, reply and post events. */
 internal sealed interface BridgeMessage {
-    data class Call(val id: Long, val method: String, val params: JsonElement = JsonNull) : BridgeMessage
+    /**
+     * [clicked] is the click verdict a page's `hostBridge.callAfterClick` carries (`"c"`): whether a trusted click on a
+     * button in that document came within the last second, unused (see [WebBridge.handleAfterButtonClick]). Null for a
+     * plain `call`, and for every call from the host.
+     */
+    data class Call(val id: Long, val method: String, val params: JsonElement = JsonNull, val clicked: Boolean? = null) : BridgeMessage
     data class Reply(val id: Long, val result: JsonElement? = null, val error: String? = null) : BridgeMessage
     data class Event(val name: String, val data: JsonElement = JsonNull) : BridgeMessage
 }
@@ -25,7 +30,8 @@ internal data class Envelope(val message: BridgeMessage, val to: String? = null,
 
 /**
  * The wire format shared with the page-side shim ([BridgeShim]):
- * - a call is `{"t":"call","id":…,"m":…,"p":…}`;
+ * - a call is `{"t":"call","id":…,"m":…,"p":…}`, and a page's `callAfterClick` adds its click verdict, `"c":true|false`
+ *   (only JSON `true` is a click);
  * - a reply is `{"t":"reply","id":…,"r":…}` or `{"t":"reply","id":…,"e":…}`;
  * - an event is `{"t":"event","n":…,"d":…}`.
  *
@@ -66,6 +72,7 @@ internal object BridgeCodec {
                     put("id", message.id)
                     put("m", message.method)
                     put("p", message.params)
+                    message.clicked?.let { put("c", it) }
                 }
                 is BridgeMessage.Reply -> {
                     put("t", "reply")
@@ -98,7 +105,12 @@ internal object BridgeCodec {
         }
         val obj = element as? JsonObject ?: return null
         val message = when (obj.string("t")) {
-            "call" -> BridgeMessage.Call(obj.long("id") ?: return null, obj.string("m") ?: return null, obj["p"] ?: JsonNull)
+            "call" -> BridgeMessage.Call(
+                obj.long("id") ?: return null,
+                obj.string("m") ?: return null,
+                obj["p"] ?: JsonNull,
+                clicked = obj["c"]?.let { c -> c is JsonPrimitive && !c.isString && c.content == "true" },
+            )
             "reply" -> {
                 val id = obj.long("id") ?: return null
                 val error = obj["e"]

@@ -22,6 +22,7 @@ import { agyPromptBlocks, antigravityAttachments, loadAntigravityState, removeAn
 import { createAntigravityNormalizer } from "./normalize.js"
 import { agyTransport, type AgyExit, type AgyTransport } from "./transport.js"
 import { antigravityUpdaterEnv } from "./updater.js"
+import { files, host } from "@supermux/platform"
 
 export { createAntigravityNormalizer, type AntigravityNormalizer } from "./normalize.js"
 export { antigravityUpdaterEnv } from "./updater.js"
@@ -282,7 +283,7 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
       if (!accountCli) return userCli
       // Checked before mkdir: a misconfigured value never creates anything under the real ~/.gemini.
       assertAccountCliDir(accountCli, home.user)
-      mkdirSync(accountCli, { recursive: true, mode: 0o700 })
+      files.mkdirPrivate(accountCli)
       shareAntigravityHistory(accountCli, userCli)
       return accountCli
     }
@@ -309,7 +310,7 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
       const launch = antigravityContextLaunch(context.sessionContext, { shadowHome: home.shadow, userHome: home.user })
       normalizer.setServerAliases(launch.serverAliases)
       env.HOME = home.shadow
-      if (process.platform === "win32") env.USERPROFILE = home.shadow
+      if (host.windows()) env.USERPROFILE = home.shadow
       Object.assign(env, antigravityUpdaterEnv())
       const epoch = Date.now().toString(36)
       normalizer.newGeneration(epoch)

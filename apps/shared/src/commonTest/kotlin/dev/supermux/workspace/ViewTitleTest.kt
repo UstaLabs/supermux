@@ -35,4 +35,14 @@ class ViewTitleTest {
     fun aFileTabOnAWindowsHostIsNamedAfterItsFile() {
         assertEquals("Main.kt", viewTitle(view("editor", mapOf("mode" to "file", "path" to "C:\\Users\\me\\proj\\src\\Main.kt"))))
     }
+
+    @Test
+    fun aBrowserTabIsNamedAfterItsPage() {
+        // The pane writes the page's title to the view, so every client's tab shows it.
+        assertEquals("Vite", viewTitle(view("browser", mapOf("url" to "https://vitejs.dev/guide/")).copy(title = "Vite")))
+        // Before the page has a title: its site, or the port on the host.
+        assertEquals("vitejs.dev", viewTitle(view("browser", mapOf("url" to "https://vitejs.dev/guide/"))))
+        assertEquals("localhost:5173", viewTitle(view("browser", mapOf("url" to "http://localhost:5173/login"))))
+        assertEquals("New tab", viewTitle(view("browser", emptyMap())))
+    }
 }

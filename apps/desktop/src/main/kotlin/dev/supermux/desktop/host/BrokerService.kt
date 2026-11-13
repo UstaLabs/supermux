@@ -385,8 +385,15 @@ Terminal=false
      * Pure. [env] is the text that holds a definition's env (null: not on disk); [marked]: the app
      * wrote the definition ([MANAGED_MARKER]); [legacy]: it is 1.0.0's keep-alive.
      */
+    /** An env file that holds nothing: missing (null), empty, blank or zeros. */
+    private fun isBrokenEnv(env: String?): Boolean = env == null || env.all { it == '\u0000' || it.isWhitespace() }
+
     internal fun ownership(env: String?, marked: Boolean, legacy: Boolean, me: Owner): Ownership = when {
         legacy -> Ownership.LEGACY
+        // Our task's env file gone, or written but lost (a power cut left it zeros or empty, #113): ours and broken, so
+        // the next install rewrites it. The file is per user, so nothing says another copy wrote it; taking it for
+        // another copy's would leave the app no way to start.
+        marked && isBrokenEnv(env) -> Ownership.OURS
         env != null && INSTALL_ENV in env -> if (me.id in env) Ownership.OURS else Ownership.OTHER
         marked && me.ownsUnstamped -> Ownership.OURS
         else -> Ownership.OTHER
@@ -406,7 +413,8 @@ Terminal=false
     private class Slot(
         val kind: Kind, val path: Path, val text: String, val envPath: Path, val env: String?, val marked: Boolean, val legacy: Boolean,
     ) {
-        val unstamped: Boolean get() = marked && !legacy && (env == null || INSTALL_ENV !in env)
+        /** Written before install ids: one to stamp. A broken env file is not ([isBrokenEnv]): the next install rewrites it. */
+        val unstamped: Boolean get() = marked && !legacy && !isBrokenEnv(env) && INSTALL_ENV !in env!!
 
         fun ownership(me: Owner): Ownership = BrokerService.ownership(env, marked, legacy, me)
     }
@@ -648,7 +656,13 @@ Terminal=false
      * created private and then moved over the old one, so it is never readable by others, not even
      * for a moment, and a crash never leaves it half-written.
      */
-    internal fun writePrivate(file: Path, text: String, charset: java.nio.charset.Charset = Charsets.UTF_8) {
+    internal fun writePrivate(
+        file: Path,
+        text: String,
+        charset: java.nio.charset.Charset = Charsets.UTF_8,
+        /** Flushes the written temp file to disk before the move, so a power cut can't leave the file zeroed (#113). */
+        sync: (Path) -> Unit = { p -> java.nio.channels.FileChannel.open(p, java.nio.file.StandardOpenOption.WRITE).use { it.force(true) } },
+    ) {
         val dir = file.parent
         Files.createDirectories(dir)
         val posix = "posix" in file.fileSystem.supportedFileAttributeViews()
@@ -659,6 +673,7 @@ Terminal=false
         }
         try {
             Files.writeString(tmp, text, charset)
+            sync(tmp)
             Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
         } finally {
             Files.deleteIfExists(tmp)
@@ -828,12 +843,27 @@ Terminal=false
         return gone && (pipe == null || awaitLockReleased(env, pipe) != false)
     }
 
+    /**
+     * Tells our running broker that its stop, coming next, is a restart (POST /internal/expect-restart with its per-boot
+     * token): its graceful shutdown then leaves the agents running, and the broker that comes back re-attaches them, so a
+     * turn in flight goes on (#29). The app restarts the broker itself (launchctl, systemctl, a child it stops and starts
+     * again), so the broker cannot tell that stop from a plain one. True when it took note (204); no token, an older
+     * broker or none: false, and it is stopped as before.
+     */
+    fun expectRestart(env: OsEnv, stateDir: Path, port: Int): Boolean {
+        val token = stopToken(stateDir) ?: return false
+        return env.postLocal("http://127.0.0.1:$port/internal/expect-restart", mapOf(STOP_TOKEN_HEADER to token)) == 204
+    }
+
     /** The stop request: true when the broker accepted it (202). No token (an older broker): false, nothing sent. */
     private fun requestStop(env: OsEnv, stateDir: Path, port: Int): Boolean {
-        val token = runCatching { Files.readString(stateDir.resolve(STOP_TOKEN_FILE)).trim() }.getOrNull()
-        if (token.isNullOrEmpty()) return false
+        val token = stopToken(stateDir) ?: return false
         return env.postLocal("http://127.0.0.1:$port/internal/stop", mapOf(STOP_TOKEN_HEADER to token)) == 202
     }
+
+    /** The running broker's per-boot token for its local requests (stop-token in [stateDir]); null before it wrote one. */
+    private fun stopToken(stateDir: Path): String? =
+        runCatching { Files.readString(stateDir.resolve(STOP_TOKEN_FILE)).trim() }.getOrNull()?.takeIf { it.isNotEmpty() }
 
     /** The broker broker.pid names, if it runs as a broker (never an agent's `… shim` / `… credential`). */
     private fun pidFileBroker(stateDir: Path?, procs: List<WinProcess>): Long? {
@@ -964,6 +994,80 @@ Terminal=false
         val pid = f[0].trim().toLongOrNull() ?: return@mapNotNull null
         WinProcess(pid, f[1].trim().toLongOrNull() ?: 0, f[2].trim(), f.getOrElse(3) { "" })
     }.toList()
+
+    /** A process holding a port on Windows (#113). [stale]: a leftover of a broker that has exited, ours to stop. */
+    data class PortHolder(val pid: Long, val name: String, val commandLine: String, val stale: Boolean)
+
+    /** The pids that own [port]'s listener, one a line. No double quotes in the script: Java does not escape them on Windows. */
+    internal fun portOwnersArgv(port: Int): List<String> = listOf(
+        "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
+        "Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | ForEach-Object { [string]\$_.OwningProcess }",
+    )
+
+    /** Every process, as [listWindowsProcessesArgv] lists its few: `pid TAB parentPid TAB name TAB commandLine`. */
+    internal fun listAllProcessesArgv(): List<String> = listOf(
+        "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
+        "Get-CimInstance Win32_Process | ForEach-Object { [string]\$_.ProcessId + [char]9 + [string]\$_.ParentProcessId + " +
+            "[char]9 + \$_.Name + [char]9 + [string]\$_.CommandLine }",
+    )
+
+    /**
+     * Pure. Who holds a port whose listener [owners] made. A live owner is named, never stale: it is a running program
+     * (a broker still stopping, or another app). A gone owner's listener lives on in a process that kept its handle: its
+     * supermux descendants (keepers, the agents' shims, mux-sessiond), found through the parent pids Windows keeps after
+     * a parent exits, are the stale holders. A gone owner with none of those is still named, by its pid.
+     */
+    fun portHolders(owners: List<Long>, procs: List<WinProcess>): List<PortHolder> {
+        val byPid = procs.associateBy { it.pid }
+        val children = procs.groupBy { it.parentPid }
+        return owners.distinct().flatMap { owner ->
+            byPid[owner]?.let { return@flatMap listOf(PortHolder(owner, it.name, it.commandLine, stale = false)) }
+            val tree = mutableListOf<WinProcess>()
+            val queue = ArrayDeque(listOf(owner))
+            val seen = mutableSetOf(owner)
+            while (queue.isNotEmpty()) {
+                for (c in children[queue.removeFirst()].orEmpty()) if (seen.add(c.pid)) { tree += c; queue += c.pid }
+            }
+            tree.filter { isSupermuxImage(it.name) }.sortedBy { it.pid }.map { PortHolder(it.pid, it.name, it.commandLine, stale = true) }
+                .ifEmpty { listOf(PortHolder(owner, "", "", stale = false)) }
+        }.distinctBy { it.pid }
+    }
+
+    private fun isSupermuxImage(name: String) =
+        name.equals(WINDOWS_BROKER_EXE, ignoreCase = true) || name.equals("mux-sessiond.exe", ignoreCase = true)
+
+    /** What holds [port] on Windows ([portHolders]); empty when nothing does, it can't be told, or elsewhere. */
+    fun windowsPortHolders(env: OsEnv, port: Int): List<PortHolder> {
+        if (env.os != DesktopOs.WINDOWS) return emptyList()
+        val owners = env.runCapture(portOwnersArgv(port))?.lineSequence()?.mapNotNull { it.trim().toLongOrNull() }?.toList()
+        if (owners.isNullOrEmpty()) return emptyList()
+        val procs = env.runCapture(listAllProcessesArgv())?.let(::parseWindowsProcesses).orEmpty()
+        return portHolders(owners, procs)
+    }
+
+    /**
+     * Windows (#113): stop the stale holders of [port] ([portHolders]) and wait (up to ~10 s) for it to come free. A
+     * live process is never stopped. Returns what still holds it, empty once free.
+     */
+    fun freeWindowsPort(env: OsEnv, port: Int): List<PortHolder> {
+        val holders = windowsPortHolders(env, port)
+        val stale = holders.filter { it.stale }
+        if (stale.isEmpty()) return holders
+        env.run(taskkillArgv(stale.map { it.pid }))
+        for (i in 1..20) {
+            val left = windowsPortHolders(env, port)
+            if (left.isEmpty()) return left
+            env.sleep(500)
+        }
+        return windowsPortHolders(env, port)
+    }
+
+    /** The error's sentence naming [holders] of [port], each with its pid and command line, so a report carries them. */
+    fun describePortHolders(port: Int, holders: List<PortHolder>): String =
+        "Port $port is still held by " + holders.joinToString("; ") { h ->
+            if (h.name.isEmpty()) "a process that has exited (pid ${h.pid}), through a handle another process kept"
+            else "${h.name} (pid ${h.pid})" + (h.commandLine.takeIf { it.isNotBlank() }?.let { ": ${it.take(300)}" } ?: "")
+        } + "."
 
     private fun taskkillArgv(pids: List<Long>): List<String> =
         listOf("taskkill", "/F") + pids.flatMap { listOf("/PID", it.toString()) }

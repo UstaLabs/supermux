@@ -59,6 +59,18 @@ data class SessionInfo(
     val account: String? = null,
     /** Display label for [account]. */
     val accountLabel: String? = null,
+    /** #92: every account of its agent is out and it waits for the first reset; null = no wait. */
+    val limitWait: LimitWaitDto? = null,
+)
+
+/** #92: when a session resumes by itself after a usage limit, and on which account. ISO times. */
+@Serializable
+data class LimitWaitDto(
+    val resumeAt: String,
+    /** Null: the reset time was not reported; the session tries again at [resumeAt]. */
+    val resetsAt: String? = null,
+    val account: String = "",
+    val accountLabel: String = "",
 )
 
 /** A finish job's outcome/state machine, broadcast on the `finish_job` WS frame and
@@ -117,7 +129,31 @@ data class LogEntry(
     val error: Boolean = false,
     /** Card #76: the live stream this stored reply replaces (only on the live `message_append`; never stored). */
     val stream: String? = null,
+    /** #104: an html card the agent showed (show_html); its page is GET /html/<id>. */
+    val card: HtmlCardDto? = null,
+    /** #104: on the user's message a click in an html card sent. */
+    @SerialName("from_card") val fromCard: FromCardDto? = null,
 )
+
+/**
+ * #104: an agent's html card. [id] is the page's SHA-256. The heights are the page's first-paint heights in CSS px,
+ * measured by the broker at phone width ([height]) and at the desktop chat column's width ([desktopHeight]).
+ */
+@Serializable
+data class HtmlCardDto(
+    val id: String,
+    val title: String,
+    val height: Int? = null,
+    @SerialName("desktop_height") val desktopHeight: Int? = null,
+)
+
+/** #104: the card a user's message was sent from. */
+@Serializable
+data class FromCardDto(val id: String, val title: String)
+
+/** #104: the card a `send` names (`args.from_card`); the broker finds its title. */
+@Serializable
+data class CardRef(val id: String)
 
 @Serializable
 data class Attachment(
@@ -344,7 +380,12 @@ data class AgentStatus(
 }
 
 @Serializable
-data class SendArgs(val text: String = "", val attachments: List<String>? = null)
+data class SendArgs(
+    val text: String = "",
+    val attachments: List<String>? = null,
+    /** #104: a click in this card sent the text. Left out when null: the broker reads any from_card as a card's. */
+    @SerialName("from_card") val fromCard: CardRef? = null,
+)
 
 @Serializable
 data class ControlAction(val kind: String, val muted: Boolean? = null)
@@ -724,7 +765,11 @@ sealed interface ServerFrame {
 
     /** The accounts settings changed (PUT /settings/accounts). */
     @Serializable @SerialName("accounts_settings")
-    data class AccountsSettings(val autoSwitch: Boolean = false) : ServerFrame
+    data class AccountsSettings(val autoSwitch: Boolean = false, val autoResume: Boolean = true) : ServerFrame
+
+    /** #92: a session's wait for a usage-limit reset was made, replaced or dropped ([wait] null). */
+    @Serializable @SerialName("limit_wait")
+    data class LimitWait(val session: String, val wait: LimitWaitDto? = null) : ServerFrame
 
     @Serializable @SerialName("agent_state")
     data class AgentState(
@@ -856,6 +901,13 @@ sealed interface ServerFrame {
         val comment: ReviewComment,
     ) : ServerFrame
 
+    /** #122 phase 4: a Browser tab comment stored, or the agent's answer to it (its pin follows). */
+    @Serializable @SerialName("browser_comment")
+    data class BrowserCommentFrame(
+        val sessionId: String,
+        val comment: dev.supermux.net.BrowserCommentDto,
+    ) : ServerFrame
+
     // Finish job lifecycle: the broker broadcasts `{type:"finish_job",session,job}`
     // on every job state change (running → done|failed) — src/main.ts:onUpdate.
     @Serializable @SerialName("finish_job")
@@ -934,7 +986,11 @@ sealed interface ServerFrame {
 
     /** Broker `{type:"error", reason}` — switch/respond failures surface here. */
     @Serializable @SerialName("error")
-    data class Error(val reason: String = "") : ServerFrame
+    data class Error(
+        val reason: String = "",
+        /** #104: the app's id of the send this refuses, when the broker names one (a send from an html card). */
+        @SerialName("client_message_id") val clientMessageId: String? = null,
+    ) : ServerFrame
 }
 
 @Serializable

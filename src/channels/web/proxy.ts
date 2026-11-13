@@ -63,6 +63,18 @@ export function matchProxyPath(pathname: string): { slug: string; rest: string |
 }
 
 /**
+ * By-port previews: a digits-only slug is a PORT (`/p/5173/`, `5173.<base>`), never a name (Registry.addProxy refuses
+ * digits-only names). Returns undefined for a slug that is a name, null for a digits-only slug that is not a usable
+ * port (0, above 65535, a leading zero: one port gets one URL), else the port.
+ */
+export function portFromSlug(slug: string): number | null | undefined {
+  if (!/^[0-9]+$/.test(slug)) return undefined
+  if (!/^[1-9][0-9]{0,4}$/.test(slug)) return null
+  const port = Number(slug)
+  return port <= 65535 ? port : null
+}
+
+/**
  * Builds a proxy's public URL. Subdomain mode (unchanged) when a base domain is
  * set; path mode under the broker's own public URL otherwise.
  */
@@ -89,7 +101,7 @@ export function stripUpstreamOrigin(loc: string, upstreamHost: string): string |
       if (loc.startsWith(origin)) {
         const rest = loc.slice(origin.length)
         if (rest === "") return "/"
-        if (/^[/?#]/.test(rest)) return rest.startsWith("/") ? rest : "/" + rest
+        if (/^[/?#]/.test(rest)) return rest.startsWith("/") ? rest : "/" + rest // platform-ok: a URL path, / by definition
       }
     }
   }
@@ -112,9 +124,9 @@ export function rewriteSubdomainLocation(loc: string, upstreamHost: string): str
  */
 export function rewriteLocation(loc: string, prefix: string, upstreamHost: string): string {
   const path = stripUpstreamOrigin(loc, upstreamHost) ?? loc
-  if (path.startsWith("/") && !path.startsWith("//")) {
+  if (path.startsWith("/") && !path.startsWith("//")) { // platform-ok: a URL path, / by definition
     // Idempotent: an already-prefixed path (e.g. a base-aware upstream) is left as-is.
-    if (path === prefix || path.startsWith(prefix + "/")) return path
+    if (path === prefix || path.startsWith(prefix + "/")) return path // platform-ok: a URL path, / by definition
     return prefix + path
   }
   return loc
@@ -130,8 +142,8 @@ export function rewriteSetCookiePath(setCookie: string, prefix: string): string 
     return setCookie.replace(/;(\s*)path=([^;]*)/i, (_m, sp: string, p: string) => {
       const orig = p.trim() || "/"
       // Idempotent: a cookie already scoped under the prefix is left as-is.
-      if (orig === prefix || orig.startsWith(prefix + "/")) return `;${sp}Path=${orig}`
-      const np = orig === "/" ? `${prefix}/` : `${prefix}${orig.startsWith("/") ? "" : "/"}${orig}`
+      if (orig === prefix || orig.startsWith(prefix + "/")) return `;${sp}Path=${orig}` // platform-ok: a cookie's URL path, / by definition
+      const np = orig === "/" ? `${prefix}/` : `${prefix}${orig.startsWith("/") ? "" : "/"}${orig}` // platform-ok: a cookie's URL path, / by definition
       return `;${sp}Path=${np}`
     })
   }
@@ -158,12 +170,26 @@ const STRIP_REQUEST_HEADERS = new Set(["cf-connecting-ip", "cf-ray", "cf-visitor
 // --- Headers to strip from upstream responses ---
 const STRIP_RESPONSE_HEADERS = new Set(["transfer-encoding"])
 
+/** The Cookie header without the named cookies, or null when nothing is left. */
+export function withoutCookies(header: string, names: string[]): string | null {
+  const kept = header.split(";").map((p) => p.trim()).filter((p) => {
+    if (!p) return false
+    const eq = p.indexOf("=")
+    return !names.includes((eq < 0 ? p : p.slice(0, eq)).trim())
+  })
+  return kept.length ? kept.join("; ") : null
+}
+
+/** What the proxied app must never see: supermux's own cookies, and a bearer that is one of its device tokens. */
+export interface OwnCredentials { cookies: string[]; isOwnBearer?: (token: string) => boolean }
+
 // --- Proxy handler ---
 
 export async function handleProxyRequest(
   req: Request,
   upstream: { port: number; sessionName: string },
   pathOpts?: { prefix: string; upstreamPath: string },
+  own?: OwnCredentials,
 ): Promise<Response> {
   const url = new URL(req.url)
   const pathAndQuery = pathOpts ? pathOpts.upstreamPath : url.pathname + (url.search || "")
@@ -174,6 +200,17 @@ export async function handleProxyRequest(
   forwardedHeaders.set("host", `127.0.0.1:${upstream.port}`)
   for (const h of STRIP_REQUEST_HEADERS) {
     forwardedHeaders.delete(h)
+  }
+  // An agent's dev server must not receive the user's device token: it would be the whole API, from anywhere.
+  if (own) {
+    const cookie = forwardedHeaders.get("cookie")
+    if (cookie) {
+      const kept = withoutCookies(cookie, own.cookies)
+      if (kept) forwardedHeaders.set("cookie", kept)
+      else forwardedHeaders.delete("cookie")
+    }
+    const bearer = /^Bearer\s+(.+)$/i.exec(forwardedHeaders.get("authorization")?.trim() ?? "")?.[1]?.trim()
+    if (bearer && own.isOwnBearer?.(bearer)) forwardedHeaders.delete("authorization")
   }
 
   log.debug("proxy.forward", {

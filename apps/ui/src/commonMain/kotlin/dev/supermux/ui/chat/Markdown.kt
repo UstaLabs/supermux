@@ -48,10 +48,12 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -135,9 +137,37 @@ fun mdAnnotated(
     softBreaks: Boolean = false,
 ): AnnotatedString {
     val platform = LocalPlatform.current
-    val openUrl: (String) -> Unit = onOpenUrl ?: { url -> runCatching { platform.openUrl(url) } }
+    // A chat in a workspace routes its links (#105): the Browser tab that shows the link, a new one, or, on a
+    // ⌘/Ctrl-click, the system's browser. Outside one, and on the web client, links open as they always did.
+    val routed = dev.supermux.ui.browser.LocalOpenLink.current
+    val openUrlNow: (String) -> Unit = onOpenUrl ?: routed ?: { url -> runCatching { platform.openUrl(url) } }
     val linkColor = MaterialTheme.colorScheme.primary
     val codeFill = mdPalette().codeFill
+    // Parsed once per text and look, not at every recomposition (a row recomposing re-parsed every block of it). The
+    // links call the LATEST handlers, so a caller's new lambda neither re-parses nor leaves a link on an old one.
+    val currentOpenUrl by rememberUpdatedState(openUrlNow)
+    val currentOpenFile by rememberUpdatedState(onOpenFile)
+    val probe = LocalChatCompositionProbe.current
+    val mono = MonoFontFamily
+    return remember(text, linkify, softBreaks, linkColor, codeFill, mono) {
+        probe?.invoke("parse")
+        val openUrl: (String) -> Unit = { url -> currentOpenUrl(url) }
+        val openFile: (FilePathRef) -> Unit = { ref -> currentOpenFile(ref) }
+        mdAnnotatedString(text, openFile, openUrl, linkify, softBreaks, linkColor, codeFill, mono)
+    }
+}
+
+/** [mdAnnotated]'s string: [text]'s inline markdown, its links calling [openFile] and [openUrl]. */
+private fun mdAnnotatedString(
+    text: String,
+    onOpenFile: (FilePathRef) -> Unit,
+    openUrl: (String) -> Unit,
+    linkify: Boolean,
+    softBreaks: Boolean,
+    linkColor: Color,
+    codeFill: Color,
+    mono: androidx.compose.ui.text.font.FontFamily,
+): AnnotatedString {
     val linkStyles = TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline))
     return buildAnnotatedString {
         // Chat keeps every source line break (agents format with them); a document follows
@@ -156,7 +186,7 @@ fun mdAnnotated(
                     }
                     SpanStyleKind.CODE -> withStyle(
                         SpanStyle(
-                            fontFamily = MonoFontFamily,
+                            fontFamily = mono,
                             fontSize = 0.9.em, // relative, so code in a heading scales with it
                             fontWeight = FontWeight.Normal,
                             background = codeFill,
@@ -391,12 +421,19 @@ fun MarkdownBody(
     /** Card #76: the reveal this text is written under (a live reply): its text blocks draw the ink edge. */
     reveal: LiveRevealState? = null,
 ) {
+    LocalChatCompositionProbe.current?.let { probe -> SideEffect { probe("markdown") } }
     val cs = MaterialTheme.colorScheme
     val typography = MaterialTheme.typography
     // A document reads at a looser line height than a chat bubble.
     val body = if (document) typography.bodyLarge.copy(lineHeight = typography.bodyLarge.fontSize * 1.6f) else typography.bodyLarge
-    val blocks = parseMarkdownBlocks(text)
-    val inkEnds = reveal?.let { blockSourceEnds(text, blocks) }
+    // Parsed once per text: a recomposition of the row (a new handler, a theme read) doesn't parse it again.
+    val probe = LocalChatCompositionProbe.current
+    val blocks = remember(text) {
+        probe?.invoke("parse")
+        parseMarkdownBlocks(text)
+    }
+    val revealing = reveal != null
+    val inkEnds = remember(blocks, revealing) { if (revealing) blockSourceEnds(text, blocks) else null }
     val palette = if (document) mdDocumentPalette() else mdPalette()
     @Composable
     fun annotated(t: String) = mdAnnotated(t, onOpenFile, linkify = linkify, onOpenUrl = onOpenUrl, softBreaks = document)

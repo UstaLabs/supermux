@@ -6,6 +6,7 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.withKeyDown
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
@@ -145,7 +146,8 @@ class AgentSettingsHubTest {
         val app = appForAgents()
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                TestAppShell(app, ui)
+                // Providers is the machine's: an offline machine shows its offline line instead (#97).
+                TestAppShell(app, ui, online = true)
             }
         }
         waitForIdle()
@@ -201,10 +203,11 @@ class AgentSettingsHubTest {
         ui.openSettings()
         assertFalse(ui.usageOpen)
         assertTrue(ui.settingsOpen)
-        assertEquals(SettingsSection.Providers, ui.settingsSection)
+        // #97: plain Settings has no section (General on a wide window).
+        assertEquals(null, ui.settingsSection)
     }
 
-    @Test fun rail_switches_to_editor_lsp_without_nested_back() = runComposeUiTest {
+    @Test fun rail_switches_to_coding_without_nested_back() = runComposeUiTest {
         val ui = ShellUiState().apply { openSettings(SettingsSection.Providers) }
         val app = HostStore(
             baseUrl = "ws://test:9898",
@@ -233,16 +236,16 @@ class AgentSettingsHubTest {
         )
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                TestAppShell(app, ui)
+                TestAppShell(app, ui, online = true)
             }
         }
         waitForIdle()
-        onNodeWithTag("settings_section_editorlsp").performClick()
+        onNodeWithTag("settings_section_coding").performClick()
         waitForIdle()
-        assertEquals(SettingsSection.EditorLsp, ui.settingsSection)
+        assertEquals(SettingsSection.Coding, ui.settingsSection)
         waitUntil(timeoutMillis = 5_000) {
             try {
-                onNodeWithTag("lsp_settings_screen").assertIsDisplayed()
+                onNodeWithTag("lsp_settings_screen").assertExists()
                 true
             } catch (_: Throwable) {
                 false
@@ -250,7 +253,7 @@ class AgentSettingsHubTest {
         }
         // Nested back must be gone when embedded in the hub.
         onNodeWithTag("lsp_settings_back").assertDoesNotExist()
-        onNodeWithText("TypeScript").assertIsDisplayed()
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithText("TypeScript").fetchSemanticsNodes().isNotEmpty() }
         // Hub back remains.
         onNodeWithTag("settings_hub_back").assertIsDisplayed()
     }
@@ -286,11 +289,14 @@ class AgentSettingsHubTest {
                 }
             },
         ) { "rec-unused" }
+        // Both machines online: Providers loads only for a machine that answers (#97).
+        val connections = mutableListOf<(Boolean) -> Unit>()
         val fleet = FleetStore(
             store = store,
             scope = scope,
             deps = testDeps(),
             appFactory = { url, token, onConn ->
+                connections += onConn
                 val statusJson = when {
                     url.contains("a.relay") -> statusA
                     else -> statusB
@@ -315,6 +321,7 @@ class AgentSettingsHubTest {
                 )
             },
         )
+        connections.forEach { it(true) }
         val ui = ShellUiState().apply { openSettings(SettingsSection.Providers) }
         val primary = fleet.appForRecord("h1")!!
         setContent {
@@ -332,6 +339,7 @@ class AgentSettingsHubTest {
             }
         }
         fleet.setActiveHost("h2")
+        connections.forEach { it(true) }
         waitUntil(timeoutMillis = 5_000) {
             try {
                 onNodeWithTag("agent_row_cursor").assertIsDisplayed()

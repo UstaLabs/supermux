@@ -20,13 +20,13 @@ class ContractTest {
             "agent_state", "agent_error", "message_append", "activity_append", "bg_tasks",
             "commands_changed", "finish_job", "session_git", "session_git_remote",
             "sessions_reordered", "session_read",
-            "walkthrough_updated", "review_comment",
+            "walkthrough_updated", "review_comment", "browser_comment",
             "request_open", "request_closed", "error",
             "worktree_sizes", "worktrees_removed", "agent_models_changed", "host_requirements", "keep_awake", "telemetry",
             "subagent_update", "subagents_cleared", "activity_append_subagent", "activity_append_subagent_message",
             "request_open_subagent", "message_append_subagent", "council_update",
             "fs_dir", "fs_gone", "fs_err",
-            "accounts_changed", "account_login_state", "agents_changed", "accounts_settings", "session_state_account",
+            "accounts_changed", "account_login_state", "agents_changed", "accounts_settings", "session_state_account", "limit_wait",
             "reply_stream", "reply_stream_thinking", "reply_stream_end", "message_append_live", "activity_append_live", "snapshot_live",
         )
         for (n in names) {
@@ -48,6 +48,7 @@ class ContractTest {
                 is ServerFrame.ViewChanged -> {}
                 is ServerFrame.ViewMoved -> {}
                 is ServerFrame.SessionState -> {}
+                is ServerFrame.LimitWait -> assertEquals("Work Max", frame.wait?.accountLabel)
                 is ServerFrame.AgentState -> {}
                 is ServerFrame.AgentError -> {}
                 is ServerFrame.MessageAppend -> {}
@@ -66,6 +67,7 @@ class ContractTest {
                 is ServerFrame.FsChanged -> {}
                 is ServerFrame.WalkthroughUpdated -> {}
                 is ServerFrame.ReviewCommentFrame -> {}
+                is ServerFrame.BrowserCommentFrame -> {}
                 is ServerFrame.LspStatus -> {}
                 is ServerFrame.LspReady -> {}
                 is ServerFrame.LspError -> {}
@@ -84,12 +86,13 @@ class ContractTest {
                 ServerFrame.AgentsChanged -> {}
                 is ServerFrame.AgentAvatarChanged -> {}
                 is ServerFrame.AccountLoginState -> {}
-                is ServerFrame.AccountsSettings -> {}
+                is ServerFrame.AccountsSettings -> assertEquals(true, frame.autoResume)
                 is ServerFrame.HostRequirementsChanged -> {}
                 is ServerFrame.KeepAwakeChanged -> {}
                 is ServerFrame.TelemetryChanged -> {}
                 is ServerFrame.WalkthroughUpdated -> {}
                 is ServerFrame.ReviewCommentFrame -> {}
+                is ServerFrame.BrowserCommentFrame -> {}
                 is ServerFrame.RequestOpen -> {}
                 // The chosen answer has to survive the wire — the transcript line quotes it.
                 is ServerFrame.RequestClosed -> assertEquals("Allow always", frame.answerLabel)

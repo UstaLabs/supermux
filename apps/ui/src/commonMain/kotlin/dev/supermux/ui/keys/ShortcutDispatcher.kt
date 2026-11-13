@@ -32,19 +32,27 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeMark
 import kotlin.time.TimeSource
 
-/** One window's keyboard: resolves each key against [keymap] and its [tracker]'s focus stack, and runs the command. */
-class ShortcutDispatcher(val os: KeyOs = currentKeyOs, val keymap: Keymap = DefaultKeymap) {
+/**
+ * One window's keyboard: resolves each key against [keymap] and its [tracker]'s focus stack, and runs the command.
+ * [timeSource] times held keys and the macOS menu's echoes; a test passes a `TestTimeSource`.
+ */
+class ShortcutDispatcher(
+    val os: KeyOs = currentKeyOs,
+    val keymap: Keymap = DefaultKeymap,
+    private val timeSource: TimeSource = TimeSource.Monotonic,
+) {
     val tracker = KeyScopeTracker()
 
     /**
-     * The macOS menu bar's key equivalents. The native menu fires one even after Compose used the key (the JDK hands
-     * the key to Java first, then lets the menu act), so a menu item's action may be the echo of a key press the
-     * dispatcher already judged. [onWindowKey] notes the presses of these keys, and [invokeFromMenu] ignores the echo.
+     * A native menu bar's key equivalents. The menu fires one on its own: macOS's even after Compose used the key (the
+     * JDK hands the key to Java first, then lets the menu act), Swing's window menu whenever Compose left the key. So a
+     * menu item's action may be the echo of a key press the dispatcher already judged. [onWindowKey] notes the presses
+     * of these keys, and [invokeFromMenu] ignores the echo.
      */
     var nativeMenuChords: Set<KeyChord> = emptySet()
 
-    /** A key whose press the app used: its [chord], and the character it types (-1 for none). */
-    private class Taken(val chord: KeyChord, val char: Int)
+    /** A key whose press the app used: its [chord], the character it types (-1 for none), when it last went down. */
+    private class Taken(val chord: KeyChord, val char: Int, var pressedAt: TimeMark)
 
     /** The keys held down whose press the app used: their auto-repeat, typed echo and release are the app's too. */
     private val taken = HashMap<Key, Taken>()
@@ -64,9 +72,14 @@ class ShortcutDispatcher(val os: KeyOs = currentKeyOs, val keymap: Keymap = Defa
         val chord = chordOf(event)
         val held = taken[event.key]
         if (held != null) {
-            // The same chord again before its release is the key's auto-repeat: the command ran on the press.
-            if (held.chord == chord) return true
-            // Another chord: that release went elsewhere, and this is a new press.
+            // The same chord again before its release is the key's auto-repeat: the command ran on the press. Repeats
+            // come every few tens of ms, after a delay of at most ~2 s; an entry older than that is a release that
+            // went elsewhere (a dialog the command opened took it).
+            if (held.chord == chord && held.pressedAt.elapsedNow() < 2.seconds) {
+                held.pressedAt = timeSource.markNow()
+                return true
+            }
+            // Another chord, or that stale entry: the release went elsewhere, and this is a new press.
             taken.remove(event.key)
         }
         return chord != null && run(chord, KeyPhase.Preview, event)
@@ -96,7 +109,7 @@ class ShortcutDispatcher(val os: KeyOs = currentKeyOs, val keymap: Keymap = Defa
     fun onWindowKey(event: KeyEvent) {
         if (event.type != KeyEventType.KeyDown) return
         val chord = keyChordOf(event) ?: return
-        if (chord in nativeMenuChords) menuKeyPresses[chord] = TimeSource.Monotonic.markNow()
+        if (chord in nativeMenuChords) menuKeyPresses[chord] = timeSource.markNow()
     }
 
     /**
@@ -121,7 +134,7 @@ class ShortcutDispatcher(val os: KeyOs = currentKeyOs, val keymap: Keymap = Defa
         val stack = tracker.stack()
         val hit = resolveKey(chord, stack, phase, os, keymap) ?: return false
         if (!stack[hit.scopeIndex].run(hit.binding.commandId)) return false
-        taken[event.key] = Taken(chord, printableChar(event))
+        taken[event.key] = Taken(chord, printableChar(event), timeSource.markNow())
         return true
     }
 

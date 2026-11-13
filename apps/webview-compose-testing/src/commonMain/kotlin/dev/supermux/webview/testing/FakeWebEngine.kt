@@ -1,5 +1,9 @@
 package dev.supermux.webview.testing
 
+import dev.supermux.webview.DeviceEmulation
+import dev.supermux.webview.FindResult
+import dev.supermux.webview.InspectorResult
+import dev.supermux.webview.WebCookie
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -44,6 +48,8 @@ import kotlinx.serialization.json.put
 
 /** How a [FakeWebEngine] behaves. */
 public data class FakeEngineBehavior(
+    /** Whether [FakeWebEngine.emulateDevice] applies (WebView2's device mode); false as most engines. */
+    val emulatesDevices: Boolean = false,
     /** Emit [EngineEvent.FirstPaint] during every load, reload and restore. */
     val paintsOnLoad: Boolean = true,
     /** The page's content height in CSS px, reported after load (for WrapContentHeight); null = never reported. */
@@ -279,6 +285,21 @@ public class FakeWebEngine(
         return true
     }
 
+    /**
+     * The page calls the host's [method] as the shim sends it, signed by the current document: `hostBridge.call` when
+     * [clicked] is null, else `hostBridge.callAfterClick`, with the verdict the shim made ([clicked]: a trusted click on a
+     * button in the page within the last second, unused). The host's reply is recorded in [calls] as `post:`. False,
+     * and nothing is sent, when the document runs no shim or the engine was released.
+     * @throws IllegalArgumentException if [params] isn't strict JSON.
+     */
+    public fun callFromPage(id: Long, method: String, params: JsonElement = JsonNull, clicked: Boolean? = null): Boolean {
+        val content = current ?: return false
+        val document = nonce ?: return false
+        if (released) return false
+        emit(EngineEvent.PageMessage(originOf(content), FakePageWire.call(id, method, params, clicked, from = document)), document)
+        return true
+    }
+
     override fun configure(setup: PageSetup) {
         record("configure")
         if (!allowed("configure", lease = true)) return
@@ -309,16 +330,63 @@ public class FakeWebEngine(
         allowed("stop")
     }
 
+    /** What [find] answers; null (the default) is an engine that can't. */
+    public var findAnswer: ((query: String, backwards: Boolean) -> FindResult?)? = null
+
+    /** What [openInspector] answers. */
+    public var inspectorAnswer: InspectorResult = InspectorResult.Opened
+
+    private val cookieJar = mutableListOf<WebCookie>()
+
+    /** Every cookie [setCookie] put in this engine's profile, in order. */
+    public val cookies: List<WebCookie> get() = cookieJar
+
+    override suspend fun find(query: String, backwards: Boolean): FindResult? {
+        record("find:$query:$backwards")
+        if (!allowed("find")) return null
+        return findAnswer?.invoke(query, backwards)
+    }
+
+    override fun clearFind() {
+        record("clearFind")
+        allowed("clearFind")
+    }
+
+    override fun setZoom(factor: Float): Boolean {
+        record("zoom:$factor")
+        return allowed("setZoom")
+    }
+
+    override fun emulateDevice(emulation: DeviceEmulation?): Boolean {
+        record("emulate:" + (emulation?.run { "${width}x$height@$deviceScaleFactor mobile=$mobile touch=$touch scale=$scale" } ?: "none"))
+        return behavior.emulatesDevices && allowed("emulateDevice")
+    }
+
+    override suspend fun setCookie(cookie: WebCookie): Boolean {
+        record("cookie:${cookie.name}")
+        if (!allowed("setCookie")) return false
+        cookieJar += cookie
+        return true
+    }
+
+    override fun openInspector(): InspectorResult {
+        record("inspector")
+        return if (allowed("openInspector")) inspectorAnswer else InspectorResult.Unsupported
+    }
+
     override fun reload() {
         record("reload")
         if (!allowed("reload")) return
         current?.let(::documentLoaded)
     }
 
+    /** What [evaluate] answers for a script: its JSON result, or null. */
+    public var evaluateAnswer: (String) -> String? = { null }
+
     override suspend fun evaluate(script: String): String? {
         record("eval:", script)
-        allowed("evaluate")
-        return null
+        if (!allowed("evaluate")) return null
+        return evaluateAnswer(script)
     }
 
     override fun postMessage(json: String, targetOrigin: String) {

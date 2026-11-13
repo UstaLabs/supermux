@@ -192,7 +192,7 @@ fun switcherHost(hosts: List<HostView>, filter: String?): HostView? =
 /**
  * The host switch at the left of the sidebar footer: the current host's dot and name (or "All
  * hosts") with a ⌄, opening a menu of `All hosts`, every host with its live session count (an
- * OFFLINE host is greyed and carries its last-seen), Rename / Forget for the selected host, and
+ * OFFLINE host is greyed and carries its last-seen), Open / Rename / Forget for the selected host, and
  * `Add host`. [selected] is a recordId or null (= All).
  *
  * It shows from ONE host up: a device that has paired a single host is exactly the one that needs
@@ -212,6 +212,8 @@ fun HostSwitcher(
     onAddHost: () -> Unit,
     onRenameHost: (recordId: String, name: String) -> Unit = { _, _ -> },
     onForgetHost: (recordId: String) -> Unit = {},
+    /** "Open ‹machine›": that machine's page in Settings (#97). Null hides the row. */
+    onOpenHost: ((recordId: String) -> Unit)? = null,
     nowMs: Long = Clock.System.now().toEpochMilliseconds(),
     /** The collapsed sidebar's form: the host glyph with its dot, no name. Same menu. */
     compact: Boolean = false,
@@ -313,6 +315,16 @@ fun HostSwitcher(
                 )
             }
             HorizontalDivider(Modifier.padding(vertical = 4.dp))
+            if (current != null && onOpenHost != null) {
+                DropdownMenuItem(
+                    text = { Text("Open ${current.displayLabel}") },
+                    leadingIcon = {
+                        Icon(Icons.Filled.Dns, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(14.dp))
+                    },
+                    onClick = { expanded = false; onOpenHost(current.recordId) },
+                    modifier = Modifier.testTag("host_switcher_open"),
+                )
+            }
             if (current != null) {
                 DropdownMenuItem(
                     text = { Text("Rename ${current.displayLabel}…") },

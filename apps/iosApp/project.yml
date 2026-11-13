@@ -22,7 +22,7 @@ settings:
     TARGETED_DEVICE_FAMILY: "1,2"
     CODE_SIGN_STYLE: Automatic
     DEVELOPMENT_TEAM: "57L7J9XA89"
-    MARKETING_VERSION: "1.6"
+    MARKETING_VERSION: "1.7"
     CURRENT_PROJECT_VERSION: "88"
     # Gradle pre-build phase needs filesystem access outside the sandbox.
     ENABLE_USER_SCRIPT_SANDBOXING: "NO"
@@ -89,6 +89,10 @@ targets:
         # iPhone, so every scroll in the shared shell would run at half the display's rate — the
         # runtime treats that as a misconfiguration rather than a preference, and throws at launch.
         CADisableMinimumFrameDurationOnPhone: true
+        # #118: what the audio player plays, and read-aloud, go on with the app in the background (the lock screen
+        # shows it through MPNowPlayingInfoCenter, IosNowPlaying.kt). Needs the .playback session while it plays.
+        UIBackgroundModes:
+          - audio
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
@@ -100,6 +104,7 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         NSCameraUsageDescription: supermux scans the pairing QR code printed by your broker.
         NSMicrophoneUsageDescription: supermux records voice messages you send to your agents.
+        NSPhotoLibraryAddUsageDescription: supermux saves the pictures and videos you choose to save into Photos.
         NSSpeechRecognitionUsageDescription: supermux uses on-device speech recognition to turn your voice into editable text.
         NSLocalNetworkUsageDescription: Supermux connects to the broker server running on your own computer when you reach it by its LAN address (for example 192.168.1.50). It does not scan or collect information about other devices on your network.
         ITSAppUsesNonExemptEncryption: false

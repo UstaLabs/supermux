@@ -5,6 +5,7 @@ import { dirname } from "node:path"
 import type { NormalizedBody } from "../../../packages/supermux-core/src/events/normalized.js"
 import type { SubagentSnapshot } from "../../../packages/supermux-core/src/types.js"
 import type { ActivityEvent } from "../agents/claude/activity-event"
+import { files } from "@supermux/platform"
 
 export type SubagentBody = Extract<NormalizedBody, { kind: "subagent" }>
 export type SubagentStatus = "running" | "completed" | "failed" | "cancelled"
@@ -137,7 +138,7 @@ export class SubagentStore extends EventEmitter {
     try {
       mkdirSync(dirname(file), { recursive: true })
       const temp = `${file}.${process.pid}.tmp`
-      writeFileSync(temp, JSON.stringify({ version: 1, sessions }), { mode: 0o600 })
+      files.writePrivate(temp, JSON.stringify({ version: 1, sessions }))
       renameSync(temp, file)
     } catch { /* persistence is best effort: the live store is unaffected */ }
   }

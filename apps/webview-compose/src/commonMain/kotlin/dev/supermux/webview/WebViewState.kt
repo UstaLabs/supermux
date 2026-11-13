@@ -1,5 +1,8 @@
 package dev.supermux.webview
 
+import androidx.compose.ui.graphics.ImageBitmap
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
@@ -21,6 +24,7 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -352,6 +356,9 @@ internal interface StateOwner {
      * False when there is no engine.
      */
     fun onEngine(command: (WebEngine) -> Unit): Boolean
+
+    /** Runs a suspending [command] on [engine], guarded like [onEngine]; null without an engine, or when it threw. */
+    suspend fun <T> withEngine(command: suspend (WebEngine) -> T): T?
 }
 
 /**
@@ -380,6 +387,66 @@ public class WebNavigator internal constructor(private val state: WebViewState) 
         state.owner?.onEngine { it.stop() }
     }
 
+    /** Finds [query] in the page; null without a live engine, or on an engine that can't. */
+    public suspend fun find(query: String, backwards: Boolean = false): FindResult? =
+        state.owner?.withEngine { it.find(query, backwards) }
+
+    public fun clearFind() {
+        state.owner?.onEngine { it.clearFind() }
+    }
+
+    /** Sets the page's zoom (1.0 = 100 %, kept within 25–500 %); false without a live engine, or on one that can't. */
+    public fun setZoom(factor: Float): Boolean {
+        var applied = false
+        state.owner?.onEngine { applied = it.setZoom(factor.coerceIn(MIN_ZOOM, MAX_ZOOM)) }
+        return applied
+    }
+
+    /**
+     * Shows the page as [emulation]'s device (a browser's device mode), or as itself again (null). False without a live
+     * engine, or on one that can't (today only WebView2 can: its DevTools protocol). A new engine starts as itself:
+     * apply it again when the page is live again.
+     */
+    public fun emulateDevice(emulation: DeviceEmulation?): Boolean {
+        var applied = false
+        state.owner?.onEngine { applied = it.emulateDevice(emulation) }
+        return applied
+    }
+
+    /**
+     * The element at ([fx], [fy]), fractions of the viewport's width and height, or [up] ancestors above it: what a
+     * person points at in pick mode (#122). Read-only, run when asked: nothing stays in the page. Null without a live
+     * engine, an element there, or a script (the web's cross-origin iframe). The page could lie about its own DOM.
+     */
+    public suspend fun elementAt(fx: Float, fy: Float, up: Int = 0): PageElement? =
+        PickScripts.parseElement(state.owner?.withEngine { it.evaluate(PickScripts.elementAt(fx, fy, up)) })
+
+    /** Each selector's element box now (pins follow their elements as the page scrolls or changes), null where it's gone. */
+    public suspend fun boxesOf(selectors: List<String>): List<PageBox?> =
+        if (selectors.isEmpty()) emptyList()
+        else PickScripts.parseBoxes(state.owner?.withEngine { it.evaluate(PickScripts.boxesOf(selectors)) }, selectors.size)
+
+    /** Puts [cookie] in the view's profile; true once it's there. Set it before loading the page that needs it. */
+    public suspend fun setCookie(cookie: WebCookie): Boolean = state.owner?.withEngine { it.setCookie(cookie) } ?: false
+
+    public fun openInspector(): InspectorResult {
+        var result: InspectorResult = InspectorResult.Unsupported
+        state.owner?.onEngine { result = it.openInspector() }
+        return result
+    }
+
+    /**
+     * The page as it looks now, as its engine draws it: null without a live engine, before the page has painted, or
+     * where the engine can't picture its page (the web's cross-origin iframe).
+     */
+    public suspend fun screenshot(): ImageBitmap? = state.owner?.withEngine { it.snapshot() }
+
+    /** The page's icon: its `<link rel="icon">`, else `/favicon.ico` on its origin; null without a page or for a non-http one. */
+    public suspend fun favicon(): String? {
+        val json = state.owner?.withEngine { it.evaluate(FAVICON_SCRIPT) } ?: return null
+        return runCatching { Json.parseToJsonElement(json).jsonPrimitive.contentOrNull }.getOrNull()
+    }
+
     /**
      * Reloads the page, and clears its error. A live page reloads in its engine. A cold, crashed or unavailable view is
      * asked to activate again, so a retry button works.
@@ -390,6 +457,15 @@ public class WebNavigator internal constructor(private val state: WebViewState) 
         val phase = state.phase
         if (phase == WebViewPhase.Crashed || phase is WebViewPhase.Unavailable) state.phase = WebViewPhase.Cold
         state.onNeedsEvaluation?.invoke()
+    }
+
+    private companion object {
+        const val MIN_ZOOM = 0.25f
+        const val MAX_ZOOM = 5f
+        const val FAVICON_SCRIPT =
+            "(() => { if (!/^https?:/.test(location.protocol)) return null;" +
+                " const l = document.querySelector('link[rel~=\"icon\"]');" +
+                " return l && l.href ? l.href : location.origin + '/favicon.ico' })()"
     }
 }
 

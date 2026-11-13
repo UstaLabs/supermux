@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #123: English, the source. Every key here also lives in values-tr/strings.xml with the same placeholders
+     (tests/i18n-strings.test.ts). Keys are area_thing. Terms and tone: docs/i18n/glossary.md. -->
+<resources>
+    <!-- Shared option words -->
+    <string name="common_system">System</string>
+    <string name="common_light">Light</string>
+    <string name="common_dark">Dark</string>
+    <string name="common_clear">Clear</string>
+
+    <!-- Settings › General -->
+    <string name="general_title">General</string>
+    <string name="general_theme">Theme</string>
+    <string name="general_language">Language</string>
+    <string name="general_language_description">Follows your device unless you pick one.</string>
+    <string name="general_text_size">Text size</string>
+    <string name="general_text_size_description">Scales all text in the app.</string>
+    <string name="general_live_replies">Show replies as they're written</string>
+    <string name="general_live_replies_description">Off: a reply appears once the agent has finished it.</string>
+    <string name="general_chat_detail">Chat detail</string>
+    <string name="general_chat_detail_description">How much of each tool call a chat shows.</string>
+    <string name="general_chat_detail_low">Low</string>
+    <string name="general_chat_detail_medium">Medium</string>
+    <string name="general_chat_detail_high">High</string>
+    <string name="general_terminal_colours">Terminal colours</string>
+    <string name="general_terminal_colours_description">Programs that pick their own colours keep them.</string>
+    <string name="general_terminal_match_app">Match app</string>
+    <string name="general_this_app">This app</string>
+    <string name="general_cache">Cached images and files</string>
+    <string name="general_cache_clearing">Clearing…</string>
+    <string name="general_cache_calculating">Calculating…</string>
+    <string name="general_cache_empty">Empty</string>
+    <string name="general_cache_empty_session">Empty. Images and files are kept only until this page closes.</string>
+    <string name="general_cache_size_kept">%1$s, kept so they open instantly and offline.</string>
+    <string name="general_cache_size_session">%1$s, kept only until this page closes.</string>
+
+    <!-- Browser tab › a sent comment (#122 phase 4) -->
+    <string name="browser_comment_remove">Remove</string>
+    <string name="browser_comment_close">Close</string>
+    <string name="browser_comment_sent">Sent</string>
+    <string name="browser_comment_seen">Seen</string>
+    <string name="browser_comment_done">Done</string>
+    <string name="browser_comment_answered">Answered</string>
+    <string name="browser_comment_to">→ %1$s</string>
+    <string name="browser_comment_dismissed">Dismissed</string>
+
+    <!-- After a phone saves an attachment (#95): where it went. -->
+    <string name="saved_to_photos">Saved to Photos</string>
+    <string name="saved_to_gallery">Saved to Gallery</string>
+    <string name="saved_to_downloads">Saved to Downloads</string>
+    <string name="saved_file">Saved %1$s</string>
+</resources>

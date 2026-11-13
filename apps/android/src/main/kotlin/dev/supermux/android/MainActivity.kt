@@ -68,10 +68,12 @@ import dev.supermux.ui.push.PushTapHandle
 import dev.supermux.ui.push.notificationCancelSessionIds
 import dev.supermux.ui.push.pushTapHandleDecision
 import dev.supermux.ui.push.resolvePushTap
-import dev.supermux.ui.settings.FleetSettingsExtra
 import dev.supermux.ui.settings.FleetSettingsSection
 import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.ui.theme.nextAppearance
+import dev.supermux.ui.theme.paintedAppearance
 import kotlinx.coroutines.launch
+import androidx.lifecycle.lifecycleScope
 import dev.supermux.workspace.toDomainOrNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -182,10 +184,7 @@ class MainActivity : ComponentActivity() {
             val appearance by themeUiPrefs.appearance(AppearanceMode.SYSTEM)
                 .collectAsState(appearanceSeed.appearance)
             val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
-            val effectiveAppearance = when (appearance) {
-                AppearanceMode.SYSTEM -> if (systemDark) AppearanceMode.DARK else AppearanceMode.LIGHT
-                else -> appearance
-            }
+            val effectiveAppearance = paintedAppearance(appearance, AppearanceMode.SYSTEM, systemDark)
             val themeScope = androidx.compose.runtime.rememberCoroutineScope()
             val textScale by themeUiPrefs.textScale.collectAsState(appearanceSeed.textScale)
             AndroidTheme(appearance = appearance, textScale = textScale, uiPrefs = themeUiPrefs) {
@@ -279,7 +278,11 @@ class MainActivity : ComponentActivity() {
                     val obs = LifecycleEventObserver { _, event ->
                         when (event) {
                             Lifecycle.Event.ON_START -> appVisible = true
-                            Lifecycle.Event.ON_STOP -> appVisible = false
+                            Lifecycle.Event.ON_STOP -> {
+                                appVisible = false
+                                // Card #121: write the offline cache now; Android may end the app before the next sample.
+                                vm.fleet.let { f -> lifecycleScope.launch { f.writeSnapshots() } }
+                            }
                             else -> {}
                         }
                     }
@@ -354,7 +357,8 @@ class MainActivity : ComponentActivity() {
                     // what's on screen, so the icon and the flip match what the user sees.
                     appearance = effectiveAppearance,
                     onToggleTheme = {
-                        val next = if (effectiveAppearance == AppearanceMode.DARK) AppearanceMode.LIGHT else AppearanceMode.DARK
+                        // The opposite of what is painted (#97 spec §10.6).
+                        val next = nextAppearance(appearance, AppearanceMode.SYSTEM, systemDark)
                         themeScope.launch { themeUiPrefs.putAppearance(next) }
                     },
                     defaultDeviceName = androidDeviceName(),
@@ -375,8 +379,7 @@ class MainActivity : ComponentActivity() {
                             onOpenDisplays = { ui.openDisplays() },
                         )
                     },
-                    settingsExtra = { extra, scope -> FleetSettingsExtra(extra, scope) },
-                    settingsSection = { section, scope -> FleetSettingsSection(section, scope, vm.fleet) },
+                    settingsSection = { place, scope -> FleetSettingsSection(place, scope, vm.fleet) },
                 )
             }
         }

@@ -1,5 +1,6 @@
-import { execFileSync } from "child_process"
+import { spawnCommandSync } from "../process/launcher"
 import { readFileSync } from "fs"
+import { host } from "@supermux/platform"
 
 const KEY = "MUX_SESSION_ID="
 
@@ -12,8 +13,9 @@ function processSessionId(pid: number, platform: NodeJS.Platform): string | null
       }
       return null
     }
-    const out = execFileSync("ps", ["-E", "-ww", "-p", String(pid), "-o", "command="], { encoding: "utf8", timeout: 2000 })
-    const m = out.match(/(?:^|\s)MUX_SESSION_ID=(\S+)/)
+    const r = spawnCommandSync("ps", ["-E", "-ww", "-p", String(pid), "-o", "command="], { encoding: "utf8", timeout: 2000 })
+    if (r.error || r.status !== 0) return null
+    const m = r.stdout.toString().match(/(?:^|\s)MUX_SESSION_ID=(\S+)/)
     return m?.[1] ?? null
   } catch {
     return null
@@ -22,8 +24,9 @@ function processSessionId(pid: number, platform: NodeJS.Platform): string | null
 
 function childPids(pid: number): number[] {
   try {
-    const out = execFileSync("pgrep", ["-P", String(pid)], { encoding: "utf8", timeout: 2000 })
-    return out.split("\n").map((l) => Number(l.trim())).filter((n) => n > 0)
+    const r = spawnCommandSync("pgrep", ["-P", String(pid)], { encoding: "utf8", timeout: 2000 })
+    if (r.error || r.status !== 0) return []
+    return r.stdout.toString().split("\n").map((l) => Number(l.trim())).filter((n) => n > 0)
   } catch {
     return []
   }
@@ -34,6 +37,6 @@ function childPids(pid: number): number[] {
  * environment, or in its direct children's (the pane runs `bash -lc 'exec env … claude'`, so
  * either the pane process itself or its child carries it). Null when it can't be read.
  */
-export function paneSessionId(panePid: number, platform: NodeJS.Platform = process.platform): string | null {
+export function paneSessionId(panePid: number, platform: NodeJS.Platform = host.os()): string | null {
   return processSessionId(panePid, platform) ?? childPids(panePid).map((pid) => processSessionId(pid, platform)).find((id) => id) ?? null
 }

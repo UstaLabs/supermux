@@ -1,5 +1,6 @@
 package dev.supermux.desktop.platform
 
+import dev.supermux.ui.whatsnew.ReleasePlatform
 import dev.supermux.desktop.notify.DesktopNotifications
 import dev.supermux.desktop.shell.DesktopWindowHostController
 import dev.supermux.desktop.update.DesktopAppUpdater
@@ -66,7 +67,7 @@ class DesktopPlatform : Platform {
         appearanceControls = true,
         // No wallpaper-derived scheme off Android: the Material You row would be an inert switch.
         dynamicColor = false,
-        // The app updates ITSELF here as well (Route.AppUpdate → the shared `ui/update/AppUpdate.kt`).
+        // The app updates ITSELF here as well (General ▸ App version, `ui/settings/pages/AppUpdateRows.kt`).
         appUpdate = true,
         // The shared Ghostty renderer is bound (`terminalView()` never returns the
         // unavailable factory here).
@@ -76,6 +77,8 @@ class DesktopPlatform : Platform {
         // AWT turns a Mac trackpad's two-finger scroll into wheel events that run on into the
         // system's momentum, with no "fingers lifted" in between.
         trackpadMomentum = isMacOs(),
+        // WKWebView's pageZoom: device mode's fit (#122). WebView2 and WPE have no page zoom in the engine yet.
+        pageFit = isMacOs(),
         // The assistant overlay (#62): the Agent in always-on-top windows over every app, behind its
         // Appearance switch. macOS and Windows; a Linux compositor may not keep it on top.
         assistantOverlay = dev.supermux.desktop.overlay.desktopOverlaySupported,
@@ -96,6 +99,19 @@ class DesktopPlatform : Platform {
 
     /** Detached workspace windows — the shell binds the live registry into this. */
     override val windows: WindowHostController = DesktopWindowHostController
+
+    // #105: a desktop browser's tabs never freeze: room for every kept tab plus what shows.
+    override val keepsBrowserTabsLive: Boolean = true
+
+    override val releasePlatform: ReleasePlatform = when (DesktopOs.current) {
+        DesktopOs.MACOS -> ReleasePlatform.Mac
+        DesktopOs.WINDOWS -> ReleasePlatform.Windows
+        DesktopOs.LINUX -> ReleasePlatform.Linux
+    }
+
+    init {
+        dev.supermux.ui.browser.AppWebViews.liveBudget = dev.supermux.ui.browser.BrowserTabKeeper.MAX_LIVE_TABS + 8
+    }
 
     /** No FCM off Android; desktop's own tray notifications cover the live process. */
     override val push: PushRegistrar? = null
@@ -169,6 +185,12 @@ class DesktopPlatform : Platform {
 
     /** Process-wide, not per-window — see [SharedDesktopTts]. */
     override val tts: TtsEngine get() = SharedDesktopTts
+
+    /** AVAudioPlayer on macOS (#118: the library cannot play an audio-only file there); the library elsewhere. */
+    override val audioOutputs: dev.supermux.work.AudioOutputs? = desktopAudioOutputs()
+
+    /** The Mac's Now Playing and media keys, Windows's media keys (#118 car 3c); none on Linux. */
+    override val systemNowPlaying: dev.supermux.work.SystemNowPlaying? get() = DesktopNowPlaying.shared
 
     /** Rendered by `DesktopTheme`'s snackbar host — one bus per window root, which is where
      *  [DesktopPlatform] itself is constructed. */

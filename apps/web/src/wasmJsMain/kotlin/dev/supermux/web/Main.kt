@@ -35,7 +35,6 @@ import dev.supermux.ui.push.notificationCancelSessionIds
 import dev.supermux.ui.push.pushTapHandleDecision
 import dev.supermux.ui.push.resolvePushTap
 import dev.supermux.ui.session.SessionListMode
-import dev.supermux.ui.settings.FleetSettingsExtra
 import dev.supermux.ui.settings.FleetSettingsSection
 import dev.supermux.ui.settings.rememberAgentSettingsActions
 import dev.supermux.ui.settings.rememberDevicesSettingsActions
@@ -44,6 +43,9 @@ import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.ui.shell.SupermuxApp
 import dev.supermux.ui.shell.visibleWorkspaceChatIdsAt
 import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.ui.theme.nextAppearance
+import dev.supermux.ui.theme.paintedAppearance
+import dev.supermux.web.seams.WebDownload
 import dev.supermux.web.seams.WebMedia
 import dev.supermux.web.auth.CookieSession
 import dev.supermux.web.auth.SessionState
@@ -57,7 +59,6 @@ import kotlinx.browser.window
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.configureWebResources
@@ -100,7 +101,14 @@ fun main() {
 
     val settings = LocalStorageSettingsStore()
     // The browser has no reliable version or OS source and we don't parse the User-Agent: surface only.
-    val deps = HostStoreDeps(httpFactory = jsHttpFactory(), settings = settings, media = WebMedia.cache, clientInfo = dev.supermux.net.ClientInfo("web"))
+    // Downloads (#95) are the browser's own fetch into a Blob: this page has no files for them to land in.
+    val deps = HostStoreDeps(
+        httpFactory = jsHttpFactory(),
+        settings = settings,
+        media = WebMedia.cache,
+        clientInfo = dev.supermux.net.ClientInfo("web"),
+        browserDownload = WebDownload,
+    )
     val uiPrefs = UiPrefs(settings)
     // The page's own scope: `Dispatchers.Main` because everything it drives ends in a Compose state
     // read, `SupervisorJob` so one failed collector cannot tear the app's state down. Never
@@ -136,6 +144,8 @@ fun main() {
         ComposeViewport(document.body!!) {
             val appearance by uiPrefs.appearance(AppearanceMode.SYSTEM).collectAsState(appearanceSeed)
             val textScale by uiPrefs.textScale.collectAsState(textScaleSeed)
+            // The theme's own dark check: what System paints, for the sidebar's theme shortcut.
+            val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
             // Hold the splash until Compose has actually painted: removing it before the first
             // frame leaves one blank frame.
             LaunchedEffect(Unit) { window.requestAnimationFrame { document.getElementById("splash")?.remove() } }
@@ -189,10 +199,10 @@ fun main() {
                     mutableStateOf(settings.stringNow(GROUP_BY_PROJECT_KEY) != "false")
                 }
                 val foreground by WebAppState.foreground.collectAsState()
+                // Card #121: a hidden tab writes the offline cache now; it may be closed before the next sample.
+                LaunchedEffect(foreground) { if (!foreground) fleet.writeSnapshots() }
 
-                // Silence read-aloud when the tab goes to the background, the way Android stops it
-                // on ON_STOP: nothing else would ever stop it, since the composition stays alive.
-                LaunchedEffect(foreground) { if (!foreground) MessageTts.stop(platform.tts) }
+                // Read-aloud goes on in a background tab (#118 car 3b), as the audio player does: the dock's ✕ stops it.
 
                 // Has this broker been through first-run setup? `null` until its first snapshot,
                 // which is the whole reason this is a tri-state: a default of `false` would flash
@@ -319,13 +329,12 @@ fun main() {
                     SupermuxApp(
                         fleet = fleet,
                         ui = ui,
-                        appearance = appearance,
+                        // What is painted, so the icon and the flip match the screen: the opposite of it
+                        // (System resolved by the browser's dark check), never of the stored value (#97 spec §10.6).
+                        appearance = paintedAppearance(appearance, AppearanceMode.SYSTEM, systemDark),
                         onToggleTheme = {
-                            appScope.launch {
-                                uiPrefs.putAppearance(
-                                    if (appearance == AppearanceMode.DARK) AppearanceMode.LIGHT else AppearanceMode.DARK,
-                                )
-                            }
+                            val next = nextAppearance(appearance, AppearanceMode.SYSTEM, systemDark)
+                            appScope.launch { uiPrefs.putAppearance(next) }
                         },
                         appForeground = foreground,
                         // A tab reopens where it was, and the URL says where that is.
@@ -337,8 +346,7 @@ fun main() {
                             groupByProject = value
                             appScope.launch { settings.putString(GROUP_BY_PROJECT_KEY, value.toString()) }
                         },
-                        settingsExtra = { extra, scope -> FleetSettingsExtra(extra, scope) },
-                        settingsSection = { section, scope -> FleetSettingsSection(section, scope, fleet) },
+                        settingsSection = { place, scope -> FleetSettingsSection(place, scope, fleet) },
                     )
                     // An OVERLAY at the top, not a row above the shell: the strip must not reflow
                     // the app (see [WebPushBanner]). It draws nothing at all unless this browser
@@ -380,17 +388,7 @@ private fun buildFleet(deps: HostStoreDeps, scope: CoroutineScope): FleetStore {
         },
     )
     fleet.bindMessageTts()
-    scope.launch {
-        combine(fleet.sessions, fleet.sessionHost) { sessions, owners -> sessions to owners }
-            .collect { (sessions, owners) ->
-                val records = fleet.store.list()
-                snapshots.retainOnly(records.map { it.recordId })
-                val now = deps.nowMs()
-                records.forEach { host ->
-                    val mine = sessions.filter { owners[it.id] == host.recordId }
-                    if (mine.isNotEmpty()) snapshots.replace(host.recordId, mine, now, host.version)
-                }
-            }
-    }
+    // Card #121: the chat list and recent chats, cached for an instant (and offline) next launch.
+    scope.launch { fleet.keepSnapshots() }
     return fleet
 }

@@ -32,6 +32,9 @@ internal class TestServer : AutoCloseable {
     /** The paths asked for, in order. */
     val requested: MutableList<String> = Collections.synchronizedList(mutableListOf())
 
+    /** The `Cookie` header of each request, in step with [requested] (empty when it had none). */
+    val cookies: MutableList<String> = Collections.synchronizedList(mutableListOf())
+
     val port: Int = socket.localPort
 
     /** This server's origin, as `http://127.0.0.1:<port>`. */
@@ -63,11 +66,14 @@ internal class TestServer : AutoCloseable {
         try {
             val reader = BufferedReader(InputStreamReader(connection.getInputStream(), Charsets.ISO_8859_1))
             val requestLine = reader.readLine() ?: return@use
+            var cookie = ""
             while (true) {
                 val line = reader.readLine() ?: break
                 if (line.isEmpty()) break
+                if (line.startsWith("Cookie:", ignoreCase = true)) cookie = line.substringAfter(':').trim()
             }
             val path = (requestLine.split(' ').getOrNull(1) ?: "/").substringBefore('?')
+            cookies += cookie
             requested += path
             val response = routes[path] ?: Response(404, "not found", "text/plain")
             if (response.delayMillis > 0) Thread.sleep(response.delayMillis)

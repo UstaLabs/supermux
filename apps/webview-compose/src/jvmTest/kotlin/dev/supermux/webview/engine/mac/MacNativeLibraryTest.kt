@@ -120,8 +120,10 @@ class MacNativeLibraryTest {
         val file = File(root, "glue.dylib").apply { writeBytes(glue) }
         loader(resources(), override = file.path).load()
         assertEquals(listOf(file.absolutePath), loads)
-        val failure = assertFailsWith<MacGlueException> { loader(resources(), override = file.path, abi = 7).load() }
-        assertTrue("speaks ABI 7" in failure.message!!, failure.message)
+        // Any ABI but this library's: a fixed number goes stale when the glue's ABI moves to it.
+        val other = MacGlue.ABI + 1
+        val failure = assertFailsWith<MacGlueException> { loader(resources(), override = file.path, abi = other).load() }
+        assertTrue("speaks ABI $other" in failure.message!!, failure.message)
     }
 
     /**

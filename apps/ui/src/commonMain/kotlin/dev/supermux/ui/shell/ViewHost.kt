@@ -16,6 +16,7 @@ package dev.supermux.ui.shell
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.CompositionLocalProvider
+import dev.supermux.ui.browser.trackClickModifiers
 import dev.supermux.fs.hostJoin
 import dev.supermux.ui.editor.repoPath
 import dev.supermux.ui.isAbsoluteEditorPath
@@ -171,6 +172,8 @@ fun ViewHost(
     onEntryMoved: (oldAbsolutePath: String, newAbsolutePath: String?) -> Unit = { _, _ -> },
     /** Reveal/create the singleton Changes pane and switch it into walkthrough mode. */
     onOpenWalkthrough: (sessionId: String, stepId: String?) -> Unit = { _, _ -> },
+    /** Reveal/create the singleton Changes pane (#72: the composer footer's git sign). */
+    onOpenChanges: (() -> Unit)? = null,
     /** Session whose walkthrough the singleton Changes pane currently presents. */
     walkthroughSessionId: String? = null,
     onWalkthroughClosed: () -> Unit = {},
@@ -217,29 +220,38 @@ fun ViewHost(
         "chat" -> {
             val sessionId = view.chatSessionId()
             if (sessionId == null) UnknownViewHint(view.kind, modifier)
-            else ChatViewPane(
-                actions = actions,
-                sessionId = sessionId,
-                workdir = workdir,
-                drafts = drafts,
-                headerMode = chatHeaderMode,
-                chatState = chatState,
-                chatActions = chatActions,
-                onSelectSession = onSelectSession,
-                onOpenFile = onOpenFile,
-                onOpenWalkthrough = { stepId -> onOpenWalkthrough(sessionId, stepId) },
-                forceLinksMenu = forceLinksMenuFor == sessionId,
-                onForceLinksMenuConsumed = onForceLinksMenuConsumed,
-                externalAttach = externalAttach?.takeIf { it.first == sessionId }?.second,
-                onExternalAttachConsumed = onExternalAttachConsumed,
-                externalDictate = externalDictate?.takeIf { it.first == sessionId }?.second,
-                onExternalDictateConsumed = onExternalDictateConsumed,
-                // Addressed to one session so a workspace showing two chats pastes into the
-                // selected one, not both.
-                pasteImageRequestNonce = if (pasteImageFor == sessionId) pasteImageRequestNonce else 0L,
-                onPasteImageRequestConsumed = onPasteImageRequestConsumed,
-                modifier = modifier,
-            )
+            else {
+                // Its links go through the workspace (#105), with the modifiers of the press that clicked them.
+                val links = dev.supermux.ui.browser.LocalLinkOpener.current
+                val clicks = remember { dev.supermux.ui.browser.ClickModifiers() }
+                val openLink = remember(links, view.id) { links?.let { o -> { url: String -> o.open(url, view.id, clicks.modified) } } }
+                CompositionLocalProvider(dev.supermux.ui.browser.LocalOpenLink provides openLink) {
+                    ChatViewPane(
+                        actions = actions,
+                        sessionId = sessionId,
+                        workdir = workdir,
+                        drafts = drafts,
+                        headerMode = chatHeaderMode,
+                        chatState = chatState,
+                        chatActions = chatActions,
+                        onSelectSession = onSelectSession,
+                        onOpenFile = onOpenFile,
+                        onOpenWalkthrough = { stepId -> onOpenWalkthrough(sessionId, stepId) },
+                        onOpenChanges = onOpenChanges,
+                        forceLinksMenu = forceLinksMenuFor == sessionId,
+                        onForceLinksMenuConsumed = onForceLinksMenuConsumed,
+                        externalAttach = externalAttach?.takeIf { it.first == sessionId }?.second,
+                        onExternalAttachConsumed = onExternalAttachConsumed,
+                        externalDictate = externalDictate?.takeIf { it.first == sessionId }?.second,
+                        onExternalDictateConsumed = onExternalDictateConsumed,
+                        // Addressed to one session so a workspace showing two chats pastes into the
+                        // selected one, not both.
+                        pasteImageRequestNonce = if (pasteImageFor == sessionId) pasteImageRequestNonce else 0L,
+                        onPasteImageRequestConsumed = onPasteImageRequestConsumed,
+                        modifier = modifier.then(Modifier.trackClickModifiers(clicks)),
+                    )
+                }
+            }
         }
         "terminal" -> {
             val scope = view.stateString("scope") ?: "workspace"
@@ -318,6 +330,13 @@ fun ViewHost(
             // means "whatever is running here", not "a stream that has gone away".
             DisplayPanelForStream(actions, view.stateString("displayId").orEmpty(), "$workspaceId:${view.id}", modifier)
         }
+        // A web page (#105): its view's state is the page, synced to every client.
+        "browser" -> {
+            // Desktop: the tab's page stays live while it's in the back ([BrowserTabKeeper]); elsewhere the pool parks it.
+            val keeper = dev.supermux.ui.browser.LocalBrowserTabKeeper.current
+            if (keeper != null) keeper.Show(view, workspaceId, actions.browser, modifier)
+            else dev.supermux.ui.browser.BrowserPane(view, workspaceId, actions.browser, modifier)
+        }
         else -> UnknownViewHint(view.kind, modifier)
     }
 }
@@ -340,6 +359,7 @@ private fun ChatViewPane(
     onSelectSession: (String) -> Unit,
     onOpenFile: (path: String, line: Int?, endLine: Int?) -> Unit,
     onOpenWalkthrough: (stepId: String?) -> Unit,
+    onOpenChanges: (() -> Unit)?,
     forceLinksMenu: Boolean,
     onForceLinksMenuConsumed: () -> Unit,
     externalAttach: ComposerExternalAttach?,
@@ -392,6 +412,7 @@ private fun ChatViewPane(
                 modifier = modifier.fillMaxSize().testTag(WorkspaceChatPaneTestIds.VIEW_CHAT),
                 showHeader = true,
                 onOpenWalkthrough = onOpenWalkthrough,
+                onOpenChanges = onOpenChanges,
                 // Mute is the one session control this panel can perform without a dialog; rename/kill
                 // live in OverflowMenu (the header slot below), so they stay out of the slash menu here.
                 onRequestMute = { actions.setMute(sessionId, !(session.mute ?: false)) },
@@ -455,6 +476,7 @@ private fun ChatViewPane(
                 onDraftChange = { drafts[sessionId] = it },
                 showHeader = false,
                 onOpenWalkthrough = onOpenWalkthrough,
+                onOpenChanges = onOpenChanges,
                 onRequestMute = { actions.setMute(sessionId, !(session.mute ?: false)) },
                 externalAttach = externalAttach,
                 onExternalAttachConsumed = onExternalAttachConsumed,
@@ -568,7 +590,12 @@ private fun rememberOpenTappedPath(
 ): (FilePathRef) -> Unit {
     val notices = LocalPlatform.current.notices
     val scope = rememberCoroutineScope()
-    return { ref ->
+    // One lambda while what it opens is the same: a new one each recomposition recomposed every markdown row it reached.
+    val currentOpenFile by androidx.compose.runtime.rememberUpdatedState(onOpenFile)
+    val currentFileSystem by androidx.compose.runtime.rememberUpdatedState(fileSystem)
+    return remember(notices, scope, workdir, relativeTo) { { ref ->
+        val fileSystem = currentFileSystem
+        val onOpenFile = currentOpenFile
         val candidates = tappedPathCandidates(ref, workdir, relativeTo)
         if (candidates.isEmpty()) {
             notices.show("That's the workspace folder itself")
@@ -579,7 +606,7 @@ private fun rememberOpenTappedPath(
                 else onOpenFile(found, ref.line, ref.endLine)
             }
         }
-    }
+    } }
 }
 
 /**
@@ -723,6 +750,8 @@ private fun FilePaneForWorkspace(
         onOpenFile = openLink,
         rawBytes = { abs -> actions.fileSystemFor(workspaceId)?.raw(abs) ?: Result.failure(IllegalStateException("Host offline")) },
         fileSystem = actions.fileSystemFor(workspaceId),
+        // A binary file's "Save and open…" as one of the fleet's downloads (#95): closing the tab no longer stops it.
+        hostFileDownload = { abs -> actions.hostFileDownloadFor(workspaceId, abs) },
         modifier = modifier.fillMaxSize(),
     )
 }
@@ -791,6 +820,8 @@ private fun DiffPaneForWorkspace(
         baseText = actions.workspaceChangesBlob?.let { f -> { repo, sha, force -> f(workspaceId, repo, sha, force) } },
         // The review drafts outlive the workspace's composition, which a rotation rebuilds (#89).
         retainKey = "diff:$workspaceId:$viewId",
+        // #72: the "in the next commit" boxes wait for the commit bar (car 4b); a box with no way to commit is half a feature.
+        stageFiles = null,
         modifier = modifier.fillMaxSize(),
     )
 }

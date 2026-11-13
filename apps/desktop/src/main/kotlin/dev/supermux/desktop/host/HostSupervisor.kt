@@ -451,7 +451,10 @@ class HostSupervisor(
                     retries.reset()
                     _status.value = HostingStatus.Starting
                     val me = me()
-                    withContext(io) { BrokerService.restart(osEnv, me) }
+                    withContext(io) {
+                        expectRestartLocked(p.port)
+                        BrokerService.restart(osEnv, me)
+                    }
                     afterLaunch(p, awaitHealthy(p.port, null, timing.healthTimeoutMs))
                     false
                 }
@@ -523,6 +526,11 @@ class HostSupervisor(
 
         var found = probe(prefs.port)
         log("probe :${prefs.port}: ${found.describe()}")
+        // Windows (#113): a gone broker's leftovers can keep its listener; stop them before deciding anything.
+        if (osEnv.os == DesktopOs.WINDOWS && (found == HostProbeResult.Busy || found == HostProbeResult.ForeignProcess)) {
+            freeStalePortLocked(prefs.port)
+            found = probe(prefs.port)
+        }
         // Finish or undo a takeover a crash interrupted (journal in <stateDir>/takeover-backup).
         val healthy = found.isOurs() && ownsRunningBroker()
         val recovered = withContext(io) { Takeover.recoverPending(stateDir, osEnv, ourServiceHealthy = healthy, me = me) }
@@ -792,7 +800,10 @@ class HostSupervisor(
         if (ourServiceInstalled()) {
             // Our service: restart it the way it runs, whatever prefs.background says.
             // Windows can't replace a running .exe: stop the task's broker first (no elevation; the
-            // install below restarts the task, and only asks for UAC when its definition changed).
+            // install below restarts the task, and only asks for UAC when its definition changed). Announced first
+            // (#113): the keepers run from the broker's copy in desktop-assets, so the agents carry on and the new
+            // broker re-attaches them.
+            if (windows) withContext(io) { expectRestartLocked(prefs0.port) }
             if (windows && !stopWindowsServiceLocked(prefs0.port)) return keepServiceAfterFailedStop(prefs0)
             val bins = binaries()
             if (lastCopyFailed && !windows) return keepRunning(prefs0, Mode.SERVICE)
@@ -893,11 +904,20 @@ class HostSupervisor(
         }
     }
 
+    /**
+     * A restart, never a plain stop (quit, hosting off): the broker on [port] is told first, so it leaves its agents
+     * running for the broker that comes next (#29).
+     */
+    private fun expectRestartLocked(port: Int) {
+        if (BrokerService.expectRestart(osEnv, stateDir, port)) log("restart: the broker keeps its agents running for the next one")
+    }
+
     /** Restart in the current mode with a freshly built env (relay change, tray restart in child mode). */
     private suspend fun relaunchLocked(p: HostingPrefs) {
         stopWatch()
         retries.reset()
         _status.value = HostingStatus.Starting
+        withContext(io) { expectRestartLocked(p.port) }
         val stopped = mode == Mode.SERVICE && osEnv.os == DesktopOs.WINDOWS
         if (stopped && !stopWindowsServiceLocked(p.port)) return keepServiceAfterFailedStop(p)
         val bins = binaries()

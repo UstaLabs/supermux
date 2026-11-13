@@ -1,5 +1,9 @@
 package dev.supermux.webview.sample.checks
 
+import dev.supermux.webview.WebCookie
+import dev.supermux.webview.FindResult
+import java.net.InetSocketAddress
+import com.sun.net.httpserver.HttpServer
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -33,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import dev.supermux.webview.Activation
 import dev.supermux.webview.DarkMode
 import dev.supermux.webview.WebContent
+import dev.supermux.webview.WebProfile
 import dev.supermux.webview.WebSettings
 import dev.supermux.webview.WebSizing
 import dev.supermux.webview.WebView
@@ -76,11 +81,35 @@ hostBridge.handle('state', function () {
 </script></body></html>""",
     )
 
+    /**
+     * A page with the same field that records the ⌘ keys it sees and keeps ⌘B for itself (`preventDefault`), as a web
+     * editor's bold does (#122, page-first keys).
+     */
+    private val KEYS_PAGE = WebContent.Html(
+        """<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>keys</title>
+<style>html,body{margin:0;height:100%;background:#e8f0fe;font:16px system-ui}
+#field{position:absolute;left:8px;top:8px;width:150px;height:40px;box-sizing:border-box;font:16px system-ui}</style></head>
+<body><input id="field" autocomplete="off" spellcheck="false"><script>
+var keys = '';
+document.addEventListener('keydown', function (e) {
+  if (!e.metaKey) return;
+  var k = e.key.toLowerCase();
+  keys += k;
+  if (k === 'b') e.preventDefault();
+});
+hostBridge.handle('state', function () {
+  var f = document.getElementById('field');
+  return { presses: 0, value: f.value, focused: document.activeElement === f, keys: keys };
+});
+</script></body></html>""",
+    )
+
     /** What a check's scene shows, and where its parts are in the window (px). */
-    private class Stage(withEmbed: Boolean = false) {
+    /** [profile]: a view that loads local content and then a page needs one pinned, or each runs in its own (Html: Ephemeral). */
+    private class Stage(withEmbed: Boolean = false, val profile: WebProfile? = null, content: WebContent = INPUT_PAGE) {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         val runtime = WebViewRuntime(RuntimeConfig(maxLive = 2, maxIdle = 0, snapshotCacheBytes = 16L shl 20, scope = scope))
-        val state = WebViewState(INPUT_PAGE)
+        val state = WebViewState(content)
         val embedState = if (withEmbed) WebViewState(WebContent.Html("<!doctype html><title>embed</title><p>An embed</p>")) else null
         var page: Rect? = null
         var overlay: Rect? = null
@@ -100,7 +129,7 @@ hostBridge.handle('state', function () {
                         WebView(
                             stage.state,
                             Modifier.fillMaxSize().onGloballyPositioned { stage.page = it.boundsInWindow() },
-                            settings = WebSettings(darkMode = DarkMode.Light),
+                            settings = WebSettings(darkMode = DarkMode.Light, profile = stage.profile),
                             activation = Activation.Eager,
                         )
                         // A marked overlay over the page's top-right corner: its presses are Compose's (D1).
@@ -190,7 +219,146 @@ hostBridge.handle('state', function () {
         if (met != true) throw AssertionError("no $what within $millis ms")
     }
 
+    /** A page whose title says what it sees: its device pixel ratio (WebKit's page zoom scales it), refreshed on resize. */
+    private val TEXT_PAGE = WebContent.Html(
+        """<!doctype html><html><head><title>text-page</title></head><body>
+<p>Find the password in this paragraph.</p><script>
+function report() { document.title = 'dpr=' + window.devicePixelRatio.toFixed(2); }
+window.addEventListener('resize', report);
+setTimeout(report, 50);
+</script></body></html>""",
+    )
+
+    /** A page whose title says its layout width in CSS px (#122 2b: device mode's fit keeps it). */
+    private val WIDTH_PAGE = WebContent.Html(
+        """<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>width-page</title></head>
+<body><script>
+function report() { document.title = 'w=' + window.innerWidth; }
+window.addEventListener('resize', report);
+setInterval(report, 100);
+report();
+</script></body></html>""",
+    )
+
+    /** A checkout-like page for the picker (#122): a heading with an id, two rows alike, a summary with its button. */
+    private val PICK_PAGE = WebContent.Html(
+        """<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>pick</title>
+<style>html,body{margin:0;height:100%;font:16px system-ui}h1{margin:0;height:10vh}ul{margin:0;padding:0;height:40vh}
+li{list-style:none;height:20vh}aside{position:absolute;left:0;right:0;top:60vh;height:30vh}
+button{display:block;width:100%;height:15vh;margin-top:8vh}</style></head>
+<body><h1 id="title">Your cart</h1><ul><li class="row">Shoes</li><li class="row">Socks</li></ul>
+<section class="cart" style="position:absolute;left:0;width:50%;top:50vh;height:10vh"><h3 style="margin:0;height:10vh">Cart</h3></section>
+<input placeholder="you@example.com" style="position:absolute;left:50%;width:50%;top:50vh;height:10vh;box-sizing:border-box">
+<aside class="summary"><h2 style="margin:0;height:8vh">Order summary</h2><button class="buy">Pay €42</button></aside></body></html>""",
+    )
+
+    /** A local page that puts the Cookie header its request carried, and what its script can read, in its title. */
+    private fun cookieEcho(): HttpServer = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+        createContext("/") { exchange ->
+            val sent = exchange.requestHeaders.getFirst("Cookie").orEmpty().replace(Regex("[^A-Za-z0-9=;_ -]"), "")
+            val body = "<!doctype html><title>cookies</title><script>document.title = 'req=$sent | js=' + document.cookie</script>"
+                .toByteArray()
+            exchange.responseHeaders.add("Content-Type", "text/html")
+            exchange.sendResponseHeaders(200, body.size.toLong())
+            exchange.responseBody.use { it.write(body) }
+        }
+        start()
+    }
+
     val all: List<Check> = listOf(
+        Check("mac-find-says-found-or-not") {
+            val stage = Stage()
+            withPage(stage) { _ ->
+                stage.state.load(TEXT_PAGE)
+                waitFor("the text page") { stage.state.title?.startsWith("dpr=") == true }
+                assertEquals(FindResult(found = true), stage.state.navigator.find("password"), "a word on the page")
+                assertEquals(FindResult(found = false), stage.state.navigator.find("absent-word"), "a word that isn't")
+                stage.state.navigator.clearFind()
+            }
+        },
+        Check("mac-zoom-scales-the-page") {
+            val stage = Stage()
+            withPage(stage) { _ ->
+                stage.state.load(TEXT_PAGE)
+                waitFor("the text page") { stage.state.title?.startsWith("dpr=") == true }
+                val before = stage.state.title!!.removePrefix("dpr=").toDouble()
+                assertTrue(stage.state.navigator.setZoom(2f), "the engine zooms")
+                waitFor("the page at 200 %") { (stage.state.title?.removePrefix("dpr=")?.toDoubleOrNull() ?: 0.0) >= before * 1.9 }
+                stage.state.navigator.setZoom(1f)
+                waitFor("the page back at 100 %") { stage.state.title?.removePrefix("dpr=")?.toDoubleOrNull() == before }
+            }
+        },
+        Check("mac-page-zoom-keeps-the-css-width-device-mode-fits-with") {
+            // #122 2b: device mode fits a big device by drawing the view at size × s and zooming the page by s. Its CSS
+            // width must stay the device's: a 360 dp view at 50 % is a 720 CSS px page, as media queries see it.
+            val stage = Stage()
+            withPage(stage) { _ ->
+                stage.state.load(WIDTH_PAGE)
+                fun width() = stage.state.title?.removePrefix("w=")?.toIntOrNull()
+                waitFor("the width page") { width() != null }
+                val base = width()!!
+                assertTrue(base in 359..361, "at 100 % the page is the view's width (360 dp, ± a pixel's rounding): $base")
+                assertTrue(stage.state.navigator.setZoom(0.5f), "the engine zooms")
+                // The view is 360 dp; WebKit rounds the 100 % width to the slot's pixels (361 on a 2× screen).
+                waitFor("the page laid out at twice the view's width (720 ± 2)") { (width() ?: 0) in 718..722 }
+                stage.state.navigator.setZoom(1f)
+                waitFor("the page back at the view's width") { width() == base }
+            }
+        },
+        Check("mac-the-picker-names-an-element-with-a-short-verified-selector") {
+            // #122 pick and comment: the element under a point, its selector as short as stays unique and resolves back
+            // (supercomment's rule), its text and box; a parent; and boxes of pinned selectors, one gone.
+            val stage = Stage()
+            withPage(stage) { _ ->
+                stage.state.load(PICK_PAGE)
+                waitFor("the checkout page") { stage.state.title == "pick" }
+                val nav = stage.state.navigator
+                val pay = assertNotNull(nav.elementAt(0.5f, 0.83f), "an element at the button")
+                assertEquals("button.buy", pay.selector, "unique on its own: no longer")
+                assertEquals("Pay €42", pay.text)
+                assertEquals("button", pay.tag)
+                assertTrue(pay.label.startsWith("button.buy · "), pay.label)
+                assertTrue(pay.box.y in 0.74f..0.78f && pay.box.height in 0.13f..0.17f, "the button at 76 % of the height, 15 % tall: ${pay.box}")
+                assertEquals("aside.summary", nav.elementAt(0.5f, 0.83f, up = 1)?.selector)
+                val second = assertNotNull(nav.elementAt(0.5f, 0.35f), "the second of two alike")
+                assertEquals("li.row:nth-of-type(2)", second.selector)
+                assertEquals("#title", nav.elementAt(0.5f, 0.05f)?.selector, "an id says it all")
+                // Over its own text a block's box hugs the text, not its empty width (Ahmet, 2026-11-12: "big for no
+                // reason"); one up is the block's own box; the selector is the block's either way.
+                val words = assertNotNull(nav.elementAt(0.05f, 0.03f), "the title's words")
+                val block = assertNotNull(nav.elementAt(0.05f, 0.03f, up = 1), "the title's block")
+                assertEquals("#title" to "#title", words.selector to block.selector)
+                assertTrue(words.box.width < 0.8f && block.box.width > 0.98f, "the words ${words.box}, the block ${block.box}")
+                // Never a bare tag (Tally, 2026-11-12: "h3" and "input" can't be acted on): the nearest classed
+                // ancestor, or the element's own placeholder.
+                assertEquals("section.cart > h3", nav.elementAt(0.25f, 0.55f)?.selector)
+                assertEquals("input[placeholder='you@example.com']", nav.elementAt(0.75f, 0.55f)?.selector)
+                val boxes = nav.boxesOf(listOf(pay.selector, "section.gone"))
+                assertEquals(pay.box, boxes[0])
+                assertEquals(null, boxes[1])
+            }
+        },
+        Check("mac-a-cookie-set-before-the-page-reaches-its-request-and-an-httponly-one-stays-out-of-its-script") {
+            val server = cookieEcho()
+            try {
+                // The stage starts on local content: without a pinned profile its cookies would go into Html's
+                // Ephemeral store, and the page would load in the Default one.
+                val stage = Stage(profile = WebProfile.Named("checks-cookies"))
+                withPage(stage) { _ ->
+                    val url = "http://127.0.0.1:${server.address.port}/"
+                    assertTrue(stage.state.navigator.setCookie(WebCookie(name = "probe", value = "1", url = url, secure = false, httpOnly = false)))
+                    assertTrue(stage.state.navigator.setCookie(WebCookie(name = "hidden", value = "1", url = url, secure = false, httpOnly = true)))
+                    stage.state.navigator.load(url)
+                    waitFor("the echo page") { stage.state.title?.startsWith("req=") == true }
+                    val title = stage.state.title!!
+                    val (sent, script) = title.removePrefix("req=").split(" | js=")
+                    assertTrue("probe=1" in sent && "hidden=1" in sent, "the request carried both: $title")
+                    assertTrue("probe=1" in script && "hidden" !in script, "the script sees only the plain one: $title")
+                }
+            } finally {
+                server.stop(0)
+            }
+        },
         Check("mac-the-page-takes-its-presses-and-a-marked-overlay-its-own") {
             val stage = Stage()
             withPage(stage) { mac ->
@@ -236,6 +404,38 @@ hostBridge.handle('state', function () {
                 MacEngineTesting.type(mac.window, "q")
                 waitFor("⌘A selecting all, so q replaces it") { pageState(stage)["value"]!!.jsonPrimitive.content == "q" }
                 assertEquals("", stage.text, "no key reached Compose's field")
+            }
+        },
+        // #122: a ⌘ key goes to the page first, as in Chrome: one the page uses (⌘B, preventDefault) stays the page's; one
+        // it leaves unused (⌘K) reaches the app after it. One the app reserves (⌘T) reaches the app first, as before: it
+        // keeps AppKit's own route, because the menu bar runs ⌘N, ⌘T and ⌘, from there.
+        Check("mac-command-keys-are-the-pages-first") {
+            val stage = Stage(content = KEYS_PAGE)
+            val app = StringBuffer()
+            val listener = java.awt.KeyEventDispatcher { e ->
+                if (e.id == java.awt.event.KeyEvent.KEY_PRESSED && e.isMetaDown) app.append(java.awt.event.KeyEvent.getKeyText(e.keyCode).lowercase())
+                false
+            }
+            java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(listener)
+            try {
+                withPage(stage) { mac ->
+                    val page = assertNotNull(stage.page)
+                    pressAt(mac, page, 83f, 28f)
+                    waitFor("the field focused") { pageState(stage)["focused"]!!.jsonPrimitive.boolean }
+                    suspend fun pageKeys() = pageState(stage)["keys"]!!.jsonPrimitive.content
+                    MacEngineTesting.command(mac.window, 'b')
+                    waitFor("⌘B reaching the page") { "b" in pageKeys() }
+                    delay(500)
+                    assertTrue("b" !in app.toString(), "the page kept ⌘B, but the app got it too: $app")
+                    MacEngineTesting.command(mac.window, 'k')
+                    waitFor("⌘K reaching the page") { "k" in pageKeys() }
+                    waitFor("⌘K, unused by the page, reaching the app after it") { "k" in app.toString() }
+                    MacEngineTesting.command(mac.window, 't')
+                    waitFor("⌘T, the app's own, reaching the app") { "t" in app.toString() }
+                    assertTrue(app.toString().count { it == 'k' } == 1, "⌘K reached the app once: $app")
+                }
+            } finally {
+                java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().removeKeyEventDispatcher(listener)
             }
         },
         Check("mac-focus-follows-the-press") {

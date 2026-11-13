@@ -1,7 +1,11 @@
 package dev.supermux.webview.engine
 
+import dev.supermux.webview.FindResult
+import dev.supermux.webview.InspectorResult
+import dev.supermux.webview.WebCookie
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import dev.supermux.webview.ConsoleMessage
 import dev.supermux.webview.DialogResult
@@ -47,6 +51,11 @@ public data class EngineConfig(val profile: WebProfile, val mediaPlaybackRequire
  * @property transparentBackground whether the engine leaves the page's background transparent.
  * @property userAgentSuffix appended to the engine's user agent, or null.
  * @property bridgeOrigins the origins whose documents get the bridge shim.
+ * @property userAgent a whole user agent in place of the engine's own, or null ([agent]).
+ * @property desktopSite the desktop site, as a phone browser's "Desktop site" ([WebSettings.desktopSite]).
+ * @property underlay the opaque colour the app draws behind a transparent page ([WebSettings.underlay]), which an engine
+ *   whose page lies under the Compose canvas paints behind it from the lease's start; null for none, and always for an
+ *   opaque page. An engine drawn in Compose's order ignores it: its page is truly transparent.
  */
 @WebEngineSpi
 public data class PageSetup(
@@ -56,7 +65,14 @@ public data class PageSetup(
     val transparentBackground: Boolean,
     val userAgentSuffix: String?,
     val bridgeOrigins: Set<String>,
-)
+    val userAgent: String? = null,
+    val desktopSite: Boolean = false,
+    val underlay: Color? = null,
+) {
+    /** The agent to set on an engine whose own is [base]: [userAgent] or [base], then the suffix; null to leave it alone. */
+    public fun agent(base: String?): String? =
+        if (userAgent == null && userAgentSuffix == null) null else listOfNotNull(userAgent ?: base, userAgentSuffix).joinToString(" ")
+}
 
 /**
  * The per-lease part of these settings, with the values the runtime resolved: [dark] from [WebSettings.darkMode] and
@@ -69,7 +85,27 @@ internal fun WebSettings.pageSetup(dark: Boolean, bridgeOrigins: Set<String>): P
     transparentBackground = transparentBackground,
     userAgentSuffix = userAgentSuffix,
     bridgeOrigins = bridgeOrigins,
+    userAgent = userAgent,
+    desktopSite = desktopSite,
+    underlay = underlay.takeIf { transparentBackground },
 )
+
+/**
+ * A phone engine's "Desktop site" ([WebSettings.desktopSite]) where the platform has no such mode of its own (Android):
+ * Chrome's desktop agent on Linux, as Chrome Android sends for it, and a 1280 px layout viewport in place of the page's
+ * own, set at document start and kept as the page adds or changes its viewport tag.
+ */
+@WebEngineSpi
+public object DesktopSite {
+    public const val AGENT: String =
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
+    public const val VIEWPORT_SCRIPT: String = "(function(){var want='width=1280';" +
+        "function fix(m){if(m&&m.getAttribute('content')!==want)m.setAttribute('content',want);}" +
+        "function all(){var ms=document.querySelectorAll('meta[name=viewport]');for(var i=0;i<ms.length;i++)fix(ms[i]);" +
+        "if(!ms.length&&document.head){var m=document.createElement('meta');m.name='viewport';m.content=want;document.head.appendChild(m);}}" +
+        "new MutationObserver(all).observe(document,{subtree:true,childList:true,attributes:true,attributeFilter:['content']});" +
+        "document.addEventListener('DOMContentLoaded',all);})();"
+}
 
 @WebEngineSpi
 public sealed interface WebEngineResult {
@@ -124,6 +160,9 @@ public interface EngineClient {
     public suspend fun onPermission(request: PermissionRequest): Boolean
     public suspend fun onDownload(request: DownloadRequest): Boolean
     public fun onNewWindow(request: NewWindowRequest): NewWindowDecision
+
+    /** A key the page left unused, for the app's shortcuts ([dev.supermux.webview.WebClient.onUnusedKey]). Main thread. */
+    public fun onUnusedKey(event: androidx.compose.ui.input.key.KeyEvent): Boolean = false
 }
 
 @WebEngineSpi
@@ -328,6 +367,24 @@ public interface WebEngine {
     public fun goForward()
     public fun reload()
     public fun stop()
+
+    /** Finds [query] in the page, the next match after the current one, or the previous one when [backwards]. Null when the engine can't. */
+    public suspend fun find(query: String, backwards: Boolean): FindResult? = null
+
+    /** Clears find's highlight and selection. */
+    public fun clearFind() {}
+
+    /** Sets the page's zoom, 1.0 being 100 %. False when the engine can't. */
+    public fun setZoom(factor: Float): Boolean = false
+
+    /** Shows the page as [emulation]'s device, or as itself again (null). False when the engine can't (#122). */
+    public fun emulateDevice(emulation: dev.supermux.webview.DeviceEmulation?): Boolean = false
+
+    /** Puts [cookie] in the view's profile, done when this returns true. False when the engine can't. */
+    public suspend fun setCookie(cookie: WebCookie): Boolean = false
+
+    /** Opens the engine's inspector on this page, or says where the user can. */
+    public fun openInspector(): InspectorResult = InspectorResult.Unsupported
 
     /** Runs [script] in the page and returns its result JSON-encoded, or null. */
     public suspend fun evaluate(script: String): String?

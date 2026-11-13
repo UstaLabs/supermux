@@ -2,6 +2,7 @@
 import { mkdirSync, writeFileSync, chmodSync } from "fs"
 import { join } from "path"
 import { IS_COMPILED } from "../../shared/build-info"
+import { files } from "@supermux/platform"
 
 export interface InstallCredentialLauncherOpts {
   /** Override process.execPath (tests). */
@@ -22,7 +23,7 @@ export function installCredentialLauncher(
   brokerRoot: string,
   opts: InstallCredentialLauncherOpts = {},
 ): string {
-  mkdirSync(binDir, { recursive: true, mode: 0o700 })
+  files.mkdirPrivate(binDir)
   const launcher = join(binDir, "mux-credential")
   const execPath = opts.execPath ?? process.execPath
   const compiled = opts.compiled ?? IS_COMPILED
@@ -30,6 +31,6 @@ export function installCredentialLauncher(
     ? `#!/bin/sh\nexec ${JSON.stringify(execPath)} credential "$@"\n`
     : `#!/bin/sh\nexec ${JSON.stringify(execPath)} ${JSON.stringify(join(brokerRoot, "src", "core", "forge", "credential-cli.ts"))} "$@"\n`
   writeFileSync(launcher, body)
-  chmodSync(launcher, 0o700)
+  files.makePrivate(launcher, { executable: true })
   return launcher
 }

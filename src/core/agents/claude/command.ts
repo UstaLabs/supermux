@@ -1,5 +1,7 @@
+// platform-ok: Windows only (the claude.cmd → claude.exe lookup after the platform check), win32 so its tests run anywhere
 import { win32 } from "path"
 import { resolveCommand, type CommandEnvironment, type ResolveCommandDeps } from "../../process/launcher"
+import { host } from "@supermux/platform"
 
 /**
  * The program a Claude keeper runs. The keeper spawns it without a shell, which on Windows starts only
@@ -8,7 +10,7 @@ import { resolveCommand, type CommandEnvironment, type ResolveCommandDeps } from
  */
 export function claudeCommand(
   env: CommandEnvironment,
-  platform: NodeJS.Platform = process.platform,
+  platform: NodeJS.Platform = host.os(),
   deps: ResolveCommandDeps = {},
 ): string {
   if (platform !== "win32") return "claude"

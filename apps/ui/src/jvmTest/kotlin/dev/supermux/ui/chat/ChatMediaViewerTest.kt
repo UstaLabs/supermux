@@ -1,6 +1,19 @@
 package dev.supermux.ui.chat
 
 import androidx.compose.material3.Text
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.test.hasProgressBarRangeInfo
+import androidx.compose.ui.test.hasTestTag
+import dev.supermux.ui.work.LocalDownloads
+import dev.supermux.work.DownloadCenter
+import dev.supermux.work.DownloadOrigin
+import dev.supermux.work.DownloadedFile
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Modifier
@@ -171,6 +184,80 @@ class ChatMediaViewerTest {
         // Moving on takes the player down with the page.
         onNodeWithTag("chat_media_viewer").performKeyInput { pressKey(Key.DirectionRight) }
         waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag("stub_player").fetchSemanticsNodes().isEmpty() }
+    }
+
+    // ▶ in the viewer is the fleet's download too (#95, round 2): listed, with the chat and message it came from.
+    @Test fun a_clips_page_downloads_through_the_center() = runComposeUiTest {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val center = DownloadCenter(scope)
+            val gate = CompletableDeferred<Unit>()
+            val media = object : AttachmentMedia {
+                override suspend fun bytes(att: Attachment, refresh: Boolean): ByteArray? = if (att.kind == "video") null else TINY_PNG_BYTES
+                override fun downloadKey(att: Attachment): String = "att:rec/${att.file_id}"
+                override suspend fun download(att: Attachment, progress: (Long, Long?) -> Unit): DownloadedFile? {
+                    progress(42, 100)
+                    gate.await()
+                    return null
+                }
+            }
+            setPlatformContent {
+                CompositionLocalProvider(LocalDownloads provides center, LocalChatSessionId provides "s1") {
+                    ChatMediaViewer(
+                        items = items,
+                        startKey = clip.key,
+                        resolve = { item -> MediaHandle((item as ChatMediaItem.FromAttachment).att, media, attachmentImageKey(item.att)) },
+                        onDismiss = {},
+                        renderPlayer = { uri, _, _ -> Text("player $uri", modifier = Modifier.testTag("stub_player")) },
+                    )
+                }
+            }
+            waitUntil(timeoutMillis = 5_000L) { center.items.value.isNotEmpty() }
+            val item = center.items.value.single()
+            assertEquals("att:rec/v", item.key)
+            assertEquals(DownloadOrigin("s1", "m1"), item.origin)
+            onNode(
+                hasTestTag("attachment_video_ring") and hasProgressBarRangeInfo(ProgressBarRangeInfo(0.42f, 0f..1f)),
+                useUnmergedTree = true,
+            ).assertIsDisplayed()
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    // After a restart (#95, round 3): a clip the store holds plays in the viewer from its file, with no download.
+    @Test fun a_stored_clip_plays_in_the_viewer_without_a_download() = runComposeUiTest {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val center = DownloadCenter(scope)
+            val downloads = java.util.concurrent.atomic.AtomicInteger(0)
+            val media = object : AttachmentMedia {
+                override suspend fun bytes(att: Attachment, refresh: Boolean): ByteArray? = if (att.kind == "video") null else TINY_PNG_BYTES
+                override fun downloadKey(att: Attachment): String = "att:rec/${att.file_id}"
+                override suspend fun playableUri(att: Attachment): String = "file:///cache/${att.file_id}.mp4"
+                override suspend fun stored(att: Attachment): DownloadedFile = DownloadedFile("clip.mp4", "video/mp4", 100, "/cache/${att.file_id}.mp4")
+                override suspend fun download(att: Attachment, progress: (Long, Long?) -> Unit): DownloadedFile? {
+                    downloads.incrementAndGet()
+                    return null
+                }
+            }
+            setPlatformContent {
+                CompositionLocalProvider(LocalDownloads provides center) {
+                    ChatMediaViewer(
+                        items = items,
+                        startKey = clip.key,
+                        resolve = { item -> MediaHandle((item as ChatMediaItem.FromAttachment).att, media, attachmentImageKey(item.att)) },
+                        onDismiss = {},
+                        renderPlayer = { uri, _, _ -> Text("player $uri", modifier = Modifier.testTag("stub_player")) },
+                    )
+                }
+            }
+            waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag("stub_player").fetchSemanticsNodes().isNotEmpty() }
+            assertEquals(0, downloads.get(), "played from the store")
+            assertEquals(emptyList(), center.items.value, "nothing listed")
+        } finally {
+            scope.cancel()
+        }
     }
 
     @Test fun a_clip_dragged_halfway_into_view_downloads_nothing() = runComposeUiTest {

@@ -30,6 +30,14 @@ export class PushSubscriptionStore {
     return info.changes > 0
   }
 
+  /** A renamed device keeps its subscription (#97); a stale row under the new name gives way. */
+  rename(from: string, to: string): void {
+    this.db.transaction(() => {
+      this.db.prepare("DELETE FROM push_subscriptions WHERE device = ?").run(to)
+      this.db.prepare("UPDATE push_subscriptions SET device = ? WHERE device = ?").run(to, from)
+    })()
+  }
+
   get(device: string): PushSubscriptionRecord | null {
     const row = this.db.prepare(`
       SELECT device, endpoint, p256dh, auth, user_agent, created_at, last_used_at

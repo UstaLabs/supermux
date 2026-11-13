@@ -16,6 +16,7 @@ import androidx.compose.ui.input.pointer.isPrimaryPressed
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.isShiftPressed
 import androidx.compose.ui.input.pointer.isTertiaryPressed
+import dev.supermux.webview.DeviceEmulation
 import dev.supermux.webview.DialogResult
 import dev.supermux.webview.DownloadRequest
 import dev.supermux.webview.FileChooserRequest
@@ -24,6 +25,9 @@ import dev.supermux.webview.NewWindowRequest
 import dev.supermux.webview.PermissionKind
 import dev.supermux.webview.PermissionRequest
 import dev.supermux.webview.WebContent
+import dev.supermux.webview.bridge.InputStamp
+import dev.supermux.webview.bridge.UserInputSource
+import dev.supermux.webview.bridge.inputClock
 import dev.supermux.webview.WebDialog
 import dev.supermux.webview.WebError
 import dev.supermux.webview.WebProfile
@@ -95,7 +99,15 @@ internal class WindowsWebEngine(
     private val scripts: Wv2Scripts,
     private val scope: CoroutineScope,
     private val onReleased: () -> Unit = {},
-) : WebEngine {
+) : WebEngine, UserInputSource {
+
+    /**
+     * When the user last gave this view real input, for [UserInputSource]. A press Compose delivered to the surface (which the library forwards to WebView2 itself) or a key the page took counts; the key comes on the glue's UI thread, so the stamp may be marked from it. A new document starts with none.
+     */
+    private val inputStamp = InputStamp()
+
+    override fun consumeUserInput(): Boolean = inputStamp.consume(inputClock())
+
     /** A question the client was asked and hasn't answered: answered exactly once (Linux's Pending). */
     private class Pending(val byDefault: () -> Unit, val holdsPage: Boolean) {
         var job: Job? = null
@@ -188,7 +200,11 @@ internal class WindowsWebEngine(
     init {
         WinPages.listen(page.token, ::onEvent)
         WinPages.decide(page.token) { _, flags, url -> Wv2Navigation.decide(flags, url, snapshot, own) }
-        WinPages.keys(page.token) { vk, scan, flags -> keyRouter.offer(vk, scan, flags) }
+        WinPages.keys(page.token) { vk, scan, flags ->
+            // Every key the page is about to get, before the app is offered it: real input to this view.
+            if (!released && !crashed) inputStamp.mark(inputClock())
+            keyRouter.offer(vk, scan, flags)
+        }
         publish()
     }
 
@@ -207,6 +223,11 @@ internal class WindowsWebEngine(
         page.devtools(NO_ANSWER, "Page.enable", "{}")
         page.devtools(NO_ANSWER, "Page.setInterceptFileChooserDialog", "{\"enabled\":true}")
         page.subscribe("Page.fileChooserOpened")
+        // Page-first keys (#122): the page's verdict on a key, from its isolated key script through a binding only it has.
+        page.devtools(NO_ANSWER, "Runtime.enable", "{}")
+        page.devtools(NO_ANSWER, "Runtime.addBinding", Wv2Keys.bindingParams)
+        page.devtools(NO_ANSWER, "Page.addScriptToEvaluateOnNewDocument", Wv2Keys.scriptParams)
+        page.subscribe("Runtime.bindingCalled")
         if (config.profile == WebProfile.Ephemeral && !wipeData()) return false
         queue.advance(reset = true)
         return !released && !crashed
@@ -219,6 +240,11 @@ internal class WindowsWebEngine(
         val before = this.setup
         this.setup = setup
         page.configure(flagsOf(setup), backgroundOf(setup), setup.userAgentSuffix)
+        // A whole agent (#122's device mode) through CDP: the glue only appends a suffix to WebView2's. "" clears it.
+        if (setup.userAgent != before?.userAgent || setup.userAgent != null && setup.userAgentSuffix != before?.userAgentSuffix) {
+            val agent = setup.userAgent?.let { listOfNotNull(it, setup.userAgentSuffix).joinToString(" ") }.orEmpty()
+            page.devtools(NO_ANSWER, "Emulation.setUserAgentOverride", buildJsonObject { put("userAgent", JsonPrimitive(agent)) }.toString())
+        }
         // Origins or scripts changed mid-lease: documents from now on get them, in the same epoch, with the same secret.
         if (content != null && (before == null || before.bridgeOrigins != setup.bridgeOrigins || before.javaScriptEnabled != setup.javaScriptEnabled)) {
             page.setScript(queue.epoch, secret, documentScript())
@@ -274,6 +300,7 @@ internal class WindowsWebEngine(
      */
     private fun loadInDocument(content: WebContent.Url) {
         val epoch = queue.advance()
+        inputStamp.clear()
         this.content = content
         page.setScript(epoch, secret, documentScript())
         committedEpoch = epoch
@@ -546,6 +573,13 @@ internal class WindowsWebEngine(
 
     /** CDP's file chooser (V8): the element's `accept`, the client's files, `DOM.setFileInputFiles`; nothing to cancel. */
     private fun onDevToolsEvent(event: WinEvent.DevToolsEvent) {
+        if (event.name == "Runtime.bindingCalled") {
+            val params = event.json?.let { runCatching { Json.parseToJsonElement(it).jsonObject }.getOrNull() } ?: return
+            if (params["name"]?.jsonPrimitive?.contentOrNull != Wv2Keys.BINDING) return
+            val (used, vk) = params["payload"]?.jsonPrimitive?.contentOrNull?.let(Wv2Keys::verdict) ?: return
+            keyRouter.verdict(used, vk)
+            return
+        }
         if (!ofDocument(event.epoch) || event.name != "Page.fileChooserOpened") return
         val params = event.json?.let { runCatching { Json.parseToJsonElement(it).jsonObject }.getOrNull() } ?: return
         val node = params["backendNodeId"]?.jsonPrimitive?.longOrNull ?: return
@@ -926,6 +960,7 @@ internal class WindowsWebEngine(
     internal fun pointer(event: PointerEvent) {
         if (released || crashed) return
         val change = event.changes.firstOrNull() ?: return
+        if (event.type == PointerEventType.Press) inputStamp.mark(inputClock())
         val mouse = event.nativeEvent as? java.awt.event.MouseEvent
         val kind = when (event.type) {
             PointerEventType.Enter -> MouseInput.Kind.Enter
@@ -974,8 +1009,39 @@ internal class WindowsWebEngine(
         returnToAwt = { windows.canvasComponent(surfaceWindow)?.requestFocusInWindow() },
     )
 
+    /**
+     * Device mode (#122) through the DevTools protocol, as Chrome's own: the page's CSS viewport, its pixel ratio and a
+     * mobile viewport (setDeviceMetricsOverride, drawn at [DeviceEmulation.scale]), touch with the mouse sending touches.
+     * The overrides live on the page's target across its documents; null takes them off.
+     */
+    override fun emulateDevice(emulation: DeviceEmulation?): Boolean {
+        if (released || crashed) return false
+        if (emulation == null) {
+            page.devtools(NO_ANSWER, "Emulation.clearDeviceMetricsOverride", "{}")
+            page.devtools(NO_ANSWER, "Emulation.setTouchEmulationEnabled", "{\"enabled\":false}")
+            page.devtools(NO_ANSWER, "Emulation.setEmitTouchEventsForMouse", "{\"enabled\":false}")
+            return true
+        }
+        page.devtools(NO_ANSWER, "Emulation.setDeviceMetricsOverride", buildJsonObject {
+            put("width", JsonPrimitive(emulation.width))
+            put("height", JsonPrimitive(emulation.height))
+            put("deviceScaleFactor", JsonPrimitive(emulation.deviceScaleFactor))
+            put("mobile", JsonPrimitive(emulation.mobile))
+            put("scale", JsonPrimitive(emulation.scale))
+        }.toString())
+        page.devtools(NO_ANSWER, "Emulation.setTouchEmulationEnabled", buildJsonObject {
+            put("enabled", JsonPrimitive(emulation.touch))
+            if (emulation.touch) put("maxTouchPoints", JsonPrimitive(5))
+        }.toString())
+        page.devtools(NO_ANSWER, "Emulation.setEmitTouchEventsForMouse", buildJsonObject {
+            put("enabled", JsonPrimitive(emulation.touch))
+            if (emulation.touch) put("configuration", JsonPrimitive(if (emulation.mobile) "mobile" else "desktop"))
+        }.toString())
+        return true
+    }
+
     /** The app's shortcuts while the page has the keyboard: offered to Compose first (D15). */
-    private val keyRouter = KeyRouter(target = { if (surfaceFocused) canvasForKeys else null })
+    private val keyRouter = KeyRouter(target = { if (surfaceFocused) canvasForKeys else null }, pageFirst = Wv2Keys::pageFirst)
 
     @Volatile private var surfaceFocused = false
     @Volatile private var canvasForKeys: java.awt.Component? = null

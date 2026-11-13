@@ -10,7 +10,7 @@
  * the journal is appended through one descriptor of a file it made new, every
  * other write replaces a file whole, and the directory is checked each time.
  */
-import { spawn, type ChildProcess } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
 import { chmodSync, closeSync, constants, existsSync, renameSync, unlinkSync } from 'node:fs'
 import { createServer, type Server, type Socket } from 'node:net'
 import { join } from 'node:path'
@@ -18,6 +18,7 @@ import { TextDecoder } from 'node:util'
 import { assertNoLinksIn, assertRealDirectory, createPrivateFile, present, stagingPath, writeAll, writePrivateFile } from '../private-files.js'
 import { KEEPER_ENV, requestId, responseId, type FrameShape, type JournalEntry, type KeeperLimits, type KeeperMessage, type KeeperStatus } from './protocol.js'
 import { files, proc } from '@supermux/platform'
+import { files as platformFiles } from "@supermux/platform"
 
 const STATUS_COALESCE_MS = 250
 /** How much of the agent's stderr the keeper keeps for its exit report (a crash usually says why there). */
@@ -88,7 +89,7 @@ async function main() {
   // The client made the directory and passes its real path: a directory of this user's, with no link to it or in it.
   const verify = () => assertRealDirectory(sessionDir)
   verify()
-  chmodSync(sessionDir, 0o700)
+  platformFiles.makePrivate(sessionDir)
   assertNoLinksIn(sessionDir)
 
   // A short path elsewhere when this one would not fit sun_path (the client picks it: keeperSocketPath).
@@ -269,13 +270,13 @@ async function main() {
     try { sock.write(encode(msg)) } catch { /* closed */ }
   }
 
-  const agent: ChildProcess = spawn(command, args, {
+  // Through @supermux/platform's spawnCommand: never a shell, and on Windows an npm shim (codex.cmd) through cmd.exe with
+  // every argument escaped, which node's spawn alone cannot start. Its defaults include windowsHide: the keeper has no
+  // console, so a console agent (claude.exe) would otherwise get a visible one of its own.
+  const agent: ChildProcess = proc.spawnCommand(command, args, {
     cwd,
     env: agentEnv,
     stdio: ['pipe', 'pipe', 'pipe'],
-    shell: false,
-    // Windows: the keeper has no console, so a console agent (claude.exe) would get a visible one of its own.
-    windowsHide: true,
   })
   // The last stderr lines are always kept for the exit report. Some agents (OpenCode with --print-logs) also report
   // provider failures only on stderr: with captureStderr, every line is journaled and sent to the client too.
@@ -403,9 +404,11 @@ async function main() {
     for (const p of parked.values()) clearTimeout(p.timer)
     parked.clear()
     if (!alive(agent.pid ?? 0)) { finish(); return }
-    try { agent.kill('SIGTERM') } catch { /* */ }
-    const t = setTimeout(() => { try { agent.kill('SIGKILL') } catch { /* */ } }, limits.shutdownTimeoutMs)
-    agent.once('close', () => clearTimeout(t))
+    // A tree stop: on Windows a .cmd agent runs behind cmd.exe, and ending cmd.exe alone would leave the agent running.
+    // Elsewhere SIGTERM, then SIGKILL after shutdownTimeoutMs, to the agent (its process group, when it leads one).
+    // Never once the agent has exited: the SIGKILL can come after that (a program it started may hold its pipes open),
+    // and its pid be another's.
+    proc.stop(agent, { graceMs: limits.shutdownTimeoutMs })
   }
 
   function attach(sock: Socket, cursor: number) {
@@ -498,7 +501,10 @@ async function main() {
     }
     if (msg.type === 'signal') {
       if (msg.signal !== 'SIGINT') { sendClient(sock, { type: 'error', message: 'invalid signal' }); return }
-      try { agent.kill('SIGINT') } catch { /* gone */ }
+      // To the recorded pid as the root of the agent's tree: on Windows an interrupt is TerminateProcess, and a .cmd
+      // agent's pid is cmd.exe's, so ending it alone would leave the agent behind it running. Nothing once the agent
+      // has exited: the keeper outlives it (up to its parked deadline), and the pid may be another process's by then.
+      proc.killChildTree(agent, { signal: 'SIGINT' })
       return
     }
     if (msg.type === 'frame') {

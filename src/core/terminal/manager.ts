@@ -20,7 +20,8 @@ import {
   type WorkspaceTerminalKey,
   type WorkspaceTerminalViewer,
 } from "./workspace-backend"
-import { proc as platformProc } from "@supermux/platform"
+import { spawnProcess } from "../process/launcher"
+import { host } from "@supermux/platform"
 
 const log = makeLogger("terminal")
 
@@ -54,7 +55,7 @@ export interface TermProc {
 export type SpawnFn = (cmd: string[]) => TermProc
 
 const defaultSpawn: SpawnFn = (cmd) =>
-  Bun.spawn(cmd, { ...platformProc.spawnDefaults(), stdin: "pipe", stdout: "pipe", stderr: "pipe" }) as unknown as TermProc
+  spawnProcess(cmd, { stdin: "pipe", stdout: "pipe", stderr: "pipe" }) as unknown as TermProc
 
 /**
  * Whether an attachment may CREATE the terminal it is attaching to.
@@ -224,7 +225,7 @@ export class TerminalManager {
     /** Injected in tests. Real builds get the platform's own. */
     workspaceBackend?: WorkspaceTerminalBackend
   }) {
-    this.platform = opts?.platform ?? process.platform
+    this.platform = opts?.platform ?? host.os()
     this.stateDir = opts?.stateDir ?? STATE_DIR
     this.environment = opts?.environment
     this.findExecutable = opts?.findExecutable

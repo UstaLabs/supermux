@@ -17,9 +17,9 @@
  * answer is, and the CLI reports its own auth error. The answer drives the
  * status badge and the login flow only.
  */
-import { spawnSync } from "node:child_process"
+import { spawnCommandSync } from "../../process/launcher"
 import { existsSync } from "fs"
-import { join, win32 } from "path"
+import { host, paths } from "@supermux/platform"
 import type { AgentAuthResult } from "../auth-result"
 import { claudeLoginSpawnCommand, type LoginSpawnCommand } from "../login/spawn-command"
 
@@ -45,11 +45,7 @@ const CLAUDE_ENV_MODES: readonly (readonly [string, ClaudeAuthMode])[] = [
 ]
 
 const runAuthStatus: AuthStatusRunner = (command, args) => {
-  const result = spawnSync(command, args, {
-    env: process.env,
-    stdio: "ignore",
-    timeout: 5_000,
-  })
+  const result = spawnCommandSync(command, args, { stdio: "ignore", timeout: 5_000 })
   return result.status === 0 && !result.error
 }
 
@@ -60,7 +56,7 @@ const runAuthStatus: AuthStatusRunner = (command, args) => {
  * unauthenticated.
  */
 export function claudeCliIsAuthenticated(
-  platform = process.platform,
+  platform = host.os(),
   runner: AuthStatusRunner = runAuthStatus,
 ): boolean {
   if (platform !== "darwin") return false
@@ -73,7 +69,7 @@ export function claudeCliIsAuthenticated(
 
 /** Absolute path of the credential file `claude login` writes. */
 export function claudeCredentialsPath(opts: { home: string; platform?: NodeJS.Platform }): string {
-  const pathJoin = (opts.platform ?? process.platform) === "win32" ? win32.join : join
+  const pathJoin = paths.flavor(opts.platform ?? host.os()).join
   return pathJoin(opts.home, ".claude", ".credentials.json")
 }
 
@@ -105,7 +101,7 @@ export function claudeAuthMode(opts: ClaudeAuthProbe): ClaudeAuthMode {
   const exists = opts.fileExists ?? ((p: string) => existsSync(p))
   if (exists(claudeCredentialsPath(opts))) return "credentials_file"
   if (opts.storedLogin?.()) return "credential_manager"
-  if (claudeCliIsAuthenticated(opts.platform ?? process.platform, opts.runner ?? runAuthStatus)) {
+  if (claudeCliIsAuthenticated(opts.platform ?? host.os(), opts.runner ?? runAuthStatus)) {
     return "cli_keychain"
   }
   return "none"

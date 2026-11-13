@@ -4,7 +4,7 @@
  *
  * Run: scripts/test-broker.sh bun tests/ui/prompts-journey.spec.ts
  */
-import { launchBrowser, uiFixture, injectServerFrame, lastClientFrames } from "./fixture-env"
+import { launchBrowser, uiFixture, injectServerFrame, lastClientFrames, freshPairLink } from "./fixture-env"
 import { byTag, openSeededSession, tap } from "./compose-dom"
 
 export async function main(): Promise<void> {
@@ -20,7 +20,7 @@ export async function main(): Promise<void> {
     const page = await context.newPage()
     page.on("pageerror", (error) => console.error(`[pageerror] ${error.message}`))
 
-    await page.goto(`${fixture.baseUrl}/pair?t=${encodeURIComponent(fixture.token)}`, {
+    await page.goto((await freshPairLink(fixture)).url, {
       waitUntil: "domcontentloaded",
     })
     await openSeededSession(page, fixture.sessionId)

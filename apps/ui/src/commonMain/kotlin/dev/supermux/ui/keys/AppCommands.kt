@@ -7,6 +7,7 @@ enum class CommandGroup(val title: String) {
     Workspace("Workspace"),
     Chat("Chat"),
     Files("Files"),
+    Browser("Browser"),
 }
 
 /**
@@ -22,15 +23,52 @@ object AppCommands {
     val NewTerminal = AppCommand("workspace.newTerminal", "New terminal tab", CommandGroup.Workspace)
     val ToggleSidebar = AppCommand("sidebar.toggle", "Show or hide the sidebar", CommandGroup.General)
     val GoToFile = AppCommand("files.goTo", "Go to file", CommandGroup.Files)
-    val FindInChat = AppCommand("chat.find", "Find in chat", CommandGroup.Chat)
+    /** Find in the focused thing: a chat registers its find bar, and any other view (a browser page) its own. */
+    val Find = AppCommand("find", "Find", CommandGroup.General)
+    /** The next and previous match of the open find (#122): what owns the find registers them. */
+    val FindNext = AppCommand("find.next", "Find next", CommandGroup.General)
+    val FindPrevious = AppCommand("find.previous", "Find previous", CommandGroup.General)
     val OpenSettings = AppCommand("settings.open", "Settings", CommandGroup.General)
     val ShowShortcuts = AppCommand("shortcuts.show", "Keyboard shortcuts", CommandGroup.General)
     val PasteImage = AppCommand("composer.pasteImage", "Paste an image into the message", CommandGroup.Chat)
     val SplitRight = AppCommand("workspace.splitRight", "Split right (a new column)", CommandGroup.Workspace)
     val SplitDown = AppCommand("workspace.splitDown", "Split down (a new row)", CommandGroup.Workspace)
+    val CloseTab = AppCommand("tab.close", "Close tab", CommandGroup.Workspace)
+    /** Chrome's tab keys (#122): the next or previous tab of the pane last worked in, and its tab 1–8 or last (9). */
+    /** The last closed Browser tab back, as Chrome's ⌘⇧T (#122). Off Apple its key stays New terminal in a terminal. */
+    val ReopenClosedTab = AppCommand("tab.reopenClosed", "Reopen closed tab", CommandGroup.Workspace)
+    val TabNext = AppCommand("tab.next", "Next tab", CommandGroup.Workspace)
+    val TabPrevious = AppCommand("tab.previous", "Previous tab", CommandGroup.Workspace)
+    private val tabNumbers = (1..9).map { n ->
+        AppCommand("tab.goTo$n", if (n == 9) "Go to the last tab" else "Go to tab $n", CommandGroup.Workspace)
+    }
+
+    /** Tab [n] (1–8) of the pane, or its last tab for 9. */
+    fun tabNumber(n: Int): AppCommand = tabNumbers[n - 1]
+    val BrowserFocusAddress = AppCommand("browser.focusAddress", "Focus the address bar", CommandGroup.Browser)
+    val BrowserReload = AppCommand("browser.reload", "Reload the page", CommandGroup.Browser)
+    val BrowserBack = AppCommand("browser.back", "Back", CommandGroup.Browser)
+    val BrowserForward = AppCommand("browser.forward", "Forward", CommandGroup.Browser)
+    val BrowserZoomIn = AppCommand("browser.zoomIn", "Zoom in", CommandGroup.Browser)
+    val BrowserZoomOut = AppCommand("browser.zoomOut", "Zoom out", CommandGroup.Browser)
+    val BrowserZoomReset = AppCommand("browser.zoomReset", "Actual size", CommandGroup.Browser)
+    val BrowserOpenExternally = AppCommand("browser.openExternally", "Open in your browser", CommandGroup.Browser)
+    /** ⌘T in a Browser tab: a new Browser tab beside it, as in Chrome (#122, Q1). New terminal everywhere else. */
+    val BrowserNewTab = AppCommand("browser.newTab", "New Browser tab", CommandGroup.Browser)
+    /** A picture of the page into the chat's composer, unsent (#122): only where a chat can take it. */
+    val BrowserScreenshot = AppCommand("browser.screenshot", "Send a screenshot to the chat", CommandGroup.Browser)
+    /** The page at a phone's or tablet's size (#122 phase 2), DevTools' device toolbar. */
+    val BrowserDeviceMode = AppCommand("browser.deviceMode", "Device mode", CommandGroup.Browser)
+    /** Pick an element on the page and comment on it for an agent (#122 phase 3), DevTools' inspect-element chord. */
+    val BrowserPick = AppCommand("browser.pick", "Comment on the page", CommandGroup.Browser)
+    val BrowserInspect = AppCommand("browser.inspect", "Inspect the page", CommandGroup.Browser)
+    /** Stops a page while it loads; on a loaded page it declines, so Esc stays the page's. */
+    val BrowserStop = AppCommand("browser.stop", "Stop loading", CommandGroup.Browser)
 
     val all: List<AppCommand> = listOf(
-        NewSession, MoveToNewWindow, NewTerminal, ToggleSidebar, GoToFile, FindInChat,
-        OpenSettings, ShowShortcuts, PasteImage, SplitRight, SplitDown,
-    )
+        NewSession, MoveToNewWindow, NewTerminal, ToggleSidebar, GoToFile, Find, FindNext, FindPrevious,
+        OpenSettings, ShowShortcuts, PasteImage, SplitRight, SplitDown, CloseTab, ReopenClosedTab, TabNext, TabPrevious,
+        BrowserFocusAddress, BrowserReload, BrowserBack, BrowserForward, BrowserZoomIn, BrowserZoomOut, BrowserZoomReset, BrowserOpenExternally,
+        BrowserInspect, BrowserStop, BrowserNewTab, BrowserScreenshot, BrowserDeviceMode, BrowserPick,
+    ) + tabNumbers
 }

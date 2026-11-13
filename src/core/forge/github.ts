@@ -27,7 +27,7 @@ async function call(c: ForgeCredential, path: string, init?: RequestInit): Promi
 function toRepo(c: ForgeCredential, j: any): RemoteRepo {
   return {
     connectionId: c.id, kind: "github", host: c.host,
-    owner: j.owner?.login ?? j.full_name.split("/")[0], name: j.name, fullName: j.full_name,
+    owner: j.owner?.login ?? j.full_name.split("/")[0], name: j.name, fullName: j.full_name, // platform-ok: a GitHub "owner/repo" name, not a path
     private: !!j.private, description: j.description ?? undefined, defaultBranch: j.default_branch ?? "main",
     language: j.language ?? undefined, updatedAt: j.updated_at ?? undefined,
     cloneUrl: j.clone_url, webUrl: j.html_url,

@@ -1,5 +1,5 @@
 import { existsSync, rmSync } from "fs"
-import { files } from "@supermux/platform"
+import { files, host } from "@supermux/platform"
 import { basename, isAbsolute, join, sep } from "path"
 import { PLUGINS_DIR } from "../../shared/paths"
 import { home } from "../../shared/home"
@@ -105,7 +105,7 @@ export function pluginSummaries(reg: PluginsRegistry): PluginSummary[] {
 export type Exec = (cmd: string, args: string[]) => void
 const defaultExec: Exec = (cmd, args) => {
   const env = { ...process.env }
-  const command = resolveCommand([cmd], env, process.platform) ?? cmd
+  const command = resolveCommand([cmd], env, host.os()) ?? cmd
   const result = spawnCommandSync(command, args, { env, stdio: "inherit" })
   if (result.error) throw result.error
   if (result.status !== 0) throw new Error(`${cmd} exited ${result.status}`)

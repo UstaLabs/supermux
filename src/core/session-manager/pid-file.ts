@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from "fs"
 import { dirname } from "path"
-import { proc } from "@supermux/platform"
+import { files, host, proc } from "@supermux/platform"
+import { spawnProcessSync } from "../process/launcher"
 
 /**
  * Whether [pid] is a live process: the platform's rule, where `EPERM` (someone else's live process, e.g. a broker in
@@ -18,11 +19,11 @@ export interface BrokerProbeDeps {
 }
 
 const defaultProbeDeps: BrokerProbeDeps = {
-  platform: process.platform,
+  platform: host.os(),
   readProcCmdline: (pid) => readFileSync(`/proc/${pid}/cmdline`, "utf8"),
   run: (cmd) => {
     try {
-      const r = Bun.spawnSync(cmd, { ...proc.spawnDefaults(), stdout: "pipe", stderr: "pipe" })
+      const r = spawnProcessSync(cmd, { stdout: "pipe", stderr: "pipe" })
       return r.exitCode === 0 ? r.stdout.toString() : null
     } catch {
       return null
@@ -114,7 +115,7 @@ export function acquirePidFile(path: string, deps: PidFileDeps = defaultPidFileD
   let empties = 0
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
     try {
-      writeFileSync(path, ours, { flag: "wx", mode: 0o600 })
+      files.writePrivate(path, ours, { flag: "wx" })
       return
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error

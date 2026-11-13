@@ -12,7 +12,7 @@ class KeyResolverTest {
         override fun keeps(chord: KeyChord) = chord in kept
     }
 
-    private val window = Scope(AppCommands.NewSession, AppCommands.NewTerminal, AppCommands.ToggleSidebar, AppCommands.FindInChat)
+    private val window = Scope(AppCommands.NewSession, AppCommands.NewTerminal, AppCommands.ToggleSidebar, AppCommands.Find)
     private val terminal = Scope(opaque = true)
 
     @Test fun aWindowKeyWaitsForTheBubbleWhenNoOwnerHasTheFocus() {
@@ -84,25 +84,41 @@ class KeyResolverTest {
     }
 
     @Test fun theDeepestHandlerWins() {
-        val keymap = Keymap(listOf(bind("Mod-k", AppCommands.FindInChat), bind("Mod-k", AppCommands.GoToFile)))
-        val chat = Scope(AppCommands.FindInChat)
+        val keymap = Keymap(listOf(bind("Mod-k", AppCommands.Find), bind("Mod-k", AppCommands.GoToFile)))
+        val chat = Scope(AppCommands.Find)
         val files = Scope(AppCommands.GoToFile)
         val ctrlK = KeyChord("k", ctrl = true)
-        assertEquals("chat.find", resolveKey(ctrlK, listOf(chat, files), KeyPhase.Bubble, KeyOs.Other, keymap)?.binding?.commandId)
+        assertEquals("find", resolveKey(ctrlK, listOf(chat, files), KeyPhase.Bubble, KeyOs.Other, keymap)?.binding?.commandId)
         assertEquals("files.goTo", resolveKey(ctrlK, listOf(files, chat), KeyPhase.Bubble, KeyOs.Other, keymap)?.binding?.commandId)
     }
 
     @Test fun aDeeperHandlerThatWaitsBlocksAShallowerAppFirstOne() {
-        val keymap = Keymap(listOf(bind("Mod-k", AppCommands.FindInChat), bind("Mod-k", AppCommands.GoToFile, appFirst = true)))
-        val chat = Scope(AppCommands.FindInChat)
+        val keymap = Keymap(listOf(bind("Mod-k", AppCommands.Find), bind("Mod-k", AppCommands.GoToFile, appFirst = true)))
+        val chat = Scope(AppCommands.Find)
         val outer = Scope(AppCommands.GoToFile)
         val ctrlK = KeyChord("k", ctrl = true)
         assertNull(resolveKey(ctrlK, listOf(chat, outer), KeyPhase.Preview, KeyOs.Other, keymap))
-        assertEquals("chat.find", resolveKey(ctrlK, listOf(chat, outer), KeyPhase.Bubble, KeyOs.Other, keymap)?.binding?.commandId)
+        assertEquals("find", resolveKey(ctrlK, listOf(chat, outer), KeyPhase.Bubble, KeyOs.Other, keymap)?.binding?.commandId)
     }
 
     @Test fun noHandlerMeansNoHit() {
         assertNull(resolveKey(KeyChord("p", meta = true), listOf(window), KeyPhase.Bubble, KeyOs.Apple))
         assertNull(resolveKey(KeyChord("n", meta = true), emptyList(), KeyPhase.Bubble, KeyOs.Apple))
+    }
+
+    /** #122 (Q1): in a Browser tab ⌘T / Ctrl+T is a new Browser tab; everywhere else it stays New terminal. */
+    @Test fun modTInABrowserTabIsANewBrowserTab() {
+        val browser = Scope(AppCommands.BrowserNewTab)
+        for ((os, chord) in listOf(KeyOs.Apple to KeyChord("t", meta = true), KeyOs.Other to KeyChord("t", ctrl = true))) {
+            assertEquals("browser.newTab", resolveKey(chord, listOf(browser, window), KeyPhase.Bubble, os)?.binding?.commandId)
+            assertEquals("workspace.newTerminal", resolveKey(chord, listOf(window), KeyPhase.Bubble, os)?.binding?.commandId)
+        }
+    }
+
+    /** #122: off Apple Ctrl+Shift+T is the reopen key first (it makes a terminal itself where it should). */
+    @Test fun ctrlShiftTIsTheReopenKeyWhereTheWindowHasIt() {
+        val both = Scope(AppCommands.ReopenClosedTab, AppCommands.NewTerminal)
+        val hit = resolveKey(KeyChord("t", ctrl = true, shift = true), listOf(terminal, both), KeyPhase.Preview, KeyOs.Other)
+        assertEquals("tab.reopenClosed", hit?.binding?.commandId)
     }
 }

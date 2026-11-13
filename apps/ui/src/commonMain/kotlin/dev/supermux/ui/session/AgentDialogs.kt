@@ -312,7 +312,7 @@ internal fun CreateAgentDialog(
                     }
                     providers == null -> CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                     providers!!.isEmpty() -> Text(
-                        "No provider is installed. Install one in Settings › Providers.",
+                        "No provider is installed. Install one in Settings ▸ Providers & accounts.",
                         color = cs.onSurfaceVariant,
                         fontSize = 12.5.sp,
                         modifier = Modifier.testTag("agents_create_no_provider"),

@@ -29,6 +29,7 @@ import dev.supermux.webview.NavigationDecision
 import dev.supermux.webview.NavigationRequest
 import dev.supermux.webview.PermissionKind
 import dev.supermux.webview.PermissionRequest
+import dev.supermux.webview.DeviceEmulation
 import dev.supermux.webview.WebContent
 import dev.supermux.webview.WebOrigin
 import dev.supermux.webview.WebProfile
@@ -241,15 +242,26 @@ object WindowsChecks {
             keys("ctrl+v")
             eventually("pasted") { scene.b == "copyme" }
         },
-        Check("an-app-shortcut-reaches-the-app-and-not-the-page") {
-            // F8b and D15: Ctrl+Shift+K is the app's (an onPreviewKeyEvent around the WebView); the page never sees it.
+        Check("an-app-shortcut-the-page-leaves-unused-reaches-the-app") {
+            // #122 (page-first keys, as in Chrome): Ctrl+Shift+K goes to the page first; unused there, the app gets it.
             val scene = focusScene(engine())
             compose { scene.Content() }
             scene.typeIntoPage(this, "x")
             scene.engine.evaluate("window.__k = 0; addEventListener('keydown', function (e) { if (e.key === 'K' || e.key === 'k') window.__k++; }); 1")
             keys("ctrl+shift+k")
-            eventually("the app took it") { scene.shortcuts == 1 }
-            assertEquals("0", scene.engine.evaluate("window.__k"))
+            eventually("the app took it after the page") { scene.shortcuts == 1 }
+            assertEquals("1", scene.engine.evaluate("window.__k"))
+        },
+        Check("a-shortcut-the-page-uses-stays-the-pages") {
+            // #122: a page that takes Ctrl+Shift+K (preventDefault) keeps it, as a web editor keeps Ctrl+B.
+            val scene = focusScene(engine())
+            compose { scene.Content() }
+            scene.typeIntoPage(this, "x")
+            scene.engine.evaluate("window.__k = 0; addEventListener('keydown', function (e) { if (e.key === 'K' || e.key === 'k') { window.__k++; e.preventDefault(); } }); 1")
+            keys("ctrl+shift+k")
+            eventually("the page took it") { scene.engine.evaluate("window.__k") == "1" }
+            Thread.sleep(600)
+            assertEquals(0, scene.shortcuts, "the page kept it")
         },
         Check("a-demo-cannot-take-the-keyboard-from-the-app") {
             // L32: a page focusing its input on a timer while the user types in Compose.
@@ -673,6 +685,22 @@ object WindowsChecks {
                 corners.all { (x, y) -> LinuxChecks.near(0x000000, screenPixel(x, y), 24) } &&
                     inside.all { (x, y) -> LinuxChecks.near(0xffffff, screenPixel(x, y), 24) }
             }
+        },
+        Check("a-device-is-emulated-with-its-size-ratio-and-touch") {
+            // #122 2b: device mode on WebView2 is Chrome's own (DevTools protocol): the page laid out at the device's CSS
+            // size whatever the surface's, at its pixel ratio, with touch and a coarse pointer; and back to itself.
+            val scene = SceneEngine(engine(), solidPage("device", "#ffffff"), ::contentOrigin)
+            compose { Box(Modifier.padding(start = 20.dp, top = 20.dp)) { scene.Surface(Modifier.size(206.dp, 458.dp)) } }
+            scene.awaitPainted()
+            assertEquals("206", scene.engine.evaluate("innerWidth"), "the surface's width before")
+            assertTrue(scene.engine.emulateDevice(DeviceEmulation(412, 915, 2.625, mobile = true, touch = true, scale = 0.5f)))
+            eventually("the page at the device's width") { scene.engine.evaluate("innerWidth") == "412" }
+            assertEquals("2.625", scene.engine.evaluate("devicePixelRatio"), "the device's pixel ratio")
+            assertEquals("5", scene.engine.evaluate("navigator.maxTouchPoints"), "touch")
+            assertEquals("true", scene.engine.evaluate("matchMedia('(pointer: coarse)').matches"), "a coarse pointer")
+            assertTrue(scene.engine.emulateDevice(null))
+            eventually("the page back at the surface's width") { scene.engine.evaluate("innerWidth") == "206" }
+            assertEquals("1", scene.engine.evaluate("devicePixelRatio"), "the window's scale again")
         },
         Check("an-overlay-takes-the-pages-hover") {
             // L28: Compose's hit test routes the mouse: over an overlay the page gets a mouseout and no moves.

@@ -1,43 +1,20 @@
-// Add an account (slice A3b): the chooser, the paste-a-token / API-key form and the guided login,
-// as the steps of ONE modal so the user never loses their place between them.
+// Add a login (slice A3b, restyled as a Settings kit sheet in #97): the chooser, the paste-a-token / API-key form and
+// the guided login, as the steps of ONE sheet so the user never loses their place between them.
 //
 // The guided login is driven by `account_login_state` frames; a slow poll of
 // GET /accounts/login/<id> only fills a gap left by a dropped socket, and never moves the sheet
 // backwards (see [accountLoginPhaseRank]).
 package dev.supermux.ui.accounts
 
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.automirrored.filled.OpenInNew
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.ErrorOutline
-import androidx.compose.material.icons.filled.Key
-import androidx.compose.material.icons.automirrored.filled.Login
-import androidx.compose.material.icons.outlined.ConfirmationNumber
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -49,38 +26,34 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.net.AccountDto
 import dev.supermux.net.AccountLoginStateDto
 import dev.supermux.state.AccountResult
 import dev.supermux.state.accountLoginPhaseRank
-import dev.supermux.ui.chat.CardButton
-import dev.supermux.ui.chat.CardButtonStyle
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.retain.rememberRetainedOnPage
 import dev.supermux.ui.retain.rememberRetainedScope
-import dev.supermux.ui.session.AgentLogo
-import dev.supermux.ui.theme.LocalSemantics
+import dev.supermux.ui.settings.kit.KitCopyCommand
+import dev.supermux.ui.settings.kit.KitGhostButton
+import dev.supermux.ui.settings.kit.KitItem
+import dev.supermux.ui.settings.kit.KitItemList
+import dev.supermux.ui.settings.kit.KitSheet
+import dev.supermux.ui.settings.kit.KitTextAction
+import dev.supermux.ui.settings.kit.KitTextField
+import dev.supermux.ui.settings.kit.kitColors
+import dev.supermux.ui.settings.kit.kitFocusRing
 import dev.supermux.ui.theme.MonoFontFamily
-import dev.supermux.ui.theme.Radii
-import dev.supermux.ui.theme.Space
-import dev.supermux.ui.theme.Stroke
-import dev.supermux.ui.widgets.CopyableCommand
-import dev.supermux.ui.widgets.SecretField
-import dev.supermux.ui.widgets.settingsFieldColors
-import dev.supermux.ui.widgets.submitOnEnter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+
 
 private const val LOGIN_POLL_MS = 4_000L
 private const val DONE_CLOSE_MS = 2_200L
@@ -96,7 +69,7 @@ private sealed interface AddStep {
  * POST's answer (the broker can publish before the response lands) are held and replayed.
  */
 @Stable
-internal class AccountLoginFlow(private val agent: String, private val actions: AccountsActions) {
+internal class AccountLoginFlow(private val agent: String, private val actions: AccountsActions, private val email: String? = null) {
     var loginId by mutableStateOf<String?>(null)
         private set
     var state by mutableStateOf<AccountLoginStateDto?>(null)
@@ -126,7 +99,7 @@ internal class AccountLoginFlow(private val agent: String, private val actions: 
         loginId = null
         state = null
         early.clear()
-        when (val r = actions.startLogin(agent)) {
+        when (val r = actions.startLogin(agent, email)) {
             is AccountResult.Ok -> {
                 loginId = r.value.loginId
                 state = r.value
@@ -149,9 +122,9 @@ internal class AccountLoginFlow(private val agent: String, private val actions: 
  * code being pasted. Kept for the page on display when the sheet has a `retainKey`; closing the
  * sheet [reset]s it, so the next one starts over, as a new composition did.
  */
-private class AddAccountForm(private val agent: String, private val actions: AccountsActions) {
+private class AddAccountForm(private val agent: String, private val actions: AccountsActions, private val signInAgain: AccountDto? = null) {
     var step by mutableStateOf(firstStep())
-    var flow by mutableStateOf(AccountLoginFlow(agent, actions))
+    var flow by mutableStateOf(newFlow())
     var secret by mutableStateOf("")
     var label by mutableStateOf("")
     var saving by mutableStateOf(false)
@@ -164,7 +137,10 @@ private class AddAccountForm(private val agent: String, private val actions: Acc
     var codeError by mutableStateOf<String?>(null)
 
     private fun firstStep(): AddStep =
-        addAccountOptions(agent).let { if (it.size == 1) AddStep.Secret(it.single()) else AddStep.Choose }
+        if (signInAgain != null) AddStep.Login
+        else addAccountOptions(agent).let { if (it.size == 1) AddStep.Secret(it.single()) else AddStep.Choose }
+
+    private fun newFlow() = AccountLoginFlow(agent, actions, signInAgain?.let { signInAgainEmail(it) })
 
     fun newSecret() {
         secret = ""
@@ -183,7 +159,7 @@ private class AddAccountForm(private val agent: String, private val actions: Acc
 
     fun reset() {
         step = firstStep()
-        flow = AccountLoginFlow(agent, actions)
+        flow = newFlow()
         newSecret()
         clearCode()
     }
@@ -195,6 +171,20 @@ private class AddAccountForm(private val agent: String, private val actions: Acc
  *
  * [retainKey] names the sheet's state kept for the page on display (#89): its step, a sign-in in
  * flight and what is typed. Null keeps all of it in this composition.
+ *
+ * [signInAgain]: sign that login in again (#106). The sheet goes straight to the guided login, as its email
+ * where the agent's login takes one; the broker repairs that same account (same id, its chats stay on it).
+ */
+
+/**
+ * The add-a-login sheet for [agent]. [existing] are that agent's accounts (to name an
+ * `account_exists` collision).
+ *
+ * [retainKey] names the sheet's state kept for the page on display (#89): its step, a sign-in in
+ * flight and what is typed. Null keeps all of it in this composition.
+ *
+ * [signInAgain]: sign that login in again (#106). The sheet goes straight to the guided login, as its email
+ * where the agent's login takes one; the broker repairs that same account (same id, its chats stay on it).
  */
 @Composable
 fun AddAccountSheet(
@@ -203,15 +193,16 @@ fun AddAccountSheet(
     existing: List<AccountDto>,
     onDismiss: () -> Unit,
     retainKey: String? = null,
+    signInAgain: AccountDto? = null,
 ) {
     val options = remember(agent) { addAccountOptions(agent) }
     // With [retainKey], a rotation finds the sheet where it was: it went back to the first step in
     // the middle of a sign-in that went on on the host. The sign-in, a key being added and a cancel
     // then run on the fleet's scope, and closing the sheet starts the next one afresh.
     val form = if (retainKey != null) {
-        rememberRetainedOnPage(retainKey) { AddAccountForm(agent, actions) }
+        rememberRetainedOnPage(retainKey) { AddAccountForm(agent, actions, signInAgain) }
     } else {
-        remember(agent, actions) { AddAccountForm(agent, actions) }
+        remember(agent, actions, signInAgain?.id) { AddAccountForm(agent, actions, signInAgain) }
     }
     val scope = if (retainKey != null) rememberRetainedScope() else rememberCoroutineScope()
     var step by form::step
@@ -222,6 +213,8 @@ fun AddAccountSheet(
     }
 
     LaunchedEffect(flow) { actions.loginFrames.collect { flow.onState(it) } }
+    // Sign in again starts the login at once: there is nothing to choose.
+    LaunchedEffect(flow) { if (signInAgain != null && flow.loginId == null && !flow.starting) flow.start() }
     // The fallback poll — only while a login is live, and never backwards.
     LaunchedEffect(flow.loginId, flow.terminal) {
         val id = flow.loginId ?: return@LaunchedEffect
@@ -244,81 +237,49 @@ fun AddAccountSheet(
         }
     }
 
-    AccountsModal(onDismiss = dismiss, testTag = "account-add-sheet") {
-        when (val s = step) {
-            AddStep.Choose -> ChooseStep(
-                agent = agent,
-                options = options,
-                onPick = { option ->
-                    if (option == AddAccountOption.Login) {
-                        step = AddStep.Login
-                        scope.launch { flow.start() }
-                    } else {
-                        // What was typed for another method does not carry over (it was keyed on it).
-                        form.newSecret()
-                        step = AddStep.Secret(option)
-                    }
-                },
-                onCancel = close,
-            )
-            is AddStep.Secret -> SecretStep(
-                agent = agent,
-                method = s.method,
-                canGoBack = options.size > 1,
-                onBack = { step = AddStep.Choose },
-                onCancel = close,
-                form = form,
-                scope = scope,
-                onSave = { secret, label ->
-                    val method = if (s.method == AddAccountOption.Token) "token" else "api_key"
-                    actions.addAccount(agent, method, secret, label)
-                },
-                onAdded = close,
-            )
-            AddStep.Login -> LoginStep(
-                agent = agent,
-                flow = flow,
-                existing = existing,
-                form = form,
-                scope = scope,
-                onSubmitCode = { code -> flow.loginId?.let { actions.sendLoginCode(it, code) } },
-                onRetry = { scope.launch { flow.start() } },
-                onCancel = dismiss,
-                onDone = close,
-            )
-        }
-    }
-}
-
-@Composable
-private fun SheetTitle(agent: String, title: String, onBack: (() -> Unit)? = null) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Space.sm),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        if (onBack != null) {
-            IconButton(onClick = onBack, modifier = Modifier.size(32.dp).testTag("account-add-back")) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", modifier = Modifier.size(18.dp))
-            }
-        } else {
-            AgentLogo(agent, size = 22.dp)
-        }
-        Text(
-            title,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
+    when (val s = step) {
+        AddStep.Choose -> ChooseStep(
+            agent = agent,
+            options = options,
+            onPick = { option ->
+                if (option == AddAccountOption.Login) {
+                    step = AddStep.Login
+                    scope.launch { flow.start() }
+                } else {
+                    // What was typed for another method does not carry over (it was keyed on it).
+                    form.newSecret()
+                    step = AddStep.Secret(option)
+                }
+            },
+            onCancel = close,
+        )
+        is AddStep.Secret -> SecretStep(
+            agent = agent,
+            method = s.method,
+            canGoBack = options.size > 1,
+            onBack = { step = AddStep.Choose },
+            onCancel = close,
+            form = form,
+            scope = scope,
+            onSave = { secret, label ->
+                val method = if (s.method == AddAccountOption.Token) "token" else "api_key"
+                actions.addAccount(agent, method, secret, label)
+            },
+            onAdded = close,
+        )
+        AddStep.Login -> LoginStep(
+            agent = agent,
+            title = signInAgain?.let { "Sign in to ${accountDisplayName(it)} again" },
+            flow = flow,
+            existing = existing,
+            form = form,
+            scope = scope,
+            onSubmitCode = { code -> flow.loginId?.let { actions.sendLoginCode(it, code) } },
+            onRetry = { scope.launch { flow.start() } },
+            onCancel = dismiss,
+            onDone = close,
         )
     }
-}
-
-private fun optionIcon(option: AddAccountOption): ImageVector = when (option) {
-    AddAccountOption.Login -> Icons.AutoMirrored.Filled.Login
-    AddAccountOption.Token -> Icons.Outlined.ConfirmationNumber
-    AddAccountOption.ApiKey -> Icons.Filled.Key
 }
 
 private fun optionTag(option: AddAccountOption): String = when (option) {
@@ -334,48 +295,22 @@ private fun ChooseStep(
     onPick: (AddAccountOption) -> Unit,
     onCancel: () -> Unit,
 ) {
-    val cs = MaterialTheme.colorScheme
-    SheetTitle(agent, "Add a ${agentDisplayName(agent)} account")
-    Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
-        options.forEach { option ->
-            val shape = RoundedCornerShape(Radii.md)
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(shape)
-                    .border(Stroke.hairline, cs.outlineVariant, shape)
-                    .clickable { onPick(option) }
-                    .padding(horizontal = Space.md, vertical = Space.md)
-                    .testTag("account-add-option:${optionTag(option)}"),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Space.md),
-            ) {
-                Box(
-                    Modifier.size(32.dp).clip(CircleShape).background(cs.primary.copy(alpha = 0.12f)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(optionIcon(option), contentDescription = null, tint = cs.primary, modifier = Modifier.size(16.dp))
-                }
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        addOptionTitle(agent, option),
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = cs.onSurface,
-                    )
-                    Text(addOptionHint(agent, option), style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
-                }
-                Icon(
-                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                    contentDescription = null,
-                    tint = cs.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp),
+    KitSheet(
+        title = "Add a ${agentDisplayName(agent)} login",
+        onDismiss = onCancel,
+        tag = "account-add-sheet",
+        buttons = { KitGhostButton("Cancel", onClick = onCancel, modifier = Modifier.testTag("account-add-cancel")) },
+    ) {
+        KitItemList(Modifier.padding(top = 12.dp)) {
+            options.forEach { option ->
+                KitItem(
+                    addOptionTitle(agent, option),
+                    Modifier.testTag("account-add-option:${optionTag(option)}"),
+                    subtitle = addOptionHint(agent, option),
+                    onClick = { onPick(option) },
                 )
             }
         }
-    }
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-        CardButton(label = "Cancel", style = CardButtonStyle.Ghost, enabled = true, testTag = "account-add-cancel", onClick = onCancel)
     }
 }
 
@@ -391,7 +326,6 @@ private fun SecretStep(
     onSave: suspend (secret: String, label: String?) -> AccountResult<AccountDto>,
     onAdded: () -> Unit,
 ) {
-    val cs = MaterialTheme.colorScheme
     var secret by form::secret
     var label by form::label
     var saving by form::saving
@@ -410,7 +344,7 @@ private fun SecretStep(
                 is AccountResult.Ok -> form.added = true
                 is AccountResult.Failed -> {
                     form.saving = false
-                    form.error = r.message ?: "Couldn't add the account — check the connection and try again."
+                    form.error = r.message ?: "Couldn't add the login — check the connection and try again."
                 }
             }
         }
@@ -422,59 +356,66 @@ private fun SecretStep(
         onAdded()
     }
 
-    SheetTitle(agent, addOptionTitle(agent, method), onBack = if (canGoBack) onBack else null)
-    if (token) {
-        Text(
-            "On a machine with a browser, run this and paste the token it prints:",
-            style = MaterialTheme.typography.bodySmall,
-            color = cs.onSurfaceVariant,
-        )
-        CopyableCommand("claude setup-token")
-    } else {
-        Text(addOptionHint(agent, method), style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
-    }
-    SecretField(
-        value = secret,
-        onValueChange = { secret = it; error = null },
-        placeholder = if (token) "sk-ant-oat01-…" else "sk-…",
-        modifier = Modifier.fillMaxWidth().testTag(if (token) "account-token-field" else "account-key-field"),
-        onSubmit = ::save,
-        submitEnabled = canSave,
-    )
-    OutlinedTextField(
-        value = label,
-        onValueChange = { label = it },
-        placeholder = { Text("Name (optional) — e.g. Work", style = MaterialTheme.typography.bodySmall) },
-        singleLine = true,
-        textStyle = MaterialTheme.typography.bodyMedium,
-        colors = settingsFieldColors(),
-        modifier = Modifier.fillMaxWidth().testTag("account-label-field").submitOnEnter(canSave, ::save),
-    )
-    error?.let { Text(it, color = cs.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("account-secret-error")) }
-    ButtonRow {
-        CardButton(label = "Cancel", style = CardButtonStyle.Secondary, enabled = !saving, testTag = "account-add-cancel", onClick = onCancel)
-        CardButton(
-            label = if (saving) "Adding…" else "Add account",
-            style = CardButtonStyle.Primary,
-            enabled = canSave,
-            testTag = "account-secret-save",
-            onClick = ::save,
-        )
+    KitSheet(
+        title = addOptionTitle(agent, method),
+        onDismiss = { if (!saving) onCancel() },
+        description = if (token) "On a computer with a browser, run this and paste the token it prints:" else addOptionHint(agent, method),
+        tag = "account-add-sheet",
+        // A half-typed key is not thrown away by a stray tap.
+        dismissOnOutside = false,
+        buttons = {
+            if (canGoBack) KitGhostButton("Back", onClick = onBack, enabled = !saving, modifier = Modifier.testTag("account-add-back"))
+            KitGhostButton("Cancel", onClick = onCancel, enabled = !saving, modifier = Modifier.testTag("account-add-cancel"))
+            KitGhostButton(
+                if (saving) "Adding…" else "Add login",
+                onClick = ::save,
+                enabled = canSave,
+                modifier = Modifier.testTag("account-secret-save"),
+            )
+        },
+    ) {
+        Column(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (token) KitCopyCommand("claude setup-token")
+            KitTextField(
+                secret,
+                {
+                    secret = it
+                    error = null
+                },
+                placeholder = if (token) "sk-ant-oat01-…" else "sk-…",
+                secret = true,
+                onSubmit = ::save,
+                fieldTag = if (token) "account-token-field" else "account-key-field",
+            )
+            KitTextField(
+                label,
+                { label = it },
+                label = "Name (optional)",
+                placeholder = "e.g. Work",
+                onSubmit = ::save,
+                fieldTag = "account-label-field",
+            )
+            error?.let { SheetLine(it, warn = true, tag = "account-secret-error") }
+        }
     }
 }
 
 @Composable
-private fun ButtonRow(content: @Composable () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(top = Space.xs),
-        horizontalArrangement = Arrangement.spacedBy(Space.sm, Alignment.End),
-        verticalAlignment = Alignment.CenterVertically,
-    ) { content() }
+private fun SheetLine(text: String, warn: Boolean = false, tag: String? = null, modifier: Modifier = Modifier) {
+    val c = kitColors()
+    Text(
+        text,
+        fontSize = 12.5.sp,
+        lineHeight = 19.sp,
+        color = if (warn) c.warn else c.dim,
+        modifier = modifier.then(if (tag != null) Modifier.testTag(tag) else Modifier),
+    )
 }
 
 @Composable
 private fun LoginStep(
     agent: String,
+    title: String?,
     flow: AccountLoginFlow,
     existing: List<AccountDto>,
     form: AddAccountForm,
@@ -484,7 +425,6 @@ private fun LoginStep(
     onCancel: () -> Unit,
     onDone: () -> Unit,
 ) {
-    val cs = MaterialTheme.colorScheme
     val view = loginView(flow.state, agent, existing)
     // The code step's fields go when the step does, as they went with its composition before.
     val awaiting = view is LoginView.AwaitingUser
@@ -495,73 +435,55 @@ private fun LoginStep(
             onDone()
         }
     }
-    Column(Modifier.fillMaxWidth().testTag("account-login-sheet"), verticalArrangement = Arrangement.spacedBy(Space.md)) {
-        SheetTitle(agent, if (agent == "codex") "Sign in with ChatGPT" else "Sign in to ${agentDisplayName(agent)}")
-        val startError = flow.startError
-        when {
-            startError != null -> FailedBlock(startError)
-            else -> when (view) {
-                LoginView.Starting -> ProgressLine("Starting the sign-in…", "account-login-starting")
-                is LoginView.AwaitingUser -> AwaitingBlock(agent, view, form, scope, onSubmitCode)
-                LoginView.Verifying -> ProgressLine("Checking the sign-in…", "account-login-verifying")
-                is LoginView.Done -> DoneBlock(view.label)
-                is LoginView.Failed -> FailedBlock(view.message)
-                LoginView.Cancelled -> Text(
-                    "Sign-in cancelled.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = cs.onSurfaceVariant,
-                )
-            }
-        }
-        if (view !is LoginView.Done) {
-            ButtonRow {
-                CardButton(
-                    label = "Cancel",
-                    style = CardButtonStyle.Secondary,
-                    enabled = true,
-                    testTag = "account-login-cancel",
-                    onClick = onCancel,
-                )
+    val startError = flow.startError
+    KitSheet(
+        title = title ?: if (agent == "codex") "Sign in with ChatGPT" else "Sign in to ${agentDisplayName(agent)}",
+        onDismiss = onCancel,
+        tag = "account-add-sheet",
+        // A sign-in under way is cancelled on purpose, not by a stray tap.
+        dismissOnOutside = false,
+        buttons = {
+            if (view !is LoginView.Done) {
+                KitGhostButton("Cancel", onClick = onCancel, modifier = Modifier.testTag("account-login-cancel"))
                 if (startError != null || view is LoginView.Failed || view is LoginView.Cancelled) {
-                    CardButton(
-                        label = "Try again",
-                        style = CardButtonStyle.Primary,
-                        enabled = !flow.starting,
-                        testTag = "account-login-retry",
-                        onClick = onRetry,
+                    KitGhostButton("Try again", onClick = onRetry, enabled = !flow.starting, modifier = Modifier.testTag("account-login-retry"))
+                }
+            }
+        },
+    ) {
+        Column(
+            Modifier.fillMaxWidth().padding(top = 12.dp).testTag("account-login-sheet"),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            when {
+                startError != null -> SheetLine(startError, warn = true, tag = "account-login-failed")
+                else -> when (view) {
+                    LoginView.Starting -> SheetLine("Starting the sign-in…", tag = "account-login-starting")
+                    is LoginView.AwaitingUser -> AwaitingBlock(view, form, scope, onSubmitCode)
+                    LoginView.Verifying -> SheetLine("Checking the sign-in…", tag = "account-login-verifying")
+                    is LoginView.Done -> Text(
+                        "Added ${view.label}",
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = kitColors().ok,
+                        modifier = Modifier.testTag("account-login-done"),
                     )
+                    is LoginView.Failed -> SheetLine(view.message, warn = true, tag = "account-login-failed")
+                    LoginView.Cancelled -> SheetLine("Sign-in cancelled.")
                 }
             }
         }
     }
 }
 
-@Composable
-private fun ProgressLine(text: String, tag: String) {
-    val cs = MaterialTheme.colorScheme
-    Row(
-        Modifier.fillMaxWidth().padding(vertical = Space.md).testTag(tag),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Space.md),
-    ) {
-        CircularProgressIndicator(color = cs.primary, strokeWidth = Stroke.thin, modifier = Modifier.size(18.dp))
-        Text(text, style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
-    }
-}
-
-/** A numbered step: a small tinted number, then the instruction and its control. */
+/** A numbered step: its number, then the instruction and its control. */
 @Composable
 private fun StepItem(number: Int, text: String, content: @Composable () -> Unit = {}) {
-    val cs = MaterialTheme.colorScheme
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Space.md)) {
-        Box(
-            Modifier.padding(top = 1.dp).size(20.dp).clip(CircleShape).background(cs.primary.copy(alpha = 0.14f)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text("$number", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = cs.primary)
-        }
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Space.sm)) {
-            Text(text, style = MaterialTheme.typography.bodyMedium, color = cs.onSurface)
+    val c = kitColors()
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("$number.", fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = c.dim)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(text, fontSize = 13.sp, lineHeight = 19.sp, color = c.text)
             content()
         }
     }
@@ -569,13 +491,12 @@ private fun StepItem(number: Int, text: String, content: @Composable () -> Unit 
 
 @Composable
 private fun AwaitingBlock(
-    agent: String,
     view: LoginView.AwaitingUser,
     form: AddAccountForm,
     scope: CoroutineScope,
     onSubmitCode: suspend (String) -> AccountResult<Unit>?,
 ) {
-    val cs = MaterialTheme.colorScheme
+    val c = kitColors()
     val platform = LocalPlatform.current
     var code by form::code
     var submitting by form::codeSubmitting
@@ -585,12 +506,12 @@ private fun AwaitingBlock(
     val url = view.url
 
     fun submit() {
-        val c = code.trim()
-        if (c.isEmpty() || submitting) return
+        val typed = code.trim()
+        if (typed.isEmpty() || submitting) return
         submitting = true
         error = null
         scope.launch {
-            when (val r = onSubmitCode(c)) {
+            when (val r = onSubmitCode(typed)) {
                 is AccountResult.Failed -> form.codeError = r.message ?: "Couldn't send the code."
                 else -> form.codeSubmitted = true
             }
@@ -601,135 +522,64 @@ private fun AwaitingBlock(
     var n = 1
     StepItem(n++, if (url != null) "Open the sign-in page and approve the request." else "Waiting for the sign-in page…") {
         if (url != null) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
-                CardButton(
-                    label = "Open sign-in page",
-                    style = CardButtonStyle.Primary,
-                    enabled = true,
-                    testTag = "account-login-open",
-                    trailing = Icons.AutoMirrored.Filled.OpenInNew,
-                    onClick = { platform.openUrl(url) },
-                )
-                IconButton(
-                    onClick = { platform.copyToClipboard(url) },
-                    modifier = Modifier.size(36.dp).testTag("account-login-copy-url"),
-                ) {
-                    Icon(Icons.Filled.ContentCopy, contentDescription = "Copy link", tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
-                }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                KitGhostButton("Open sign-in page", onClick = { platform.openUrl(url) }, modifier = Modifier.testTag("account-login-open"))
+                KitTextAction("Copy link", { platform.copyToClipboard(url) }, Modifier.testTag("account-login-copy-url"))
             }
         } else {
-            ProgressLine("Generating the link…", "account-login-generating")
+            SheetLine("Generating the link…", tag = "account-login-generating")
         }
     }
     view.code?.let { device ->
         StepItem(n++, "Enter this code on the page:") {
-            val shape = RoundedCornerShape(Radii.sm)
+            val src = remember { MutableInteractionSource() }
             Row(
                 Modifier
-                    .clip(shape)
-                    .background(cs.surfaceContainerHighest)
-                    .border(Stroke.hairline, cs.outlineVariant, shape)
-                    .clickable { platform.copyToClipboard(device); copied = true }
-                    .padding(start = Space.md, end = Space.sm, top = Space.sm, bottom = Space.sm)
+                    .clickable(interactionSource = src, indication = null, role = Role.Button) {
+                        platform.copyToClipboard(device)
+                        copied = true
+                    }
+                    .kitFocusRing(src, RoundedCornerShape(4.dp))
                     .testTag("account-login-device-code"),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Space.md),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 SelectionContainer {
-                    Text(
-                        device,
-                        fontFamily = MonoFontFamily,
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        letterSpacing = 2.sp,
-                        color = cs.onSurface,
-                    )
+                    Text(device, fontFamily = MonoFontFamily, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 2.sp, color = c.text)
                 }
-                Icon(
-                    if (copied) Icons.Filled.Check else Icons.Filled.ContentCopy,
-                    contentDescription = "Copy code",
-                    tint = if (copied) cs.primary else cs.onSurfaceVariant,
-                    modifier = Modifier.size(16.dp),
-                )
+                Text(if (copied) "Copied" else "Copy", fontSize = 12.5.sp, color = c.accent)
             }
         }
     }
     if (view.needsCode) {
         StepItem(n, "Paste the code the page shows you after approving.") {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
-                OutlinedTextField(
-                    value = code,
-                    onValueChange = { code = it; error = null; submitted = false },
-                    placeholder = { Text("Paste code", style = MaterialTheme.typography.bodySmall) },
-                    singleLine = true,
-                    textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = MonoFontFamily),
-                    colors = settingsFieldColors(),
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("account-login-code")
-                        .submitOnEnter(code.isNotBlank() && !submitting, ::submit),
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                KitTextField(
+                    code,
+                    {
+                        code = it
+                        error = null
+                        submitted = false
+                    },
+                    Modifier.weight(1f),
+                    placeholder = "Paste the code",
+                    mono = true,
+                    onSubmit = ::submit,
+                    fieldTag = "account-login-code",
                 )
-                CardButton(
-                    label = if (submitting) "Sending…" else "Submit",
-                    style = CardButtonStyle.Primary,
-                    enabled = code.isNotBlank() && !submitting,
-                    testTag = "account-login-submit",
+                KitGhostButton(
+                    if (submitting) "Sending…" else "Submit",
                     onClick = ::submit,
+                    enabled = code.isNotBlank() && !submitting,
+                    modifier = Modifier.testTag("account-login-submit"),
                 )
             }
             when {
-                error != null -> Text(error!!, color = cs.error, style = MaterialTheme.typography.bodySmall)
-                submitted -> Text("Code sent — checking…", color = cs.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
+                error != null -> SheetLine(error!!, warn = true)
+                submitted -> SheetLine("Code sent — checking…")
             }
         }
     } else if (url != null) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Space.sm),
-            modifier = Modifier.padding(start = 32.dp),
-        ) {
-            CircularProgressIndicator(color = cs.onSurfaceVariant, strokeWidth = 1.5.dp, modifier = Modifier.size(12.dp))
-            Text(
-                "Waiting for you to approve in the browser…",
-                style = MaterialTheme.typography.labelMedium,
-                color = cs.onSurfaceVariant,
-            )
-        }
+        SheetLine("Waiting for you to approve in the browser…", modifier = Modifier.padding(start = 22.dp))
     }
-}
-
-@Composable
-private fun DoneBlock(label: String) {
-    val sem = LocalSemantics.current
-    Column(
-        Modifier.fillMaxWidth().padding(vertical = Space.lg).testTag("account-login-done"),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(Space.sm),
-    ) {
-        Box(Modifier.size(44.dp).clip(CircleShape).background(sem.success.copy(alpha = 0.14f)), contentAlignment = Alignment.Center) {
-            Icon(Icons.Filled.Check, contentDescription = null, tint = sem.success, modifier = Modifier.size(24.dp))
-        }
-        Text("Added $label", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
-    }
-}
-
-@Composable
-private fun FailedBlock(message: String) {
-    val cs = MaterialTheme.colorScheme
-    val sem = LocalSemantics.current
-    Surface(
-        shape = RoundedCornerShape(Radii.sm),
-        color = sem.danger.copy(alpha = 0.08f),
-        border = BorderStroke(Stroke.hairline, sem.danger.copy(alpha = 0.3f)),
-        modifier = Modifier.fillMaxWidth().testTag("account-login-failed"),
-    ) {
-        Row(
-            Modifier.padding(Space.md),
-            horizontalArrangement = Arrangement.spacedBy(Space.sm),
-        ) {
-            Icon(Icons.Filled.ErrorOutline, contentDescription = null, tint = sem.danger, modifier = Modifier.size(18.dp))
-            Text(message, style = MaterialTheme.typography.bodyMedium, color = cs.onSurface)
-        }
-    }
-    Spacer(Modifier.height(0.dp))
 }

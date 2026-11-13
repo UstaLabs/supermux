@@ -49,15 +49,32 @@ sealed interface Route {
     @SerialName("add_host")
     data object AddHost : Route
 
-    /** [section] is the rail selection inside the hub; desktop reads/writes it, Android defaults it. */
+    /**
+     * Settings. [section] null = "just Settings" (the phone's index; General on a wide window). [sub] is a
+     * second-level page inside the section (a provider, the glossary, This computer's page); [anchor] a row to scroll
+     * to and flash once. See `ui/settings/SettingsPlace.kt`.
+     */
     @Serializable
     @SerialName("settings")
-    data class Settings(val section: SettingsSection = SettingsSection.Providers) : Route
+    data class Settings(
+        val section: SettingsSection? = null,
+        val sub: String? = null,
+        val anchor: String? = null,
+    ) : Route
 
     @Serializable
     @SerialName("usage")
     data object Usage : Route
 
+    /** What's new (#90): [version]'s edition, a full-pane page on every width. */
+    @Serializable
+    @SerialName("whats_new")
+    data class WhatsNew(val version: String) : Route
+
+    /**
+     * The machine page's Devices (#97 Step 2). Kept so callers, links and saved stacks that name it still land:
+     * the shell pushes it as `Settings(Machine, anchor = "devices")` (`canonicalRoute`), never as itself.
+     */
     @Serializable
     @SerialName("devices")
     data object Devices : Route
@@ -66,6 +83,7 @@ sealed interface Route {
     @SerialName("archived")
     data object Archived : Route
 
+    /** The machine page's Shared links, as [Devices] is its Devices: pushed as `Settings(Machine, anchor = "links")`. */
     @Serializable
     @SerialName("proxies")
     data object Proxies : Route
@@ -74,12 +92,6 @@ sealed interface Route {
     @SerialName("displays")
     data object Displays : Route
 
-    @Serializable
-    @SerialName("appearance")
-    data object Appearance : Route
-
-    /** Desktop-only today: the in-app updater's full-pane screen. */
-    @Serializable
-    @SerialName("app_update")
-    data object AppUpdate : Route
+    // Appearance and the updater's page are General's rows since #97 (`openSettings(General)`,
+    // `ShellUiState.openAppUpdate`); a saved back stack naming them decodes to Home.
 }

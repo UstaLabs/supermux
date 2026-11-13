@@ -1,10 +1,11 @@
 // Card #78 end to end: a real broker (throwaway state, MUX_TEST_BROKER=1, its own HOME) with real keepers and the
-// library's echo `claude`, restarted the two ways it happens on his box:
-// - SIGTERM (a restart, and as far as agents go a reboot: graceful shutdown stops every agent and its keeper);
-// - SIGKILL (a crash or OOM kill: keepers outlive the broker, so their agents still run at the next boot).
+// library's echo `claude`, restarted the ways it happens:
+// - SIGTERM (a plain stop, and as far as agents go a reboot: graceful shutdown stops every agent and its keeper);
+// - SIGKILL (a crash or OOM kill: keepers outlive the broker, so their agents still run at the next boot);
+// - a restart under systemd, as `supermux setup` installs the broker (#29): its agents run on.
 // After either, only the Agent and a worker whose agent still runs have keepers; the other workers are asleep
 // (suspended) and the first message to one wakes it and gets the answer.
-import { afterAll, expect, test } from "bun:test"
+import { afterEach, expect, test } from "bun:test"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
@@ -18,7 +19,9 @@ const AGENT = "00000000-0000-4000-8000-0000000000a1"
 const WORKER_A = "00000000-0000-4000-8000-0000000000b1"
 const WORKER_B = "00000000-0000-4000-8000-0000000000b2"
 const fixtures: Fixture[] = []
-afterAll(async () => { for (const f of fixtures) await f.dispose() })
+// Each test's brokers, keepers and agents stop when it ends: one test's broker left running while the next one boots
+// competes with it on a small CI runner (a first boot that timed out at 60 s, run 42431421364).
+afterEach(async () => { for (const f of fixtures.splice(0)) await f.dispose() })
 
 function freePort(): number {
   const l = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } })
@@ -74,30 +77,76 @@ class Fixture {
     chmodSync(join(stub, "tmux"), 0o755)
   }
 
-  async start(): Promise<void> {
+  /**
+   * Nothing from the session that runs the test (MUX_*, CLAUDE*, provider keys), and a HOME of its own, so the broker
+   * can't write the real ~/.claude.json.
+   */
+  private brokerEnv(): Record<string, string> {
+    return {
+      PATH: `${join(this.dir, "stubbin")}:${process.env.PATH}`,
+      HOME: join(this.dir, "home"),
+      MUX_TEST_BROKER: "1",
+      MUX_HOME: this.dir,
+      MUX_STATE_DIR: this.state,
+      MUX_SOCKETS_DIR: join(this.state, "sockets"),
+      MUX_WEB_PORT: String(this.port),
+      MUX_WEB_PUBLIC_URL: this.base,
+      MUX_UPDATE_CHECK: "0",
+      MUX_CURATOR_ENABLED: "0",
+      DO_NOT_TRACK: "1",
+    }
+  }
+
+  async start(extraEnv: Record<string, string> = {}): Promise<void> {
     const log = join(this.dir, `broker-${++this.boots}.log`)
-    // Nothing from the session that runs the test (MUX_*, CLAUDE*, provider keys), and a HOME of its own, so the
-    // broker can't write the real ~/.claude.json.
-    this.broker = Bun.spawn(["bun", "src/main.ts"], {
-      cwd: REPO,
-      stdout: Bun.file(log),
-      stderr: Bun.file(log),
-      env: {
-        PATH: `${join(this.dir, "stubbin")}:${process.env.PATH}`,
-        HOME: join(this.dir, "home"),
-        MUX_TEST_BROKER: "1",
-        MUX_HOME: this.dir,
-        MUX_STATE_DIR: this.state,
-        MUX_SOCKETS_DIR: join(this.state, "sockets"),
-        MUX_WEB_PORT: String(this.port),
-        MUX_WEB_PUBLIC_URL: this.base,
-        MUX_UPDATE_CHECK: "0",
-        MUX_CURATOR_ENABLED: "0",
-        DO_NOT_TRACK: "1",
-      },
-    })
-    // The web port opens after the boot resume.
+    this.broker = Bun.spawn(["bun", "src/main.ts"], { cwd: REPO, stdout: Bun.file(log), stderr: Bun.file(log), env: { ...this.brokerEnv(), ...extraEnv } })
+    await this.answers()
+  }
+
+  /** The running broker catches SIGTERM: its graceful-shutdown listener is registered (/proc/<pid>/status SigCgt). */
+  catchesSigterm(): boolean {
+    const caught = readFileSync(`/proc/${this.broker!.pid}/status`, "utf8").match(/^SigCgt:\s*([0-9a-f]+)$/m)?.[1]
+    return caught !== undefined && ((BigInt(`0x${caught}`) >> 14n) & 1n) === 1n
+  }
+
+  /** The web port opens after the boot resume. */
+  private async answers(): Promise<void> {
     await until("the broker to answer", async () => (await fetch(`${this.base}/me`).then((r) => r.status).catch(() => 0)) === 401 || undefined)
+  }
+
+  /** The transient systemd user service the broker runs as, once [startUnit] started it. */
+  private unit: string | undefined
+
+  /** The broker as a systemd user service, as `supermux setup` installs it: the default KillMode=control-group. */
+  async startUnit(): Promise<void> {
+    this.unit = `supermux-e2e-${this.port}`
+    const log = join(this.dir, "broker-unit.log")
+    const env = Object.entries(this.brokerEnv()).map(([k, v]) => `--setenv=${k}=${v}`)
+    const run = Bun.spawnSync(["systemd-run", "--user", "--quiet", "--collect", `--unit=${this.unit}`, `--working-directory=${REPO}`,
+      "-p", `StandardOutput=append:${log}`, "-p", `StandardError=append:${log}`, ...env, process.execPath, "src/main.ts"])
+    expect(run.exitCode, run.stderr.toString()).toBe(0)
+    await this.answers()
+  }
+
+  systemctl(verb: "restart" | "stop"): void {
+    expect(Bun.spawnSync(["systemctl", "--user", verb, this.unit!]).exitCode).toBe(0)
+  }
+
+  /** The unit's broker process; 0 when none runs. */
+  mainPid(): number {
+    return Number(Bun.spawnSync(["systemctl", "--user", "show", "-p", "MainPID", "--value", this.unit!]).stdout.toString().trim())
+  }
+
+  /** Waits for the broker after [before] (its process) to answer: a new process, with its web port open. */
+  async restarted(before: number): Promise<void> {
+    await until("a new broker process", () => { const now = this.mainPid(); return (now !== 0 && now !== before) || undefined })
+    await this.answers()
+  }
+
+  /** POST /internal/<what> with the per-boot token, as the desktop app and `supermux connect --restart` send it. */
+  async internal(what: "restart" | "expect-restart"): Promise<number> {
+    const token = readFileSync(join(this.state, "stop-token"), "utf8").trim()
+    return (await fetch(`${this.base}/internal/${what}`, { method: "POST", headers: { "x-supermux-stop-token": token } })).status
   }
 
   async stop(signal: "SIGTERM" | "SIGKILL"): Promise<void> {
@@ -117,6 +166,18 @@ class Fixture {
       if (dir?.startsWith(root)) live.set(dir.slice(root.length).replace(/\/$/, ""), Number(pid))
     }
     return live
+  }
+
+  /**
+   * The session's keeper process, from its status.json, while it runs. The broker's own unit runs its processes with
+   * this user's primary group, and Linux lets only a process with the same uid and gid read their /proc/<pid>/environ,
+   * which [keepers] reads: a test run from a shell with another group (`sg`) cannot.
+   */
+  keeperPid(id: string): number | undefined {
+    const file = join(this.state, "core", "claude", "keepers", id, "status.json")
+    if (!existsSync(file)) return undefined
+    const pid = (JSON.parse(readFileSync(file, "utf8")) as { keeperPid?: number }).keeperPid
+    return pidAlive(pid) ? pid : undefined
   }
 
   /** The session's agent process runs (its keeper's status.json). */
@@ -149,7 +210,23 @@ class Fixture {
   }
 
   async dispose(): Promise<void> {
+    // A child broker that does not answer when its test ends (it exited, or it never came up) says why, from its log.
+    if (this.broker && (await fetch(`${this.base}/me`).then((r) => r.status).catch(() => 0)) !== 401) {
+      const log = join(this.dir, `broker-${this.boots}.log`)
+      const exited = this.broker.exitCode ?? this.broker.signalCode
+      const tail = existsSync(log) ? readFileSync(log, "utf8").split("\n").slice(-40).join("\n") : "(no log)"
+      console.error(`the broker of ${this.dir} does not answer${exited != null ? ` (it exited: ${exited})` : ""}; the end of ${log}:\n${tail}`)
+    }
     if (this.broker) await this.stop("SIGTERM")
+    if (this.unit) Bun.spawnSync(["systemctl", "--user", "stop", this.unit])
+    // A unit's keepers (in scopes of their own) and their agents, by the pids their status records, for a test that
+    // failed before its plain stop.
+    for (const id of [AGENT, WORKER_A, WORKER_B]) {
+      const file = join(this.state, "core", "claude", "keepers", id, "status.json")
+      if (!existsSync(file)) continue
+      const status = JSON.parse(readFileSync(file, "utf8")) as { keeperPid?: number; agentPid?: number }
+      for (const pid of [status.keeperPid, status.agentPid]) if (pidAlive(pid)) { try { process.kill(pid!, "SIGKILL") } catch { /* gone */ } }
+    }
     // Whatever a crash left running in this fixture.
     for (const pid of this.keepers().values()) { try { process.kill(pid, "SIGKILL") } catch { /* gone */ } }
     if (process.env.MUX_TEST_KEEP_FIXTURE === "1") console.log("fixture kept:", this.dir)
@@ -215,4 +292,99 @@ test("after a crash a worker whose agent still runs is re-attached, not started 
   expect(f.keepers().has(WORKER_B)).toBe(false)
   expect(await f.converse(WORKER_A, "after the crash")).toContain("after the crash")
   expect(f.keepers().get(WORKER_A)).toBe(keeperBefore!)
+}, 240_000)
+
+/** This user's systemd answers `systemd-run --user` (a desktop, a server with lingering; not a container or CI). */
+const userSystemd = process.platform === "linux"
+  && Bun.spawnSync(["systemd-run", "--user", "--scope", "--quiet", "--collect", "--", "true"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0
+
+// #29: a restart must not take the agents down. Under the unit `supermux setup` installs (KillMode=control-group), a
+// restart killed every keeper in the unit's cgroup, and the broker's own graceful shutdown stopped them as well: the
+// turn in flight was lost on every restart. Keepers now run in scopes of their own, and a restart the broker expects
+// (it scheduled it, or the desktop app said so first) leaves them to the broker that comes back.
+test.skipIf(!userSystemd)("under systemd a restart keeps the agents running; a plain stop still stops them", async () => {
+  const f = new Fixture()
+  await f.startUnit()
+  expect(await f.converse(WORKER_A, "before the restart")).toContain("before the restart")
+  const keeper = f.keeperPid(WORKER_A)
+  expect(keeper).toBeDefined()
+  const agentKeeper = f.keeperPid(AGENT)
+
+  // Restart broker, `supermux connect --restart`, `supermux update`: the broker restarts itself under its unit.
+  let before = f.mainPid()
+  expect(await f.internal("restart")).toBe(202)
+  await f.restarted(before)
+  expect(f.keeperPid(WORKER_A)).toBe(keeper!)
+  expect(f.agentRuns(WORKER_A)).toBe(true)
+  expect((await f.sessions()).get(WORKER_A)?.status).toBe("active")
+  expect(await f.converse(WORKER_A, "after the restart")).toContain("after the restart")
+  expect(f.keeperPid(WORKER_A)).toBe(keeper!)
+
+  // The desktop app's Restart: it says so first, then restarts the unit itself.
+  before = f.mainPid()
+  expect(await f.internal("expect-restart")).toBe(204)
+  f.systemctl("restart")
+  await f.restarted(before)
+  expect(f.keeperPid(WORKER_A)).toBe(keeper!)
+  expect(await f.converse(WORKER_A, "after the app's restart")).toContain("after the app's restart")
+
+  // A plain stop (`systemctl --user stop`, an uninstall): the agents stop with the broker.
+  f.systemctl("stop")
+  await until("every keeper to exit", () => (f.keeperPid(WORKER_A) === undefined && f.keeperPid(AGENT) === undefined) || undefined, 20_000)
+  expect(agentKeeper === undefined || !f.agentRuns(AGENT)).toBe(true)
+  expect(f.agentRuns(WORKER_A)).toBe(false)
+}, 240_000)
+
+/** A Telegram Bot API for a broker configured with a bot token: getMe, a long poll that never has updates, ok to the rest. */
+function stubTelegram(): { root: string; polled: () => boolean; stop: () => void } {
+  let polled = false
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(req) {
+      const method = new URL(req.url).pathname.split("/").pop()
+      if (method === "getMe") {
+        return Response.json({ ok: true, result: { id: 1, is_bot: true, first_name: "stub", username: "stub_bot", can_join_groups: false, can_read_all_group_messages: false, supports_inline_queries: false } })
+      }
+      if (method === "getUpdates") {
+        polled = true
+        await Bun.sleep(500)
+        return Response.json({ ok: true, result: [] })
+      }
+      return Response.json({ ok: true, result: true })
+    },
+  })
+  return { root: `http://127.0.0.1:${server.port}`, polled: () => polled, stop: () => server.stop(true) }
+}
+
+// #29: with Telegram configured, the broker's last boot step is grammy's long poll, which returns only at shutdown, and
+// main.ts registered its SIGTERM/SIGINT listeners after it, so they never were. Every SIGTERM was a hard kill: no
+// graceful shutdown, broker.pid left behind, the agents left to their parked deadline, and a restart could not be told
+// from a stop. The listeners now come before the channels start.
+test("with Telegram on, SIGTERM still runs the graceful shutdown: an announced restart keeps the agents, a plain stop stops them", async () => {
+  const telegram = stubTelegram()
+  const f = new Fixture()
+  try {
+    const env = { MUX_TELEGRAM_BOT_TOKEN: "123456:stub-token", MUX_TELEGRAM_API_ROOT: telegram.root }
+    await f.start(env)
+    await until("the broker's Telegram long poll", () => telegram.polled() || undefined)
+    expect(f.catchesSigterm()).toBe(true)
+
+    // An announced restart (the desktop app's Restart, a deploy that says so first): the agents stay for the next broker.
+    expect(await f.converse(WORKER_A, "before the restart")).toContain("before the restart")
+    const keeper = f.keeperPid(WORKER_A)
+    expect(keeper).toBeDefined()
+    expect(await f.internal("expect-restart")).toBe(204)
+    await f.stop("SIGTERM")
+    expect(f.keeperPid(WORKER_A)).toBe(keeper!)
+    await f.start(env)
+    expect(await f.converse(WORKER_A, "after the restart")).toContain("after the restart")
+    expect(f.keeperPid(WORKER_A)).toBe(keeper!)
+
+    // A plain stop: the graceful shutdown runs, and the agents stop with the broker.
+    await f.stop("SIGTERM")
+    await until("every keeper to exit", () => (f.keeperPid(WORKER_A) === undefined && f.keeperPid(AGENT) === undefined) || undefined, 20_000)
+  } finally {
+    telegram.stop()
+  }
 }, 240_000)

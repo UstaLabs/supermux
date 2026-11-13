@@ -87,6 +87,13 @@ private val DEFAULT_ACTIVATION: Activation = Activation.WhenVisible()
  * @param activation when the view goes live. By default once it is on screen and has stopped moving
  *   ([Activation.WhenVisible]), as views in lists, the main use, need: never mid-scroll. Give a pane that should be live
  *   whenever it shows [Activation.Eager].
+ * @param keepRunningWhileHidden keeps the page running while the view is composed but not shown, as a browser's tab
+ *   behind another: for as long as it is composed, it keeps its engine (no
+ *   [dev.supermux.webview.runtime.RuntimeConfig.hiddenReleaseMillis]), ranks with visible views in the pool (a visible
+ *   view that needs a slot takes hidden views' engines first; memory pressure may still take it, least recently used
+ *   first), its engine is never told it is hidden (which stops a page's media on macOS and iOS), and shown again with
+ *   its page still painted, it shows that page live at once, with no cover. Off by default: such a view costs a live
+ *   page the whole time.
  * @param placeholder covers the page while there is no snapshot to show. The default is opaque, in the theme
  *   [settings] resolve to. A custom one should be opaque too, or the engine's unpainted surface may show through.
  */
@@ -98,6 +105,7 @@ public fun WebView(
     client: WebClient = WebClient.Default,
     activation: Activation = DEFAULT_ACTIVATION,
     sizing: WebSizing = WebSizing.Fill,
+    keepRunningWhileHidden: Boolean = false,
     placeholder: @Composable (WebViewState) -> Unit = { DefaultPlaceholder(it, dark = settings.darkMode.isDark()) },
 ) {
     val runtime = LocalWebViewRuntime.current
@@ -108,7 +116,7 @@ public fun WebView(
     val uriHandler = LocalUriHandler.current
     val dark = settings.darkMode.isDark()
     val density = LocalDensity.current.density
-    SideEffect { host.update(settings, client, activation, uriHandler, dark, density, overlays) }
+    SideEffect { host.update(settings, client, activation, keepRunningWhileHidden, uriHandler, dark, density, overlays) }
     LaunchedEffect(host) { host.run() }
     DisposableEffect(host) { onDispose { host.dispose() } }
     val sized = when (sizing) {
@@ -134,7 +142,7 @@ public fun WebView(
     // A new host is a new view: its layout reports its position afresh.
     key(host) {
         // The host's node draws the snapshot over the placeholder when there is one (see HostNode).
-        Box(probe.then(sized).then(HostElement(host, dark))) {
+        Box(probe.then(sized).then(HostElement(host, dark, settings.underlay.takeIf { settings.transparentBackground }))) {
             val engine = host.engine
             if (engine != null) {
                 key(engine) {
@@ -168,23 +176,27 @@ internal fun DarkMode.isDark(): Boolean = when (this) {
 
 /**
  * Tells [host] where the view is laid out, when it no longer is, and when the user presses on it, and draws the cover
- * in [dark].
+ * in [dark], on a transparent page's [underlay] if it has one.
  */
-private class HostElement(private val host: WebViewHost, private val dark: Boolean) : ModifierNodeElement<HostNode>() {
-    override fun create() = HostNode(host, dark)
+private class HostElement(private val host: WebViewHost, private val dark: Boolean, private val underlay: Color?) :
+    ModifierNodeElement<HostNode>() {
+    override fun create() = HostNode(host, dark, underlay)
 
     override fun update(node: HostNode) {
         node.host = host
         node.dark = dark
+        node.underlay = underlay
     }
 
-    override fun equals(other: Any?): Boolean = other is HostElement && other.host === host && other.dark == dark
+    override fun equals(other: Any?): Boolean =
+        other is HostElement && other.host === host && other.dark == dark && other.underlay == underlay
 
-    override fun hashCode(): Int = 31 * host.hashCode() + dark.hashCode()
+    override fun hashCode(): Int = 31 * (31 * host.hashCode() + dark.hashCode()) + underlay.hashCode()
 
     override fun InspectorInfo.inspectableProperties() {
         name = "webViewHost"
         properties["dark"] = dark
+        properties["underlay"] = underlay
     }
 }
 
@@ -200,10 +212,21 @@ private class HostElement(private val host: WebViewHost, private val dark: Boole
  * It draws the cover itself so that a view coming on screen shows its snapshot in that very frame: the host reads the
  * snapshot from the cache in layout, and this node redraws before the frame is drawn.
  */
-private class HostNode(var host: WebViewHost, dark: Boolean) :
+private class HostNode(var host: WebViewHost, dark: Boolean, underlay: Color?) :
     Modifier.Node(), GlobalPositionAwareModifierNode, UnplacedAwareModifierNode, PointerInputModifierNode,
     DrawModifierNode {
     var dark: Boolean = dark
+        set(value) {
+            if (field == value) return
+            field = value
+            invalidateDraw()
+        }
+
+    /**
+     * What the app draws behind a transparent page ([WebSettings.underlay]). The cover lies on it: where the page lies
+     * under the canvas, the cover's clear pixels would show the canvas's hole, what is under the canvas.
+     */
+    var underlay: Color? = underlay
         set(value) {
             if (field == value) return
             field = value
@@ -236,6 +259,7 @@ private class HostNode(var host: WebViewHost, dark: Boolean) :
             backgroundOf = image
             background = coverBackgroundOf(image)
         }
+        underlay?.let { drawRect(it) }
         drawCover(image, coverScale(image.width, image.height, size, density, cover.key.pixelsPerDp), background)
     }
 }

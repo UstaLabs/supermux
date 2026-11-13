@@ -22,6 +22,7 @@ import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.AgentLoginState
 import dev.supermux.net.AccountDto
 import dev.supermux.net.AccountLoginStateDto
+import dev.supermux.net.AccountRemovalPlanDto
 import dev.supermux.net.SessionAccountResult
 import dev.supermux.net.AppConfigDto
 import dev.supermux.net.ArchivedDto
@@ -31,8 +32,16 @@ import dev.supermux.net.BrokerClient
 import dev.supermux.util.PerfTrace
 import dev.supermux.util.perfClientLogs
 import dev.supermux.net.ChunkSource
+import dev.supermux.chat.mimeForFileName
 import dev.supermux.media.AttachmentMedia
+import dev.supermux.media.MediaCache
+import dev.supermux.media.MediaKey
 import dev.supermux.media.RangeDownload
+import dev.supermux.media.StoredFile
+import dev.supermux.work.DownloadSource
+import dev.supermux.work.DownloadedFile
+import dev.supermux.work.hostFileId
+import kotlin.random.Random
 import dev.supermux.net.CreateProxyResponse
 import dev.supermux.net.CuratorConfig
 import dev.supermux.net.CuratorSettingsResponse
@@ -107,6 +116,8 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import dev.supermux.proto.ClientFrame
+import dev.supermux.proto.CardRef
+import dev.supermux.proto.FromCardDto
 import dev.supermux.proto.FinishJobDto
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.ProjectDto
@@ -124,6 +135,8 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
@@ -142,6 +155,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.flow.stateIn
@@ -239,6 +253,8 @@ class HostStore(
     private val apiSpeak by lazy { apiOverride ?: BrokerApi(baseUrl, token, httpSpeak.value) }
     // Attachment downloads (the media cache): one 4 MB range per request, each allowed two minutes,
     // so a slow phone link finishes a long clip instead of hitting CIO's 15 s per-request ceiling.
+    // Host-file downloads (#95) use it too: /fs/raw has no ranges, so a whole file (up to the host's
+    // 64 MB cap) comes in one request.
     private val httpMedia = lazy { deps.httpFactory(MEDIA_TIMEOUT_MS) }
     private val apiMedia by lazy { apiOverride ?: BrokerApi(baseUrl, token, httpMedia.value) }
     // Session starts (card #75): POST /sessions answers once the worktree is made and the agent is up,
@@ -257,6 +273,9 @@ class HostStore(
     private fun rangeDownload(fileId: String): RangeDownload = { from, to, sink ->
         runApi("fileRange") { apiMedia.fileRange(fileId, from, to, sink) }
     }
+
+    /** #104: html cards' pages on this host, kept in memory by id. */
+    val htmlPages: dev.supermux.net.HtmlPages = dev.supermux.net.HtmlPages(fetch = { id -> apiMedia.htmlPage(id) })
 
     /** How the chat reads this host's attachments: through the media cache once [bindMedia] ran. */
     val media: AttachmentMedia = object : AttachmentMedia {
@@ -282,6 +301,98 @@ class HostStore(
             val cache = deps.media ?: return null
             val host = mediaHost ?: return null
             return cache.playableUri(host, att, rangeDownload(att.file_id))
+        }
+
+        // #95: to a file through the media cache — the same transfer an inline clip of it plays from — or, on the
+        // web, which has no files, into a Blob the browser fetches and holds itself.
+        override suspend fun download(att: Attachment, progress: (received: Long, total: Long?) -> Unit): DownloadedFile? {
+            val host = mediaHost ?: return null
+            val name = att.name ?: att.file_id
+            val mime = att.mime ?: "application/octet-stream"
+            deps.browserDownload?.let { browser ->
+                val (blob, size) = browser.fetch(api.fileUrl(att.file_id), api.authHeaders(), progress) ?: return null
+                return DownloadedFile(name, mime, size, path = null, handle = blob)
+            }
+            val stored = deps.media?.file(host, att, rangeDownload(att.file_id), progress) ?: return null
+            return DownloadedFile(name, mime, stored.size, stored.path)
+        }
+
+        // #95: what the store already holds, as a finished download — a look, never a request. The web keeps no
+        // files (a browser Blob does not outlive the page): nothing is stored there.
+        override suspend fun stored(att: Attachment): DownloadedFile? {
+            if (deps.browserDownload != null) return null
+            val host = mediaHost ?: return null
+            val file = deps.media?.storedFile(host, att) ?: return null
+            return DownloadedFile(att.name ?: att.file_id, att.mime ?: "application/octet-stream", file.size, file.path)
+        }
+
+        override fun cancelDownload(att: Attachment) {
+            val host = mediaHost ?: return
+            deps.media?.cancelFile(host, att.file_id)
+        }
+
+        override fun downloadKey(att: Attachment): String? {
+            if (deps.media == null && deps.browserDownload == null) return null
+            return mediaHost?.let { "att:$it/${att.file_id}" }
+        }
+    }
+
+    /**
+     * A host file for the DownloadCenter (#95: Files / editor "Save and open…"): its key, `fs:<host>:<path>@<version>`
+     * (a fresh one each time when [version] is unknown), and its source. Null where this app keeps no downloads (no
+     * media cache and no browser download) or once this host is closed.
+     *
+     * The file lands in the media store under an id made of its path, mtime and size from `/fs/stat`, so an unchanged
+     * file is not fetched twice and Storage › Clear covers it. It can change between that stat and the read: the write
+     * is kept only when as many bytes came as the stat said and a second stat after the transfer still sees the same
+     * mtime and size; otherwise nothing is kept and the download fails, retryable (`/fs/raw` has no ranges, so a retry
+     * starts over). On the web the browser streams `/fs/raw` into a Blob instead. The transfer runs inside `fetch`, so
+     * cancelling the job stops it: the source needs no `cancel`.
+     */
+    fun hostFileDownload(path: String, version: String?): Pair<String, DownloadSource>? {
+        val host = mediaHost ?: return null
+        val cache = deps.media
+        val browser = deps.browserDownload
+        if (cache == null && browser == null) return null
+        val name = dev.supermux.fs.pathLeaf(path)
+        val mime = mimeForFileName(name) ?: "application/octet-stream"
+        val source = object : DownloadSource {
+            override suspend fun fetch(progress: (received: Long, total: Long?) -> Unit): DownloadedFile? {
+                // Closed since: a closed host starts no download (and builds no client) again.
+                if (mediaHost == null) return null
+                if (browser != null) {
+                    val (blob, size) = browser.fetch(api.hostFsRawUrl(path), api.authHeaders(), progress) ?: return null
+                    return DownloadedFile(name, mime, size, path = null, handle = blob)
+                }
+                val stored = storeHostFile(cache ?: return null, host, path, name, progress) ?: return null
+                return DownloadedFile(name, mime, stored.size, stored.path)
+            }
+        }
+        val at = version ?: Random.nextInt().toUInt().toString(16).padStart(8, '0')
+        return "fs:$host:$path@$at" to source
+    }
+
+    /** [path] into [cache]'s store as the version `/fs/stat` sees now; null when no whole copy of it came (see [hostFileDownload]). */
+    private suspend fun storeHostFile(
+        cache: MediaCache,
+        host: String,
+        path: String,
+        name: String,
+        progress: (received: Long, total: Long?) -> Unit,
+    ): StoredFile? {
+        val stat = apiMedia.hostFsStat(path)
+        val size = stat.size ?: return null
+        val mtime = stat.mtime ?: return null
+        val key = MediaKey.of(host, hostFileId(path, mtime, size), name, null) ?: return null
+        return cache.storeFile(key) { append ->
+            var received = 0L
+            apiMedia.hostFsRawTo(path) { buf, n ->
+                append(buf, n)
+                received += n
+                progress(received, size)
+            }
+            // Whole, and still the version the first stat saw: it did not change while it came.
+            received == size && apiMedia.hostFsStat(path).let { it.mtime == mtime && it.size == size }
         }
     }
     private val sendFrame: suspend (ClientFrame) -> Unit = sendFrameOverride ?: { client.send(it) }
@@ -374,6 +485,15 @@ class HostStore(
         _state.map { it.commandsResolved }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     /** Per-session walkthrough holders. Created and updated by [walkthroughSeam] on first frame. */
     private val walkthroughs = mutableMapOf<String, Any>()
+
+    /** #122 phase 4: the Browser tab comments this host has stored, by id, as the agents answer them. */
+    private val _browserComments = MutableStateFlow<Map<String, dev.supermux.net.BrowserCommentDto>>(emptyMap())
+    val browserComments: StateFlow<Map<String, dev.supermux.net.BrowserCommentDto>> = _browserComments.asStateFlow()
+
+    /** Keeps [comments] (what the broker answered a send), so their pins follow before any frame arrives. */
+    fun rememberBrowserComments(comments: List<dev.supermux.net.BrowserCommentDto>) {
+        _browserComments.update { map -> map + comments.associateBy { it.id } }
+    }
 
     @Suppress("UNCHECKED_CAST")
     fun <T : Any> walkthroughState(sessionId: String): T {
@@ -512,6 +632,9 @@ class HostStore(
     private val _accountsAutoSwitch = MutableStateFlow<Boolean?>(null)
     /** GET/PUT /settings/accounts `autoSwitch`, kept current by `accounts_settings`. */
     val accountsAutoSwitch: StateFlow<Boolean?> = _accountsAutoSwitch.asStateFlow()
+    private val _accountsAutoResume = MutableStateFlow<Boolean?>(null)
+    /** #92: GET/PUT /settings/accounts `autoResume`, kept current by `accounts_settings`. */
+    val accountsAutoResume: StateFlow<Boolean?> = _accountsAutoResume.asStateFlow()
 
     private val _accountLogins = MutableSharedFlow<AccountLoginStateDto>(extraBufferCapacity = 32)
     /** Every `account_login_state` frame (all logins; filter by `loginId`). */
@@ -531,6 +654,9 @@ class HostStore(
 
     /** Whether the client has a fresh snapshot from the broker (i.e. we're synced/connected). */
     val connected: Boolean get() = client.sync.synced
+
+    /** Dial the broker now instead of waiting out the reconnect backoff (card #121's Retry). */
+    fun retryNow() = client.retryNow()
 
     init {
         PerfTrace.milestone("host.init", "host" to baseUrl)
@@ -731,6 +857,7 @@ class HostStore(
             // A resumed session leaves the archive.
             is ServerFrame.SessionAdded -> if (_archivedSessions.value.any { it.id == frame.session.id }) refreshArchived("resumed")
             is ServerFrame.MessageAppend -> {
+                frame.entry.message_id?.let { cardAnswers.value[it]?.complete("") }
                 if (frame.entry.direction == "outbound" && frame.entry.op == "reply") {
                     _agentReplies.tryEmit(AgentReplyEvent(frame.session, frame.entry))
                 }
@@ -743,17 +870,23 @@ class HostStore(
             is ServerFrame.FsChanged -> Unit
             is ServerFrame.WalkthroughUpdated -> applyWalkthroughFrame(frame.sessionId, frame)
             is ServerFrame.ReviewCommentFrame -> applyWalkthroughFrame(frame.sessionId, frame)
+            is ServerFrame.BrowserCommentFrame -> rememberBrowserComments(listOf(frame.comment))
             is ServerFrame.LspRpcIn -> _lspRpc.tryEmit(frame)
             is ServerFrame.UsageUpdated -> holdUsage(frame.usage)
             ServerFrame.AccountsChanged -> if (accountsWanted) refreshAccounts()
             ServerFrame.AgentsChanged -> _agentsChanged.tryEmit(Unit)
             is ServerFrame.AccountLoginState -> _accountLogins.tryEmit(frame.toDto())
-            is ServerFrame.AccountsSettings -> _accountsAutoSwitch.value = frame.autoSwitch
+            is ServerFrame.AccountsSettings -> {
+                _accountsAutoSwitch.value = frame.autoSwitch
+                _accountsAutoResume.value = frame.autoResume
+            }
             is ServerFrame.HostRequirementsChanged -> _hostRequirements.value = frame.requirements
             is ServerFrame.KeepAwakeChanged -> _keepAwake.value = frame.keepAwake
             is ServerFrame.TelemetryChanged -> _telemetry.value = TelemetryState(frame.enabled, frame.source, frame.noticeShown)
             // An older broker didn't know a frame this app sent: said once in the log (the reducer shows the user nothing).
-            is ServerFrame.Error -> if (frame.reason == UNKNOWN_FRAME_TYPE && !unknownFrameLogged) {
+            is ServerFrame.Error -> if (frame.clientMessageId != null) {
+                cardAnswers.value[frame.clientMessageId]?.complete(frame.reason.ifBlank { "refused" })
+            } else if (frame.reason == UNKNOWN_FRAME_TYPE && !unknownFrameLogged) {
                 unknownFrameLogged = true
                 println("[HostStore] the broker answered \"$UNKNOWN_FRAME_TYPE\": it is older than this app; carrying on without it")
             }
@@ -799,6 +932,7 @@ class HostStore(
      * keep-alive heartbeat.
      */
     fun updateViewing(session: String?, visible: Boolean) {
+        noteOpenings(if (visible && session != null) listOf(session) else emptyList())
         viewingSessionIds = if (visible && session != null) listOf(session) else emptyList()
         viewingOnList = visible && session == null
         viewingVisible = visible
@@ -816,6 +950,7 @@ class HostStore(
      * empty + [visible]=false means the window is backgrounded.
      */
     fun updateViewingSessions(sessionIds: List<String>, visible: Boolean) {
+        noteOpenings(if (visible) sessionIds.distinct() else emptyList())
         viewingSessionIds = if (visible) sessionIds.distinct() else emptyList()
         viewingOnList = visible && viewingSessionIds.isEmpty()
         viewingVisible = visible
@@ -824,6 +959,29 @@ class HostStore(
         }
         sendViewingIfChanged()
         ensureViewingHeartbeat()
+    }
+
+    /** Card #121: each chat on screen → its read mark from just before it came on screen. */
+    private val _openedAt = MutableStateFlow<Map<String, String>>(emptyMap())
+
+    /**
+     * Card #121: the read mark a chat opens with: for a chat on screen, its mark from just before it came on
+     * screen (viewing moves the mark to now at once); for any other chat, its mark now, which is what it will
+     * open with. The chat opens at its first message newer than this.
+     */
+    val readMarksAtOpen: StateFlow<Map<String, String>> =
+        combine(_state.map { it.lastRead }, _openedAt) { read, opened -> read + opened }
+            .stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
+
+    /** Record the read mark of each chat in [onScreen] that was not on screen before; forget the rest. */
+    private fun noteOpenings(onScreen: List<String>) {
+        val before = viewingSessionIds.toSet()
+        val read = _state.value.lastRead
+        _openedAt.update { held ->
+            onScreen.mapNotNull { id ->
+                (if (id in before) held[id] else read[id])?.let { id to it }
+            }.toMap()
+        }
     }
 
     /** Optimistically advance this session's read pointer to now so the list un-bolds immediately. */
@@ -935,13 +1093,14 @@ class HostStore(
      *  broker echoes it back as an inbound message (iOS BrokerSession.send parity). Replaced in the
      *  MessageAppend reducer by the broker's copy of the message sent as [clientMessageId] (card #75).
      *  Only echoes when there is text (attachments-only stay quiet). */
-    fun appendLocalEcho(sessionId: String, text: String, clientMessageId: String? = null) {
+    fun appendLocalEcho(sessionId: String, text: String, clientMessageId: String? = null, fromCard: FromCardDto? = null) {
         if (text.isEmpty()) return
         val optimistic = LogEntry(
             id = clientMessageId?.let(::localEchoId) ?: "local-${(_state.value.messages[sessionId]?.size ?: 0)}-${text.hashCode()}",
             ts = nowIso(),
             direction = "inbound",
             text = text,
+            fromCard = fromCard,
         )
         _state.update {
             it.copy(messages = it.messages + (sessionId to ((it.messages[sessionId] ?: emptyList()) + optimistic)))
@@ -987,6 +1146,47 @@ class HostStore(
         val frame = ClientFrame.Send(sessionId, args = SendArgs(text, attachments.ifEmpty { null }), clientMessageId = clientMessageId)
         stateScope.launch { deliverOrQueue(frame) }
     }
+
+    /** #104: card sends waiting for the broker's answer, by their client message id: "" taken, else its reason. */
+    private val cardAnswers = MutableStateFlow<Map<String, CompletableDeferred<String>>>(emptyMap())
+
+    /**
+     * #104: a click in [card] sends [text] as the user's message: a `send` frame with `from_card`, no attachments. It
+     * returns null once the broker has taken it (its copy of the message arrived), or why not: the broker refused it (an
+     * unknown card, a second send within a second), the app isn't connected (a click's send is never kept for later),
+     * or no answer came in [CARD_SEND_TIMEOUT_MS]. A refused send's own bubble goes.
+     */
+    suspend fun sendFromCard(sessionId: String, card: FromCardDto, text: String): String? {
+        if (text.isEmpty()) return "the text is empty"
+        val clientMessageId = newClientMessageId()
+        val answer = CompletableDeferred<String>()
+        cardAnswers.update { it + (clientMessageId to answer) }
+        try {
+            appendLocalEcho(sessionId, text, clientMessageId, fromCard = card)
+            markPendingSend(sessionId)
+            val frame = ClientFrame.Send(sessionId, args = SendArgs(text, fromCard = CardRef(card.id)), clientMessageId = clientMessageId)
+            if (!trySendFrame(frame)) {
+                dropCardEcho(sessionId, clientMessageId)
+                return "not connected"
+            }
+            val said = withTimeoutOrNull(CARD_SEND_TIMEOUT_MS) { answer.await() } ?: return "no answer from the host"
+            if (said.isEmpty()) return null
+            dropCardEcho(sessionId, clientMessageId)
+            return said
+        } finally {
+            cardAnswers.update { it - clientMessageId }
+        }
+    }
+
+    private fun dropCardEcho(sessionId: String, clientMessageId: String) {
+        _pendingSend.update { it - sessionId }
+        val echo = localEchoId(clientMessageId)
+        _state.update { st ->
+            val log = st.messages[sessionId] ?: return@update st
+            st.copy(messages = st.messages + (sessionId to log.filterNot { it.id == echo }))
+        }
+    }
+
 
     /** Android name for [sendMessage] with attachments. */
     fun sendWith(sessionId: String, text: String, attachments: List<String>) =
@@ -1549,6 +1749,10 @@ class HostStore(
             if (isAbsoluteEditorPath(path)) { api.hostFsWrite(path, content); true } else api.workspaceFsWrite(workspaceId, path, content)
         } ?: false
 
+    /** #72: puts whole files into the next commit, or takes them out → true on success. */
+    suspend fun workspaceStage(workspaceId: String, repo: String, paths: List<String>, staged: Boolean): Boolean =
+        runApi("workspaceStage") { api.workspaceStage(workspaceId, repo, paths, staged); true } ?: false
+
     /** The Changes list (`/changes`, lazy files); the old full-patch `fs/diff` only on a broker that has no `/changes`. */
     suspend fun workspaceFsDiff(workspaceId: String, base: String? = null): FsDiffResult? {
         if (!noChangesRoute) {
@@ -1724,6 +1928,8 @@ class HostStore(
             // the working tree and the base picker writes one when the user chooses another.
             dev.supermux.workspace.NewViewKind.DIFF -> buildJsonObject { put("mode", JsonPrimitive("diff")) }
             dev.supermux.workspace.NewViewKind.DISPLAY -> buildJsonObject { put("displayId", JsonPrimitive("")) }
+            // A new tab: no page yet (BrowserViewState.Empty), the address bar takes the focus.
+            dev.supermux.workspace.NewViewKind.BROWSER -> buildJsonObject { }
             // A pending chat: no sessionId yet. The tab renders the new-session
             // composer, and binds to a real session on first send (bindChatView).
             dev.supermux.workspace.NewViewKind.CHAT -> buildJsonObject { }
@@ -1742,6 +1948,15 @@ class HostStore(
      * Close a view. Used for a pending chat tab the user backed out of — it has no
      * session behind it, so nothing is ended; the broker just drops the view.
      */
+    /** A New tab (#91) in [groupId]: a view of kind "new", holding nothing, that asks what to show. */
+    fun addNewTab(workspaceId: String, groupId: String, onCreated: (String) -> Unit = {}) {
+        stateScope.launch {
+            runCatching { api.addView(workspaceId, AddViewBody(kind = "new", state = buildJsonObject { }, groupId = groupId)) }
+                .onSuccess { onCreated(it.id) }
+                .onFailure { println("[HostStore] addNewTab failed: $it") }
+        }
+    }
+
     fun closeWorkspaceView(workspaceId: String, viewId: String) {
         stateScope.launch {
             runCatching { api.closeView(workspaceId, viewId) }
@@ -1988,7 +2203,8 @@ class HostStore(
                     workspaces = snap.workspaces,
                     projects = snap.projects,
                     projectCatalogKnown = snap.projects.isNotEmpty(),
-                    messages = snap.lastMessages.mapValues { listOf(it.value) },
+                    messages = snap.lastMessages.mapValues { listOf(it.value) } + snap.recentLogs,
+                    lastRead = snap.lastRead,
                 )
             }
         }
@@ -2227,8 +2443,12 @@ class HostStore(
     suspend fun removeAccount(id: String, deleteHome: Boolean = false): AccountResult<Unit> =
         accountCall { api.removeAccount(id, deleteHome) }.also { if (it is AccountResult.Ok) refreshAccounts() }
 
-    suspend fun startAccountLogin(agent: String, loginAs: String? = null, label: String? = null): AccountResult<AccountLoginStateDto> =
-        accountCall { api.startAccountLogin(agent, loginAs = loginAs, label = label) }
+    suspend fun startAccountLogin(agent: String, loginAs: String? = null, label: String? = null, email: String? = null): AccountResult<AccountLoginStateDto> =
+        accountCall { api.startAccountLogin(agent, loginAs = loginAs, email = email, label = label) }
+
+    /** GET /accounts/<id>/removal; null when the broker cannot say (older broker, offline). */
+    suspend fun accountRemovalPlan(id: String): AccountRemovalPlanDto? =
+        runApi("accountRemovalPlan") { api.accountRemovalPlan(id) }
 
     suspend fun accountLoginState(loginId: String): AccountLoginStateDto? =
         runApi("accountLoginState") { api.accountLoginState(loginId) }
@@ -2244,12 +2464,24 @@ class HostStore(
         accountCall { api.setSessionAccount(sessionId, account) }
 
     suspend fun loadAccountsAutoSwitch(): Boolean? =
-        runApi("accountsSettings") { api.accountsSettings().autoSwitch }?.also { _accountsAutoSwitch.value = it }
+        runApi("accountsSettings") { api.accountsSettings() }?.also { _accountsAutoResume.value = it.autoResume }?.autoSwitch
+            ?.also { _accountsAutoSwitch.value = it }
 
     suspend fun setAccountsAutoSwitch(enabled: Boolean): AccountResult<Boolean> =
         accountCall { api.setAccountsAutoSwitch(enabled).autoSwitch }.also {
             if (it is AccountResult.Ok) _accountsAutoSwitch.value = it.value
         }
+
+    suspend fun setAccountsAutoResume(enabled: Boolean): AccountResult<Boolean> =
+        accountCall { api.setAccountsAutoResume(enabled).autoResume }.also {
+            if (it is AccountResult.Ok) _accountsAutoResume.value = it.value
+        }
+
+    /** #92: the session no longer resumes by itself after its usage limit. */
+    suspend fun cancelLimitWait(sessionId: String): AccountResult<Unit> = accountCall { api.cancelLimitWait(sessionId) }
+
+    /** #92: resume a session waiting for its usage limit now. */
+    suspend fun resumeLimitWait(sessionId: String): AccountResult<Unit> = accountCall { api.resumeLimitWait(sessionId) }
 
     // ── Devices settings (desktop-parity Task 2) ───────────────────────────────────────────
     // Backs the Devices section of the Settings hub. Mirrors AppViewModel devices / addDevice /
@@ -2265,6 +2497,10 @@ class HostStore(
     /** POST /devices {name} → one-time pairing URL. Null on failure. */
     suspend fun addDevice(name: String): AddDeviceResponse? =
         runApi("addDevice") { api.addDevice(name) }
+
+    /** PATCH /devices/<name> {name} — rename a paired device (#97); a refusal keeps the broker's status and code. */
+    suspend fun renameDevice(name: String, newName: String): AccountResult<DeviceDto> =
+        accountCall { api.renameDevice(name, newName) }
 
     /** DELETE /devices/<name> — revoke a paired device. False on failure. */
     suspend fun revokeDevice(name: String): Boolean =
@@ -2338,6 +2574,10 @@ class HostStore(
      */
     suspend fun restartBroker(): Boolean =
         runApi("restartBroker") { api.restartBroker(); true } ?: false
+
+    /** POST /system/restart, telling a broker that can't restart itself (409) from one that failed. */
+    suspend fun restartBrokerResult(): dev.supermux.net.BrokerRestart =
+        runApi("restartBroker") { api.restartBrokerResult() } ?: dev.supermux.net.BrokerRestart.Failed
 
 
     // ── LSP settings (M4g-4 Task 1) ────────────────────────────────────────────────────
@@ -2919,6 +3159,8 @@ class HostStore(
         /** Ceiling for a worktree delete batch (final review I-1); the Settings screen also chunks. */
         const val WORKTREE_DELETE_TIMEOUT_MS = 600_000L
         const val SPEAK_TIMEOUT_MS = 600_000L
+        /** #104: how long a card's send waits for the broker's answer. */
+        const val CARD_SEND_TIMEOUT_MS = 10_000L
         /** One 4 MB range of an attachment download. */
         const val MEDIA_TIMEOUT_MS = 120_000L
     }

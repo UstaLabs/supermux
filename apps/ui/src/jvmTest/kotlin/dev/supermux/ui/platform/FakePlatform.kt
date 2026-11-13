@@ -20,6 +20,7 @@ import dev.supermux.ui.terminal.rememberLazyTerminalClient
 import dev.supermux.ui.terminal.rememberTerminalKeySink
 import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.NoHaptics
+import dev.supermux.work.DownloadedFile
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -95,6 +96,7 @@ internal open class FakePlatform(
     override fun videoDecoder(): VideoSurfaceFactory? = video
 
     override var updates: AppUpdater = FakeAppUpdater()
+    override var releasePlatform: dev.supermux.ui.whatsnew.ReleasePlatform? = null
     override var notifications: NotificationManager = FakeNotifications()
     override var windows: WindowHostController? = null
     override var push: PushRegistrar? = null
@@ -252,6 +254,30 @@ internal class FakeFiles(
     var posterFrames: (Any?) -> ByteArray? = { null }
 
     override fun posterJpeg(preview: Any?): ByteArray? = posterFrames(preview)
+
+    // ── a finished download's FILE (#95) ──────────────────────────────────────────────────────
+    /** Every action, unless a test says what its host lacks (iOS: no Open). */
+    override var fileActions: Set<FileAction> = setOf(FileAction.Open, FileAction.Save, FileAction.Share)
+
+    /** [DownloadedFile.name]s handed to [saveFile] / [openFile] / [shareFile], in call order. */
+    val savedFiles = mutableListOf<String>()
+    val openedFiles = mutableListOf<String>()
+    val sharedFiles = mutableListOf<String>()
+
+    override suspend fun saveFile(file: DownloadedFile): SavedFile? {
+        savedFiles.add(file.name)
+        return if (saveResult) SavedFile(file.name, "/fake/${file.name}") else null
+    }
+
+    override suspend fun openFile(file: DownloadedFile): Boolean {
+        openedFiles.add(file.name)
+        return openResult
+    }
+
+    override suspend fun shareFile(file: DownloadedFile): Boolean {
+        sharedFiles.add(file.name)
+        return true
+    }
 }
 
 /** Recording [MicCapture]: drive it through [startResult]/[audio] and assert [events]. */
@@ -315,9 +341,20 @@ internal class FakeTts : TtsEngine {
     var stops = 0
     var shutdowns = 0
 
-    override suspend fun speak(text: String) { spoken.add(text) }
+    /** Speech lasts until [stop], as a real voice does, instead of ending at once. */
+    var hold = false
+    private var gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+
+    override suspend fun speak(text: String) {
+        spoken.add(text)
+        if (hold) gate.await()
+    }
     override suspend fun playAudioChunk(bytes: ByteArray) { chunks.add(bytes.size) }
-    override fun stop() { stops++ }
+    override fun stop() {
+        stops++
+        gate.complete(Unit)
+        gate = kotlinx.coroutines.CompletableDeferred()
+    }
     override fun shutdown() { shutdowns++ }
 }
 

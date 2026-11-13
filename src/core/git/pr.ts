@@ -1,9 +1,8 @@
 // src/core/git/pr.ts
-import { execFileSync } from "child_process"
+import { runSync } from "./exec-sync"
 
 function run(cmd: string, args: string[], cwd?: string, timeout = 60_000): { ok: boolean; out: string } {
-  try { return { ok: true, out: execFileSync(cmd, args, { cwd, encoding: "utf-8", timeout, stdio: ["pipe","pipe","pipe"], env: process.env }).trim() } }
-  catch (e: any) { return { ok: false, out: `${e?.stdout?.toString?.() ?? ""}${e?.stderr?.toString?.() ?? ""}`.trim() } }
+  return runSync(cmd, args, { cwd, timeoutMs: timeout })
 }
 
 /** `gh` on PATH AND authenticated. */
@@ -23,7 +22,7 @@ function parseOrigin(url: string): { host: string; owner: string; repo: string }
   if (!m) m = url.match(/^https?:\/\/(?:[^@]+@)?([^/]+)\/(.+?)(?:\.git)?$/)
   if (!m) return null
   const host = m[1] ?? ""; const path = m[2] ?? ""
-  const slash = path.lastIndexOf("/")
+  const slash = path.lastIndexOf("/") // platform-ok: a remote URL's path (owner/repo), not a file path
   if (slash < 0) return null
   return { host, owner: path.slice(0, slash), repo: path.slice(slash + 1) }
 }

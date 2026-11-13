@@ -5,6 +5,7 @@ import dev.supermux.desktop.host.HostingStatus
 import dev.supermux.desktop.host.LidSleepHelper
 import dev.supermux.desktop.host.LidStatus
 import dev.supermux.ui.settings.HostingCopy
+import dev.supermux.ui.settings.HostingPhase
 import dev.supermux.ui.settings.LidClosedUi
 import dev.supermux.net.GitRequirement
 import kotlin.test.Test
@@ -43,6 +44,18 @@ class DesktopHostingSettingsTest {
         ).checkoutMoved
         assertEquals("This broker runs aaaaaaaaa, the checkout is at bbbbbbbbb: restart it to run the new code.", moved(running))
         assertNull(moved(HostingStatus.Starting))
+    }
+
+    @Test fun the_machine_page_reads_where_hosting_is_and_why_it_did_not_start() {
+        assertEquals(HostingPhase.Running, state().phase)
+        assertEquals(HostingPhase.Off, state(status = HostingStatus.NotHosting).phase)
+        assertEquals(HostingPhase.Starting, state(status = HostingStatus.Starting).phase)
+        assertEquals(HostingPhase.Starting, state(status = HostingStatus.AskTakeover("h")).phase)
+        assertEquals(HostingPhase.Restarting, state(status = HostingStatus.Restarting(1)).phase)
+        val failed = state(status = HostingStatus.CantStart("port 9898 is in use"))
+        assertEquals(HostingPhase.Failed, failed.phase)
+        assertEquals("port 9898 is in use", failed.failReason)
+        assertNull(state().failReason)
     }
 
     @Test fun running_maps_status_line_url_and_buttons() {

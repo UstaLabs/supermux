@@ -7,7 +7,7 @@ import { codex } from "../src/codex/index.js"
 import { CATALOG_FILE, inspectCatalog, multiAgentV1Args, multiAgentV1Launch, pinCatalogToV1 } from "../src/codex/catalog.js"
 import { createCore } from "../src/index.js"
 import type { CoreEvent } from "../src/types.js"
-import { TEST_LIMITS, nextId } from "./helpers.js"
+import { TEST_LIMITS, nextId, FIXTURE_SETUP_MS } from "./helpers.js"
 import type { DriverContext } from "../src/types.js"
 
 setDefaultTimeout(20_000)
@@ -104,7 +104,7 @@ function ctx(): DriverContext {
 }
 function driver(command: string, home: string) {
   const stateDirectory = temp("codex-keeper-")
-  return codex({ id: "codex", command, args: ["app-server"], env: { CODEX_HOME: home }, inheritEnv: true, sandbox: "read-only", approvalPolicy: "never", permissions: { kind: "codex", approvalPolicy: "never", sandbox: "read-only" }, setupTimeoutMs: 5000, requestTimeoutMs: 3000, shutdownTimeoutMs: 500, maxFrameBytes: 16 * 1024 * 1024, keeper: { stateDirectory, limits: { parkedDeadlineMs: 5000, journalMaxBytes: 1_000_000, connectTimeoutMs: 4000 } } })
+  return codex({ id: "codex", command, args: ["app-server"], env: { CODEX_HOME: home }, inheritEnv: true, sandbox: "read-only", approvalPolicy: "never", permissions: { kind: "codex", approvalPolicy: "never", sandbox: "read-only" }, setupTimeoutMs: FIXTURE_SETUP_MS, requestTimeoutMs: 3000, shutdownTimeoutMs: 500, maxFrameBytes: 16 * 1024 * 1024, keeper: { stateDirectory, limits: { parkedDeadlineMs: 5000, journalMaxBytes: 1_000_000, connectTimeoutMs: 4000 } } })
 }
 
 test("driver starts the app-server with the v1 catalog override (start and resume)", async () => {

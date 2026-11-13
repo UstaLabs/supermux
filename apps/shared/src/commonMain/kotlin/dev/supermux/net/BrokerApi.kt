@@ -280,6 +280,8 @@ data class DeviceDto(
     val name: String,
     val created_at: String? = null,
     val last_seen_at: String? = null,
+    /** True on the device whose token made the request ("This device"); an older broker leaves it out → false. */
+    val current: Boolean = false,
 )
 
 @Serializable
@@ -596,6 +598,32 @@ data class CreateProxyResponse(
     val port: Int = 0,
 )
 
+/** The cookie the broker asks a Browser tab to keep (#105 car 2): its preview-only token, for this host's previews. */
+@Serializable
+data class PreviewCookieDto(
+    val name: String,
+    val value: String,
+    val url: String,
+    val path: String = "/",
+    val domain: String? = null,
+    val httpOnly: Boolean = true,
+    val secure: Boolean = true,
+    val sameSite: String = "Lax",
+    val maxAge: Long? = null,
+)
+
+/** POST /devices/preview-token's answer. */
+@Serializable
+data class PreviewTokenResponse(val token: String, val cookie: PreviewCookieDto)
+
+/** GET /html/<id>'s answer (#104): an html card's page text. */
+@Serializable
+data class HtmlPageDto(val id: String, val html: String)
+
+/** GET /proxies/by-port's answer: the host's by-port preview URL, `{port}` standing for the port. */
+@Serializable
+data class ByPortDto(val url: String)
+
 /** POST /devices → one-time pairing URL for a freshly minted device token. */
 @Serializable
 data class AddDeviceResponse(val url: String = "", val name: String = "")
@@ -725,6 +753,51 @@ data class OpenCodeUsage(
     val outputTokens: Long = 0,
     val cacheReadTokens: Long = 0,
     val cacheWriteTokens: Long = 0,
+    /** The OpenCode Go plan's limits (broker ≥ #109); null from an older broker. */
+    val plan: OpenCodePlan? = null,
+)
+
+/** One OpenCode Go window: how much of its allowance is used, and when it resets. */
+@Serializable
+data class OpenCodeGoMeter(
+    val percent: Double = 0.0,
+    /** Go refuses requests until the window resets. */
+    val limited: Boolean = false,
+    val resetsAtIso: String? = null,
+)
+
+/** OpenCode Go's 5-hour ("rolling"), weekly and monthly windows. */
+@Serializable
+data class OpenCodeGoUsage(
+    val rolling: OpenCodeGoMeter = OpenCodeGoMeter(),
+    val weekly: OpenCodeGoMeter = OpenCodeGoMeter(),
+    val monthly: OpenCodeGoMeter = OpenCodeGoMeter(),
+)
+
+/**
+ * The OpenCode login's plan: `status` active (meters in [go]) · none (no Go plan) · signed_out · expired · unavailable
+ * ([error] says why). [via] console = the OpenCode sign-in, api_key = an OpenCode key.
+ */
+@Serializable
+data class OpenCodePlan(
+    val status: String = "",
+    val go: OpenCodeGoUsage? = null,
+    val via: String? = null,
+    val email: String? = null,
+    val error: String? = null,
+    /** The free models' daily limit (broker ≥ #109); null from an older broker. */
+    val free: OpenCodeFreeTier? = null,
+)
+
+/**
+ * OpenCode's free models: a daily limit per network that OpenCode exposes nowhere, so no numbers — only when it
+ * resets and whether a session hit it ([reached]).
+ */
+@Serializable
+data class OpenCodeFreeTier(
+    val resetsAtIso: String? = null,
+    val reached: Boolean = false,
+    val reachedAtIso: String? = null,
 )
 
 /** One row of Grok's `productUsage` breakdown (e.g. GrokBuild) under unified billing. */
@@ -1142,6 +1215,8 @@ data class DiffFile(
     val baseBlob: String? = null,
     val size: Long? = null,
     val lazy: Boolean = false,
+    /** #72: how much of it is in the next commit (all | partial | none); null: nothing uncommitted. */
+    val staged: String? = null,
 )
 
 /** GET …/changes — the Changes pane's list (spec 2026-09-29 §2.1): no file text. */
@@ -1171,7 +1246,12 @@ data class ChangedFile(
     val oldPath: String? = null,
     val baseBlob: String? = null,
     val size: Long? = null,
+    val staged: String? = null,
 )
+
+/** POST …/git/stage (#72): whole files into the next commit, or out of it. */
+@Serializable
+data class StageRequest(val repo: String, val paths: List<String>, val staged: Boolean)
 
 /** The list in the shape the pane already renders: every file [DiffFile.lazy], no patch. */
 fun ChangesResult.toFsDiffResult(): FsDiffResult = FsDiffResult(
@@ -1182,7 +1262,7 @@ fun ChangesResult.toFsDiffResult(): FsDiffResult = FsDiffResult(
                 DiffFile(
                     path = f.path, status = f.status, binary = f.binary,
                     added = f.added, removed = f.removed, oldPath = f.oldPath,
-                    baseBlob = f.baseBlob, size = f.size, lazy = true,
+                    baseBlob = f.baseBlob, size = f.size, lazy = true, staged = f.staged,
                 )
             },
             baseSha = r.baseSha, truncated = r.truncated, total = r.total, error = r.error,
@@ -1218,6 +1298,38 @@ data class RefCommit(
     val sha: String,
     val subject: String = "",
 )
+
+/**
+ * One Browser tab comment (#122 phase 4) as the broker stored it in the session it went to: its pin [number], the
+ * element ([selector], [text]), the person's words ([comment]), and what the agent did with it ([status]: sent, seen,
+ * done, answered or dismissed, with its one-line [note]).
+ */
+@Serializable
+data class BrowserCommentDto(
+    val id: String,
+    val sessionId: String,
+    val batchId: String,
+    val number: Int,
+    val url: String? = null,
+    val viewedAs: String? = null,
+    val selector: String,
+    val text: String = "",
+    val comment: String,
+    val picture: String? = null,
+    val status: String,
+    val note: String? = null,
+    val createdAt: String,
+    val updatedAt: String,
+)
+
+@Serializable
+data class BrowserCommentInput(val number: Int, val comment: String, val selector: String, val text: String = "", val picture: String? = null)
+
+@Serializable
+data class BrowserCommentsBody(val url: String? = null, val viewedAs: String? = null, val comments: List<BrowserCommentInput>)
+
+@Serializable
+data class BrowserCommentsResult(val comments: List<BrowserCommentDto> = emptyList())
 
 @Serializable
 data class ReviewComment(
@@ -1420,9 +1532,24 @@ data class AccountLoginStateDto(
     val account: AccountDto? = null,
 )
 
-/** GET/PUT /settings/accounts. [autoSwitch]: move a session to another account on a usage limit (default off). */
+/** GET /accounts/<id>/removal: removing [account] moves its [sessions] chats to [to] ([toLabel] for display). */
 @Serializable
-data class AccountsSettingsDto(val autoSwitch: Boolean = false)
+data class AccountRemovalPlanDto(
+    val account: String = "",
+    val sessions: Int = 0,
+    val to: String = "",
+    val toLabel: String = "",
+)
+
+/** GET/PUT /settings/accounts. [autoSwitch]: move a session to another account on a usage limit (default off).
+ *  [autoResume] (#92): when every account is out, wait for the first reset and carry on (default on). */
+@Serializable
+data class AccountsSettingsDto(val autoSwitch: Boolean = false, val autoResume: Boolean = true)
+
+/** PUT /settings/accounts body: only the toggle being written. A null field is left out (explicitNulls=false),
+ *  so writing one never resets the other (encodeDefaults would send its default). */
+@Serializable
+private data class AccountsSettingsPatch(val autoSwitch: Boolean? = null, val autoResume: Boolean? = null)
 
 /** POST /sessions/<id>/account → the session's account after the switch. */
 @Serializable
@@ -1514,6 +1641,14 @@ data class UpdateStatus(
     val lastError: String? = null,
     val disabled: Boolean = false,
 )
+
+/** What came of asking a broker to restart (`POST /system/restart`). */
+enum class BrokerRestart {
+    Accepted,
+    /** 409: no service manager runs it, so it can't bring itself back. */
+    CantRestartItself,
+    Failed,
+}
 
 /** Result of POST /api/update/run. `started=true` (HTTP 202) means the broker
  *  began self-updating — poll [UpdateStatus] for progress. `error="busy"` (409)
@@ -1823,6 +1958,13 @@ class BrokerApi(
 
     /** This client's bearer, or nothing at all when the token is blank — see [bearer]. */
     private fun HttpRequestBuilder.authHeader() = bearer(token)
+
+    /**
+     * [authHeader] as plain headers, for a request this client does not make itself: the web's browser download
+     * (#95). Empty for a blank token, as there — the browser sends its own cookie.
+     */
+    internal fun authHeaders(): Map<String, String> =
+        if (token.isNotBlank()) mapOf(HttpHeaders.Authorization to "Bearer $token") else emptyMap()
 
     /**
      * Read [resp] into [T] WITHOUT ever aborting the app on failure.
@@ -2532,6 +2674,9 @@ class BrokerApi(
         ensureMutationSuccess(http.delete("$httpBase/accounts/${urlEncode(id)}$q") { authHeader() })
     }
 
+    /** GET /accounts/<id>/removal → how many chats removing it moves, and to which account (#106). */
+    suspend fun accountRemovalPlan(id: String): AccountRemovalPlanDto = getJson("$httpBase/accounts/${urlEncode(id)}/removal")
+
     /** POST /accounts/login — start a guided login (`loginAs`: subscription | token; Codex defaults to token). */
     suspend fun startAccountLogin(agent: String, loginAs: String? = null, email: String? = null, label: String? = null): AccountLoginStateDto =
         postReturningJson("$httpBase/accounts/login", AccountLoginBody(agent, loginAs, email, label))
@@ -2560,8 +2705,26 @@ class BrokerApi(
         decode(http.put("$httpBase/settings/accounts") {
             authHeader()
             contentType(ContentType.Application.Json)
-            setBody(json.encodeToString(AccountsSettingsDto(enabled)))
+            setBody(json.encodeToString(AccountsSettingsPatch(autoSwitch = enabled)))
         })
+
+    /** PUT /settings/accounts {autoResume} (#92). */
+    suspend fun setAccountsAutoResume(enabled: Boolean): AccountsSettingsDto =
+        decode(http.put("$httpBase/settings/accounts") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(AccountsSettingsPatch(autoResume = enabled)))
+        })
+
+    /** DELETE /sessions/<id>/limit-wait — the session no longer resumes by itself (#92). */
+    suspend fun cancelLimitWait(sessionId: String) {
+        ensureMutationSuccess(http.delete("$httpBase/sessions/${urlEncode(sessionId)}/limit-wait") { authHeader() })
+    }
+
+    /** POST /sessions/<id>/limit-wait/resume — resume a waiting session now (#92). */
+    suspend fun resumeLimitWait(sessionId: String) {
+        ensureMutationSuccess(http.post("$httpBase/sessions/${urlEncode(sessionId)}/limit-wait/resume") { authHeader() })
+    }
 
     // ── opencode providers (key + oauth) ───────────────────────────────────────
 
@@ -2633,6 +2796,20 @@ class BrokerApi(
         ensureMutationSuccess(
             http.post("$httpBase/system/restart") { authHeader() },
         )
+    }
+
+    /**
+     * POST /system/restart, read for the machine page: a 409 is a broker no service manager runs, which refuses
+     * rather than stop for good ([BrokerRestart.CantRestartItself]); any other non-2xx is [BrokerRestart.Failed].
+     * Transport failures throw, as every call here does.
+     */
+    suspend fun restartBrokerResult(): BrokerRestart {
+        val resp = http.post("$httpBase/system/restart") { authHeader() }
+        return when {
+            resp.status.isSuccess() -> BrokerRestart.Accepted
+            resp.status.value == 409 -> BrokerRestart.CantRestartItself
+            else -> BrokerRestart.Failed
+        }
     }
 
 
@@ -2776,6 +2953,17 @@ class BrokerApi(
             setBody(json.encodeToString(AddDeviceBody(name)))
         })
 
+    /**
+     * PATCH /devices/<urlencoded name> {name} → the renamed device (#97). Non-2xx throws: 409 `name_taken`
+     * (another device has it), 404 (not paired any more), 400 `name_invalid` (blank or too long).
+     */
+    suspend fun renameDevice(name: String, newName: String): DeviceDto =
+        decode(http.patch("$httpBase/devices/${urlEncode(name)}") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(AddDeviceBody(newName)))
+        })
+
     /** DELETE /devices/<urlencoded name> — non-2xx throws (same contract as postJson/putJson). */
     suspend fun revokeDevice(name: String) {
         ensureMutationSuccess(http.delete("$httpBase/devices/${urlEncode(name)}") {
@@ -2906,6 +3094,17 @@ class BrokerApi(
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(CreateProxyBody(sessionName, port, domain)))
         })
+
+    /** POST /devices/preview-token: a token that opens this host's port previews and nothing else (#105). Bearer only. */
+    suspend fun previewToken(): PreviewTokenResponse =
+        decode(http.post("$httpBase/devices/preview-token") { authHeader() })
+
+    /** GET /proxies/by-port: the host's `/p/<port>/` template (#105), or null from a broker without by-port previews. */
+    suspend fun byPortTemplate(): String? = runCatching { getJson<ByPortDto>("$httpBase/proxies/by-port").url }.getOrNull()
+
+    /** GET /html/<id> (#104): an html card's page text, or null when the broker hasn't it. Never loaded from the broker's origin. */
+    suspend fun htmlPage(id: String): String? =
+        runCatching { getJson<HtmlPageDto>("$httpBase/html/${urlEncode(id)}").html }.getOrNull()
 
     /** PATCH /proxies/<domain> {isPublic} */
     suspend fun setProxyPublic(domain: String, isPublic: Boolean) =
@@ -3053,11 +3252,14 @@ class BrokerApi(
 
     /** GET /files/<urlencoded file_id> — raw bytes of a stored attachment. */
     suspend fun fileBytes(fileId: String): ByteArray? {
-        val resp = http.get("$httpBase/files/${urlEncode(fileId)}") {
+        val resp = http.get(fileUrl(fileId)) {
             authHeader()
         }
         return if (resp.status.isSuccess()) resp.bodyAsBytes() else null
     }
+
+    /** Where a stored attachment is served: also what the web's browser download fetches (#95). */
+    internal fun fileUrl(fileId: String): String = "$httpBase/files/${urlEncode(fileId)}"
 
     /**
      * POST /files/<clip>/poster — make an uploaded picture an uploaded clip's poster (both this
@@ -3083,7 +3285,7 @@ class BrokerApi(
         var end = to
         repeat(2) {
             var retryEnd: Long? = null
-            val result = http.prepareGet("$httpBase/files/${urlEncode(fileId)}") {
+            val result = http.prepareGet(fileUrl(fileId)) {
                 authHeader()
                 header(HttpHeaders.Range, "bytes=$from-$end")
             }.execute { resp ->
@@ -3342,7 +3544,7 @@ class BrokerApi(
 
     /** GET /fs/raw?path=<abs> → the file's bytes (image/binary previews). Throws FsException on non-2xx (413 over 64 MB / 404 / 403). */
     suspend fun hostFsRaw(path: String): ByteArray {
-        val resp = http.get("$httpBase/fs/raw?path=${urlEncode(path)}") {
+        val resp = http.get(hostFsRawUrl(path)) {
             authHeader()
         }
         if (!resp.status.isSuccess()) {
@@ -3350,6 +3552,21 @@ class BrokerApi(
         }
         return resp.bodyAsBytes()
     }
+
+    /**
+     * [hostFsRaw] streamed to [sink] as it arrives, for a download to a file (#95): the file is never held in memory
+     * whole. Answers how many bytes came. Throws FsException on non-2xx, as [hostFsRaw] does.
+     */
+    suspend fun hostFsRawTo(path: String, sink: suspend (ByteArray, Int) -> Unit): Long =
+        http.prepareGet(hostFsRawUrl(path)) { authHeader() }.execute { resp ->
+            if (!resp.status.isSuccess()) {
+                throw FsException(resp.status.value, hostFsErrorMessage(resp.bodyAsText()) ?: "read failed (${resp.status.value})")
+            }
+            pump(resp.bodyAsChannel(), sink)
+        }
+
+    /** Where [hostFsRaw] reads [path]: also what the web's browser download fetches (#95). */
+    internal fun hostFsRawUrl(path: String): String = "$httpBase/fs/raw?path=${urlEncode(path)}"
 
     /** A host fs route's `{ error, message }` body as its message (what the editor shows); null when blank. */
     private fun hostFsErrorMessage(body: String): String? {
@@ -3451,6 +3668,10 @@ class BrokerApi(
     suspend fun workspaceFsDiff(workspaceId: String, base: String? = null): FsDiffResult =
         getJson("$httpBase/workspaces/$workspaceId/fs/diff" + if (base != null) "?base=${urlEncode(base)}" else "")
 
+    /** POST /workspaces/<id>/git/stage — throws when the broker refuses. */
+    suspend fun workspaceStage(workspaceId: String, repo: String, paths: List<String>, staged: Boolean) =
+        postJson("$httpBase/workspaces/$workspaceId/git/stage", StageRequest(repo, paths, staged))
+
     /** GET /workspaces/<id>/changes?base=<spec>; null when the broker predates it (404). */
     suspend fun workspaceChanges(workspaceId: String, base: String? = null): ChangesResult? =
         changesAt("$httpBase/workspaces/$workspaceId/changes" + baseQuery(base))
@@ -3501,6 +3722,10 @@ class BrokerApi(
     /** GET /workspaces/<id>/fs/refs */
     suspend fun workspaceFsRefs(workspaceId: String): FsRefsResult =
         getJson("$httpBase/workspaces/$workspaceId/fs/refs")
+
+    /** #122 phase 4: POST /sessions/<id>/browser/comments → the comments as stored, with their ids. */
+    suspend fun addBrowserComments(sessionId: String, body: BrowserCommentsBody): List<BrowserCommentDto> =
+        postReturningJson<BrowserCommentsBody, BrowserCommentsResult>("$httpBase/sessions/$sessionId/browser/comments", body).comments
 
     /** POST /sessions/<id>/review/comments {repo,path,side,anchorLine,anchorContext,body,diffHunkHeader?} → the created comment. */
     suspend fun reviewAddComment(sessionId: String, body: AddCommentBody): ReviewComment =

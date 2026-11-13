@@ -24,6 +24,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.isTertiaryPressed
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -78,7 +83,22 @@ fun DefaultTabChip(
 ) {
     val hover = remember { MutableInteractionSource() }
     val hovered by hover.collectIsHoveredAsState()
-    TabChipRow(hover) {
+    val close by rememberUpdatedState(onClose)
+    // A middle click closes the tab, as in a browser.
+    TabChipRow(
+        hover,
+        Modifier.pointerInput(itemId) {
+            awaitPointerEventScope {
+                while (true) {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    if (event.type == PointerEventType.Press && event.buttons.isTertiaryPressed) {
+                        event.changes.forEach { it.consume() }
+                        close(itemId)
+                    }
+                }
+            }
+        },
+    ) {
         if (icon != null) {
             TabIcon(badge = dot) { icon() }
         } else if (dot != null) {

@@ -11,17 +11,17 @@
 // take their non-interactive branch and can never hang waiting for a prompt.
 // Dependency-injected (spawn + builtin deps + isInstalled) so it unit-tests
 // without real installs.
-import { spawn as defaultSpawn, type ChildProcess } from "child_process"
+import type { ChildProcess } from "child_process"
 import { agentDisplayName, type AgentKind } from "../../shared/agents"
 import { makeLogger } from "../../shared/log"
 import { addToUserPath, windowsPowerShellPath } from "../windows/user-install"
 import { agentBinDirs, withAgentBinDirs, withNodeBinDirs } from "./bin-dirs"
 import { BUILTIN_INSTALLERS, realBuiltinDeps, type BuiltinInstallDeps } from "./install-builtin"
 import { LINUX_BUILTIN_INSTALLERS, realLinuxBuiltinDeps, type LinuxBuiltinDeps } from "./install-builtin-linux"
-import { resolveCommand } from "../process/launcher"
+import { resolveCommand, spawnCommand } from "../process/launcher"
 import { linkIntoLocalBin, realLinkFs, type LinkFs } from "./local-bin"
 import { home as userHome } from "../../shared/home"
-import { proc } from "@supermux/platform"
+import { host, proc } from "@supermux/platform"
 
 const log = makeLogger("agents/install")
 
@@ -152,7 +152,7 @@ export interface InstallDeps {
   isInstalled: (kind: AgentKind) => boolean
   /** Home dir for resolving per-user bin dirs. Defaults to the user's home (home()). */
   home?: string
-  /** Defaults to process.platform. */
+  /** Defaults to host.os(). */
   platform?: NodeJS.Platform
   /** The environment installers start from. Defaults to process.env. */
   env?: Record<string, string | undefined>
@@ -178,9 +178,12 @@ export interface InstallDeps {
 const MAX_LOG = 64 * 1024 // keep the tail bounded; installers can be chatty
 export const INSTALL_DEADLINE_MS = 15 * 60_000
 
-/** Kill [child] and its descendants (proc.killTree): the installer leads its own process group (spawned detached). */
+/**
+ * End [child] and its descendants at once (proc.stop): the installer leads its own process group (spawned detached),
+ * which goes even when the installer itself has already exited and left something it started running.
+ */
 export function killProcessTree(child: ChildProcess, platform: NodeJS.Platform): void {
-  if (child.pid) proc.killTree(child.pid, { signal: "SIGKILL", platform })
+  proc.stop(child, { platform, running: () => true })
 }
 const EXIT_OUTPUT_GRACE_MS = 2_000
 
@@ -232,7 +235,7 @@ export function installEnv(base: Record<string, string | undefined>, home: strin
  * recipe gives an already-failed job that says so.
  */
 export function startInstall(kind: AgentKind, deps: InstallDeps): { job: InstallJob; done: Promise<void> } {
-  const platform = deps.platform ?? process.platform
+  const platform = deps.platform ?? host.os()
   const job: InstallJob = { state: "running", log: "", exitCode: null }
   const append = (chunk: unknown) => {
     job.log += String(chunk)
@@ -333,12 +336,13 @@ export function startInstall(kind: AgentKind, deps: InstallDeps): { job: Install
 
     const env = installEnv(baseEnv, home, platform)
     const { cmd, args } = installCommand(recipe, env)
-    const spawnFn = deps.spawn ?? (defaultSpawn as unknown as InstallSpawnFn)
     let child: ChildProcess
     try {
       // stdio[0] = "ignore" → the installer's stdin is NOT a TTY.
       // detached on macOS/Linux: its own process group, so a timeout kills everything it started.
-      child = spawnFn(cmd, args, { env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, ...(platform === "win32" ? {} : { detached: true }) })
+      child = spawnCommand(cmd, args, {
+        env, stdio: ["ignore", "pipe", "pipe"], ...(platform === "win32" ? {} : { detached: true }), platform, spawn: deps.spawn as never,
+      })
       running = child
     } catch (err) {
       const message = `couldn't start ${cmd}: ${err instanceof Error ? err.message : String(err)}`

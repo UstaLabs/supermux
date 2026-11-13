@@ -21,8 +21,8 @@ import dev.supermux.state.SettingsKeys
 import dev.supermux.state.liveRepliesOn
 import dev.supermux.state.SettingsStore
 import dev.supermux.ui.ChatDetailLevel
-import dev.supermux.ui.ThemeDefaults
 import dev.supermux.ui.chat.DictationMode
+import dev.supermux.ui.i18n.AppLanguage
 import dev.supermux.ui.sanitizeSetLevel
 import dev.supermux.ui.terminal.TerminalAppearance
 import dev.supermux.ui.theme.AppearanceMode
@@ -77,7 +77,7 @@ const val FILES_REVEAL_ACTIVE_DEFAULT = true
  * for the first frame and the stored value immediately after. That matches how the rest of the
  * shared store is already consumed (drafts, launcher prefs).
  */
-class UiPrefs(private val settings: SettingsStore) {
+class UiPrefs(val settings: SettingsStore) {
 
     /** Soft wrap in the code editor. */
     val editorLineWrap: Flow<Boolean> =
@@ -200,18 +200,13 @@ class UiPrefs(private val settings: SettingsStore) {
     suspend fun putAppearance(mode: AppearanceMode) =
         settings.putString(SettingsKeys.APPEARANCE, mode.name)
 
-    /**
-     * Material You opt-in. A NO-OP as far as colour goes — the brand OKLCH palette is the only
-     * palette on every platform (`ThemeDefaults.DYNAMIC_COLOR_ENABLED`) — but still stored so a
-     * user who turned it on does not silently lose the preference.
-     */
-    val dynamicColor: Flow<Boolean> =
-        settings.string(SettingsKeys.DYNAMIC_COLOR).map {
-            ThemeDefaults.dynamicColorEnabled(it?.toBooleanStrictOrNull())
-        }
+    /** #123: this device's chosen language; [AppLanguage.SYSTEM] when none is stored. */
+    val language: Flow<AppLanguage> = settings.string(SettingsKeys.LANGUAGE).map { AppLanguage.parse(it) }
 
-    suspend fun putDynamicColor(value: Boolean) =
-        settings.putString(SettingsKeys.DYNAMIC_COLOR, value.toString())
+    /** System clears the key, so "follow the system" costs nothing and is what an unknown stored tag falls back to. */
+    suspend fun putLanguage(language: AppLanguage) {
+        settings.putString(SettingsKeys.LANGUAGE, language.tag)
+    }
 
     /** The assistant overlay (#62, experimental): the default Agent floating over other apps. Off unless turned on. */
     val assistantOverlay: Flow<Boolean> =

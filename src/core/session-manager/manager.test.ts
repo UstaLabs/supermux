@@ -273,6 +273,7 @@ describe("SessionManager applyConfig", () => {
     const frames: object[] = []
     const m = manager({ phase: "running", agentErrors, frames })
     m.registry.register({ id: "k2", name: "cl2", workdir: "/tmp", pid: 1, agent: "claude", model: "old-m" })
+    m.registerClaudeRuntime("k2", { async setConfiguration() { throw new Error("boom") } } as unknown as CoreAdapter)
     const queued = await m.applyConfig("k2", { model: "new-m" })
     expect(queued).toEqual({ ok: true, status: "queued" })
 
@@ -280,11 +281,10 @@ describe("SessionManager applyConfig", () => {
     await m.drainPendingReapply("k2", "running")
     expect(m.registry.get("k2")?.model).toBe("new-m")
 
-    // Idle → drain runs. No Core adapter is registered in this test, so the
-    // claude apply fails explicitly → registry rolls back.
+    // Idle → drain runs. The adapter refuses the change → registry rolls back.
     await m.drainPendingReapply("k2", "idle")
     expect(m.registry.get("k2")?.model).toBe("old-m")
-    expect(agentErrors).toEqual(["config:Failed to apply model/effort/fast change: claude adapter not found"])
+    expect(agentErrors).toEqual(["config:Failed to apply model/effort/fast change: boom"])
     expect(frames).toContainEqual({ type: "session_state", session: "k2", model: "old-m", reasoningLevel: undefined, fastMode: false })
 
     // The queue entry was consumed — a second idle transition is a no-op.
@@ -318,8 +318,9 @@ describe("SessionManager applyConfig", () => {
   test("a failed fast-mode apply rolls the flag back", async () => {
     const m = manager()
     m.registry.register({ id: "f3", name: "f3", workdir: "/tmp", pid: 1, agent: "claude", model: "claude-opus-5-5" })
+    m.registerClaudeRuntime("f3", { async setConfiguration() { throw new Error("boom") } } as unknown as CoreAdapter)
     const r = await m.applyConfig("f3", { fast: true })
-    expect(r).toEqual({ ok: false, error: "claude adapter not found" })
+    expect(r).toEqual({ ok: false, error: "boom" })
     expect(m.registry.get("f3")?.fastMode).toBe(false)
   })
 
@@ -334,20 +335,23 @@ describe("SessionManager applyConfig", () => {
     expect(m.registry.get("f4")?.fastMode).toBe(true)
   })
 
-  test("an idle claude apply fails explicitly without an adapter and rolls back", async () => {
-    const m = manager()
+  test("a sleeping claude session stores the change for its next wake and tells the clients (#106)", async () => {
+    const frames: object[] = []
+    const m = manager({ frames })
     m.registry.register({ id: "k3", name: "cl3", workdir: "/tmp", pid: 1, agent: "claude", reasoningLevel: "low" })
     const r = await m.applyConfig("k3", { effort: "high" })
-    expect(r).toEqual({ ok: false, error: "claude adapter not found" })
-    expect(m.registry.get("k3")?.reasoningLevel).toBe("low")
+    expect(r).toEqual({ ok: true, status: "applied" })
+    expect(m.registry.get("k3")?.reasoningLevel).toBe("high")
+    expect(frames).toContainEqual(expect.objectContaining({ type: "session_state", session: "k3" }))
   })
 
-  test("codex reapply without agent_home fails with the exact error and rolls back", async () => {
-    const m = manager()
-    m.registry.register({ id: "x1", name: "cx", workdir: "/tmp", pid: 1, agent: "codex", model: "old-m" })
-    const r = await m.applyConfig("x1", { model: "new-m" })
-    expect(r).toEqual({ ok: false, error: "codex session missing agent_home" })
-    expect(m.registry.get("x1")?.model).toBe("old-m")
+  test("a sleeping session takes a model change for every restart-style agent (#106)", async () => {
+    for (const agent of ["claude", "codex", "grok", "antigravity"] as const) {
+      const m = manager()
+      m.registry.register({ id: "s1", name: "s1", workdir: "/tmp", pid: 0, agent, model: "old-m" })
+      expect(await m.applyConfig("s1", { model: "new-m" })).toEqual({ ok: true, status: "applied" })
+      expect(m.registry.get("s1")?.model).toBe("new-m")
+    }
   })
 
   test("kill awaits core codex stop before dropping the runtime; a delayed stop is not faked", async () => {
@@ -670,7 +674,7 @@ describe("SessionManager applyConfig", () => {
     expect(m.registry.get("gf")?.model).toBe("old-m")
   })
 
-  test("grok effort reapply without a live adapter fails with the exact error and rolls back", async () => {
+  test("a sleeping grok session stores an effort change for its next wake (#106)", async () => {
     const m = manager({
       lookupModels: () => [
         { id: "grok-4", displayName: "Grok 4", agent: "grok", reasoningLevels: [{ id: "low" }, { id: "high" }] },
@@ -678,8 +682,8 @@ describe("SessionManager applyConfig", () => {
     })
     m.registry.register({ id: "g2", name: "gk2", workdir: "/tmp", pid: 0, agent: "grok", model: "grok-4", reasoningLevel: "low" })
     const r = await m.applyConfig("g2", { effort: "high" })
-    expect(r).toEqual({ ok: false, error: "grok session has no live adapter" })
-    expect(m.registry.get("g2")?.reasoningLevel).toBe("low")
+    expect(r).toEqual({ ok: true, status: "applied" })
+    expect(m.registry.get("g2")?.reasoningLevel).toBe("high")
   })
 })
 
@@ -858,6 +862,28 @@ describe("SessionManager.handleOutbound attach", () => {
     const none = await m.handleOutbound({ session_id: s.id, op: { name: "attach", args: { text: "just text" } } } as any)
     expect(none.ok).toBe(false)
     expect(seen.length).toBe(1)
+  })
+})
+
+describe("SessionManager.outbound show_html", () => {
+  test("goes to the show_html port with the CALLING session's id, never one the agent names", async () => {
+    const db = openDb(":memory:")
+    runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+    const calls: any[] = []
+    const ports = fakePorts(db)
+    ports.outbound = { ...ports.outbound, showHtml: async (id, args) => { calls.push([id, args]); return { ok: true as const, value: "shown" } } }
+    const m = new SessionManager(new Registry(db), ports)
+    const s = m.registry.register({ name: "cl5", workdir: "/tmp", pid: 0, agent: "claude", connected: true })
+    const r = await m.handleOutbound({ session_id: s.id, op: { name: "show_html", args: { title: "T", html: "<p/>", session_id: "other" } } } as any)
+    expect(r).toEqual({ ok: true, value: "shown" })
+    expect(calls).toEqual([[s.id, { title: "T", html: "<p/>", session_id: "other" }]])
+  })
+  test("a broker without the port says so", async () => {
+    const db = openDb(":memory:")
+    runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+    const m = new SessionManager(new Registry(db), fakePorts(db))
+    const s = m.registry.register({ name: "cl6", workdir: "/tmp", pid: 0, agent: "claude", connected: true })
+    expect((await m.handleOutbound({ session_id: s.id, op: { name: "show_html", args: {} } } as any)).ok).toBe(false)
   })
 })
 

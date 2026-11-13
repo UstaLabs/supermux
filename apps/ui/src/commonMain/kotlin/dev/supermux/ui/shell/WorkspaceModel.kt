@@ -75,6 +75,7 @@ fun phoneAddKinds(): List<NewViewKind> = listOf(
     NewViewKind.EDITOR,
     NewViewKind.DIFF,
     NewViewKind.DISPLAY,
+    NewViewKind.BROWSER,
 )
 
 fun addViewState(kind: NewViewKind, nowMillis: Long = 0L): JsonObject = when (kind) {
@@ -85,6 +86,7 @@ fun addViewState(kind: NewViewKind, nowMillis: Long = 0L): JsonObject = when (ki
     NewViewKind.EDITOR -> buildJsonObject { put("mode", JsonPrimitive("tree")) }
     NewViewKind.DIFF -> buildJsonObject { put("mode", JsonPrimitive("diff")) }
     NewViewKind.DISPLAY -> buildJsonObject { put("displayId", JsonPrimitive("")) }
+    NewViewKind.BROWSER -> buildJsonObject { }
     NewViewKind.CHAT -> buildJsonObject { }
 }
 

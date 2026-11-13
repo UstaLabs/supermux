@@ -8,6 +8,7 @@
 // through `:shared`'s `formatChatTime`.
 package dev.supermux.ui.chat
 
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -73,13 +74,16 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -95,6 +99,7 @@ import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -129,6 +134,29 @@ import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.Platform
+import dev.supermux.ui.work.handOverAsTapped
+import dev.supermux.ui.work.saveDownload
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.resources.Res
+import dev.supermux.ui.resources.saved_file
+import dev.supermux.ui.resources.saved_to_downloads
+import dev.supermux.ui.resources.saved_to_gallery
+import dev.supermux.ui.resources.saved_to_photos
+import dev.supermux.ui.platform.SavedFile
+import dev.supermux.ui.platform.SavedPlace
+import dev.supermux.ui.work.DownloadItemRing
+import dev.supermux.ui.work.rememberDownloads
+import dev.supermux.ui.work.AudioToggleButton
+import dev.supermux.ui.work.rememberAudioPlayer
+import dev.supermux.work.AudioItem
+import dev.supermux.work.Download
+import dev.supermux.work.DownloadCenter
+import dev.supermux.work.DownloadOrigin
+import dev.supermux.work.DownloadPurpose
+import dev.supermux.work.DownloadSource
+import dev.supermux.work.DownloadState
+import dev.supermux.work.DownloadedFile
+import dev.supermux.work.isAvailable
 import dev.supermux.ui.resolveBashParts
 import dev.supermux.ui.resolveEditParts
 import dev.supermux.ui.toolDiffDoc
@@ -284,7 +312,11 @@ fun AgentErrorMessage(
 private fun MessageMetaRow(text: String, ts: String?) {
     val cs = MaterialTheme.colorScheme
     val platform = LocalPlatform.current
-    val readAloud = remember(platform) { PlatformReadAloud(platform) }
+    // The reading is the fleet's player's item (#118 car 2), from this chat and message.
+    val player = dev.supermux.ui.work.LocalAudioPlayer.current
+    val origin = rememberDownloadOrigin("")
+    val chat = LocalChatTitle.current
+    val readAloud = remember(platform, player, origin, chat) { PlatformReadAloud(platform, player, origin, chat) }
     val scope = rememberCoroutineScope()
     var copied by remember { mutableStateOf(false) }
     val speaking = readAloud.isSpeaking(text)
@@ -351,7 +383,11 @@ private fun MessageMetaRow(text: String, ts: String?) {
  * Short text hugs content; long text wraps inside the cap. No gutter, no label.
  */
 @Composable
-fun UserMessage(text: String) {
+fun UserMessage(
+    text: String,
+    /** #104: the title of the html card a click in which sent this message; a small "from ‹title›" line above it. */
+    fromCard: String? = null,
+) {
     val cs = MaterialTheme.colorScheme
     // Tail sits on the bottom-end (right) so it reads as a sent bubble.
     val bubbleShape = RoundedCornerShape(
@@ -376,6 +412,16 @@ fun UserMessage(text: String) {
                     .border(1.dp, cs.outlineVariant, bubbleShape)
                     .padding(horizontal = Space.md, vertical = Space.sm),
             ) {
+                if (fromCard != null) {
+                    Text(
+                        "from $fromCard",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = cs.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("from-card"),
+                    )
+                }
                 LinkSelectionContainer {
                     MdText(
                         text = mdAnnotated(text),
@@ -807,6 +853,7 @@ fun TimelineItemRow(
     /** Ends a council (the council card's Stop); null = no Stop. */
     endCouncil: ((councilId: String) -> Unit)? = null,
 ) {
+    LocalChatCompositionProbe.current?.let { probe -> SideEffect { probe("row") } }
     when (item) {
         is TimelineItem.Msg -> {
             val text = item.entry.text
@@ -816,7 +863,9 @@ fun TimelineItemRow(
             val inbox = item.entry.channel == "inbox"
             // An agent's reply carries its files between its text and its time row.
             val filesInReply = !text.isNullOrBlank() && !atts.isNullOrEmpty() && messageBody(item.entry) == MessageBody.AgentReply
-            if (!text.isNullOrBlank() || !atts.isNullOrEmpty()) {
+            // #104: an agent's html card (its message has no text of its own).
+            val card = item.entry.card?.takeIf { !isUser }
+            if (!text.isNullOrBlank() || !atts.isNullOrEmpty() || card != null) {
                 // Media drawn anywhere in this row (attachments, a reply's `![](…)`) name themselves
                 // in the chat's viewer by this entry.
                 CompositionLocalProvider(LocalChatMediaEntry provides item.entry.id) {
@@ -846,7 +895,7 @@ fun TimelineItemRow(
                                         onOpen = subagentUi?.let { ui -> { ui.open(toSubagent) } },
                                     )
                                 }
-                                MessageBody.User -> UserMessage(text)
+                                MessageBody.User -> UserMessage(text, fromCard = item.entry.fromCard?.title)
                                 MessageBody.AccountNotice -> dev.supermux.ui.accounts.AccountNoticeRow(text)
                                 MessageBody.AgentError ->
                                     AgentErrorMessage(item.entry.id, text, onOpenFile = onOpenFile, ts = item.entry.ts)
@@ -861,6 +910,7 @@ fun TimelineItemRow(
                                 )
                             }
                         }
+                        if (card != null) HtmlCardView(item.entry.id, card)
                         if (!atts.isNullOrEmpty() && !filesInReply) {
                             AttachmentList(atts, alignEnd = isUser && !inbox, media = media, entryId = item.entry.id)
                         }
@@ -1104,7 +1154,7 @@ private fun AttachmentItem(
             return
         }
         FilePreviewKind.Video -> {
-            InlineVideo(att, media, onOpenViewer = { open(ChatMediaItem.FromAttachment(entryId, att, FilePreviewKind.Video)); true })
+            InlineVideo(att, media, onOpenViewer = { open(ChatMediaItem.FromAttachment(entryId, att, FilePreviewKind.Video)); true }, entryId = entryId)
             return
         }
         null -> Unit
@@ -1118,7 +1168,7 @@ private fun AttachmentItem(
         isAudio -> MediaIcons.Volume
         else -> Icons.AutoMirrored.Filled.InsertDriveFile
     }
-    AttachmentFileCard(icon, label, att, media)
+    AttachmentFileCard(icon, label, att, media, entryId, audio = isAudio)
 }
 
 /**
@@ -1360,6 +1410,7 @@ internal fun ImageLightbox(
     val platform = LocalPlatform.current
     val pointer = LocalPointerAvailable.current
     val scope = rememberCoroutineScope()
+    val savedWords = rememberSavedWords()
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -1422,7 +1473,14 @@ internal fun ImageLightbox(
                         icon = MediaIcons.Save,
                         label = "Download",
                         tag = "image_lightbox_download",
-                        onClick = { scope.launch { saveOrOpenAttachment(platform, pointer, name, mime, bytes) } },
+                        // Save, as the viewer's does (#95): on a phone it ran "open with".
+                        onClick = {
+                            scope.launch {
+                                saveAttachment(platform, pointer, name, mime, bytes)
+                                    ?.let { savedNotice(it, pointer, savedWords) }
+                                    ?.let(platform.notices::show)
+                            }
+                        },
                     )
                 }
                 LightboxButton(
@@ -1455,13 +1513,15 @@ private fun LightboxButton(icon: ImageVector, label: String, tag: String, onClic
  *
  * Nothing is fetched until the user opts into playback — a transcript must never eagerly download
  * every clip. The media cache's own file then plays in place ([AttachmentMedia.playableUri]): it was
- * downloaded straight to disk, so a long clip never passes through memory. Without one (the web, a
- * memory-only cache) the bytes are staged through `Platform.files.stageTemp` as before, so the
+ * downloaded straight to disk, so a long clip never passes through memory. A media that downloads
+ * files and has none for it shows the file card ([resolvePlayableClip]); one without downloads (a
+ * preview's in-memory media) stages the bytes through `Platform.files.stageTemp` as before, so the
  * native backend can open them by URI. A failed download, or a backend error, falls back to the
  * ordinary [AttachmentFileCard] so save + the OS player stay reachable.
  *
  * [onOpenViewer] opens the clip in the chat's fullscreen viewer (the ⤢ button; the inline player
- * pauses first); false — or no viewer at all — keeps the old "open in the system player".
+ * pauses first); false — or no viewer at all — keeps the old "open in the system player", which
+ * hands over the clip's FILE through the fleet's downloads ([startDownload]).
  *
  * [renderPlayer] is the mount seam: tests inject a stub so the suite never loads native media
  * libraries in a headless worker.
@@ -1471,6 +1531,7 @@ internal fun InlineVideo(
     att: Attachment,
     media: AttachmentMedia,
     onOpenViewer: (() -> Boolean)? = null,
+    entryId: String = "",
     renderPlayer: @Composable (uri: String, onExternal: () -> Unit, onError: () -> Unit) -> Unit =
         { uri, onExternal, onError ->
             MountedVideoPlayer(uri, onError = onError, onExternal = onExternal, expandsInViewer = onOpenViewer != null)
@@ -1480,19 +1541,26 @@ internal fun InlineVideo(
     val platform = LocalPlatform.current
     val pointer = LocalPointerAvailable.current
     val scope = rememberCoroutineScope()
+    val downloads = rememberDownloads()
     var playing by remember(att.file_id) { mutableStateOf(false) }
     var uri by remember(att.file_id) { mutableStateOf<String?>(null) }
     var staged by remember(att.file_id) { mutableStateOf<ByteArray?>(null) }
     var failed by remember(att.file_id) { mutableStateOf(false) }
+    val origin = rememberDownloadOrigin(entryId)
+    val download = rememberListedDownload(downloads, media.downloadKey(att))
+    // Already in the store (#95: after a restart): ▶ plays it from there, with no ring.
+    val stored = rememberStoredFile(media, att, download)
 
     LaunchedEffect(att.file_id, playing) {
         if (!playing || uri != null || failed) return@LaunchedEffect
-        val clip = resolvePlayableClip(att, media, platform)
-        if (clip == null) {
-            failed = true
-        } else {
-            staged = clip.staged
-            uri = clip.uri
+        when (val fetched = fetchClip(downloads, media, att, platform, origin)) {
+            is ClipFetch.Ready -> {
+                staged = fetched.clip.staged
+                uri = fetched.clip.uri
+            }
+            ClipFetch.Failed -> failed = true
+            // Paused or cancelled: back to the poster, its ring offering Resume.
+            ClipFetch.Stopped -> playing = false
         }
     }
 
@@ -1529,6 +1597,10 @@ internal fun InlineVideo(
             att.duration_ms?.let {
                 ClipDurationBadge(it, Modifier.align(Alignment.BottomEnd).padding(Space.sm).testTag("attachment_video_duration"))
             }
+            // A paused clip (or one fetching for the card or the list): its ring, to resume or cancel it.
+            if (download?.state is DownloadState.Running || download?.state == DownloadState.Cancelled) {
+                DownloadItemRing(download, VIDEO_RING_TAG, Modifier.align(Alignment.TopEnd).padding(Space.xs))
+            }
         }
         located == null -> Box(
             modifier = surface
@@ -1538,11 +1610,9 @@ internal fun InlineVideo(
                 .testTag("attachment_video_loading"),
             contentAlignment = Alignment.Center,
         ) {
-            CircularProgressIndicator(
-                Modifier.size(MdImageDimens.SpinnerSize),
-                color = cs.onSurfaceVariant,
-                strokeWidth = MdImageDimens.SpinnerStroke,
-            )
+            // The clip's download, as the card's ↓ and the sidebar draw it; a preview's bytes just turn it. A stored
+            // clip is only opened: no ring.
+            DownloadItemRing(download?.takeIf { it.state !is DownloadState.Done }, VIDEO_RING_TAG, busy = stored == null)
         }
         else -> Box(surface) {
             renderPlayer(
@@ -1550,7 +1620,9 @@ internal fun InlineVideo(
                 {
                     if (onOpenViewer?.invoke() != true) {
                         scope.launch {
-                            // A clip played from the cache's file was never read into memory: read it now.
+                            // The clip's FILE, through the fleet's downloads: leaving the chat lets go of it, and it waits in the bar.
+                            if (startDownload(downloads, media, att, platform, pointer, origin = origin)) return@launch
+                            // No download here (a preview): the staged bytes, else read them now.
                             val body = staged ?: runCatching { media.bytes(att) }.getOrNull()
                             if (body != null) saveOrOpenAttachment(platform, pointer, att.name ?: "video", att.mime, body)
                         }
@@ -1562,16 +1634,87 @@ internal fun InlineVideo(
     }
 }
 
+/** The tag of a clip's download ring: on its loading state, and on its poster while paused. */
+internal const val VIDEO_RING_TAG = "attachment_video_ring"
+
+/** [key]'s listed download in [downloads], as it changes; null without a key or while nothing is listed. */
+@Composable
+internal fun rememberListedDownload(downloads: DownloadCenter, key: String?): Download? {
+    val listed by remember(downloads, key) { downloads.items.map { all -> all.firstOrNull { it.key == key } } }
+        .collectAsState(downloads.items.value.firstOrNull { it.key == key })
+    return if (key == null) null else listed
+}
+
+/**
+ * [att]'s file if the store already holds it (#95: a restart keeps it) while [listed] — its live download — is none;
+ * asked again once a listed one goes. Null on the web, which keeps no files, and for media without a download.
+ */
+@Composable
+internal fun rememberStoredFile(media: AttachmentMedia, att: Attachment, listed: Download?): DownloadedFile? {
+    val look = listed == null && media.downloadKey(att) != null
+    val stored by produceState<DownloadedFile?>(null, media, att.file_id, look) {
+        value = if (look) runCatching { media.stored(att) }.getOrNull() else null
+    }
+    return if (look) stored else null
+}
+
+/** What ▶ got: a clip to play, nothing (failed), or a download the user paused or cancelled. */
+internal sealed interface ClipFetch {
+    class Ready(val clip: PlayableClip) : ClipFetch
+
+    data object Failed : ClipFetch
+
+    data object Stopped : ClipFetch
+}
+
+/**
+ * ▶ (#95, round 2): a host's clip downloads as a job of the fleet's [downloads] — the same key and
+ * source as its file card, so one transfer in the media cache — listed in the downloads with
+ * [origin], and played once its file is whole, from the stored file ([resolvePlayableClip] answers
+ * from disk then). Leaving lets go; the download carries on. No streaming while it downloads.
+ * Media without a download key (a preview) keeps [resolvePlayableClip]'s own route.
+ */
+internal suspend fun fetchClip(
+    downloads: DownloadCenter,
+    media: AttachmentMedia,
+    att: Attachment,
+    platform: Platform,
+    origin: DownloadOrigin?,
+): ClipFetch {
+    val key = media.downloadKey(att)
+        ?: return resolvePlayableClip(att, media, platform)?.let { ClipFetch.Ready(it) } ?: ClipFetch.Failed
+    // Stored already and not listed (#95: after a restart): played from the store, no download to list.
+    if (downloads.items.value.none { it.key == key } && runCatching { media.stored(att) }.getOrNull() != null) {
+        resolvePlayableClip(att, media, platform)?.let { return ClipFetch.Ready(it) }
+    }
+    val claim = downloads.start(key, att.name ?: att.file_id, att.mime ?: "video/mp4", DownloadPurpose.File, AttachmentDownload(media, att), origin)
+    val file = try {
+        claim.await()
+    } finally {
+        claim.release()
+    }
+    if (file == null) {
+        val state = downloads.items.value.firstOrNull { it.key == key }?.state
+        return if (state is DownloadState.Failed) ClipFetch.Failed else ClipFetch.Stopped
+    }
+    return resolvePlayableClip(att, media, platform)?.let { ClipFetch.Ready(it) } ?: ClipFetch.Failed
+}
+
 /** A URI the platform's player opens, and the bytes behind it when they had to be staged. */
 internal class PlayableClip(val uri: String, val staged: ByteArray?)
 
 /**
  * Where a clip plays from: the media cache's own file first (downloaded straight to disk, played in
- * place — a long clip never passes through memory); without one (the web, a memory-only cache) the
- * bytes are staged through `Platform.files.stageTemp`. Null when neither works.
+ * place — a long clip never passes through memory). A media that downloads files (#95: a host with a
+ * file store, the web's browser download) plays from that file or not at all: no file is a failure,
+ * and the caller shows the file card. Its transfer is the one a download of the same file shares, so
+ * after the user cancelled that download in the bar, reading the bytes here would fetch the whole
+ * clip again, into memory. Without a download (a preview's in-memory media) the bytes are staged
+ * through `Platform.files.stageTemp`. Null when nothing works.
  */
 internal suspend fun resolvePlayableClip(att: Attachment, media: AttachmentMedia, platform: Platform): PlayableClip? {
     runCatching { media.playableUri(att) }.getOrNull()?.let { return PlayableClip(it, staged = null) }
+    if (media.downloadKey(att) != null) return null
     val bytes = runCatching { media.bytes(att) }.getOrNull() ?: return null
     // Name by the unique file_id so two clips never collide in the staging dir, and keep the
     // original extension — the native backends pick their demuxer from it.
@@ -1748,7 +1891,16 @@ internal fun MountedVideoPlayer(
                 drawLayer(frameLayer)
             }
         }
-        VideoPlayerSurface(playerState = player, modifier = surface)
+        val aspect = liveVideoAspect(player)
+        if (aspect == null) {
+            VideoPlayerSurface(playerState = player, modifier = surface)
+        } else {
+            // iOS: the library frames every clip at 16:9 (liveVideoAspect), so the frame is sized here at the clip's
+            // real ratio, as large as the space allows, and the picture fills it exactly.
+            Box(surface.fillMaxHeight(), contentAlignment = Alignment.Center) {
+                VideoPlayerSurface(playerState = player, modifier = Modifier.aspectRatio(aspect), contentScale = ContentScale.FillBounds)
+            }
+        }
     }
 }
 
@@ -2015,8 +2167,18 @@ internal object VideoControls {
  *  - Touch (Android): download and hand straight to the system chooser — a phone has no browsable
  *    file system to save into, and the platform gesture is "open with".
  *
- * A failed DOWNLOAD turns the second line into "Download failed — tap to retry"; a cancelled save
- * does not (cancel is not an error, and a red card on cancel would be worse than a silent one).
+ * A host's attachment downloads in the fleet's [DownloadCenter] (#95, [startDownload]), by its
+ * key: leaving the chat lets go of it and it carries on, waiting in the activity bar; the card
+ * draws the download whenever there is one, so coming back shows the same download. The file's own
+ * preview (badge, name, meta) stays; only the trailing ↓ becomes the download's ring
+ * ([DownloadItemRing]): a tap on it pauses, resumes or retries, the ✕ beside a stopped one removes it,
+ * and a done one is a quiet ✓ while the card's tap hands the file over. A file the media store already
+ * holds (after a restart) is done from the start, and handed over without a download. The
+ * download remembers this chat and message ([DownloadOrigin]), so the downloads list opens them.
+ * A preview's in-memory media has no key and keeps the bytes path.
+ *
+ * A failed DOWNLOAD turns the second line into "Download failed — tap to retry"; a paused one reads
+ * "Paused"; a cancelled save says nothing (cancel is not an error).
  */
 @Composable
 private fun AttachmentFileCard(
@@ -2024,34 +2186,87 @@ private fun AttachmentFileCard(
     label: String,
     att: Attachment,
     media: AttachmentMedia,
+    entryId: String = "",
+    audio: Boolean = false,
 ) {
     val platform = LocalPlatform.current
     val pointer = LocalPointerAvailable.current
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
+    val downloads = rememberDownloads()
+    val origin = rememberDownloadOrigin(entryId)
+    val key = media.downloadKey(att)
+    val download = rememberListedDownload(downloads, key)
+    val running = download?.state as? DownloadState.Running
+    // Already in the store (#95: after a restart): done from the start, and a tap hands it over at once. One that
+    // vanished under the app (the OS reclaimed it, Storage › Clear) is a plain ↓ again.
+    var storeLost by remember(att.file_id) { mutableStateOf(false) }
+    val stored = rememberStoredFile(media, att, download)?.takeIf { !storeLost }
     var busy by remember(att.file_id) { mutableStateOf(false) }
     var failed by remember(att.file_id) { mutableStateOf(false) }
+    // This card waits for its download: one tap, one hand-over.
+    var waiting by remember(att.file_id) { mutableStateOf(false) }
     val badge = remember(att.name, label) { fileBadgeLabel(att.name ?: label) }
     val family = remember(att.name, att.mime, label) { fileFamily(fileExtension(att.name ?: label), att.mime) }
     val meta = remember(att.name, att.mime, att.size, label) { fileMetaLine(att.name ?: label, att.mime, att.size) }
+    val savedWords = rememberSavedWords()
+    // What the phone says after a save; true when something was saved.
+    fun saved(file: SavedFile?): Boolean {
+        file?.let { savedNotice(it, pointer, savedWords) }?.let(platform.notices::show)
+        return file != null
+    }
+    val canAct = !busy && !waiting && running == null
+    // A tap does what a tap does (R1: on a phone, Open; on iOS, Share). The ↓ SAVES (#95): it looked like Save and
+    // opened the chooser or the share sheet.
+    fun act(save: Boolean) {
+        if (key != null && download == null && stored != null) {
+            waiting = true
+            scope.launch {
+                try {
+                    val item = Download(key, stored.name, stored.mime, DownloadPurpose.File, DownloadState.Done(stored), origin)
+                    val done = if (save) saved(saveDownload(platform, pointer, downloads, item)) else handOverAsTapped(platform, pointer, downloads, item)
+                    if (!done && !stored.isAvailable()) storeLost = true
+                } finally {
+                    waiting = false
+                }
+            }
+            return
+        }
+        if (key != null) {
+            // The card's scope holds only the claim: leaving lets go, the download goes on.
+            waiting = true
+            scope.launch {
+                try {
+                    if (save) {
+                        startDownload(downloads, media, att, platform, pointer, origin = origin, then = { saved(saveDownload(platform, pointer, downloads, it)) })
+                    } else {
+                        startDownload(downloads, media, att, platform, pointer, origin = origin)
+                    }
+                } finally {
+                    waiting = false
+                }
+            }
+            return
+        }
+        busy = true
+        failed = false
+        scope.launch {
+            val bytes = runCatching { media.bytes(att) }.getOrNull()
+            busy = false
+            if (bytes == null) {
+                failed = true
+                return@launch
+            }
+            if (save) saved(saveAttachment(platform, pointer, att.name ?: att.file_id, att.mime, bytes))
+            else saveOrOpenAttachment(platform, pointer, att.name ?: att.file_id, att.mime, bytes)
+        }
+    }
     Row(
         modifier = Modifier
             .mediaColumnWidth()
             .clip(RoundedCornerShape(Radii.md))
             .background(cs.surfaceContainerHigh)
-            .clickable(enabled = !busy) {
-                busy = true
-                failed = false
-                scope.launch {
-                    val bytes = runCatching { media.bytes(att) }.getOrNull()
-                    busy = false
-                    if (bytes == null) {
-                        failed = true
-                        return@launch
-                    }
-                    saveOrOpenAttachment(platform, pointer, att.name ?: att.file_id, att.mime, bytes)
-                }
-            }
+            .clickable(enabled = canAct) { act(save = false) }
             .padding(Space.sm)
             .testTag("attachment_chip"),
         verticalAlignment = Alignment.CenterVertically,
@@ -2062,7 +2277,6 @@ private fun AttachmentFileCard(
             contentAlignment = Alignment.Center,
         ) {
             when {
-                busy -> CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
                 badge != null -> Text(badge, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                 else -> Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
             }
@@ -2076,28 +2290,191 @@ private fun AttachmentFileCard(
                 // The extension stays in view: "very-long-report…-final.pdf".
                 overflow = TextOverflow.MiddleEllipsis,
             )
-            val second = if (failed) "Download failed — tap to retry" else meta
+            val state = download?.state
+            val retry = failed || state is DownloadState.Failed
+            val second = when {
+                retry -> "Download failed — tap to retry"
+                state == DownloadState.Cancelled -> "Paused"
+                else -> meta
+            }
             if (second.isNotEmpty()) {
                 Text(
                     text = second,
-                    color = if (failed) cs.error else cs.onSurfaceVariant,
+                    color = if (retry) cs.error else cs.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
         }
-        Icon(
-            imageVector = MediaIcons.Save,
-            contentDescription = "Download",
-            tint = cs.onSurfaceVariant,
-            modifier = Modifier.size(20.dp),
-        )
+        if (audio) {
+            AudioCardControl(att, label, media, download, origin, onFailed = { failed = true })
+            return@Row
+        }
+        val shown = download
+            ?: stored?.let { Download(key.orEmpty(), it.name, it.mime, DownloadPurpose.File, DownloadState.Done(it), origin) }
+        // The ↓ is Save of its own (#95); the ring inside it stays what it shows.
+        Box(Modifier.clip(CircleShape).clickable(enabled = canAct) { act(save = true) }.testTag("attachment_chip_save")) {
+            DownloadItemRing(item = shown, tag = "attachment_ring", busy = busy) {
+                Icon(
+                    imageVector = MediaIcons.Save,
+                    contentDescription = "Download",
+                    tint = cs.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
     }
 }
 
 private object FileCard {
     val BadgeSize = 40.dp
+}
+
+/**
+ * A voice note's ▶ (#118), in the card's ring place: it downloads the note as a job of the fleet's [DownloadCenter]
+ * exactly as a clip's ▶ does ([fetchClip]: the same key and ring, a stored one at once), then plays the stored file in
+ * the app's player ([rememberAudioPlayer]) with this chat and message as where it came from. While the note is what
+ * plays, ❚❚/▶ toggles it. Leaving the chat lets go of the wait; the download, and what plays, carry on.
+ */
+@Composable
+private fun AudioCardControl(
+    att: Attachment,
+    label: String,
+    media: AttachmentMedia,
+    download: Download?,
+    origin: DownloadOrigin?,
+    onFailed: () -> Unit,
+) {
+    val player = rememberAudioPlayer()
+    val downloads = rememberDownloads()
+    val platform = LocalPlatform.current
+    val chat = LocalChatTitle.current
+    val scope = rememberCoroutineScope()
+    val now by player.state.collectAsState()
+    // What names this note in the player: its download key, or — a preview's media has none — its file id.
+    val identity = media.downloadKey(att) ?: "att:${att.file_id}"
+    // A note that could not play shows ▶ again here: a tap tries it anew (the dock says why it stopped).
+    val mine = now?.takeIf { it.item.key == identity && it.failed == null }
+    var fetching by remember(att.file_id) { mutableStateOf(false) }
+    val state = download?.state
+    when {
+        mine != null -> AudioToggleButton(playing = mine.playing, tag = AUDIO_PLAY_TAG) { player.toggle() }
+        state is DownloadState.Running || state == DownloadState.Cancelled || state is DownloadState.Failed ->
+            DownloadItemRing(download, "attachment_ring")
+        fetching -> DownloadItemRing(null, "attachment_ring", busy = true)
+        else -> AudioToggleButton(playing = false, tag = AUDIO_PLAY_TAG) {
+            fetching = true
+            scope.launch {
+                try {
+                    when (val got = fetchClip(downloads, media, att, platform, origin)) {
+                        is ClipFetch.Ready -> player.play(AudioItem(label, got.clip.uri, origin, chat, identity, att.duration_ms))
+                        ClipFetch.Failed -> onFailed()
+                        // Paused or cancelled: its ring offers Resume.
+                        ClipFetch.Stopped -> Unit
+                    }
+                } finally {
+                    fetching = false
+                }
+            }
+        }
+    }
+}
+
+/** The tag of a voice note's ▶ / ❚❚ on its card. */
+internal const val AUDIO_PLAY_TAG = "attachment_audio_play"
+
+/**
+ * The chat message a download here starts from: this chat's session ([LocalChatSessionId]) and
+ * [entryId], else the message the row draws ([LocalChatMediaEntry]). Null outside a chat.
+ */
+@Composable
+internal fun rememberDownloadOrigin(entryId: String): DownloadOrigin? {
+    val session = LocalChatSessionId.current
+    val entry = entryId.ifEmpty { LocalChatMediaEntry.current.orEmpty() }
+    return remember(session, entry) { if (session == null || entry.isEmpty()) null else DownloadOrigin(session, entry) }
+}
+
+/**
+ * Start (or join) [att]'s download in [downloads] and, while this caller is still here when it
+ * finishes, hand it over as a tap does (R1). Leaving releases the claim; the download carries on and
+ * waits in the bar. Null key (a preview's in-memory media): false — the caller keeps the bytes path.
+ *
+ * [onFailed] is the caller's word for a download that failed while it waited, where nothing else on
+ * its screen says so (the viewer's Save); the user's own Cancel is not a failure.
+ */
+internal suspend fun startDownload(
+    downloads: DownloadCenter,
+    media: AttachmentMedia,
+    att: Attachment,
+    platform: Platform,
+    pointer: Boolean,
+    onFailed: () -> Unit = {},
+    origin: DownloadOrigin? = null,
+    /** What to do with it once it is done: what a tap does, unless the caller is a Save button ([saveDownload]). */
+    then: suspend (Download) -> Unit = { handOverAsTapped(platform, pointer, downloads, it) },
+): Boolean {
+    val key = media.downloadKey(att) ?: return false
+    val name = att.name ?: att.file_id
+    val claim = downloads.start(key, name, att.mime ?: "application/octet-stream", DownloadPurpose.File, AttachmentDownload(media, att), origin)
+    try {
+        val file = claim.await()
+        val item = downloads.items.value.firstOrNull { it.key == key }
+        when {
+            file == null -> if (item?.state is DownloadState.Failed) onFailed()
+            item != null -> then(item)
+        }
+    } finally {
+        claim.release()
+    }
+    return true
+}
+
+/**
+ * [att] through its media, which can also stop it: the media cache runs the transfer on its own
+ * scope, so cancelling the job alone would leave it running.
+ */
+private class AttachmentDownload(private val media: AttachmentMedia, private val att: Attachment) : DownloadSource {
+    override suspend fun fetch(progress: (received: Long, total: Long?) -> Unit): DownloadedFile? = media.download(att, progress)
+
+    override fun cancel() = media.cancelDownload(att)
+}
+
+/**
+ * The viewer's Save with [bytes] in hand: save them (on a phone the platform picks the gallery or its files,
+ * [SavedFile.place]); a pointer host then opens what it saved. Never the tap's "open with" ([saveOrOpenAttachment]),
+ * which is what Save ran on a phone before. Null: cancelled or failed.
+ */
+internal suspend fun saveAttachment(platform: Platform, pointer: Boolean, name: String, mime: String?, bytes: ByteArray): SavedFile? {
+    val safeName = previewFilename(fileNameOf(name), mime)
+    val type = mime?.ifBlank { null } ?: platform.files.probeMime(safeName)
+    val saved = platform.files.saveAs(safeName, type, bytes) ?: return null
+    if (pointer) platform.files.openSaved(saved)
+    return saved
+}
+
+/** What a phone says after a save, in the app's language: resolved in composition, used after the save returns. */
+internal class SavedWords(val photos: String, val gallery: String, val downloads: String, val chosen: (String) -> String)
+
+/** The phone's word for where [saved] went; null on a pointer host, which opens the file instead. */
+internal fun savedNotice(saved: SavedFile, pointer: Boolean, words: SavedWords): String? = when {
+    pointer -> null
+    saved.place == SavedPlace.Photos -> words.photos
+    saved.place == SavedPlace.Gallery -> words.gallery
+    saved.place == SavedPlace.Downloads -> words.downloads
+    else -> words.chosen(saved.name)
+}
+
+/** [SavedWords] in the app's language. */
+@Composable
+internal fun rememberSavedWords(): SavedWords {
+    val photos = localized(Res.string.saved_to_photos)
+    val gallery = localized(Res.string.saved_to_gallery)
+    val downloads = localized(Res.string.saved_to_downloads)
+    val chosen = localized(Res.string.saved_file, "%1\$s")
+    return remember(photos, gallery, downloads, chosen) {
+        SavedWords(photos, gallery, downloads) { name -> chosen.replace("%1\$s", name) }
+    }
 }
 
 /**

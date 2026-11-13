@@ -185,6 +185,8 @@ class LinuxWebEngineTest {
         rig.engine.configure(WebSettings.Default.copy(javaScriptEnabled = false).pageSetup(dark = false, bridgeOrigins = emptySet()))
         assertNull(rig.view.configured!![1], "no shim without scripts")
         assertEquals(false, rig.view.configured!![4])
+        rig.engine.configure(WebSettings.Default.copy(userAgent = "Phone/1").pageSetup(dark = false, bridgeOrigins = emptySet()))
+        assertEquals("Phone/1", rig.view.configured!![7], "a whole agent replaces WPE's (#122 device mode)")
         rig.close()
     }
 

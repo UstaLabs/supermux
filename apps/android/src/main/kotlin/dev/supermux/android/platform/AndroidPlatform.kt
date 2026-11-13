@@ -108,6 +108,7 @@ class AndroidPlatform(
     /** APK self-update. PROCESS-wide (application context): this platform is rebuilt per activity,
      *  and a per-activity updater would drop an in-flight download on rotation and leak its client. */
     override val updates: AppUpdater = AndroidAppUpdater.shared(context)
+    override val releasePlatform: dev.supermux.ui.whatsnew.ReleasePlatform = dev.supermux.ui.whatsnew.ReleasePlatform.Android
 
     /**
      * Nothing local: an agent reply reaches this device as an FCM push already
@@ -236,6 +237,12 @@ class AndroidPlatform(
         }
 
     override val notices: NoticeChannel = AndroidNotices(context.applicationContext)
+
+    /**
+     * The audio player's outputs (#118 car 3a): the media session's ExoPlayer ([AudioPlaybackService]), so what plays
+     * goes on in the background with the media notification. Process-wide, as [tts] is: one session for every window.
+     */
+    override val audioOutputs: dev.supermux.work.AudioOutputs get() = AndroidAudio.forApp(context)
 
     /**
      * Decodes that completed with nobody left to await them — the activity was re-created while the

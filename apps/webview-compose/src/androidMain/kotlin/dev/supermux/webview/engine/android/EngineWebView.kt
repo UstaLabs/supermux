@@ -3,6 +3,7 @@ package dev.supermux.webview.engine.android
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Rect
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.VelocityTracker
 import android.view.ViewConfiguration
@@ -13,6 +14,7 @@ import androidx.core.view.NestedScrollingChild3
 import androidx.core.view.NestedScrollingChildHelper
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import dev.supermux.webview.engine.SideSwipe
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -24,6 +26,10 @@ import kotlin.math.roundToInt
  *   its own compositor and reports the part of a drag the page couldn't take through [overScrollBy]: that part goes to
  *   the scrolling parents (Compose's, through AndroidView) while the finger is down. So does the gesture's fling, if
  *   its drag reached them: a flick the page took itself (an inner scroller, a carousel, a canvas) stays the page's.
+ * - Sideways it is the same, up to the page's edge ([SideSwipe]): a page that can't scroll sideways, or one scrolled to
+ *   its edge, hands the rest of a one-finger sideways drag to the parents (the phone's tab swipe). Once they take some,
+ *   the page gets a cancel and the gesture is theirs, both ways, until the finger lifts, so the page doesn't scroll back
+ *   under a half-moved tab. A pinch never hands off; a zoomed-in page scrolls to its edge first.
  * - The page gets the touch as if the view were still where it was when the finger went down. As the parents scroll
  *   the view under the finger, the page would take that for the finger moving, and hand it back to them: on the phone,
  *   the list shook under a steady drag, further each move.
@@ -31,7 +37,12 @@ import kotlin.math.roundToInt
  *   visual viewport by the part of the page the keyboard covers, whatever the views above it did with the insets.
  */
 @SuppressLint("ViewConstructor")
-internal class EngineWebView(context: Context, private val onFocus: (Boolean) -> Unit) : WebView(context), NestedScrollingChild3 {
+internal class EngineWebView(
+    context: Context,
+    private val onFocus: (Boolean) -> Unit,
+    /** The user pressed the view or typed a key into it: real input, from the system, which no page script can make. */
+    private val onInput: () -> Unit = {},
+) : WebView(context), NestedScrollingChild3 {
     /** Whether the engine destroyed it. Nothing touches it after that. */
     var gone: Boolean = false
 
@@ -52,6 +63,16 @@ internal class EngineWebView(context: Context, private val onFocus: (Boolean) ->
 
     /** What the page couldn't take of this gesture's drag, in px, and the parents weren't handed yet: a fraction. */
     private var overscrolled = 0f
+
+    /** This gesture's sideways hand-off, and where the finger was last, on the screen. */
+    private val side = SideSwipe()
+    private var lastRawX = 0f
+    private var lastRawY = 0f
+    private var sideVelocity: VelocityTracker? = null
+    private var pageCancelled = false
+    /** Where the finger went down, in this view's px: the page is asked what is there. */
+    private var downX = 0f
+    private var downY = 0f
 
     init {
         nested = NestedScrollingChildHelper(this).also { it.isNestedScrollingEnabled = true }
@@ -80,6 +101,16 @@ internal class EngineWebView(context: Context, private val onFocus: (Boolean) ->
         onFocus(focused)
     }
 
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (!gone && event.actionMasked == MotionEvent.ACTION_DOWN) onInput()
+        return super.dispatchTouchEvent(event)
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (!gone && event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) onInput()
+        return super.dispatchKeyEvent(event)
+    }
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
             touching = true
@@ -88,12 +119,22 @@ internal class EngineWebView(context: Context, private val onFocus: (Boolean) ->
             velocity?.recycle()
             velocity = VelocityTracker.obtain()
             getLocationInWindow(downAt)
+            side.down()
+            pageCancelled = false
+            downX = event.x
+            downY = event.y
+            lastRawX = event.rawX
+            lastRawY = event.rawY
+            sideVelocity?.recycle()
+            sideVelocity = VelocityTracker.obtain()
             // The gesture stays the page's: what it can't take reaches the parents through nested scrolling.
-            if (startNestedScroll(ViewCompat.SCROLL_AXIS_VERTICAL, ViewCompat.TYPE_TOUCH)) {
+            val axes = ViewCompat.SCROLL_AXIS_VERTICAL or ViewCompat.SCROLL_AXIS_HORIZONTAL
+            if (startNestedScroll(axes, ViewCompat.TYPE_TOUCH)) {
                 parent?.requestDisallowInterceptTouchEvent(true)
             }
         }
         if (!touching) return super.onTouchEvent(event)
+        if (sideSwiping(event)) return true
         // The touch where it would be had the view stayed where it was at the down.
         getLocationInWindow(nowAt)
         val steady = MotionEvent.obtain(event)
@@ -122,10 +163,59 @@ internal class EngineWebView(context: Context, private val onFocus: (Boolean) ->
         return handled
     }
 
+    /**
+     * Feeds [side] the finger's move, on the screen (the parents move this view under it). Once the parents took the
+     * gesture, it is theirs: the page gets one cancel, the parents every move and, at the end, the fling, always, so
+     * they settle where it leaves them. True when the event was theirs.
+     */
+    private fun sideSwiping(event: MotionEvent): Boolean {
+        val dx = event.rawX - lastRawX
+        lastRawX = event.rawX
+        val dy = event.rawY - lastRawY
+        lastRawY = event.rawY
+        if (event.actionMasked == MotionEvent.ACTION_MOVE) side.moved(dx, dy, event.pointerCount)
+        if (event.actionMasked == MotionEvent.ACTION_POINTER_DOWN) side.moved(0f, 0f, event.pointerCount)
+        sideVelocity?.let { tracker ->
+            val onScreen = MotionEvent.obtain(event)
+            onScreen.setLocation(event.rawX, event.rawY)
+            tracker.addMovement(onScreen)
+            onScreen.recycle()
+        }
+        if (!side.taken) return false
+        if (!pageCancelled) {
+            pageCancelled = true
+            val cancel = MotionEvent.obtain(event)
+            cancel.action = MotionEvent.ACTION_CANCEL
+            super.onTouchEvent(cancel)
+            cancel.recycle()
+        }
+        when (event.actionMasked) {
+            MotionEvent.ACTION_MOVE -> {
+                // Nested scrolling's dx is the content's: a finger moving left scrolls it right.
+                val n = side.whole(-dx)
+                if (n != 0) dispatchNestedScroll(0, 0, n, 0, null, ViewCompat.TYPE_TOUCH, consumed)
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                var fling = 0f
+                if (event.actionMasked == MotionEvent.ACTION_UP) {
+                    sideVelocity?.let { tracker ->
+                        tracker.computeCurrentVelocity(1000, maxFling.toFloat())
+                        fling = -tracker.xVelocity
+                    }
+                }
+                dispatchNestedPreFling(fling, 0f)
+                endTouch()
+            }
+        }
+        return true
+    }
+
     private fun endTouch() {
         touching = false
         velocity?.recycle()
         velocity = null
+        sideVelocity?.recycle()
+        sideVelocity = null
         stopNestedScroll(ViewCompat.TYPE_TOUCH)
     }
 
@@ -141,6 +231,19 @@ internal class EngineWebView(context: Context, private val onFocus: (Boolean) ->
         maxOverScrollY: Int,
         isTouchEvent: Boolean,
     ): Boolean {
+        if (touching && deltaX != 0 && hasNestedScrollingParent(ViewCompat.TYPE_TOUCH)) side.ask()?.let(::askPage)
+        if (touching && deltaX != 0 && side.mayOffer() && hasNestedScrollingParent(ViewCompat.TYPE_TOUCH)) {
+            // In the finger's px, as below.
+            @Suppress("DEPRECATION")
+            val dx = side.whole(deltaX / scale)
+            consumed[0] = 0
+            consumed[1] = 0
+            if (dx != 0) dispatchNestedScroll(0, 0, dx, 0, null, ViewCompat.TYPE_TOUCH, consumed)
+            if (consumed[0] != 0) {
+                side.take()
+                return false
+            }
+        }
         if (touching && deltaY != 0 && hasNestedScrollingParent(ViewCompat.TYPE_TOUCH)) {
             // WebView reports it multiplied by its scale, the density times the page's zoom: over a page that can't
             // scroll, each 24.6 px move came as 64 or 65 px on the phone (WebView 156, 2.625 px a dp), and the list ran
@@ -158,6 +261,19 @@ internal class EngineWebView(context: Context, private val onFocus: (Boolean) ->
             }
         }
         return super.overScrollBy(deltaX, deltaY, scrollX, scrollY, scrollRangeX, scrollRangeY, maxOverScrollX, maxOverScrollY, isTouchEvent)
+    }
+
+    /**
+     * Asks the page whether the box under the finger (a carousel, a `<pre>`, a wide table) can still scroll the [way] the
+     * finger pushes: until it answers, nothing is handed on; if it can, the gesture stays the page's.
+     */
+    private fun askPage(way: Int) {
+        val gesture = side.gesture
+        @Suppress("DEPRECATION")
+        val cssPx = scale
+        evaluateJavascript(SideSwipe.innerScrollQuestion(downX / cssPx, downY / cssPx, way)) { result ->
+            if (!gone && side.gesture == gesture) side.answered(way, SideSwipe.readAnswer(result))
+        }
     }
 
     override fun onDetachedFromWindow() {

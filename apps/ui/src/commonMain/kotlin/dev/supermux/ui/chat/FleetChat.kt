@@ -72,6 +72,11 @@ fun rememberChatActions(fleet: FleetStore, sessionId: String): ChatActions =
             },
             transcribeAudio = { bytes, name, mime -> fleet.transcribeAudio(sessionId, bytes, name, mime) },
             media = fleet.media(sessionId),
+            htmlCards = HtmlCardHost(
+                page = { id -> fleet.htmlPage(sessionId, id) },
+                send = { card, text -> fleet.sendFromCard(sessionId, card, text) },
+                peek = { id -> fleet.peekHtmlPage(sessionId, id) },
+            ),
             composer = ComposerActions(
                 loadDraft = { fleet.loadDraft(it) },
                 saveDraft = { id, t -> fleet.saveDraft(id, t) },
@@ -87,10 +92,6 @@ fun rememberChatActions(fleet: FleetStore, sessionId: String): ChatActions =
                 checkEdit = { text, newWords -> fleet.transcribeEdit(sessionId, text, newWords) },
                 transcribeWarm = { id -> fleet.transcribeWarm(sessionId, id) },
                 openDictationStream = { id, session -> fleet.openDictationStream(sessionId, id, session) },
-                gitFetch = { fleet.gitFetch(sessionId) },
-                gitPull = { fleet.gitPull(sessionId) },
-                gitPush = { fleet.gitPush(sessionId) },
-                gitPublish = { fleet.gitPublish(sessionId) },
             ),
             loadModels = { fleet.sessionModels(sessionId) },
             loadReasoning = { fleet.sessionReasoning(sessionId) },

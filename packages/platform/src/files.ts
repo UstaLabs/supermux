@@ -3,12 +3,12 @@
 // Mode: without it the answer is Unsupported, and the caller falls back on purpose (Q5: copy a small file, or keep an
 // account's files to itself) instead of failing halfway, or swallowing EPERM and losing the file.
 import { execFileSync } from "node:child_process"
-import { copyFileSync, cpSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync, type Stats } from "node:fs"
-import { cp, rename } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { appendFileSync, chmodSync, copyFileSync, cpSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync, type Stats } from "node:fs"
+import { cp, mkdir as mkdirAsync, rename } from "node:fs/promises"
+import { homedir, tmpdir } from "node:os"
 import { dirname, isAbsolute, join, relative, resolve } from "node:path"
 import { Unsupported } from "./errors.js"
-import { isInside } from "./paths.js"
+import { flavor, isInside } from "./paths.js"
 
 type LinkType = "file" | "dir" | "junction"
 
@@ -229,4 +229,63 @@ export async function replace(from: string, to: string, options: ReplaceOptions<
       await new Promise(resolve => setTimeout(resolve, wait))
     }
   }
+}
+
+// ── Owner-only files and folders (spec step 7) ──
+// POSIX modes where they exist. Windows has no mode (chmod there only toggles read-only): a file is kept private by
+// the inherited ACL of the user's profile, so what lives in it is private and what lives outside it may not be.
+
+export interface PrivateOptions {
+  /** The OS whose rules apply; the running one by default. */
+  platform?: NodeJS.Platform
+  /** The chmod call (tests); node:fs's chmodSync by default. */
+  chmod?: (path: string, mode: number) => void
+  /** The user's profile (Windows); os.homedir() by default. */
+  home?: string
+  /** A file only its owner may run too (a launcher, an askpass script): 0o700 instead of 0o600. */
+  executable?: boolean
+}
+
+/**
+ * Make [path] (a file or a folder) owner-only: 0o600 or 0o700 on POSIX. On Windows nothing is changed; true when the
+ * path is inside the user's profile, whose ACL keeps it private, false when it is not (the caller may say so).
+ */
+export function makePrivate(path: string, options: PrivateOptions = {}): boolean {
+  const platform = options.platform ?? process.platform
+  if (platform === "win32") return isInside(path, options.home ?? homedir(), flavor("win32"))
+  ;(options.chmod ?? chmodSync)(path, statSync(path).isDirectory() || options.executable ? 0o700 : 0o600)
+  return true
+}
+
+/** Create the folder [dir] (and its parents) owner-only: 0o700 on POSIX for the folders it creates. */
+export function mkdirPrivate(dir: string, options: { recursive?: boolean } = {}): void {
+  mkdirSync(dir, { recursive: options.recursive ?? true, mode: 0o700 })
+}
+
+/** [dir], created owner-only when it is not there yet (async). */
+export async function mkdirPrivateAsync(dir: string, options: { recursive?: boolean } = {}): Promise<void> {
+  await mkdirAsync(dir, { recursive: options.recursive ?? true, mode: 0o700 })
+}
+
+/** Write [data] to [path], creating it owner-only (0o600 on POSIX). [options] are the write's own (flag, encoding). */
+export function writePrivate(path: string, data: string | NodeJS.ArrayBufferView, options: { flag?: string; encoding?: BufferEncoding } = {}): void {
+  writeFileSync(path, data, { ...options, mode: 0o600 })
+}
+
+/** Append [data] to [path], creating it owner-only (0o600 on POSIX) when it is not there yet. */
+export function appendPrivate(path: string, data: string | Uint8Array): void {
+  appendFileSync(path, data, { mode: 0o600 })
+}
+
+/**
+ * Write [data] to [path], creating it executable (0o755 on POSIX; Windows runs by extension); [options.private]: only
+ * its owner may read or run it (0o700).
+ */
+export function writeExecutable(path: string, data: string | NodeJS.ArrayBufferView, options: { private?: boolean } = {}): void {
+  writeFileSync(path, data, { mode: options.private ? 0o700 : 0o755 })
+}
+
+/** Make [path] executable (0o755 on POSIX); nothing on Windows, which runs a file by its extension. */
+export function makeExecutable(path: string, options: { platform?: NodeJS.Platform } = {}): void {
+  if ((options.platform ?? process.platform) !== "win32") chmodSync(path, 0o755)
 }

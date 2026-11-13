@@ -4,8 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.sample
+import kotlinx.coroutines.withTimeoutOrNull
 import dev.supermux.ui.perf.PerfPanelHost
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -21,6 +20,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.mutableStateOf
@@ -37,8 +37,6 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyShortcut
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
@@ -108,6 +106,8 @@ import dev.supermux.pairing.PairingTokenStore
 import dev.supermux.ui.intro.OnboardingScreen
 import dev.supermux.state.HostStore
 import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.ui.theme.nextAppearance
+import dev.supermux.ui.theme.paintedAppearance
 import dev.supermux.ui.theme.Space
 import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.ui.adaptive.InputMode
@@ -119,7 +119,6 @@ import dev.supermux.ui.adaptive.widthClassForPx
 import dev.supermux.ui.shell.SupermuxApp
 import dev.supermux.ui.shell.windows.tearOutTabLive
 import dev.supermux.ui.shell.windows.tearOutCanvasLive
-import dev.supermux.desktop.settings.DesktopSettingsExtra
 import dev.supermux.desktop.settings.LocalHostSupervisor
 import dev.supermux.desktop.settings.LocalHostingFleet
 import dev.supermux.desktop.settings.LocalHostingSessions
@@ -142,6 +141,7 @@ import dev.supermux.desktop.shell.PersistedUiState
 import dev.supermux.ui.prefs.seedShellState
 import dev.supermux.ui.prefs.ShellStateSeed
 import dev.supermux.ui.prefs.SIDEBAR_WIDTH_DEFAULT
+import dev.supermux.ui.session.LocalAvatarsLive
 import dev.supermux.ui.session.SessionListMode
 import dev.supermux.ui.notify.NotificationController
 import dev.supermux.desktop.shell.DesktopTearOff
@@ -166,7 +166,11 @@ import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
-import dev.supermux.desktop.shell.MenuShortcut
+import dev.supermux.desktop.shell.menuChords
+import dev.supermux.desktop.shell.menuShortcutFor
+import dev.supermux.ui.keys.AppCommand
+import dev.supermux.ui.keys.AppCommands
+import dev.supermux.ui.keys.ShortcutDispatcher
 import dev.supermux.desktop.shell.WindowsTitleBarHeight
 import dev.supermux.desktop.shell.ShellStateStore
 import dev.supermux.ui.shell.ShellUiState
@@ -290,21 +294,23 @@ private val desktopBindTts: (
 //                                  ArchivedScreen's Resume button uses: app.resume(id) fire-and-
 //                                  forget + close the overlay (M4e). SPAWNS/UN-ARCHIVES a real
 //                                  session — point it at a throwaway you archived yourself.  [main]
-//   SM_SETTINGS=1                 — open the Settings hub on Providers (File ▸ "Settings…"'s SAME
-//                                  ui.openSettings()) on start, loading real app.agentStatuses()
-//                                  (GET /agents/status, read-only) from the active host          [main]
-//   SM_DEVICES=1                  — open the Settings hub on Devices via ui.openSettings(Devices)
-//                                  on start, loading real app.devices() (GET /devices, read-only)
-//                                  from the active host. Off by default; never mints/revokes.    [main]
-//   SM_GIT_HOSTING=1              — open the Settings hub on Git hosting (Task 4) via the SAME
-//                                  ui.openSettings(GitHosting), loading real app.forgesLoad()
-//                                  (GET /forge/connections, read-only). Off by default.       [main]
-//   SM_SYSTEM=1                   — open the Settings hub on System via ui.openSettings(System)
-//                                  on start, loading real app.updateStatus() (GET /api/update/status,
+//   SM_SETTINGS=1                 — open the Settings hub (File ▸ "Settings…"'s SAME
+//                                  ui.openSettings(): General on a wide window) on start, loading
+//                                  real app.agentStatuses() (GET /agents/status, read-only)      [main]
+//   SM_DEVICES=1                  — open the Settings hub on the machine page's Devices via
+//                                  ui.openMachine("devices") on start, loading real
+//                                  app.devices() (GET /devices, read-only) from the active host. Off
+//                                  by default; never mints/revokes.                              [main]
+//   SM_GIT_HOSTING=1              — open the Settings hub on Coding's GitHub row via
+//                                  ui.openSettings(Coding, anchor = "github"), loading real
+//                                  app.forgesLoad() (GET /forge/connections, read-only).        [main]
+//   SM_SYSTEM=1                   — open the Settings hub on the machine page's updates via
+//                                  ui.openMachine("updates") on start, loading real
+//                                  app.updateStatus() (GET /api/update/status,
 //                                  read-only) from the active host. Off by default; never calls
 //                                  runUpdate/restartBroker (those kill/update the live broker).  [main]
-//   SM_PROXIES=1                  — open the Settings hub on Proxies via ui.openSettings(Proxies)
-//                                  on start, loading real app.proxiesForSettings() (GET /proxies,
+//   SM_PROXIES=1                  — open the Settings hub on the machine page's Shared links via
+//                                  ui.openMachine("links") on start, loading real app.proxiesForSettings() (GET /proxies,
 //                                  read-only). Never creates/removes/toggles. Off by default.    [main]
 //   SM_VOICE=1                    — open the Settings hub on Voice via ui.openSettings(Voice) on
 //                                  start, loading real app.appConfig() + fetchGlossary() (GET
@@ -315,7 +321,7 @@ private val desktopBindTts: (
 //                                  (M4f). Read-only — never calls redeemCodexReset() (that burns a
 //                                  real banked Codex reset; the redeem path stays UI-test-covered
 //                                  only). Off by default.                                    [main]
-//   SM_LSP_SETTINGS=1             — open the LSP settings overlay (File ▸ "Editor / LSP…"'s SAME
+//   SM_LSP_SETTINGS=1             — open Settings on Coding's code intelligence (File ▸ "Coding…"'s SAME
 //                                  ui.openLspSettings()) on start, loading the real app.lspLoad()
 //                                  (GET /settings/editor, read-only) (M4g-4). Read-only — never
 //                                  calls lspInstall/lspToggle/lspAddCustom/lspRemoveCustom. Off by
@@ -489,9 +495,13 @@ fun main() {
                 WindowPosition.PlatformDefault
             },
         )
+        // Same, for the fleet: the tray reads this computer's session count and the remote host.
+        var pairedFleet by remember { mutableStateOf<FleetStore?>(null) }
         var shuttingDown by remember { mutableStateOf(false) }
         LaunchedEffect(shuttingDown) {
             if (shuttingDown) {
+                // Card #121: the offline cache gets this session's last state before the app goes.
+                pairedFleet?.let { f -> withTimeoutOrNull(2_000) { f.writeSnapshots() } }
                 // First let the Window content recompose empty, detaching every SwingPanel while
                 // Compose's Skia layer is still live. Then close the native window.
                 delay(100)
@@ -518,8 +528,6 @@ fun main() {
         // and after unpair, when there is no shell to select into — the click handler
         // no-ops in that case (see onAction below).
         var pairedUi by remember { mutableStateOf<ShellUiState?>(null) }
-        // Same, for the fleet: the tray reads this computer's session count and the remote host.
-        var pairedFleet by remember { mutableStateOf<FleetStore?>(null) }
 
         // Card #86 part 2: a locked screen or sleeping displays are nobody reading, focused window or not.
         val screenWatch = remember { ScreenWatch(screenProbe()) }
@@ -587,7 +595,9 @@ fun main() {
         DisposableEffect(Unit) {
             val updater = dev.supermux.desktop.update.DesktopAppUpdater.shared
             updater.onQuitForInstaller = { javax.swing.SwingUtilities.invokeLater { quitNow() } }
-            onDispose { updater.onQuitForInstaller = null }
+            onDispose {
+                updater.onQuitForInstaller = null
+            }
         }
         fun cancelQuit() {
             confirmQuit = null
@@ -806,6 +816,8 @@ fun main() {
         }
         val appTextScale by desktopUiPrefs.textScale.collectAsState(seededTextScale)
         val themeScope = rememberCoroutineScope()
+        // The theme's own dark check: what System paints here, for the sidebar's theme shortcut.
+        val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
         // Cluster G1: the tray manager is installed INTO the `Platform.notifications` seam, so the
         // shell's notification controller and any shared caller raise the same toast.
         val notificationController = remember {
@@ -906,9 +918,17 @@ fun main() {
 
         // Linux custom chrome: the main menu lives behind the ☰ button, and F10 / Alt+F/E/V open it.
         val mainMenuState = remember { MainMenuState() }
+        // The main window's keyboard: the menu bar drives it, and its menu keys gate the Linux menu.
+        val shortcuts = remember { ShortcutDispatcher() }
         Window(
             onPreviewKeyEvent = { e ->
+                // The window sees every key before Compose sends it to a layer. The dispatcher notes a press of a macOS
+                // menu key here, so that the menu's own firing of it right after is ignored (ShortcutDispatcher.onWindowKey).
+                shortcuts.onWindowKey(e)
+                // F10 / Alt+F/E/V open the Linux and Windows menu, but never over a terminal or remote screen:
+                // Alt+F there is the shell's (forward a word), as in VS Code.
                 e.type == KeyEventType.KeyDown &&
+                    !shortcuts.tracker.focusIsOpaque &&
                     mainMenuState.onWindowKey(e.key, e.isAltPressed, e.isCtrlPressed, e.isShiftPressed, e.isMetaPressed)
             },
             // Close hides to the tray (spec D3); without a tray there is nowhere to hide, so it quits.
@@ -968,23 +988,18 @@ fun main() {
             }
             var showUnpairConfirm by remember { mutableStateOf(false) }
 
-            // Menu bar (paired only). DEDUPE DECISION: the View toggle items are clickable-only —
-            // they carry NO KeyShortcut, because the in-app `Modifier.shellShortcuts` already
-            // owns Ctrl/Cmd+B/E/T/D; registering the same accelerator on the menu would risk a
-            // double-toggle (menu action + the key event still bubbling to the modifier). File ▸
-            // New Session keeps its conventional Ctrl+N accelerator too — it and the in-app shortcut
-            // both just flip `ui.launcherOpen`, which is idempotent, so a double-fire (menu action +
-            // the key event still bubbling to shellShortcuts) is harmless.
-            // One menu, two renderings (DesktopMainMenu.kt): the native menu bar, or — under the
-            // Linux custom chrome, which has no system frame to hang a menu bar in — the main-menu
-            // button in the sidebar band.
+            // Menu bar (paired only). The keys come from the keymap (DefaultKeymap), so the menu shows ⌘N on a
+            // Mac and Ctrl+N elsewhere. The items run through the dispatcher and grey out when their command can't run.
+            // One menu, two renderings (DesktopMainMenu.kt): the native menu bar, or, under the Linux custom
+            // chrome (no system frame to hang a menu bar in), the main-menu button in the sidebar band.
             val perfPanelVisible by dev.supermux.util.PerfTrace.panelVisible.collectAsState()
             val mainMenu = listOf(
                 MainMenuGroup(
                     "File",
                     'F',
                     listOf(
-                        MainMenuEntry.Action("New Session", MenuShortcut(Key.N, ctrl = true)) { ui.openLauncher() },
+                        MainMenuEntry.Action("New Session", menuShortcutFor(AppCommands.NewSession), enabled = shortcuts.rememberCanInvoke(AppCommands.NewSession)) { shortcuts.invokeFromMenu(AppCommands.NewSession) },
+                        MainMenuEntry.Action("New Terminal", menuShortcutFor(AppCommands.NewTerminal), enabled = shortcuts.rememberCanInvoke(AppCommands.NewTerminal)) { shortcuts.invokeFromMenu(AppCommands.NewTerminal) },
                         // Through the seam (cluster G1); AppShell binds the live registry into it.
                         MainMenuEntry.Action("Move workspace to New Window") { DesktopWindowHostController.tearOutCanvas() },
                         MainMenuEntry.Action("Move group to New Window") {
@@ -1001,10 +1016,11 @@ fun main() {
                         MainMenuEntry.Action("Archived…") { ui.openArchived() },
                         MainMenuEntry.Action("Displays…") { ui.openDisplays() },
                         MainMenuEntry.Action("Usage…") { ui.openUsage() },
-                        MainMenuEntry.Action("Settings…") { ui.openSettings() },
+                        MainMenuEntry.Action("Settings…", menuShortcutFor(AppCommands.OpenSettings), enabled = shortcuts.rememberCanInvoke(AppCommands.OpenSettings)) { shortcuts.invokeFromMenu(AppCommands.OpenSettings) },
                         // Existing items keep working — they open the Settings hub focused on
-                        // that section (same overlay as Settings…, not a separate stack).
-                        MainMenuEntry.Action("Editor / LSP…") { ui.openLspSettings() },
+                        // that page (same overlay as Settings…, not a separate stack): Coding, at
+                        // its code-intelligence row (#97; once "Editor / LSP…").
+                        MainMenuEntry.Action("Coding…") { ui.openLspSettings() },
                         MainMenuEntry.Action("Check for Updates…") { ui.openAppUpdate() },
                         MainMenuEntry.Separator,
                         MainMenuEntry.Action("Unpair…") { showUnpairConfirm = true },
@@ -1014,15 +1030,9 @@ fun main() {
                     "Edit",
                     'E',
                     listOf(
-                        // Same paste-image path as Ctrl/Cmd+V / right-click in the composer.
-                        // The accelerator exists only while a chat composer has the focus: a
-                        // window-wide Ctrl+V would steal every paste from the code editor (M5 B2).
-                        MainMenuEntry.Action(
-                            "Paste image",
-                            // The same Ctrl+V as pasteImageShortcut, as menu data.
-                            pasteImageShortcut(dev.supermux.ui.chat.ChatInputFocus.focused)
-                                ?.let { MenuShortcut(Key.V, ctrl = true) },
-                        ) { ui.requestPasteImage() },
+                        // ⌘V / Ctrl+V in the composer pastes an image itself (Composer.kt); the menu item has no
+                        // key, or it would take every paste from the code editor.
+                        MainMenuEntry.Action("Paste image") { ui.requestPasteImage() },
                     ),
                 ),
                 MainMenuGroup(
@@ -1033,9 +1043,12 @@ fun main() {
                         // old shell's four fixed panes. A workspace has no fixed panes — views are
                         // created, split and closed on its own layout tree, from the tab strip's
                         // "+" — so there is nothing here to check on or off.
-                        MainMenuEntry.Toggle("Show Sidebar", checked = !ui.sidebarCollapsed) {
-                            ui.sidebarCollapsed = !ui.sidebarCollapsed
-                        },
+                        MainMenuEntry.Toggle(
+                            "Show Sidebar",
+                            checked = !ui.sidebarCollapsed,
+                            shortcut = menuShortcutFor(AppCommands.ToggleSidebar),
+                            enabled = shortcuts.rememberCanInvoke(AppCommands.ToggleSidebar),
+                        ) { shortcuts.invokeFromMenu(AppCommands.ToggleSidebar) },
                         // Card #54: this launch's timeline, chat opens, WebSocket and HTTP traffic.
                         MainMenuEntry.Toggle("Load Timings", checked = perfPanelVisible) {
                             dev.supermux.util.PerfTrace.panelVisible.value = !perfPanelVisible
@@ -1043,7 +1056,13 @@ fun main() {
                     ),
                 ),
             )
-            if (paired && linuxChrome == null && windowsChrome == null) DesktopMenuBar(mainMenu)
+            val nativeMenu = paired && linuxChrome == null && windowsChrome == null
+            if (nativeMenu) DesktopMenuBar(mainMenu)
+            // A native menu fires its own key equivalents: macOS even when Compose already used the key (the JDK
+            // hands the key to Java first, then lets the menu act: AWTView.m), Swing's window menu whenever Compose
+            // left it (a dialog in front). The dispatcher stays the one judge of a key: it notes the press
+            // (onWindowKey above), and the menu's echo of it is ignored (invokeFromMenu). A click runs normally.
+            SideEffect { shortcuts.nativeMenuChords = if (nativeMenu) mainMenu.menuChords() else emptySet() }
 
             // Appearance lives on [ui] so the sidebar toggle, theme, and ui-state.json share one source.
             ProvideDesktopAdaptiveLocals {
@@ -1142,7 +1161,7 @@ fun main() {
                     }
                     DisposableEffect(Unit) { onDispose { fleet.close() } }
                     // Keep that cache current: at most every 20 s while the lists change, off the UI thread.
-                    LaunchedEffect(fleet) { keepDesktopSnapshots(fleet, desktopSnapshots) }
+                    LaunchedEffect(fleet) { fleet.keepSnapshots() }
                     // Published up to the tray (session count, the remote host's name/reachability).
                     DisposableEffect(fleet) {
                         pairedFleet = fleet
@@ -1745,7 +1764,7 @@ fun main() {
                     }
 
                     // Headless Settings-hub / Agents verification hook (desktop-parity Task 1):
-                    // SM_SETTINGS=1 opens the Settings hub on Agents via the SAME
+                    // SM_SETTINGS=1 opens the Settings hub (General) via the SAME
                     // `ui.openSettings()` the File ▸ "Settings…" menu item calls, so the hub loads
                     // real `app.agentStatuses()` (GET /agents/status) under Xvfb. Read-only by
                     // construction — never starts install/login. Off by default; harmless in prod.
@@ -1753,8 +1772,8 @@ fun main() {
                     if (settingsHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Providers)
-                            println("[settings] opened the Settings hub (Providers)")
+                            ui.openSettings()
+                            println("[settings] opened the Settings hub (General)")
                             // Prove the screen loads REAL data from the live broker, not just the shell.
                             val statuses = app.agentStatuses()
                             println("[settings] agentStatuses count=${statuses?.size ?: "null"} kinds=${statuses?.joinToString { "${it.kind}:${if (it.installed) "inst" else "miss"}:${if (it.authed) "auth" else "noauth"}" } ?: "(load failed)"}")
@@ -1762,16 +1781,16 @@ fun main() {
                     }
 
                     // Headless Devices verification hook (desktop-parity Task 2): SM_DEVICES=1 opens
-                    // the Settings hub on Devices via the SAME `ui.openSettings(Devices)` path the
-                    // rail uses, so DevicesSettingsScreen loads real `app.devices()` (GET /devices)
+                    // the machine page at its Devices via `ui.openMachine("devices")`, so the Devices part loads
+                    // real `app.devices()` (GET /devices)
                     // under Xvfb. Read-only by construction — never calls addDevice/revokeDevice.
                     // Off by default; harmless in prod.
                     val devicesHook = System.getenv("SM_DEVICES") == "1"
                     if (devicesHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Devices)
-                            println("[devices] opened the Settings hub (Devices)")
+                            ui.openMachine("devices")
+                            println("[devices] opened the machine page at Devices")
                             val devices = app.devices()
                             println(
                                 "[devices] devices count=${devices?.size ?: "null"} " +
@@ -1781,16 +1800,16 @@ fun main() {
                     }
 
                     // Headless Git-hosting verification hook (desktop-parity Task 4):
-                    // SM_GIT_HOSTING=1 opens the Settings hub on the Git hosting section via the
-                    // SAME ui.openSettings(GitHosting) path, then loads real app.forgesLoad()
+                    // SM_GIT_HOSTING=1 opens Coding at its GitHub row (once the Git hosting section) via the
+                    // ui.openSettings(Coding, anchor = "github") path, then loads real app.forgesLoad()
                     // (GET /forge/connections) under Xvfb. Read-only by construction — never
                     // add/import/remove. Off by default; harmless in production.
                     val gitHostingHook = System.getenv("SM_GIT_HOSTING") == "1"
                     if (gitHostingHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.GitHosting)
-                            println("[git-hosting] opened the Settings hub (Git hosting)")
+                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Coding, anchor = "github")
+                            println("[git-hosting] opened the Settings hub (Coding › GitHub & GitLab)")
                             val forges = app.forgesLoad()
                             val conns = forges?.connections.orEmpty()
                             val cli = forges?.cli
@@ -1803,14 +1822,13 @@ fun main() {
                     }
 
                     // Headless Proxies verification hook (desktop-parity Task 5): SM_PROXIES=1 opens
-                    // the Settings hub on Proxies via the SAME ui.openSettings(Proxies) path the
-                    // rail uses. Read-only — never createProxy/setProxyPublic/removeProxy.
+                    // the machine page at its Shared links via ui.openMachine("links"). Read-only — never createProxy/setProxyPublic/removeProxy.
                     val proxiesHook = System.getenv("SM_PROXIES") == "1"
                     if (proxiesHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Proxies)
-                            println("[proxies] opened the Settings hub (Proxies)")
+                            ui.openMachine("links")
+                            println("[proxies] opened the machine page at Shared links")
                             val proxies = app.proxiesForSettings()
                             println(
                                 "[proxies] proxies count=${proxies?.size ?: "null"} " +
@@ -1820,7 +1838,7 @@ fun main() {
                     }
 
                     // Headless System verification hook (desktop-parity Task 3): SM_SYSTEM=1 opens
-                    // the Settings hub on System via ui.openSettings(System) so SystemSettingsScreen
+                    // the machine page at its updates (ui.openMachine("updates")) so its header
                     // loads real `app.updateStatus()` (GET /api/update/status) under Xvfb.
                     // Read-only by construction — never calls runUpdate/restartBroker (those mutate
                     // the live broker). Distinct from File ▸ "Check for Updates…" (desktop app).
@@ -1829,8 +1847,8 @@ fun main() {
                     if (systemHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.System)
-                            println("[system] opened the Settings hub (System)")
+                            ui.openMachine("updates")
+                            println("[system] opened the machine page at its updates")
                             val st = app.updateStatus()
                             println(
                                 "[system] updateStatus current=${st?.current ?: "null"} " +
@@ -1893,7 +1911,7 @@ fun main() {
                         LaunchedEffect(app) {
                             delay(3_000)
                             ui.openLspSettings()
-                            println("[lsp-settings] opened the LSP settings overlay")
+                            println("[lsp-settings] opened the Settings hub (Coding › code intelligence)")
                         }
                     }
 
@@ -1972,12 +1990,15 @@ fun main() {
                         LocalPairedHostStore provides hostStore,
                         LocalHostingFleet provides fleet,
                         LocalHostingSessions provides fleetFacts.localSessions,
+                        // Card #108: living avatars stand still while nobody can see them.
+                        LocalAvatarsLive provides (windowVisible && !windowState.isMinimized && screenSeen),
                     ) {
                         // Card #54: the Load Timings panel (View ▸ Load Timings) floats over the app.
                         androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) {
                         SupermuxApp(
                             fleet = fleet,
                             ui = ui,
+                            shortcuts = shortcuts,
                             notify = notificationController,
                             appForeground = LocalWindowInfo.current.isWindowFocused && screenSeen,
                             // Desktop's sidebar lists WORKSPACES; Android's lists the fleet's
@@ -1987,6 +2008,8 @@ fun main() {
                             // The broker this app supervises is "this computer": its folders get
                             // the native folder dialog in the launcher.
                             isLocalHost = { id -> id != null && id == supervisor.hostId.value },
+                            // Settings' search field shows its shortcut, and that key focuses it.
+                            settingsSearchShortcut = if (isMacOs()) "⌘F" else "Ctrl+F",
                             stripChrome = DesktopStripChrome,
                             // macOS: no full-window dead strip under the transparent title bar.
                             // Detail content runs to the top edge; only the sidebar body is padded
@@ -2052,20 +2075,17 @@ fun main() {
                             autoSelectName = System.getenv("SM_SMOKE_SEND")
                                 ?.substringBefore(':')?.takeIf { it.isNotBlank() },
                             defaultDeviceName = remember { desktopDeviceName() },
-                            settingsExtra = { extra, scope -> DesktopSettingsExtra(extra, scope) },
-                            settingsSection = { section, scope ->
-                                DesktopSettingsSection(section, scope, fleet.activeApp() ?: app)
+                            settingsSection = { place, scope ->
+                                DesktopSettingsSection(place, scope, fleet.activeApp() ?: app)
                             },
-                            appearance = ui.appearance,
-                            // The toggle writes the SAME stored value the Appearance screen does
+                            // What is painted (System resolved by the OS's dark check), so the icon and the flip
+                            // match the screen.
+                            appearance = paintedAppearance(ui.appearance, AppearanceMode.DARK, systemDark),
+                            // The toggle writes the SAME stored value General's Theme row does
                             // (the collector above mirrors it back onto `ui.appearance`), so the
-                            // two never drift apart.
+                            // two never drift apart — the opposite of what is painted (#97 spec §10.6).
                             onToggleTheme = {
-                                val next = if (ui.appearance == AppearanceMode.DARK) {
-                                    AppearanceMode.LIGHT
-                                } else {
-                                    AppearanceMode.DARK
-                                }
+                                val next = nextAppearance(ui.appearance, AppearanceMode.DARK, systemDark)
                                 ui.appearance = next
                                 themeScope.launch { desktopUiPrefs.putAppearance(next) }
                             },
@@ -2360,47 +2380,11 @@ private fun ProvideDesktopAdaptiveLocals(content: @Composable () -> Unit) {
     )
 }
 
-/** Edit ▸ Paste image's accelerator: Ctrl+V while a chat composer is focused, none otherwise (the editor's paste stays its own). */
-internal fun pasteImageShortcut(chatInputFocused: Boolean): KeyShortcut? =
-    if (chatInputFocused) KeyShortcut(Key.V, ctrl = true) else null
-
 /**
- * Card #54: write each host's live sessions, workspaces, projects and preview lines to the desktop's
- * offline cache, so the next launch draws its sidebar before the socket opens. Sampled (at most one
- * write per 20 s while things change) and written off the UI thread.
+ * [ShortcutDispatcher.canInvoke] for a menu item, as state that changes only when the answer does. The menu is built
+ * in the window's own composition, which would otherwise recompose on every focus move.
  */
-@OptIn(kotlinx.coroutines.FlowPreview::class)
-private suspend fun keepDesktopSnapshots(fleet: FleetStore, cache: dev.supermux.host.HostSnapshotStore) {
-    combine(fleet.sessions, fleet.workspaces, fleet.projects) { s, w, p -> Triple(s, w, p) }
-        .sample(20_000)
-        .collect { (sessions, workspaces, projects) ->
-            // Not while the archived rows are loading: the cache needs them to leave out archived-only projects.
-            if (sessions.isEmpty() || fleet.archivedPending.value) return@collect
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                val owners = fleet.sessionHost.value
-                val wsOwners = fleet.workspaceHost.value
-                val tails = fleet.messages.value
-                // The live sidebar hides a project whose workspaces are all archived; the cache has no
-                // archived rows to tell, so it leaves those projects out instead of drawing them empty.
-                val liveProjects = workspaces.mapNotNull { it.projectId }.toSet()
-                val archivedOnly = fleet.archivedWorkspaces.value.mapNotNull { it.projectId }.toSet() - liveProjects
-                val now = System.currentTimeMillis()
-                synchronized(cache) {
-                    for (host in fleet.store.list()) {
-                        val mine = sessions.filter { owners[it.id] == host.recordId }
-                        if (mine.isEmpty()) continue
-                        cache.replace(
-                            host.recordId,
-                            mine,
-                            now,
-                            host.version,
-                            workspaces = workspaces.filter { wsOwners[it.id] == host.recordId },
-                            projects = projects.filter { it.hostId == host.recordId && it.project.id !in archivedOnly }.map { it.project },
-                            lastMessages = mine.mapNotNull { s -> tails[s.id]?.lastOrNull()?.let { s.id to it } }.toMap(),
-                        )
-                    }
-                }
-            }
-        }
-}
+@Composable
+private fun ShortcutDispatcher.rememberCanInvoke(command: AppCommand): Boolean =
+    remember(this, command) { derivedStateOf { canInvoke(command) } }.value
 

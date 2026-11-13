@@ -181,6 +181,13 @@ public interface WebClient {
     /** A request for a new window. May run off the main thread: keep it fast, pure and thread-safe. */
     public fun onNewWindow(request: NewWindowRequest): NewWindowDecision = NewWindowDecision.Block
 
+    /**
+     * A key the page had first and left unused (#122, as in Chrome: the page's shortcuts win, the app gets the rest).
+     * True if the app took it. On Android only, where WebView keeps every key and tells of the unused ones after
+     * (`onUnhandledKeyEvent`); macOS and Windows hand them to the window themselves. Main thread.
+     */
+    public fun onUnusedKey(event: androidx.compose.ui.input.key.KeyEvent): Boolean = false
+
     public companion object {
         public val Default: WebClient = object : WebClient {}
     }

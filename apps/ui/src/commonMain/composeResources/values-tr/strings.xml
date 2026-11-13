@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #123: Turkish. Same keys and placeholders as values/strings.xml; terms and tone: docs/i18n/glossary.md. -->
+<resources>
+    <string name="common_system">Sistem</string>
+    <string name="common_light">Açık</string>
+    <string name="common_dark">Koyu</string>
+    <string name="common_clear">Temizle</string>
+
+    <string name="general_title">Genel</string>
+    <string name="general_theme">Tema</string>
+    <string name="general_language">Dil</string>
+    <string name="general_language_description">Bir dil seçmezseniz cihazınızın dili kullanılır.</string>
+    <string name="general_text_size">Yazı boyutu</string>
+    <string name="general_text_size_description">Uygulamadaki tüm yazıları büyütür ya da küçültür.</string>
+    <string name="general_live_replies">Yanıtları yazılırken göster</string>
+    <string name="general_live_replies_description">Kapalıyken yanıt, ajan yazmayı bitirince görünür.</string>
+    <string name="general_chat_detail">Sohbet ayrıntısı</string>
+    <string name="general_chat_detail_description">Sohbette her araç çağrısının ne kadarının gösterileceği.</string>
+    <string name="general_chat_detail_low">Az</string>
+    <string name="general_chat_detail_medium">Orta</string>
+    <string name="general_chat_detail_high">Çok</string>
+    <string name="general_terminal_colours">Terminal renkleri</string>
+    <string name="general_terminal_colours_description">Kendi renklerini seçen programlar onları korur.</string>
+    <string name="general_terminal_match_app">Uygulamaya uy</string>
+    <string name="general_this_app">Bu uygulama</string>
+    <string name="general_cache">Önbellekteki görseller ve dosyalar</string>
+    <string name="general_cache_clearing">Temizleniyor…</string>
+    <string name="general_cache_calculating">Hesaplanıyor…</string>
+    <string name="general_cache_empty">Boş</string>
+    <string name="general_cache_empty_session">Boş. Görseller ve dosyalar yalnızca bu sayfa kapanana kadar tutulur.</string>
+    <string name="general_cache_size_kept">%1$s; anında ve çevrimdışı açılmaları için saklanır.</string>
+    <string name="general_cache_size_session">%1$s; yalnızca bu sayfa kapanana kadar tutulur.</string>
+
+    <!-- Browser tab › a sent comment (#122 phase 4) -->
+    <string name="browser_comment_remove">Kaldır</string>
+    <string name="browser_comment_close">Kapat</string>
+    <string name="browser_comment_sent">Gönderildi</string>
+    <string name="browser_comment_seen">Görüldü</string>
+    <string name="browser_comment_done">Tamamlandı</string>
+    <string name="browser_comment_answered">Yanıtlandı</string>
+    <string name="browser_comment_to">→ %1$s</string>
+    <string name="browser_comment_dismissed">Yok sayıldı</string>
+
+    <!-- After a phone saves an attachment (#95): where it went. -->
+    <string name="saved_to_photos">Fotoğraflar'a kaydedildi</string>
+    <string name="saved_to_gallery">Galeri'ye kaydedildi</string>
+    <string name="saved_to_downloads">İndirilenler'e kaydedildi</string>
+    <string name="saved_file">%1$s kaydedildi</string>
+</resources>

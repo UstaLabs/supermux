@@ -46,8 +46,8 @@ function fakeLinux(routes: Record<string, () => Response>, opts: { unpack?: (des
         for (const [f, b] of [...files]) if (under(from)(f)) { files.delete(f); files.set(to + f.slice(from.length), b) }
       },
       remove: (p) => { for (const f of [...files.keys()]) if (under(p)(f)) files.delete(f); links.delete(p) },
-      chmod: (p, m) => { modes.set(p, m) },
-      symlink: (target, path) => { links.set(path, target) },
+      makeExecutable: (p) => { modes.set(p, 0o755) },
+      linkFile: (target, path) => { links.set(path, target) },
       contained: () => opts.escape ?? null,
     },
     linkFs: {
@@ -56,7 +56,7 @@ function fakeLinux(routes: Record<string, () => Response>, opts: { unpack?: (des
       readlink: (p) => links.get(p)!,
       mkdir: () => {},
       unlink: (p) => { links.delete(p) },
-      symlink: (target, path) => { links.set(path, target) },
+      linkFile: (target, path) => { links.set(path, target) },
     },
     log: (l) => lines.push(l),
     now: () => 42,

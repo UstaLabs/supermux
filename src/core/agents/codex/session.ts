@@ -6,13 +6,15 @@ import type { CodexRpc } from "../../slash-commands/types"
 import { CoreAdapter, CODEX_CORE_PROFILE, type ConfigurationPatch } from "../core-bridge/core-adapter"
 import { getCodexCoreHost } from "./core-host-provider"
 import { attachCodexRuntimeAdapter, BROKER_CODEX_ARGS, type CodexCoreHost, type CodexPrepareExtra } from "./core-host"
-import { resolveCommand } from "../../process/launcher"
+import { resolveCommand, type CommandEnvironment } from "../../process/launcher"
 import { join } from "path"
 import { randomUUID } from "crypto"
 import { STATE_DIR, homeDirName } from "../../../shared/paths"
 import { AgentKind } from "../../../shared/agents"
 import { resolvePermissionMode } from "../permission-modes"
 import type { Core, HostHandle } from "../../../../packages/supermux-core/src/index.js"
+import { systemAccountId } from "../../../../packages/supermux-core/src/accounts/registry.js"
+import { host as thisHost } from "@supermux/platform"
 
 /** Slash-command discovery context: the live app-server JSON-RPC client.
  * A session uses its own adapter's client; a launcher preview (no session of
@@ -46,8 +48,10 @@ export function brokerCodexArgs(_sessionName: string): string[] {
   return [...BROKER_CODEX_ARGS]
 }
 
-function resolveCodexCommand(env: Record<string, string>): string {
-  return resolveCommand(["codex"], env, process.platform) ?? "codex"
+/** Codex as found on the broker's PATH now: on Windows an npm install's codex.cmd, which the keeper starts through
+ *  cmd.exe only when it is named (a bare `codex` it cannot wrap). The bare name when there is none. */
+function resolveCodexCommand(env: CommandEnvironment = process.env): string {
+  return resolveCommand(["codex"], env, thisHost.os()) ?? "codex"
 }
 
 function persistNativeId(
@@ -126,7 +130,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
     ...(args.account ? { account: args.account } : {}),
     id,
     env: {},
-    command: resolveCodexCommand({}),
+    command: resolveCodexCommand(),
     args: brokerCodexArgs(name),
     extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir, permissionMode }),
   })
@@ -139,7 +143,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
       reregister: (fields) => host.register({
         id,
         env: {},
-        command: resolveCodexCommand({}),
+        command: resolveCodexCommand(),
         args: brokerCodexArgs(name),
         extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir, permissionMode: fields.permissionMode }),
       }),
@@ -230,7 +234,7 @@ export async function resumeCodexSession(
     ...(session.account ? { account: session.account } : {}),
     id: session.id,
     env: {},
-    command: resolveCodexCommand({}),
+    command: resolveCodexCommand(),
     args: brokerCodexArgs(session.name),
     extra: prepareExtra({
       id: session.id,
@@ -249,7 +253,7 @@ export async function resumeCodexSession(
         ...(session.account ? { account: session.account } : {}),
         id: session.id,
         env: {},
-        command: resolveCodexCommand({}),
+        command: resolveCodexCommand(),
         args: brokerCodexArgs(session.name),
         extra: prepareExtra({
           id: session.id,
@@ -319,6 +323,6 @@ export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): 
       onThreadId: (_name, sid) => { ctx.persistAgentSessionId(sid) },
       codexHost: ctx.codexHost,
     },
-    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, effort: ctx.sessionEffort(session), fast: ctx.sessionFast?.(session) ?? false, agent_session_id: session.agent_session_id, account: session.account ?? undefined, permissionMode: session.permissionMode ?? undefined },
+    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, effort: ctx.sessionEffort(session), fast: ctx.sessionFast?.(session) ?? false, agent_session_id: session.agent_session_id, account: session.account ?? systemAccountId("codex"), permissionMode: session.permissionMode ?? undefined },
   )
 }

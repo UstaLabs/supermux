@@ -1,6 +1,7 @@
 package dev.supermux.ui.platform
 
 import dev.supermux.update.ClientUpdateStatus
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -52,6 +53,17 @@ internal class FakeAppUpdater(
     /** Every installer handed to [install], in order. */
     val installed = mutableListOf<DownloadedInstaller>()
 
+    /** How many downloads began (one the unknown-sources gate refused counts too). */
+    var downloadCalls = 0
+        private set
+
+    /** How many downloads their caller cancelled mid-transfer (#95: leaving a screen must not be one). */
+    var cancelledDownloads = 0
+        private set
+
+    /** Every installer a finished [download] answered, in order — what an Install must hand back. */
+    val downloaded = mutableListOf<DownloadedInstaller>()
+
     override suspend fun check(): UpdateStatus {
         // Contract: a live download/install owns the phase (both host updaters do this).
         if (state.value.busy) return state.value
@@ -66,6 +78,9 @@ internal class FakeAppUpdater(
                 phase = if (found.updateAvailable) UpdatePhase.Available else UpdatePhase.UpToDate,
                 release = found,
                 dismissed = found.latestVersion in dismissedVersions,
+                // Contract (#113): the background choice and a ready download outlive a check.
+                background = state.value.background,
+                ready = state.value.ready,
             )
         }
         return state.value
@@ -73,6 +88,7 @@ internal class FakeAppUpdater(
 
     override suspend fun download(onProgress: (Long, Long?) -> Unit): DownloadedInstaller? {
         val url = state.value.release?.downloadUrl ?: return null
+        downloadCalls++
         if (refuseInstall) {
             state.value = state.value.copy(
                 phase = UpdatePhase.Failed,
@@ -102,7 +118,10 @@ internal class FakeAppUpdater(
                 state.value = state.value.copy(phase = UpdatePhase.Failed, error = it)
                 return null
             }
-            return DownloadedInstaller(location = "/tmp/$url", kind = "apk")
+            return DownloadedInstaller(location = "/tmp/$url", kind = "apk").also { downloaded += it }
+        } catch (c: CancellationException) {
+            cancelledDownloads++
+            throw c
         } finally {
             // Contract: a cancelled transfer must not strand the phase at Downloading.
             if (state.value.phase == UpdatePhase.Downloading) state.value = state.value.settled()
@@ -134,5 +153,34 @@ internal class FakeAppUpdater(
     override fun dismiss() {
         state.value.release?.latestVersion?.let { dismissedVersions.add(it) }
         state.value = state.value.copy(dismissed = true)
+    }
+
+    // ── #113: background updates ──
+    override var restartsToUpdate: Boolean = false
+    override var offersBackgroundUpdates: Boolean = false
+
+    override var justUpdatedTo: String? = null
+    var acknowledged = 0
+        private set
+
+    override fun acknowledgeUpdated() {
+        acknowledged++
+        justUpdatedTo = null
+    }
+
+    var prepares = 0
+        private set
+
+    override suspend fun prepareInBackground() {
+        prepares++
+    }
+
+    override fun setBackgroundUpdates(on: Boolean) {
+        state.value = state.value.copy(background = on)
+    }
+
+    /** Stands in for a background download that finished: the release found by [check] is now [UpdateStatus.ready]. */
+    fun becomeReady(installer: DownloadedInstaller = DownloadedInstaller("/tmp/ready.msi", "msi")) {
+        state.value = state.value.copy(background = true, ready = installer)
     }
 }

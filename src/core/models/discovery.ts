@@ -6,6 +6,7 @@ import { home } from "../../shared/home"
 import { join } from "path"
 import { claudeModelSupportsFast, CODEX_FAST_SERVICE_TIER } from "./fast-mode"
 import { readClaudeStoredLogin } from "../agents/claude/stored-login"
+import { host } from "@supermux/platform"
 
 /**
  * An added account's launch env (the registry's `materialize`): discovery runs with it in place of
@@ -107,7 +108,7 @@ export async function runCli(names: readonly string[], args: string[], timeoutMs
   for (const key of launch?.unset ?? []) delete env[key]
   // An account's args are global flags (Codex's `-c` provider config), so they go before the subcommand.
   args = [...(launch?.args ?? []), ...args]
-  const command = resolveCommand(names, env, process.platform)
+  const command = resolveCommand(names, env, host.os())
   if (!command) throw new Error(`${names.join(" or ")} not found`)
   return await new Promise<string>((resolve, reject) => {
     const child = spawnCommand(command, args, { env, stdio: ["ignore", "pipe", "pipe"] })
@@ -152,10 +153,29 @@ export async function discoverCodexModels(opts?: {
   }
 }
 
+/**
+ * Cursor's own model list, from the ACP options a session start returns (#102): what `session/set_config_option`
+ * takes. Cursor's names, and its Auto keeps the id `auto` every client already stores.
+ */
+export function cursorModelsFromAcp(entries: { value: string; name: string }[]): ModelInfo[] {
+  return entries.map((entry) => ({
+    id: entry.name.toLowerCase() === "auto" ? "auto" : entry.name,
+    displayName: entry.name,
+    agent: Agent.Cursor,
+  }))
+}
+
+/**
+ * Cursor's models: the list its ACP gave at a session start (`learned`), else `cursor-agent --list-models` on a first
+ * run. The CLI list holds effort/fast variants (`gpt-5.6-sol-high`) Cursor's ACP cannot select (#102).
+ */
 export async function discoverCursorModels(opts?: {
   run?: (cmd: string) => Promise<string>
   launch?: DiscoveryLaunch
+  learned?: () => ModelInfo[] | undefined
 }): Promise<ModelInfo[]> {
+  const learned = opts?.learned?.()
+  if (learned?.length) return learned
   try {
     const raw = opts?.run ? await opts.run("cursor-agent --list-models") : await runCli(["cursor-agent"], ["--list-models"], 10_000, opts?.launch)
     const models: ModelInfo[] = []
@@ -190,7 +210,7 @@ export async function discoverOpenCodeModels(opts?: {
     const models: ModelInfo[] = []
     for (const line of raw.split("\n")) {
       const id = line.trim()
-      if (!id || !id.includes("/")) continue
+      if (!id || !id.includes("/")) continue // platform-ok: an opencode model id, "provider/model"
       models.push({ id, displayName: id, agent: Agent.OpenCode })
     }
     return models

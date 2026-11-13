@@ -9,6 +9,7 @@
 // tmux, helpers — inherits it. A real git earlier on PATH (Homebrew, a CLT install) is left alone.
 import { accessSync, chmodSync, constants, mkdirSync, writeFileSync } from "fs"
 import { delimiter, join } from "path"
+import { files } from "@supermux/platform"
 
 export const APPLE_GIT_STUB = "/usr/bin/git"
 
@@ -65,10 +66,10 @@ export function applyCltGuard(deps: CltGuardDeps): CltGuardResult {
   if (git !== APPLE_GIT_STUB) return { gitUnavailable: false }
   if (deps.runXcodeSelect() === 0) return { gitUnavailable: false }
 
-  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  files.mkdirPrivate(dir)
   const shim = join(dir, "git")
-  writeFileSync(shim, NO_CLT_SHIM, { mode: 0o755 })
-  chmodSync(shim, 0o755) // an existing file keeps its old mode on write
+  files.writeExecutable(shim, NO_CLT_SHIM)
+  files.makeExecutable(shim) // an existing file keeps its old mode on write
   deps.env.PATH = [dir, ...rest].join(delimiter)
   return {
     gitUnavailable: true,

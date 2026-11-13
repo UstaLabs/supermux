@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from "fs"
-import { join } from "path"
+import { dirname, join } from "path"
 import { Database } from "bun:sqlite"
 import { CoreError } from "../../../packages/supermux-core/src/errors.js"
 import { AgentKind } from "../../shared/agents"
@@ -9,7 +9,10 @@ import { CURSOR_SIGN_IN_EXPIRED } from "../agents/cursor/auth"
 import { readClaudeStoredLogin } from "../agents/claude/stored-login"
 import { authCredPath } from "../agents/detect"
 import { openCodeDataDir } from "../agents/opencode/auth"
+import { fetchOpenCodePlan, type OpenCodePlan } from "./opencode-go"
+import { openCodeFreeTier } from "./opencode-free"
 import { home } from "../../shared/home"
+import { dirs, host } from "@supermux/platform"
 
 const log = makeLogger("usage")
 
@@ -122,6 +125,8 @@ export interface OpenCodeUsage {
   outputTokens: number
   cacheReadTokens: number
   cacheWriteTokens: number
+  /** The OpenCode Go plan's limits; absent when they weren't asked for. */
+  plan?: OpenCodePlan
 }
 
 // Grok Build (xAI SuperGrok) subscription credits via cli-chat-proxy.
@@ -267,12 +272,20 @@ export type ClaudeStoredLoginRead = () => Promise<string | null>
 /** The system login's: Claude Code run without CLAUDE_CONFIG_DIR. */
 const readSystemStoredLogin: ClaudeStoredLoginRead = () => readClaudeStoredLogin()
 
-/** The access token of a Claude login (`claudeAiOauth`, or the bare oauth object); null when it has none or it expired. */
+/** What the usage card and the account say for a Claude login that must be signed in again (account_expired, #106). */
+export const CLAUDE_SIGN_IN_EXPIRED = "Claude sign-in expired — sign in to Claude again."
+
+/**
+ * The access token of a Claude login (`claudeAiOauth`, or the bare oauth object); null when it has none or it
+ * expired (Claude Code refreshes it on its next run). Expired with no refresh token: the login is dead (account_expired).
+ */
 function claudeLoginToken(login: any): string | null {
   const oauth = login?.claudeAiOauth ?? login
   const expiresAt = oauth?.expiresAt
-  if (typeof expiresAt === "string" && new Date(expiresAt).getTime() < Date.now()) return null
-  if (typeof expiresAt === "number" && expiresAt < Date.now()) return null
+  const expired = (typeof expiresAt === "string" && new Date(expiresAt).getTime() < Date.now())
+    || (typeof expiresAt === "number" && expiresAt < Date.now())
+  if (expired && !(oauth?.refreshToken ?? oauth?.refresh_token)) throw new CoreError(SIGN_IN_EXPIRED, CLAUDE_SIGN_IN_EXPIRED)
+  if (expired) return null
   const token = oauth?.accessToken ?? oauth?.access_token
   return typeof token === "string" && token ? token : null
 }
@@ -282,18 +295,31 @@ function claudeLoginToken(login: any): string | null {
  * Anthropic's `tengu_windows_credman` rollout on, it moves the login into Credential Manager and deletes the file.
  */
 async function readClaudeToken(credsPath: string, readStored: ClaudeStoredLoginRead): Promise<string | null> {
+  let dead: unknown
   if (existsSync(credsPath)) {
-    const token = claudeLoginToken(JSON.parse(readFileSync(credsPath, "utf-8")))
-    if (token) return token
+    try {
+      const token = claudeLoginToken(JSON.parse(readFileSync(credsPath, "utf-8")))
+      if (token) return token
+    } catch (err) {
+      if ((err as { code?: unknown }).code !== SIGN_IN_EXPIRED) throw err
+      dead = err
+    }
   }
+  let stored: string | null
   try {
-    const stored = await readStored()
-    return stored ? claudeLoginToken(JSON.parse(stored)) : null
+    stored = await readStored()
   } catch (err) {
     // The store's own words stay in the broker log; the card gets a sentence.
     log.warn("claude_stored_login_unreadable", { err: String(err) })
     throw new Error("Couldn't read Claude's sign-in from Windows Credential Manager.")
   }
+  if (!stored) { if (dead) throw dead; return null }
+  let login: unknown
+  try { login = JSON.parse(stored) } catch (err) {
+    log.warn("claude_stored_login_unreadable", { err: String(err) })
+    throw new Error("Couldn't read Claude's sign-in from Windows Credential Manager.")
+  }
+  return claudeLoginToken(login)
 }
 
 const RESET_ID = /^[a-z0-9_-]{1,40}$/
@@ -347,6 +373,8 @@ export async function fetchClaudeUsageWithToken(token: string): Promise<ClaudeUs
     headers: claudeHeaders(token),
     signal: AbortSignal.timeout(TIMEOUT_MS),
   })
+  // 401: the API no longer takes this login (revoked, or refreshed away by another copy of it).
+  if (res.status === 401) throw new CoreError(SIGN_IN_EXPIRED, CLAUDE_SIGN_IN_EXPIRED)
   if (!res.ok) throw new Error(`Claude usage API ${res.status}: ${await res.text()}`)
 
   const data = await res.json() as any
@@ -606,9 +634,8 @@ export async function redeemCodexReset(
 export function cursorAuthPath(): string {
   return authCredPath(AgentKind.Cursor, {
     home: home(),
-    xdgConfigHome: process.env.XDG_CONFIG_HOME,
-    appData: process.env.APPDATA,
-    platform: process.platform,
+    ...dirs.baseDirs(),
+    platform: host.os(),
   })
 }
 
@@ -710,9 +737,29 @@ export async function fetchCursorUsageWithToken(token: string): Promise<CursorUs
 // for assistant messages, `cost` and `tokens: { input, output, cache: { read, write } }`.
 const OPENCODE_SESSION_TOTALS = ["cost", "tokens_input", "tokens_output", "tokens_cache_read", "tokens_cache_write"]
 
+/** The local totals, and with `plan` the OpenCode Go limits beside them. null = nothing to show at all. */
 export async function fetchOpenCodeUsage(
   dbPath: string = OPENCODE_DB,
+  opts: { plan?: () => Promise<OpenCodePlan> } = {},
 ): Promise<OpenCodeUsage | null> {
+  const plan = await opts.plan?.()
+  const local = readOpenCodeTotals(dbPath)
+  if (!plan) return local
+  if (!local && plan.status === "signed_out") return null
+  return { ...(local ?? EMPTY_OPENCODE_TOTALS), plan }
+}
+
+const EMPTY_OPENCODE_TOTALS: OpenCodeUsage = {
+  sessions: 0, messages: 0, totalCostUsd: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
+}
+
+/** OpenCode Go limits for the system login: the native data dir's Console sign-in or OpenCode key. */
+export async function fetchSystemOpenCodePlan(): Promise<OpenCodePlan> {
+  const plan = await fetchOpenCodePlan({ dbPath: OPENCODE_DB, authPath: join(dirname(OPENCODE_DB), "auth.json") })
+  return { ...plan, free: openCodeFreeTier() }
+}
+
+function readOpenCodeTotals(dbPath: string): OpenCodeUsage | null {
   if (!existsSync(dbPath)) return null
 
   const db = new Database(dbPath, { readonly: true })

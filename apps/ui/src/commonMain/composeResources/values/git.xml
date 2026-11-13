@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Git (#72): the composer footer's sign, the Changes pane and its menus. -->
+<resources>
+    <plurals name="git_sign_changed">
+        <item quantity="one">%1$d changed</item>
+        <item quantity="other">%1$d changed</item>
+    </plurals>
+    <plurals name="git_sign_not_in_base">
+        <item quantity="one">%1$d commit not in %2$s</item>
+        <item quantity="other">%1$d commits not in %2$s</item>
+    </plurals>
+    <plurals name="git_sign_base_moved">
+        <item quantity="one">%2$s has %1$d new</item>
+        <item quantity="other">%2$s has %1$d new</item>
+    </plurals>
+    <plurals name="git_sign_to_push">
+        <item quantity="one">%1$d to push</item>
+        <item quantity="other">%1$d to push</item>
+    </plurals>
+    <plurals name="git_sign_to_pull">
+        <item quantity="one">%1$d to pull</item>
+        <item quantity="other">%1$d to pull</item>
+    </plurals>
+    <plurals name="git_in_next_commit">
+        <item quantity="one">%1$d of %2$d in the next commit</item>
+        <item quantity="other">%1$d of %2$d in the next commit</item>
+    </plurals>
+    <string name="git_include_in_commit">In the next commit</string>
+</resources>

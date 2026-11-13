@@ -11,9 +11,9 @@ internal object MacGlue {
     /**
      * The ABI this library speaks: `WV_ABI_VERSION` in `native/macos/WVGlue.h`. Change both together. 3: [setBackdrop]. 4:
      * [place]'s window, [syncFrames], [frameRecorded], [testFrameSync]. 5: [createPage]'s floor at a host of the bundles'
-     * scheme, [testWebProcess].
+     * scheme, [testWebProcess]. 6: [find], [clearFind], [setPageZoom], [setCookie]. 7: [setUnderlay].
      */
-    const val ABI: Int = 5
+    const val ABI: Int = 7
 
     /** The loaded glue's ABI; -1 if it couldn't find [onEvent] when it loaded. */
     @JvmStatic external fun abiVersion(): Int
@@ -93,6 +93,17 @@ internal object MacGlue {
 
     @JvmStatic external fun stop(page: Long)
 
+    @JvmStatic external fun find(page: Long, request: Long, query: String, backwards: Boolean)
+
+    @JvmStatic external fun clearFind(page: Long)
+
+    @JvmStatic external fun setPageZoom(page: Long, factor: Double)
+
+    @JvmStatic external fun setCookie(
+        page: Long, request: Long, name: String, value: String, url: String, path: String, domain: String?,
+        secure: Boolean, httpOnly: Boolean, sameSite: String, maxAgeSeconds: Long,
+    )
+
     @JvmStatic external fun evaluate(page: Long, request: Long, script: String, pageWorld: Boolean)
 
     @JvmStatic external fun deliver(page: Long, body: String, json: String, target: String, eventName: String)
@@ -159,6 +170,9 @@ internal object MacGlue {
 
     /** The page's own background, ARGB, which shows where the page was a moment ago while its slot moves; 0: none. */
     @JvmStatic external fun setBackdrop(page: Long, argb: Int)
+
+    /** What lies behind a transparent page in its view, ARGB, opaque; 0: nothing (an opaque page paints its own). */
+    @JvmStatic external fun setUnderlay(page: Long, argb: Int)
 
     /**
      * Whether [window]'s page views move with skiko's frames ([MacFrameSync]): [on], if skiko's layer there is what the

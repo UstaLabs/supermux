@@ -18,7 +18,8 @@ import { envText, readEnvText } from "./shared/env-file"
 import { muxHomeNow } from "./shared/paths"
 import { IS_COMPILED } from "./shared/build-info"
 import { home, username } from "./shared/home"
-import { proc } from "@supermux/platform"
+import { spawnProcessSync } from "./core/process/launcher"
+import { dirs, files, host } from "@supermux/platform"
 
 // Agent CLIs we report on (PATH presence only — the user owns these logins).
 const AGENT_CLIS = ["claude", "codex", "cursor-agent", "opencode", "grok", "agy"] as const
@@ -109,7 +110,7 @@ function installSystemdUnit(_flags: Flags, println: (s: string) => void): void {
   // Detect a usable `systemctl --user`. (The shared source-mode guard lives in
   // the installService dispatcher, alongside the macOS LaunchAgent path.)
   const hasSystemctl = Bun.which("systemctl", { PATH: process.env.PATH }) !== null
-  const runtimeDir = process.env.XDG_RUNTIME_DIR
+  const runtimeDir = dirs.baseDirs().xdgRuntimeDir
   if (!hasSystemctl || !runtimeDir) {
     println(`No systemd --user available; run the broker manually: ${process.execPath}`)
     return
@@ -130,7 +131,7 @@ function installSystemdUnit(_flags: Flags, println: (s: string) => void): void {
   // 4. daemon-reload + enable --now, each guarded.
   const sc = (sub: string[]): boolean => {
     try {
-      const r = Bun.spawnSync(["systemctl", "--user", ...sub], { ...proc.spawnDefaults() })
+      const r = spawnProcessSync(["systemctl", "--user", ...sub])
       return r.exitCode === 0
     } catch {
       return false
@@ -148,7 +149,7 @@ function installSystemdUnit(_flags: Flags, println: (s: string) => void): void {
   Bun.sleepSync(2000)
   let active = false
   try {
-    active = Bun.spawnSync(["systemctl", "--user", "is-active", "--quiet", "supermux"], { ...proc.spawnDefaults() }).exitCode === 0
+    active = spawnProcessSync(["systemctl", "--user", "is-active", "--quiet", "supermux"]).exitCode === 0
   } catch {
     active = false
   }
@@ -171,7 +172,7 @@ function enableLinger(println: (s: string) => void): void {
   const user = username()
   if (user) {
     try {
-      if (Bun.spawnSync(["loginctl", "enable-linger", user], { ...proc.spawnDefaults() }).exitCode === 0) {
+      if (spawnProcessSync(["loginctl", "enable-linger", user]).exitCode === 0) {
         println("Enabled lingering so the broker survives logout ✔")
         return
       }
@@ -290,7 +291,7 @@ export function installLaunchdAgent(_flags: Flags, println: (s: string) => void)
   const target = `${domain}/${LAUNCHD_LABEL}`
   const lc = (sub: string[]): boolean => {
     try {
-      return Bun.spawnSync(["launchctl", ...sub], { ...proc.spawnDefaults() }).exitCode === 0
+      return spawnProcessSync(["launchctl", ...sub]).exitCode === 0
     } catch {
       return false
     }
@@ -310,7 +311,7 @@ export function installLaunchdAgent(_flags: Flags, println: (s: string) => void)
   Bun.sleepSync(2000)
   let running = false
   try {
-    const r = Bun.spawnSync(["launchctl", "print", target], { ...proc.spawnDefaults() })
+    const r = spawnProcessSync(["launchctl", "print", target])
     running =
       r.exitCode === 0 && new TextDecoder().decode(r.stdout).includes("state = running")
   } catch {
@@ -331,7 +332,7 @@ export function installLaunchdAgent(_flags: Flags, println: (s: string) => void)
  * but `bun` in source mode (use SETUP.md's manual unit for source installs).
  */
 function installService(flags: Flags, println: (s: string) => void): void {
-  if (process.platform === "win32") {
+  if (host.windows()) {
     // No CLI service on Windows: the desktop app's "Supermux Host" Scheduled Task is the service.
     println("Note: on Windows the supermux desktop app keeps the broker running in the background. Skipping service setup.")
     return
@@ -343,7 +344,7 @@ function installService(flags: Flags, println: (s: string) => void): void {
     )
     return
   }
-  if (process.platform === "darwin") installLaunchdAgent(flags, println)
+  if (host.os() === "darwin") installLaunchdAgent(flags, println)
   else installSystemdUnit(flags, println)
 }
 
@@ -363,7 +364,7 @@ export async function runSetupCommand(
   const stateDir = resolveStateDir()
   const envPath = join(stateDir, ".env")
   try {
-    mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+    files.mkdirPrivate(stateDir)
   } catch (e) {
     println(`error: could not create state dir ${stateDir}: ${String(e)}`)
     return 1
@@ -402,7 +403,7 @@ export async function runSetupCommand(
     writeFileSync(envPath, envText(map))
   }
   // Always tighten perms (cheap, and fixes a stray loose mode on re-run).
-  chmodSync(envPath, 0o600)
+  files.makePrivate(envPath)
 
   // ── always-on service (systemd unit on Linux, LaunchAgent on macOS) ───────
   if (flags.noService) {
@@ -429,7 +430,7 @@ export async function runSetupCommand(
   // or a source install). And resolve the real username: a literal `$USER` is the
   // exact rough edge a user shouldn't have to hand-fix.
   const willManageService = !flags.noService && (IS_COMPILED || flags.forceSourceUnit)
-  if (process.platform === "darwin") {
+  if (host.os() === "darwin") {
     println(
       "Headless Mac mini? Enable Automatic Login (System Settings ▸ Users & Groups) so" +
         " the LaunchAgent runs after a reboot — or install it as a system LaunchDaemon.",

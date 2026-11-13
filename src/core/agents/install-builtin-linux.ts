@@ -12,8 +12,11 @@
 //     ~/.opencode/bin/opencode.
 //
 // Both dirs are on the broker's PATH (bin-dirs.ts), so the new CLI is found without a restart.
+// platform-ok: Linux only (the builtin agents' Linux install): tar, with a timeout; never runs on Windows
 import { execFile } from "child_process"
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "fs"
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "fs"
+import { files } from "@supermux/platform"
+// platform-ok: builds the Linux install's paths, with posix on any host so its tests run anywhere
 import { posix } from "path"
 import { sha256Hex } from "../windows/user-install"
 import { findEscape } from "./archive-guard"
@@ -38,8 +41,10 @@ export interface LinuxBuiltinDeps {
     write: (p: string, b: Uint8Array) => void
     rename: (from: string, to: string) => void
     remove: (p: string) => void
-    chmod: (p: string, mode: number) => void
-    symlink: (target: string, path: string) => void
+    /** Make a file executable (files.makeExecutable). */
+    makeExecutable: (p: string) => void
+    /** Link the file [path] → [target] (files.linkFile). */
+    linkFile: (target: string, path: string) => void
     /** The first unpacked entry escaping [dir] (zip-slip, a symlink out), or null. */
     contained: (dir: string) => string | null
   }
@@ -158,7 +163,7 @@ export const installOpenCodeLinux: LinuxBuiltinInstaller = async (deps) => {
     if (escape) throw new Error(`${assetName} reaches outside its folder (${escape}); refusing it`)
     const exe = posix.join(staging, "opencode")
     if (!deps.fs.exists(exe)) throw new Error(`no opencode in ${assetName}`)
-    deps.fs.chmod(exe, 0o755)
+    deps.fs.makeExecutable(exe)
     deps.fs.mkdir(dir)
     deps.fs.rename(exe, posix.join(dir, "opencode"))
   } finally {
@@ -201,8 +206,8 @@ export function realLinuxBuiltinDeps(home: string): Omit<LinuxBuiltinDeps, "log"
       write: (p, b) => writeFileSync(p, b),
       rename: (from, to) => renameSync(from, to),
       remove: (p) => rmSync(p, { recursive: true, force: true }),
-      chmod: (p, mode) => chmodSync(p, mode),
-      symlink: (target, path) => symlinkSync(target, path),
+      makeExecutable: (p) => files.makeExecutable(p),
+      linkFile: (target, path) => files.linkFile(target, path),
       contained: (dir) => findEscape(dir),
     },
     linkFs: realLinkFs,

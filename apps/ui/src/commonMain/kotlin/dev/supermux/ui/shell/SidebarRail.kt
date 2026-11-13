@@ -283,8 +283,9 @@ private class RailFlyout {
 }
 
 /**
- * The collapsed sidebar. [footer] is the host's: the host switch and the settings menu.
- * [avatars] is keyed by session id (the app-level Agent avatar cache).
+ * The collapsed sidebar. [footer] is the host's: the host switch and the settings menu, in the
+ * rail's bottom sheet; [aboveFooter] stands on the rail's own tone just above that sheet (the
+ * downloads' ring, #95). [avatars] is keyed by session id (the app-level Agent avatar cache).
  */
 @Composable
 internal fun SidebarRail(
@@ -295,6 +296,7 @@ internal fun SidebarRail(
     onShowSidebar: () -> Unit,
     footer: @Composable ColumnScope.() -> Unit,
     modifier: Modifier = Modifier,
+    aboveFooter: @Composable ColumnScope.() -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     val flyout = remember { RailFlyout() }
@@ -363,6 +365,7 @@ internal fun SidebarRail(
                 }
             }
         }
+        aboveFooter()
         // The rail's bottom part, as the expanded sidebar's: a sheet in the chat's tone, no rule.
         Column(
             Modifier
@@ -370,6 +373,7 @@ internal fun SidebarRail(
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(10.dp))
                 .background(cs.surfaceContainerLow)
+                .testTag("sidebar_rail_footer")
                 .padding(vertical = 6.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(2.dp),

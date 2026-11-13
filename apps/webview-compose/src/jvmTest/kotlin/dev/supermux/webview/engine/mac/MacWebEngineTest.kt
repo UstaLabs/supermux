@@ -1,5 +1,9 @@
 package dev.supermux.webview.engine.mac
 
+import androidx.compose.ui.graphics.Color
+import dev.supermux.webview.InspectorResult
+import dev.supermux.webview.WebCookie
+import dev.supermux.webview.FindResult
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
@@ -170,8 +174,8 @@ class MacWebEngineTest {
         }
 
         /** The lease's first document (epoch 1), painted and shown in a placed, still surface; then a second goes by. */
-        fun live() {
-            engine.configure(setup)
+        fun live(with: PageSetup = setup) {
+            engine.configure(with)
             engine.load(html)
             send(GlueEvent.Committed(1, page(html.origin.url, loading = true), 0.5f))
             relay(1, "$doc start")
@@ -305,6 +309,8 @@ class MacWebEngineTest {
             "configure dark=false transparent=false ua=Mozilla/5.0 Test Sample/1 inspectable=false shim=true",
             rig.glue.last("configure"),
         )
+        rig.engine.configure(setup.copy(userAgent = "Phone/1"))
+        assertEquals("configure dark=false transparent=false ua=Phone/1 inspectable=false shim=true", rig.glue.last("configure"))
     }
 
     @Test fun aStaleCommitChangesNothingBeforeItIsDropped() = runTest {
@@ -515,9 +521,59 @@ class MacWebEngineTest {
         val dark = Rig(this)
         dark.engine.configure(setup.copy(dark = true))
         assertEquals("setBackdrop ff000000", dark.glue.last("setBackdrop"))
+        assertEquals("setUnderlay 00000000", dark.glue.last("setUnderlay"), "an opaque page paints its own background")
         val clear = Rig(this)
         clear.engine.configure(setup.copy(transparentBackground = true))
-        assertEquals("setBackdrop 00000000", clear.glue.last("setBackdrop"), "what is under the canvas shows through it anyway")
+        assertEquals("setBackdrop 00000000", clear.glue.last("setBackdrop"), "without an underlay, as before")
+        assertEquals("setUnderlay 00000000", clear.glue.last("setUnderlay"), "nothing behind it: what is under the canvas")
+    }
+
+    /**
+     * An agent's card in a light chat showed black between its boxes (the user's report, 2026-11-12): a transparent
+     * page's view lies under the canvas, WebKit draws nothing behind it, and its hole showed the window's black backing.
+     * With an underlay, the page's view is painted in it, and so is the backdrop where it was a moment ago, from the
+     * lease's start: before its first document, so no frame of the hole ever shows the backing.
+     */
+    @Test fun aTransparentPageWithAnUnderlayIsPaintedInItFromItsFirstFrame() = runTest {
+        val rig = Rig(this, inList = true)
+        rig.live(setup.copy(transparentBackground = true, underlay = Color(0xFFF4F4F5)))
+        assertEquals("setUnderlay fff4f4f5", rig.glue.last("setUnderlay"))
+        assertEquals("setBackdrop fff4f4f5", rig.glue.last("setBackdrop"), "the band a moving page leaves, too")
+        val calls = rig.glue.calls
+        val under = calls.indexOf("setUnderlay fff4f4f5")
+        assertTrue(under in 0 until calls.indexOfFirst { it.startsWith("loadHtml ") }, "before the first document: $calls")
+        assertTrue(under < calls.indexOfFirst { it.startsWith("place ") }, "before the view is placed: $calls")
+        rig.solidSnapshot(0x10, 0x20, 0x40)
+        assertEquals("setBackdrop fff4f4f5", rig.glue.last("setBackdrop"), "never a transparent snapshot's edges")
+        assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node), "the page live in its hole")
+    }
+
+    @Test fun theUnderlayFollowsTheThemeAndGoesWithTheLease() = runTest {
+        val rig = Rig(this)
+        val light = setup.copy(transparentBackground = true, underlay = Color(0xFFF4F4F5))
+        rig.live(light)
+        val sent = rig.glue.calls.count { it.startsWith("setUnderlay") }
+        rig.place(y = 40f)
+        assertEquals(sent, rig.glue.calls.count { it.startsWith("setUnderlay") }, "sent when it changes, not at every placement")
+        rig.engine.configure(light.copy(dark = true, underlay = Color(0xFF18181B)))
+        assertEquals("setUnderlay ff18181b", rig.glue.last("setUnderlay"), "the dark theme's, mid-lease")
+        assertEquals("setBackdrop ff18181b", rig.glue.last("setBackdrop"))
+        try {
+            MacWebEngine.backdropEnabled = false
+            rig.place(y = 80f)
+            assertEquals("setBackdrop 00000000", rig.glue.last("setBackdrop"), "the check's baseline turns the backdrop off")
+            assertEquals("setUnderlay ff18181b", rig.glue.last("setUnderlay"), "but not what lies behind the page")
+        } finally {
+            MacWebEngine.backdropEnabled = true
+        }
+        val reset = async { rig.engine.reset() }
+        runCurrent()
+        assertEquals("setUnderlay 00000000", rig.glue.last("setUnderlay"), "none without a lease")
+        rig.send(GlueEvent.Finished(2, rig.page(WebKitUrls.FLOOR_URL), floorKept = true))
+        rig.answer("wipeData") { GlueEvent.Result(it, true, null, null) }
+        assertTrue(reset.await())
+        rig.engine.configure(setup)
+        assertEquals("setUnderlay 00000000", rig.glue.last("setUnderlay"), "an opaque page next")
     }
 
     @Test fun aResetLetsThePagesColourGoAndTheChecksCanTurnTheBackdropOff() = runTest {
@@ -874,12 +930,16 @@ class MacWebEngineTest {
         assertEquals(emptyList<EngineEvent>(), next)
     }
 
-    /** A slot shown again (a lazy list's retained item placed again) is drawn again, under its cover, before input. */
+    /**
+     * A slot shown again whose page was told it is hidden (a lazy list's retained item placed again: the runtime tells
+     * it at once) is drawn again, under its cover, before input.
+     */
     @Test fun aSlotShownAgainIsDrawnAgainBeforeItTakesInput() = runTest {
         val rig = Rig(this)
         rig.live()
         rig.snapshot()
         assertTrue(rig.engine.surfaceUnplaced(rig.node))
+        rig.engine.setVisible(false)
         advanceTimeBy(1_000) // scrolled back a while later
         runCurrent()
         val repaints = rig.glue.ids("repaint").size
@@ -891,6 +951,98 @@ class MacWebEngineTest {
         rig.tick()
         rig.tick()
         assertTrue(rig.glue.lastInteractive)
+    }
+
+    /**
+     * A page that kept running while its slot was hidden (never told it is hidden: a keep-running view, a Browser tab
+     * behind another) shown again at the same size, scale and window: its view still holds its last frame, so it shows
+     * at once, with no motion cover, no repaint asked, and its input.
+     */
+    @Test fun aRunningPageShownAgainAtTheSameSizeShowsAtOnce() = runTest {
+        val rig = Rig(this)
+        rig.live()
+        rig.snapshot()
+        advanceTimeBy(1_500) // the cover is old: a motion that needed one would take a fresh one
+        runCurrent()
+        assertTrue(rig.engine.surfaceUnplaced(rig.node))
+        advanceTimeBy(5_000) // another tab in front for a while
+        runCurrent()
+        val repaints = rig.glue.ids("repaint").size
+        val snapshots = rig.glue.ids("snapshot").size
+        rig.place()
+        assertEquals("place 0.0 0.0 640.0 480.0 in 0.0 0.0 640.0 480.0 at 2.0 hidden=false", rig.glue.last("place"))
+        assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node), "the live page, uncovered, from the frame it shows")
+        assertTrue(rig.glue.lastInteractive, "and its input")
+        rig.tick()
+        rig.tick()
+        assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node))
+        assertTrue(rig.glue.lastInteractive)
+        assertEquals(repaints, rig.glue.ids("repaint").size, "no repaint asked")
+        assertEquals(snapshots, rig.glue.ids("snapshot").size, "and no picture taken for a cover")
+    }
+
+    /** The same page shown again at another size reflows: covered and drawn again before input, as any resize. */
+    @Test fun aRunningPageShownAgainAtAnotherSizeIsStillCoveredAndDrawnAgain() = runTest {
+        val rig = Rig(this)
+        rig.live()
+        rig.snapshot()
+        assertTrue(rig.engine.surfaceUnplaced(rig.node))
+        advanceTimeBy(1_000)
+        runCurrent()
+        val repaints = rig.glue.ids("repaint").size
+        rig.place(width = 600f)
+        assertEquals(repaints + 1, rig.glue.ids("repaint").size, "WebKit draws it at its new size first")
+        assertIs<SurfaceDraw.Cover>(rig.engine.drawFor(rig.node))
+        assertFalse(rig.glue.lastInteractive)
+        rig.repainted()
+        rig.tick()
+        rig.tick()
+        assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node))
+        assertTrue(rig.glue.lastInteractive)
+    }
+
+    /**
+     * A surface moved in the composition (`movableContentOf`: a tab moved between its pane and a holder that keeps it
+     * composed unplaced) leaves and enters again in one apply: its view hides where it is and stays in its window, and
+     * placed again as it was, a page that ran on shows at once.
+     */
+    @Test fun aSurfaceMovedInTheCompositionKeepsItsViewInItsWindowAndShowsAtOnce() = runTest {
+        val rig = Rig(this)
+        rig.live()
+        rig.snapshot()
+        rig.engine.surfaceDetached(rig.node)
+        assertEquals("place 0.0 0.0 640.0 480.0 in 0.0 0.0 640.0 480.0 at 2.0 hidden=true", rig.glue.last("place"))
+        rig.engine.surfaceAttached(rig.node) // in the holder, in the same apply
+        runCurrent()
+        assertFalse(rig.glue.calls.any { it.startsWith("detach") }, "never out of its window: ${rig.glue.calls}")
+        advanceTimeBy(5_000)
+        runCurrent()
+        val repaints = rig.glue.ids("repaint").size
+        // Moved back to its pane: left and entered again, then placed where it was.
+        rig.engine.surfaceDetached(rig.node)
+        rig.engine.surfaceAttached(rig.node)
+        rig.place()
+        assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node), "the live page, uncovered")
+        assertTrue(rig.glue.lastInteractive)
+        rig.tick()
+        rig.tick()
+        assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node))
+        assertEquals(repaints, rig.glue.ids("repaint").size, "no repaint asked")
+        assertFalse(rig.glue.calls.any { it.startsWith("detach") }, "${rig.glue.calls}")
+    }
+
+    /** A surface that leaves the composition for good takes the view out of its window once the composition is applied. */
+    @Test fun aSurfaceThatLeavesTakesItsViewOutOfItsWindowOnceApplied() = runTest {
+        val rig = Rig(this)
+        rig.live()
+        rig.engine.surfaceDetached(rig.node)
+        runCurrent()
+        assertEquals("detach 7", rig.glue.last("detach"))
+        rig.engine.surfaceAttached(rig.node)
+        val repaints = rig.glue.ids("repaint").size
+        rig.place()
+        assertEquals(repaints + 1, rig.glue.ids("repaint").size, "back in the window: drawn there again first")
+        assertFalse(rig.glue.lastInteractive)
     }
 
     /** The first paint waits for the slot to be still: drawn again where it is, then two ticks. */
@@ -1091,6 +1243,7 @@ class MacWebEngineTest {
         // Parked: its surface leaves, it is hidden, its subscriber goes.
         rig.engine.surfaceDetached(rig.node)
         rig.engine.setVisible(false)
+        runCurrent() // the composition applied with no surface back: out of its window
         assertEquals("detach 7", rig.glue.last("detach"))
         assertEquals("setMediaSuspended true", rig.glue.last("setMediaSuspended"))
         rig.events.clear()
@@ -1252,5 +1405,75 @@ class MacWebEngineTest {
         rig.engine.load(offline)
         rig.send(GlueEvent.Failed(1, null, "NSURLErrorDomain", -1003, "no such host"))
         assertEquals(listOf<String?>(offline.url), rig.events.filterIsInstance<EngineEvent.Error>().map { it.error.url })
+    }
+
+    @Test fun findAsksWebKitAndReadsFoundOrNot() = runTest {
+        val rig = Rig(this)
+        val found = async { rig.engine.find("password", backwards = false) }
+        rig.answer("find") { GlueEvent.Result(it, true, "true", null) }
+        assertEquals(FindResult(found = true), found.await())
+        val missing = async { rig.engine.find("nothing", backwards = true) }
+        rig.answer("find") { GlueEvent.Result(it, true, "false", null) }
+        assertEquals(FindResult(found = false), missing.await())
+        assertTrue(rig.glue.calls.any { it.startsWith("find ") && it.endsWith(" nothing true") }, "${rig.glue.calls}")
+        assertNull(rig.engine.find("", backwards = false))
+    }
+
+    @Test fun zoomCookieAndTheInspectorHint() = runTest {
+        val rig = Rig(this)
+        assertTrue(rig.engine.setZoom(1.5f))
+        assertEquals("setPageZoom 1.5", rig.glue.last("setPageZoom"))
+        rig.engine.clearFind()
+        assertTrue("clearFind" in rig.glue.calls)
+        val stored = async { rig.engine.setCookie(WebCookie(name = "cmux_preview", value = "t", url = "https://app.test/p/", path = "/p/")) }
+        rig.answer("setCookie") { GlueEvent.Result(it, true, "true", null) }
+        assertTrue(stored.await())
+        assertTrue(rig.glue.last("setCookie")!!.endsWith("cmux_preview /p/ null true"), rig.glue.last("setCookie"))
+        val refused = async { rig.engine.setCookie(WebCookie(name = "bad", value = "", url = "not a url")) }
+        rig.answer("setCookie") { GlueEvent.Result(it, false, null, null) }
+        assertFalse(refused.await())
+        val inspector = rig.engine.openInspector()
+        assertTrue(inspector is InspectorResult.Elsewhere && "Develop" in inspector.hint, "$inspector")
+    }
+
+    @Test fun afterReleaseTheBrowserOperationsReachNothing() = runTest {
+        val rig = Rig(this)
+        rig.engine.release()
+        runCurrent()
+        assertNull(rig.engine.find("x", backwards = false))
+        assertFalse(rig.engine.setZoom(2f))
+        assertFalse(rig.engine.setCookie(WebCookie(name = "a", value = "b", url = "https://app.test/")))
+        assertFalse(rig.glue.calls.any { it.startsWith("find") || it.startsWith("setPageZoom") || it.startsWith("setCookie") }, "${rig.glue.calls}")
+    }
+
+    /** The input stamp (click-to-send): a press or a key the page's view took allows one send, and a document starts with none. */
+    @Test fun aPressTheViewTookAllowsOneSendAndOneOnly() = runTest {
+        val rig = Rig(this)
+        rig.engine.configure(setup)
+        rig.engine.load(html)
+        rig.send(GlueEvent.Committed(1, rig.page(html.origin.url), 0.5f))
+        assertFalse(rig.engine.consumeUserInput(), "no input yet: a send on load")
+        rig.send(GlueEvent.Pointer(10.0, 10.0))
+        assertTrue(rig.engine.consumeUserInput())
+        assertFalse(rig.engine.consumeUserInput(), "one press, one send")
+    }
+
+    @Test fun aKeyThePageTookAllowsASend() = runTest {
+        val rig = Rig(this)
+        rig.engine.configure(setup)
+        rig.engine.load(html)
+        rig.send(GlueEvent.Committed(1, rig.page(html.origin.url), 0.5f))
+        rig.send(GlueEvent.Pointer(-1.0, -1.0))
+        assertTrue(rig.engine.consumeUserInput())
+    }
+
+    @Test fun aPressInTheDocumentBeforeIsNoInputInTheNextOne() = runTest {
+        val rig = Rig(this)
+        rig.engine.configure(setup)
+        rig.engine.load(html)
+        rig.send(GlueEvent.Committed(1, rig.page(html.origin.url), 0.5f))
+        rig.send(GlueEvent.Pointer(10.0, 10.0))
+        rig.engine.load(WebContent.Html("<p>b</p>", WebOrigin("c2")))
+        assertFalse(rig.engine.consumeUserInput())
     }
 }

@@ -327,6 +327,40 @@ class WindowsWebEngineTest {
         light.close()
     }
 
+    /** #122's device mode: a whole agent in place of WebView2's, through CDP (the glue only appends a suffix); none clears it. */
+    @Test fun aUserAgentReplacesWebView2sThroughCdpAndGoesAgain() = runTest {
+        val rig = WinRig(this, WebProfile.Default)
+        rig.warm()
+        fun overrides() = rig.page.devtools.filter { it.second == "Emulation.setUserAgentOverride" }.map { it.third }
+        rig.engine.configure(WebSettings.Default.pageSetup(dark = false, bridgeOrigins = emptySet()))
+        assertTrue(overrides().isEmpty(), "no override asked for, none sent")
+        rig.engine.configure(WebSettings(userAgent = "Phone/1", userAgentSuffix = "demo/1").pageSetup(dark = false, bridgeOrigins = emptySet()))
+        assertEquals("{\"userAgent\":\"Phone/1 demo/1\"}", overrides().last())
+        rig.engine.configure(WebSettings(userAgentSuffix = "demo/1").pageSetup(dark = false, bridgeOrigins = emptySet()))
+        assertEquals("{\"userAgent\":\"\"}", overrides().last(), "back to WebView2's own")
+        rig.close()
+    }
+
+    /** #122 2b: device mode on Windows is Chrome's own, through CDP; null takes it off. */
+    @Test fun aDeviceIsEmulatedThroughCdpAndTakenOff() = runTest {
+        val rig = WinRig(this, WebProfile.Default)
+        rig.warm()
+        rig.engine.configure(WebSettings.Default.pageSetup(dark = false, bridgeOrigins = emptySet()))
+        fun sent(method: String) = rig.page.devtools.filter { it.second == method }.map { it.third }
+        assertTrue(rig.engine.emulateDevice(dev.supermux.webview.DeviceEmulation(412, 915, 2.625, mobile = true, touch = true, scale = 0.5f)))
+        assertEquals(
+            "{\"width\":412,\"height\":915,\"deviceScaleFactor\":2.625,\"mobile\":true,\"scale\":0.5}",
+            sent("Emulation.setDeviceMetricsOverride").last(),
+        )
+        assertEquals("{\"enabled\":true,\"maxTouchPoints\":5}", sent("Emulation.setTouchEmulationEnabled").last())
+        assertEquals("{\"enabled\":true,\"configuration\":\"mobile\"}", sent("Emulation.setEmitTouchEventsForMouse").last())
+        assertTrue(rig.engine.emulateDevice(null))
+        assertEquals(listOf("{}"), sent("Emulation.clearDeviceMetricsOverride"))
+        assertEquals("{\"enabled\":false}", sent("Emulation.setTouchEmulationEnabled").last())
+        assertEquals("{\"enabled\":false}", sent("Emulation.setEmitTouchEventsForMouse").last())
+        rig.close()
+    }
+
     @Test fun aHugePageControlledTitleOrUrlCostsNoBacktracking() = runTest {
         // L20: no regex with nested quantifiers on what a page controls.
         val rig = WinRig(this)
