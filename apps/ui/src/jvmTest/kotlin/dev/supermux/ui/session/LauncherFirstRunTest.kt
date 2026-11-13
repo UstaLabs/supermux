@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -180,6 +181,16 @@ class LauncherFirstRunTest {
         assertEquals("my-app", asked)
         onNodeWithTag(LauncherFirstRunTags.FIRST_PROJECT).assertDoesNotExist()
         onNodeWithTag("launcher_message").assertIsDisplayed()
+    }
+
+    // #128: once the first project is there, typing goes straight into the message.
+    @Test fun the_first_project_puts_the_cursor_in_the_message() = runComposeUiTest {
+        pointer { Launcher(createLocalRepo = { "/home/u/projects/$it" }) }
+        waitFor { onNodeWithTag(LauncherFirstRunTags.CREATE_PROJECT).assertIsDisplayed() }
+        onNodeWithTag(LauncherFirstRunTags.CREATE_PROJECT).performClick()
+        onNodeWithTag(LauncherFirstRunTags.NAME_FIELD).performTextInput("my-app")
+        onNodeWithTag(LauncherFirstRunTags.CONFIRM).performClick()
+        waitFor { onNodeWithTag("launcher_message").assertIsFocused() }
     }
 
     @Test fun create_shows_the_brokers_reason() = runComposeUiTest {

@@ -94,6 +94,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -319,6 +320,9 @@ fun SessionLauncherScreen(
     // null = no project yet (see the header): never a placeholder path that would load as one.
     var workdir by remember { mutableStateOf<String?>(null) }
     var workdirTouched by remember { mutableStateOf(false) }
+    // #128: the first project chosen, the cursor goes to the message, so the next keystrokes are the first prompt.
+    val messageFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    var focusMessage by remember { mutableStateOf(false) }
     var agent by remember { mutableStateOf("claude") }
     var model by remember { mutableStateOf<String?>(null) } // null == "Default"
     var message by remember { mutableStateOf(TextFieldValue("")) }
@@ -1037,7 +1041,7 @@ fun SessionLauncherScreen(
                             validatePath = actions.validatePath,
                             createLocalRepo = actions.createLocalRepo,
                             onProject = { path ->
-                                workdir = path; workdirTouched = true; error = null
+                                workdir = path; workdirTouched = true; error = null; focusMessage = true
                             },
                             stacked = compact,
                             pickFolder = nativeFolderPicker,
@@ -1287,6 +1291,14 @@ fun SessionLauncherScreen(
                         }
                     }
 
+                    // #128: focus waits for the composer to be on screen (not while an agent install takes its place).
+                    val composerShown = !(needsAgentInstall && agentSetup != null)
+                    LaunchedEffect(focusMessage, composerShown) {
+                        if (!focusMessage || !composerShown) return@LaunchedEffect
+                        withFrameNanos { }
+                        runCatching { messageFocus.requestFocus() }
+                        focusMessage = false
+                    }
                     if (needsAgentInstall && agentSetup != null) {
                         InstallAgentPanel(
                             actions = agentSetup,
@@ -1338,6 +1350,7 @@ fun SessionLauncherScreen(
                         // `launcher_error` — where it has always been.
                         onMicError = { micError = it },
                         sendEnabled = canSend && !submitting,
+                        focusRequester = messageFocus,
                         sendProgress = submitting,
                         toolbar = { composer ->
                             if (pointer) {

@@ -325,6 +325,15 @@ class FleetStore(
     /** Some host's archived list is still on its way after a `lazyArchived` snapshot (card #54). */
     val archivedPending: StateFlow<Boolean> =
         eachHost { it.archivedPending }.map { pending -> pending.any { it } }.stateIn(fleetScope, SharingStarted.Eagerly, false)
+    /**
+     * Whether the fleet holds no sessions at all (#128): null until some host's first snapshot has said what it holds,
+     * then true only if no host has any (a host seeded from the offline cache counts its cached sessions). Read from
+     * each host's own state, so it never sees a host as loaded before its sessions are there.
+     */
+    val noSessions: StateFlow<Boolean?> =
+        eachHost { it.state }.map { states ->
+            if (states.none { it.snapshotLoaded }) null else states.all { it.sessions.isEmpty() }
+        }.stateIn(fleetScope, SharingStarted.Eagerly, null)
     val displays: StateFlow<List<DisplayStream>> = mergedList { it.displays }
     val activity: StateFlow<Map<String, List<ActivityEvent>>> = mergedMap { it.activity }
     val agentErrors: StateFlow<Map<String, ServerFrame.AgentError>> = mergedMap { it.agentErrors }
