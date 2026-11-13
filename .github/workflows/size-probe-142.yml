@@ -1,15 +1,19 @@
-# Scratch, NOT for merge (#142 web-size research): builds the web client once and uploads
-# (a) the :web:stageForBroker output, (b) the pre-wasm-opt production wasm (with its name section),
-# (c) the Gradle log with the gzip total. Runs only on pushes to this scratch branch.
+# Scratch, NOT for merge (#142 web-size research). Round 2: both jobs build #142's probe branch at
+# db591b53c. (1) a wasm-opt flag sweep over the pre-opt wasm, (2) a compose-lean stageForBroker.
+# Runs only on pushes to this scratch branch.
 name: size-probe-142
 on:
   push:
     branches: [size-probe-142]
 jobs:
-  web-size:
+  sweep:
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: db591b53c5a99d96a79cdb93b48cdd6a402204c5
+      - run: sudo apt-get install -y brotli
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - uses: actions/setup-java@v4
@@ -17,35 +21,56 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: gradle/actions/setup-gradle@v4
-      - name: Cache the zig toolchain and the terminal wasm tree
-        uses: actions/cache@v4
+      - uses: actions/cache@v4
         with:
           path: |
             ~/.local/zig
             apps/terminal-core/build
           key: terminal-wasm-${{ runner.os }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json') }}
           restore-keys: terminal-wasm-${{ runner.os }}-
-      - name: Build the browser terminal engine
-        run: bash apps/terminal-core/wasm/build.sh
+      - run: bash apps/terminal-core/wasm/build.sh
         env:
           ST_ZIG_JOBS: "4"
-      - name: Build the web client (stageForBroker)
-        working-directory: apps
+      - working-directory: apps
         run: ./gradlew :web:stageForBroker --console=plain 2>&1 | tee ../stageForBroker.log
-      - name: List what was built
-        run: |
-          ls -la src/channels/web/static | head -40
-          find apps/web/build/compileSync -name '*.wasm' -exec ls -la {} \; || true
+      - run: bash tools/size-probe-142/sweep.sh apps/web/build/compileSync/wasmJs/main/productionExecutable/kotlin/supermux-apps-web.wasm sweep-out
+      - if: always()
+        run: mkdir -p sweep-out && cp stageForBroker.log sweep-out/
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-opt-sweep
+          path: sweep-out
+  compose-lean:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: db591b53c5a99d96a79cdb93b48cdd6a402204c5
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/zig
+            apps/terminal-core/build
+          key: terminal-wasm-${{ runner.os }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json') }}
+          restore-keys: terminal-wasm-${{ runner.os }}-
+      - run: bash apps/terminal-core/wasm/build.sh
+        env:
+          ST_ZIG_JOBS: "4"
+      - working-directory: apps
+        run: ./gradlew :web:stageForBroker -Psupermux.composeLean=true --console=plain 2>&1 | tee ../stageForBroker-composeLean.log
       - uses: actions/upload-artifact@v4
         with:
-          name: web-static
+          name: web-static-composeLean
           path: src/channels/web/static
       - uses: actions/upload-artifact@v4
         with:
-          name: web-wasm-pre-opt
-          path: apps/web/build/compileSync/wasmJs/main/productionExecutable
-          if-no-files-found: warn
-      - uses: actions/upload-artifact@v4
-        with:
-          name: stageForBroker-log
-          path: stageForBroker.log
+          name: stageForBroker-composeLean-log
+          path: stageForBroker-composeLean.log
