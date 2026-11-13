@@ -37,7 +37,10 @@ function Select-Rows($db, [string]$sql) {
         $record = Invoke-Com $view "Fetch"
         if ($null -eq $record) { break }
         $count = Get-Prop $record "FieldCount"
-        $rows += , @(1..$count | ForEach-Object { Get-Prop $record "StringData" @($_) })
+        # A plain [int]: a pipeline's $_ is a PSObject, which COM rejects (DISP_E_TYPEMISMATCH).
+        $row = @()
+        for ($i = 1; $i -le [int]$count; $i++) { $row += [string](Get-Prop $record "StringData" @([int]$i)) }
+        $rows += , $row
     }
     Invoke-Com $view "Close" | Out-Null
     , $rows
