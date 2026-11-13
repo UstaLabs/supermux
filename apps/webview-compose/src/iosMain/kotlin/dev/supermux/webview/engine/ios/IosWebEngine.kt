@@ -5,7 +5,9 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.colorspace.ColorSpaces
 import androidx.compose.ui.input.nestedscroll.NestedScrollDispatcher
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalDensity
@@ -361,12 +363,15 @@ internal class IosWebEngine private constructor(
         webView.overrideUserInterfaceStyle =
             if (setup.dark) UIUserInterfaceStyle.UIUserInterfaceStyleDark else UIUserInterfaceStyle.UIUserInterfaceStyleLight
         val background = when {
-            setup.transparentBackground -> UIColor.clearColor
+            setup.transparentBackground -> underlayColor()
             setup.dark -> UIColor.blackColor
             else -> UIColor.whiteColor
         }
+        // A transparent page stays non-opaque, so its own colours win, over its underlay ([PageSetup.underlay]): its view
+        // lies under the Compose canvas, and without one its hole showed what is under the canvas, not the app's content.
         webView.setOpaque(!setup.transparentBackground)
         webView.backgroundColor = background
+        container?.backgroundColor = underlayColor()
         // The scroll view is WebKit's to paint: an opaque page's own background (clear for a transparent one). It shows
         // where WebKit hasn't drawn the page yet, as in the strip a wider view gains until the page is laid out at its
         // new width: painted white, that strip flashed light over a dark page for a frame.
@@ -656,6 +661,7 @@ internal class IosWebEngine private constructor(
         queue.advance(reset = true)
         client = null
         setup = null
+        container?.backgroundColor = UIColor.clearColor
         content = null
         bundles.bundle = null
         answerAllByDefault()
@@ -768,9 +774,15 @@ internal class IosWebEngine private constructor(
 
     /** [view], the surface's container, takes the web view: composed, or in a test's window. */
     internal fun attach(view: EngineContainerView) {
+        // Where the web view doesn't reach yet (a container not laid out), the transparent page's underlay too.
+        view.backgroundColor = underlayColor()
         view.adopt(webView)
         container = view
     }
+
+    /** What lies behind a transparent page: its lease's underlay ([PageSetup.underlay]), else nothing. */
+    internal fun underlayColor(): UIColor =
+        setup?.underlay?.takeIf { setup?.transparentBackground == true }?.let(::uiColorOf) ?: UIColor.clearColor
 
     /** [view] lets the web view go: its composition ended (the page parked, or released). */
     internal fun detach(view: EngineContainerView) {
@@ -1475,3 +1487,9 @@ internal suspend fun awaitFloor(loaded: Deferred<Boolean>, millis: Long, settleM
         }
         shown
     } ?: false
+
+/** [color] as UIKit's, in sRGB. */
+internal fun uiColorOf(color: Color): UIColor {
+    val srgb = color.convert(ColorSpaces.Srgb)
+    return UIColor.colorWithRed(srgb.red.toDouble(), green = srgb.green.toDouble(), blue = srgb.blue.toDouble(), alpha = srgb.alpha.toDouble())
+}

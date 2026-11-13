@@ -1,5 +1,6 @@
 package dev.supermux.webview.engine.mac
 
+import androidx.compose.ui.graphics.Color
 import dev.supermux.webview.InspectorResult
 import dev.supermux.webview.WebCookie
 import dev.supermux.webview.FindResult
@@ -173,8 +174,8 @@ class MacWebEngineTest {
         }
 
         /** The lease's first document (epoch 1), painted and shown in a placed, still surface; then a second goes by. */
-        fun live() {
-            engine.configure(setup)
+        fun live(with: PageSetup = setup) {
+            engine.configure(with)
             engine.load(html)
             send(GlueEvent.Committed(1, page(html.origin.url, loading = true), 0.5f))
             relay(1, "$doc start")
@@ -520,9 +521,59 @@ class MacWebEngineTest {
         val dark = Rig(this)
         dark.engine.configure(setup.copy(dark = true))
         assertEquals("setBackdrop ff000000", dark.glue.last("setBackdrop"))
+        assertEquals("setUnderlay 00000000", dark.glue.last("setUnderlay"), "an opaque page paints its own background")
         val clear = Rig(this)
         clear.engine.configure(setup.copy(transparentBackground = true))
-        assertEquals("setBackdrop 00000000", clear.glue.last("setBackdrop"), "what is under the canvas shows through it anyway")
+        assertEquals("setBackdrop 00000000", clear.glue.last("setBackdrop"), "without an underlay, as before")
+        assertEquals("setUnderlay 00000000", clear.glue.last("setUnderlay"), "nothing behind it: what is under the canvas")
+    }
+
+    /**
+     * An agent's card in a light chat showed black between its boxes (the user's report, 2026-11-12): a transparent
+     * page's view lies under the canvas, WebKit draws nothing behind it, and its hole showed the window's black backing.
+     * With an underlay, the page's view is painted in it, and so is the backdrop where it was a moment ago, from the
+     * lease's start: before its first document, so no frame of the hole ever shows the backing.
+     */
+    @Test fun aTransparentPageWithAnUnderlayIsPaintedInItFromItsFirstFrame() = runTest {
+        val rig = Rig(this, inList = true)
+        rig.live(setup.copy(transparentBackground = true, underlay = Color(0xFFF4F4F5)))
+        assertEquals("setUnderlay fff4f4f5", rig.glue.last("setUnderlay"))
+        assertEquals("setBackdrop fff4f4f5", rig.glue.last("setBackdrop"), "the band a moving page leaves, too")
+        val calls = rig.glue.calls
+        val under = calls.indexOf("setUnderlay fff4f4f5")
+        assertTrue(under in 0 until calls.indexOfFirst { it.startsWith("loadHtml ") }, "before the first document: $calls")
+        assertTrue(under < calls.indexOfFirst { it.startsWith("place ") }, "before the view is placed: $calls")
+        rig.solidSnapshot(0x10, 0x20, 0x40)
+        assertEquals("setBackdrop fff4f4f5", rig.glue.last("setBackdrop"), "never a transparent snapshot's edges")
+        assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node), "the page live in its hole")
+    }
+
+    @Test fun theUnderlayFollowsTheThemeAndGoesWithTheLease() = runTest {
+        val rig = Rig(this)
+        val light = setup.copy(transparentBackground = true, underlay = Color(0xFFF4F4F5))
+        rig.live(light)
+        val sent = rig.glue.calls.count { it.startsWith("setUnderlay") }
+        rig.place(y = 40f)
+        assertEquals(sent, rig.glue.calls.count { it.startsWith("setUnderlay") }, "sent when it changes, not at every placement")
+        rig.engine.configure(light.copy(dark = true, underlay = Color(0xFF18181B)))
+        assertEquals("setUnderlay ff18181b", rig.glue.last("setUnderlay"), "the dark theme's, mid-lease")
+        assertEquals("setBackdrop ff18181b", rig.glue.last("setBackdrop"))
+        try {
+            MacWebEngine.backdropEnabled = false
+            rig.place(y = 80f)
+            assertEquals("setBackdrop 00000000", rig.glue.last("setBackdrop"), "the check's baseline turns the backdrop off")
+            assertEquals("setUnderlay ff18181b", rig.glue.last("setUnderlay"), "but not what lies behind the page")
+        } finally {
+            MacWebEngine.backdropEnabled = true
+        }
+        val reset = async { rig.engine.reset() }
+        runCurrent()
+        assertEquals("setUnderlay 00000000", rig.glue.last("setUnderlay"), "none without a lease")
+        rig.send(GlueEvent.Finished(2, rig.page(WebKitUrls.FLOOR_URL), floorKept = true))
+        rig.answer("wipeData") { GlueEvent.Result(it, true, null, null) }
+        assertTrue(reset.await())
+        rig.engine.configure(setup)
+        assertEquals("setUnderlay 00000000", rig.glue.last("setUnderlay"), "an opaque page next")
     }
 
     @Test fun aResetLetsThePagesColourGoAndTheChecksCanTurnTheBackdropOff() = runTest {

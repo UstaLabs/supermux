@@ -74,6 +74,20 @@ private fun FrameSurface(frame: WebFrame, modifier: Modifier) {
 }
 
 class WebFrameTest {
+    /**
+     * The frame lies under the canvas: a transparent page's clear pixels show what is under it, the host page, not the
+     * app's content. With an underlay, the frame's own box is painted in it.
+     */
+    @Test fun aTransparentPagesFrameIsPaintedInItsUnderlay() {
+        val frame = WebFrame()
+        frame.setTheme(dark = false, transparent = true)
+        assertEquals("transparent", styleValue(frame.cut, "background-color"), "without one, as before")
+        frame.setTheme(dark = false, transparent = true, underlay = Color(0xFF336699))
+        assertEquals("rgb(51, 102, 153)", styleValue(frame.cut, "background-color"))
+        frame.setTheme(dark = true, transparent = false, underlay = Color(0xFF336699))
+        assertEquals("canvas", styleValue(frame.cut, "background-color").lowercase(), "an opaque page paints its own")
+    }
+
     private val page = Rect(40f, 40f, 640f, 440f)
 
     private fun frameWithPage(name: String): Pair<WebFrame, HTMLElement> {
