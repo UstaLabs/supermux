@@ -126,11 +126,12 @@ val windowsJvmArgs = if (windowsBuildHost) {
     emptyList()
 }
 
-// #133: G1 at its defaults keeps up to 70% of the heap free and never shrinks while idle, and the heap may grow
-// to a quarter of RAM. These hand memory back (about 55 MB at rest on an M1 Air) at no measured cost to startup;
-// the live set at rest is about 60 MB, so 1 GB still leaves 16x headroom. Packaged app only.
+// #133: G1 at its defaults keeps up to 70% of the heap free and never shrinks while idle. These hand it back after
+// a GC and run one when idle (committed heap at rest 90 -> 37 MB on an M1 Air). No -Xmx: a cap saved nothing at rest
+// (1g and 2g left the same heap), and heavy sessions (big diffs, many tabs, long terminals) must not hit an OOM.
+// Packaged app only.
 val memoryJvmArgs = listOf(
-    "-XX:MinHeapFreeRatio=10", "-XX:MaxHeapFreeRatio=20", "-XX:G1PeriodicGCInterval=30000", "-Xmx1g",
+    "-XX:MinHeapFreeRatio=10", "-XX:MaxHeapFreeRatio=20", "-XX:G1PeriodicGCInterval=30000",
 )
 
 // #133: an AppCDS archive of the app's own classes, trained in CI by trainAppCds (createDistributable, macOS,
