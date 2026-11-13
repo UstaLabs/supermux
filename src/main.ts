@@ -196,7 +196,7 @@ import { discoverGrokModels } from "./core/agents/grok/model-discovery"
 import { grokHasScheduledTasks } from "./core/agents/grok/scheduled-tasks"
 import { keeperAgentRunning } from "../packages/supermux-core/src/keeper/index.js"
 import { discoverAntigravityModels } from "./core/agents/antigravity/model-discovery"
-import { refreshModelCache, type ModelDiscoverers } from "./core/models/refresh"
+import { refreshModelCache, seedModelCache, SharedRefreshes, type ModelDiscoverers } from "./core/models/refresh"
 import { listOpenCodeProviders, setOpenCodeApiKey, startOpenCodeOAuth, finishOpenCodeOAuth } from "./core/agents/opencode/auth-ops"
 import { openCodeConsoleFingerprint } from "./core/agents/opencode/console"
 import { onOpenCodeFreeLimit } from "./core/usage/opencode-free"
@@ -1086,12 +1086,24 @@ const modelDiscoverers: ModelDiscoverers = {
 // the event loop.
 const MODEL_REFRESH_INTERVAL_MS = 15 * 60_000
 
-function refreshModels(discoverers: ModelDiscoverers = modelDiscoverers): Promise<void> {
-  return refreshModelCache(modelCache, discoverers, {
-    onEmpty: (agent) => log.warn("model_discovery_empty", { agent }),
-  }).then((changed) => {
-    if (changed.length > 0) announceAgentModelsChanged(changed)
-  })
+// One discovery per agent at a time: the boot or periodic refresh and a GET /models join the same one, so Claude Code
+// (Claude's discovery) never runs twice at once. Resolves to whether the agent's cached list changed.
+const modelRefreshes = new SharedRefreshes<boolean>()
+
+function discoverAgentModels(agent: AgentKind): Promise<boolean> {
+  const discover = modelDiscoverers[agent]
+  if (!discover) return Promise.resolve(false)
+  return modelRefreshes.run(agent, () => refreshModelCache(modelCache, { [agent]: discover }, {
+    onEmpty: (empty) => log.warn("model_discovery_empty", { agent: empty }),
+  }).then((changed) => changed.length > 0))
+}
+
+/** Every agent's models, announced once for all the lists that changed. */
+async function refreshModels(): Promise<void> {
+  const agents = Object.keys(modelDiscoverers) as AgentKind[]
+  const changed = await Promise.all(agents.map(discoverAgentModels))
+  const announced = agents.filter((_, i) => changed[i])
+  if (announced.length > 0) announceAgentModelsChanged(announced)
 }
 
 /**
@@ -1103,17 +1115,10 @@ function announceAgentModelsChanged(agents: AgentKind[]): void {
   webChannel?.broadcastToAll({ type: "agent_models_changed" })
 }
 
-const agentModelRefreshes = new Map<AgentKind, Promise<void>>()
-
 function refreshAgentModels(agent: AgentKind): Promise<void> {
-  const running = agentModelRefreshes.get(agent)
-  if (running) return running
-  const discover = modelDiscoverers[agent]
-  if (!discover) return Promise.resolve()
-  const refresh = refreshModels({ [agent]: discover })
-    .finally(() => agentModelRefreshes.delete(agent))
-  agentModelRefreshes.set(agent, refresh)
-  return refresh
+  return discoverAgentModels(agent).then((changed) => {
+    if (changed) announceAgentModelsChanged([agent])
+  })
 }
 
 function lookupModels(agent: AgentKind) {
@@ -4995,6 +5000,8 @@ telemetry.start()
 proxyLivenessMonitor.start()
 worktreeService.start()
 if (!IS_TEST_BROKER) {
+  // The lists learned last run answer GET /models at once; the refresh below replaces them.
+  seedModelCache(modelCache, learnedModels, Object.keys(modelDiscoverers) as AgentKind[])
   refreshModels().catch((err) => log.warn("model_cache_init_failed", { err: String(err) }))
 }
 const modelRefreshInterval = IS_TEST_BROKER ? undefined : setInterval(() => {
