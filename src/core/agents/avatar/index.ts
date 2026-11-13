@@ -3,7 +3,7 @@
 import { createHash } from "crypto"
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs"
 import { join } from "path"
-import { Resvg } from "@resvg/resvg-js"
+import type { Resvg as ResvgClass } from "@resvg/resvg-js"
 import { getMuxHome } from "../../memory/init"
 import { agentMemoryPaths } from "../../memory/agent-memory"
 
@@ -59,7 +59,22 @@ const LEVELS = [0.05, 0.6, 0.95, 0.3, 0.8, 0.15, 0.7, 0.4]
  * speaking, idle+hover), 8 frames across 2 s plus a forced blink, each 120 px and clipped like
  * the app; then the same states at the real sidebar size (34 px) shown ×3, on dark and light.
  */
+// resvg is a native addon. Loaded at module load, a host that refuses to load it (a hardened-runtime
+// macOS helper whose library validation rejects the extracted .node: "different Team IDs") killed the
+// whole broker at boot. Loaded here, only rendering a preview can fail, and it says why.
+let resvgClass: typeof ResvgClass | undefined
+function resvg(): typeof ResvgClass {
+  if (resvgClass) return resvgClass
+  try {
+    resvgClass = (require("@resvg/resvg-js") as { Resvg: typeof ResvgClass }).Resvg
+    return resvgClass
+  } catch (err) {
+    throw new Error(`avatar preview unavailable: the resvg renderer could not load (${(err as Error)?.message ?? err})`)
+  }
+}
+
 export function renderAvatarSheet(spec: unknown): Buffer {
+  const Resvg = resvg()
   const CELL = 120, GAP = 12, LABEL = 110, COLS = 9
   const smallTop = 40 + ROWS.length * (CELL + GAP) + 20
   const SMALL = 34, ZOOM = 3
