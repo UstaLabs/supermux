@@ -19,7 +19,10 @@
 // open-comment count — is the shared behaviour both apps already had.
 package dev.supermux.ui.editor
 
+import androidx.compose.foundation.layout.IntrinsicSize
 import dev.supermux.ui.i18n.Str
+import dev.supermux.net.LogCommit
+import dev.supermux.net.GitHistory
 import dev.supermux.proto.FinishJobDto
 import dev.supermux.net.FinishReadiness
 import dev.supermux.net.LatestResult
@@ -33,6 +36,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -195,6 +199,8 @@ fun DiffView(
     mergeReadiness: (suspend () -> FinishReadiness?)? = null,
     mergeIntoBase: ((runChecks: Boolean) -> Unit)? = null,
     mergeJob: FinishJobDto? = null,
+    /** #72: the History tab's commits; null: no History tab. */
+    history: (suspend () -> GitHistory?)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -213,9 +219,9 @@ fun DiffView(
     // #72: the commit bar's message, the action in flight, and what the last one did.
     var commitMessage by remember { mutableStateOf("") }
     var lastGitWrite by remember { mutableStateOf<Pair<String, GitWriteResult?>?>(null) }
-    var cancelled by remember { mutableStateOf(false) }
-    var watchingMerge by remember { mutableStateOf(false) }
     var lastLatest by remember { mutableStateOf<LatestResult?>(null) }
+    var watchingMerge by remember { mutableStateOf(false) }
+    var cancelled by remember { mutableStateOf(false) }
     fun runGit(op: String, amend: Boolean = false) {
         val call = gitWrite ?: return
         if (staging) return
@@ -275,6 +281,24 @@ fun DiffView(
             watchingMerge = true; lastGitWrite = null; lastLatest = null; cancelled = false
             mergeIntoBase(checks)
         }, onDismiss = { mergeOpen = false })
+    }
+    // #72: the History tab — which tab is showing, its commits, a naming dialog, and the last action's line.
+    var tab by remember { mutableStateOf("changes") }
+    var commits by remember { mutableStateOf<GitHistory?>(null) }
+    var naming by remember { mutableStateOf<Pair<LogCommit, String>?>(null) }
+    var historyNote by remember { mutableStateOf<Pair<String, GitWriteResult?>?>(null) }
+    fun loadHistory() { val f = history ?: return; scope.launch { commits = f() } }
+    fun historyOp(op: String, c: LogCommit, name: String? = null) {
+        val call = gitWrite ?: return
+        if (staging) return
+        staging = true
+        scope.launch {
+            try { historyNote = (name ?: c.subject) to call(op, CommitRequest("", sha = c.sha, name = name)).let { r -> r?.copy(reason = r.reason ?: if (r.ok) null else "failed") } }
+            finally { staging = false; onReload(); loadHistory() }
+        }
+    }
+    naming?.let { (c, kind) ->
+        NameRefDialog(kind, onCreate = { n -> naming = null; historyOp(kind, c, n) }, onDismiss = { naming = null })
     }
     val resolvePrompt = baseName?.let { b -> localized(Str.git_agent_resolve_prompt, b, clashing.joinToString(", ") { it.second.path }) }
     val conflictChoices: (String, DiffFile) -> (@Composable () -> Unit)? = { repoId, f ->
@@ -384,7 +408,10 @@ fun DiffView(
                 .padding(horizontal = Space.sm),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
+            if (history != null) {
+                HeaderTab(localized(Str.git_tab_changes), tab == "changes", "diff_tab_changes") { tab = "changes" }
+                HeaderTab(localized(Str.git_tab_history), tab == "history", "diff_tab_history") { tab = "history"; loadHistory() }
+            } else Text(
                 "$totalFiles changed file${if (totalFiles == 1) "" else "s"}",
                 style = MaterialTheme.typography.titleSmall,
                 color = cs.onSurface,
@@ -490,6 +517,17 @@ fun DiffView(
         }
         HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
 
+        if (tab == "history") {
+            HistoryList(
+                commits, staging,
+                onRevert = { c -> historyOp("revert", c) },
+                onName = { c, kind -> naming = c to kind },
+                modifier = Modifier.weight(1f),
+            )
+            historyNote?.let { (what, r) ->
+                Text(historyLine(what, r), fontSize = 11.sp, color = cs.onSurfaceVariant, modifier = Modifier.fillMaxWidth().background(cs.surfaceContainer).padding(Space.md).testTag("git_history_note"))
+            }
+        } else {
         // ── #72: the base moved on, or a merge from it is under way ──────────
         if (baseName != null && gitWrite != null && merging) {
             val repoOf = repos.firstOrNull { it.merging }?.repo ?: ""
@@ -668,6 +706,8 @@ fun DiffView(
                 mergeLabel = if (mergeIntoBase != null && baseName != null && aheadOfBase > 0 && !merging && mergeJob?.status != "running") localized(Str.git_merge_into, baseName) else null,
                 onMerge = { readiness = null; mergeOpen = true },
             )
+        }
+
         }
 
         // ── Sticky submit bar ──────────────────────────────────────────────────
@@ -1677,4 +1717,29 @@ private class ReloadGeneration {
         if (repos !== last) { last = repos; n++ }
         return n
     }
+}
+
+/** A header tab of the Changes pane (#72): our own underline, not Material's tab row. */
+@Composable
+private fun HeaderTab(text: String, selected: Boolean, tag: String, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    // Sized to its own label: the underline fills the TAB, never the header row.
+    Column(
+        Modifier.width(IntrinsicSize.Max).clickable(onClick = onClick).padding(horizontal = Space.sm).testTag(tag),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(text, fontSize = 13.sp, fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal, color = if (selected) cs.onSurface else cs.onSurfaceVariant, modifier = Modifier.padding(vertical = 10.dp))
+        Box(Modifier.height(2.dp).fillMaxWidth().background(if (selected) cs.primary else androidx.compose.ui.graphics.Color.Transparent))
+    }
+}
+
+/** What a History action did, as one line. */
+@Composable
+private fun historyLine(what: String, r: GitWriteResult?): String = when {
+    r?.ok == true && r.sha != null -> localized(Str.git_reverted, what)
+    r?.ok == true -> localized(Str.git_ref_made, what)
+    r?.reason == "conflict" -> localized(Str.git_revert_clash)
+    r?.reason == "exists" -> localized(Str.git_ref_exists, what)
+    r?.reason == "bad" -> localized(Str.git_ref_bad)
+    else -> localized(Str.git_commit_failed, (r?.message ?: r?.error).orEmpty().lineSequence().firstOrNull().orEmpty())
 }

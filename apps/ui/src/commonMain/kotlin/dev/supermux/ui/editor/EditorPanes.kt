@@ -487,6 +487,7 @@ fun DiffPane(
     mergeReadiness: (suspend () -> dev.supermux.net.FinishReadiness?)? = null,
     mergeIntoBase: ((runChecks: Boolean) -> Unit)? = null,
     mergeJob: dev.supermux.proto.FinishJobDto? = null,
+    history: (suspend () -> dev.supermux.net.GitHistory?)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val reviewState = reviewWalkthrough ?: walkthrough
@@ -600,6 +601,7 @@ fun DiffPane(
             mergeReadiness = mergeReadiness,
             mergeIntoBase = mergeIntoBase,
             mergeJob = mergeJob,
+            history = history,
         )
         }
     }

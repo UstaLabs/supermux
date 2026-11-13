@@ -86,4 +86,21 @@
     <string name="git_merge_moved">%1$s moved while merging. Try again.</string>
     <string name="git_merge_nothing">Nothing to merge: %1$s already has this chat's commits</string>
     <string name="git_merge_failed">Couldn't merge: %1$s</string>
+    <string name="git_tab_changes">Changes</string>
+    <string name="git_tab_history">History</string>
+    <string name="git_history_chat">This chat</string>
+    <string name="git_history_empty">Commits made in this chat show up here.</string>
+    <string name="git_pushed">pushed</string>
+    <string name="git_copy_hash">Copy hash</string>
+    <string name="git_revert">Revert (a new commit that undoes it)</string>
+    <string name="git_branch_here">Create branch here…</string>
+    <string name="git_tag_here">Tag…</string>
+    <string name="git_name_branch">Name the new branch</string>
+    <string name="git_name_tag">Name the tag</string>
+    <string name="git_create">Create</string>
+    <string name="git_reverted">Reverted: %1$s</string>
+    <string name="git_revert_clash">Undoing it clashes with later changes, so nothing was done</string>
+    <string name="git_ref_made">Made %1$s</string>
+    <string name="git_ref_exists">%1$s already exists</string>
+    <string name="git_ref_bad">That name can't be used</string>
 </resources>

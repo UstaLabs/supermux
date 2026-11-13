@@ -1632,6 +1632,8 @@ class FleetStore(
     suspend fun workspaceFsWrite(workspaceId: String, path: String, content: String): Boolean =
         appForWorkspace(workspaceId)?.workspaceFsWrite(workspaceId, path, content) == true
     suspend fun sessionGitLatest(sessionId: String): dev.supermux.net.LatestResult? = appFor(sessionId)?.sessionGitLatest(sessionId)
+    suspend fun gitHistory(workspaceId: String, sessionId: String?, repo: String): dev.supermux.net.GitHistory? =
+        appForWorkspace(workspaceId)?.gitHistory(workspaceId, sessionId, repo)
     suspend fun workspaceGitWrite(workspaceId: String, op: String, body: dev.supermux.net.CommitRequest): dev.supermux.net.GitWriteResult? =
         appForWorkspace(workspaceId)?.workspaceGitWrite(workspaceId, op, body)
     suspend fun workspaceStage(workspaceId: String, repo: String, paths: List<String>, staged: Boolean): Boolean =

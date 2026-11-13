@@ -136,6 +136,8 @@ class ShellActions(
     val workspaceStage: (suspend (workspaceId: String, repo: String, paths: List<String>, staged: Boolean) -> Boolean)? = null,
     /** #72: "Merge into <base>" for a session (the merge job, the chat kept open); null: this host can't. */
     val mergeIntoBase: ((sessionId: String, skipVerify: Boolean, onKickoff: (Boolean) -> Unit) -> Unit)? = null,
+    /** #72: the History tab's commits (workspace, chat session or null, repo); null: this host has none. */
+    val gitHistory: (suspend (workspaceId: String, sessionId: String?, repo: String) -> dev.supermux.net.GitHistory?)? = null,
     /** #72: "Get latest from <base>" for a session; null: this host can't. */
     val sessionGitLatest: (suspend (sessionId: String) -> dev.supermux.net.LatestResult?)? = null,
     /** #72: commit / uncommit in a workspace repo; null: this host can't (no commit bar). */
@@ -231,6 +233,7 @@ fun rememberShellActions(
             workspaceStage = { wsId, repo, paths, staged -> app.workspaceStage(wsId, repo, paths, staged) },
             workspaceGitWrite = { wsId, op, body -> app.workspaceGitWrite(wsId, op, body) },
             sessionGitLatest = { id -> app.sessionGitLatest(id) },
+            gitHistory = { ws, sid, repo -> app.gitHistory(ws, sid, repo) },
             mergeIntoBase = { id, skipVerify, done -> app.mergeIntoBase(id, skipVerify, done) },
             workspaceFsDiff = { wsId, base -> app.workspaceFsDiff(wsId, base) },
             workspaceChangesBlob = { wsId, repo, sha, force -> app.workspaceChangesBlob(wsId, repo, sha, force) },
@@ -300,6 +303,7 @@ fun rememberShellActions(fleet: FleetStore): ShellActions {
             workspaceStage = { wsId, repo, paths, staged -> fleet.workspaceStage(wsId, repo, paths, staged) },
             workspaceGitWrite = { wsId, op, body -> fleet.workspaceGitWrite(wsId, op, body) },
             sessionGitLatest = { id -> fleet.sessionGitLatest(id) },
+            gitHistory = { ws, sid, repo -> fleet.gitHistory(ws, sid, repo) },
             mergeIntoBase = { id, skipVerify, done -> fleet.mergeIntoBase(id, skipVerify, done) },
             workspaceFsDiff = { wsId, base -> fleet.workspaceFsDiff(wsId, base) },
             workspaceChangesBlob = { wsId, repo, sha, force -> fleet.workspaceChangesBlob(wsId, repo, sha, force) },

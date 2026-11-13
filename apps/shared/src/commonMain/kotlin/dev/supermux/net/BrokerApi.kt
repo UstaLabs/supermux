@@ -1272,7 +1272,22 @@ data class CommitRequest(
     /** resolve: the conflicted file and the side kept (mine | theirs | both). */
     val path: String? = null,
     val side: String? = null,
+    /** revert / branch / tag: the commit, and the new name. */
+    val sha: String? = null,
+    val name: String? = null,
 )
+
+/** GET …/git/history: the chat's commits (its branch minus its base) and the base's recent ones. */
+@Serializable
+data class GitHistory(
+    val branch: String? = null,
+    val base: String? = null,
+    val chat: List<LogCommit> = emptyList(),
+    val baseCommits: List<LogCommit> = emptyList(),
+)
+
+@Serializable
+data class LogCommit(val sha: String, val subject: String = "", val author: String = "", val at: Long = 0, val pushed: Boolean? = null)
 
 /** POST /sessions/<id>/git/latest: the base merged in (clean | up_to_date), stopped on a clash (conflict), or failed. */
 @Serializable
@@ -3732,6 +3747,10 @@ class BrokerApi(
     /** GET /workspaces/<id>/fs/diff?base=<spec> */
     suspend fun workspaceFsDiff(workspaceId: String, base: String? = null): FsDiffResult =
         getJson("$httpBase/workspaces/$workspaceId/fs/diff" + if (base != null) "?base=${urlEncode(base)}" else "")
+
+    /** GET /<sessions|workspaces>/<id>/git/history?repo= */
+    suspend fun gitHistory(scope: String, id: String, repo: String): GitHistory =
+        getJson("$httpBase/$scope/$id/git/history?repo=${urlEncode(repo)}")
 
     /** POST /sessions/<id>/git/latest: its answer, a refusal (409) included. */
     suspend fun sessionGitLatest(sessionId: String): LatestResult {

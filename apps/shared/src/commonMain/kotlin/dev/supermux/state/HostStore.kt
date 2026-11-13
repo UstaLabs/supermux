@@ -1757,6 +1757,10 @@ class HostStore(
             if (isAbsoluteEditorPath(path)) { api.hostFsWrite(path, content); true } else api.workspaceFsWrite(workspaceId, path, content)
         } ?: false
 
+    /** #72: History; [sessionId] (its own base) when there is one, else the workspace's. Null on failure. */
+    suspend fun gitHistory(workspaceId: String, sessionId: String?, repo: String): dev.supermux.net.GitHistory? =
+        runApi("gitHistory") { if (sessionId != null) api.gitHistory("sessions", sessionId, repo) else api.gitHistory("workspaces", workspaceId, repo) }
+
     /** #72: the session's base merged into its branch; null when the broker could not be reached. */
     suspend fun sessionGitLatest(sessionId: String): dev.supermux.net.LatestResult? =
         runApi("sessionGitLatest") { api.sessionGitLatest(sessionId) }

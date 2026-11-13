@@ -81,6 +81,7 @@ class DiffViewTest {
         mergeReadiness: (suspend () -> dev.supermux.net.FinishReadiness?)? = null,
         mergeIntoBase: ((Boolean) -> Unit)? = null,
         mergeJob: dev.supermux.proto.FinishJobDto? = null,
+        history: (suspend () -> dev.supermux.net.GitHistory?)? = null,
     ): @androidx.compose.runtime.Composable () -> Unit = {
         CompositionLocalProvider(
             LocalUiPrefs provides prefs,
@@ -113,6 +114,7 @@ class DiffViewTest {
                 mergeReadiness = mergeReadiness,
                 mergeIntoBase = mergeIntoBase,
                 mergeJob = mergeJob,
+                history = history,
             )
         }
         }
@@ -295,6 +297,49 @@ class DiffViewTest {
         onNodeWithTag("commit_more").performClick()
         waitForIdle()
         onNodeWithTag("commit_merge").assertDoesNotExist()
+    }
+
+    private val sampleHistory = dev.supermux.net.GitHistory(
+        branch = "mux/search", base = "dev",
+        chat = listOf(dev.supermux.net.LogCommit("c41e9d2aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Add search box", "claude", 0, pushed = true)),
+        baseCommits = listOf(dev.supermux.net.LogCommit("9f3c2a1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "Bump SDK", "deniz", 0)),
+    )
+
+    @Test
+    fun the_history_tab_lists_the_chats_commits_then_the_bases_and_reverts_one() = runComposeUiTest {
+        val calls = mutableListOf<Pair<String, dev.supermux.net.CommitRequest>>()
+        setContent(host(committedOnly(), gitWrite = { op, b -> calls += op to b; dev.supermux.net.GitWriteResult(ok = true, sha = "abc") }, history = { sampleHistory }))
+        waitForIdle()
+        onNodeWithTag("diff_tab_history").performClick()
+        waitForIdle()
+        onNodeWithText("Add search box").assertExists()
+        onNodeWithText("pushed").assertExists()
+        onNodeWithText("Bump SDK").assertExists()
+        onNodeWithTag("git_commit_c41e9d2").performClick()
+        waitForIdle()
+        onNodeWithTag("git_revert").performClick()
+        waitForIdle()
+        assertEquals(listOf("revert" to dev.supermux.net.CommitRequest("", sha = "c41e9d2aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")), calls)
+        onNodeWithText("Reverted: Add search box").assertExists()
+    }
+
+    @Test
+    fun a_base_commit_can_be_named_but_not_reverted_here() = runComposeUiTest {
+        val calls = mutableListOf<Pair<String, dev.supermux.net.CommitRequest>>()
+        setContent(host(committedOnly(), gitWrite = { op, b -> calls += op to b; dev.supermux.net.GitWriteResult(ok = true) }, history = { sampleHistory }))
+        waitForIdle()
+        onNodeWithTag("diff_tab_history").performClick()
+        waitForIdle()
+        onNodeWithTag("git_commit_9f3c2a1").performClick()
+        waitForIdle()
+        onNodeWithTag("git_revert").assertDoesNotExist()
+        onNodeWithTag("git_branch_here").performClick()
+        waitForIdle()
+        onNodeWithTag("git_name_field").performTextInput("try/sdk")
+        onNodeWithTag("git_name_create").performClick()
+        waitForIdle()
+        assertEquals(listOf("branch" to dev.supermux.net.CommitRequest("", sha = "9f3c2a1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", name = "try/sdk")), calls)
+        onNodeWithText("Made try/sdk").assertExists()
     }
 
     @Test

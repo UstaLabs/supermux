@@ -848,6 +848,7 @@ private fun DiffPaneForWorkspace(
         mergeReadiness = reviewSessionId?.let { id -> { actions.finishReadiness(id) } },
         mergeIntoBase = reviewSessionId?.let { id -> actions.mergeIntoBase?.let { f -> { checks: Boolean -> f(id, !checks) {} } } },
         mergeJob = reviewSessionId?.let { finishJobs[it] },
+        history = actions.gitHistory?.let { f -> { f(workspaceId, reviewSessionId, "") } },
         modifier = modifier.fillMaxSize(),
     )
 }

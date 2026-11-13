@@ -86,4 +86,21 @@
     <string name="git_merge_moved">Birleştirme sırasında %1$s değişti. Tekrar deneyin.</string>
     <string name="git_merge_nothing">Birleştirilecek bir şey yok: %1$s bu sohbetin commit'lerine zaten sahip</string>
     <string name="git_merge_failed">Birleştirilemedi: %1$s</string>
+    <string name="git_tab_changes">Değişiklikler</string>
+    <string name="git_tab_history">Geçmiş</string>
+    <string name="git_history_chat">Bu sohbet</string>
+    <string name="git_history_empty">Bu sohbette yapılan commit'ler burada görünür.</string>
+    <string name="git_pushed">gönderildi</string>
+    <string name="git_copy_hash">Hash'i kopyala</string>
+    <string name="git_revert">Geri çevir (bunu geri alan yeni bir commit)</string>
+    <string name="git_branch_here">Burada dal oluştur…</string>
+    <string name="git_tag_here">Etiketle…</string>
+    <string name="git_name_branch">Yeni dalın adı</string>
+    <string name="git_name_tag">Etiketin adı</string>
+    <string name="git_create">Oluştur</string>
+    <string name="git_reverted">Geri çevrildi: %1$s</string>
+    <string name="git_revert_clash">Bunu geri almak sonraki değişikliklerle çakışıyor, hiçbir şey yapılmadı</string>
+    <string name="git_ref_made">%1$s oluşturuldu</string>
+    <string name="git_ref_exists">%1$s zaten var</string>
+    <string name="git_ref_bad">Bu ad kullanılamaz</string>
 </resources>
