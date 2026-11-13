@@ -1,0 +1,51 @@
+# Scratch, NOT for merge (#142 web-size research): builds the web client once and uploads
+# (a) the :web:stageForBroker output, (b) the pre-wasm-opt production wasm (with its name section),
+# (c) the Gradle log with the gzip total. Runs only on pushes to this scratch branch.
+name: size-probe-142
+on:
+  push:
+    branches: [size-probe-142]
+jobs:
+  web-size:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Cache the zig toolchain and the terminal wasm tree
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/zig
+            apps/terminal-core/build
+          key: terminal-wasm-${{ runner.os }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json') }}
+          restore-keys: terminal-wasm-${{ runner.os }}-
+      - name: Build the browser terminal engine
+        run: bash apps/terminal-core/wasm/build.sh
+        env:
+          ST_ZIG_JOBS: "4"
+      - name: Build the web client (stageForBroker)
+        working-directory: apps
+        run: ./gradlew :web:stageForBroker --console=plain 2>&1 | tee ../stageForBroker.log
+      - name: List what was built
+        run: |
+          ls -la src/channels/web/static | head -40
+          find apps/web/build/compileSync -name '*.wasm' -exec ls -la {} \; || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-static
+          path: src/channels/web/static
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-wasm-pre-opt
+          path: apps/web/build/compileSync/wasmJs/main/productionExecutable
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stageForBroker-log
+          path: stageForBroker.log
