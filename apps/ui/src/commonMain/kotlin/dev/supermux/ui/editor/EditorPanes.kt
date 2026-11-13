@@ -476,6 +476,8 @@ fun DiffPane(
     retainKey: String? = null,
     /** #72: whole files into the next commit, or out of it (see [DiffView]); null: no boxes. */
     stageFiles: (suspend (repo: String, paths: List<String>, staged: Boolean) -> Boolean)? = null,
+    /** #72: commit / uncommit (see [DiffView]); null: no commit bar. */
+    gitWrite: (suspend (op: String, body: dev.supermux.net.CommitRequest) -> dev.supermux.net.GitWriteResult?)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val reviewState = reviewWalkthrough ?: walkthrough
@@ -580,6 +582,7 @@ fun DiffPane(
             baseText = baseText,
             retainKey = retainKey,
             stage = stageFiles,
+            gitWrite = gitWrite,
         )
         }
     }

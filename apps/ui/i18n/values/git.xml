@@ -26,4 +26,20 @@
         <item quantity="other">%1$d of %2$d in the next commit</item>
     </plurals>
     <string name="git_include_in_commit">In the next commit</string>
+    <string name="git_commit">Commit</string>
+    <plurals name="git_commit_all">
+        <item quantity="one">Commit %1$d file</item>
+        <item quantity="other">Commit all %1$d</item>
+    </plurals>
+    <string name="git_commit_hint">Commit message: leave it empty and it's written for you</string>
+    <string name="git_more_commit_actions">More commit actions</string>
+    <string name="git_amend">Amend the last commit</string>
+    <string name="git_undo_commit">Undo the last commit</string>
+    <string name="git_committed">Committed: %1$s</string>
+    <string name="git_nothing_to_commit">Nothing to commit</string>
+    <string name="git_commit_failed">Commit failed: %1$s</string>
+    <string name="git_undone">Undone: %1$s. Its changes are back.</string>
+    <string name="git_undo_pushed">That commit is already pushed, so it isn't undone here</string>
+    <string name="git_undo_merge">A merge commit isn't undone here</string>
+    <string name="git_undo_none">There is no commit to undo</string>
 </resources>

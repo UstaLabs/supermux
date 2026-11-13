@@ -14,6 +14,8 @@ package dev.supermux.state
 import dev.supermux.ui.isAbsoluteEditorPath
 import dev.supermux.state.AgentReplyEvent
 import dev.supermux.state.StagedUpload
+import dev.supermux.net.CommitRequest
+import dev.supermux.net.GitWriteResult
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.AddDeviceResponse
 import dev.supermux.net.AgentInstallJob
@@ -1748,6 +1750,10 @@ class HostStore(
         runApi("workspaceFsWrite") {
             if (isAbsoluteEditorPath(path)) { api.hostFsWrite(path, content); true } else api.workspaceFsWrite(workspaceId, path, content)
         } ?: false
+
+    /** #72: commit / uncommit; null when the broker could not be reached. */
+    suspend fun workspaceGitWrite(workspaceId: String, op: String, body: CommitRequest): GitWriteResult? =
+        runApi("workspaceGitWrite") { api.workspaceGitWrite(workspaceId, op, body) }
 
     /** #72: puts whole files into the next commit, or takes them out → true on success. */
     suspend fun workspaceStage(workspaceId: String, repo: String, paths: List<String>, staged: Boolean): Boolean =
