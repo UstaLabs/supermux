@@ -479,7 +479,7 @@ fun SupermuxApp(
         uiPrefs.settings,
         appPlatform.updates.currentVersion,
         appPlatform.releasePlatform,
-        existingInstall = { fleet.store.list().isNotEmpty() },
+        existingInstall = { fleet.store.hadHostsAtStart },
     )
     val onCollapsedPathsChange: (Set<String>) -> Unit = { paths ->
         ui.collapsedProjectPaths = paths
