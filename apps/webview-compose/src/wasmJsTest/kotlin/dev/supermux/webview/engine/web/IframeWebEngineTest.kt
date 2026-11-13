@@ -51,7 +51,7 @@ import kotlin.time.Duration.Companion.minutes
 private fun watch(outer: HTMLElement, cut: HTMLElement): JsAny = js("""(function () {
   var log = { frame: 0, loadFrame: -1, drawingAtLoad: false, seenFrame: -1, stop: false };
   (function tick() { if (log.stop) return; log.frame++; requestAnimationFrame(tick); })();
-  function seen() { return outer.style.visibility === 'visible' && outer.style.opacity === '1'; }
+  function seen() { return outer.style.visibility === 'visible' && outer.style.opacity !== '' && outer.style.opacity !== '0'; }
   new MutationObserver(function () {
     if (log.seenFrame < 0 && seen()) log.seenFrame = log.frame;
   }).observe(outer, { attributes: true, attributeFilter: ['style'] });
@@ -205,7 +205,7 @@ class IframeWebEngineTest {
         frames(1)
         assertEquals("compose", hitAt(100.0, 100.0), "covered, the page takes no clicks")
         waitUntil("the first paint") { EngineEvent.FirstPaint in h.events }
-        assertEquals("1", styleValue(h.engine.frame.outer, "opacity"), "seen by its first paint")
+        assertEquals(SHOWN_OPACITY, styleValue(h.engine.frame.outer, "opacity"), "seen by its first paint")
         frames(2)
         stopWatching(log)
         assertTrue(loadFrame(log) >= 0, "it loaded")
@@ -604,7 +604,7 @@ class IframeWebEngineTest {
         val replayed = h.events.drop(parkedAt)
         assertEquals(EngineEvent.UrlChanged(content.origin.url), replayed.first(), "$replayed")
         assertEquals("visible", styleValue(h.engine.frame.outer, "visibility"))
-        assertEquals("1", styleValue(h.engine.frame.outer, "opacity"), "seen by its replayed first paint")
+        assertEquals(SHOWN_OPACITY, styleValue(h.engine.frame.outer, "opacity"), "seen by its replayed first paint")
         assertEquals(0, loadsOf(iframe), "the page never reloaded")
         // The same document: asked to announce itself, it gives the nonce it gave before.
         val hello = h.events.size

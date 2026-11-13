@@ -34,6 +34,15 @@ class WhatsNewSlotTest {
         onNodeWithText("2 new things you can do on this Mac.").assertExists()
     }
 
+    @Test fun a_later_build_offers_the_newest_edition_under_its_own_version() = runComposeUiTest {
+        setPlatformContent {
+            val whatsNew = rememberWhatsNew(FakeSettingsStore(), "0.18.1-rc.2", ReleasePlatform.Mac, existingInstall = { true }, load = { page }, editions = listOf("0.18.0"))
+            WhatsNewSlot(whatsNew, onOpen = {})
+        }
+        waitUntil { onAllNodes(androidx.compose.ui.test.hasTestTag("whats_new_card")).fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithText("Updated to v0.18.1-rc.2").assertExists()
+    }
+
     @Test fun a_build_that_does_not_say_which_platform_it_is_is_offered_nothing() = runComposeUiTest {
         val store = FakeSettingsStore()
         mount(store, platform = null)
