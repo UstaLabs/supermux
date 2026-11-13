@@ -1045,11 +1045,20 @@ private fun TaskCard(event: ActivityEvent) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Space.sm),
     ) {
-        Text(event.title ?: event.taskKind ?: "task", style = MaterialTheme.typography.labelMedium)
+        // The title gives way (#141): it wraps, up to two lines, and the status keeps its own width on one line.
+        Text(
+            event.title ?: event.taskKind ?: "task",
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
         Text(
             status,
             style = MaterialTheme.typography.labelSmall,
             color = pillColor,
+            maxLines = 1,
+            softWrap = false,
             modifier = Modifier
                 .clip(RoundedCornerShape(Radii.sm))
                 .background(pillColor.copy(alpha = 0.15f))
