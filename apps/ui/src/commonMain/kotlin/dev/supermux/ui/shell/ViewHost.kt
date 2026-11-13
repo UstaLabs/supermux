@@ -803,6 +803,7 @@ private fun DiffPaneForWorkspace(
     // #72: the chat's base (its name and how far it moved on) for the merge notes.
     val sessions by actions.sessions.collectAsState()
     val reviewGit = reviewSessionId?.let { id -> sessions.firstOrNull { it.id == id }?.git }
+    val finishJobs by actions.finishJobs.collectAsState()
     DiffPane(
         diff = diff,
         walkthrough = walkthrough,
@@ -843,6 +844,10 @@ private fun DiffPaneForWorkspace(
         baseBehind = reviewGit?.takeIf { it.mode == "base" }?.behind ?: 0,
         gitLatest = reviewSessionId?.let { id -> actions.sessionGitLatest?.let { f -> { f(id) } } },
         askAgent = reviewSessionId?.let { id -> { text: String -> actions.sendMessage(id, text) } },
+        aheadOfBase = reviewGit?.takeIf { it.mode == "base" }?.ahead ?: 0,
+        mergeReadiness = reviewSessionId?.let { id -> { actions.finishReadiness(id) } },
+        mergeIntoBase = reviewSessionId?.let { id -> actions.mergeIntoBase?.let { f -> { checks: Boolean -> f(id, !checks) {} } } },
+        mergeJob = reviewSessionId?.let { finishJobs[it] },
         modifier = modifier.fillMaxSize(),
     )
 }

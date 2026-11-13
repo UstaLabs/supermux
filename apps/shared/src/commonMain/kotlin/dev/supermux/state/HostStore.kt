@@ -1593,10 +1593,16 @@ class HostStore(
         prBody: String? = null,
         draft: Boolean? = null,
         prRequiresGreen: Boolean? = null,
+        keep: Boolean? = null,
     ): Boolean =
         runCatching {
-            api.finish(id, action, skipVerify, commitFirst, commitMessage, prTitle, prBody, draft, prRequiresGreen)
+            api.finish(id, action, skipVerify, commitFirst, commitMessage, prTitle, prBody, draft, prRequiresGreen, keep)
         }.isSuccess
+
+    /** #72: "Merge into <base>" — the merge job, never archiving the chat; [onKickoff] says if it started. */
+    fun mergeIntoBase(id: String, skipVerify: Boolean, onKickoff: (Boolean) -> Unit = {}) {
+        stateScope.launch { onKickoff(finish(id, "merge", skipVerify = skipVerify, keep = true)) }
+    }
 
     /**
      * Fire-and-forget finish kickoff on the STORE's own scope, reporting acceptance through

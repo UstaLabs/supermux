@@ -483,6 +483,10 @@ fun DiffPane(
     baseBehind: Int = 0,
     gitLatest: (suspend () -> dev.supermux.net.LatestResult?)? = null,
     askAgent: ((String) -> Unit)? = null,
+    aheadOfBase: Int = 0,
+    mergeReadiness: (suspend () -> dev.supermux.net.FinishReadiness?)? = null,
+    mergeIntoBase: ((runChecks: Boolean) -> Unit)? = null,
+    mergeJob: dev.supermux.proto.FinishJobDto? = null,
 ) {
     val scope = rememberCoroutineScope()
     val reviewState = reviewWalkthrough ?: walkthrough
@@ -592,6 +596,10 @@ fun DiffPane(
             baseBehind = baseBehind,
             gitLatest = gitLatest,
             askAgent = askAgent,
+            aheadOfBase = aheadOfBase,
+            mergeReadiness = mergeReadiness,
+            mergeIntoBase = mergeIntoBase,
+            mergeJob = mergeJob,
         )
         }
     }

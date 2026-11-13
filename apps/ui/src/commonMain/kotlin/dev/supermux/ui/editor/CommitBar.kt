@@ -73,6 +73,9 @@ internal fun CommitBar(
     /** "Get latest from <base>" in the ▾; null: not offered. */
     getLatestLabel: String? = null,
     onGetLatest: () -> Unit = {},
+    /** "Merge into <base>…" in the ▾; null: not offered. */
+    mergeLabel: String? = null,
+    onMerge: () -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     var menu by remember { mutableStateOf(false) }
@@ -153,6 +156,13 @@ internal fun CommitBar(
                     }
                 }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    if (mergeLabel != null) {
+                        DropdownMenuItem(
+                            text = { Text(mergeLabel) },
+                            onClick = { menu = false; onMerge() },
+                            modifier = Modifier.testTag("commit_merge"),
+                        )
+                    }
                     if (getLatestLabel != null) {
                         DropdownMenuItem(
                             text = { Text(getLatestLabel) },

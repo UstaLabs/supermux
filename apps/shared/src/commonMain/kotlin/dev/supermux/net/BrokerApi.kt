@@ -1758,6 +1758,8 @@ private data class FinishBody(
     val prBody: String? = null,
     val draft: Boolean? = null,
     val prRequiresGreen: Boolean? = null,
+    /** #72: never archive the chat after a merge. */
+    val keep: Boolean? = null,
 )
 
 @Serializable
@@ -3105,12 +3107,13 @@ class BrokerApi(
         prBody: String? = null,
         draft: Boolean? = null,
         prRequiresGreen: Boolean? = null,
+        keep: Boolean? = null,
     ): FinishResult =
         decode(http.post("$httpBase/sessions/$id/finish") {
             authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(FinishBody(
-                action, skipVerify, commitFirst, commitMessage, prTitle, prBody, draft, prRequiresGreen,
+                action, skipVerify, commitFirst, commitMessage, prTitle, prBody, draft, prRequiresGreen, keep,
             )))
         })
 

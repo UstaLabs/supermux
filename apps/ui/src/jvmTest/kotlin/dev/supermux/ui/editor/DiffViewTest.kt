@@ -77,6 +77,10 @@ class DiffViewTest {
         baseBehind: Int = 0,
         gitLatest: (suspend () -> dev.supermux.net.LatestResult?)? = null,
         askAgent: ((String) -> Unit)? = null,
+        aheadOfBase: Int = 0,
+        mergeReadiness: (suspend () -> dev.supermux.net.FinishReadiness?)? = null,
+        mergeIntoBase: ((Boolean) -> Unit)? = null,
+        mergeJob: dev.supermux.proto.FinishJobDto? = null,
     ): @androidx.compose.runtime.Composable () -> Unit = {
         CompositionLocalProvider(
             LocalUiPrefs provides prefs,
@@ -105,6 +109,10 @@ class DiffViewTest {
                 baseBehind = baseBehind,
                 gitLatest = gitLatest,
                 askAgent = askAgent,
+                aheadOfBase = aheadOfBase,
+                mergeReadiness = mergeReadiness,
+                mergeIntoBase = mergeIntoBase,
+                mergeJob = mergeJob,
             )
         }
         }
@@ -243,6 +251,50 @@ class DiffViewTest {
         onNodeWithTag("commit_button").performClick()
         waitForIdle()
         assertEquals(listOf("commit" to dev.supermux.net.CommitRequest("", null)), calls)
+    }
+
+    private fun committedOnly() = listOf(RepoDiff(repo = "", files = listOf(DiffFile(path = "src/App.jsx", status = "modified"))))
+
+    @Test
+    fun merge_into_the_base_names_it_and_runs_the_checks_only_when_asked() = runComposeUiTest {
+        val merged = mutableListOf<Boolean>()
+        setContent(host(committedOnly(), stage = { _, _, _ -> true }, gitWrite = { _, _ -> null }, baseName = "dev", aheadOfBase = 2,
+            mergeReadiness = { dev.supermux.net.FinishReadiness(base = "dev", ahead = 2) }, mergeIntoBase = { merged += it }))
+        waitForIdle()
+        onNodeWithTag("commit_more").performClick()
+        waitForIdle()
+        onNodeWithText("Merge into dev…").performClick()
+        waitForIdle()
+        onNodeWithText("Merge 2 commits into dev").assertExists()
+        onNodeWithTag("merge_run_checks").performClick()
+        onNodeWithTag("merge_confirm").performClick()
+        waitForIdle()
+        assertEquals(listOf(true), merged)
+    }
+
+    @Test
+    fun a_chat_with_uncommitted_changes_is_asked_to_commit_before_merging() = runComposeUiTest {
+        val merged = mutableListOf<Boolean>()
+        setContent(host(committedOnly(), stage = { _, _, _ -> true }, gitWrite = { _, _ -> null }, baseName = "dev", aheadOfBase = 1,
+            mergeReadiness = { dev.supermux.net.FinishReadiness(base = "dev", ahead = 1, dirtyFiles = listOf("x.txt")) }, mergeIntoBase = { merged += it }))
+        waitForIdle()
+        onNodeWithTag("commit_more").performClick()
+        waitForIdle()
+        onNodeWithTag("commit_merge").performClick()
+        waitForIdle()
+        onNodeWithText("This chat has changes that aren't committed. Commit or undo them first.").assertExists()
+        onNodeWithTag("merge_confirm").performClick()
+        waitForIdle()
+        assertEquals(emptyList(), merged)
+    }
+
+    @Test
+    fun nothing_ahead_of_the_base_offers_no_merge() = runComposeUiTest {
+        setContent(host(committedOnly(), stage = { _, _, _ -> true }, gitWrite = { _, _ -> null }, baseName = "dev", aheadOfBase = 0, mergeIntoBase = {}))
+        waitForIdle()
+        onNodeWithTag("commit_more").performClick()
+        waitForIdle()
+        onNodeWithTag("commit_merge").assertDoesNotExist()
     }
 
     @Test

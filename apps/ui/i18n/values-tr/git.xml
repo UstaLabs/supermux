@@ -67,4 +67,23 @@
     </plurals>
     <string name="git_latest_failed">En son değişiklikler alınamadı: %1$s</string>
     <string name="git_merge_cancelled">Birleştirme iptal edildi. Her şey eskisi gibi.</string>
+    <string name="git_merge_into">%1$s dalına birleştir…</string>
+    <plurals name="git_merge_title">
+        <item quantity="one">%1$d commit'i %2$s dalına birleştir</item>
+        <item quantity="other">%1$d commit'i %2$s dalına birleştir</item>
+    </plurals>
+    <string name="git_merge_body">Kendi klasörünüzdeki %1$s dalına girer. Orada başka hiçbir şey değişmez.</string>
+    <string name="git_merge_clash_warning">Bir kısmı %1$s ile çakışıyor. Önce burada birleştirilir, böylece hiçbir şey taşınmadan çözebilirsiniz.</string>
+    <string name="git_merge_uncommitted">Bu sohbette commit edilmemiş değişiklikler var. Önce commit edin ya da geri alın.</string>
+    <string name="git_merge_run_checks">Önce projenin kontrollerini çalıştır</string>
+    <string name="git_merge_confirm">%1$s dalına birleştir</string>
+    <string name="git_cancel">İptal</string>
+    <string name="git_merging">%1$s dalına birleştiriliyor…</string>
+    <string name="git_merged">%1$s dalına birleştirildi</string>
+    <string name="git_merge_tests_failed">Kontroller başarısız oldu, hiçbir şey birleştirilmedi</string>
+    <string name="git_merge_no_checks">Bu projede kontrol tanımlı değil (.mux/verify.sh)</string>
+    <string name="git_merge_dirty_base">Klasörünüzdeki %1$s dalında, bunun dokunacağı dosyalarda commit edilmemiş değişiklikler var</string>
+    <string name="git_merge_moved">Birleştirme sırasında %1$s değişti. Tekrar deneyin.</string>
+    <string name="git_merge_nothing">Birleştirilecek bir şey yok: %1$s bu sohbetin commit'lerine zaten sahip</string>
+    <string name="git_merge_failed">Birleştirilemedi: %1$s</string>
 </resources>

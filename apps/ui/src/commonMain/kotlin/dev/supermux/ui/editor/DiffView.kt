@@ -20,6 +20,8 @@
 package dev.supermux.ui.editor
 
 import dev.supermux.ui.i18n.Str
+import dev.supermux.proto.FinishJobDto
+import dev.supermux.net.FinishReadiness
 import dev.supermux.net.LatestResult
 import dev.supermux.net.GitWriteResult
 import dev.supermux.net.CommitRequest
@@ -188,6 +190,11 @@ fun DiffView(
     gitLatest: (suspend () -> LatestResult?)? = null,
     /** #72: hands a message to the chat's agent ("Ask the agent"); null: not offered. */
     askAgent: ((String) -> Unit)? = null,
+    /** #72: "Merge into <base>": the chat's commits not in it, the preflight, the kickoff, and the job. */
+    aheadOfBase: Int = 0,
+    mergeReadiness: (suspend () -> FinishReadiness?)? = null,
+    mergeIntoBase: ((runChecks: Boolean) -> Unit)? = null,
+    mergeJob: FinishJobDto? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -206,8 +213,9 @@ fun DiffView(
     // #72: the commit bar's message, the action in flight, and what the last one did.
     var commitMessage by remember { mutableStateOf("") }
     var lastGitWrite by remember { mutableStateOf<Pair<String, GitWriteResult?>?>(null) }
-    var lastLatest by remember { mutableStateOf<LatestResult?>(null) }
     var cancelled by remember { mutableStateOf(false) }
+    var watchingMerge by remember { mutableStateOf(false) }
+    var lastLatest by remember { mutableStateOf<LatestResult?>(null) }
     fun runGit(op: String, amend: Boolean = false) {
         val call = gitWrite ?: return
         if (staging) return
@@ -230,7 +238,7 @@ fun DiffView(
                 }
                 if (shown?.ok == true && op == "commit") commitMessage = ""
                 lastGitWrite = op to shown
-                lastLatest = null; cancelled = false
+                lastLatest = null; cancelled = false; watchingMerge = false
             } finally { staging = false; onReload() }
         }
     }
@@ -242,7 +250,7 @@ fun DiffView(
         if (staging) return
         staging = true
         scope.launch {
-            try { lastLatest = call() ?: LatestResult(); lastGitWrite = null; cancelled = false }
+            try { lastLatest = call() ?: LatestResult(); lastGitWrite = null; cancelled = false; watchingMerge = false }
             finally { staging = false; onReload() }
         }
     }
@@ -257,6 +265,16 @@ fun DiffView(
                 else if (r?.ok != true) lastGitWrite = op to r
             } finally { staging = false; onReload() }
         }
+    }
+    var mergeOpen by remember { mutableStateOf(false) }
+    var readiness by remember { mutableStateOf<FinishReadiness?>(null) }
+    if (mergeOpen && baseName != null && mergeIntoBase != null) {
+        LaunchedEffect(Unit) { readiness = mergeReadiness?.invoke() }
+        MergeDialog(baseName, aheadOfBase, readiness, onMerge = { checks ->
+            mergeOpen = false
+            watchingMerge = true; lastGitWrite = null; lastLatest = null; cancelled = false
+            mergeIntoBase(checks)
+        }, onDismiss = { mergeOpen = false })
     }
     val resolvePrompt = baseName?.let { b -> localized(Str.git_agent_resolve_prompt, b, clashing.joinToString(", ") { it.second.path }) }
     val conflictChoices: (String, DiffFile) -> (@Composable () -> Unit)? = { repoId, f ->
@@ -636,6 +654,7 @@ fun DiffView(
                 onMessage = { commitMessage = it },
                 last = lastGitWrite,
                 note = when {
+                    watchingMerge && mergeJob != null && baseName != null -> mergeNote(mergeJob, baseName)
                     cancelled -> localized(Str.git_merge_cancelled)
                     else -> lastLatest?.let { latestNote(it, baseName.orEmpty()) }
                 },
@@ -646,6 +665,8 @@ fun DiffView(
                 onAmend = { runGit("commit", amend = true) },
                 onUndo = { runGit("uncommit") },
                 onGetLatest = { getLatest() },
+                mergeLabel = if (mergeIntoBase != null && baseName != null && aheadOfBase > 0 && !merging && mergeJob?.status != "running") localized(Str.git_merge_into, baseName) else null,
+                onMerge = { readiness = null; mergeOpen = true },
             )
         }
 

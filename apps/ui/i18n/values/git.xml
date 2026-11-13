@@ -67,4 +67,23 @@
     </plurals>
     <string name="git_latest_failed">Couldn't get the latest: %1$s</string>
     <string name="git_merge_cancelled">Merge cancelled. Everything is as it was.</string>
+    <string name="git_merge_into">Merge into %1$s…</string>
+    <plurals name="git_merge_title">
+        <item quantity="one">Merge %1$d commit into %2$s</item>
+        <item quantity="other">Merge %1$d commits into %2$s</item>
+    </plurals>
+    <string name="git_merge_body">It goes into %1$s in your own folder. Nothing else there changes.</string>
+    <string name="git_merge_clash_warning">Some of it clashes with %1$s. It is merged in here first, so you can settle it before anything moves.</string>
+    <string name="git_merge_uncommitted">This chat has changes that aren't committed. Commit or undo them first.</string>
+    <string name="git_merge_run_checks">Run the project's checks first</string>
+    <string name="git_merge_confirm">Merge into %1$s</string>
+    <string name="git_cancel">Cancel</string>
+    <string name="git_merging">Merging into %1$s…</string>
+    <string name="git_merged">Merged into %1$s</string>
+    <string name="git_merge_tests_failed">The checks failed, so nothing was merged</string>
+    <string name="git_merge_no_checks">This project has no checks set up (.mux/verify.sh)</string>
+    <string name="git_merge_dirty_base">%1$s in your folder has uncommitted changes in files this would touch</string>
+    <string name="git_merge_moved">%1$s moved while merging. Try again.</string>
+    <string name="git_merge_nothing">Nothing to merge: %1$s already has this chat's commits</string>
+    <string name="git_merge_failed">Couldn't merge: %1$s</string>
 </resources>
