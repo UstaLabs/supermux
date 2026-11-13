@@ -3,7 +3,7 @@ package dev.supermux.editor.syntax
 import kotlin.system.exitProcess
 
 /**
- * `java -cp "<app dir>/*" dev.supermux.editor.syntax.SyntaxSelfCheck`: the editor's syntax highlighting, proven
+ * `java -cp "<app dir>\app\*" dev.supermux.editor.syntax.SyntaxSelfCheck` (a Windows image): the editor's syntax highlighting, proven
  * inside a PACKAGED desktop app with its own runtime and jars (#138). The library loads from the jar through
  * [SesNativeLoader], a compiled-in grammar and a tables-only one parse, and their highlight queries capture.
  * release.yml runs it on the built Windows image; in the app, the same failure only turns every editor into
