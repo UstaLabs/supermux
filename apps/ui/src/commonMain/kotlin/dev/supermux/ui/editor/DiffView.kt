@@ -19,8 +19,6 @@
 // open-comment count — is the shared behaviour both apps already had.
 package dev.supermux.ui.editor
 
-import dev.supermux.ui.resources.git_in_next_commit
-import dev.supermux.ui.resources.Res
 import dev.supermux.ui.i18n.localizedPlural
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -107,6 +105,7 @@ import dev.supermux.ui.retain.rememberRetainedScope
 import dev.supermux.ui.prefs.EDITOR_DIFF_TREE_VIEW_DEFAULT
 import dev.supermux.ui.prefs.EDITOR_DIFF_SIDE_BY_SIDE_DEFAULT
 import androidx.compose.runtime.collectAsState
+import dev.supermux.ui.i18n.Plurals
 
 // ─── Diff colours — same semantic palette as iOS DiffView.swift:38-41 (emerald/red/
 //     blue/amber), applied as opacity tints so they read in light + dark. State is never
@@ -303,7 +302,7 @@ fun DiffView(
                 val inCount = uncommitted.count { it.second.staged != "none" }
                 val all = uncommitted.all { it.second.staged == "all" }
                 Text(
-                    localizedPlural(Res.plurals.git_in_next_commit, inCount, inCount, uncommitted.size),
+                    localizedPlural(Plurals.git_in_next_commit, inCount, inCount, uncommitted.size),
                     style = MaterialTheme.typography.labelSmall,
                     color = cs.onSurfaceVariant,
                     maxLines = 1,
