@@ -250,9 +250,18 @@ test("holders lists the processes with a file open; off Linux it knows none", ()
   const fd = openSync(path, "r")
   try {
     if (process.platform === "linux") expect(proc.holders(path)).toContain(process.pid)
-    expect(proc.holders(path, { platform: "darwin" })).toEqual([])
+    expect(proc.holders(path, { platform: "win32" })).toEqual([])
     expect(proc.holders(join(dir, "nobody-has-this"))).toEqual([])
   } finally {
     closeSync(fd)
   }
+})
+
+test("holders on macOS asks lsof for the pids, and an lsof that fails or is missing knows none", () => {
+  const asked: string[][] = []
+  const lsof = (argv: string[]) => { asked.push(argv); return { exitCode: 0, stdout: "123\n456\n" } }
+  expect(proc.holders("/s/db.sqlite3", { platform: "darwin", run: lsof })).toEqual([123, 456])
+  expect(asked).toEqual([["/usr/sbin/lsof", "-t", "--", "/s/db.sqlite3"]])
+  expect(proc.holders("/s/db.sqlite3", { platform: "darwin", run: () => ({ exitCode: 1, stdout: "" }) })).toEqual([])
+  expect(proc.holders("/s/db.sqlite3", { platform: "darwin", run: () => { throw new Error("ENOENT") } })).toEqual([])
 })

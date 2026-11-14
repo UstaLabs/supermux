@@ -357,12 +357,30 @@ export function posixShell(env: CommandEnvironment = process.env, options: Resol
   return candidates.find((path) => !path.toLowerCase().startsWith(system) && fileExists(path)) ?? null
 }
 
+/** Runs a command to its end: its exit code and stdout. */
+export type RunSync = (argv: string[]) => { exitCode: number | null; stdout: string }
+
+const runSync: RunSync = (argv) => {
+  const r = nodeSpawnSync(argv[0]!, argv.slice(1), { encoding: "utf8", windowsHide: true, timeout: 5_000 })
+  return { exitCode: r.status, stdout: r.stdout ?? "" }
+}
+
 /**
- * The pids that have [path] open, read from /proc/<pid>/fd: Linux only (another OS answers []), and only processes this
- * user may look into. For a log line naming who holds a locked file, never for a decision.
+ * The pids that have [path] open: Linux reads /proc/<pid>/fd, macOS asks lsof, another OS answers []. Only processes
+ * this user may look into. For a log line naming who holds a locked file, never for a decision.
  */
-export function holders(path: string, options: { platform?: NodeJS.Platform } = {}): number[] {
-  if ((options.platform ?? process.platform) !== "linux") return []
+export function holders(path: string, options: { platform?: NodeJS.Platform; run?: RunSync } = {}): number[] {
+  const platform = options.platform ?? process.platform
+  if (platform === "darwin") {
+    try {
+      const r = (options.run ?? runSync)(["/usr/sbin/lsof", "-t", "--", path])
+      if (r.exitCode !== 0) return []
+      return r.stdout.split(/\s+/).filter((pid) => /^\d+$/.test(pid)).map(Number)
+    } catch {
+      return []
+    }
+  }
+  if (platform !== "linux") return []
   const found: number[] = []
   let pids: string[]
   try { pids = readdirSync("/proc").filter((name) => /^\d+$/.test(name)) } catch { return [] }
