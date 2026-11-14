@@ -6,7 +6,8 @@
  *   2. a paired one opens the seeded session, and a fenced Kotlin block in the reply renders in the
  *      chat's code editor: its font comes from the TERMINAL's JetBrains Mono path and never the
  *      editor's (the editor's copy is no longer shipped), and with the real syntax module staged
- *      (MUX_SMOKE_REQUIRE_SYNTAX=1) the syntax module loads and the block draws in more than one colour;
+ *      (MUX_SMOKE_REQUIRE_SYNTAX=1) the syntax module and the PHP table (a .br sibling) load and both a
+ *      built-in grammar's block (Kotlin) and a table grammar's (PHP) draw in more than one colour;
  *   3. a Terminal tab opens and the terminal engine wasm loads;
  *   4. every wasm the browser fetched with br offered came back br, and an explicit br request for
  *      the app wasm is answered with the precompressed sibling.
@@ -100,7 +101,9 @@ export async function main(): Promise<void> {
 
     await tap(byTag(page, "composer-input"))
     await page.keyboard.type("smoke:", { delay: 10 })
-    for (const line of ["```kotlin", "fun main() { val answer = 42; println(\"hi $answer\") }", "```"]) {
+    // Kotlin's grammar is built into the syntax module; PHP's is a code-only table (php.sesz, which
+    // precompress gives a .br sibling), so the second block exercises the table fetch under brotli.
+    for (const line of ["```kotlin", "fun main() { val answer = 42; println(\"hi $answer\") }", "```", "```php", "<?php function hi($n) { return \"hi \" . $n; } echo hi(42);", "```"]) {
       await page.keyboard.press("Shift+Enter")
       await page.keyboard.type(line, { delay: 5 })
     }
@@ -115,17 +118,21 @@ export async function main(): Promise<void> {
     if (fonts.some((s) => s.url.includes(EDITOR_FONT))) fail("the editor's own JetBrains Mono was requested; it should come from the terminal's copy", fonts)
     if (!fonts.some((s) => s.url.includes(TERMINAL_FONT) && s.status === 200)) fail("JetBrains Mono (terminal copy) was never loaded for the code block", fonts)
 
-    const grammar = seen.find((s) => /\/kotlin\.sesz(\?|$)/.test(s.url))
+    const grammar = seen.find((s) => /\/php\.sesz(\?|$)/.test(s.url))
     const syntaxWasm = seen.find((s) => /supermux-syntax-[0-9a-f]{8}\.wasm/.test(s.url))
     if (requireSyntax) {
       if (!syntaxWasm || syntaxWasm.status !== 200 || syntaxWasm.bytes === 0) fail("the syntax module did not load", seen)
-      // Kotlin's grammar is built into the syntax module; only the code-only grammars fetch a .sesz table.
-      if (grammar && grammar.status !== 200) fail(`the Kotlin grammar table answered ${grammar.status}`, seen)
-      const box = await block.boundingBox()
-      if (!box) fail("the code block has no box on screen")
-      const png = await page.screenshot({ clip: box, path: join(shots, "2b-code-block-crop.png") })
-      const colours = await colourCount(page, png)
-      if (colours < 2) fail(`the code block draws in ${colours} colour(s): no syntax highlighting`)
+      if (!grammar || grammar.status !== 200 || grammar.bytes === 0) fail("the PHP grammar table (php.sesz) did not load", seen)
+      if (grammar.offeredBr && grammar.encoding !== "br") fail(`php.sesz was offered br but came back ${grammar.encoding ?? "uncompressed"}`, seen)
+      const blocks = await byTag(page, "chat_code_editor").all()
+      let colours = Number.MAX_SAFE_INTEGER
+      for (const [i, b] of blocks.slice(-2).entries()) {
+        const box = await b.boundingBox()
+        if (!box) fail(`code block ${i} has no box on screen`)
+        const n = await colourCount(page, await page.screenshot({ clip: box, path: join(shots, `2b-code-block-${i}.png`) }))
+        if (n < 2) fail(`code block ${i} draws in ${n} colour(s): no syntax highlighting`)
+        colours = Math.min(colours, n)
+      }
       console.log(`bundle smoke: highlighting ok (${colours} colour buckets, syntax module ${syntaxWasm.bytes} bytes)`)
     } else {
       console.log(`bundle smoke: syntax module ${syntaxWasm ? `${syntaxWasm.bytes} bytes` : "not requested"} — highlighting not required (MUX_SMOKE_REQUIRE_SYNTAX unset)`)
