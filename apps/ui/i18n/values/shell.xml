@@ -188,4 +188,6 @@
         <item quantity="one">yesterday</item>
         <item quantity="other">%1$d days ago</item>
     </plurals>
+    <!-- #151: a close the broker refused; the tab is back -->
+    <string name="shell_close_failed">Couldn't close %1$s</string>
 </resources>

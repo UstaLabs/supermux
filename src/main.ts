@@ -2275,9 +2275,17 @@ const workspaceService = new WorkspaceService(
     archiveSession: async (id) => {
       const s = registry.get(id)
       if (!s) return
-      await killSession(s.id)
-      unregisterSession(s.id)
-      webChannel?.broadcastToAll({ type: "session_removed", id: s.id })
+      // #151: the tab is already gone, so the session is archived whatever the kill does: never left half-alive.
+      try {
+        await killSession(s.id)
+      } finally {
+        unregisterSession(s.id)
+        webChannel?.broadcastToAll({ type: "session_removed", id: s.id })
+      }
+    },
+    onViewClosed: (e) => {
+      if (e.ok) log.info("view_closed", e)
+      else log.error("view_closed", e)
     },
     resumeSession: async (id) => {
       const r = await resumeFromArchive(id)
@@ -3293,7 +3301,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       if (!v) throw new Error("view not found")
       return viewDto(v)
     },
-    closeWorkspaceView: async (viewId) => { await workspaceService.closeView(viewId) },
+    // #151: answer once the view is gone; ending its work (the agent's exit, a shell's) follows in the background.
+    closeWorkspaceView: async (viewId) => { workspaceService.beginClose(viewId) },
     moveWorkspaceView: (viewId, toWorkspaceId, toGroupId) =>
       registry.workspaces.moveView(viewId, toWorkspaceId, toGroupId),
     getWorkspaceWorkdir: (id) => registry.workspaces.getById(id)?.workdir,

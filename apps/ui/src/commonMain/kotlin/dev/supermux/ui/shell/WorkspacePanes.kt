@@ -149,6 +149,7 @@ import dev.supermux.workspace.NewViewKind
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.collectViewIds
 import dev.supermux.workspace.firstGroupId
+import dev.supermux.workspace.removeViewFromLayout
 import dev.supermux.workspace.groupIdOf
 import dev.supermux.chat.parseChatTs
 import dev.supermux.net.ClosedSessionDto
@@ -168,6 +169,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
+import dev.supermux.ui.i18n.formatCatalogText
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.i18n.localizedLabels
 
@@ -373,6 +375,8 @@ private fun WorkspacePanesBody(
     var walkthroughSessionId by kept::walkthroughSessionId
     val windowsSeam = LocalPlatform.current.windows
     val notices = LocalPlatform.current.notices
+    // #151: read while composing; a refused close's notice is shown later, outside composition.
+    val closeFailed = localized(Str.shell_close_failed)
     TrackFocusedFileView(ws)
     val bulkLabels = localizedLabels(BulkClose.entries) { it.labelRes }
     val newTabWord = localized(Str.shell_new_tab)
@@ -404,6 +408,7 @@ private fun WorkspacePanesBody(
     // workspace). Theirs is made in that pane, then moved into a pane of its own at the workspace's edge.
     val mainWindow = hostId == ui.windows.mainHostId
     val topRight = topRightGroupId(layout)
+    ForgetClosedTabs(ws)
     val splitButtons = remember(mainWindow, topRight, layoutSync, app, current.id, hostId) {
         if (!mainWindow) {
             null
@@ -570,7 +575,7 @@ private fun WorkspacePanesBody(
     closeCandidate?.let { v ->
         if (!v.closeNeedsConfirmation()) {
             LaunchedEffect(v.id) {
-                runCatching { app.api.closeView(v.workspaceId, v.id) }
+                closeTabNow(ws, app, v) { notices.show(formatCatalogText(closeFailed, arrayOf(liveViewTitle(it, sessionNames::get)))) }
                 onCloseCandidate(null)
             }
         } else {
@@ -579,10 +584,8 @@ private fun WorkspacePanesBody(
                 sessionNames = sessionNames,
                 onDismiss = { onCloseCandidate(null) },
                 onConfirm = {
-                    overlayScope.launch {
-                        runCatching { app.api.closeView(v.workspaceId, v.id) }
-                        onCloseCandidate(null)
-                    }
+                    closeTabNow(ws, app, v) { notices.show(formatCatalogText(closeFailed, arrayOf(liveViewTitle(it, sessionNames::get)))) }
+                    onCloseCandidate(null)
                 },
                 chatWorkdir = v.chatSessionId()?.let { sid -> app.sessions.value.firstOrNull { it.id == sid }?.workdir },
                 worktreeForWorkdir = { app.worktreeForWorkdir(it) },
@@ -634,12 +637,15 @@ fun PhoneWorkspacePanes(
     // extra window, must not show those views twice.
     val windowsSeam = LocalPlatform.current.windows
     val notices = LocalPlatform.current.notices
+    // #151: read while composing; a refused close's notice is shown later, outside composition.
+    val closeFailed = localized(Str.shell_close_failed)
     val scope = rememberCoroutineScope()
-    val layout = ui.windows.layoutFor(
-        ui.windows.mainHostId,
-        current.layout.toDomainOrNull() ?: ws.layoutSync.tree,
+    val layout = withoutClosing(
+        ui.windows.layoutFor(ui.windows.mainHostId, current.layout.toDomainOrNull() ?: ws.layoutSync.tree),
+        ws.closing.keys,
     )
     val tabs = phoneTabModel(layout, current.activeViewId)
+    ForgetClosedTabs(ws)
     val viewsById = ws.viewsById
     // A Browser tab closed here or elsewhere lets its live page go (#105).
     dev.supermux.ui.browser.ReleaseClosedBrowserTabs(viewsById.values)
@@ -652,7 +658,7 @@ fun PhoneWorkspacePanes(
 
     fun closeOrConfirm(view: ViewDto) {
         if (view.closeNeedsConfirmation()) kept.askToClose(view)
-        else app.closeWorkspaceView(current.id, view.id)
+        else closeTabNow(ws, app, view) { notices.show(formatCatalogText(closeFailed, arrayOf(liveViewTitle(it, sessionNames::get)))) }
     }
 
     // Same as the wide strip: a bulk close feeds each tab to its own close, one at a time.
@@ -1082,7 +1088,7 @@ fun PhoneWorkspacePanes(
             sessionNames = sessionNames,
             onDismiss = { kept.askToClose(null) },
             onConfirm = {
-                app.closeWorkspaceView(current.id, v.id)
+                closeTabNow(ws, app, v) { notices.show(formatCatalogText(closeFailed, arrayOf(liveViewTitle(it, sessionNames::get)))) }
                 kept.askToClose(null)
             },
             chatWorkdir = v.chatSessionId()?.let { sid -> app.sessions.value.firstOrNull { it.id == sid }?.workdir },
@@ -1634,4 +1640,45 @@ private fun NewTabView(newTab: ViewDto, hostId: String, current: WorkspaceDto, w
             }
         },
     )
+}
+
+/**
+ * #151: [tree] without the tabs being closed ([closing]): a close leaves the screen at once, before the broker's frame
+ * drops it. A pane left with none goes; a workspace left with none keeps one empty pane.
+ */
+internal fun withoutClosing(tree: LayoutNode, closing: Set<String>): LayoutNode {
+    if (closing.isEmpty()) return tree
+    var out: LayoutNode? = tree
+    for (id in closing) out = out?.let { removeViewFromLayout(it, id) }
+    return out ?: LayoutNode.Group(firstGroupId(tree) ?: "", emptyList(), null)
+}
+
+/**
+ * #151: close [view] now: it leaves the screen at once ([WorkspaceSession.closing]) and the broker's work follows.
+ * A close the broker refuses brings the tab back, with a notice.
+ */
+internal fun closeTabNow(ws: WorkspaceSession, app: HostStore, view: ViewDto, onFailed: (ViewDto) -> Unit) {
+    val clicked = Clock.System.now().toEpochMilliseconds()
+    ws.closing[view.id] = clicked
+    app.closeWorkspaceView(
+        view.workspaceId, view.id,
+        onDone = { println("[close] ${view.kind} ${view.id}: broker answered after ${Clock.System.now().toEpochMilliseconds() - clicked} ms") },
+    ) {
+        ws.closing.remove(view.id)
+        onFailed(view)
+    }
+}
+
+/** #151: a tab whose close the broker has made is gone from its tree too, so [WorkspaceSession.closing] lets it go. */
+@Composable
+internal fun ForgetClosedTabs(ws: WorkspaceSession) {
+    val tree = ws.layoutSync.tree
+    LaunchedEffect(tree) {
+        val present = collectViewIds(tree).toSet()
+        val now = Clock.System.now().toEpochMilliseconds()
+        ws.closing.filterKeys { it !in present }.forEach { (id, clicked) ->
+            println("[close] $id: gone from the broker's layout after ${now - clicked} ms")
+            ws.closing.remove(id)
+        }
+    }
 }
