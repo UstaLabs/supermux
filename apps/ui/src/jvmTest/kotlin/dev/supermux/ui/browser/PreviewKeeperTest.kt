@@ -4,7 +4,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.plus
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -148,7 +147,7 @@ class PreviewKeeperTest {
     @Test fun oneDriverAtATimeAndAnotherTakesOverWhenItsScopeEnds() = runTest {
         val keeper = PreviewKeeper(mint = { "k" }, now = { 0L })
         val first = Job(coroutineContext[Job])
-        val a = keeper.drive(this + first, MutableSharedFlow())
+        val a = keeper.drive(kotlinx.coroutines.CoroutineScope(coroutineContext + first), MutableSharedFlow())
         assertSame(a, keeper.drive(this, MutableSharedFlow()))
         first.cancel()
         runCurrent()
