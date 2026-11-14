@@ -161,6 +161,8 @@ export function codex(options: CodexOptions): AgentDriver {
       completion: ReturnType<typeof deferred<{stopReason: string}>>
       early: any[]
       finished: boolean
+      /** A turn Codex starts itself (thread/compact/start answers {}): told of each early notice to find its turn/started. */
+      onEarly?: () => void
     }
     let owned: OwnedSlot | undefined
     const live = new Map<string, TurnSlot>()
@@ -686,6 +688,7 @@ export function codex(options: CodexOptions): AgentDriver {
           return
         }
         owned.early.push({ method, params })
+        owned.onEarly?.()
         return
       }
       if (turnId == null) {
@@ -1007,6 +1010,36 @@ export function codex(options: CodexOptions): AgentDriver {
         if (capturedSlot && current.generation !== capturedSlot.generation) throw new Error('Codex turn already ended')
         if (capturedOwned && (owned !== capturedOwned || owned.id !== turnId)) throw new Error('Codex turn already ended')
         await rpc.request('turn/steer', { threadId: agentSessionId, expectedTurnId: turnId, input: converted })
+      },
+      // #144: Compact. Codex takes no note on what to keep (its remote compaction has no prompt for OpenAI accounts).
+      compactTakesNote: false,
+      async compact(_note, signal) {
+        if (fatal || closed) throw fatal ?? new Error('Codex runtime closed')
+        signal.throwIfAborted()
+        if (owned || liveUnfinished().length) throw new Error('Codex prompt already running')
+        const a: OwnedSlot = { started: deferred<string>(), completion: deferred<{stopReason:string}>(), early: [], finished: false }
+        owned = a
+        const abort = () => { void interrupt().catch(error => { a.completion.reject(error) }) }
+        signal.addEventListener('abort', abort, { once: true })
+        try {
+          // The compaction is a turn Codex starts itself: its id comes with its turn/started, held in `early` meanwhile.
+          const startedTurn = () => a.early.find(e => e.method === 'turn/started' && typeof e.params?.turn?.id === 'string')?.params.turn.id as string | undefined
+          const turnStarted = new Promise<string>((resolve, reject) => {
+            a.onEarly = () => { const id = startedTurn(); if (id) resolve(id) }
+            failure.promise.catch(reject)
+          })
+          await rpc.request('thread/compact/start', { threadId: agentSessionId })
+          const turnId = startedTurn() ?? await turnStarted
+          a.onEarly = undefined
+          if (owned !== a) throw new Error('Codex turn already ended')
+          a.id = turnId
+          const slot = bindLive(turnId, 'owned')
+          if (slot) a.generation = slot.generation
+          const early = a.early.splice(0)
+          for (const update of early) dispatchNotify({ method: update.method, params: update.params })
+          return await a.completion.promise
+        } catch (error) { a.started.reject(error instanceof Error ? error : new Error(String(error))); throw error }
+        finally { signal.removeEventListener('abort', abort); if (owned === a) owned = undefined }
       },
       async prompt(content, signal) {
         if (fatal || closed) throw fatal ?? new Error('Codex runtime closed')

@@ -415,6 +415,22 @@ export class Session {
     return { via: "relay", receipt, delivery }
   }
 
+  /**
+   * #144 Compact: the agent summarizes the conversation and drops the rest, as a turn in the queue like a message.
+   * [note] says what to keep where the agent takes one (`canCompact().note`).
+   */
+  async compact(options: { note?: string; whenBusy: "queue" | "reject" }): Promise<Receipt> {
+    this.assertReady()
+    if (!this.runtime.compact) throw new UnsupportedOperation("compact", this.record.agent)
+    const note = options.note?.trim() || undefined
+    return this.send({ content: [{ type: "text", text: note ? `/compact ${note}` : "/compact" }], whenBusy: options.whenBusy, compact: note ? { note } : {} })
+  }
+
+  /** #144: whether this agent can Compact from here, and whether it takes a note on what to keep. */
+  canCompact(): { compact: boolean; note: boolean } {
+    return { compact: !!this.runtime?.compact, note: !!this.runtime?.compact && this.runtime.compactTakesNote === true }
+  }
+
   /** What fills the context window now (#144); undefined when the agent doesn't report a breakdown. */
   async contextBreakdown(): Promise<ContextBreakdown | undefined> {
     this.assertReady()
@@ -714,7 +730,9 @@ export class Session {
 
   private async run(entry: Entry, abort: AbortController): Promise<void> {
     try {
-      const result = await this.runtime.prompt(entry.input.content, abort.signal)
+      const result = entry.input.compact && this.runtime.compact
+        ? await this.runtime.compact(this.runtime.compactTakesNote ? entry.input.compact.note : undefined, abort.signal)
+        : await this.runtime.prompt(entry.input.content, abort.signal)
       entry.finish(result.stopReason === "cancelled" ? { status: "cancelled" } : { status: "completed", stopReason: result.stopReason })
     } catch (error) {
       entry.finish(abort.signal.aborted ? { status: "cancelled" } : { status: "failed", error: asError(error) })

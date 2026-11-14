@@ -234,3 +234,26 @@ test("grokContextBreakdown: _x.ai/session/info's categories (its own `used` coun
   })
   expect(grokContextBreakdown({ result: {} })).toBeUndefined()
 })
+
+test("Grok's own compaction notices become compaction events; its tokens_after is not trusted (#144)", () => {
+  const n = createAcpNormalizer({ vendor: "grok" })
+  const notice = (update: Record<string, unknown>): AgentUpdate => ({ protocol: "native", value: { method: "_x.ai/session_notification", params: { sessionId: "s", update } } })
+  expect(n(notice({ sessionUpdate: "auto_compact_started", tokens_used: 210000, context_window: 256000, percentage: 82 })))
+    .toEqual([{ kind: "compaction", compactionId: "grok-compact-1", status: "in_progress" }])
+  // Real 1.0.46: tokens_after equals tokens_before on a first compaction, so only "before" is kept.
+  expect(n(notice({ sessionUpdate: "auto_compact_completed", tokens_before: 28200, tokens_after: 28200, summary_preview: null })))
+    .toEqual([{ kind: "compaction", compactionId: "grok-compact-1", status: "completed", before: 28200 }])
+  expect(n(notice({ sessionUpdate: "auto_compact_failed", error: "boom" })))
+    .toEqual([{ kind: "compaction", compactionId: "grok-compact-2", status: "failed", error: "boom" }])
+})
+
+test("OpenCode: the driver's compaction marks become compaction events, from the last size it reported (#144)", () => {
+  const n = createAcpNormalizer({ vendor: "opencode" })
+  n(acp("usage_update", { used: 171000, size: 200000 }))
+  const mark = (status: string) => ({ protocol: "native" as const, value: { method: "compaction", params: { status } } })
+  expect(n(mark("in_progress"))).toEqual([{ kind: "compaction", compactionId: "compact-1", status: "in_progress" }])
+  // Right after /compact OpenCode reports the summarizing call itself (real 1.18.34: 469): not the window's size.
+  expect(n(acp("usage_update", { used: 469, size: 200000 }))).toEqual([{ kind: "usage" }])
+  expect(n(mark("completed"))).toEqual([{ kind: "compaction", compactionId: "compact-1", status: "completed", before: 171000 }])
+  expect(n(acp("usage_update", { used: 18000, size: 200000 }))[0]).toMatchObject({ context: { used: 18000, size: 200000 } })
+})

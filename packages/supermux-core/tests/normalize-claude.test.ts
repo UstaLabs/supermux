@@ -413,3 +413,52 @@ describe("claudeContextBreakdown (#144)", () => {
     expect(claudeContextBreakdown(null)).toBeUndefined()
   })
 })
+
+describe("compaction (#144)", () => {
+  // Real 2.1.308 frames of a manual /compact (trimmed): status compacting → status success → init → compact_boundary
+  // → the summary as a synthetic replayed user frame → "Compacted" → result.
+  const frames = [
+    { type: "system", subtype: "status", status: "compacting", uuid: "36523f3e" },
+    { type: "system", subtype: "status", status: null, compact_result: "success", uuid: "810461f3" },
+    { type: "system", subtype: "init", cwd: "/tmp", model: "claude-haiku-5-5" },
+    { type: "system", subtype: "compact_boundary", uuid: "f70e6172", compact_metadata: { trigger: "manual", pre_tokens: 26905, post_tokens: 8621, cumulative_dropped_tokens: 18284, duration_ms: 7497 } },
+    { type: "user", isReplay: true, isSynthetic: true, message: { role: "user", content: "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n1. Primary Request: remember PELICAN-7731." } },
+    { type: "user", isReplay: true, message: { role: "user", content: "<local-command-stdout>Compacted </local-command-stdout>" } },
+  ]
+
+  test("a compaction is in progress, then completed with its before → after and Claude's summary", () => {
+    const n = createClaudeNormalizer()
+    // A turn before it told the window and its size.
+    n(native({ type: "assistant", message: { id: "m0", model: "claude-haiku-5-5", role: "assistant", content: [{ type: "text", text: "OK" }], usage: { input_tokens: 2, cache_read_input_tokens: 26903, output_tokens: 1 } } }))
+    n(native({ type: "result", subtype: "success", is_error: false, result: "OK", usage: {}, modelUsage: { "claude-haiku-5-5": { contextWindow: 1000000 } } }))
+    const out = frames.flatMap(f => n(native(f)))
+    expect(out.filter(b => b.kind === "compaction")).toEqual([
+      { kind: "compaction", compactionId: "36523f3e", status: "in_progress" },
+      {
+        kind: "compaction", compactionId: "36523f3e", status: "completed", trigger: "manual", before: 26905, after: 8621,
+        summary: "Summary:\n1. Primary Request: remember PELICAN-7731.",
+      },
+    ])
+    // The window now holds what the compaction left, at once and on the turn's result.
+    expect(out.filter(b => b.kind === "usage")).toEqual([{ kind: "usage", context: { used: 8621, size: 1000000 } }])
+    const result = n(native({ type: "result", subtype: "success", is_error: false, result: "", num_turns: 0, usage: { input_tokens: 0, output_tokens: 0 } }))
+    expect(result.find(b => b.kind === "usage")).toMatchObject({ context: { used: 8621, size: 1000000 } })
+    // Nothing of it is a chat message.
+    expect(out.some(b => b.kind === "assistant-message" || b.kind === "user-message")).toBe(false)
+  })
+
+  test("a failed compaction says so", () => {
+    const n = createClaudeNormalizer()
+    n(native(frames[0]))
+    expect(n(native({ type: "system", subtype: "status", status: null, compact_result: "failed", compact_error: "Not enough messages to compact." })))
+      .toEqual([{ kind: "compaction", compactionId: "36523f3e", status: "failed", error: "Not enough messages to compact." }])
+  })
+
+  test("an automatic compaction (no status frames) still completes at its boundary", () => {
+    const n = createClaudeNormalizer()
+    const out = n(native({ type: "system", subtype: "compact_boundary", uuid: "b1", compact_metadata: { trigger: "auto", pre_tokens: 967000, post_tokens: 20113 } }))
+    expect(out.filter(b => b.kind === "compaction")).toEqual([])
+    const summary = n(native(frames[4]))
+    expect(summary).toEqual([{ kind: "compaction", compactionId: "b1", status: "completed", trigger: "auto", before: 967000, after: 20113, summary: "Summary:\n1. Primary Request: remember PELICAN-7731." }])
+  })
+})

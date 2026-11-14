@@ -153,6 +153,8 @@ export type SendOptions = {
   content: ContentBlock[]
   whenBusy: "queue" | "reject"
   idempotencyKey?: string
+  /** #144: this turn is a Compact (Session.compact), run by runtime.compact with this note. */
+  compact?: { note?: string }
 }
 
 /** ACP payloads stay intact; native integrations may use a separate namespace. */
@@ -364,6 +366,12 @@ export type AgentRuntime = {
   messageSubagent?(subagentId: string, content: ContentBlock[]): Promise<SubagentMessageResult>
   /** Stop a running subagent without interrupting the main turn. */
   stopSubagent?(subagentId: string): Promise<void>
+  /**
+   * #144 Compact: the agent summarizes the conversation and drops the rest, as a turn of its own. [note] says what to
+   * keep, where the agent takes one ([compactTakesNote]); others ignore it.
+   */
+  compact?(note: string | undefined, signal: AbortSignal): Promise<{ stopReason: string }>
+  readonly compactTakesNote?: boolean
   /** What fills the context window, asked of the agent now (#144); undefined where the agent doesn't say. */
   contextBreakdown?(): Promise<ContextBreakdown | undefined>
   /** Session context changes this process can take without a relaunch (session.updateContext). */

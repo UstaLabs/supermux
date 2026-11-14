@@ -1053,6 +1053,24 @@ export function acp(options: AcpOptions): AgentDriver {
         close,
         messageSubagent,
         stopSubagent,
+        // #144 Compact: Grok and OpenCode compact on a "/compact" prompt (both drop any text after it, verified live).
+        // Cursor's ACP does not: its /summarize lives only in its own terminal app.
+        ...(options.vendor === 'grok' || options.vendor === 'opencode' ? {
+          compactTakesNote: false,
+          async compact(_note: string | undefined, signal: AbortSignal) {
+            // OpenCode announces no compaction: the turn is bracketed here so the chat can mark it.
+            const mark = (params: Record<string, unknown>) => { if (options.vendor === 'opencode' && session && !closed) session.onUpdate({ protocol: 'native', value: { method: 'compaction', params } }) }
+            mark({ status: 'in_progress' })
+            try {
+              const result = await prompt([{ type: 'text', text: '/compact' }], signal)
+              mark({ status: result.stopReason === 'cancelled' ? 'cancelled' : 'completed' })
+              return result
+            } catch (error) {
+              mark({ status: 'failed', error: error instanceof Error ? error.message : String(error) })
+              throw error
+            }
+          },
+        } : {}),
         // Grok says what fills its context (#144): `_x.ai/session/info`. The other ACP agents report totals only.
         ...(options.vendor === 'grok' ? {
           async contextBreakdown() {

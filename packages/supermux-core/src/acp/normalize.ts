@@ -222,6 +222,9 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
   let lastCommandsJson: string | undefined
   /** Each model's context window and the one in use (#144): Grok reports usage per call but no window with it. */
   const windows: { current?: string; sizes: Record<string, number> } = { sizes: {} }
+  const grokCompaction = { seq: 0, open: false }
+  const driverCompaction: { seq: number; open: boolean; before?: number } = { seq: 0, open: false }
+  let lastContextUsed: number | undefined
   let lastModelsJson: string | undefined
   let firstSession: string | undefined
   const scopes = new Map<string, Scope>()
@@ -421,6 +424,17 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
     const kind = value.sessionUpdate
     const subagentId = scope.subagentId
     if (kind === "turn_completed" || kind === "user_message_chunk") return []
+    if (kind === "auto_compact_started" || kind === "auto_compact_completed" || kind === "auto_compact_failed") {
+      // Grok's compaction (#144), its own or a /compact. tokens_after repeats tokens_before on a first one (1.0.46).
+      if (sub) return []
+      if (!grokCompaction.open) { grokCompaction.seq += 1; grokCompaction.open = true }
+      const compactionId = `grok-compact-${grokCompaction.seq}`
+      if (kind === "auto_compact_started") return [{ kind: "compaction", compactionId, status: "in_progress" }]
+      grokCompaction.open = false
+      if (kind === "auto_compact_failed") return [{ kind: "compaction", compactionId, status: "failed", error: str(value.error) ?? str(value.message) ?? "Compaction failed" }]
+      const before = num(value.tokens_before)
+      return [{ kind: "compaction", compactionId, status: "completed", ...(before != null ? { before } : {}) }]
+    }
     if (kind === "response_completed") {
       // Grok, one per model call: what that call sent is how full the window is now (#144).
       const usage = rec(value.usage)
@@ -579,7 +593,10 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
     }
     if (kind === "usage_update") {
       // OpenCode sends used 0 (with the failed model's window) after a refused turn: no size, the last good one stands.
-      const used = typeof value.used === "number" && value.used > 0 ? value.used : undefined
+      const reported = typeof value.used === "number" && value.used > 0 ? value.used : undefined
+      // During a compaction OpenCode reports the summarizing call itself, not the window (#144).
+      const used = driverCompaction.open ? undefined : reported
+      if (used != null) lastContextUsed = used
       const size = typeof value.size === "number" ? value.size : undefined
       const costRow = rec(value.cost)
       return [{
@@ -832,6 +849,24 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
   }
 
   function mapNative(method: string, params: unknown): NormalizedBody[] {
+    if (method === "compaction") {
+      // The driver brackets a Compact it ran on an agent that announces none (OpenCode, #144).
+      const status = str(rec(params)?.status)
+      if (status === "in_progress") {
+        driverCompaction.seq += 1
+        driverCompaction.open = true
+        driverCompaction.before = lastContextUsed
+        return [{ kind: "compaction", compactionId: `compact-${driverCompaction.seq}`, status: "in_progress" }]
+      }
+      if (!driverCompaction.open || (status !== "completed" && status !== "failed" && status !== "cancelled")) return []
+      driverCompaction.open = false
+      const error = str(rec(params)?.error)
+      return [{
+        kind: "compaction", compactionId: `compact-${driverCompaction.seq}`, status,
+        ...(status === "completed" && driverCompaction.before != null ? { before: driverCompaction.before } : {}),
+        ...(error ? { error } : {}),
+      }]
+    }
     if (method === "model_windows") {
       // The driver forwards each model's context window and the current one (Grok's _meta.modelState).
       const p = rec(params)
