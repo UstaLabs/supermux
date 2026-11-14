@@ -279,8 +279,8 @@ afterEach(async () => {
 })
 
 function listen(adapter: CoreAdapter) {
-  const events: Array<{ kind: string; error?: Error; recoverable?: boolean; text?: string; phase?: string; detail?: unknown; events?: unknown[]; reported?: boolean }> = []
-  for (const k of ["assistant-message", "tool-call", "turn-start", "turn-complete", "turn-failed", "error", "session-failed", "commands-update", "activity"]) {
+  const events: Array<{ kind: string; error?: Error; recoverable?: boolean; text?: string; phase?: string; detail?: unknown; events?: unknown[]; reported?: boolean; used?: number }> = []
+  for (const k of ["assistant-message", "tool-call", "turn-start", "turn-complete", "turn-failed", "error", "session-failed", "commands-update", "context-update", "activity"]) {
     adapter.on(k, (e: { kind: string }) => events.push(e))
   }
   return events
@@ -2829,4 +2829,40 @@ acrossGrok("busy=stop ends the turn at once, even with a tool call running", asy
   fake.completePrompt()
   await Promise.all([first, urgent])
   expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", noted("urgent")])
+})
+
+acrossGrok("a usage update's context becomes contextUsage and one context-update per change (#144)", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  const events = listen(adapter)
+  await adapter.start()
+  fake.emit({ protocol: "acp", value: { sessionUpdate: "usage_update", used: 11465, size: 200000 } })
+  fake.emit({ protocol: "acp", value: { sessionUpdate: "usage_update", used: 11465, size: 200000 } })
+  fake.emit({ protocol: "acp", value: { sessionUpdate: "usage_update", used: 12000, size: 200000 } })
+  await flush()
+  expect(adapter.contextUsage).toEqual({ used: 12000, size: 200000 })
+  expect(events.filter((e) => e.kind === "context-update").map((e) => (e as { used?: number }).used)).toEqual([11465, 12000])
+})
+
+acrossGrok("tools the chat started are counted for 'used in this chat' (#144)", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  await adapter.start()
+  for (const id of ["t1", "t2"]) fake.emit({ protocol: "acp", value: { sessionUpdate: "tool_call", toolCallId: id, title: "Read", kind: "read", status: "pending" } })
+  await flush()
+  expect([...adapter.toolUses.values()].reduce((a, b) => a + b, 0)).toBe(2)
+})
+
+acrossGrok("a compaction notice becomes the adapter's compaction event (#144)", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  const seen: unknown[] = []
+  adapter.on("compaction", (e: unknown) => seen.push(e))
+  await adapter.start()
+  fake.emit({ protocol: "native", value: { method: "_x.ai/session_notification", params: { update: { sessionUpdate: "auto_compact_completed", tokens_before: 28200, tokens_after: 28200 } } } })
+  await flush()
+  expect(seen).toEqual([{ kind: "compaction", compactionId: "grok-compact-1", status: "completed", before: 28200 }])
 })

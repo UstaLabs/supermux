@@ -184,8 +184,10 @@ private fun LimitRows(accounts: AccountsActions) {
     val scope = rememberCoroutineScope()
     val autoSwitch by accounts.autoSwitch.collectAsState(null)
     val autoResume by accounts.autoResume.collectAsState(null)
+    val compactBeforeWait by accounts.compactBeforeWait.collectAsState(null)
     var pendingSwitch by remember { mutableStateOf<Boolean?>(null) }
     var pendingResume by remember { mutableStateOf<Boolean?>(null) }
+    var pendingCompact by remember { mutableStateOf<Boolean?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     val saveFailed = localized(Str.providers_setting_save_failed)
 
@@ -213,6 +215,14 @@ private fun LimitRows(accounts: AccountsActions) {
         onCheckedChange = { save(it, { v -> pendingResume = v }, accounts.setAutoResume) },
         modifier = Modifier.kitAnchor("limit-resume").testTag("accounts-autoresume"),
         description = localized(Str.providers_auto_resume_description),
+    )
+    // #146: compact before the wait, while the cache is still warm (off unless turned on).
+    KitToggleRow(
+        localized(Str.providers_compact_before_wait),
+        checked = pendingCompact ?: compactBeforeWait ?: false,
+        onCheckedChange = { save(it, { v -> pendingCompact = v }, accounts.setCompactBeforeWait) },
+        modifier = Modifier.kitAnchor("compact-before-wait").testTag("accounts-compact-before-wait"),
+        description = localized(Str.providers_compact_before_wait_description),
     )
     error?.let {
         Text(it, fontSize = 12.sp, color = kitColors().warn, modifier = Modifier.padding(top = 6.dp).testTag("accounts-autoswitch-error"))

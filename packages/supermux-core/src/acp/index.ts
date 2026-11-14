@@ -8,7 +8,7 @@ import { ACTIVITY_OVERFLOW } from '../activity.js'
 import { CoreError, UnsupportedOperation } from '../errors.js'
 import { acpPermissionDecision, appliedFor, launchPermissions, validatePermissionsSpec } from '../permissions.js'
 import { connectAcpProcess, type AcpKeeperLimits } from './process.js'
-import { createAcpNormalizer, DRIVER_WARNING_METHOD, OPENCODE_FREE_LIMIT_METHOD, SUBAGENT_SESSION_METHOD, SUBAGENT_TURN_METHOD, type AcpNormalizer, type AcpVendor } from './normalize.js'
+import { createAcpNormalizer, grokContextBreakdown, DRIVER_WARNING_METHOD, OPENCODE_FREE_LIMIT_METHOD, SUBAGENT_SESSION_METHOD, SUBAGENT_TURN_METHOD, type AcpNormalizer, type AcpVendor } from './normalize.js'
 import { freeLoopbackPort, isOpenCodeEndpointMissing, newOpenCodeServerInfo, openCodeAskToAcp, openCodeServerClient, readOpenCodeServerInfo, type OpenCodePendingAsk, type OpenCodeServerClient, type OpenCodeServerInfo } from './opencode-server.js'
 import { detachedKeeperHooks, type KeeperFrameEvent } from '../keeper/client.js'
 import { REASON, SUBAGENT_STATE_METHOD } from '../subagent-actions.js'
@@ -149,6 +149,22 @@ function readConfigOptions(result: unknown): ConfigOption[] {
 /** Callers name models the way pickers list them (`claude-opus-5-5`, `auto`); a select option's wire VALUE
  * may carry parameters (`claude-opus-5-5[context=300k,…]`, `default[]` for Auto). Match by value first, then
  * by the option's display name (case-insensitive); anything else is sent as given so the agent reports it. */
+/**
+ * Each model's context window and the current model (#144), from a result's model state: Grok puts it in
+ * `_meta.modelState` (each model's `_meta.totalContextTokens`), ACP's own `models` has the same shape.
+ */
+export function readModelWindows(result: unknown): { current?: string; windows: Record<string, number> } | undefined {
+  const r = result as { models?: unknown; _meta?: { modelState?: unknown } } | null
+  const state = (r?._meta?.modelState ?? r?.models) as { currentModelId?: unknown; availableModels?: unknown } | undefined
+  if (!state || !Array.isArray(state.availableModels)) return undefined
+  const windows: Record<string, number> = {}
+  for (const model of state.availableModels as Array<{ modelId?: unknown; _meta?: { totalContextTokens?: unknown } }>) {
+    if (typeof model?.modelId === 'string' && typeof model._meta?.totalContextTokens === 'number') windows[model.modelId] = model._meta.totalContextTokens
+  }
+  if (!Object.keys(windows).length) return undefined
+  return { ...(typeof state.currentModelId === 'string' ? { current: state.currentModelId } : {}), windows }
+}
+
 function resolveConfigValue(configOptions: ConfigOption[], configId: string, value: string): string {
   const option = configOptions.find(o => o.id === configId)
   if (!option?.options?.length) return value
@@ -847,6 +863,11 @@ export function acp(options: AcpOptions): AgentDriver {
     let timer: ReturnType<typeof setTimeout>
     const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new CoreError('setup_timeout', 'ACP setup timed out')), setupTimeout) })
     const setup = <T>(promise: Promise<T>) => Promise.race([ioWait(promise), aborted, timeout])
+    // The models' context windows, for the ring (#144): the normalizer pairs them with each call's usage.
+    const forwardModelWindows = (result: unknown) => {
+      const windows = readModelWindows(result)
+      if (windows && session && !closed) session.onUpdate({ protocol: 'native', value: { method: 'model_windows', params: windows } })
+    }
     async function applyNativeMode(spec: Extract<PermissionsSpec, { kind: 'acp' }>, required: boolean) {
       if (spec.nativeMode == null) return
       // At launch a sessionConfig mode was just sent: skip only the same mode again. A different one
@@ -1032,6 +1053,30 @@ export function acp(options: AcpOptions): AgentDriver {
         close,
         messageSubagent,
         stopSubagent,
+        // #144 Compact: Grok and OpenCode compact on a "/compact" prompt (both drop any text after it, verified live).
+        // Cursor's ACP does not: its /summarize lives only in its own terminal app.
+        ...(options.vendor === 'grok' || options.vendor === 'opencode' ? {
+          compactTakesNote: false,
+          async compact(_note: string | undefined, signal: AbortSignal) {
+            // OpenCode announces no compaction: the turn is bracketed here so the chat can mark it.
+            const mark = (params: Record<string, unknown>) => { if (options.vendor === 'opencode' && session && !closed) session.onUpdate({ protocol: 'native', value: { method: 'compaction', params } }) }
+            mark({ status: 'in_progress' })
+            try {
+              const result = await prompt([{ type: 'text', text: '/compact' }], signal)
+              mark({ status: result.stopReason === 'cancelled' ? 'cancelled' : 'completed' })
+              return result
+            } catch (error) {
+              mark({ status: 'failed', error: error instanceof Error ? error.message : String(error) })
+              throw error
+            }
+          },
+        } : {}),
+        // Grok says what fills its context (#144): `_x.ai/session/info`. The other ACP agents report totals only.
+        ...(options.vendor === 'grok' ? {
+          async contextBreakdown() {
+            return grokContextBreakdown(await ioWait(connection.extMethod('_x.ai/session/info', { sessionId: agentSessionId })))
+          },
+        } : {}),
       }
     }
     try {
@@ -1088,6 +1133,7 @@ export function acp(options: AcpOptions): AgentDriver {
       cursorSubagents = options.vendor === 'cursor' && (initialized.agentCapabilities?.sessionCapabilities as { subagents?: unknown } | undefined)?.subagents != null
       if (initialized.protocolVersion !== PROTOCOL_VERSION) throw new CoreError('protocol_version', `Unsupported ACP protocol version ${initialized.protocolVersion}`)
       if (session && !closed) session.onUpdate({ protocol: 'native', value: { method: 'initialize', params: initialized } })
+      forwardModelWindows(initialized)
       const methods = initialized.authMethods ?? []
       async function authenticate(methodId: string) {
         const method = methods.find(method => method.id === methodId)
@@ -1114,6 +1160,7 @@ export function acp(options: AcpOptions): AgentDriver {
         } else throw new UnsupportedOperation('resume', options.id)
       } else {
         const created = await setup(connection.newSession(sessionContext?.newSessionMeta ? { ...params, _meta: sessionContext.newSessionMeta } : params))
+        forwardModelWindows(created)
         agentSessionId = created.sessionId
         configOptions = readConfigOptions(created)
         preamble = sessionContext?.firstPromptBlock

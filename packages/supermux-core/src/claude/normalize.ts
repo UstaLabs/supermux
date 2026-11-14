@@ -1,5 +1,5 @@
 /** Claude headless stream-json mapper. */
-import type { AgentUpdate, SubagentSnapshot } from "../types.js"
+import type { AgentUpdate, ContextBreakdown, SubagentSnapshot } from "../types.js"
 import type { AgentCommandEntry, AgentModelEntry, NormalizedBody, PlanEntryStatus, SubagentEndedBy, SubagentStats, TaskKind } from "../events/normalized.js"
 import { ACCOUNT_UNAVAILABLE_ERROR, NOT_SIGNED_IN_ERROR } from "../accounts/policy.js"
 import { REASON, SUBAGENT_STATE_METHOD, actionFields, actionsKey, endedReason, shortReason, type SubagentActions } from "../subagent-actions.js"
@@ -233,6 +233,58 @@ function statsOf(usage: unknown): SubagentStats | undefined {
   return Object.keys(stats).length ? stats : undefined
 }
 
+const CATEGORY_KINDS = new Set(["used", "deferred", "buffer", "free"])
+
+/** Claude's get_context_usage reply → the breakdown (#144). Its grid and colours are the TUI's; they are dropped. */
+export function claudeContextBreakdown(reply: unknown): ContextBreakdown | undefined {
+  const r = rec(reply)
+  const used = num(r?.totalTokens)
+  const size = num(r?.maxTokens)
+  if (!r || used == null || size == null) return undefined
+  const rows = (value: unknown) => (Array.isArray(value) ? value : []).map(rec).filter((row): row is Record<string, unknown> => !!row)
+  const categories = rows(r.categories).flatMap(row => {
+    const id = str(row.id), name = str(row.name), tokens = num(row.tokens), kind = str(row.kind)
+    return id && name && tokens != null && kind && CATEGORY_KINDS.has(kind)
+      ? [{ id, name, tokens, kind: kind as ContextBreakdown["categories"][number]["kind"] }] : []
+  })
+  const mcpTools = rows(r.mcpTools).flatMap(row => {
+    const server = str(row.serverName), full = str(row.name), tokens = num(row.tokens)
+    if (!server || !full || tokens == null) return []
+    // mcp__<server>__<tool>: the tool's own name is what follows the server's prefix.
+    const name = full.startsWith(`mcp__${server}__`) ? full.slice(`mcp__${server}__`.length) : full
+    return [{ server, name, tokens, loaded: row.isLoaded !== false }]
+  })
+  const mcpInstructions = rows(r.mcpInstructions).flatMap(row => {
+    const server = str(row.serverName), tokens = num(row.tokens)
+    return server && tokens != null ? [{ server, tokens }] : []
+  })
+  const skills = rows(rec(r.skills)?.skillFrontmatter).flatMap(row => {
+    const name = str(row.name), tokens = num(row.tokens), source = str(row.source)
+    return name && tokens != null ? [{ name, tokens, ...(source ? { source } : {}) }] : []
+  })
+  const memoryFiles = rows(r.memoryFiles).flatMap(row => {
+    const path = str(row.path), tokens = num(row.tokens), type = str(row.type)
+    return path && tokens != null ? [{ path, ...(type ? { type } : {}), tokens }] : []
+  })
+  const threshold = r.isAutoCompactEnabled !== false ? num(r.autoCompactThreshold) : undefined
+  return {
+    used, size, ...(threshold != null ? { threshold } : {}), categories,
+    ...(mcpTools.length ? { mcpTools } : {}),
+    ...(mcpInstructions.length ? { mcpInstructions } : {}),
+    ...(skills.length ? { skills } : {}),
+    ...(memoryFiles.length ? { memoryFiles } : {}),
+  }
+}
+
+/** The window of the model the conversation runs on, from a result's modelUsage (the largest one if it isn't listed). */
+function contextWindow(modelUsage: Record<string, unknown> | undefined, model: string | undefined): number | undefined {
+  if (!modelUsage) return undefined
+  const own = model ? num(rec(modelUsage[model])?.contextWindow) : undefined
+  if (own != null) return own
+  const all = Object.values(modelUsage).map(v => num(rec(v)?.contextWindow)).filter((v): v is number => v != null)
+  return all.length ? Math.max(...all) : undefined
+}
+
 export function createClaudeNormalizer(): ClaudeNormalizer {
   let streamMessageId = "message"
   /** Index of the stream block currently open (content_block_start), per streamed message. */
@@ -257,6 +309,43 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
    * in · Please run /login"): its result repeats the text as the turn's error, so it is held, not a reply (#110).
    */
   let apiError: { code?: string; bodies: NormalizedBody[] } | undefined
+  /**
+   * How full the context window is (#144): the main thread's latest request (its input, cache reads and cache writes),
+   * and the window, which only the result's modelUsage carries. `reported` is the last size sent, so the several
+   * frames of one request report once.
+   */
+  const context: { used?: number; size?: number; model?: string; reported?: number } = {}
+  /**
+   * A compaction under way (#144): "compacting" opens it, compact_boundary gives its sizes, and Claude's summary (a
+   * synthetic replayed user frame) or the turn's result completes it.
+   */
+  let compaction: { id: string; trigger?: "manual" | "auto"; before?: number; after?: number; bounded?: boolean } | undefined
+  const COMPACT_SUMMARY = "This session is being continued from a previous conversation"
+
+  function compactionDone(summary?: string): NormalizedBody[] {
+    if (!compaction?.bounded) return []
+    const done = compaction
+    compaction = undefined
+    return [{
+      kind: "compaction", compactionId: done.id, status: "completed",
+      ...(done.trigger ? { trigger: done.trigger } : {}),
+      ...(done.before != null ? { before: done.before } : {}),
+      ...(done.after != null ? { after: done.after } : {}),
+      ...(summary ? { summary } : {}),
+    }]
+  }
+
+  function requestSize(message: Record<string, unknown>): number | undefined {
+    const usage = rec(message.usage)
+    if (!usage || message.model === "<synthetic>") return undefined
+    const used = (num(usage.input_tokens) ?? 0) + (num(usage.cache_read_input_tokens) ?? 0) + (num(usage.cache_creation_input_tokens) ?? 0)
+    return used > 0 ? used : undefined
+  }
+  function contextUpdate(): NormalizedBody[] {
+    if (context.used == null || context.size == null || context.used === context.reported) return []
+    context.reported = context.used
+    return [{ kind: "usage", context: { used: context.used, size: context.size } }]
+  }
 
   function take(kind: "assistant" | "reasoning"): NormalizedBody[] {
     const map = kind === "assistant" ? assistant : reasoning
@@ -746,6 +835,27 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
         }]
       }
       if (subtype && (subtype.startsWith("hook_") || subtype === "hook")) return []
+      if (subtype === "status") {
+        if (frame.status === "compacting") {
+          compaction = { id: str(frame.uuid) ?? "compact" }
+          return [{ kind: "compaction", compactionId: compaction.id, status: "in_progress" }]
+        }
+        const result = str(frame.compact_result)
+        if (result && result !== "success" && compaction) {
+          const id = compaction.id
+          compaction = undefined
+          return [{ kind: "compaction", compactionId: id, status: "failed", error: str(frame.compact_error) ?? "Compaction failed" }]
+        }
+        return []
+      }
+      if (subtype === "compact_boundary") {
+        const meta = rec(frame.compact_metadata)
+        const trigger = meta?.trigger === "manual" || meta?.trigger === "auto" ? meta.trigger : undefined
+        const before = num(meta?.pre_tokens), after = num(meta?.post_tokens)
+        compaction = { id: compaction?.id ?? str(frame.uuid) ?? "compact", ...(trigger ? { trigger } : {}), ...(before != null ? { before } : {}), ...(after != null ? { after } : {}), bounded: true }
+        if (after != null) context.used = after
+        return contextUpdate()
+      }
       if (subtype === "commands_changed") {
         const commands = claudeCommands(frame.commands)
         return commands ? [{ kind: "commands-update", commands }] : []
@@ -779,11 +889,20 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
         apiError = { code: str(frame.error), bodies: [...(apiError?.bodies ?? []), ...bodies.filter(b => b.kind === "assistant-message")] }
         return bodies.filter(b => b.kind !== "assistant-message")
       }
-      return mapAssistantContent(message)
+      const used = requestSize(message)
+      if (used != null) {
+        context.used = used
+        if (typeof message.model === "string") context.model = message.model
+      }
+      return [...mapAssistantContent(message), ...contextUpdate()]
     }
     if (type === "user") {
       const message = rec(frame.message)
       if (!message) return []
+      if (compaction?.bounded && frame.isSynthetic === true && typeof message.content === "string" && message.content.startsWith(COMPACT_SUMMARY)) {
+        const at = message.content.indexOf("Summary:")
+        return compactionDone((at >= 0 ? message.content.slice(at) : message.content).trim())
+      }
       return mapUserContent(message, undefined, frame)
     }
     if (type === "rate_limit_event") {
@@ -802,10 +921,15 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
       const cost = typeof frame.total_cost_usd === "number"
         ? { amount: frame.total_cost_usd, currency: "USD" }
         : undefined
-      const out: NormalizedBody[] = [...take("reasoning"), ...take("assistant"), {
+      const window = contextWindow(rec(frame.modelUsage), context.model)
+      if (window != null) context.size = window
+      const ctx = context.used != null && context.size != null ? { used: context.used, size: context.size } : undefined
+      if (ctx) context.reported = ctx.used
+      const out: NormalizedBody[] = [...take("reasoning"), ...take("assistant"), ...compactionDone(), {
         kind: "usage",
         ...(tokens ? { tokens } : {}),
         ...(cost ? { cost } : {}),
+        ...(ctx ? { context: ctx } : {}),
       }]
       // An interrupted turn (Claude's abort signal fired) ends as error_during_execution with only Claude's own
       // "[ede_diagnostic] ..." line: no failure. The driver settles the turn as cancelled.

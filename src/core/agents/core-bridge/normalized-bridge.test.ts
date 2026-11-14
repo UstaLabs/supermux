@@ -323,3 +323,39 @@ test("OpenCode waiting out its free limit: a recoverable error the user sees, an
   expect(events[0]).toMatchObject({ kind: "error", recoverable: true, errorType: "free_limit" })
   expect((events[0] as { error: Error }).error.message).toContain("free models")
 })
+
+test("a usage event's context reaches onContext; rate limits still reach onUsage (#144)", () => {
+  const contexts: unknown[] = []
+  const limits: unknown[] = []
+  const b = createNormalizedBridge({ agent: "claude", emit: () => {}, onContext: (c) => contexts.push(c), onUsage: (r) => limits.push(r) })
+  b.handle(env({ kind: "usage", context: { used: 26955, size: 1000000 } }))
+  b.handle(env({ kind: "usage", rateLimits: { five_hour: 1 } }))
+  // A subagent's usage is never the chat's.
+  b.handle(env({ kind: "usage", context: { used: 5, size: 10 }, subagentId: "sub" }))
+  expect(contexts).toEqual([{ used: 26955, size: 1000000 }])
+  expect(limits).toEqual([{ five_hour: 1 }])
+})
+
+test("each tool the main thread starts is counted by name; a Skill call by its skill (#144)", () => {
+  const used: string[] = []
+  const b = createNormalizedBridge({ agent: "claude", emit: () => {}, onToolUsed: (name) => used.push(name) })
+  b.handle(env({ kind: "tool-call", callId: "c1", tool: "mcp__mux-shim__message_session", phase: "started", input: {} }))
+  b.handle(env({ kind: "tool-call", callId: "c1", tool: "mcp__mux-shim__message_session", phase: "completed" }))
+  b.handle(env({ kind: "tool-call", callId: "c2", tool: "Skill", phase: "started", input: { skill: "superpowers:brainstorming" } }))
+  b.handle(env({ kind: "tool-call", callId: "c3", tool: "Bash", phase: "started", input: {}, subagentId: "sub" }))
+  b.handle(env({ kind: "tool-call", callId: "c4", tool: "Read", phase: "started", input: {}, replay: true }))
+  expect(used).toEqual(["mcp__mux-shim__message_session", "Skill:superpowers:brainstorming"])
+})
+
+test("the main thread's compactions reach onCompaction; a subagent's or a replayed one does not (#144)", () => {
+  const seen: unknown[] = []
+  const b = createNormalizedBridge({ agent: "claude", emit: () => {}, onCompaction: (c) => seen.push(c) })
+  b.handle(env({ kind: "compaction", compactionId: "c1", status: "in_progress" }))
+  b.handle(env({ kind: "compaction", compactionId: "c1", status: "completed", before: 262000, after: 20113, trigger: "manual", summary: "S" }))
+  b.handle(env({ kind: "compaction", compactionId: "c2", status: "completed", subagentId: "sub" }))
+  b.handle(env({ kind: "compaction", compactionId: "c3", status: "completed", replay: true }))
+  expect(seen).toEqual([
+    { compactionId: "c1", status: "in_progress" },
+    { compactionId: "c1", status: "completed", before: 262000, after: 20113, trigger: "manual", summary: "S" },
+  ])
+})
