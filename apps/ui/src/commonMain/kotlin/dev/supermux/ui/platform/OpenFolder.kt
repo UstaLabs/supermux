@@ -9,21 +9,31 @@ import dev.supermux.ui.i18n.localized
 enum class FileManager { Finder, Explorer, Files }
 
 /**
- * Whether a session's host is this computer (#149): the desktop's own broker. Its folders are folders on this machine,
- * so they can be opened here. False wherever the shell doesn't say (phone, web, tests).
+ * Opens a session's folders in [manager] (#149) — for a session whose host is this computer ([onThisComputer]: the
+ * desktop's own broker), whose paths are paths on this machine. The shell provides it where the device has a file
+ * manager; elsewhere (phone, web, a screen under test) there is none, and nothing offers to open a folder.
  */
-val LocalSessionOnThisComputer = staticCompositionLocalOf<(sessionId: String) -> Boolean> { { false } }
+class FolderOpener(
+    val manager: FileManager,
+    private val onThisComputer: (sessionId: String) -> Boolean,
+    private val open: (path: String) -> Boolean,
+) {
+    fun forSession(sessionId: String?, path: String?): (() -> Unit)? {
+        if (sessionId == null || path.isNullOrBlank() || !onThisComputer(sessionId)) return null
+        return { open(path) }
+    }
+}
 
-/**
- * Opens [path], a folder of session [sessionId], in the system file manager — or null when this device has none, or
- * the session's host isn't this computer (a remote host's path means nothing here).
- */
+val LocalFolderOpener = staticCompositionLocalOf<FolderOpener?> { null }
+
+/** "Show in Finder" (its label) and the open itself, for [path] of session [sessionId]; null when it can't be opened here. */
+class OpenFolder(val label: String, val open: () -> Unit)
+
 @Composable
-fun rememberOpenFolder(sessionId: String?, path: String?): (() -> Unit)? {
-    val platform = LocalPlatform.current
-    val onThisComputer = LocalSessionOnThisComputer.current
-    if (platform.fileManager == null || sessionId == null || path.isNullOrBlank() || !onThisComputer(sessionId)) return null
-    return { platform.openFolder(path) }
+fun rememberOpenFolder(sessionId: String?, path: String?): OpenFolder? {
+    val opener = LocalFolderOpener.current ?: return null
+    val open = opener.forSession(sessionId, path) ?: return null
+    return OpenFolder(openFolderLabel(opener.manager), open)
 }
 
 /** "Show in Finder" / "Show in Explorer" / "Open folder": the entry that opens a folder in [manager]. */
