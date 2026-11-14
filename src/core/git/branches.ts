@@ -23,6 +23,12 @@ export function repoToplevel(workdir: string): string | null {
   try { return realpathSync(r.out) } catch { return r.out }
 }
 
+/** The branch a checkout is on now, or null when detached / not a repo (#72: a chat follows its copy's branch). */
+export function liveBranch(workdir: string): string | null {
+  const r = git(workdir, ["symbolic-ref", "--quiet", "--short", "HEAD"])
+  return r.ok && r.out ? r.out : null
+}
+
 /** List local + remote branches with worktree-occupancy info. Local refs only — no network. */
 export function listBranches(workdir: string): BranchList {
   const repoRoot = repoToplevel(workdir)

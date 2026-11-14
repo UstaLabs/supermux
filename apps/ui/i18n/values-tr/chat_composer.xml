@@ -23,7 +23,6 @@
     <string name="composer_pill_effort">çaba</string>
     <string name="composer_cancel">İptal</string>
     <string name="composer_ok">Tamam</string>
-    <string name="composer_done">Bitti</string>
     <string name="composer_dismiss">Kapat</string>
 
     <!-- The detail chip under the card -->
@@ -90,56 +89,6 @@
     <string name="composer_dictation_send_audio">Ses olarak gönder</string>
 
     <!-- Finish (land a worktree's branch) -->
-    <string name="composer_finish_button">Bitir</string>
-    <string name="composer_finish_kickoff_failed">Bitirme başlatılamadı. Bağlantınızı kontrol edip tekrar deneyin.</string>
-    <string name="composer_finish_title_branch">Bitir · %1$s</string>
-    <string name="composer_finish_title_running">Bitiriliyor</string>
-    <string name="composer_finish_checking">Dal kontrol ediliyor…</string>
-    <string name="composer_finish_nothing_to_land">Aktarılacak yeni commit yok</string>
-    <string name="composer_finish_keep">Sakla</string>
-    <string name="composer_finish_merge_locally">Yerelde birleştir</string>
-    <string name="composer_finish_tests_before_merge">Birleştirmeden önce testler çalıştırılsın mı?</string>
-    <string name="composer_finish_tests_before_pr">PR açmadan önce testler çalıştırılsın mı?</string>
-    <string name="composer_finish_may_conflict">çakışabilir</string>
-    <string name="composer_finish_no_conflict">çakışma yok</string>
-    <string name="composer_finish_push_open_pr">Gönder ve PR aç</string>
-    <string name="composer_finish_open_pr">PR aç</string>
-    <string name="composer_finish_no_remote">uzak depo yok</string>
-    <string name="composer_finish_discard">At</string>
-    <string name="composer_finish_discard_confirm">Bu daldaki tüm çalışma atılsın mı?</string>
-    <string name="composer_finish_run_tests">Testleri çalıştır</string>
-    <string name="composer_finish_skip_tests">Testleri atla</string>
-    <string name="composer_finish_running">Bitiriliyor…</string>
-    <string name="composer_finish_running_hint">Bunu kapatabilirsiniz; bitince size haber vereceğim.</string>
-    <string name="composer_finish_merged_into">%1$s dalına birleştirildi</string>
-    <string name="composer_finish_base">temel dal</string>
-    <string name="composer_finish_pr_opened">Pull request açıldı</string>
-    <string name="composer_finish_view_pr">PR'ı görüntüle</string>
-    <string name="composer_finish_branch_pushed">Dal gönderildi</string>
-    <string name="composer_finish_open_a_pr">PR aç</string>
-    <string name="composer_finish_tests_failed">Testler başarısız oldu</string>
-    <string name="composer_finish_merge_anyway">Yine de birleştir</string>
-    <string name="composer_finish_let_agent_fix">Ajan düzeltsin</string>
-    <string name="composer_finish_merge_conflicts">Birleştirme çakışmaları</string>
-    <string name="composer_finish_base_unsaved">Temel dalda kaydedilmemiş değişiklikler var</string>
-    <string name="composer_finish_uncommitted_title">Bu değişiklikler henüz commit edilmedi</string>
-    <string name="composer_finish_commit_message">Commit mesajı</string>
-    <string name="composer_finish_commit_open_pr">Commit et ve PR aç</string>
-    <string name="composer_finish_commit_merge">Commit et ve birleştir</string>
-    <string name="composer_finish_no_verify">.mux/verify.sh ayarlanmamış</string>
-    <string name="composer_finish_merge_unverified">Doğrulamadan birleştir</string>
-    <string name="composer_finish_generate_verify">Doğrulama betiği oluştur</string>
-    <string name="composer_finish_draft">Taslak · %1$s</string>
-    <string name="composer_finish_save">Kaydet</string>
-    <string name="composer_finish_push_failed">Gönderme başarısız oldu</string>
-    <string name="composer_finish_retry">Tekrar dene</string>
-    <string name="composer_finish_nothing_to_do">Aktarılacak bir şey yok: yeni commit yok.</string>
-    <string name="composer_finish_kept">Dal saklandı</string>
-    <string name="composer_finish_discarded">Çalışma atıldı</string>
-    <string name="composer_finish_base_moved">Temel dal ilerledi</string>
-    <string name="composer_finish_base_moved_hint">Bitirme sırasında temel dal ilerledi. Yeniden eşitleyip tekrar birleştirin.</string>
-    <string name="composer_finish_merge_again">Tekrar birleştir</string>
-    <string name="composer_finish_failed">Bitirme başarısız oldu</string>
 
     <!-- Continue in a new conversation -->
     <string name="composer_continue_title">Yeni sohbette devam et</string>
@@ -213,13 +162,5 @@
     <plurals name="composer_duration_seconds">
         <item quantity="one">%1$d saniye</item>
         <item quantity="other">%1$d saniye</item>
-    </plurals>
-    <plurals name="composer_finish_files_changed">
-        <item quantity="one">%1$d dosya · +%2$d/−%3$d</item>
-        <item quantity="other">%1$d dosya · +%2$d/−%3$d</item>
-    </plurals>
-    <plurals name="composer_finish_uncommitted">
-        <item quantity="one">%1$d commit edilmemiş</item>
-        <item quantity="other">%1$d commit edilmemiş</item>
     </plurals>
 </resources>

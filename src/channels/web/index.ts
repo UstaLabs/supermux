@@ -9,7 +9,7 @@ import { makeLogger } from "../../shared/log"
 import { FrameStats, LoopLag, lapTimer, perfPath, type PerfLog } from "../../core/perf/perf-log"
 import { home } from "../../shared/home"
 import { MUX_HOME, isMuxInternalPath } from "../../shared/paths"
-import { existsSync, writeFileSync, mkdirSync, rmSync } from "fs"
+import { existsSync, writeFileSync, mkdirSync, rmSync, realpathSync } from "fs"
 import { tmpdir } from "os"
 import { join, resolve, sep } from "path"
 import { CardSendGuard } from "../../core/show-html/card-send"
@@ -27,8 +27,9 @@ import { UnsupportedAudioError } from "../../core/transcription/wav"
 import { computeWorkdirDiff, listRepoRefs } from "../../core/editor/workdir-diff"
 import { listChanges, readBaseBlob, discoverReposCached } from "../../core/editor/changes"
 import { safeRepoPath, setStaged } from "../../core/git/stage"
+import { discard } from "../../core/git/discard"
 import { commit as gitCommit, uncommit as gitUncommit } from "../../core/git/commit"
-import { abortMerge, getLatest, resolveConflict } from "../../core/git/latest"
+import { abortMerge, getLatest, resolveConflict, undoLatest } from "../../core/git/latest"
 import { createRef, history, revert } from "../../core/git/history"
 import { reanchor } from "../../core/review/anchor"
 import { formatInstantComment, matchingStep, toWalkthroughDto } from "../../core/walkthrough/author"
@@ -49,7 +50,9 @@ import { worktreesRoot } from "../../core/worktree/manager"
 
 import { getRepoInfo } from "../../core/git/repo-info"
 import { remoteStatus, fetchRemote, publishBranch, pushBranch, pullBranch } from "../../core/git/remote"
-import { listBranches, switchBranch } from "../../core/git/branches"
+import { listBranches, liveBranch, repoToplevel, switchBranch } from "../../core/git/branches"
+import { checkLog, createPr, markReady, readPr, type PrRead } from "../../core/git/forge"
+import { prInput, writePrText, type PrTextWriter } from "../../core/git/pr-text"
 import type { AgentKind } from "../../core/agents/types"
 import { AGENT_KINDS, isAgentKind } from "../../shared/agents"
 import { isPermissionMode, permissionCatalog } from "../../core/agents/permission-modes"
@@ -184,6 +187,8 @@ function hostOrigin(req: Request): string | undefined {
 /** Largest body PUT /fs/write accepts (the editor reads at most 1 MB). */
 const FS_WRITE_MAX_BYTES = 8 * 1024 * 1024
 
+/** How long a read PR/MR is reused (#72): the pane polls while open; gh / glab calls take a second or two. */
+const PR_CACHE_MS = 15_000
 const API_PREFIXES = ["/api", "/ports", "/sessions", "/archived-sessions", "/archived-workspaces", "/projects", "/project-catalog", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/accounts", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views", "/worktrees", "/search", "/html"]
 const MAX_CLIENT_LOG_RING = 800
 // randomUUID() shape: version 4, RFC 4122 variant. A client-minted view id must
@@ -354,6 +359,8 @@ export interface WebChannelOpts {
   staticDir?: string
   staticEmbedded?: Record<string, string>
   getSessionsSnapshot: () => SessionSnapshot[]
+  /** #72: the agent writing a PR's title and description (agent-rpc "pr_text"); without it, the commits' subjects. */
+  writePrText?: PrTextWriter
   /** Newest `limit` entries (the store's default when omitted), oldest first. */
   getSessionLog: (name: string, limit?: number) => unknown[]
   /**
@@ -411,7 +418,7 @@ export interface WebChannelOpts {
   respondRequest?: (sessionId: string, requestId: string, answer: unknown) => Promise<{ ok: true } | { ok: false; error: string }>
   getSessionAgent?: (name: string) => { agent: AgentKind; model?: string; reasoningLevel?: string } | undefined
   interruptSession?: (id: string) => Promise<{ ok: boolean; reason?: string }>
-  finishSession?: (id: string, req: { action: "merge"|"pr"|"keep"|"discard"; skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string; keep?: boolean }) => Promise<import("../../core/worktree/finish-job").FinishJob | { error: string }>
+  finishSession?: (id: string, req: { action: "merge"|"pr"|"keep"|"discard"; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prTitle?: string; prBody?: string; keep?: boolean }) => Promise<import("../../core/worktree/finish-job").FinishJob | { error: string }>
   finishReadiness?: (id: string) => import("../../core/worktree/readiness").FinishReadiness | { error: string }
   reviewList?: (id: string) => import("../../core/review/store").Comment[]
   reviewAdd?: (id: string, c: Omit<import("../../core/review/store").NewComment, "sessionId">) => import("../../core/review/store").Comment
@@ -426,8 +433,6 @@ export interface WebChannelOpts {
   sendUserMessage?: (id: string, text: string) => Promise<{ ok: boolean; reason?: string }>
   getWalkthrough?: (id: string) => import("../../core/walkthrough/store").Walkthrough | undefined
   reviewSession?: (id: string) => { workdir: string; repoRoot?: string; baseCommits?: Record<string, string> } | undefined
-  verifySuggest?: (id: string) => { content: string; source: string } | undefined
-  verifySave?: (id: string, content: string) => { ok: boolean; reason?: string }
   spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; account?: string; worktree?: boolean; baseBranch?: string; inheritFrom?: string; workspaceId?: string; viewId?: string; firstMessage?: string; firstAttachments?: InboundAttachment[]; /** Card #75: the app's own id for the first message (`web-<uuid>`). */ firstMessageId?: string; device?: string; /** Card #75: the app's session-start trace (`x-mux-trace: S…/<req>`). */ perfTrace?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; repo_root?: string; session_branch?: string }>
   createDraft?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; draftPayload?: { text?: string; attachments?: unknown[] } }) => Promise<{ id: string; name: string; workdir: string; agent: AgentKind }>
   killSession?: (name: string) => Promise<void>
@@ -2382,11 +2387,15 @@ export class WebChannel implements Channel {
   /**
    * POST …/git/{stage,commit,uncommit} (#72), all with {repo}:
    * stage {paths, staged} puts whole files into the next commit or takes them out;
+   * discard {paths} | {all: true} throws unstaged edits away and deletes new files (staged edits stay);
    * commit {message?, all?, amend?} commits it (an empty message is written from the files);
    * uncommit undoes the last commit and keeps its changes in the next one;
    * resolve {path, side: mine|theirs|both} settles one conflicted file; abort cancels the merge;
    * revert {sha} adds a commit that undoes one; branch|tag {sha, name} names one, moving nothing.
    */
+  /** #72: a branch's PR/MR as last read, per checkout and branch (GET …/git/pr). */
+  private readonly prCache = new Map<string, { at: number; r: PrRead }>()
+
   private async gitWrite(workdir: string, op: string, req: Request): Promise<Response> {
     let body: { repo?: unknown; paths?: unknown; staged?: unknown; message?: unknown; all?: unknown; amend?: unknown; path?: unknown; side?: unknown; sha?: unknown; name?: unknown }
     try { body = (await req.json()) as typeof body } catch { return this.json({ error: "bad json" }, 400) }
@@ -2405,6 +2414,19 @@ export class WebChannel implements Channel {
         return this.json({ ok: true })
       } catch (err) {
         return this.json({ error: err instanceof Error ? err.message : String(err) }, 409)
+      }
+    }
+    if (op === "discard") {
+      const all = body.all === true, paths = Array.isArray(body.paths) ? body.paths : null
+      if (all === !!paths || (paths && (!paths.length || paths.length > 5000 || !paths.every(safeRepoPath)))) {
+        return this.json({ error: "bad request" }, 400)
+      }
+      if (!found) return this.json({ error: "repo not found" }, 404)
+      try {
+        const r = await discard(found.absPath, all ? "all" : paths as string[])
+        return r.ok ? this.json(r) : this.json(r, 409)
+      } catch (err) {
+        return this.json({ ok: false, reason: "failed", message: err instanceof Error ? err.message : String(err) }, 409)
       }
     }
     if (!found) return this.json({ error: "repo not found" }, 404)
@@ -3809,7 +3831,20 @@ export class WebChannel implements Channel {
       const r = await getLatest(workdir, g.repoRoot, g.base)
       return this.json(r, r.status === "failed" ? 409 : 200)
     }
-    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/(stage|commit|uncommit|resolve|abort|revert|branch|tag)$/)) {
+    // #72: undo a clean Get latest ({before, after} from its answer); refused once the branch moved on.
+    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/latest\/undo$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getSessionWorkdir?.(id)
+      if (!workdir) return this.json({ error: "session not found" }, 404)
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      const sha = /^[0-9a-f]{7,64}$/i
+      if (typeof body.before !== "string" || typeof body.after !== "string" || !sha.test(body.before) || !sha.test(body.after)) {
+        return this.json({ error: "bad request" }, 400)
+      }
+      const r = await undoLatest(workdir, body.before, body.after)
+      return this.json(r, r.ok ? 200 : 409)
+    }
+    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/(stage|discard|commit|uncommit|resolve|abort|revert|branch|tag)$/)) {
       const workdir = this.opts.getSessionWorkdir?.(decodeURIComponent(path.split("/")[2]!))
       if (!workdir) return this.json({ error: "session not found" }, 404)
       return this.gitWrite(workdir, path.split("/")[4]!, req)
@@ -3915,7 +3950,7 @@ export class WebChannel implements Channel {
       const { repos } = await listChanges(workdir, base?.baseCommits ?? {}, base?.createdAt, url.searchParams.get("base") ?? undefined)
       return this.json({ repos, comments: [] })
     }
-    if (method === "POST" && path.match(/^\/workspaces\/[^/]+\/git\/(stage|commit|uncommit|resolve|abort|revert|branch|tag)$/)) {
+    if (method === "POST" && path.match(/^\/workspaces\/[^/]+\/git\/(stage|discard|commit|uncommit|resolve|abort|revert|branch|tag)$/)) {
       const workdir = this.opts.getWorkspaceWorkdir?.(decodeURIComponent(path.split("/")[2]!))
       if (!workdir) return this.json({ error: "workspace not found" }, 404)
       return this.gitWrite(workdir, path.split("/")[4]!, req)
@@ -4114,11 +4149,9 @@ export class WebChannel implements Channel {
       const action = body.action === "pr" || body.action === "keep" || body.action === "discard" ? body.action : "merge"
       const result = await this.opts.finishSession(id, {
         action,
-        skipVerify: body.skipVerify === true,
         commitFirst: body.commitFirst === true,
         commitMessage: typeof body.commitMessage === "string" ? body.commitMessage : undefined,
         draft: body.draft === true,
-        prRequiresGreen: body.prRequiresGreen === true,
         prTitle: typeof body.prTitle === "string" ? body.prTitle : undefined,
         prBody: typeof body.prBody === "string" ? body.prBody : undefined,
         keep: body.keep === true,
@@ -4126,57 +4159,108 @@ export class WebChannel implements Channel {
       if (result && typeof result === "object" && "error" in result) return this.json(result, 400)
       return this.json(result)
     }
-    if (method === "GET" && path.match(/^\/sessions\/[^/]+\/git\/status$/)) {
-      const id = decodeURIComponent(path.split("/")[2]!)
-      const workdir = this.opts.getSessionWorkdir?.(id)
-      if (!workdir) return this.json({ error: "session not found" }, 404)
-      return this.json(remoteStatus(workdir))
+    // #72: the pull request (GitHub) / merge request (GitLab) of the branch the chat is on, read with the user's own
+    // gh / glab sign-in. Cached for a few seconds per checkout, so a pane polling it costs little; ?fresh=1 skips that.
+    const prOp = path.match(/^\/(sessions|workspaces)\/([^/]+)\/git\/pr$/)
+    if (method === "GET" && prOp) {
+      const [, scope, rawId] = prOp
+      const id = decodeURIComponent(rawId!)
+      const workdir = scope === "sessions" ? this.opts.getSessionWorkdir?.(id) : this.opts.getWorkspaceWorkdir?.(id)
+      if (!workdir) return this.json({ error: `${scope === "sessions" ? "session" : "workspace"} not found` }, 404)
+      const branch = liveBranch(workdir)
+      const key = `${workdir}\0${branch}`
+      const hit = this.prCache.get(key)
+      if (hit && url.searchParams.get("fresh") !== "1" && Date.now() - hit.at < PR_CACHE_MS) return this.json(hit.r)
+      const r: PrRead = branch ? await readPr(workdir, branch) : { status: "unavailable", reason: "no_branch" }
+      this.prCache.set(key, { at: Date.now(), r })
+      return this.json(r)
     }
-    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/fetch$/)) {
-      const id = decodeURIComponent(path.split("/")[2]!)
-      const workdir = this.opts.getSessionWorkdir?.(id)
-      if (!workdir) return this.json({ error: "session not found" }, 404)
-      return this.json(fetchRemote(workdir))
+    // #72: open a PR/MR from the branch the chat is on (published first when it isn't yet), mark one ready,
+    // and read a failing check's log for "Ask the agent to fix".
+    const prWrite = path.match(/^\/(sessions|workspaces)\/([^/]+)\/git\/pr(\/ready|\/check-log|\/text)?$/)
+    if (prWrite && (method === "POST" || (method === "GET" && prWrite[3] === "/check-log"))) {
+      const [, scope, rawId, sub] = prWrite
+      const id = decodeURIComponent(rawId!)
+      const workdir = scope === "sessions" ? this.opts.getSessionWorkdir?.(id) : this.opts.getWorkspaceWorkdir?.(id)
+      if (sub === "/check-log") {
+        const checkUrl = url.searchParams.get("url") ?? ""
+        if (!/^https?:\/\/\S+$/.test(checkUrl)) return this.json({ error: "bad request" }, 400)
+        if (!workdir) return this.json({ error: `${scope === "sessions" ? "session" : "workspace"} not found` }, 404)
+        return this.json(await checkLog(workdir, checkUrl))
+      }
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      if (sub === "/text") {
+        // The Create form's title and description: by the agent from the branch's commits, else the commits' subjects.
+        const own = scope === "sessions" ? this.opts.getSessionGitBase?.(id)?.base : undefined
+        const target = typeof body.target === "string" && body.target.trim() ? body.target.trim() : own
+        if (!target) return this.json({ error: "bad request" }, 400)
+        if (!workdir) return this.json({ error: `${scope === "sessions" ? "session" : "workspace"} not found` }, 404)
+        const branch = liveBranch(workdir)
+        if (!branch) return this.json({ status: "unavailable", reason: "no_branch" }, 409)
+        return this.json(await writePrText(await prInput(workdir, target, branch), this.opts.writePrText))
+      }
+      if (sub === "/ready") {
+        if (typeof body.number !== "number" || !Number.isInteger(body.number) || body.number <= 0) return this.json({ error: "bad request" }, 400)
+        if (!workdir) return this.json({ error: `${scope === "sessions" ? "session" : "workspace"} not found` }, 404)
+        const r = await markReady(workdir, body.number)
+        this.prCache.clear()
+        return this.json(r, r.ok ? 200 : 409)
+      }
+      const title = typeof body.title === "string" ? body.title.trim() : ""
+      const target = typeof body.target === "string" ? body.target.trim() : ""
+      if (!title || !target || (body.body !== undefined && typeof body.body !== "string")) return this.json({ error: "bad request" }, 400)
+      if (!workdir) return this.json({ error: `${scope === "sessions" ? "session" : "workspace"} not found` }, 404)
+      const branch = liveBranch(workdir)
+      if (!branch) return this.json({ status: "unavailable", reason: "no_branch" }, 409)
+      const remote = remoteStatus(workdir)
+      if (!remote.hasRemote) return this.json({ status: "unavailable", reason: "no_remote" }, 409)
+      if (!remote.upstream) {
+        const pub = publishBranch(workdir)
+        if (pub.status !== "pushed" && pub.status !== "up_to_date") return this.json({ status: "publish_failed", publish: pub }, 409)
+      }
+      const r = await createPr(workdir, branch, { title, body: (body.body as string | undefined) ?? "", target, draft: body.draft === true })
+      this.prCache.clear()
+      return this.json(r, r.status === "opened" || r.status === "exists" ? 200 : 409)
     }
-    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/publish$/)) {
-      const id = decodeURIComponent(path.split("/")[2]!)
-      const workdir = this.opts.getSessionWorkdir?.(id)
-      if (!workdir) return this.json({ error: "session not found" }, 404)
-      return this.json(publishBranch(workdir))
-    }
-    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/push$/)) {
-      const id = decodeURIComponent(path.split("/")[2]!)
-      const workdir = this.opts.getSessionWorkdir?.(id)
-      if (!workdir) return this.json({ error: "session not found" }, 404)
-      return this.json(pushBranch(workdir))
-    }
-    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/pull$/)) {
-      const id = decodeURIComponent(path.split("/")[2]!)
-      const workdir = this.opts.getSessionWorkdir?.(id)
-      if (!workdir) return this.json({ error: "session not found" }, 404)
+    // A branch's sync with origin, for a chat with its own copy (sessions) and a chat in a folder (workspaces) alike.
+    const syncOp = path.match(/^\/(sessions|workspaces)\/([^/]+)\/git\/(status|fetch|publish|push|pull)$/)
+    if (syncOp && (method === "GET") === (syncOp[3] === "status")) {
+      const [, scope, rawId, op] = syncOp
+      const id = decodeURIComponent(rawId!)
+      const workdir = scope === "sessions" ? this.opts.getSessionWorkdir?.(id) : this.opts.getWorkspaceWorkdir?.(id)
+      if (!workdir) return this.json({ error: `${scope === "sessions" ? "session" : "workspace"} not found` }, 404)
+      if (op === "status") return this.json(remoteStatus(workdir))
+      if (op === "fetch") return this.json(fetchRemote(workdir))
+      if (op === "publish") return this.json(publishBranch(workdir))
+      if (op === "push") return this.json(pushBranch(workdir))
       return this.json(pullBranch(workdir))
     }
+    // #72: every chat can switch branch, a chat with its own copy too; the copy follows. Each local branch says
+    // where it is open (this chat, another chat, your folder): git refuses to check one out twice.
     if (method === "GET" && path.match(/^\/sessions\/[^/]+\/git\/branches$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
-      const snap = this.opts.getSessionsSnapshot().find((s) => s.id === id || s.name === id)
-      if (snap?.session_branch) {
-        // Worktree sessions are pinned — no list, and no git calls needed.
-        return this.json({ inPlace: false, repoRoot: null, current: null, detachedSha: null, local: [], remote: [] })
-      }
-      return this.json({ inPlace: true, ...listBranches(workdir) })
+      const list = listBranches(workdir)
+      // git prints worktree paths its own way (on Windows "D:/a/…", maybe an 8.3 short name), a session row holds
+      // the OS's ("D:\\a\\…"): both go through the native realpath, then compare on the host's rules (case, separators).
+      const real = (p: string) => { try { return realpathSync.native(p) } catch { return p } }
+      const same = (a: string, b: string) => paths.isInside(a, b) && paths.isInside(b, a)
+      const here = real(repoToplevel(workdir) ?? workdir)
+      const chats = this.opts.getSessionsSnapshot().map((s) => ({ id: s.id, name: s.name, at: real(s.workdir) }))
+      const local = list.local.map((b) => {
+        if (!b.checkedOutAt) return { ...b, openIn: null }
+        const at = real(b.checkedOutAt)
+        if (same(at, here)) return { ...b, openIn: { kind: "this" } }
+        const chat = chats.find((c) => c.id !== id && same(c.at, at))
+        return { ...b, openIn: chat ? { kind: "chat", id: chat.id, name: chat.name } : { kind: "folder" } }
+      })
+      return this.json({ inPlace: true, ...list, local })
     }
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/switch$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
-      // getSessionWorkdir is UUID-only, so name-addressed requests 404 above;
-      // the name arm of this find keeps the 409 guard intact if that changes.
-      const snap = this.opts.getSessionsSnapshot().find((s) => s.id === id || s.name === id)
-      if (snap?.session_branch) {
-        return this.json({ error: "worktree sessions are pinned to their session branch" }, 409)
-      }
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
       const name = String(body.name ?? "").trim()
       if (!name) return this.json({ error: "name required" }, 400)
@@ -4189,19 +4273,6 @@ export class WebChannel implements Channel {
       const text = String(body.text ?? "").trim()
       if (!text) return this.json({ error: "text required" }, 400)
       return this.json(await this.opts.sendUserMessage(id, text))
-    }
-    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/verify\/suggest$/)) {
-      const id = decodeURIComponent(path.split("/")[2]!)
-      const s = this.opts.verifySuggest?.(id)
-      return s ? this.json(s) : this.json({ error: "not worktree-backed" }, 400)
-    }
-    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/verify\/save$/)) {
-      const id = decodeURIComponent(path.split("/")[2]!)
-      if (!this.opts.verifySave) return this.json({ error: "not configured" }, 503)
-      const body = await req.json().catch(() => ({})) as Record<string, unknown>
-      const content = String(body.content ?? "")
-      if (!content.trim()) return this.json({ error: "content required" }, 400)
-      return this.json(this.opts.verifySave(id, content))
     }
     // #122 phase 4: whose dev server a port's preview is, so its comments go to that session by default.
     if (method === "GET" && path.match(/^\/ports\/\d+\/owner$/)) {

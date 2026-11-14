@@ -22,20 +22,18 @@ export interface FinishJobHooks {
 
 export interface FinishJobOpts {
   action: FinishAction
-  skipVerify?: boolean
   commitFirst?: boolean
   commitMessage?: string
   cleanup?: boolean
   deleteBranch?: boolean
   draft?: boolean
-  prRequiresGreen?: boolean
   prTitle?: string
   prBody?: string
 }
 
 const FAILURE_STATUSES = new Set<FinishResult["status"]>([
-  "tests_failed", "sync_conflict", "dirty_overlap", "uncommitted",
-  "no_verify", "push_auth_failed", "push_rejected", "non_ff", "error",
+  "sync_conflict", "dirty_overlap", "uncommitted",
+  "push_auth_failed", "push_rejected", "non_ff", "error",
 ])
 function isFailure(o: FinishResult): boolean { return FAILURE_STATUSES.has(o.status) }
 
@@ -61,7 +59,7 @@ async function run(s: FinishSession & { id: string }, opts: FinishJobOpts, hooks
     if (opts.action === "keep") outcome = { status: "kept", branch: s.sessionBranch }
     else if (opts.action === "discard") outcome = await discardSession(s)
     else if (opts.action === "pr") outcome = await openPrForSession(s, opts, progress)
-    else outcome = await finishWorktree(s, { skipVerify: opts.skipVerify, commitFirst: opts.commitFirst, commitMessage: opts.commitMessage, cleanup: opts.cleanup, deleteBranch: opts.deleteBranch }, progress)
+    else outcome = await finishWorktree(s, { commitFirst: opts.commitFirst, commitMessage: opts.commitMessage, cleanup: opts.cleanup, deleteBranch: opts.deleteBranch }, progress)
   } catch (e: any) {
     outcome = { status: "error", message: String(e?.message ?? e) }
   }

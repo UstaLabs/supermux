@@ -4,7 +4,7 @@ import { execFileSync } from "child_process"
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { abortMerge, getLatest, resolveConflict, unmerged } from "./latest"
+import { abortMerge, getLatest, resolveConflict, undoLatest, unmerged } from "./latest"
 import { commit } from "./commit"
 import { indexState, stagedOf } from "./stage"
 
@@ -30,7 +30,8 @@ test("nothing new on the base is said; new commits come in as a merge", async ()
   const { repo, wt } = setup()
   expect(await getLatest(wt, repo, "dev")).toEqual({ status: "up_to_date", from: "dev" })
   onDev(repo, "b.txt", "b2\n", "base moves")
-  expect(await getLatest(wt, repo, "dev")).toEqual({ status: "clean", from: "dev", commits: 1 })
+  const before = git(wt, "rev-parse", "HEAD")
+  expect(await getLatest(wt, repo, "dev")).toEqual({ status: "clean", from: "dev", commits: 1, before, after: git(wt, "rev-parse", "HEAD") })
   expect(readFileSync(join(wt, "b.txt"), "utf-8")).toBe("b2\n")
 }, REAL_GIT_MS)
 
@@ -76,6 +77,38 @@ test("cancel puts everything back as it was before the merge", async () => {
   await abortMerge(wt)
   expect(git(wt, "rev-parse", "HEAD")).toBe(before)
   expect(readFileSync(join(wt, "a.txt"), "utf-8")).toBe("one\nMINE\nthree\n")
+}, REAL_GIT_MS)
+
+test("undo puts the branch back where it was before Get latest, a merge or a fast-forward", async () => {
+  const { repo, wt } = setup()
+  // fast-forward: the chat has no commits of its own, so Undo Last Commit would undo a BASE commit; this doesn't
+  onDev(repo, "b.txt", "b2\n", "base moves")
+  const ff = await getLatest(wt, repo, "dev")
+  if (ff.status !== "clean") throw new Error("expected clean")
+  expect(await undoLatest(wt, ff.before, ff.after)).toEqual({ ok: true })
+  expect(git(wt, "rev-parse", "HEAD")).toBe(ff.before)
+  expect(readFileSync(join(wt, "b.txt"), "utf-8")).toBe("b\n")
+  // a real merge commit
+  put(wt, "a.txt", "one\nmine\nthree\n"); git(wt, "commit", "-qam", "mine")
+  const m = await getLatest(wt, repo, "dev")
+  if (m.status !== "clean") throw new Error("expected clean")
+  expect(await undoLatest(wt, m.before, m.after)).toEqual({ ok: true })
+  expect(git(wt, "log", "-1", "--format=%s")).toBe("mine")
+}, REAL_GIT_MS)
+
+test("undo refuses once the branch moved on, and keeps uncommitted edits in other files", async () => {
+  const { repo, wt } = setup()
+  onDev(repo, "b.txt", "b2\n", "base moves")
+  const r = await getLatest(wt, repo, "dev")
+  if (r.status !== "clean") throw new Error("expected clean")
+  put(wt, "a.txt", "edited\n")
+  expect(await undoLatest(wt, r.before, r.after)).toEqual({ ok: true })
+  expect(readFileSync(join(wt, "a.txt"), "utf-8")).toBe("edited\n")
+  const again = await getLatest(wt, repo, "dev")
+  if (again.status !== "clean") throw new Error("expected clean")
+  git(wt, "commit", "-qam", "after")   // HEAD is no longer `after`
+  expect(await undoLatest(wt, again.before, again.after)).toEqual({ ok: false, reason: "moved" })
+  expect(git(wt, "log", "-1", "--format=%s")).toBe("after")
 }, REAL_GIT_MS)
 
 test("no base, no guess", async () => {

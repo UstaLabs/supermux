@@ -419,14 +419,17 @@ async function deleteOne(root: string, id: string, owners: () => OwnerRow[], can
   // Live owners are read from the provider NOW — per id, immediately before the destructive
   // step — never from a snapshot taken at the start of the batch: a session restored while an
   // earlier id was being deleted wins. Canonical on both sides; a session in any subfolder counts.
-  const live = ownersOf(path, await canonRows(owners(), canon)).filter((o) => o.status === "live")
+  const rows = await canonRows(owners(), canon)
+  const live = ownersOf(path, rows).filter((o) => o.status === "live")
+  // #72: a chat may have switched its copy to another branch; only the branch a chat was made with is deleted.
+  const made = rows.filter((r) => owns(resolve(path), r.workdir)).map((r) => r.session_branch).filter(Boolean)
   if (live.length) return { id, ok: false, error: "in_use", inUseBy: live.map((o) => o.name) }
   try {
     if (repoRoot) await gitAsync(repoRoot, ["worktree", "remove", "--force", "--force", path]).catch(() => {})
     if (await exists(path)) await rm(path, { recursive: true, force: true })
     if (repoRoot) {
       await gitAsync(repoRoot, ["worktree", "prune"]).catch(() => {})
-      if (branch?.startsWith("mux/") && !(await branchCheckedOutElsewhere(repoRoot, branch, path, canon))) {
+      if (branch?.startsWith("mux/") && (!made.length || made.includes(branch)) && !(await branchCheckedOutElsewhere(repoRoot, branch, path, canon))) {
         await gitAsync(repoRoot, ["branch", "-D", branch]).catch(() => {})
       }
     }
