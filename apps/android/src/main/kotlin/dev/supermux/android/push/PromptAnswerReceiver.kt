@@ -86,13 +86,13 @@ class PromptAnswerReceiver : BroadcastReceiver() {
         private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
         /** The paired host that sent the push; with no hostId (an older broker), the only paired host, if one. */
-        internal fun credsFor(context: Context, hostId: String?): SupermuxMessagingService.Creds? {
+        internal fun credsFor(context: Context, hostId: String?): SupermuxMessagingService.Companion.Creds? {
             val hosts = runCatching { HostStores.store(context).list() }.getOrDefault(emptyList())
             val host = if (hostId != null) hosts.firstOrNull { it.hostId == hostId } else hosts.singleOrNull()
             if (host != null) {
                 val url = FleetStore.effectiveUrl(host)?.takeIf { it.isNotBlank() } ?: return null
                 val token = host.token.takeIf { it.isNotBlank() } ?: return null
-                return SupermuxMessagingService.Creds(url, token)
+                return SupermuxMessagingService.Companion.Creds(url, token)
             }
             if (hostId != null) return null
             return SupermuxMessagingService.resolveAllPairedCreds(context).singleOrNull()
