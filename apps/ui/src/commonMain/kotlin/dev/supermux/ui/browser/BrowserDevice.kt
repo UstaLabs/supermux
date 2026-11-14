@@ -56,6 +56,8 @@ import dev.supermux.browser.DeviceGroup
 import dev.supermux.browser.DeviceMode
 import dev.supermux.browser.DevicePresets
 import dev.supermux.browser.PageAppearance
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.settings.kit.KitGlyphs
 import dev.supermux.ui.settings.kit.kitColors
 import dev.supermux.ui.widgets.DropdownMenu
@@ -96,17 +98,18 @@ internal fun DeviceBar(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Text(mode.preset?.name ?: "Responsive", color = c.text, fontSize = 12.5.sp, maxLines = 1)
+                    Text(mode.preset?.name ?: localized(Str.browser_device_responsive), color = c.text, fontSize = 12.5.sp, maxLines = 1)
                     Icon(KitGlyphs.ChevronDown, contentDescription = null, tint = c.dim, modifier = Modifier.size(13.dp))
                 }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    DeviceRow("Responsive", null, mode.presetId == null, "browser-device-responsive") {
+                    DeviceRow(localized(Str.browser_device_responsive), null, mode.presetId == null, "browser-device-responsive") {
                         menu = false
                         onChange(mode.resized())
                     }
                     for (group in DeviceGroup.entries) {
                         Text(
-                            group.label, color = c.faint, fontSize = 11.sp,
+                            localized(when (group) { DeviceGroup.Phones -> Str.browser_device_phones; DeviceGroup.Tablets -> Str.browser_device_tablets; DeviceGroup.Desktops -> Str.browser_device_desktops }),
+                            color = c.faint, fontSize = 11.sp,
                             modifier = Modifier.padding(start = 14.dp, top = 8.dp, bottom = 2.dp),
                         )
                         for (p in DevicePresets.all.filter { it.group == group }) {
@@ -118,42 +121,42 @@ internal fun DeviceBar(
                     }
                 }
             }
-            SideField(mode.width, "Width", "browser-device-width") { onChange(mode.resized(width = it)) }
+            SideField(mode.width, localized(Str.browser_device_width), "browser-device-width") { onChange(mode.resized(width = it)) }
             Text("×", color = c.faint, fontSize = 12.sp)
-            SideField(mode.height, "Height", "browser-device-height") { onChange(mode.resized(height = it)) }
-            BarButton(KitGlyphs.Rotate, "Rotate", "browser-device-rotate", { onChange(mode.rotated()) }, on = mode.rotated)
+            SideField(mode.height, localized(Str.browser_device_height), "browser-device-height") { onChange(mode.resized(height = it)) }
+            BarButton(KitGlyphs.Rotate, localized(Str.browser_device_rotate), "browser-device-rotate", { onChange(mode.rotated()) }, on = mode.rotated)
             scale?.let { now ->
                 BarChoice(
-                    label = mode.fit?.let { "$it%" } ?: "Fit ${(now * 100).toInt()}%",
+                    label = mode.fit?.let { "$it%" } ?: localized(Str.browser_device_fit, (now * 100).toInt()),
                     tag = "browser-device-fit",
-                    choices = listOf(Triple("Fit to pane", "browser-device-fit-auto", mode.fit == null)) +
+                    choices = listOf(Triple(localized(Str.browser_device_fit_pane), "browser-device-fit-auto", mode.fit == null)) +
                         DeviceMode.FITS.map { Triple("$it%", "browser-device-fit-$it", mode.fit == it) },
                 ) { i -> onChange(mode.copy(fit = if (i == 0) null else DeviceMode.FITS[i - 1])) }
             }
             if (ratioAndTouch) {
                 BarChoice(
-                    label = "DPR " + ratioLabel(mode.deviceScaleFactor()),
+                    label = "DPR " + ratioLabel(mode.deviceScaleFactor()), // i18n-ok: Chrome's term for the pixel ratio
                     tag = "browser-device-dpr",
-                    choices = listOf(Triple("Default (" + ratioLabel(mode.copy(dpr = null).deviceScaleFactor()) + ")", "browser-device-dpr-default", mode.dpr == null)) +
+                    choices = listOf(Triple(localized(Str.browser_device_dpr_default, ratioLabel(mode.copy(dpr = null).deviceScaleFactor())), "browser-device-dpr-default", mode.dpr == null)) +
                         DeviceMode.DPRS.map { Triple(ratioLabel(it), "browser-device-dpr-${ratioLabel(it)}", mode.dpr == it) },
                 ) { i -> onChange(mode.copy(dpr = if (i == 0) null else DeviceMode.DPRS[i - 1])) }
-                BarButton(KitGlyphs.Touch, if (mode.hasTouch()) "Touch on" else "Touch off", "browser-device-touch", { onChange(mode.copy(touch = !mode.hasTouch())) }, on = mode.hasTouch())
+                BarButton(KitGlyphs.Touch, localized(if (mode.hasTouch()) Str.browser_device_touch_on else Str.browser_device_touch_off), "browser-device-touch", { onChange(mode.copy(touch = !mode.hasTouch())) }, on = mode.hasTouch())
             }
             if (emulation) {
                 BarDivider()
                 BarChoice(
-                    label = if (mode.mobile) "Mobile" else "Desktop",
+                    label = localized(if (mode.mobile) Str.browser_device_mobile else Str.browser_device_desktop),
                     tag = "browser-device-agent",
-                    choices = listOf(Triple("Mobile", "browser-device-agent-mobile", mode.mobile), Triple("Desktop", "browser-device-agent-desktop", !mode.mobile)),
+                    choices = listOf(Triple(localized(Str.browser_device_mobile), "browser-device-agent-mobile", mode.mobile), Triple(localized(Str.browser_device_desktop), "browser-device-agent-desktop", !mode.mobile)),
                 ) { i -> onChange(mode.withMobile(i == 0)) }
                 BarChoice(
-                    label = "◐ " + mode.appearance.label,
+                    label = "◐ " + appearanceText(mode.appearance),
                     tag = "browser-device-appearance",
-                    choices = PageAppearance.entries.map { Triple(it.label, "browser-device-appearance-${it.name.lowercase()}", it == mode.appearance) },
+                    choices = PageAppearance.entries.map { Triple(appearanceText(it), "browser-device-appearance-${it.name.lowercase()}", it == mode.appearance) },
                 ) { i -> onChange(mode.copy(appearance = PageAppearance.entries[i])) }
             }
             Spacer(Modifier.weight(1f))
-            BarButton(KitGlyphs.Close, "Close device mode", "browser-device-close", onClose)
+            BarButton(KitGlyphs.Close, localized(Str.browser_device_close), "browser-device-close", onClose)
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.line))
     }
@@ -266,5 +269,10 @@ internal fun DeviceStage(mode: DeviceMode, fit: Boolean = false, onScale: (Float
     }
 }
 
+/** What the page's colour scheme is called in the app's language. */
+private fun appearanceText(a: PageAppearance): String =
+    localized(when (a) { PageAppearance.System -> Str.common_system; PageAppearance.Light -> Str.common_light; PageAppearance.Dark -> Str.common_dark })
+
 /** A pixel ratio as Chrome writes it: 3, 2.625. */
+
 private fun ratioLabel(ratio: Double): String = if (ratio == kotlin.math.floor(ratio)) ratio.toInt().toString() else ratio.toString()

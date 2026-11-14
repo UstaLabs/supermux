@@ -6,6 +6,8 @@ package dev.supermux.ui.files
 import dev.supermux.fs.FileSystemService
 import dev.supermux.fs.FsStat
 import dev.supermux.net.FsException
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 
 /**
  * True only when [stat] definitely says there is no such entry (HTTP 404). Any other failure — an
@@ -18,4 +20,4 @@ fun statSaysMissing(stat: Result<FsStat>): Boolean = (stat.exceptionOrNull() as?
 suspend fun tappedFileMissing(fileSystem: FileSystemService?, absPath: String): Boolean =
     fileSystem != null && statSaysMissing(fileSystem.stat(absPath))
 
-fun fileNotFoundNotice(path: String): String = "File not found: $path"
+fun fileNotFoundNotice(path: String): String = localized(Str.files_not_found, path)

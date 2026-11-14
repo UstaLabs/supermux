@@ -78,6 +78,8 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -542,10 +544,10 @@ private fun TreePlaceholder(root: DirState, onRetry: () -> Unit) {
                     fontSize = 12.sp,
                 )
                 Spacer(Modifier.height(8.dp))
-                TextButton(onClick = onRetry, modifier = Modifier.testTag("editor_tree_retry")) { Text("Retry") }
+                TextButton(onClick = onRetry, modifier = Modifier.testTag("editor_tree_retry")) { Text(localized(Str.files_retry)) }
             }
-            root == DirState.Gone -> Text("This folder no longer exists", color = cs.onSurfaceVariant, fontSize = 12.sp)
-            root.snapshotOrPrevious != null -> Text("Empty folder", color = cs.onSurfaceVariant, fontSize = 12.sp)
+            root == DirState.Gone -> Text(localized(Str.files_folder_gone), color = cs.onSurfaceVariant, fontSize = 12.sp)
+            root.snapshotOrPrevious != null -> Text(localized(Str.files_empty_folder), color = cs.onSurfaceVariant, fontSize = 12.sp)
             else -> CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 1.5.dp, color = cs.onSurfaceVariant)
         }
     }
@@ -573,7 +575,7 @@ private fun TreeErrorStrip(message: String, compact: Boolean, onRetry: () -> Uni
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
-        TextButton(onClick = onRetry, modifier = Modifier.testTag("editor_tree_retry")) { Text("Retry", fontSize = 12.sp) }
+        TextButton(onClick = onRetry, modifier = Modifier.testTag("editor_tree_retry")) { Text(localized(Str.files_retry), fontSize = 12.sp) }
     }
 }
 
@@ -607,12 +609,14 @@ private fun TreeRowLine(
     val alpha = if (entry.ignored) IgnoredAlpha else 1f
     val guide = cs.outlineVariant.copy(alpha = 0.6f)
     val depth = row.depth
-    val clickLabel = when (row.status) {
-        RowStatus.FILE -> "Open"
-        RowStatus.ERROR -> "Retry"
-        RowStatus.CLOSED -> "Expand"
-        else -> "Collapse"
-    }
+    val clickLabel = localized(
+        when (row.status) {
+            RowStatus.FILE -> Str.files_open
+            RowStatus.ERROR -> Str.files_retry
+            RowStatus.CLOSED -> Str.files_expand
+            else -> Str.files_collapse
+        },
+    )
     val density = LocalDensity.current
     Box(Modifier.fillMaxWidth()) {
         Row(
@@ -651,13 +655,13 @@ private fun TreeRowLine(
                         Modifier.combinedClickable(
                             role = Role.Button,
                             onClickLabel = clickLabel,
-                            onLongClickLabel = onLongClick?.let { "More actions" },
+                            onLongClickLabel = onLongClick?.let { localized(Str.files_more_actions) },
                             onClick = { onClick(row) },
                             onLongClick = onLongClick?.let { { it(row) } },
                         )
                     },
                 )
-                .semantics { if (isDir) stateDescription = if (expanded) "Expanded" else "Collapsed" }
+                .semantics { if (isDir) stateDescription = localized(if (expanded) Str.files_expanded else Str.files_collapsed) }
                 .pointerHoverIcon(PointerIcon.Hand)
                 .drawBehind { drawIndentGuides(depth, guide) }
                 .heightIn(min = if (compact) RowMinTouch else RowMinDense)
@@ -676,7 +680,7 @@ private fun TreeRowLine(
                         if (isDir) {
                             Modifier
                                 .testTag("tree_chevron:${entry.name}")
-                                .clickable(role = Role.Button, onClickLabel = if (expanded) "Collapse" else "Expand") { onToggle(row) }
+                                .clickable(role = Role.Button, onClickLabel = localized(if (expanded) Str.files_collapse else Str.files_expand)) { onToggle(row) }
                         } else {
                             Modifier
                         },
@@ -716,7 +720,7 @@ private fun TreeRowLine(
                     color = cs.onSurfaceVariant.copy(alpha = alpha),
                     fontSize = 12.sp,
                     maxLines = 1,
-                    modifier = Modifier.clearAndSetSemantics { contentDescription = "Symlink loop" },
+                    modifier = Modifier.clearAndSetSemantics { contentDescription = localized(Str.files_symlink_loop) },
                 )
             }
             val git = entry.git
@@ -785,14 +789,14 @@ private fun GitMark(letter: String, alpha: Float) {
 }
 
 private fun gitDescription(letter: String): String = when (letter) {
-    "M" -> "Modified"
-    "A" -> "Added"
-    "D" -> "Deleted"
-    "R" -> "Renamed"
-    "?" -> "Untracked"
-    "U" -> "Conflict"
-    "*" -> "Changes inside"
-    else -> "Git: $letter"
+    "M" -> localized(Str.files_git_modified)
+    "A" -> localized(Str.files_git_added)
+    "D" -> localized(Str.files_git_deleted)
+    "R" -> localized(Str.files_git_renamed)
+    "?" -> localized(Str.files_git_untracked)
+    "U" -> localized(Str.files_git_conflict)
+    "*" -> localized(Str.files_git_changes_inside)
+    else -> localized(Str.files_git_other, letter)
 }
 
 /** Chevron, or — for a folder still loading — a small spinner, but only after [SpinnerDelayMs]. */

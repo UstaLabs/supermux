@@ -1,5 +1,7 @@
 package dev.supermux.ui.editor
 
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.Str
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
@@ -130,7 +132,7 @@ fun WalkthroughView(
             )
             if (step == null) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(if (state.loading) "Loading walkthrough…" else "No walkthrough", color = cs.onSurfaceVariant)
+                    Text(localized(if (state.loading) Str.walkthrough_loading else Str.walkthrough_none), color = cs.onSurfaceVariant)
                 }
             } else {
                 StepSlide(
@@ -164,7 +166,7 @@ private fun WalkthroughTopBar(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconButton(onClick = onToggleDrawer, modifier = Modifier.testTag("walkthrough_drawer")) {
-            Icon(Icons.Filled.Menu, "Show steps", modifier = Modifier.size(18.dp))
+            Icon(Icons.Filled.Menu, localized(Str.walkthrough_show_steps), modifier = Modifier.size(18.dp))
         }
         TextButton(onClick = state::previous, enabled = state.stepIndex > 0) { Text("‹") }
         Text("$index / $total", fontFamily = MonoFontFamily, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
@@ -186,7 +188,7 @@ private fun WalkthroughTopBar(
             }
         }
         IconButton(onClick = onClose, modifier = Modifier.testTag("walkthrough_close")) {
-            Icon(Icons.Filled.Close, "Back to diff", modifier = Modifier.size(18.dp))
+            Icon(Icons.Filled.Close, localized(Str.walkthrough_back_to_diff), modifier = Modifier.size(18.dp))
         }
     }
 }
@@ -195,7 +197,7 @@ private fun WalkthroughTopBar(
 private fun StepDrawer(state: WalkthroughState, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
     Column(modifier.fillMaxSize().background(cs.surfaceContainerHigh).padding(vertical = Space.sm)) {
-        Text("Walkthrough steps", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(Space.md))
+        Text(localized(Str.walkthrough_steps), style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(Space.md))
         state.steps.forEachIndexed { index, step ->
             val open = state.comments.count { c ->
                 c.parentId == null && c.status == "open" && c.repo == step.repo && c.path == step.path &&
@@ -244,9 +246,9 @@ private fun StepSlide(
             baseText == null -> LazyBase(null)
             else -> when (val r = try { baseCache.get(step.repo, baseBlob, false, baseText) } catch (e: CancellationException) { throw e } catch (_: Exception) { BlobText.Failed("") }) {
                 is BlobText.Text -> LazyBase(LineEndings.load(r.text).text)
-                is BlobText.TooLarge -> LazyBase(null, "Large file — changes not shown")
-                is BlobText.Binary -> LazyBase(null, "Binary file — changes not shown")
-                is BlobText.Failed -> LazyBase(null, "Couldn't load the previous version — changes not shown")
+                is BlobText.TooLarge -> LazyBase(null, localized(Str.walkthrough_large_file))
+                is BlobText.Binary -> LazyBase(null, localized(Str.walkthrough_binary_file))
+                is BlobText.Failed -> LazyBase(null, localized(Str.walkthrough_base_failed))
             }
         }
     }
@@ -265,7 +267,7 @@ private fun StepSlide(
     Column(modifier.padding(horizontal = Space.md, vertical = Space.sm), verticalArrangement = Arrangement.spacedBy(Space.sm)) {
         if (state.updatedStepIndex == state.stepIndex) {
             TextButton(onClick = state::clearUpdatedBadge, modifier = Modifier.testTag("walkthrough_updated_badge")) {
-                Text("Step ${state.stepIndex + 1} updated", color = WalkthroughBlue, fontWeight = FontWeight.SemiBold)
+                Text(localized(Str.walkthrough_step_updated, state.stepIndex + 1), color = WalkthroughBlue, fontWeight = FontWeight.SemiBold)
             }
         }
         if (path == null) {
@@ -288,26 +290,26 @@ private fun StepSlide(
                 color = cs.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )
-            TextButton(onClick = { onOpenFile(step.repo, path, step.anchorLine ?: step.rangeStart) }) { Text("Open file") }
+            TextButton(onClick = { onOpenFile(step.repo, path, step.anchorLine ?: step.rangeStart) }) { Text(localized(Str.walkthrough_open_file)) }
         }
         if (step.anchorStatus == "outdated") {
             Text(
-                "Code changed since authoring — showing the nearest available region.",
+                localized(Str.walkthrough_outdated),
                 color = cs.error,
                 fontSize = 12.sp,
                 modifier = Modifier.background(cs.errorContainer, RoundedCornerShape(6.dp)).padding(Space.sm),
             )
         } else if (step.anchorStatus == "not_in_diff") {
             Text(
-                "Code is outside the current diff — showing file context.",
+                localized(Str.walkthrough_not_in_diff),
                 color = cs.onSurfaceVariant,
                 fontSize = 12.sp,
                 modifier = Modifier.background(cs.surfaceContainerHigh, RoundedCornerShape(6.dp)).padding(Space.sm),
             )
         }
         when {
-            loadError != null -> Text(loadError ?: "Could not load file", color = cs.error)
-            content == null || lazyBase == null -> Text("Loading code…", color = cs.onSurfaceVariant)
+            loadError != null -> Text(loadError ?: localized(Str.walkthrough_load_failed), color = cs.error)
+            content == null || lazyBase == null -> Text(localized(Str.walkthrough_loading_code), color = cs.onSurfaceVariant)
             else -> {
                 lazyBase?.notice?.let {
                     Text(it, color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.testTag("walkthrough_base_notice"))

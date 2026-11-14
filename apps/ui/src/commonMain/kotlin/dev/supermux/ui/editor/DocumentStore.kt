@@ -28,6 +28,8 @@
 //     redundant there too; preserved here for exact parity, not because it's good API shape.
 package dev.supermux.ui.editor
 
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.Str
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -238,7 +240,7 @@ class DocumentStore(
                     // Only surface the error (and clear the spinner) if this is still the current
                     // open — a superseded load's failure must not stomp the newer load in progress.
                     if (loadingPath == path) {
-                        loadError = err.message ?: "Could not open file"
+                        loadError = err.message ?: localized(Str.editor_open_failed)
                         loadErrorBinary = (err as? dev.supermux.net.FsException)?.status == 415
                         loadingPath = null
                     }
@@ -420,7 +422,7 @@ class DocumentStore(
                 doc.savedContent = loaded.text
                 changedPaths = changedPaths - normPath(path)
             }
-            .onFailure { err -> loadError = err.message ?: "Could not reload file" }
+            .onFailure { err -> loadError = err.message ?: localized(Str.editor_reload_failed) }
         if (loadingPath == path) loadingPath = null
     }
 }

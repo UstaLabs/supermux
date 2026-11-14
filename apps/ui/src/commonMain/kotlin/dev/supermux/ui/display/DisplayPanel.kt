@@ -79,6 +79,8 @@ import dev.supermux.net.ScrcpyStatus
 import dev.supermux.net.VncClient
 import dev.supermux.net.VncStatus
 import dev.supermux.ui.adaptive.LocalPointerAvailable
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.keys.KeyContext
 import dev.supermux.ui.keys.ProvideKeyScope
 import dev.supermux.ui.keys.keyScope
@@ -238,7 +240,7 @@ fun DisplayStreamSurface(
         DisplayTransport.VNC -> VncView(stream.id, actions.connectVnc, stream.provider, retainKey, actions.displays, modifier)
         DisplayTransport.UNSUPPORTED ->
             Text(
-                "Unsupported display transport '${stream.transport}'",
+                localized(Str.display_unsupported, stream.transport),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.testTag("display_unsupported"),
             )
@@ -284,7 +286,7 @@ private fun DisplayEmptyState(starting: Boolean, onStart: () -> Unit, onRefresh:
             modifier = Modifier.size(40.dp),
         )
         Text(
-            "No active display for this session",
+            localized(Str.display_none_for_session),
             color = cs.onSurfaceVariant,
             fontFamily = MonoFontFamily,
             fontSize = 13.sp,
@@ -297,12 +299,12 @@ private fun DisplayEmptyState(starting: Boolean, onStart: () -> Unit, onRefresh:
             if (starting) {
                 CircularProgressIndicator(color = cs.onPrimary, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
             } else {
-                Text("Start display", fontWeight = FontWeight.Medium)
+                Text(localized(Str.display_start), fontWeight = FontWeight.Medium)
             }
         }
         TextButton(onClick = onRefresh, modifier = Modifier.touchTarget().testTag("display_refresh_button")) {
             Text(
-                "Refresh",
+                localized(Str.display_refresh),
                 color = cs.primary,
                 fontFamily = MonoFontFamily,
                 fontSize = 13.sp,
@@ -599,7 +601,7 @@ fun DisplayControlBar(
                 ) {
                     Icon(
                         Icons.Filled.Keyboard,
-                        contentDescription = "Toggle keyboard",
+                        contentDescription = localized(Str.display_toggle_keyboard),
                         tint = if (keyboardActive) cs.primary else cs.onSurfaceVariant,
                     )
                 }
@@ -625,14 +627,13 @@ private fun VncPasswordPrompt(
 ) {
     val cs = MaterialTheme.colorScheme
     val isMac = provider == "macos-screen"
-    val explain = if (isMac) "This Mac's Screen Sharing requires a password to connect."
-        else "This display requires a password to connect."
+    val explain = localized(if (isMac) Str.display_password_explain_mac else Str.display_password_explain)
 
     if (LocalPointerAvailable.current) {
         AlertDialog(
             onDismissRequest = onDismiss,
             modifier = Modifier.testTag("vnc_password_dialog"),
-            title = { Text("Password required") },
+            title = { Text(localized(Str.display_password_required)) },
             text = {
                 Column {
                     Text(explain)
@@ -646,9 +647,9 @@ private fun VncPasswordPrompt(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { onSubmit(password) }, enabled = password.isNotEmpty()) { Text("Connect") }
+                TextButton(onClick = { onSubmit(password) }, enabled = password.isNotEmpty()) { Text(localized(Str.display_connect)) }
             },
-            dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = onDismiss) { Text(localized(Str.display_cancel)) } },
         )
         return
     }
@@ -667,12 +668,12 @@ private fun VncPasswordPrompt(
                 .testTag("vnc_password_sheet"),
             verticalArrangement = Arrangement.spacedBy(Space.md),
         ) {
-            Text("Password required", color = cs.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
+            Text(localized(Str.display_password_required), color = cs.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
             Text(explain, color = cs.onSurfaceVariant, fontSize = 13.sp)
             OutlinedTextField(
                 value = password,
                 onValueChange = onPasswordChange,
-                label = { Text("Screen sharing password") },
+                label = { Text(localized(Str.display_password_label)) },
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
@@ -680,12 +681,12 @@ private fun VncPasswordPrompt(
                 modifier = Modifier.fillMaxWidth().testTag("vnc_password_field"),
             )
             Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
-                TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) { Text("Cancel") }
+                TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) { Text(localized(Str.display_cancel)) }
                 Button(
                     onClick = { onSubmit(password) },
                     enabled = password.isNotEmpty(),
                     modifier = Modifier.heightIn(min = 48.dp),
-                ) { Text("Connect") }
+                ) { Text(localized(Str.display_connect)) }
             }
         }
     }
@@ -698,10 +699,11 @@ fun DisplayStatusChip(state: DisplayState, modifier: Modifier = Modifier) {
     // Connected is GREEN: desktop painted a literal green and Android an amber `Panes.warning`,
     // which was the odd one out — the union is the semantic success role (G4 review).
     val (label, tint) = when (state) {
-        DisplayState.CONNECTING -> "Connecting…" to cs.primary
-        DisplayState.CONNECTED -> "Connected" to LocalSemantics.current.success
-        DisplayState.DISCONNECTED -> "Disconnected" to cs.onSurfaceVariant
-        DisplayState.NEEDS_PASSWORD -> "Password required" to cs.primary
+        DisplayState.CONNECTING -> localized(Str.display_connecting) to cs.primary
+        DisplayState.CONNECTED -> localized(Str.display_connected) to LocalSemantics.current.success
+        DisplayState.DISCONNECTED -> localized(Str.display_disconnected) to cs.onSurfaceVariant
+        DisplayState.NEEDS_PASSWORD -> localized(Str.display_password_required) to cs.primary
+
     }
     Row(
         modifier

@@ -3,6 +3,8 @@
 // system viewer). The editor's document store never sees these files.
 package dev.supermux.ui.editor
 
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.Str
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -127,10 +129,10 @@ fun BinaryFilePreview(
     var bytes by remember(absPath) { mutableStateOf<ByteArray?>(null) }
     var error by remember(absPath) { mutableStateOf<String?>(null) }
     LaunchedEffect(absPath, version) {
-        if (version == "gone") { error = "File not found"; return@LaunchedEffect }
+        if (version == "gone") { error = localized(Str.editor_file_not_found); return@LaunchedEffect }
         loadBytes(absPath)
             .onSuccess { bytes = it; error = null }
-            .onFailure { error = it.message?.takeIf(String::isNotBlank) ?: "Couldn't load the file" }
+            .onFailure { error = it.message?.takeIf(String::isNotBlank) ?: localized(Str.editor_load_failed) }
     }
     val name = pathLeaf(absPath)
     val mime = LocalPlatform.current.files.probeMime(name)
@@ -161,7 +163,7 @@ private fun ImagePreview(name: String, mime: String, data: ByteArray) {
     var lightbox by remember { mutableStateOf(false) }
     when (val decoded = rememberDecodedImage(data)) {
         DecodedImage.Loading -> CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp, color = cs.primary)
-        DecodedImage.Failed -> PreviewMessage("Couldn't decode this image")
+        DecodedImage.Failed -> PreviewMessage(localized(Str.editor_image_decode_failed))
         is DecodedImage.Ready -> {
             Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
                 // Inside: never blown up past its own size, shrunk to fit the pane.
@@ -238,7 +240,7 @@ fun BinaryFileCard(
     ) {
         Icon(Icons.AutoMirrored.Filled.InsertDriveFile, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(40.dp))
         Text(name, color = cs.onSurface, fontSize = 14.sp, textAlign = TextAlign.Center)
-        Text("Binary file — no text to show", color = cs.onSurfaceVariant, fontSize = 12.sp)
+        Text(localized(Str.editor_binary_no_text), color = cs.onSurfaceVariant, fontSize = 12.sp)
         FilledTonalButton(
             enabled = !busy && !waiting && !running,
             onClick = {
@@ -261,7 +263,7 @@ fun BinaryFileCard(
                 scope.launch {
                     loadBytes(absPath)
                         .onSuccess { saveOrOpenAttachment(platform, pointer, name, platform.files.probeMime(name), it) }
-                        .onFailure { platform.notices.show(it.message?.takeIf(String::isNotBlank) ?: "Couldn't load the file") }
+                        .onFailure { platform.notices.show(it.message?.takeIf(String::isNotBlank) ?: localized(Str.editor_load_failed)) }
                     busy = false
                 }
             },
@@ -269,9 +271,9 @@ fun BinaryFileCard(
         ) {
             Text(
                 when {
-                    running -> "Downloading…"
-                    pointer -> "Save and open…"
-                    else -> "Open"
+                    running -> localized(Str.editor_downloading)
+                    pointer -> localized(Str.editor_save_and_open)
+                    else -> localized(Str.machine_open)
                 },
                 style = MaterialTheme.typography.labelLarge,
             )

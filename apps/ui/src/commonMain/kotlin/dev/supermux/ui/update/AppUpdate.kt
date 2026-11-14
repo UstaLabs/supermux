@@ -18,6 +18,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import dev.supermux.update.ClientUpdateStatus
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.material.icons.outlined.Redeem
 import androidx.compose.material3.DropdownMenu
@@ -113,9 +115,9 @@ fun formatUpdateProgress(bytesReceived: Long, contentLength: Long?): String {
         null
     }
     return when {
-        pct != null -> "Downloading $pct%…"
-        bytesReceived > 0 -> "Downloading ${formatUpdateBytes(bytesReceived)}…"
-        else -> "Downloading…"
+        pct != null -> localized(Str.update_downloading_percent, pct)
+        bytesReceived > 0 -> localized(Str.update_downloading_bytes, formatUpdateBytes(bytesReceived))
+        else -> localized(Str.update_downloading)
     }
 }
 
@@ -158,17 +160,16 @@ suspend fun AppUpdater.keepUpdated(every: Duration = 6.hours) {
 suspend fun AppUpdater.announceUpdate(notices: NoticeChannel, reconnected: Flow<Boolean>, waitMs: Long = 60_000) {
     val version = justUpdatedTo ?: return
     val back = withTimeoutOrNull(waitMs) { reconnected.first { it } } == true
-    notices.show(if (back) "Updated to v$version · all sessions reconnected" else "Updated to v$version")
+    notices.show(localized(if (back) Str.update_updated_reconnected else Str.update_updated, version))
     acknowledgeUpdated()
 }
 
 /** The caption under a Download: what it will open on this host. */
 fun installCaption(kind: String?): String = when (kind) {
     // Android's wording — the notifier that posts this progress lives behind the seam.
-    "apk" -> "One-tap installs the latest release APK over this build. " +
-        "Progress also appears in the notification bar."
-    null -> "Downloads the latest installer and opens it."
-    else -> "Downloads the latest .$kind and opens it."
+    "apk" -> localized(Str.update_install_caption_apk)
+    null -> localized(Str.update_install_caption)
+    else -> localized(Str.update_install_caption_kind, kind.orEmpty())
 }
 
 // ── The download (#95) ────────────────────────────────────────────────────────
@@ -236,19 +237,19 @@ val UpdateStatus.showsUpdateCard: Boolean
 
 /** What a waiting "Restart to update" says (#113): an upload first, as the likelier and the longer. */
 fun finishingLabel(work: List<InFlightWork.Kind>): String =
-    if (InFlightWork.Kind.Upload in work || work.isEmpty()) "Finishing upload…" else "Finishing recording…"
+    localized(if (InFlightWork.Kind.Upload in work || work.isEmpty()) Str.update_finishing_upload else Str.update_finishing_recording)
 
 /** The ready card's line where the installer reopens the app (#113): the agents carry on through the restart. */
-const val RESTART_CAPTION = "Restart to update: supermux closes, installs it and opens again. Your sessions carry on."
+val RESTART_CAPTION: String get() = localized(Str.update_restart_caption)
 
 /**
  * The card's one muted line: what pressing Install will actually do on this host. Not a warning —
  * the agents live in the broker, a separate background service, so updating the app stops nothing.
  */
 fun updateCardCaption(kind: String?): String = when (kind) {
-    "apk" -> "Downloads the new APK and installs it over this build."
-    null -> "Downloads the new version and opens the installer."
-    else -> "Downloads the new .$kind and opens it."
+    "apk" -> localized(Str.update_card_caption_apk)
+    null -> localized(Str.update_card_caption)
+    else -> localized(Str.update_card_caption_kind, kind.orEmpty())
 }
 
 /**
@@ -325,7 +326,7 @@ private fun UpdateCardBody(
             )
             Spacer(Modifier.width(10.dp))
             Text(
-                if (ready != null) "Update ready" else "Update available",
+                localized(if (ready != null) Str.update_ready else Str.update_available),
                 color = cs.onSurface,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Medium,
@@ -339,7 +340,7 @@ private fun UpdateCardBody(
             ) {
                 Icon(
                     Icons.Default.Close,
-                    contentDescription = "Dismiss",
+                    contentDescription = localized(Str.update_dismiss),
                     tint = cs.onSurfaceVariant,
                     modifier = Modifier.size(18.dp),
                 )
@@ -348,7 +349,7 @@ private fun UpdateCardBody(
         Spacer(Modifier.height(Space.sm))
         Column(Modifier.padding(end = Space.sm)) {
             Text(
-                if (ready != null) "v${release.latestVersion} is downloaded." else "v${release.latestVersion} is ready to install.",
+                localized(if (ready != null) Str.update_card_downloaded else Str.update_card_ready, release.latestVersion.orEmpty()),
                 color = cs.onSurface,
                 fontSize = 13.sp,
                 lineHeight = 18.sp,
@@ -416,8 +417,8 @@ private fun UpdateCardBody(
                             when {
                                 installing -> formatUpdateProgress(update.bytesReceived, update.contentLength)
                                 waiting -> finishingLabel(work)
-                                restarts -> "Restart to update"
-                                else -> "Install"
+                                restarts -> localized(Str.update_restart)
+                                else -> localized(Str.settings_update_install)
                             },
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Medium,
@@ -451,7 +452,7 @@ private fun WhatsNewButton(release: ClientUpdateStatus, updater: AppUpdater, mod
             contentPadding = PaddingValues(horizontal = Space.sm),
             modifier = Modifier.fillMaxSize().testTag("app_update_card_whats_new"),
         ) {
-            Text("What's new", fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+            Text(localized(Str.update_whats_new), fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
         }
         DropdownMenu(
             expanded = open,
@@ -467,7 +468,7 @@ private fun WhatsNewButton(release: ClientUpdateStatus, updater: AppUpdater, mod
                 verticalArrangement = Arrangement.spacedBy(Space.sm),
             ) {
                 Text(
-                    "What's new in ${release.latestVersion}",
+                    localized(Str.update_whats_new_in, release.latestVersion.orEmpty()),
                     color = cs.onSurface,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
@@ -486,7 +487,8 @@ private fun WhatsNewButton(release: ClientUpdateStatus, updater: AppUpdater, mod
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(Space.xs),
                     ) {
-                        Text("Full release notes", color = cs.onSurfaceVariant, fontSize = 12.sp)
+                        Text(localized(Str.update_full_notes), color
+ = cs.onSurfaceVariant, fontSize = 12.sp)
                         Icon(
                             Icons.AutoMirrored.Filled.OpenInNew,
                             contentDescription = null,

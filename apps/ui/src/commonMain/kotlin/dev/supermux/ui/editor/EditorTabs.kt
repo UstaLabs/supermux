@@ -8,6 +8,8 @@
 // its close glyph, and Material `Icons.Filled.Close` in place of the bundled `ic_x` drawable.
 package dev.supermux.ui.editor
 
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.Str
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -169,7 +171,7 @@ private fun TabChip(
         if (!loading) {
             Icon(
                 Icons.Filled.Close,
-                contentDescription = "Close",
+                contentDescription = localized(Str.shell_close),
                 tint = cs.onSurfaceVariant.copy(alpha = 0.7f),
                 modifier = Modifier
                     .size(14.dp)

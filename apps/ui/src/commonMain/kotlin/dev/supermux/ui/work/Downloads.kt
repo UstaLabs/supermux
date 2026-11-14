@@ -52,6 +52,8 @@ import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.LocalChatSearch
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.platform.DownloadedInstaller
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.Platform
@@ -139,7 +141,7 @@ fun ActivityRailIcon(modifier: Modifier = Modifier) {
     // The air the rail keeps between its tiles, between the ring and the bottom sheet under it.
     Box(modifier.padding(bottom = PanelTokens.RailGap)) {
         Box {
-            RailTile(onClick = { open = true }, tag = "rail_downloads", label = "Downloads") {
+            RailTile(onClick = { open = true }, tag = "rail_downloads", label = localized(Str.work_downloads)) {
                 Box(
                     Modifier
                         .size(RingTokens.RailTile)
@@ -196,7 +198,8 @@ private fun DownloadsPanel(
                 item.origin?.let { origin ->
                     onDismiss()
                     if (search?.reveal(origin.sessionId, origin.messageId) != true) {
-                        platform.notices.show("That chat is no longer available")
+                        platform.notices.show(localized(Str.work_chat_gone))
+
                     }
                 }
             },

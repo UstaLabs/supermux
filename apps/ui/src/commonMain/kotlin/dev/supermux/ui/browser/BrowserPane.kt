@@ -277,13 +277,13 @@ fun BrowserPane(
     }
     fun zoomBy(direction: Int) {
         val next = if (direction == 0) 1f else nextZoom(zoom, direction)
-        if (state.navigator.setZoom(next * (if (zoomFits) stageScale else 1f))) zoom = next else notice = "Zoom isn't available here yet"
+        if (state.navigator.setZoom(next * (if (zoomFits) stageScale else 1f))) zoom = next else notice = localized(Str.browser_zoom_unavailable)
     }
     fun inspect() {
         notice = when (val r = state.navigator.openInspector()) {
             InspectorResult.Opened -> null
             is InspectorResult.Elsewhere -> r.hint
-            else -> "This engine has no inspector here"
+            else -> localized(Str.browser_no_inspector)
         }
     }
     // The inspect key opens what the engine has, and leaves the key alone where it has none (#122: never a note that
@@ -461,12 +461,13 @@ fun BrowserPane(
         notice?.let { text ->
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp).testTag("browser-notice"), verticalAlignment = Alignment.CenterVertically) {
                 Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                dev.supermux.ui.settings.kit.KitTextAction("OK", { notice = null })
+                dev.supermux.ui.settings.kit.KitTextAction(localized(Str.browser_ok), { notice = null })
             }
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (val b = body) {
-                BrowserBody.NewTab -> BrowserMessage("Type a site, or a port such as 5173.", "browser-new-tab")
+                BrowserBody.NewTab -> BrowserMessage(localized(Str.browser_new_tab_hint), "browser-new-tab")
+
                 is BrowserBody.Said -> BrowserMessage(b.message, "browser-said")
                 is BrowserBody.Page -> {
                     val pageAndPicks = @Composable {

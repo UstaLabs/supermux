@@ -76,6 +76,8 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.chat.LocalChatSearch
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.shell.RailTile
 import dev.supermux.ui.theme.MonoFontFamily
@@ -143,7 +145,7 @@ private fun NowPlayingPart(player: AudioPlayer, now: NowPlaying, modifier: Modif
                 QuietButton(
                     size = m.button,
                     corner = m.corner,
-                    label = if (now.playing) "Pause" else "Play",
+                    label = localized(if (now.playing) Str.work_pause else Str.work_play),
                     tag = "now_playing_toggle",
                     onClick = { player.toggle() },
                 ) {
@@ -171,7 +173,7 @@ private fun NowPlayingPart(player: AudioPlayer, now: NowPlaying, modifier: Modif
                 if (origin != null && chat != null) {
                     ChatLink(chat, m.chat, Modifier.weight(1f, fill = false)) {
                         if (search?.reveal(origin.sessionId, origin.messageId) != true) {
-                            platform.notices.show("That chat is no longer available")
+                            platform.notices.show(localized(Str.work_chat_gone))
                         }
                     }
                 }
@@ -180,7 +182,7 @@ private fun NowPlayingPart(player: AudioPlayer, now: NowPlaying, modifier: Modif
                 size = m.speedHeight,
                 width = null,
                 corner = m.corner,
-                label = "Speed",
+                label = localized(Str.work_speed),
                 tag = "now_playing_speed",
                 onClick = { player.nextSpeed() },
             ) {
@@ -191,13 +193,13 @@ private fun NowPlayingPart(player: AudioPlayer, now: NowPlaying, modifier: Modif
                     modifier = Modifier.padding(horizontal = m.speedPadding),
                 )
             }
-            QuietButton(size = m.stop, corner = m.corner, label = "Stop", tag = "now_playing_stop", onClick = { player.stop() }) {
+            QuietButton(size = m.stop, corner = m.corner, label = localized(Str.work_stop), tag = "now_playing_stop", onClick = { player.stop() }) {
                 Icon(AudioGlyphs.Stop, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(m.stopGlyph))
             }
         }
         if (failed) {
             Text(
-                "Couldn't play this",
+                localized(Str.work_play_failed),
                 color = cs.error,
                 fontSize = m.time,
                 maxLines = 1,
@@ -227,7 +229,7 @@ private fun ChatLink(chat: String, size: androidx.compose.ui.unit.TextUnit, modi
         overflow = TextOverflow.Ellipsis,
         textDecoration = if (hovered) androidx.compose.ui.text.style.TextDecoration.Underline else null,
         modifier = modifier
-            .clickable(interactionSource = source, indication = null, role = Role.Button, onClickLabel = "Open the chat it came from", onClick = onClick)
+            .clickable(interactionSource = source, indication = null, role = Role.Button, onClickLabel = localized(Str.work_open_source_chat), onClick = onClick)
             .pointerHoverIcon(PointerIcon.Hand)
             .testTag("now_playing_chat"),
     )
@@ -276,8 +278,8 @@ private fun Scrubber(player: AudioPlayer, now: NowPlaying, m: DockMeasures) {
                     }
                 }
                 .semantics {
-                    contentDescription = "Position"
-                    stateDescription = "${clock(now.positionMs)} of ${clock(length)}"
+                    contentDescription = localized(Str.work_position)
+                    stateDescription = localized(Str.work_position_state, clock(now.positionMs), clock(length))
                     progressBarRangeInfo = ProgressBarRangeInfo(fraction, 0f..1f)
                     setProgress { to ->
                         if (length > 0) player.seek((to.coerceIn(0f, 1f) * length).toLong())
@@ -335,14 +337,14 @@ fun AudioRailIcon(modifier: Modifier = Modifier) {
     }
     val fraction = if (now.durationMs > 0) (now.positionMs.toFloat() / now.durationMs).coerceIn(0f, 1f) else 0f
     Box(modifier.padding(bottom = 4.dp)) {
-        RailTile(onClick = { open = !open }, tag = "rail_audio", label = "Now playing") {
+        RailTile(onClick = { open = !open }, tag = "rail_audio", label = localized(Str.work_now_playing)) {
             Box(
                 Modifier
                     .size(RingTokens.RailTile)
                     .background(if (open) cs.onSurface.copy(alpha = cs.washAlpha) else Color.Transparent)
                     .semantics {
-                        contentDescription = "Now playing: ${now.item.title}"
-                        stateDescription = if (now.stopOnly) "reading" else if (now.playing) "playing" else "paused"
+                        contentDescription = localized(Str.work_now_playing_title, now.item.title)
+                        stateDescription = localized(if (now.stopOnly) Str.work_state_reading else if (now.playing) Str.work_state_playing else Str.work_state_paused)
                         progressBarRangeInfo = ProgressBarRangeInfo(fraction, 0f..1f)
                     },
                 contentAlignment = Alignment.Center,
@@ -411,7 +413,8 @@ internal fun AudioToggleButton(playing: Boolean, tag: String, onClick: () -> Uni
     QuietButton(
         size = if (touch) 44.dp else 32.dp,
         corner = 8.dp,
-        label = if (playing) "Pause" else "Play",
+        label = localized(if (playing) Str.work_pause else Str.work_play),
+
         tag = tag,
         onClick = onClick,
     ) {

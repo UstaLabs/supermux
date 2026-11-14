@@ -4,6 +4,8 @@
 // scrim-dismiss and result-tap is folded back in (the desktop haptics implementation is a no-op).
 package dev.supermux.ui.editor
 
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.Str
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -83,7 +85,7 @@ fun EditorSearchField(
                 Box {
                     if (query.isEmpty()) {
                         Text(
-                            "Search files…",
+                            localized(Str.editor_search_files),
                             color = cs.onSurfaceVariant,
                             fontFamily = MonoFontFamily,
                             fontSize = 12.sp,

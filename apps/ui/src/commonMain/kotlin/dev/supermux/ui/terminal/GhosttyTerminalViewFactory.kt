@@ -7,6 +7,8 @@
 // is the same code on every target.
 package dev.supermux.ui.terminal
 
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.Str
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -521,7 +523,7 @@ internal fun TerminalLinkDialog(uri: String, onCopy: () -> Unit, onDismiss: () -
     AlertDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.testTag("terminal_link_dialog"),
-        title = { Text(if (openable) "Open link?" else "Link") },
+        title = { Text(localized(if (openable) Str.terminal_open_link else Str.terminal_link)) },
         text = { Text(uri, fontFamily = MonoFontFamily, fontSize = 13.sp, maxLines = 6, overflow = TextOverflow.Ellipsis) },
         confirmButton = {
             if (openable) {
@@ -531,15 +533,15 @@ internal fun TerminalLinkDialog(uri: String, onCopy: () -> Unit, onDismiss: () -
                         onDismiss()
                     },
                     modifier = Modifier.testTag("terminal_link_open"),
-                ) { Text("Open") }
+                ) { Text(localized(Str.machine_open)) }
             } else {
-                TextButton(onClick = { onCopy(); onDismiss() }) { Text("Copy") }
+                TextButton(onClick = { onCopy(); onDismiss() }) { Text(localized(Str.chatline_copy)) }
             }
         },
         dismissButton = {
             Row {
-                if (openable) TextButton(onClick = { onCopy(); onDismiss() }) { Text("Copy") }
-                TextButton(onClick = onDismiss) { Text("Cancel") }
+                if (openable) TextButton(onClick = { onCopy(); onDismiss() }) { Text(localized(Str.chatline_copy)) }
+                TextButton(onClick = onDismiss) { Text(localized(Str.shell_cancel)) }
             }
         },
     )
@@ -553,7 +555,7 @@ private const val BELL_HAPTIC_INTERVAL_MS = 1_000L
 @Composable
 private fun TerminalFailureBanner(error: Throwable, modifier: Modifier = Modifier) {
     Text(
-        text = error.message ?: "terminal failed",
+        text = error.message ?: localized(Str.terminal_failed),
         color = Color(0xFFFFD7D7),
         fontSize = 12.sp,
         maxLines = 2,

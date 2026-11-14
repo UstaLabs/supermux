@@ -19,6 +19,8 @@
 // open-comment count — is the shared behaviour both apps already had.
 package dev.supermux.ui.editor
 
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localizedPlural
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -289,7 +291,7 @@ fun DiffView(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                "$totalFiles changed file${if (totalFiles == 1) "" else "s"}",
+                localizedPlural(Plurals.diff_changed_files, totalFiles, totalFiles),
                 style = MaterialTheme.typography.titleSmall,
                 color = cs.onSurface,
                 maxLines = 1,
@@ -337,7 +339,7 @@ fun DiffView(
                 ) {
                     Icon(
                         Icons.Filled.VerticalSplit,
-                        contentDescription = if (sideBySide) "Show inline" else "Show side by side",
+                        contentDescription = localized(if (sideBySide) Str.diff_show_inline else Str.diff_show_side_by_side),
                         tint = if (sideBySide) cs.primary else cs.onSurfaceVariant,
                         modifier = Modifier.size(18.dp),
                     )
@@ -352,7 +354,7 @@ fun DiffView(
             ) {
                 Icon(
                     if (treeView) Icons.Filled.AccountTree else Icons.Filled.ViewList,
-                    contentDescription = if (treeView) "Show as list" else "Show as tree",
+                    contentDescription = localized(if (treeView) Str.diff_show_list else Str.diff_show_tree),
                     tint = if (treeView) cs.primary else cs.onSurfaceVariant,
                     modifier = Modifier.size(18.dp),
                 )
@@ -366,7 +368,7 @@ fun DiffView(
                 ) {
                     Icon(
                         Icons.Filled.WrapText,
-                        contentDescription = if (wrap) "Turn wrapping off" else "Turn wrapping on",
+                        contentDescription = localized(if (wrap) Str.diff_wrap_off else Str.diff_wrap_on),
                         tint = if (wrap) cs.primary else cs.onSurfaceVariant,
                         modifier = Modifier.size(18.dp),
                     )
@@ -377,7 +379,7 @@ fun DiffView(
                     modifier = Modifier.testTag("diff_wrap_toggle"),
                 ) {
                     Text(
-                        "Wrap",
+                        localized(Str.diff_wrap),
                         style = MaterialTheme.typography.titleSmall,
                         color = if (wrap) cs.primary else cs.onSurfaceVariant,
                     )
@@ -386,7 +388,7 @@ fun DiffView(
             IconButton(onClick = onClose, modifier = Modifier.testTag("diff_back")) {
                 Icon(
                     Icons.Filled.Close,
-                    contentDescription = "Close diff",
+                    contentDescription = localized(Str.diff_close),
                     tint = cs.onSurfaceVariant,
                     modifier = Modifier.size(18.dp),
                 )
@@ -399,7 +401,7 @@ fun DiffView(
             // A repo whose listing failed has no files either: say why instead of "no changes".
             repos.forEach { RepoBanner(it) }
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                if (repos.none { it.error != null }) Text("No changes found", color = cs.onSurfaceVariant, fontSize = 13.sp)
+                if (repos.none { it.error != null }) Text(localized(Str.diff_no_changes), color = cs.onSurfaceVariant, fontSize = 13.sp)
             }
         } else {
             val listState = rememberLazyListState()
@@ -549,7 +551,7 @@ fun DiffView(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    "$openCount open comment${if (openCount == 1) "" else "s"}",
+                    localizedPlural(Plurals.diff_open_comments, openCount, openCount),
                     style = MaterialTheme.typography.bodyMedium,
                     color = cs.onSurfaceVariant,
                 )
@@ -566,7 +568,7 @@ fun DiffView(
                     enabled = openCount > 0 && !submitting,
                     modifier = Modifier.testTag("diff_submit"),
                 ) {
-                    Text("Submit review", fontWeight = FontWeight.SemiBold)
+                    Text(localized(Str.diff_submit_review), fontWeight = FontWeight.SemiBold)
                 }
             }
         }
@@ -597,8 +599,8 @@ private class DiffReviewKept {
 /** Human label for a base spec, ported verbatim from Android DiffView.kt:305-311 (mirrors the web
  *  DiffView chip). Public for the pure-mapping unit test. */
 fun baseLabel(base: String): String = when {
-    base == "session-start" -> "Session start"
-    base == "head" -> "Uncommitted"
+    base == "session-start" -> localized(Str.diff_base_session_start)
+    base == "head" -> localized(Str.diff_base_uncommitted)
     base.startsWith("commit:") -> base.removePrefix("commit:").take(7)
     base.startsWith("branch:") -> base.removePrefix("branch:")
     else -> base
@@ -640,7 +642,7 @@ private fun BaseSelector(
                 .testTag("diff_base_chip"),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Base: ", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+            Text(localized(Str.diff_base_label) + " ", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
             Text(
                 baseLabel(base),
                 style = MaterialTheme.typography.labelMedium,
@@ -672,7 +674,7 @@ private fun BaseSelector(
                             .testTag("diff_base_menu"),
                     ) {
                         Text(
-                            "Diff base",
+                            localized(Str.diff_base_title),
                             color = cs.onSurface,
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 15.sp,
@@ -704,10 +706,10 @@ private fun BaseOptions(
     /** Android's sheet tinted the selected row; a menu marks it with the trailing check alone. */
     tintSelected: Boolean = false,
 ) {
-    BaseOption("Session start", spec = "session-start", selected = base == "session-start", tintSelected = tintSelected, onSelect = onSelect)
-    BaseOption("Uncommitted (HEAD)", spec = "head", selected = base == "head", tintSelected = tintSelected, onSelect = onSelect)
+    BaseOption(localized(Str.diff_base_session_start), spec = "session-start", selected = base == "session-start", tintSelected = tintSelected, onSelect = onSelect)
+    BaseOption(localized(Str.diff_base_uncommitted_head), spec = "head", selected = base == "head", tintSelected = tintSelected, onSelect = onSelect)
 
-    BaseSectionHeader("Previous commit")
+    BaseSectionHeader(localized(Str.diff_base_previous_commit))
     val commits = refs?.commits ?: emptyList()
     if (commits.isEmpty()) {
         BaseNoneRow(noneFontSize)
@@ -725,7 +727,7 @@ private fun BaseOptions(
         }
     }
 
-    BaseSectionHeader("Another branch")
+    BaseSectionHeader(localized(Str.diff_base_another_branch))
     val branches = refs?.branches ?: emptyList()
     if (branches.isEmpty()) {
         BaseNoneRow(noneFontSize)
@@ -751,7 +753,7 @@ private fun BaseSectionHeader(text: String) {
 @Composable
 private fun BaseNoneRow(fontSize: Int) {
     Text(
-        "None",
+        localized(Str.diff_base_none),
         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
         fontSize = fontSize.sp,
         modifier = Modifier.padding(horizontal = Space.md, vertical = Space.sm),
@@ -860,7 +862,7 @@ private fun RepoHeader(repo: RepoDiff, expanded: Boolean, onToggle: () -> Unit) 
             modifier = Modifier.weight(1f).padding(start = Space.sm),
         )
         Text(
-            "${repo.files.size} file${if (repo.files.size == 1) "" else "s"}",
+            localizedPlural(Plurals.diff_repo_files, repo.files.size, repo.files.size),
             fontSize = 11.sp,
             color = cs.onSurfaceVariant,
         )
@@ -996,9 +998,9 @@ private fun FileSection(
                 modifier = Modifier.weight(1f).padding(horizontal = Space.sm),
             )
             if (file.binary) {
-                Tag("Binary")
+                Tag(localized(Str.diff_tag_binary))
             } else if (file.modeChange) {
-                Tag("Mode")
+                Tag(localized(Str.diff_tag_mode))
             }
             Text(
                 statusLabel(file.status),
@@ -1033,8 +1035,8 @@ private fun FileSection(
             HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
             val lines = remember(file.diff) { parseDiffLines(file.diff) }
             when {
-                file.binary -> Placeholder("Binary file — no text diff")
-                !file.lazy && file.modeChange && lines.isEmpty() -> Placeholder("File mode changed")
+                file.binary -> Placeholder(localized(Str.diff_binary_no_text))
+                !file.lazy && file.modeChange && lines.isEmpty() -> Placeholder(localized(Str.diff_mode_changed))
                 else -> {
                     val body: @Composable () -> Unit = {
                         DiffRows(
@@ -1076,7 +1078,7 @@ private fun FileSection(
                             fallback = rows,
                         )
                     } else if (file.lazy) {
-                        Placeholder("Open this file to see its changes")
+                        Placeholder(localized(Str.diff_open_to_see))
                     } else {
                         rows()
                     }
@@ -1198,7 +1200,7 @@ private fun Gutter(
                 ) {
                     Icon(
                         Icons.Filled.Add,
-                        contentDescription = if (open) "Close comment composer on line $newLine" else "Add comment on line $newLine",
+                        contentDescription = localized(if (open) Str.diff_close_composer else Str.diff_add_comment_on, newLine),
                         tint = if (open) cs.primary else cs.primary.copy(alpha = 0.7f),
                         modifier = Modifier.size(13.dp),
                     )
@@ -1240,19 +1242,19 @@ internal fun Composer(
         OutlinedTextField(
             value = draft,
             onValueChange = onDraftChange,
-            placeholder = { Text("Leave a comment…") },
+            placeholder = { Text(localized(Str.diff_comment_placeholder)) },
             modifier = Modifier.fillMaxWidth().widthIn(min = 220.dp).testTag("diff_comment_draft"),
             minLines = 2,
             maxLines = 6,
             textStyle = MaterialTheme.typography.bodyMedium,
         )
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            OutlinedButton(onClick = onCancel, modifier = Modifier.testTag("diff_comment_cancel")) { Text("Cancel") }
+            OutlinedButton(onClick = onCancel, modifier = Modifier.testTag("diff_comment_cancel")) { Text(localized(Str.shell_cancel)) }
             Button(
                 onClick = onAdd,
                 enabled = draft.trim().isNotEmpty() && !submitting,
                 modifier = Modifier.padding(start = Space.sm).testTag("diff_comment_add"),
-            ) { Text("Add") }
+            ) { Text(localized(Str.settings_glossary_add)) }
         }
     }
 }
@@ -1275,18 +1277,18 @@ internal fun CommentThreadRow(
         if (c.status == "resolved") {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 CommentStatusBadge(c)
-                Text("${1 + replies.size} message${if (replies.isEmpty()) "" else "s"}",
+                Text(localizedPlural(Plurals.diff_messages, 1 + replies.size, 1 + replies.size),
                     style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
                     modifier = Modifier.padding(start = Space.xs))
             }
         } else {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(c.author.ifEmpty { "You" }, fontSize = 11.sp, color = cs.onSurfaceVariant)
+                Text(c.author.ifEmpty { localized(Str.diff_you) }, fontSize = 11.sp, color = cs.onSurfaceVariant)
                 CommentStatusBadge(c)
                 Box(Modifier.weight(1f))
                 if (c.status == "open") {
                     TextButton(onClick = onResolve, modifier = Modifier.testTag("diff_resolve")) {
-                        Text("Resolve", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = cs.primary)
+                        Text(localized(Str.diff_resolve), fontSize = 12.sp, fontWeight = FontWeight.Medium, color = cs.primary)
                     }
                 }
             }
@@ -1295,7 +1297,7 @@ internal fun CommentThreadRow(
                 Row(Modifier.fillMaxWidth().padding(top = Space.xs), verticalAlignment = Alignment.Top) {
                     Text(if (reply.author == "agent") "🤖" else "●", fontSize = 12.sp, modifier = Modifier.padding(end = Space.xs))
                     Column {
-                        Text(reply.author.ifEmpty { "You" }, fontSize = 10.sp, color = cs.onSurfaceVariant)
+                        Text(reply.author.ifEmpty { localized(Str.diff_you) }, fontSize = 10.sp, color = cs.onSurfaceVariant)
                         Text(reply.body, style = MaterialTheme.typography.bodyMedium, color = cs.onSurface)
                     }
                 }
@@ -1308,10 +1310,10 @@ internal fun CommentThreadRow(
 private fun CommentStatusBadge(c: ReviewComment) {
     val cs = MaterialTheme.colorScheme
     when {
-        c.outdated -> Badge("outdated", Amber)
-        c.status == "submitted" -> Badge("submitted", DiffBlue)
-        c.status == "resolved" -> Badge("resolved", Emerald)
-        else -> Badge("open", cs.onSurfaceVariant)
+        c.outdated -> Badge(localized(Str.diff_status_outdated), Amber)
+        c.status == "submitted" -> Badge(localized(Str.diff_status_submitted), DiffBlue)
+        c.status == "resolved" -> Badge(localized(Str.diff_status_resolved), Emerald)
+        else -> Badge(localized(Str.diff_status_open), cs.onSurfaceVariant)
     }
 }
 
@@ -1337,10 +1339,10 @@ private fun Tag(text: String) {
 /** Under a repo's header (above the list with one repo): its listing failed, or was cut short. */
 @Composable
 private fun RepoBanner(repo: RepoDiff) {
-    repo.error?.let { Placeholder("Couldn't list changes: $it") }
+    repo.error?.let { Placeholder(localized(Str.diff_list_failed, it)) }
     if (repo.truncated) {
         Text(
-            "Showing ${repo.files.size} of ${repo.total ?: repo.files.size} files",
+            localized(Str.diff_truncated, repo.files.size, repo.total ?: repo.files.size),
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.xs).testTag("diff_truncated"),
@@ -1432,10 +1434,10 @@ private fun statusColor(status: String): Color = when (status) {
 }
 
 private fun statusLabel(status: String): String = when (status) {
-    "added" -> "Added"
-    "deleted" -> "Deleted"
-    "renamed" -> "Renamed"
-    else -> "Modified"
+    "added" -> localized(Str.diff_added)
+    "deleted" -> localized(Str.diff_deleted)
+    "renamed" -> localized(Str.diff_renamed)
+    else -> localized(Str.diff_modified)
 }
 
 private fun rowBackground(type: DiffLineType): Color = when (type) {

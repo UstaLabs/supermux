@@ -1,0 +1,189 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #123: the Browser tab (toolbar, find, device mode, page comments), displays, downloads and the audio player, and
+     the app update card. English, the source; values-tr/browser_display.xml has the same keys (tests/i18n-strings.test.ts). -->
+<resources>
+    <!-- Browser tab › toolbar and menu -->
+    <string name="browser_back">Back</string>
+    <string name="browser_forward">Forward</string>
+    <string name="browser_stop">Stop</string>
+    <string name="browser_reload">Reload</string>
+    <string name="browser_address_hint">Type a site, or a port such as 5173</string>
+    <string name="browser_new_tab_hint">Type a site, or a port such as 5173.</string>
+    <string name="browser_comment_on_page">Comment on the page</string>
+    <string name="browser_device_mode">Device mode</string>
+    <string name="browser_more">More</string>
+    <string name="browser_find_in_page">Find in page</string>
+    <string name="browser_send_screenshot">Send screenshot to chat</string>
+    <string name="browser_screenshot_to_chat">Screenshot to chat</string>
+    <string name="browser_inspect">Inspect</string>
+    <string name="browser_desktop_site">Desktop site</string>
+    <string name="browser_zoom">Zoom</string>
+    <string name="browser_zoom_out">Zoom out</string>
+    <string name="browser_zoom_in">Zoom in</string>
+    <string name="browser_on">On</string>
+    <string name="browser_zoom_unavailable">Zoom isn't available here yet</string>
+    <string name="browser_no_inspector">This engine has no inspector here</string>
+    <string name="browser_ok">OK</string>
+
+    <!-- Browser tab › find in page -->
+    <string name="browser_find">Find</string>
+    <string name="browser_find_unavailable">Find isn't available here yet</string>
+    <string name="browser_find_none">No matches</string>
+    <string name="browser_find_position">%1$s of %2$s</string>
+    <plurals name="browser_find_matches">
+        <item quantity="one">%1$d match</item>
+        <item quantity="other">%1$d matches</item>
+    </plurals>
+    <string name="browser_find_found">Found</string>
+    <string name="browser_find_previous">Previous</string>
+    <string name="browser_find_next">Next</string>
+    <string name="browser_find_close">Close find</string>
+
+    <!-- Browser tab › device mode -->
+    <string name="browser_device_responsive">Responsive</string>
+    <string name="browser_device_phones">Phones</string>
+    <string name="browser_device_tablets">Tablets</string>
+    <string name="browser_device_desktops">Desktops</string>
+    <string name="browser_device_width">Width</string>
+    <string name="browser_device_height">Height</string>
+    <string name="browser_device_rotate">Rotate</string>
+    <string name="browser_device_fit">Fit %1$d%</string>
+    <string name="browser_device_fit_pane">Fit to pane</string>
+    <string name="browser_device_dpr_default">Default (%1$s)</string>
+    <string name="browser_device_touch_on">Touch on</string>
+    <string name="browser_device_touch_off">Touch off</string>
+    <string name="browser_device_mobile">Mobile</string>
+    <string name="browser_device_desktop">Desktop</string>
+    <string name="browser_device_close">Close device mode</string>
+
+    <!-- Browser tab › comments on the page -->
+    <string name="browser_pick_add">Add comment</string>
+    <string name="browser_pick_delete">Delete this comment</string>
+    <string name="browser_pick_placeholder">What should change here?</string>
+    <string name="browser_pick_tap">Tap what you mean</string>
+    <string name="browser_pick_hint">Pick an element · ↑↓ parent / child · Esc to finish</string>
+    <string name="browser_pick_save">Save</string>
+    <string name="browser_pick_deleted">Comment deleted</string>
+    <string name="browser_pick_undo">Undo</string>
+    <string name="browser_pick_add_to_message">Add to message</string>
+    <string name="browser_pick_send">Send</string>
+    <plurals name="browser_pick_count">
+        <item quantity="one">%1$d comment</item>
+        <item quantity="other">%1$d comments</item>
+    </plurals>
+    <plurals name="browser_pick_count_to">
+        <item quantity="one">%1$d comment → %2$s</item>
+        <item quantity="other">%1$d comments → %2$s</item>
+    </plurals>
+    <plurals name="browser_pick_send_count">
+        <item quantity="one">Send %1$d comment</item>
+        <item quantity="other">Send %1$d comments</item>
+    </plurals>
+    <plurals name="browser_pick_send_to">
+        <item quantity="one">Send %1$d comment to %2$s</item>
+        <item quantity="other">Send %1$d comments to %2$s</item>
+    </plurals>
+
+    <!-- Displays -->
+    <string name="display_title">Displays</string>
+    <string name="display_back">Back</string>
+    <string name="display_close">Close</string>
+    <string name="display_start">Start display</string>
+    <string name="display_stop">Stop</string>
+    <string name="display_stopped">Display stopped</string>
+    <string name="display_none">No active displays.</string>
+    <string name="display_none_for_session">No active display for this session</string>
+    <string name="display_refresh">Refresh</string>
+    <string name="display_unsupported">Unsupported display transport '%1$s'</string>
+    <string name="display_toggle_keyboard">Toggle keyboard</string>
+    <string name="display_password_required">Password required</string>
+    <string name="display_password_explain">This display requires a password to connect.</string>
+    <string name="display_password_explain_mac">This Mac's Screen Sharing requires a password to connect.</string>
+    <string name="display_password_label">Screen sharing password</string>
+    <string name="display_connect">Connect</string>
+    <string name="display_cancel">Cancel</string>
+    <string name="display_connecting">Connecting…</string>
+    <string name="display_connected">Connected</string>
+    <string name="display_disconnected">Disconnected</string>
+
+    <!-- Downloads (#95) -->
+    <string name="work_downloads">Downloads</string>
+    <string name="work_show_downloads">Show downloads</string>
+    <string name="work_clear_finished">Clear finished</string>
+    <string name="work_show_in_chat">Show in chat</string>
+    <string name="work_hint_move">↑↓ to move</string>
+    <string name="work_hint_enter">↵ to %1$s</string>
+    <string name="work_hint_close">esc to close</string>
+    <string name="work_install">Install</string>
+    <string name="work_open">Open</string>
+    <string name="work_save">Save</string>
+    <string name="work_share">Share</string>
+    <string name="work_pause">Pause</string>
+    <string name="work_resume">Resume</string>
+    <string name="work_retry">Retry</string>
+    <string name="work_remove">Remove</string>
+    <string name="work_remove_download">Remove download</string>
+    <string name="work_download">Download</string>
+    <string name="work_percent">%1$d%</string>
+    <string name="work_downloaded">Downloaded</string>
+    <string name="work_ready_to_install">Ready to install</string>
+    <string name="work_failed">Failed</string>
+    <string name="work_paused">Paused</string>
+    <string name="work_state_downloading">downloading</string>
+    <string name="work_state_downloaded">downloaded</string>
+    <string name="work_state_ready_to_install">ready to install</string>
+    <string name="work_state_failed">failed</string>
+    <string name="work_state_paused">paused</string>
+    <string name="work_so_far">%1$s so far</string>
+    <string name="work_bytes_so_far">%1$s of %2$s %3$s</string>
+    <string name="work_eta_minutes">about %1$d min left</string>
+    <string name="work_eta_minute">about a minute left</string>
+    <string name="work_eta_seconds">%1$d s left</string>
+    <string name="work_ring_percent">%1$s, %2$d%</string>
+    <string name="work_ring_downloading">%1$s, downloading</string>
+    <string name="work_ring_ready">%1$s is ready to install</string>
+    <string name="work_ring_downloaded">%1$s downloaded</string>
+    <string name="work_ring_failed">%1$s failed</string>
+    <string name="work_ring_paused">%1$s paused</string>
+    <string name="work_file_removed">%1$s was removed — retry to download it again</string>
+    <string name="work_open_failed">Couldn't open %1$s</string>
+    <string name="work_chat_gone">That chat is no longer available</string>
+
+    <!-- Audio player (#118) -->
+    <string name="work_play">Play</string>
+    <string name="work_speed">Speed</string>
+    <string name="work_stop">Stop</string>
+    <string name="work_play_failed">Couldn't play this</string>
+    <string name="work_open_source_chat">Open the chat it came from</string>
+    <string name="work_position">Position</string>
+    <string name="work_position_state">%1$s of %2$s</string>
+    <string name="work_now_playing">Now playing</string>
+    <string name="work_now_playing_title">Now playing: %1$s</string>
+    <string name="work_state_reading">reading</string>
+    <string name="work_state_playing">playing</string>
+
+    <!-- App update card (#113) -->
+    <string name="update_downloading">Downloading…</string>
+    <string name="update_downloading_percent">Downloading %1$d%…</string>
+    <string name="update_downloading_bytes">Downloading %1$s…</string>
+    <string name="update_updated">Updated to v%1$s</string>
+    <string name="update_updated_reconnected">Updated to v%1$s · all sessions reconnected</string>
+    <string name="update_install_caption_apk">One-tap installs the latest release APK over this build. Progress also appears in the notification bar.</string>
+    <string name="update_install_caption">Downloads the latest installer and opens it.</string>
+    <string name="update_install_caption_kind">Downloads the latest .%1$s and opens it.</string>
+    <string name="update_finishing_upload">Finishing upload…</string>
+    <string name="update_finishing_recording">Finishing recording…</string>
+    <string name="update_restart_caption">Restart to update: supermux closes, installs it and opens again. Your sessions carry on.</string>
+    <string name="update_card_caption_apk">Downloads the new APK and installs it over this build.</string>
+    <string name="update_card_caption">Downloads the new version and opens the installer.</string>
+    <string name="update_card_caption_kind">Downloads the new .%1$s and opens it.</string>
+    <string name="update_ready">Update ready</string>
+    <string name="update_available">Update available</string>
+    <string name="update_dismiss">Dismiss</string>
+    <string name="update_card_downloaded">v%1$s is downloaded.</string>
+    <string name="update_card_ready">v%1$s is ready to install.</string>
+    <string name="update_restart">Restart to update</string>
+    <string name="update_whats_new">What's new</string>
+    <string name="update_whats_new_in">What's new in %1$s</string>
+    <string name="update_full_notes">Full release notes</string>
+</resources>

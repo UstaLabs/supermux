@@ -107,4 +107,14 @@ the catalog (İ, not I): Kotlin's uppercase() has no Turkish "i".
 | unread | okunmamış | |
 | short times | şimdi, %d dk, %d sa, %d g | |
 | effort levels | Düşük, Orta, Yüksek, Çok yüksek, En yüksek | |
+| trash | çöp kutusu | |
+| overlay (assistant) | katman | |
+| git status | Değiştirildi, Eklendi, Silindi, Yeniden adlandırıldı, İzlenmiyor, Çakışma | |
+| binary (file) | ikili | |
+| comment / resolve / outdated | yorum / çöz / eskimiş | |
+| match (search) | eşleşme | |
+| downloads | İndirilenler | |
+| displays | Ekranlar | |
+| responsive (device mode) | Duyarlı | |
+| what's new | Yenilikler | |
 | supermux | supermux | the brand, never translated or capitalised |

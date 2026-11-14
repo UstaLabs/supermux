@@ -40,6 +40,8 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.theme.Motion
 import dev.supermux.work.Download
 import dev.supermux.work.DownloadPurpose
@@ -114,13 +116,13 @@ internal fun DownloadsButton(items: List<Download>, open: Boolean, onClick: () -
     val source = remember { MutableInteractionSource() }
     val hovered by source.collectIsHoveredAsState()
     val lit = hovered || open
-    val tint by animateColorAsState(if (lit) cs.onSurface else cs.onSurfaceVariant, Motion.stateChange(), label = "downloads-glyph")
+    val tint by animateColorAsState(if (lit) cs.onSurface else cs.onSurfaceVariant, Motion.stateChange(), label = "downloads-glyph") // i18n-ok: an animation label, never shown
     Box(
         modifier
             .size(RingTokens.Button)
             .clip(RoundedCornerShape(RingTokens.ButtonCorner))
             .background(if (lit) cs.onSurface.copy(alpha = cs.washAlpha) else Color.Transparent)
-            .clickable(interactionSource = source, indication = null, role = Role.Button, onClickLabel = "Show downloads", onClick = onClick)
+            .clickable(interactionSource = source, indication = null, role = Role.Button, onClickLabel = localized(Str.work_show_downloads), onClick = onClick)
             .pointerHoverIcon(PointerIcon.Hand)
             .downloadsSemantics(items)
             .testTag("sidebar_footer_downloads"),
@@ -131,7 +133,7 @@ internal fun DownloadsButton(items: List<Download>, open: Boolean, onClick: () -
 
 /** What the ring reads as: "Downloads", what its lead says, and a running lead's progress (assistive tech, tests). */
 internal fun Modifier.downloadsSemantics(items: List<Download>): Modifier = semantics {
-    contentDescription = "Downloads"
+    contentDescription = localized(Str.work_downloads)
     val lead = leadOf(items) ?: return@semantics
     stateDescription = ringState(lead)
     (lead.state as? DownloadState.Running)?.let { running ->
@@ -143,10 +145,11 @@ internal fun Modifier.downloadsSemantics(items: List<Download>): Modifier = sema
 internal fun leadOf(items: List<Download>): Download? = items.firstOrNull { it.state is DownloadState.Running } ?: items.firstOrNull()
 
 private fun ringState(lead: Download): String = when (val state = lead.state) {
-    is DownloadState.Running -> state.percent()?.let { "${lead.name}, $it%" } ?: "${lead.name}, downloading"
-    is DownloadState.Done -> if (lead.purpose == DownloadPurpose.Installer) "${lead.name} is ready to install" else "${lead.name} downloaded"
-    is DownloadState.Failed -> "${lead.name} failed"
-    DownloadState.Cancelled -> "${lead.name} paused"
+    is DownloadState.Running -> state.percent()?.let { localized(Str.work_ring_percent, lead.name, it) } ?: localized(Str.work_ring_downloading, lead.name)
+    is DownloadState.Done -> localized(if (lead.purpose == DownloadPurpose.Installer) Str.work_ring_ready else Str.work_ring_downloaded, lead.name)
+    is DownloadState.Failed -> localized(Str.work_ring_failed, lead.name)
+    DownloadState.Cancelled -> localized(Str.work_ring_paused, lead.name)
+
 }
 
 /**

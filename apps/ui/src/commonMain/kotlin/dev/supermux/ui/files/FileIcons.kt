@@ -25,14 +25,14 @@ private val Neutral = Color(0xFF8B8B85)
 private val byExtension: Map<String, FileBadge> = buildMap {
     fun put(vararg exts: String, label: String, argb: Long) { for (e in exts) put(e, FileBadge(label, Color(argb))) }
     put("kt", "kts", label = "K", argb = 0xFF7F52FF)
-    put("ts", "tsx", label = "TS", argb = 0xFF3178C6)
-    put("js", "mjs", "cjs", label = "JS", argb = 0xFFE8C44A)
+    put("ts", "tsx", label = "TS", argb = 0xFF3178C6) // i18n-ok: file-type badge, an abbreviation
+    put("js", "mjs", "cjs", label = "JS", argb = 0xFFE8C44A) // i18n-ok: file-type badge, an abbreviation
     put("json", label = "{}", argb = 0xFFE2A03F)
-    put("md", label = "MD", argb = 0xFF5B6B7F)
+    put("md", label = "MD", argb = 0xFF5B6B7F) // i18n-ok: file-type badge, an abbreviation
     put("swift", label = "S", argb = 0xFFF05138)
-    put("py", label = "PY", argb = 0xFF3776AB)
-    put("rs", label = "RS", argb = 0xFFCE422B)
-    put("go", label = "GO", argb = 0xFF00ADD8)
+    put("py", label = "PY", argb = 0xFF3776AB) // i18n-ok: file-type badge, an abbreviation
+    put("rs", label = "RS", argb = 0xFFCE422B) // i18n-ok: file-type badge, an abbreviation
+    put("go", label = "GO", argb = 0xFF00ADD8) // i18n-ok: file-type badge, an abbreviation
     put("java", label = "J", argb = 0xFFB07219)
     put("html", label = "<>", argb = 0xFFE34C26)
     put("css", "scss", label = "#", argb = 0xFF563D7C)

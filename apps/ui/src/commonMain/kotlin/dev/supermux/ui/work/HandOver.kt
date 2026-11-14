@@ -1,5 +1,7 @@
 package dev.supermux.ui.work
 
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.platform.FileAction
 import dev.supermux.ui.platform.Platform
 import dev.supermux.ui.platform.SavedFile
@@ -70,12 +72,13 @@ private suspend fun stillThere(platform: Platform, downloads: DownloadCenter, it
     val file = (item.state as? DownloadState.Done)?.file ?: return null
     if (file.isAvailable()) return file
     downloads.markMissing(item.key)
-    platform.notices.show("${item.name} was removed — retry to download it again")
+    platform.notices.show(localized(Str.work_file_removed, item.name))
     return null
 }
 
 private suspend fun open(platform: Platform, item: Download, file: DownloadedFile): Boolean {
     val opened = platform.files.openFile(file)
-    if (!opened) platform.notices.show("Couldn't open ${item.name}")
+    if (!opened) platform.notices.show(localized(Str.work_open_failed, item.name))
+
     return opened
 }
