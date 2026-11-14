@@ -78,7 +78,10 @@ export async function main(): Promise<void> {
     const gate = await gateContext.newPage()
     gate.on("pageerror", (e) => errors.push(`[gate] ${e.message}`))
     await gate.goto(fixture.baseUrl, { waitUntil: "domcontentloaded" })
-    await byTag(gate, "web_pair_screen").waitFor({ state: "attached", timeout: 60_000 })
+    await byTag(gate, "web_pair_screen").waitFor({ state: "attached", timeout: 60_000 }).catch(async (e) => {
+      await gate.screenshot({ path: join(shots, "1-pair-gate-FAILED.png") }).catch(() => {})
+      throw e
+    })
     await gate.screenshot({ path: join(shots, "1-pair-gate.png") })
     await gateContext.close()
 
