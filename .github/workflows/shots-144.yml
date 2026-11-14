@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 6f6e560c403d4dcaf58669e5bcb67c7acaacfc2d
+          ref: 51c387fe2dca364b9c2694a95a6f82aa3ed30070
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -25,4 +25,10 @@ jobs:
         with:
           name: context-shots-144
           path: context-shots
+          if-no-files-found: warn
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-jvmtest-report-144
+          path: apps/ui/build/reports/tests/jvmTest
           if-no-files-found: warn
