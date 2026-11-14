@@ -87,6 +87,54 @@ export async function firePushForReply(args: FirePushArgs): Promise<void> {
 }
 
 /**
+ * #143: an agent's permission prompt or question. It blocks the agent until someone answers, so unlike a reply it is
+ * pushed even when the session is muted; never for an internal worker, and not while the session is on screen
+ * somewhere (its card is there). The payload carries the request id and the answers, so a client can answer it from
+ * the notification.
+ */
+export async function firePushForRequest(args: {
+  sender: PushSender
+  sessionName: string
+  sessionId: string
+  request: { requestId: string; kind: "permission" | "question"; title: string; body: string; options: { id: string; label: string }[]; reason?: string }
+  isInternal?: (id: string) => boolean
+  devices: () => string[]
+  presentOn: (sessionId: string) => string[]
+  nativeSender?: NativePushSender
+  nativeDevices?: () => string[]
+  hostId?: string
+  log?: Logger
+}): Promise<void> {
+  const { sessionName, sessionId, request } = args
+  const log = args.log ?? defaultLog
+  const decided = (outcome: string, extra: Record<string, unknown> = {}) =>
+    log.info("push_decision", { session: sessionName, sessionId, trigger: "request", outcome, ...extra })
+  if (args.isInternal?.(sessionId)) return decided("internal")
+  const present = args.presentOn(sessionId)
+  if (present.length > 0) return decided("present", { presentOn: present })
+  const web = args.devices()
+  const native = args.nativeSender && args.nativeDevices ? args.nativeDevices() : []
+  if (web.length === 0 && native.length === 0) {
+    log.warn("push_decision", { session: sessionName, sessionId, trigger: "request", outcome: "no_targets" })
+    return
+  }
+  decided("sent", { web, native })
+  const firstLine = request.body.split("\n").find((line) => line.trim())?.trim() ?? ""
+  // The agent's own reason (a safety check) says more than the command does.
+  const text = `${request.title} ${request.reason ? `(${request.reason}) ` : ""}${firstLine}`.trim()
+  const payload: PushPayload = {
+    session: sessionName,
+    sessionId,
+    text: text.length > 120 ? text.slice(0, 117) + "…" : text,
+    ts: new Date().toISOString(),
+    ...(args.hostId ? { hostId: args.hostId } : {}),
+    request: { requestId: request.requestId, kind: request.kind, options: request.options.map((o) => ({ id: o.id, label: o.label })) },
+  }
+  for (const device of web) await args.sender.sendToDevice(device, payload)
+  for (const device of native) await args.nativeSender!.sendToDevice(device, payload)
+}
+
+/**
  * A broker notice for the user rather than a session's reply (a finished
  * worktree, the nightly curator): no mute or presence gate, every device.
  */

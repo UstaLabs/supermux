@@ -204,7 +204,8 @@ export type PermissionRequest = RequestPermissionRequest & {
   coreSessionId: string
   /** Set when the request was raised by a subagent (its tool call). */
   subagentId?: string
-  detail?: { command?: string; cwd?: string; blockedPath?: string }
+  /** reason: the agent's own why (Claude Code's decision_reason, e.g. a safety check that asks even in bypass). */
+  detail?: { command?: string; cwd?: string; blockedPath?: string; reason?: string }
 }
 
 export type PermissionResponse = RequestPermissionResponse & { message?: string }

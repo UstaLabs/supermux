@@ -183,7 +183,7 @@ export type NormalizedBodyBase =
         kind: "allow_once" | "allow_always" | "reject_once" | "reject_always"
         label: string
       }[]
-      detail?: { command?: string; cwd?: string; blockedPath?: string }
+      detail?: { command?: string; cwd?: string; blockedPath?: string; reason?: string }
     }
   | {
       kind: "request-resolved"

@@ -141,6 +141,7 @@ export function createNormalizedBridge(opts: NormalizedBridgeOpts) {
       options: request.options,
       allowFreeText: request.allowFreeText,
       blocking: request.blocking,
+      ...(request.reason ? { reason: request.reason } : {}),
       ...requestSubagent(subagentId),
     })
   }

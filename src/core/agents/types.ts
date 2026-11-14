@@ -73,6 +73,8 @@ export type BrokerRequest = {
   options: BrokerRequestOption[]
   allowFreeText: boolean
   blocking: boolean
+  /** The agent's own reason for asking, when it gave one (#143). */
+  reason?: string
 } & RequestSubagent
 
 export type RequestOpenEvent = {
@@ -84,6 +86,7 @@ export type RequestOpenEvent = {
   options: BrokerRequestOption[]
   allowFreeText: boolean
   blocking: boolean
+  reason?: string
 } & RequestSubagent
 
 export type RequestClosedEvent = {
