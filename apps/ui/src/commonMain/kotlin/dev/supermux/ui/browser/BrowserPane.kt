@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.keys.LocalShortcutDispatcher
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.runtime.collectAsState
@@ -474,10 +476,14 @@ fun BrowserPane(
                     if (deviceOn && !phone) DeviceStage(device, fit = fitting, onScale = { stageScale = it }) { pageAndPicks() }
                     else Box(Modifier.fillMaxSize().testTag("browser-viewport")) { pageAndPicks() }
                     (state.phase as? WebViewPhase.Unavailable)?.let { unavailable ->
+                        // Why is the log's, not the person's (#137: a released Windows build told them to run winvm.sh).
+                        LaunchedEffect(unavailable) {
+                            println("[BrowserPane] no web engine: ${unavailable.reason}${unavailable.detail?.let { ": $it" }.orEmpty()}")
+                        }
                         BrowserMessage(
-                            "This device can't show web pages in a tab" + (unavailable.detail?.let { ": $it" } ?: "."),
+                            localized(Str.browser_unavailable),
                             "browser-unavailable",
-                            "Open in your browser" to { platform.openUrl(b.url) },
+                            localized(Str.browser_open_in_browser) to { platform.openUrl(b.url) },
                         )
                     }
                 }

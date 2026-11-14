@@ -1058,11 +1058,17 @@ class BrowserPaneTest {
         onNodeWithTag("browser-menu-desktop-site").assertDoesNotExist()
     }
 
+    /**
+     * #137: in plain words, and only those: why the engine failed (the fake says "fake"; a released Windows build said
+     * "winvm.sh build, then Gradle") goes to the log, not to the person.
+     */
     @Test fun noEngineHereSaysSoAndOffersTheSystemBrowser() = runComposeUiTest {
         val rig = Rig().apply { engines.unavailable = UnavailableReason.NotImplemented }
         val platform = FakePlatform()
         show(rig, mutableStateOf(view("https://vitejs.dev/")), rig.actions(), platform)
         waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag("browser-unavailable").fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithText("Web pages can't be shown in a tab on this computer.", useUnmergedTree = true).assertExists()
+        onNodeWithText("fake", substring = true, useUnmergedTree = true).assertDoesNotExist()
         onNodeWithText("Open in your browser").performClick()
         assertEquals(listOf("https://vitejs.dev/"), platform.openedUrls)
     }

@@ -49,6 +49,8 @@
     <string name="browser_comment_done">Tamamlandı</string>
     <string name="browser_comment_answered">Yanıtlandı</string>
     <string name="browser_comment_to">→ %1$s</string>
+    <string name="browser_unavailable">Bu bilgisayar web sayfalarını sekmede gösteremiyor.</string>
+    <string name="browser_open_in_browser">Tarayıcında aç</string>
     <string name="browser_comment_dismissed">Yok sayıldı</string>
 
     <!-- After a phone saves an attachment (#95): where it went. -->
