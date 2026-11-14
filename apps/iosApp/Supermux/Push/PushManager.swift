@@ -50,6 +50,29 @@ final class PushManager: NSObject {
         return BrokerApi(baseUrl: base, token: token, http: IosClientKt.iosHttpClient())
     }
 
+    // MARK: - #143: answer a prompt from its notification
+
+    /// POST the answer to the paired broker (`BrokerApi.answerRequest`), then replace the notification with what
+    /// happened. A prompt already answered elsewhere, or another host's, comes back as an error: say so and point to
+    /// the app.
+    func answerPrompt(sessionId: String, requestId: String, optionId: String, title: String) async {
+        var text = "Couldn't answer (already answered, or the host is unreachable). Open Supermux."
+        if let api = makeApi() {
+            do {
+                try await api.answerRequest(sessionId: sessionId, requestId: requestId, optionId: optionId)
+                text = optionId.hasPrefix("allow") ? "Allowed." : "Denied."
+            } catch {
+                NSLog("[supermux push] answer failed: %@", error.localizedDescription)
+            }
+        }
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = text
+        content.threadIdentifier = sessionId
+        let request = UNNotificationRequest(identifier: "prompt-answered-\(requestId)", content: content, trigger: nil)
+        try? await UNUserNotificationCenter.current().add(request)
+    }
+
     // MARK: - Step 1: authorization + registration
 
     /// Whether an authorization request is already awaiting the user's answer.
@@ -227,7 +250,12 @@ final class PushAppDelegate: NSObject, UIApplicationDelegate {
         // No actions yet — the expanded view is read-only (quick-reply is a future add).
         UNUserNotificationCenter.current().setNotificationCategories([
             UNNotificationCategory(identifier: PushGroupState.chatCategory, actions: [],
-                                   intentIdentifiers: [], options: [])
+                                   intentIdentifiers: [], options: []),
+            // #143: a permission prompt. Allow only after the device unlock; Deny at once.
+            UNNotificationCategory(identifier: PushGroupState.promptCategory, actions: [
+                UNNotificationAction(identifier: PushGroupState.rejectAction, title: "Deny", options: [.destructive]),
+                UNNotificationAction(identifier: PushGroupState.allowAction, title: "Allow", options: [.authenticationRequired]),
+            ], intentIdentifiers: [], options: []),
         ])
         // Warm the push keypair on launch so its public key is generated + persisted in
         // the shared Keychain group up front (the NSE reads the same key to decrypt, and
@@ -273,6 +301,16 @@ extension PushAppDelegate: UNUserNotificationCenterDelegate {
                                 didReceive response: UNNotificationResponse) async {
         let info = response.notification.request.content.userInfo
         guard let id = info["sm_session_id"] as? String, !id.isEmpty else { return }
+        // #143: Allow / Deny on a permission prompt answers it without opening the app.
+        if response.actionIdentifier == PushGroupState.allowAction || response.actionIdentifier == PushGroupState.rejectAction {
+            let allow = response.actionIdentifier == PushGroupState.allowAction
+            let option = info[allow ? "sm_allow_option" : "sm_reject_option"] as? String
+            if let requestId = info["sm_request_id"] as? String, let option {
+                await PushManager.shared.answerPrompt(sessionId: id, requestId: requestId, optionId: option,
+                                                      title: response.notification.request.content.title)
+            }
+            return
+        }
         await MainActor.run {
             IosAppState.shared.setPendingPushSessionId(id: id)
         }
