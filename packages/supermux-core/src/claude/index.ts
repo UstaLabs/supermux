@@ -275,7 +275,8 @@ export function claude(options: ClaudeOptions): AgentDriver {
         writePermission(requestId, true, pending.input, always ? { updatedPermissions: pending.suggestions } : undefined)
       } else {
         const hostReject = optionId === 'reject_once' || optionId === 'reject_always' || optionId === 'allow_always'
-        writePermission(requestId, false, undefined, { message: hostReject ? (message ?? 'Denied by user') : 'Permission denied' })
+        // A host's cancel can say why (#143: an interrupt, "nobody refused it"); a bare one stays "Permission denied".
+        writePermission(requestId, false, undefined, { message: hostReject ? (message ?? 'Denied by user') : (message ?? 'Permission denied') })
       }
     }
     async function askHost(requestId: string, request: any, signal: AbortSignal) {
