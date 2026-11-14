@@ -1162,11 +1162,56 @@ jobs:
         run: >
           ./gradlew :desktop:packageDmg --console=plain --no-daemon
           -PsupermuxVersion="${{ steps.ver.outputs.version }}"
+          -PsmAppCdsTrain=true
           -PsmMacSignIdentity="${{ env.DEVELOPER_ID_APPLICATION }}"
           -PsmMacSignKeychain="${{ env.MACOS_COMPOSE_KEYCHAIN }}"
       - name: Build unsigned Compose DMG
         if: steps.signing.outputs.have != '1'
-        run: ./gradlew :desktop:packageDmg --console=plain --no-daemon -PsupermuxVersion="${{ steps.ver.outputs.version }}"
+        run: ./gradlew :desktop:packageDmg --console=plain --no-daemon -PsupermuxVersion="${{ steps.ver.outputs.version }}" -PsmAppCdsTrain=true
+      - name: Check the AppCDS archive in the DMG
+        # #133: createDistributable trains Contents/app/app.jsa (a GUI run of the app on this runner) and re-seals the
+        # app. A missing archive is not fatal (the app starts without CDS, as before), so this warns instead of failing.
+        working-directory: .
+        run: |
+          DMG_SRC="$(find apps/desktop/build/compose/binaries/main/dmg -name '*.dmg' -type f | head -1)"
+          MNT="$(mktemp -d)"
+          hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$MNT" "$DMG_SRC" >/dev/null
+          APPDIR="$(ls -d "$MNT"/*.app)/Contents/app"
+          if [ -f "$APPDIR/app.jsa" ]; then
+            echo "AppCDS archive in the DMG: $(du -h "$APPDIR/app.jsa" | cut -f1)"
+            JAVA="$(ls -d "$MNT"/*.app)/Contents/runtime/Contents/Home/bin/java"
+            CP="$(sed -n 's/^app.classpath=//p' "$APPDIR"/*.cfg | sed "s|\$APPDIR|$APPDIR|" | paste -sd: -)"
+            # -Xshare:on refuses to start unless the archive maps; from the mount point it also proves relocation.
+            if "$JAVA" -XX:SharedArchiveFile="$APPDIR/app.jsa" -Xshare:on -cp "$CP" -version > "$RUNNER_TEMP/cds-check.txt" 2>&1; then
+              echo "the archive maps from the mounted DMG"
+            else
+              cat "$RUNNER_TEMP/cds-check.txt"
+              echo "::warning::the AppCDS archive in the DMG does not map from the mounted image"
+            fi
+          else
+            echo "::warning::no AppCDS archive in the DMG: the app ships without CDS (see the createDistributable log)"
+          fi
+          codesign --verify --deep --strict "$(ls -d "$MNT"/*.app)" && echo "bundle signature valid"
+          # -version maps the archive but never loads an app class, and rc.6 passed it yet died at launch (a sealing
+          # violation through the archive). So launch the packaged app itself for 20 s: it must still be alive and must
+          # have a main window, not an error dialog. Unlike a missing archive, a crash at launch fails the job.
+          # From a ditto copy, the way a user installs it (ditto keeps the mtimes the archive checks).
+          LAUNCH_DIR="$RUNNER_TEMP/launch-check"; rm -rf "$LAUNCH_DIR"; mkdir -p "$LAUNCH_DIR"
+          ditto "$(ls -d "$MNT"/*.app)" "$LAUNCH_DIR/Supermux Desktop.app"
+          "$LAUNCH_DIR/Supermux Desktop.app/Contents/MacOS/Supermux Desktop" > "$RUNNER_TEMP/launch.txt" 2>&1 &
+          APP_PID=$!
+          sleep 20
+          # rc.6's failure was an error dialog (740x173) and no main window, so "alive" alone is not enough.
+          MAIN_WINDOW=$(osascript -l JavaScript -e "ObjC.import('CoreGraphics'); const w = ObjC.deepUnwrap(ObjC.castRefToObject(\$.CGWindowListCopyWindowInfo(1|16, 0))); w.some(x => x.kCGWindowOwnerPID == $APP_PID && x.kCGWindowBounds.Height > 300)" 2>&1)
+          echo "main window up: $MAIN_WINDOW"
+          if ! kill -0 "$APP_PID" 2>/dev/null || [ "$MAIN_WINDOW" != "true" ] || grep -Eq "SecurityException|sealing violation|Exception in thread \"main\"" "$RUNNER_TEMP/launch.txt"; then
+            cat "$RUNNER_TEMP/launch.txt"
+            echo "::error::the packaged app did not survive 20 s at launch"
+            kill "$APP_PID" 2>/dev/null; hdiutil detach "$MNT" -force -quiet; exit 1
+          fi
+          echo "the packaged app is up after 20 s"
+          kill "$APP_PID"; sleep 5; pkill -f "$LAUNCH_DIR" || true
+          hdiutil detach "$MNT" -quiet || hdiutil detach "$MNT" -force -quiet
       - name: Assert the packaged client engine
         # The DMG has to carry the Ghostty JNI dylib the app loads to draw a terminal, whether or
         # not this Mac is also the host. Signing does not put it there; the build above does.
