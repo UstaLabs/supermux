@@ -49,6 +49,23 @@ object WindowsWindowChrome {
         if (nativeRightInset == null || nativeRightInset <= 0f) WindowsCaptionButtonsFallbackWidth else nativeRightInset.dp
 }
 
+/**
+ * Which component a title-band event is handed on to (#150). JBR gives the band's events to the window's panel, and a
+ * client one goes on to the component [under] the pointer. A press keeps its component until it ends, as AWT's own mouse
+ * grab does: a tab dragged out of the window has nothing under the pointer, and its drag must still reach Compose, or
+ * the tab never tears off into a window of its own.
+ */
+internal class BandRedispatch<C : Any> {
+    private var grab: C? = null
+
+    fun targetFor(id: Int, under: C?): C? = when (id) {
+        MouseEvent.MOUSE_PRESSED -> under.also { grab = it }
+        MouseEvent.MOUSE_DRAGGED -> grab ?: under
+        MouseEvent.MOUSE_RELEASED -> (grab ?: under).also { grab = null }
+        else -> under
+    }
+}
+
 /** The engaged Windows chrome for one window. */
 class WindowsWindowChromeInstall(
     val regions: MacChromeRegions,
@@ -116,6 +133,7 @@ fun rememberWindowsWindowChrome(window: ComposeWindow, dark: Boolean): WindowsWi
         val soft = SoftWindowMove(window)
         // Our own re-dispatch below comes back through this listener; it was handled already.
         var redispatching = false
+        val band = BandRedispatch<java.awt.Component>()
         val listener = java.awt.event.AWTEventListener { ev ->
             val e = ev as? MouseEvent ?: return@AWTEventListener
             if (redispatching) return@AWTEventListener
@@ -140,9 +158,11 @@ fun rememberWindowsWindowChrome(window: ComposeWindow, dark: Boolean): WindowsWi
             }
             // JBR delivers the title band's events to the ComposeWindowPanel itself, not to the Skia
             // layer under the pointer that Compose listens on: the ☰ and sidebar buttons never saw
-            // a click. Hand client events on to the component that is really there.
-            if (client && e.id != MouseEvent.MOUSE_ENTERED) {
-                val target = javax.swing.SwingUtilities.getDeepestComponentAt(src, e.x, e.y)
+            // a click. Hand client events on to the component that is really there, and a press's
+            // drag and release to the component it began on, wherever the pointer is (#150).
+            if (e.id != MouseEvent.MOUSE_ENTERED) {
+                val under = if (client) javax.swing.SwingUtilities.getDeepestComponentAt(src, e.x, e.y) else null
+                val target = band.targetFor(e.id, under)
                 if (target != null && target !== src) {
                     redispatching = true
                     try {
