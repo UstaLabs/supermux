@@ -27,6 +27,7 @@ import { UnsupportedAudioError } from "../../core/transcription/wav"
 import { computeWorkdirDiff, listRepoRefs } from "../../core/editor/workdir-diff"
 import { listChanges, readBaseBlob, discoverReposCached } from "../../core/editor/changes"
 import { safeRepoPath, setStaged } from "../../core/git/stage"
+import { discard } from "../../core/git/discard"
 import { commit as gitCommit, uncommit as gitUncommit } from "../../core/git/commit"
 import { abortMerge, getLatest, resolveConflict } from "../../core/git/latest"
 import { createRef, history, revert } from "../../core/git/history"
@@ -2363,6 +2364,7 @@ export class WebChannel implements Channel {
   /**
    * POST …/git/{stage,commit,uncommit} (#72), all with {repo}:
    * stage {paths, staged} puts whole files into the next commit or takes them out;
+   * discard {paths} | {all: true} throws unstaged edits away and deletes new files (staged edits stay);
    * commit {message?, all?, amend?} commits it (an empty message is written from the files);
    * uncommit undoes the last commit and keeps its changes in the next one;
    * resolve {path, side: mine|theirs|both} settles one conflicted file; abort cancels the merge;
@@ -2386,6 +2388,19 @@ export class WebChannel implements Channel {
         return this.json({ ok: true })
       } catch (err) {
         return this.json({ error: err instanceof Error ? err.message : String(err) }, 409)
+      }
+    }
+    if (op === "discard") {
+      const all = body.all === true, paths = Array.isArray(body.paths) ? body.paths : null
+      if (all === !!paths || (paths && (!paths.length || paths.length > 5000 || !paths.every(safeRepoPath)))) {
+        return this.json({ error: "bad request" }, 400)
+      }
+      if (!found) return this.json({ error: "repo not found" }, 404)
+      try {
+        const r = await discard(found.absPath, all ? "all" : paths as string[])
+        return r.ok ? this.json(r) : this.json(r, 409)
+      } catch (err) {
+        return this.json({ ok: false, reason: "failed", message: err instanceof Error ? err.message : String(err) }, 409)
       }
     }
     if (!found) return this.json({ error: "repo not found" }, 404)
@@ -3787,7 +3802,7 @@ export class WebChannel implements Channel {
       const r = await getLatest(workdir, g.repoRoot, g.base)
       return this.json(r, r.status === "failed" ? 409 : 200)
     }
-    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/(stage|commit|uncommit|resolve|abort|revert|branch|tag)$/)) {
+    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/(stage|discard|commit|uncommit|resolve|abort|revert|branch|tag)$/)) {
       const workdir = this.opts.getSessionWorkdir?.(decodeURIComponent(path.split("/")[2]!))
       if (!workdir) return this.json({ error: "session not found" }, 404)
       return this.gitWrite(workdir, path.split("/")[4]!, req)
@@ -3893,7 +3908,7 @@ export class WebChannel implements Channel {
       const { repos } = await listChanges(workdir, base?.baseCommits ?? {}, base?.createdAt, url.searchParams.get("base") ?? undefined)
       return this.json({ repos, comments: [] })
     }
-    if (method === "POST" && path.match(/^\/workspaces\/[^/]+\/git\/(stage|commit|uncommit|resolve|abort|revert|branch|tag)$/)) {
+    if (method === "POST" && path.match(/^\/workspaces\/[^/]+\/git\/(stage|discard|commit|uncommit|resolve|abort|revert|branch|tag)$/)) {
       const workdir = this.opts.getWorkspaceWorkdir?.(decodeURIComponent(path.split("/")[2]!))
       if (!workdir) return this.json({ error: "workspace not found" }, 404)
       return this.gitWrite(workdir, path.split("/")[4]!, req)

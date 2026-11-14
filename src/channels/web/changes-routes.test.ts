@@ -230,6 +230,27 @@ test("commit refuses a bad message and an unknown repo", async () => {
   expect((await post(token, "/workspaces/ws-1/git/nope", { repo: "" })).status).not.toBe(200)
 })
 
+test("discard throws a file's unstaged edit away, or every one with all; staged edits stay", async () => {
+  const { dir, token } = await setup()
+  writeFileSync(join(dir, "n.txt"), "new\n")
+  expect((await post(token, "/workspaces/ws-1/git/discard", { repo: "", paths: ["a.txt"] })).status).toBe(200)
+  expect(git(dir, "status", "--porcelain")).toBe("?? n.txt")
+  writeFileSync(join(dir, "a.txt"), "staged\n"); git(dir, "add", "a.txt"); writeFileSync(join(dir, "a.txt"), "staged\nmore\n")
+  const all = await post(token, "/sessions/s-1/git/discard", { repo: "", all: true })
+  expect(all.status).toBe(200)
+  expect(((await all.json()) as any).discarded.sort()).toEqual(["a.txt", "n.txt"])
+  expect(git(dir, "status", "--porcelain")).toBe("M  a.txt")
+})
+
+test("discard refuses paths outside the repo, no paths, and both at once", async () => {
+  const { token } = await setup()
+  expect((await post(token, "/workspaces/ws-1/git/discard", { repo: "", paths: ["../x"] })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/discard", { repo: "", paths: [] })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/discard", { repo: "" })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/discard", { repo: "", paths: ["a.txt"], all: true })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/discard", { repo: "nope", all: true })).status).toBe(404)
+})
+
 test("get latest needs the chat's own base; resolve and abort refuse bad input", async () => {
   const { token } = await setup()
   expect((await post(token, "/sessions/s-1/git/latest", {})).status).toBe(409)   // no base known here: no guess
