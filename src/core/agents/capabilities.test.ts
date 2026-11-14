@@ -6,13 +6,15 @@ test("claude sessions have an agent terminal and no live-config restart", () => 
   expect(sessionCapabilities("claude")).toEqual({
     hasAgentTerminal: true,
     supportsLiveConfigChange: false,
+    compact: true,
+    compactNote: true,
   })
 })
 
 test("non-claude sessions have no agent terminal and support Change-now restarts", () => {
   for (const kind of AGENT_KINDS) {
     if (kind === "claude") continue
-    expect(sessionCapabilities(kind)).toEqual({
+    expect(sessionCapabilities(kind)).toMatchObject({
       hasAgentTerminal: false,
       supportsLiveConfigChange: true,
     })
@@ -46,4 +48,12 @@ test("antigravity has a device login on Windows too (a ConPTY stands in for scri
     supportsDeviceLogin: true, acceptsPastedKey: true, usableWithoutAuth: false,
   })
   expect(agentAuthCapabilities("grok", "win32").supportsDeviceLogin).toBe(true)
+})
+
+test("#144: every agent but Cursor can Compact; Claude and Antigravity take a note on what to keep", () => {
+  const compact = Object.fromEntries(AGENT_KINDS.map((k) => [k, [sessionCapabilities(k).compact, sessionCapabilities(k).compactNote]]))
+  expect(compact).toEqual({
+    claude: [true, true], codex: [true, false], cursor: [false, false],
+    opencode: [true, false], grok: [true, false], antigravity: [true, true],
+  })
 })

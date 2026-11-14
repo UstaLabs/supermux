@@ -483,6 +483,9 @@ class HostStore(
     /** Per-session resolution state of the slash-command set (true = fully resolved). */
     val commandsResolved: StateFlow<Map<String, Boolean>> =
         _state.map { it.commandsResolved }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
+    /** #144: sessions whose compaction is running (session id → compaction id). */
+    val compacting: StateFlow<Map<String, String>> =
+        _state.map { it.compacting }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     /** Per-session walkthrough holders. Created and updated by [walkthroughSeam] on first frame. */
     private val walkthroughs = mutableMapOf<String, Any>()
 
@@ -2798,6 +2801,14 @@ class HostStore(
     }
 
     /** POST /sessions/<id>/fast-mode — Claude relaunches and Codex reconfigures, at the end of a running turn. */
+    /** #144: what fills [id]'s context window and what it used; null when the broker can't say. */
+    suspend fun sessionContext(id: String): dev.supermux.net.SessionContextDto? =
+        runApi("sessionContext") { api.sessionContext(id) }
+
+    /** #144 Compact, queued like a message. False when the broker refused (it says why in the log). */
+    suspend fun compact(id: String, note: String?): Boolean =
+        runApi("compact") { api.compact(id, note); true } ?: false
+
     suspend fun switchFastMode(id: String, fastMode: Boolean): Boolean {
         val ok = runApi("switchFastMode") { api.switchFastMode(id, fastMode); true } ?: false
         if (ok) patchSession(id) { it.copy(fastMode = fastMode) }

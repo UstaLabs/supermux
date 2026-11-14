@@ -2,6 +2,7 @@ import { EventEmitter } from "events"
 import { recordOpenCodeFreeLimit } from "../../usage/opencode-free"
 import type { AgentCommandEntry } from "../../slash-commands/types"
 import type { AgentModelEntry } from "../../../../packages/supermux-core/src/events/normalized.js"
+import type { ContextBreakdown } from "../../../../packages/supermux-core/src/types.js"
 import { readFile } from "node:fs/promises"
 import type { AgentAdapter, AgentKind, BrokerRequest, InboundMeta, RequestAnswerInput } from "../types"
 import { mapPendingRequest, toCoreAnswer } from "./request-map"
@@ -273,6 +274,10 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   availableCommands?: AgentCommandEntry[]
   /** The models the agent offered at its last start (ACP options; Cursor's model list, #102). */
   offeredModels?: AgentModelEntry[]
+  /** How full the agent's context window is, as it last reported (#144); undefined until it reports. */
+  contextUsage?: { used: number; size: number }
+  /** Tools the main thread started, by name (#144 "used in this chat"); since this adapter started. */
+  readonly toolUses = new Map<string, number>()
 
   onUsageUpdate?: (data: CodexUsage) => void
   getPrevUsage?: () => CodexUsage | null
@@ -378,6 +383,13 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
         this.offeredModels = models
         this.emit("models-update", { kind: "models-update" })
       },
+      onCompaction: (compaction) => { this.emit("compaction", { kind: "compaction", ...compaction }) },
+      onToolUsed: (name) => { this.toolUses.set(name, (this.toolUses.get(name) ?? 0) + 1) },
+      onContext: (context) => {
+        if (this.contextUsage?.used === context.used && this.contextUsage.size === context.size) return
+        this.contextUsage = { used: context.used, size: context.size }
+        this.emit("context-update", { kind: "context-update", ...this.contextUsage })
+      },
       onUsage: (rateLimits) => {
         const data = codexUsageFromRateLimits(rateLimits, this.getPrevUsage?.() ?? null)
         if (data) this.onUsageUpdate?.(data)
@@ -390,6 +402,21 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   get effort(): string | undefined { return this._effort }
   get fast(): boolean { return this._fast }
   get permissionMode(): string | undefined { return this._permissionMode }
+
+  /**
+   * #144 Compact: queued like a message (it runs after the turn in progress). The note is kept only where the agent
+   * takes one. Throws when the agent can't compact or the session isn't running.
+   */
+  async compact(note?: string): Promise<void> {
+    const session = this.session
+    if (!session) throw new Error("The agent isn't running")
+    await session.compact({ ...(note ? { note } : {}), whenBusy: "queue" })
+  }
+
+  /** What fills the context window, asked of the agent now (#144); undefined when it can't say or isn't running. */
+  async contextBreakdown(): Promise<ContextBreakdown | undefined> {
+    try { return await this.session?.contextBreakdown() } catch { return undefined }
+  }
 
   /**
    * Switch this session to another account of its agent (manual). Core shuts the live process

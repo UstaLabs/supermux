@@ -1241,6 +1241,40 @@ const doorStarts = new Set<string>()
 const checkoutsInFlight = new Set<string>()
 /** gracefulShutdown has begun (declared here: the session chain reads it). */
 let shuttingDown = false
+/** #144: a "Compacted" line in words, for an app that predates it. */
+function compactionText(c: { status: string; before?: number; after?: number; error?: string }): string {
+  const k = (n: number) => (n >= 1000 ? `${Math.round(n / 100) / 10}k`.replace(".0k", "k") : String(n))
+  if (c.status === "failed") return `Compaction failed${c.error ? `: ${c.error}` : ""}`
+  if (c.status === "cancelled") return "Compaction cancelled"
+  return c.before != null && c.after != null ? `Compacted · ${k(c.before)} → ${k(c.after)}` : c.before != null ? `Compacted · was ${k(c.before)}` : "Compacted"
+}
+
+/** #144: the note a Compact was asked with, until its compaction ends (it goes on the "Compacted" line). */
+const compactNotes = new Map<string, string>()
+
+/** #144 Compact: queued like a message; refused for an agent that can't, or a session that isn't running. */
+async function compactSession(id: string, note?: string): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const s = registry.get(id)
+  if (!s) return { ok: false, status: 404, error: "unknown session" }
+  const caps = sessionCapabilities(s.agent)
+  if (!caps.compact) return { ok: false, status: 400, error: `${agentDisplayName(s.agent)} can't be asked to compact` }
+  const adapter = sessionManager.adapterFor(s.id) as unknown as { compact?: (note?: string) => Promise<void> } | undefined
+  if (!adapter?.compact) return { ok: false, status: 409, error: "the agent isn't running" }
+  const kept = caps.compactNote ? note?.trim() || undefined : undefined
+  if (kept) compactNotes.set(s.id, kept)
+  else compactNotes.delete(s.id)
+  try {
+    await adapter.compact(kept)
+    return { ok: true }
+  } catch (err) {
+    compactNotes.delete(s.id)
+    return { ok: false, status: 409, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/** Each session's context window, as its agent last reported it (#144). In memory: the next request reports again. */
+const contextUsage = new Map<string, { used: number; size: number }>()
+
 const sessionChain = new SessionChain({
   isLive: (id) => isLiveWith(liveness, id),
   ensureLive: (id) => ensureLiveWith(liveness, id),
@@ -2188,6 +2222,42 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
       announceAgentModelsChanged([agent])
     },
   })
+  // #144: a compaction starts (every client shows it at once) and ends as a "Compacted" line kept in the chat.
+  adapter.on("compaction", (c: { compactionId: string; status: "in_progress" | "completed" | "failed" | "cancelled"; before?: number; after?: number; trigger?: "manual" | "auto"; summary?: string; error?: string }) => {
+    webChannel?.broadcastToAll({ type: "compaction", session: sessionId, id: c.compactionId, status: c.status })
+    if (c.status === "in_progress") return
+    const note = compactNotes.get(sessionId)
+    compactNotes.delete(sessionId)
+    if (c.status === "completed" && c.after != null) {
+      // The window holds what the compaction left: the ring drops now, not at the next request.
+      const size = contextUsage.get(sessionId)?.size
+      if (size != null) {
+        contextUsage.set(sessionId, { used: c.after, size })
+        webChannel?.broadcastToAll({ type: "context_usage", session: sessionId, used: c.after, size })
+      }
+    }
+    const id = `compaction:${sessionId}:${c.compactionId}:${Date.now()}`
+    const entry = {
+      // The text is for apps that predate the line (they show it as a reply); new ones draw `compaction`.
+      id, ts: new Date().toISOString(), direction: "outbound" as const, channel: "web", chat_id: "web", op: "compaction" as const, text: compactionText(c),
+      compaction: {
+        status: c.status,
+        ...(c.before != null ? { before: c.before } : {}), ...(c.after != null ? { after: c.after } : {}),
+        ...(c.trigger ? { trigger: c.trigger } : {}), ...(note ? { note } : {}),
+        ...(c.summary ? { summary: c.summary } : {}), ...(c.error ? { error: c.error } : {}),
+      },
+    }
+    try {
+      messageLog.append(sessionId, entry)
+      // An outbound web row is not mirrored by the log's listener (the web channel sends its own): send this one here.
+      webChannel?.broadcastToAll({ type: "message_append", session: sessionId, entry })
+    } catch (err: any) { log.error("compaction_line_failed", { session: sessionId, err: err?.message ?? String(err) }) }
+  })
+  // How full the agent's context window is (#144): kept for the snapshot, pushed to every client as it changes.
+  adapter.on("context-update", (ctx: { used: number; size: number }) => {
+    contextUsage.set(sessionId, { used: ctx.used, size: ctx.size })
+    webChannel?.broadcastToAll({ type: "context_usage", session: sessionId, used: ctx.used, size: ctx.size })
+  })
   adapter.on("commands-update", () => {
     const name = registry.get(sessionId)?.name
     if (name) {
@@ -2884,6 +2954,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         permissionMode: resolvePermissionMode(s.agent, s.permissionMode),
         ...sessionAccountFields(s),
         limitWait: limitWaitFields(limitWaits.get(s.id)),
+        context: contextUsage.get(s.id),
         status: s.status,
         session_branch: s.session_branch || undefined,
         repo_root: s.repo_root || undefined,
@@ -2908,6 +2979,19 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     getSessionActivity: (id) => {
       const s = registry.get(id)
       return s ? activityStore.get(s.id) : []
+    },
+    compactSession: (id, note) => compactSession(id, note),
+    getSessionContext: async (id) => {
+      const s = registry.get(id)
+      if (!s) return undefined
+      // #144: the core adapter asks its agent what fills the window and counts the tools this chat started.
+      const adapter = sessionManager.adapterFor(s.id) as unknown as {
+        contextBreakdown?: () => Promise<import("../packages/supermux-core/src/types.js").ContextBreakdown | undefined>
+        toolUses?: Map<string, number>
+      } | undefined
+      const breakdown = await adapter?.contextBreakdown?.()
+      const used = [...(adapter?.toolUses ?? new Map<string, number>())].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count)
+      return { ...(contextUsage.has(s.id) ? { context: contextUsage.get(s.id) } : {}), ...(breakdown ? { breakdown } : {}), used }
     },
     getSessionAgentState: (id) => {
       const s = registry.get(id)

@@ -220,6 +220,35 @@ describe("claude normalizer", () => {
     expect(err[1]).not.toHaveProperty("errorType")
   })
 
+  test("context: the main thread's last request is how full the window is; the result gives the window (#144)", () => {
+    // Real 2.1.308 shapes: per-request usage on each assistant frame, the window in result.modelUsage.
+    const n = createClaudeNormalizer()
+    const assistant = (usage: Record<string, number>, extra: Record<string, unknown> = {}) => native({
+      type: "assistant", ...extra,
+      message: { id: "m1", model: "claude-haiku-5-5", role: "assistant", content: [{ type: "text", text: "hi" }], usage },
+    })
+    // Before the window is known, a request's size is held, not reported.
+    expect(n(assistant({ input_tokens: 2, cache_read_input_tokens: 23472, cache_creation_input_tokens: 3481, output_tokens: 4 }))
+      .filter(b => b.kind === "usage")).toEqual([])
+    const result = n(native({
+      type: "result", subtype: "success", is_error: false, result: "hi",
+      usage: { input_tokens: 4, cache_read_input_tokens: 36879, cache_creation_input_tokens: 3481, output_tokens: 9 },
+      modelUsage: { "claude-haiku-5-5": { contextWindow: 1000000, maxOutputTokens: 128000 } },
+    }))
+    expect(result.find(b => b.kind === "usage")).toMatchObject({ context: { used: 26955, size: 1000000 } })
+    // Once the window is known, each new request reports at once (the ring moves during a long turn) …
+    expect(n(assistant({ input_tokens: 1, cache_read_input_tokens: 26955, cache_creation_input_tokens: 900, output_tokens: 3 }))
+      .filter(b => b.kind === "usage")).toEqual([{ kind: "usage", context: { used: 27856, size: 1000000 } }])
+    // … but the same request's next block (same usage) says nothing new,
+    expect(n(assistant({ input_tokens: 1, cache_read_input_tokens: 26955, cache_creation_input_tokens: 900, output_tokens: 3 }))
+      .filter(b => b.kind === "usage")).toEqual([])
+    // and a subagent's or a synthetic message's usage is never the main conversation's.
+    expect(n(assistant({ input_tokens: 5, cache_read_input_tokens: 90000, output_tokens: 1 }, { parent_tool_use_id: "toolu_1" }))
+      .filter(b => b.kind === "usage")).toEqual([])
+    expect(n(native({ type: "assistant", message: { id: "s", model: "<synthetic>", role: "assistant", content: [{ type: "text", text: "x" }], usage: { input_tokens: 0, output_tokens: 0 } } }))
+      .filter(b => b.kind === "usage")).toEqual([])
+  })
+
   test("result: a turn Claude ended because it was interrupted is not an error (real 2.1.308 frames)", () => {
     // After an interrupt control request: error_during_execution with Claude's own diagnostic, and terminal_reason
     // aborted_streaming (stopped while the model answered) or aborted_tools (stopped while a tool ran).
@@ -327,5 +356,109 @@ describe("claude normalizer", () => {
     expect(n({ protocol: "acp", value: { sessionUpdate: "plan", entries: [] } })).toEqual([])
     const replayed = n(native({ type: "system", subtype: "init", cwd: "/", model: "m" }, { replay: true }))
     expect(replayed[0]?.kind).toBe("session-info")
+  })
+})
+
+describe("claudeContextBreakdown (#144)", () => {
+  test("maps get_context_usage's reply (real 2.1.308, trimmed) to the breakdown", async () => {
+    const { claudeContextBreakdown } = await import("../src/claude/normalize.js")
+    const reply = {
+      categories: [
+        { id: "system_prompt", name: "System prompt", tokens: 2517, color: "promptBorder", kind: "used" },
+        { id: "system_tools", name: "System tools", tokens: 9196, color: "inactive", kind: "used" },
+        { id: "mcp_tools_deferred", name: "MCP tools (deferred)", tokens: 19819, isDeferred: true, kind: "deferred" },
+        { id: "memory_files", name: "Memory files", tokens: 76, kind: "used" },
+        { id: "skills", name: "Skills", tokens: 6366, kind: "used" },
+        { id: "messages", name: "Messages", tokens: 1160, kind: "used" },
+        { id: "autocompact_buffer", name: "Autocompact buffer", tokens: 33000, kind: "buffer" },
+        { id: "free_space", name: "Free space", tokens: 947685, kind: "free" },
+      ],
+      totalTokens: 19315, maxTokens: 1000000, autoCompactThreshold: 967000, isAutoCompactEnabled: true,
+      memoryFiles: [{ path: "/h/CLAUDE.md", type: "User", tokens: 76 }],
+      mcpTools: [
+        { name: "mcp__claude_ai_Claude_Data__certify_query", serverName: "claude_ai_Claude_Data", tokens: 1415, isLoaded: false },
+        { name: "mcp__mux-shim__message_session", serverName: "mux-shim", tokens: 1150, isLoaded: true },
+      ],
+      mcpInstructions: [{ serverName: "claude.ai Claude Data", tokens: 351 }],
+      skills: { totalSkills: 47, tokens: 6366, skillFrontmatter: [{ name: "anatomy", source: "userSettings", path: "/s/anatomy/SKILL.md", tokens: 327 }] },
+      gridRows: [[]],
+    }
+    expect(claudeContextBreakdown(reply)).toEqual({
+      used: 19315, size: 1000000, threshold: 967000,
+      categories: [
+        { id: "system_prompt", name: "System prompt", tokens: 2517, kind: "used" },
+        { id: "system_tools", name: "System tools", tokens: 9196, kind: "used" },
+        { id: "mcp_tools_deferred", name: "MCP tools (deferred)", tokens: 19819, kind: "deferred" },
+        { id: "memory_files", name: "Memory files", tokens: 76, kind: "used" },
+        { id: "skills", name: "Skills", tokens: 6366, kind: "used" },
+        { id: "messages", name: "Messages", tokens: 1160, kind: "used" },
+        { id: "autocompact_buffer", name: "Autocompact buffer", tokens: 33000, kind: "buffer" },
+        { id: "free_space", name: "Free space", tokens: 947685, kind: "free" },
+      ],
+      mcpTools: [
+        { server: "claude_ai_Claude_Data", name: "certify_query", tokens: 1415, loaded: false },
+        { server: "mux-shim", name: "message_session", tokens: 1150, loaded: true },
+      ],
+      mcpInstructions: [{ server: "claude.ai Claude Data", tokens: 351 }],
+      skills: [{ name: "anatomy", tokens: 327, source: "userSettings" }],
+      memoryFiles: [{ path: "/h/CLAUDE.md", type: "User", tokens: 76 }],
+    })
+  })
+
+  test("auto-compact off: no threshold; a reply without totals is no breakdown", async () => {
+    const { claudeContextBreakdown } = await import("../src/claude/normalize.js")
+    expect(claudeContextBreakdown({ categories: [], totalTokens: 5, maxTokens: 10, autoCompactThreshold: 8, isAutoCompactEnabled: false }))
+      .toEqual({ used: 5, size: 10, categories: [] })
+    expect(claudeContextBreakdown({ categories: [] })).toBeUndefined()
+    expect(claudeContextBreakdown(null)).toBeUndefined()
+  })
+})
+
+describe("compaction (#144)", () => {
+  // Real 2.1.308 frames of a manual /compact (trimmed): status compacting → status success → init → compact_boundary
+  // → the summary as a synthetic replayed user frame → "Compacted" → result.
+  const frames = [
+    { type: "system", subtype: "status", status: "compacting", uuid: "36523f3e" },
+    { type: "system", subtype: "status", status: null, compact_result: "success", uuid: "810461f3" },
+    { type: "system", subtype: "init", cwd: "/tmp", model: "claude-haiku-5-5" },
+    { type: "system", subtype: "compact_boundary", uuid: "f70e6172", compact_metadata: { trigger: "manual", pre_tokens: 26905, post_tokens: 8621, cumulative_dropped_tokens: 18284, duration_ms: 7497 } },
+    { type: "user", isReplay: true, isSynthetic: true, message: { role: "user", content: "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n1. Primary Request: remember PELICAN-7731." } },
+    { type: "user", isReplay: true, message: { role: "user", content: "<local-command-stdout>Compacted </local-command-stdout>" } },
+  ]
+
+  test("a compaction is in progress, then completed with its before → after and Claude's summary", () => {
+    const n = createClaudeNormalizer()
+    // A turn before it told the window and its size.
+    n(native({ type: "assistant", message: { id: "m0", model: "claude-haiku-5-5", role: "assistant", content: [{ type: "text", text: "OK" }], usage: { input_tokens: 2, cache_read_input_tokens: 26903, output_tokens: 1 } } }))
+    n(native({ type: "result", subtype: "success", is_error: false, result: "OK", usage: {}, modelUsage: { "claude-haiku-5-5": { contextWindow: 1000000 } } }))
+    const out = frames.flatMap(f => n(native(f)))
+    expect(out.filter(b => b.kind === "compaction")).toEqual([
+      { kind: "compaction", compactionId: "36523f3e", status: "in_progress" },
+      {
+        kind: "compaction", compactionId: "36523f3e", status: "completed", trigger: "manual", before: 26905, after: 8621,
+        summary: "Summary:\n1. Primary Request: remember PELICAN-7731.",
+      },
+    ])
+    // The window now holds what the compaction left, at once and on the turn's result.
+    expect(out.filter(b => b.kind === "usage")).toEqual([{ kind: "usage", context: { used: 8621, size: 1000000 } }])
+    const result = n(native({ type: "result", subtype: "success", is_error: false, result: "", num_turns: 0, usage: { input_tokens: 0, output_tokens: 0 } }))
+    expect(result.find(b => b.kind === "usage")).toMatchObject({ context: { used: 8621, size: 1000000 } })
+    // Nothing of it is a chat message.
+    expect(out.some(b => b.kind === "assistant-message" || b.kind === "user-message")).toBe(false)
+  })
+
+  test("a failed compaction says so", () => {
+    const n = createClaudeNormalizer()
+    n(native(frames[0]))
+    expect(n(native({ type: "system", subtype: "status", status: null, compact_result: "failed", compact_error: "Not enough messages to compact." })))
+      .toEqual([{ kind: "compaction", compactionId: "36523f3e", status: "failed", error: "Not enough messages to compact." }])
+  })
+
+  test("an automatic compaction (no status frames) still completes at its boundary", () => {
+    const n = createClaudeNormalizer()
+    const out = n(native({ type: "system", subtype: "compact_boundary", uuid: "b1", compact_metadata: { trigger: "auto", pre_tokens: 967000, post_tokens: 20113 } }))
+    expect(out.filter(b => b.kind === "compaction")).toEqual([])
+    const summary = n(native(frames[4]))
+    expect(summary).toEqual([{ kind: "compaction", compactionId: "b1", status: "completed", trigger: "auto", before: 967000, after: 20113, summary: "Summary:\n1. Primary Request: remember PELICAN-7731." }])
   })
 })

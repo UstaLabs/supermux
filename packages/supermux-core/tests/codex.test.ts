@@ -713,3 +713,17 @@ test('the mismatch error names the top-level pair and the permissions pair', () 
  expect(() => driver({}, { sandbox: 'workspace-write' })).toThrow('Codex sandbox/approvalPolicy (workspace-write/never) must equal permissions.sandbox/approvalPolicy (read-only/never)')
  expect(() => driver({}, { approvalPolicy: 'on-request' })).toThrow('Codex sandbox/approvalPolicy (read-only/on-request) must equal permissions.sandbox/approvalPolicy (read-only/never)')
 })
+
+test('compact: thread/compact/start runs as its own turn and settles when it completes (#144)',async()=>{
+ const updates:any[]=[]
+ const r=await driver().open(ctx({onUpdate:(u:any)=>updates.push(u)}))
+ try {
+  expect(typeof r.compact).toBe('function')
+  expect(r.compactTakesNote).toBe(false)
+  expect(await r.compact!(undefined,signal())).toEqual({stopReason:'end_turn'})
+  const items=updates.map(u=>u.value?.params?.item?.type).filter(Boolean)
+  expect(items).toEqual(['contextCompaction','contextCompaction'])
+  // The next prompt still works.
+  expect(await r.prompt(input('after'),signal())).toEqual({stopReason:'end_turn'})
+ } finally {await r.close({ mode: "shutdown" })}
+})

@@ -306,6 +306,36 @@ data class ModelInfo(
     val supportsFast: Boolean = false,
 )
 
+/** #144: GET /sessions/<id>/context. [breakdown] only where the agent reports one (Claude, Grok). */
+@Serializable
+data class SessionContextDto(
+    val context: dev.supermux.proto.ContextUsageDto? = null,
+    val breakdown: ContextBreakdownDto? = null,
+    /** Tools this chat called, most first; a Skill call as `Skill:<skill>`. Counted since the broker started. */
+    val used: List<ToolUseDto> = emptyList(),
+)
+
+@Serializable
+data class ContextBreakdownDto(
+    val used: Long,
+    val size: Long,
+    /** Where the agent compacts by itself, when it says. */
+    val threshold: Long? = null,
+    val categories: List<ContextCategoryDto> = emptyList(),
+    val mcpTools: List<McpToolCostDto> = emptyList(),
+    val mcpInstructions: List<McpInstructionsCostDto> = emptyList(),
+    val skills: List<SkillCostDto> = emptyList(),
+    val memoryFiles: List<MemoryFileCostDto> = emptyList(),
+)
+
+/** [kind]: used | deferred (loaded on use, not counted) | buffer | free. */
+@Serializable data class ContextCategoryDto(val id: String, val name: String, val tokens: Long, val kind: String)
+@Serializable data class McpToolCostDto(val server: String, val name: String, val tokens: Long, val loaded: Boolean = true)
+@Serializable data class McpInstructionsCostDto(val server: String, val tokens: Long)
+@Serializable data class SkillCostDto(val name: String, val tokens: Long, val source: String? = null)
+@Serializable data class MemoryFileCostDto(val path: String, val type: String? = null, val tokens: Long)
+@Serializable data class ToolUseDto(val name: String, val count: Int)
+
 @Serializable
 data class ModelsResponse(
     val agent: String,
@@ -1698,6 +1728,9 @@ private data class ReasoningLevelBody(val reasoningLevel: String)
 private data class FastModeBody(val fastMode: Boolean)
 
 @Serializable
+private data class CompactBody(val note: String? = null)
+
+@Serializable
 private data class RenameBody(val name: String)
 
 @Serializable
@@ -2188,6 +2221,10 @@ class BrokerApi(
     suspend fun models(id: String): ModelsResponse =
         getJson("$httpBase/sessions/$id/models")
 
+    /** GET /sessions/<id>/context (#144): how full the context window is, what fills it, what this chat used. */
+    suspend fun sessionContext(id: String): SessionContextDto =
+        getJson("$httpBase/sessions/${urlEncode(id)}/context")
+
     /** GET /models?agent= — models for the launcher (no session). */
     suspend fun listModels(agent: String): LauncherModels =
         getJson("$httpBase/models?agent=${urlEncode(agent)}")
@@ -2233,6 +2270,10 @@ class BrokerApi(
     /** POST /sessions/<id>/reasoning-level {"reasoningLevel": ...} */
     suspend fun switchReasoning(id: String, level: String) =
         postJson("$httpBase/sessions/$id/reasoning-level", ReasoningLevelBody(level))
+
+    /** #144 POST /sessions/<id>/compact {"note"?}: queued like a message (202). */
+    suspend fun compact(id: String, note: String? = null) =
+        postJson("$httpBase/sessions/${urlEncode(id)}/compact", CompactBody(note?.takeIf { it.isNotBlank() }))
 
     /** POST /sessions/<id>/fast-mode {"fastMode": ...} */
     suspend fun switchFastMode(id: String, fastMode: Boolean) =

@@ -12,7 +12,8 @@ function replay(name: string, setup?: (n: ReturnType<typeof createAntigravityNor
   const out: NormalizedBody[] = []
   for (const f of frames(name)) out.push(...n({ protocol: "native", value: f }))
   out.push(...n.flush())
-  return out
+  // The window's size per step (#144) has its own test below; these captures pin everything else.
+  return out.filter(b => !(b.kind === "usage" && b.context && !b.tokens))
 }
 const resultOf = (name: string) => frames(name).find(f => f.event === "result")!.result
 const SI = { kind: "session-info", cwd: "/tmp/agy-probe" }
@@ -160,5 +161,37 @@ describe("antigravity normalizer (real agy 1.3.4 captures)", () => {
   test("agyToolInput keeps raw keys and never overrides canonical ones", () => {
     expect(agyToolInput({ CommandLine: "x", command: "keep" })).toEqual({ CommandLine: "x", command: "keep" })
     expect(agyToolInput(undefined)).toBeUndefined()
+  })
+})
+
+describe("compaction (#144)", () => {
+  test("a checkpoint step is agy's compaction; what it read is the context before it (real 1.5.9 frame)", () => {
+    const n = createAntigravityNormalizer(); n.newGeneration("g")
+    const step = (state: string, usage?: Record<string, number>) => ({ protocol: "native" as const, value: { event: "step_update", step_update: {
+      conversation_id: "c", step_index: 5, state, step_type: "checkpoint", ...(usage ? { usage } : {}) } } })
+    expect(n(step("ACTIVE"))).toEqual([{ kind: "compaction", compactionId: "g:5", status: "in_progress" }])
+    expect(n(step("DONE", { input_tokens: 2964, output_tokens: 301, thinking_tokens: 0, cache_read_tokens: 21037, total_tokens: 3265 })))
+      .toEqual([{ kind: "compaction", compactionId: "g:5", status: "completed", before: 24001 }])
+    // A DONE without an ACTIVE before it still completes once.
+    const m = createAntigravityNormalizer(); m.newGeneration("h")
+    expect(m(step("DONE"))).toEqual([{ kind: "compaction", compactionId: "h:5", status: "completed" }])
+  })
+})
+
+describe("context window (#144)", () => {
+  const step = (type: string, index: number, usage?: Record<string, number>) => ({ protocol: "native" as const, value: { event: "step_update", step_update: {
+    conversation_id: "c", step_index: index, state: "DONE", step_type: type, ...(type === "agent_response" ? { text_delta: "" } : {}), ...(usage ? { usage } : {}) } } })
+  test("each step's prompt (input + cache reads) is how full the window is; the window comes from the driver", () => {
+    const n = createAntigravityNormalizer(); n.newGeneration("g")
+    // No window yet: the size alone (size 0 = window not known).
+    expect(n(step("agent_response", 1, { input_tokens: 13914, cache_read_tokens: 9170, output_tokens: 5 })).filter(b => b.kind === "usage"))
+      .toEqual([{ kind: "usage", context: { used: 23084, size: 0 } }])
+    // The driver read the window from agy's conversation DB.
+    expect(n({ protocol: "native", value: { event: "context_window", size: 256000 } }))
+      .toEqual([{ kind: "usage", context: { used: 23084, size: 256000 } }])
+    expect(n(step("agent_response", 2, { input_tokens: 13382, cache_read_tokens: 0, output_tokens: 5 })).filter(b => b.kind === "usage"))
+      .toEqual([{ kind: "usage", context: { used: 13382, size: 256000 } }])
+    // A step without usage says nothing new.
+    expect(n(step("agent_response", 3)).filter(b => b.kind === "usage")).toEqual([])
   })
 })

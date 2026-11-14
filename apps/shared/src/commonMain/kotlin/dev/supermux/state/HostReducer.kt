@@ -5,6 +5,7 @@ import kotlin.uuid.Uuid
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
+import dev.supermux.proto.ContextUsageDto
 import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
@@ -319,6 +320,12 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
     }
     is ServerFrame.AgentError -> state.copy(
         agentErrors = state.agentErrors + (frame.session to frame),
+    )
+    is ServerFrame.Compaction -> state.copy(
+        compacting = if (frame.status == "in_progress") state.compacting + (frame.session to frame.id) else state.compacting - frame.session,
+    )
+    is ServerFrame.ContextUsage -> state.copy(
+        sessions = state.sessions.map { s -> if (s.id != frame.session) s else s.copy(context = ContextUsageDto(frame.used, frame.size)) },
     )
     is ServerFrame.CommandsChanged -> state.copy(
         commands = state.commands + (frame.session to frame.commands),

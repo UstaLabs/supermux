@@ -272,6 +272,14 @@ function newTerminalViewerId(): string {
 
 type WSData = { deviceName: string; openedAt: number; surface?: Surface; lastPongAt?: number; terminal?: true; terminalKind?: "scratch" | "agent"; terminalSession?: string; terminalId?: string; terminalViewerId?: string; terminalAgentTarget?: string; terminalIntent?: import("../../core/terminal/manager").TerminalAttachIntent; terminalRevision?: 1 | 2; terminalRevisionError?: string; _termLane?: TerminalFrameLane; display?: true; scrcpy?: true; displayStreamId?: string; dictation?: { id: string; sessionId?: string }; _dictation?: ReturnType<NonNullable<WebChannelOpts["openDictationStream"]>>; _termDrain?: { promise: Promise<void>; resolve: () => void }; perfTrace?: string }
 
+/** #144: GET /sessions/:id/context. */
+export interface SessionContextReport {
+  context?: { used: number; size: number }
+  breakdown?: import("../../../packages/supermux-core/src/types.js").ContextBreakdown
+  /** Tools this chat called (main thread), most first; a Skill call as `Skill:<skill>`. Since the broker started. */
+  used: Array<{ name: string; count: number }>
+}
+
 export interface SessionSnapshot {
   id?: string
   name: string
@@ -289,6 +297,8 @@ export interface SessionSnapshot {
   avatar?: string
   model?: string
   permissionMode?: string
+  /** How full the agent's context window is (#144), when the agent reports it. */
+  context?: { used: number; size: number }
   session_branch?: string
   repo_root?: string
   git?: import("../../core/worktree/lite-status").GitLiteStatus
@@ -353,6 +363,13 @@ export interface WebChannelOpts {
    */
   enrichAttachments?: (entries: unknown[]) => Promise<void>
   getSessionActivity?: (name: string) => unknown[]
+  /**
+   * #144: a session's context window: the live numbers, what fills it (asked of the agent when it can say) and the
+   * tools this chat used. Undefined for an unknown session.
+   */
+  getSessionContext?: (id: string) => Promise<SessionContextReport | undefined>
+  /** #144 Compact: queued like a message; the note is kept only where the agent takes one. */
+  compactSession?: (id: string, note?: string) => Promise<{ ok: true } | { ok: false; status: number; error: string }>
   getSessionBgTasks?: (name: string) => unknown[]
   /** Latest view of each subagent of a session (snapshot `subagents`; live `subagent_update`). */
   getSessionSubagents?: (id: string) => unknown[]
@@ -4357,6 +4374,20 @@ export class WebChannel implements Channel {
       const result = await this.opts.switchReasoningLevel(id, reasoningLevel, applyNow)
       if (!result.ok) return this.json({ error: result.error }, 400)
       return this.json({ ok: true, status: result.status }, result.status === "queued" ? 202 : 200)
+    }
+    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/compact$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      if (body.note !== undefined && typeof body.note !== "string") return this.json({ error: "note must be a string" }, 400)
+      if (!this.opts.compactSession) return this.json({ error: "not configured" }, 503)
+      const result = await this.opts.compactSession(id, body.note as string | undefined)
+      return result.ok ? this.json({ ok: true }, 202) : this.json({ error: result.error }, result.status)
+    }
+    if (method === "GET" && path.match(/^\/sessions\/[^/]+\/context$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      if (!this.opts.getSessionContext) return this.json({ error: "not configured" }, 503)
+      const report = await this.opts.getSessionContext(id)
+      return report ? this.json(report) : this.json({ error: "unknown session" }, 404)
     }
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/fast-mode$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)

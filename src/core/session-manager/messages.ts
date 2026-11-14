@@ -25,7 +25,7 @@ export interface Message {
   channel: string
   chat_id: string
   message_id?: string
-  op?: "reply" | "react" | "edit_message"
+  op?: "reply" | "react" | "edit_message" | "compaction"
   text?: string
   edited_at?: string
   attachments?: AttachmentRef[]
@@ -49,6 +49,8 @@ export interface Message {
   card?: { id: string; title: string; height?: number; desktop_height?: number }
   /** #104: set on the user's message that a click in an html card sent. */
   from_card?: { id: string; title: string }
+  /** #144: the "Compacted" line (op "compaction"): how it went, the context before → after, and Claude's summary. */
+  compaction?: MessageCompaction
   /** Card #76: the live stream this reply replaces in the app. Sent with the live frame only; never stored. */
   stream?: string
 }
@@ -82,8 +84,8 @@ export class MessageStore {
     // file was stored. In place: the channels send this same `entry` right after the append.
     if (this.fileStore && entry.attachments?.length) entry.attachments = this.fileStore.withMediaMeta(entry.attachments)
     this.db.prepare(`
-      INSERT INTO messages (id, session, session_id, ts, direction, channel, chat_id, message_id, op, text, edited_at, attachments, reactions, error, subagent_id, from_session_id, from_session_name, from_agent, council_id, council_round, council_letter, card, from_card)
-      VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO messages (id, session, session_id, ts, direction, channel, chat_id, message_id, op, text, edited_at, attachments, reactions, error, subagent_id, from_session_id, from_session_name, from_agent, council_id, council_round, council_letter, card, from_card, compaction)
+      VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       entry.id,
       sessionId,
@@ -107,6 +109,7 @@ export class MessageStore {
       entry.council_letter ?? null,
       entry.card ? JSON.stringify(entry.card) : null,
       entry.from_card ? JSON.stringify(entry.from_card) : null,
+      entry.compaction ? JSON.stringify(entry.compaction) : null,
     )
     // Bump ref_count for each attachment so the hourly GC sweep doesn't reap a
     // file that's still referenced by this row. fileStore is optional (tests
@@ -284,6 +287,17 @@ function referencedFiles(atts: readonly AttachmentRef[]): string[] {
   return atts.flatMap((a) => [a?.file_id, a?.poster_file_id].filter((id): id is string => typeof id === "string" && id.length > 0))
 }
 
+export interface MessageCompaction {
+  status: "completed" | "failed" | "cancelled"
+  before?: number
+  after?: number
+  trigger?: "manual" | "auto"
+  /** What the user asked to keep (Compact's note), when the agent takes one. */
+  note?: string
+  summary?: string
+  error?: string
+}
+
 function rowToMessage(row: any): Message {
   return {
     id: row.id,
@@ -307,5 +321,6 @@ function rowToMessage(row: any): Message {
     council_letter: row.council_letter ?? undefined,
     card: row.card ? JSON.parse(row.card) : undefined,
     from_card: row.from_card ? JSON.parse(row.from_card) : undefined,
+    compaction: row.compaction ? JSON.parse(row.compaction) : undefined,
   }
 }

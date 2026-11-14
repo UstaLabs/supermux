@@ -342,6 +342,7 @@ class FleetStore(
     val councils: StateFlow<Map<String, List<dev.supermux.proto.CouncilView>>> = mergedMap { it.councils }
     val commands: StateFlow<Map<String, List<SlashCommand>>> = mergedMap { it.commands }
     val commandsResolved: StateFlow<Map<String, Boolean>> = mergedMap { it.commandsResolved }
+    val compacting: StateFlow<Map<String, String>> = mergedMap { it.compacting }
     val finishJobs: StateFlow<Map<String, FinishJobDto>> = mergedMap { it.finishJobs }
     val lspStatus: StateFlow<Map<String, ServerFrame.LspStatus>> = mergedMap { it.lspStatus }
     val lspInstallLog: StateFlow<Map<String, List<String>>> = mergedMap { it.lspInstallLog }
@@ -1441,6 +1442,8 @@ class FleetStore(
         appFor(id)?.switchModel(id, model) == true
     suspend fun switchReasoning(id: String, level: String): Boolean =
         appFor(id)?.switchReasoning(id, level) == true
+    suspend fun sessionContext(id: String): dev.supermux.net.SessionContextDto? = appFor(id)?.sessionContext(id)
+    suspend fun compact(id: String, note: String?): Boolean = appFor(id)?.compact(id, note) == true
     suspend fun switchFastMode(id: String, fastMode: Boolean): Boolean =
         appFor(id)?.switchFastMode(id, fastMode) == true
     fun fastSupported(id: String, model: String?): Boolean {
