@@ -30,8 +30,6 @@ import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.ReviewComment
 import dev.supermux.net.ReviewSubmitResult
 import dev.supermux.net.TerminalClient
-import dev.supermux.net.VerifySaveResult
-import dev.supermux.net.VerifySuggestResult
 import dev.supermux.net.Walkthrough
 import dev.supermux.proto.FinishJobDto
 import dev.supermux.proto.ServerFrame
@@ -101,21 +99,6 @@ class ShellActions(
 
     // ── finish flow ───────────────────────────────────────────────────────────────────────────
     val finishReadiness: suspend (sessionId: String) -> FinishReadiness? = { null },
-    /**
-     * Fire-and-forget finish kickoff on the STORE's scope (never the pane's): switching views
-     * mid-kickoff must not cancel the POST. [onKickoff] reports only whether it was ACCEPTED.
-     */
-    val kickoffFinish: (
-        sessionId: String,
-        action: String,
-        skipVerify: Boolean?,
-        commitFirst: Boolean?,
-        commitMessage: String?,
-        onKickoff: (Boolean) -> Unit,
-    ) -> Unit = { _, _, _, _, _, done -> done(false) },
-    val clearFinishJob: (sessionId: String) -> Unit = {},
-    val verifySuggest: suspend (sessionId: String) -> VerifySuggestResult? = { null },
-    val verifySave: suspend (sessionId: String, content: String) -> VerifySaveResult? = { _, _ -> null },
 
     // ── terminals ─────────────────────────────────────────────────────────────────────────────
     /** The agent's own PTY (the chat view's Chat⇄Native pill). Null = no host owns that session. */
@@ -219,12 +202,6 @@ fun rememberShellActions(
             gitPush = { app.gitPush(it) },
             gitPublish = { app.gitPublish(it) },
             finishReadiness = { app.finishReadiness(it) },
-            kickoffFinish = { id, action, skipVerify, commitFirst, commitMessage, onKickoff ->
-                app.kickoffFinish(id, action, skipVerify, commitFirst, commitMessage, onKickoff)
-            },
-            clearFinishJob = { app.clearFinishJob(it) },
-            verifySuggest = { app.verifySuggest(it) },
-            verifySave = { id, content -> app.verifySave(id, content) },
             connectAgentTerminal = { app.connectAgentTerminal(it) },
             connectTerminal = { id, terminalId -> app.connectTerminal(id, terminalId) },
             connectWorkspaceTerminal = { wsId, terminalId -> app.connectWorkspaceTerminal(wsId, terminalId) },
@@ -289,12 +266,6 @@ fun rememberShellActions(fleet: FleetStore): ShellActions {
             gitPush = { fleet.gitPush(it) },
             gitPublish = { fleet.gitPublish(it) },
             finishReadiness = { fleet.finishReadiness(it) },
-            kickoffFinish = { id, action, skipVerify, commitFirst, commitMessage, onKickoff ->
-                fleet.finish(id, action, skipVerify, commitFirst, commitMessage, onKickoff = onKickoff)
-            },
-            clearFinishJob = { fleet.clearFinishJob(it) },
-            verifySuggest = { fleet.verifySuggest(it) },
-            verifySave = { id, content -> fleet.verifySave(id, content) },
             connectAgentTerminal = { fleet.connectAgentTerminal(it) },
             connectTerminal = { id, terminalId -> fleet.connectTerminal(id, terminalId) },
             connectWorkspaceTerminal = { wsId, terminalId -> fleet.connectWorkspaceTerminal(wsId, terminalId) },
