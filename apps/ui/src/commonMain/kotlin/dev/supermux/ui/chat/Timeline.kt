@@ -5,7 +5,7 @@
 //
 // Nothing here may name `java.*` / `android.*`: bytes are staged through `Platform.files.stageTemp`,
 // images decode through Coil, video plays through Compose Media Player, and timestamps format
-// through `:shared`'s `formatChatTime`.
+// through `:shared`'s `formatChatTime` (worded by `chatTimeText`).
 package dev.supermux.ui.chat
 
 import androidx.compose.foundation.layout.aspectRatio
@@ -120,7 +120,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
 import dev.supermux.chat.TimelineItem
 import dev.supermux.chat.ToolStatus
-import dev.supermux.chat.chatTimeLabel
+import dev.supermux.chat.chatTime
+import dev.supermux.ui.i18n.chatTimeText
 import dev.supermux.chat.isRedactedReasoning
 import dev.supermux.fs.pathLeaf
 import dev.supermux.media.AttachmentMedia
@@ -318,7 +319,7 @@ private fun MessageMetaRow(text: String, ts: String?) {
     val speaking = readAloud.isSpeaking(text)
     // `nowMs` is read once per composition of the row: the label only has minute resolution and a
     // transcript row is recomposed whenever anything about it changes.
-    val time = remember(ts) { chatTimeLabel(ts, Clock.System.now().toEpochMilliseconds()) }
+    val time = remember(ts) { chatTime(ts, Clock.System.now().toEpochMilliseconds()) }?.let(::chatTimeText)
     Row(
         modifier = Modifier
             .fillMaxWidth()

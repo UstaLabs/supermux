@@ -80,6 +80,7 @@ import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.retain.rememberRetainedScope
 import kotlinx.coroutines.flow.first
 import dev.supermux.state.AccountResult
+import dev.supermux.state.AgentNameError
 import dev.supermux.state.agentNameError
 import dev.supermux.state.agentNameTrim
 import dev.supermux.ui.accounts.agentDisplayName
@@ -159,6 +160,17 @@ private fun agentFailure(failure: AccountResult.Failed, fallback: String): Strin
         "agent_not_installed" -> localized(Str.agentdlg_not_installed)
         else -> fallback
     }
+
+/** Why a typed name is refused ([agentNameError]), in the app's language. */
+private fun agentNameErrorText(e: AgentNameError): String = localized(
+    when (e) {
+        AgentNameError.CONTROL_CHARACTER -> Str.words_agent_name_control
+        AgentNameError.EMPTY -> Str.words_agent_name_empty
+        AgentNameError.TOO_LONG -> Str.words_agent_name_too_long
+        AgentNameError.LEADING_DOT -> Str.words_agent_name_dot
+        AgentNameError.SLASH -> Str.words_agent_name_slash
+    },
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -320,7 +332,7 @@ internal fun CreateAgentDialog(
                     tall = compact,
                 )
                 if (nameError != null && name.isNotEmpty()) {
-                    Text(nameError, color = cs.error, fontSize = 11.5.sp, modifier = Modifier.padding(top = 4.dp))
+                    Text(agentNameErrorText(nameError), color = cs.error, fontSize = 11.5.sp, modifier = Modifier.padding(top = 4.dp))
                 }
             }
 
@@ -926,7 +938,7 @@ internal fun RenameAgentDialog(
             isError = nameError != null,
             tag = "agents_rename_name",
         )
-        (nameError ?: error?.let { agentFailure(it, localized(Str.agentdlg_rename_failed, agentName)) })?.let { Text(it, color = cs.error, fontSize = 11.5.sp, modifier = Modifier.padding(top = 6.dp)) }
+        (nameError?.let(::agentNameErrorText) ?: error?.let { agentFailure(it, localized(Str.agentdlg_rename_failed, agentName)) })?.let { Text(it, color = cs.error, fontSize = 11.5.sp, modifier = Modifier.padding(top = 6.dp)) }
     }
 }
 

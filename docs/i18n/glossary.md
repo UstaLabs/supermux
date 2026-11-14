@@ -117,4 +117,11 @@ the catalog (İ, not I): Kotlin's uppercase() has no Turkish "i".
 | displays | Ekranlar | |
 | responsive (device mode) | Duyarlı | |
 | what's new | Yenilikler | |
+| menus | Dosya, Düzen, Görünüm; Geri al, Yinele, Kes, Kopyala, Yapıştır, Tümünü seç | |
+| unpair | eşleştirmeyi kaldır | |
+| relay | aktarıcı | |
+| background service | arka plan hizmeti | |
+| months (short) | Oca Şub Mar Nis May Haz Tem Ağu Eyl Eki Kas Ara | dates day first: "14 Tem" |
+| yesterday | dün | "Dün 14:05" |
+| new chat | yeni sohbet | |
 | supermux | supermux | the brand, never translated or capitalised |

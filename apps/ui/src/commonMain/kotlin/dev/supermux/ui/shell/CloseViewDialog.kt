@@ -17,7 +17,7 @@ import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.worktree.WorktreeCleanupSection
 import dev.supermux.ui.worktree.WorktreeCleanupTick
-import dev.supermux.workspace.viewTitle
+import dev.supermux.ui.i18n.viewTitle
 import dev.supermux.ui.i18n.localized
 
 /**

@@ -158,7 +158,7 @@ class HostBadgeTest {
         // h2 was last seen 5 minutes before `nowMs`; h1 is online and carries no suffix.
         setContent(switcher(nowMs = 1_000_000L + 5 * 60_000L))
         onNodeWithTag("host_switcher").performClick()
-        onNodeWithText("Raspberry Pi · 5m ago").assertIsDisplayed()
+        onNodeWithText("Raspberry Pi · 5 min ago").assertIsDisplayed()
         onNodeWithText("MacBook").assertIsDisplayed()
     }
 

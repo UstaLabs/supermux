@@ -1,5 +1,7 @@
 package dev.supermux.android.push
 
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -77,12 +79,12 @@ object PushRouter {
     }
 
     private fun mediaLabel(kind: String?): String = when (kind) {
-        "photo" -> "Sent a photo"
-        "voice" -> "Sent a voice message"
-        "audio" -> "Sent audio"
-        "video_note" -> "Sent a video note"
-        "document" -> "Sent a document"
-        else -> "New message"
+        "photo" -> localized(Str.host_app_android_push_photo)
+        "voice" -> localized(Str.host_app_android_push_voice)
+        "audio" -> localized(Str.host_app_android_push_audio)
+        "video_note" -> localized(Str.host_app_android_push_video_note)
+        "document" -> localized(Str.host_app_android_push_document)
+        else -> localized(Str.notify_new_message)
     }
 
     private fun parseObjectOrNull(s: String): JsonObject? {

@@ -50,6 +50,8 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import dev.supermux.ui.widgets.AlertDialog
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import androidx.compose.material3.CircularProgressIndicator
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
@@ -105,7 +107,6 @@ import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.ChatDetailLevel
-import dev.supermux.util.formatDuration
 import dev.supermux.util.proxyDisplayUrl
 import dev.supermux.util.proxyUrl
 import dev.supermux.ui.display.DisplayPanel
@@ -258,7 +259,7 @@ fun ChatScreen(
             // Workdir-relative inside the project, absolute outside it (the host reads either).
             val rel = toEditorPath(ref.path, session.workdir, inferHomeDir(session.workdir))
             if (rel == null) {
-                Toast.makeText(context, "That's the project folder itself", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, localized(Str.host_app_android_folder_itself), Toast.LENGTH_SHORT).show()
             } else {
                 tapScope.launch {
                     val abs = dev.supermux.ui.files.editorAbsolutePath(session.workdir, rel)
@@ -293,7 +294,7 @@ fun ChatScreen(
                 // Back button
                 Icon(
                     painter = painterResource(R.drawable.ic_arrow_left),
-                    contentDescription = "Back",
+                    contentDescription = localized(Str.shell_back),
                     tint = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier
                         .clickable(onClick = onBack)
@@ -379,7 +380,7 @@ fun ChatScreen(
                     ) {
                         Box(Modifier.size(6.dp).clip(CircleShape).background(error))
                         Text(
-                            text = "not responding",
+                            text = localized(Str.host_app_android_not_responding),
                             color = error,
                             fontFamily = MonoFontFamily,
                             fontSize = 11.sp,
@@ -394,7 +395,7 @@ fun ChatScreen(
                     Box {
                         Icon(
                             painter = painterResource(R.drawable.ic_globe),
-                            contentDescription = "Links",
+                            contentDescription = localized(Str.shell_links),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier
                                 .clickable { showLinks = true }
@@ -442,7 +443,7 @@ fun ChatScreen(
                     var detailSubmenu by remember { mutableStateOf(false) }
                     Icon(
                         painter = painterResource(R.drawable.ic_more_vert),
-                        contentDescription = "More",
+                        contentDescription = localized(Str.shell_more),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier
                             .clickable { headerMenuExpanded = true }
@@ -462,9 +463,15 @@ fun ChatScreen(
                                     Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                 ) {
-                                    Text("Detail")
+                                    Text(localized(Str.shell_detail))
                                     Text(
-                                        chatDetailLevel.label,
+                                        localized(
+                                            when (chatDetailLevel) {
+                                                ChatDetailLevel.LOW -> Str.general_chat_detail_low
+                                                ChatDetailLevel.MEDIUM -> Str.general_chat_detail_medium
+                                                ChatDetailLevel.HIGH -> Str.general_chat_detail_high
+                                            },
+                                        ),
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         style = MaterialTheme.typography.bodySmall,
                                     )
@@ -474,7 +481,7 @@ fun ChatScreen(
                             onClick = { detailSubmenu = true },
                         )
                         DropdownMenuItem(
-                            text = { Text("Rename") },
+                            text = { Text(localized(Str.shell_rename)) },
                             leadingIcon = {
                                 Icon(
                                     painter = painterResource(R.drawable.ic_pencil),
@@ -497,7 +504,7 @@ fun ChatScreen(
                         }
                         val isMuted = session.mute ?: false
                         DropdownMenuItem(
-                            text = { Text(if (isMuted) "Unmute" else "Mute") },
+                            text = { Text(localized(if (isMuted) Str.shell_unmute else Str.shell_mute)) },
                             leadingIcon = {
                                 Icon(
                                     painter = painterResource(
@@ -514,7 +521,7 @@ fun ChatScreen(
                             },
                         )
                         DropdownMenuItem(
-                            text = { Text("Displays") },
+                            text = { Text(localized(Str.display_title)) },
                             leadingIcon = {
                                 Icon(
                                     painter = painterResource(R.drawable.ic_monitor),
@@ -530,7 +537,7 @@ fun ChatScreen(
                             },
                         )
                         DropdownMenuItem(
-                            text = { Text("Kill", color = MaterialTheme.colorScheme.error) },
+                            text = { Text(localized(Str.shell_kill), color = MaterialTheme.colorScheme.error) },
                             leadingIcon = {
                                 Icon(
                                     painter = painterResource(R.drawable.ic_trash),
@@ -551,19 +558,19 @@ fun ChatScreen(
                         onDismissRequest = { detailSubmenu = false },
                     ) {
                         listOf(
-                            ChatDetailLevel.LOW to "Messages only · tools on status line",
-                            ChatDetailLevel.MEDIUM to "Quiet tool lines between messages",
-                            ChatDetailLevel.HIGH to "Terminal windows & file diffs",
-                        ).forEach { (level, desc) ->
+                            Triple(ChatDetailLevel.LOW, Str.general_chat_detail_low, Str.shell_detail_low_description),
+                            Triple(ChatDetailLevel.MEDIUM, Str.general_chat_detail_medium, Str.shell_detail_medium_description),
+                            Triple(ChatDetailLevel.HIGH, Str.general_chat_detail_high, Str.shell_detail_high_description),
+                        ).forEach { (level, name, desc) ->
                             DropdownMenuItem(
                                 text = {
                                     Column {
                                         Text(
-                                            level.label,
+                                            localized(name),
                                             fontWeight = if (chatDetailLevel == level) FontWeight.SemiBold else FontWeight.Normal,
                                         )
                                         Text(
-                                            desc,
+                                            localized(desc),
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         )
@@ -607,7 +614,14 @@ fun ChatScreen(
                     unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                     text = {
                         Text(
-                            panel.name,
+                            localized(
+                                when (panel) {
+                                    SessionPanel.Chat -> Str.host_app_android_panel_chat
+                                    SessionPanel.Editor -> Str.host_app_android_panel_editor
+                                    SessionPanel.Terminal -> Str.host_app_android_panel_terminal
+                                    SessionPanel.Display -> Str.host_app_android_panel_display
+                                },
+                            ),
                             fontSize = 12.sp,
                             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
                         )
@@ -726,7 +740,7 @@ fun ChatScreen(
                         )
                     } else {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("Terminal unavailable", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                            Text(localized(Str.host_app_android_terminal_unavailable), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
                         }
                     }
                 }
@@ -745,7 +759,7 @@ fun ChatScreen(
                         )
                     } else {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("Display unavailable", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                            Text(localized(Str.host_app_android_display_unavailable), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
                         }
                     }
                 }
@@ -757,12 +771,12 @@ fun ChatScreen(
     if (showRenameDialog) {
         AlertDialog(
             onDismissRequest = { showRenameDialog = false },
-            title = { Text("Rename session") },
+            title = { Text(localized(Str.shell_rename_session)) },
             text = {
                 OutlinedTextField(
                     value = renameText,
                     onValueChange = { renameText = it },
-                    label = { Text("Name") },
+                    label = { Text(localized(Str.shell_name)) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                 )
@@ -774,10 +788,10 @@ fun ChatScreen(
                         showRenameDialog = false
                     },
                     enabled = renameText.isNotBlank(),
-                ) { Text("Rename") }
+                ) { Text(localized(Str.shell_rename)) }
             },
             dismissButton = {
-                TextButton(onClick = { showRenameDialog = false }) { Text("Cancel") }
+                TextButton(onClick = { showRenameDialog = false }) { Text(localized(Str.shell_cancel)) }
             },
         )
     }
@@ -798,8 +812,8 @@ fun ChatScreen(
     if (showKillDialog) {
         AlertDialog(
             onDismissRequest = { showKillDialog = false },
-            title = { Text("Kill session?") },
-            text = { Text("This will terminate \"${session.name}\" immediately.") },
+            title = { Text(localized(Str.shell_kill_session_title)) },
+            text = { Text(localized(Str.host_app_android_kill_text, session.name)) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -807,10 +821,10 @@ fun ChatScreen(
                         showKillDialog = false
                         onKill()
                     },
-                ) { Text("Kill") }
+                ) { Text(localized(Str.shell_kill)) }
             },
             dismissButton = {
-                TextButton(onClick = { showKillDialog = false }) { Text("Cancel") }
+                TextButton(onClick = { showKillDialog = false }) { Text(localized(Str.shell_cancel)) }
             },
         )
     }

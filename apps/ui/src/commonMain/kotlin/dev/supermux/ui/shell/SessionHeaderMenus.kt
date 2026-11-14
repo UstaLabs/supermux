@@ -83,7 +83,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.chat.gitOpResultLabel
 import dev.supermux.chat.shouldPublish
 import dev.supermux.net.GitOpResult
 import dev.supermux.net.ModelInfo
@@ -122,10 +121,18 @@ import dev.supermux.ui.i18n.StringKey
 fun sessionProxies(proxies: List<ProxyDto>, session: SessionInfo): List<ProxyDto> =
     proxies.filter { it.sessionName == session.name }
 
+/** Compact result label for a completed git [op] (its menu word) — the broker's message when it gave one, else its
+ *  status, else "<Op> done"; a `null` result (any failure) → "<Op> failed". */
+fun gitOpResultLabel(op: String, result: GitOpResult?): String {
+    if (result == null) return localized(Str.words_git_failed, op)
+    result.message?.takeIf { it.isNotBlank() }?.let { return it }
+    return result.status.ifBlank { localized(Str.words_git_done, op) }
+}
+
 /**
  * Android's user-facing wording for a completed git op — the text that goes to `Platform.notices`.
  *
- * Distinct from `:shared`'s [gitOpResultLabel], which is the COMPACT inline form desktop shows next
+ * Distinct from [gitOpResultLabel], which is the COMPACT inline form desktop shows next
  * to the badge; this one spells the failure modes out ("Push rejected — pull first") because a
  * toast is all the user gets.
  */
@@ -218,11 +225,11 @@ fun GitBadgeMenu(
 
     // Fire an op on a coroutine, record its outcome into the inline result label (only if this op is
     // still the latest one), and close the menu.
-    fun run(op: String, call: suspend () -> GitOpResult?) {
+    fun run(op: StringKey, call: suspend () -> GitOpResult?) {
         expanded = false
         val token = ++seq
         scope.launch {
-            val label = gitOpResultLabel(op, call())
+            val label = gitOpResultLabel(localized(op), call())
             if (token == seq) result = label
         }
     }
@@ -236,8 +243,8 @@ fun GitBadgeMenu(
                 seq++
                 expanded = true
             }
-            GitMenuForceOp.FETCH -> run("Fetch", onFetch)
-            GitMenuForceOp.PULL -> run("Pull", onPull)
+            GitMenuForceOp.FETCH -> run(Str.shell_git_fetch, onFetch)
+            GitMenuForceOp.PULL -> run(Str.shell_git_pull, onPull)
         }
         if (forceOp != null) onForceOpConsumed()
     }
@@ -268,24 +275,24 @@ fun GitBadgeMenu(
                 DropdownMenuItem(
                     text = { Text(localized(Str.shell_git_fetch)) },
                     modifier = Modifier.testTag("git_fetch"),
-                    onClick = { run("Fetch", onFetch) },
+                    onClick = { run(Str.shell_git_fetch, onFetch) },
                 )
                 DropdownMenuItem(
                     text = { Text(localized(Str.shell_git_pull)) },
                     modifier = Modifier.testTag("git_pull"),
-                    onClick = { run("Pull", onPull) },
+                    onClick = { run(Str.shell_git_pull, onPull) },
                 )
                 if (shouldPublish(session.git)) {
                     DropdownMenuItem(
                         text = { Text(localized(Str.shell_git_publish)) },
                         modifier = Modifier.testTag("git_publish"),
-                        onClick = { run("Publish", onPublish) },
+                        onClick = { run(Str.shell_git_publish, onPublish) },
                     )
                 } else {
                     DropdownMenuItem(
                         text = { Text(localized(Str.shell_git_push)) },
                         modifier = Modifier.testTag("git_push"),
-                        onClick = { run("Push", onPush) },
+                        onClick = { run(Str.shell_git_push, onPush) },
                     )
                 }
             }

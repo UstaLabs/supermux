@@ -1,5 +1,5 @@
-// Agents (formerly personal assistants): the client-side name check and the text a screen shows
-// for a refused list/create/kill. The broker validates too; this only saves a round trip.
+// Agents (formerly personal assistants): the client-side name check. The broker validates too; this
+// only saves a round trip. The UI words the reason (AgentDialogs.kt agentNameErrorText).
 package dev.supermux.state
 
 // Exactly what JS `String.prototype.trim` strips: WhiteSpace + LineTerminator. Kotlin's trim()
@@ -11,30 +11,19 @@ private fun Char.isJsTrimmed() =
 /** [s] trimmed the way the broker trims a name (JS `trim()`). */
 fun agentNameTrim(s: String): String = s.trim { it.isJsTrimmed() }
 
+/** Why a name is refused; the UI words it in the app's language. */
+enum class AgentNameError { CONTROL_CHARACTER, EMPTY, TOO_LONG, LEADING_DOT, SLASH }
+
 /** Null when [raw] is a usable Agent name; otherwise why not. Mirrors the broker's check. */
-fun agentNameError(raw: String): String? {
+fun agentNameError(raw: String): AgentNameError? {
     // Trim first, as the broker does, then refuse any control character left inside.
     val name = agentNameTrim(raw)
-    if (name.any { it.code < 0x20 || it.code == 0x7F }) return "A name can't contain control characters"
+    if (name.any { it.code < 0x20 || it.code == 0x7F }) return AgentNameError.CONTROL_CHARACTER
     return when {
-        name.isEmpty() -> "Enter a name"
-        name.length > 80 -> "A name can be at most 80 characters"
-        name.startsWith(".") -> "A name can't start with a dot"
-        name.contains('/') || name.contains('\\') -> "A name can't contain / or \\"
+        name.isEmpty() -> AgentNameError.EMPTY
+        name.length > 80 -> AgentNameError.TOO_LONG
+        name.startsWith(".") -> AgentNameError.LEADING_DOT
+        name.contains('/') || name.contains('\\') -> AgentNameError.SLASH
         else -> null
     }
 }
-
-/**
- * What to show for a refused Agents call. The broker's own message first, then copy for the
- * codes it is known to send, then a generic line naming [action] ("create the agent").
- */
-fun agentFailureText(failure: AccountResult.Failed, action: String): String =
-    failure.message?.takeIf { it.isNotBlank() }
-        ?: when (failure.code) {
-            "name_invalid" -> "That name can't be used."
-            "name_taken" -> "An agent with that name already exists."
-            "agent_not_installed" -> "That provider isn't installed. Install it in Settings ▸ Providers & accounts."
-            else -> null
-        }
-        ?: "Couldn't $action — check the connection and try again."

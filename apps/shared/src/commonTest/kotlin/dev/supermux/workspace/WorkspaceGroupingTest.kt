@@ -124,7 +124,7 @@ class WorkspaceGroupingTest {
 
         assertEquals(2, groups.size)
         assertEquals(PA_GROUP_KEY, groups[0].key)
-        assertEquals("Agents", groups[0].label)
+        assertEquals("", groups[0].label) // the UI names the pinned group
         assertEquals(listOf("w-pa"), groups[0].workspaces.map { it.id })
         assertEquals(listOf("w1"), groups[1].workspaces.map { it.id })
     }

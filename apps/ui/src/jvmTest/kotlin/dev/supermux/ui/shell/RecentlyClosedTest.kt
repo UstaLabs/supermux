@@ -19,6 +19,8 @@ import dev.supermux.ui.adaptive.LocalHardwareKeyboard
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.SupermuxTheme
+import dev.supermux.util.TimeAgo
+import dev.supermux.util.timeAgo
 import dev.supermux.workspace.NewViewKind
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -29,10 +31,10 @@ import kotlin.test.assertEquals
  */
 @OptIn(ExperimentalTestApi::class)
 class RecentlyClosedTest {
-    private val kinds = NewViewKind.entries.map { NewTabChoice(it, NewTabGlyphs.Chat, it.label, "for ${it.label}") }
+    private val kinds = NewViewKind.entries.map { NewTabChoice(it, NewTabGlyphs.Chat, it.name, "for ${it.name}") }
     private val closed = listOf(
-        ClosedSessionRow("s2", "Fix login redirect", "claude", ClosedAgo.Minutes(12)),
-        ClosedSessionRow("s1", "Release notes", "codex", ClosedAgo.Hours(3)),
+        ClosedSessionRow("s2", "Fix login redirect", "claude", TimeAgo.Minutes(12)),
+        ClosedSessionRow("s1", "Release notes", "codex", TimeAgo.Hours(3)),
     )
 
     private fun ComposeUiTest.page(closed: List<ClosedSessionRow>, onReopen: (String) -> Unit = {}) {
@@ -89,9 +91,9 @@ class RecentlyClosedTest {
 
     @Test fun closedAgoReadsLikeAClock() {
         val min = 60_000L
-        assertEquals(ClosedAgo.JustNow, closedAgo(nowMs = 10 * min, closedAtMs = 10 * min - 20_000))
-        assertEquals(ClosedAgo.Minutes(12), closedAgo(nowMs = 100 * min, closedAtMs = 88 * min))
-        assertEquals(ClosedAgo.Hours(3), closedAgo(nowMs = 1000 * min, closedAtMs = 1000 * min - 3 * 60 * min - 5 * min))
-        assertEquals(ClosedAgo.Days(2), closedAgo(nowMs = 10_000 * min, closedAtMs = 10_000 * min - 49 * 60 * min))
+        assertEquals(TimeAgo.JustNow, timeAgo(nowMs = 10 * min, thenMs = 10 * min - 20_000))
+        assertEquals(TimeAgo.Minutes(12), timeAgo(nowMs = 100 * min, thenMs = 88 * min))
+        assertEquals(TimeAgo.Hours(3), timeAgo(nowMs = 1000 * min, thenMs = 1000 * min - 3 * 60 * min - 5 * min))
+        assertEquals(TimeAgo.Days(2), timeAgo(nowMs = 10_000 * min, thenMs = 10_000 * min - 49 * 60 * min))
     }
 }

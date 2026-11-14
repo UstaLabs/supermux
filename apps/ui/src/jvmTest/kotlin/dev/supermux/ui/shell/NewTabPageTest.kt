@@ -32,7 +32,8 @@ import kotlin.test.assertTrue
 @OptIn(ExperimentalTestApi::class)
 class NewTabPageTest {
     private val rows = NewViewKind.entries.map {
-        NewTabChoice(it, NewTabGlyphs.Chat, it.label, "what ${it.label} is for", alreadyOpen = it == NewViewKind.EDITOR)
+        val label = listOf("Chat", "Terminal", "Files", "Changes", "Display", "Browser")[it.ordinal]
+        NewTabChoice(it, NewTabGlyphs.Chat, label, "what $label is for", alreadyOpen = it == NewViewKind.EDITOR)
     }
 
     private fun ComposeUiTest.page(

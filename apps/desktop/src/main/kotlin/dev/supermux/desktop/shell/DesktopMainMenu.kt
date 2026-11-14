@@ -61,6 +61,8 @@ import dev.supermux.ui.keys.DefaultKeymap
 import dev.supermux.ui.keys.KeyOs
 import dev.supermux.ui.keys.composeKeyOf
 import dev.supermux.ui.keys.currentKeyOs
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.keys.formatChord
 import dev.supermux.ui.keys.keyNameOf
 import java.awt.event.KeyEvent
@@ -116,18 +118,18 @@ fun editMenu(
         if (chord == null || !isEcho(chord)) sendKey(shortcut)
     }
     return MainMenuGroup(
-        "Edit",
+        localized(Str.host_app_desktop_menu_edit),
         'E',
         listOf(
-            item("Undo", key(Key.Z)),
-            item("Redo", key(Key.Z, shift = true)),
+            item(localized(Str.host_app_desktop_menu_undo), key(Key.Z)),
+            item(localized(Str.host_app_desktop_menu_redo), key(Key.Z, shift = true)),
             MainMenuEntry.Separator,
-            item("Cut", key(Key.X)),
-            item("Copy", key(Key.C)),
-            item("Paste", key(Key.V)),
-            item("Select All", key(Key.A)),
+            item(localized(Str.host_app_desktop_menu_cut), key(Key.X)),
+            item(localized(Str.host_app_desktop_menu_copy), key(Key.C)),
+            item(localized(Str.host_app_desktop_menu_paste), key(Key.V)),
+            item(localized(Str.host_app_desktop_menu_select_all), key(Key.A)),
             MainMenuEntry.Separator,
-            MainMenuEntry.Action("Paste image", onClick = pasteImage),
+            MainMenuEntry.Action(localized(Str.composer_paste_image), onClick = pasteImage),
         ),
     )
 }
@@ -269,7 +271,7 @@ fun MainMenuButton(menu: List<MainMenuGroup>, state: MainMenuState, modifier: Mo
                 .macTitleBarNoDragRegion("main-menu")
                 .testTag("main_menu_button"),
         ) {
-            Icon(Icons.Filled.Menu, contentDescription = "Main menu", tint = cs.onSurfaceVariant, modifier = Modifier.size(18.dp))
+            Icon(Icons.Filled.Menu, contentDescription = localized(Str.host_app_desktop_main_menu), tint = cs.onSurfaceVariant, modifier = Modifier.size(18.dp))
         }
         DropdownMenu(
             expanded = state.isOpen,
@@ -427,7 +429,7 @@ fun LinuxSidebarChrome(
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.MenuOpen,
-                    contentDescription = if (collapsed) "Show sidebar" else "Hide sidebar",
+                    contentDescription = localized(if (collapsed) Str.shell_show_sidebar else Str.shell_hide_sidebar),
                     tint = cs.onSurfaceVariant,
                     modifier = Modifier.size(16.dp).graphicsLayer { scaleX = if (collapsed) -1f else 1f },
                 )

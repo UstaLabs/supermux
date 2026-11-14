@@ -87,6 +87,8 @@ import dev.supermux.android.platform.AndroidPlatform
 import dev.supermux.android.platform.PickerHost
 import dev.supermux.android.platform.QrScanHost
 import dev.supermux.android.push.SupermuxMessagingService
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.widthClassFor
 import dev.supermux.ui.overlay.CompanionGesture
@@ -345,8 +347,8 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
         val nm = getSystemService(NotificationManager::class.java)
         if (nm.getNotificationChannel(CHANNEL_ID) == null) {
             nm.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "Assistant overlay", NotificationManager.IMPORTANCE_MIN).apply {
-                    description = "Keeps your assistant floating over other apps."
+                NotificationChannel(CHANNEL_ID, localized(Str.host_app_android_overlay_channel), NotificationManager.IMPORTANCE_MIN).apply {
+                    description = localized(Str.host_app_android_overlay_channel_description)
                     setShowBadge(false)
                 },
             )
@@ -373,17 +375,17 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
             Intent(this, AssistantOverlayService::class.java).setAction(if (ui.hidden) ACTION_SHOW else ACTION_HIDE),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val name = currentAgent?.name ?: "Your assistant"
-        val short = currentAgent?.name ?: "it"
+        val name = currentAgent?.name ?: localized(Str.host_app_android_overlay_your_assistant)
+        val short = currentAgent?.name ?: localized(Str.host_app_android_overlay_it)
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
-            .setContentTitle(if (ui.hidden) "$name is resting" else "$name is in your corner")
+            .setContentTitle(localized(if (ui.hidden) Str.host_app_android_overlay_resting else Str.host_app_android_overlay_in_corner, name))
             .setContentText(
                 when {
-                    ui.screenSharing -> "$short sees your screen: it goes with what you say. Double-tap $short to stop."
-                    ui.hidden -> "It comes back with its next reply."
-                    ui.screenWithVoice -> "Tap it to chat, hold it to talk, double-tap it to show your screen."
-                    else -> "Tap it to chat, hold it to talk."
+                    ui.screenSharing -> localized(Str.host_app_android_overlay_sharing, short)
+                    ui.hidden -> localized(Str.host_app_android_overlay_hidden_text)
+                    ui.screenWithVoice -> localized(Str.host_app_android_overlay_tap_screen)
+                    else -> localized(Str.host_app_android_overlay_tap)
                 },
             )
             .setContentIntent(open)
@@ -393,10 +395,10 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
                 Intent(this, AssistantOverlayService::class.java).setAction(ACTION_STOP_SCREEN),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
-            builder.addAction(0, "Stop sharing", stop)
+            builder.addAction(0, localized(Str.host_app_android_overlay_stop_sharing), stop)
         }
         return builder
-            .addAction(0, if (ui.hidden) "Show" else "Hide", toggle)
+            .addAction(0, localized(if (ui.hidden) Str.host_app_android_overlay_show else Str.overlay_hide), toggle)
             .setOngoing(true)
             .setSilent(true)
             .setPriority(NotificationCompat.PRIORITY_MIN)
@@ -891,7 +893,7 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
 
     private fun offerUndo() {
         dropUndo()
-        val name = currentAgent?.name ?: "Your assistant"
+        val name = currentAgent?.name ?: localized(Str.host_app_android_overlay_your_assistant)
         val window = OverlayWindow(undoParams(), oneOff = true) {
             OverlayUndo(name, onUndo = {
                 dropUndo()
@@ -947,7 +949,7 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
             sharing -> {
                 sharing = false
                 goAway(false)
-                if (failed) AndroidNotices(applicationContext).show("Couldn't ask to share the screen.")
+                if (failed) AndroidNotices(applicationContext).show(localized(Str.host_app_android_overlay_couldnt_ask_share))
             }
             picker.inFlightId != null -> onPicked(emptyList())
             else -> goAway(false)
@@ -1096,7 +1098,7 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
                 endScreen(session, "glasses off")
             }
             sharing -> Unit
-            !ui.screenWithVoice -> AndroidNotices(applicationContext).show("Showing your screen is off in Settings › Privacy & labs.")
+            !ui.screenWithVoice -> AndroidNotices(applicationContext).show(localized(Str.host_app_android_overlay_screen_off_in_settings))
             else -> {
                 sharing = true
                 if (!runBridge(OverlayBridgeActivity.share(this))) sharing = false
@@ -1215,7 +1217,7 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
         }.getOrNull()
         goAway(false)
         if (session == null) {
-            AndroidNotices(applicationContext).show("Couldn't share the screen.")
+            AndroidNotices(applicationContext).show(localized(Str.host_app_android_overlay_couldnt_share))
             return
         }
         screenShare = session
@@ -1242,7 +1244,7 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
     /** In its chat, the same switch as a double-tap: its glasses on or off (not while Settings says no). */
     @Composable
     private fun GlassesChip() {
-        if (ui.screenWithVoice) OverlayGlassesChip(ui, currentAgent?.name ?: "it", onToggle = { toggleGlasses() })
+        if (ui.screenWithVoice) OverlayGlassesChip(ui, currentAgent?.name ?: localized(Str.host_app_android_overlay_it), onToggle = { toggleGlasses() })
     }
 
     // ── the screen it lives on ──

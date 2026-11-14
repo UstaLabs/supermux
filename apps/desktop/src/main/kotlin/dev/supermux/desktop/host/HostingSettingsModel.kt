@@ -1,5 +1,7 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import java.io.RandomAccessFile
 import java.net.Inet4Address
 import java.net.InetAddress
@@ -20,10 +22,9 @@ fun hostingStatusLine(s: HostingStatus, prefs: HostingPrefs, sessions: Int, vers
     val tray = TrayModel.of(s, prefs, sessions, remoteName = null)
     val dot = dotGlyph(tray.dot)
     val text = when {
-        s is HostingStatus.Running && s.readOnly -> "Running · set up outside the app"
+        s is HostingStatus.Running && s.readOnly -> localized(Str.host_app_desktop_status_running_outside)
         s is HostingStatus.Running -> buildString {
-            append("Running · ")
-            append(sessionCountText(sessions))
+            append(localized(Str.host_app_desktop_status_running, sessionCountText(sessions)))
             version?.let { append(" · v").append(it) }
         }
         else -> tray.header

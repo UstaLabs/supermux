@@ -13,7 +13,6 @@ import kotlin.test.assertTrue
 class BrowserKindTest {
     @Test fun browserIsTheSixthRowOnBothPages() {
         assertEquals(NewViewKind.BROWSER, NewViewKind.entries[5])
-        assertEquals("Browser", NewViewKind.BROWSER.label)
         assertTrue(NewViewKind.BROWSER in phoneAddKinds())
     }
 

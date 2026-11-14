@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #123: words for what :shared computes and the UI shows — chat times, the Usage reset date, tab titles,
+     Agent name checks, git op results (SharedWords.kt and the callers named there). :shared returns data;
+     these word it. English, the source; values-tr/shared_words.xml has the same keys (tests/i18n-strings.test.ts). -->
+<resources>
+    <string name="words_time_yesterday">Yesterday %1$s</string>
+    <string name="words_time_month_day">%1$s %2$d</string>
+    <string name="words_time_jan">Jan</string>
+    <string name="words_time_feb">Feb</string>
+    <string name="words_time_mar">Mar</string>
+    <string name="words_time_apr">Apr</string>
+    <string name="words_time_may">May</string>
+    <string name="words_time_jun">Jun</string>
+    <string name="words_time_jul">Jul</string>
+    <string name="words_time_aug">Aug</string>
+    <string name="words_time_sep">Sep</string>
+    <string name="words_time_oct">Oct</string>
+    <string name="words_time_nov">Nov</string>
+    <string name="words_time_dec">Dec</string>
+    <string name="words_view_new_chat">New Chat</string>
+    <string name="words_view_page">Page</string>
+    <string name="words_view_port">port %1$d</string>
+    <string name="words_agent_name_control">A name can't contain control characters</string>
+    <string name="words_agent_name_empty">Enter a name</string>
+    <string name="words_agent_name_too_long">A name can be at most 80 characters</string>
+    <string name="words_agent_name_dot">A name can't start with a dot</string>
+    <string name="words_agent_name_slash">A name can't contain / or \\</string>
+    <string name="words_git_failed">%1$s failed</string>
+    <string name="words_git_done">%1$s done</string>
+</resources>

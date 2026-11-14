@@ -44,7 +44,8 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.host.HostView
-import dev.supermux.host.formatLastSeen
+import dev.supermux.host.lastSeenAgo
+import dev.supermux.ui.i18n.timeAgoText
 import dev.supermux.host.hostDotArgb
 import dev.supermux.proto.SessionInfo
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
@@ -305,7 +306,7 @@ fun HostSwitcher(
             }
             hosts.forEach { h ->
                 val count = sessions.count { sessionHost[it.id] == h.recordId }
-                val lastSeen = if (!h.online) formatLastSeen(nowMs, h.lastSeenAt) else ""
+                val lastSeen = if (!h.online) lastSeenAgo(nowMs, h.lastSeenAt)?.let(::timeAgoText).orEmpty() else ""
                 DropdownMenuItem(
                     text = {
                         Text(

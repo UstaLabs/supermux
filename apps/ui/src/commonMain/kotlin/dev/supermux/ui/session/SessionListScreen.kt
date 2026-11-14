@@ -115,7 +115,8 @@ import dev.supermux.fs.inferHomeDir
 import dev.supermux.fs.pathLeaf
 import dev.supermux.host.HostView
 import dev.supermux.host.filterSessions
-import dev.supermux.host.formatLastSeen
+import dev.supermux.host.lastSeenAgo
+import dev.supermux.ui.i18n.timeAgoText
 import kotlin.time.Clock
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.foundation.gestures.animateScrollBy
@@ -533,9 +534,10 @@ fun SessionListScreen(
     // ── Search matches: names first, then chat history (SidebarSearch.kt) ──────────────────────
     val chatSearch = dev.supermux.ui.chat.LocalChatSearch.current
     /** Workspace id → the project label its group shows (the status view's tag). */
-    val wsProjectLabel = remember(groups) {
+    val agentsWord = localized(Str.sessions_agents_title)
+    val wsProjectLabel = remember(groups, agentsWord) {
         groups.flatMap { g ->
-            val label = g.projectRef()?.project?.name ?: pathLeaf(g.label)
+            val label = if (g.key == PA_GROUP_KEY) agentsWord else g.projectRef()?.project?.name ?: pathLeaf(g.label)
             g.workspaces.map { it.id to label }
         }.toMap()
     }
@@ -1229,7 +1231,7 @@ fun SessionListScreen(
             groupHeader(key = "group:header:${g.workdir}") {
                 GroupHeaderRow {
                     PathGroupHeader(
-                        label = g.label,
+                        label = if (isPaGroup) localized(Str.sessions_agents_title) else g.label,
                         unreadCount = g.allSessions().count { sessionUnread(it.id) },
                         collapsed = isCollapsed,
                         onToggle = {
@@ -2124,7 +2126,7 @@ private fun QuietSettledToggle(
 @Composable
 private fun OfflineHostHeader(host: HostView) {
     val cs = MaterialTheme.colorScheme
-    val lastSeen = formatLastSeen(Clock.System.now().toEpochMilliseconds(), host.lastSeenAt)
+    val lastSeen = lastSeenAgo(Clock.System.now().toEpochMilliseconds(), host.lastSeenAt)?.let(::timeAgoText).orEmpty()
     Column(
         Modifier
             .fillMaxWidth()
@@ -2169,7 +2171,7 @@ private fun OfflineHostHeader(host: HostView) {
 @Composable
 private fun SingleHostOfflineNotice(host: HostView) {
     val cs = MaterialTheme.colorScheme
-    val lastSeen = formatLastSeen(Clock.System.now().toEpochMilliseconds(), host.lastSeenAt)
+    val lastSeen = lastSeenAgo(Clock.System.now().toEpochMilliseconds(), host.lastSeenAt)?.let(::timeAgoText).orEmpty()
     Column(
         Modifier
             .fillMaxWidth()

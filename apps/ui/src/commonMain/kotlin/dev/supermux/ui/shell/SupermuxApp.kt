@@ -178,7 +178,8 @@ import dev.supermux.ui.settings.SettingsSlotScope
 import dev.supermux.ui.settings.kit.KitMachine
 import dev.supermux.ui.settings.kit.SettingsMachines
 import dev.supermux.ui.settings.kit.THIS_COMPUTER_ID
-import dev.supermux.host.formatLastSeen
+import dev.supermux.host.lastSeenAgo
+import dev.supermux.ui.i18n.timeAgoText
 import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.update.AppUpdateCard
@@ -366,7 +367,7 @@ fun SupermuxApp(
     val settingsMachines = remember(hostViews, activeHostId, localBrokerCap, settingsClock, runningWord, offlineWord, notHostingWord, thisComputerWord) {
         val now = settingsClock
         val paired = hostViews.map { h ->
-            val seen = formatLastSeen(now, h.lastSeenAt)
+            val seen = lastSeenAgo(now, h.lastSeenAt)?.let(::timeAgoText).orEmpty()
             KitMachine(
                 id = h.recordId,
                 name = h.displayLabel,

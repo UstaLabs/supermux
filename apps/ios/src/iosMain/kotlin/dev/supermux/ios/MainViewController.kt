@@ -34,6 +34,8 @@ import dev.supermux.state.HostStore
 import dev.supermux.state.HostStoreDeps
 import dev.supermux.state.WalkthroughSeam
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.MessageTts
 import dev.supermux.ui.editor.WalkthroughState
@@ -464,7 +466,7 @@ private fun AlreadyOpenElsewhere() {
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            "supermux is already open in another window.",
+            localized(Str.host_app_ios_already_open),
             style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center,
         )

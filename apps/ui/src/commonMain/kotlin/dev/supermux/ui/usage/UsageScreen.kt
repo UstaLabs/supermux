@@ -11,7 +11,7 @@
 // swap does not touch still pick up their post-redeem numbers.
 //
 // Time: `java.time` cannot come into `:ui` commonMain, so the formatters take epoch millis and the
-// only calendar step — "Jul 14" in the user's zone — is `:shared`'s [shortMonthDayLabel], which is
+// only calendar step — "Jul 14" in the user's zone — is `:shared`'s [localMonthDay] (worded by [monthDayLabel]), which is
 // the same civil-date maths chat timestamps already use. Number formatting is likewise pure
 // (`String.format(Locale.US, …)` is a JVM call).
 package dev.supermux.ui.usage
@@ -94,7 +94,7 @@ import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.widgets.AlertDialog
-import dev.supermux.util.shortMonthDayLabel
+import dev.supermux.util.localMonthDay
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -148,7 +148,7 @@ private fun claudeResetsUseBy(resets: ClaudeResets): String {
     val grant = resets.grants.firstOrNull { it.id == resets.nextGrantId }
         ?: resets.grants.firstOrNull { it.resetsLeft > 0 }
     val endsMs = grant?.endsAtIso?.let { parseIsoMillis(it) }
-    return endsMs?.let { shortMonthDayLabel(it) }.orEmpty()
+    return endsMs?.let(::monthDayLabel).orEmpty()
 }
 
 /**
@@ -262,15 +262,25 @@ internal sealed interface ResetTime {
     data class On(val day: String) : ResetTime
 }
 
-/** Null when there is nothing to say (no time, or a date that can't be labelled). */
+/** When the window resets: soon, in so many hours and minutes, or on a calendar day. */
 private fun resetTimeFromEpochMillis(ms: Long, now: Long): ResetTime? {
     val diff = ms - now
     if (diff <= 0) return ResetTime.Soon
     if (diff < MS_PER_DAY) {
         return ResetTime.In((diff / MS_PER_HOUR).toInt(), ((diff % MS_PER_HOUR) / MS_PER_MINUTE).toInt())
     }
-    val label = shortMonthDayLabel(ms)
-    return if (label.isEmpty()) null else ResetTime.On(label)
+    return ResetTime.On(monthDayLabel(ms))
+}
+
+/** "Jul 14": the local calendar day of [ms], short month + day, in the app's language. */
+private fun monthDayLabel(ms: Long): String {
+    val (month, day) = localMonthDay(ms)
+    val name = listOf(
+        Str.words_time_jan, Str.words_time_feb, Str.words_time_mar, Str.words_time_apr,
+        Str.words_time_may, Str.words_time_jun, Str.words_time_jul, Str.words_time_aug,
+        Str.words_time_sep, Str.words_time_oct, Str.words_time_nov, Str.words_time_dec,
+    )[month - 1]
+    return localized(Str.words_time_month_day, localized(name), day)
 }
 
 internal fun resetTimeIso(resetsAt: String?, now: Long): ResetTime? {

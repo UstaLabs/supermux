@@ -17,6 +17,8 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 
 /**
  * macOS title-bar sidebar toggle — next to the traffic lights (live JBR left inset, or a small
@@ -54,7 +56,7 @@ fun MacSidebarToggle(
         ) {
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.MenuOpen,
-                contentDescription = if (collapsed) "Show sidebar" else "Hide sidebar",
+                contentDescription = localized(if (collapsed) Str.shell_show_sidebar else Str.shell_hide_sidebar),
                 tint = cs.onSurfaceVariant,
                 modifier = Modifier.size(16.dp).graphicsLayer { scaleX = if (collapsed) -1f else 1f },
             )

@@ -1747,14 +1747,17 @@ private fun WaitingIndicator(bgOpen: Int) {
 
 private fun agentsWorkingLabel(n: Int): String = localizedPlural(Plurals.composer_status_agents_working, n, n)
 
-/** The shared module's working word (`workingBaseLabel`), in the app's language. */
+/**
+ * What a working session is doing, from its agent_state detail: "starting" while a session that was not up is being
+ * woken (card #75), "working" while it runs a tool, else "thinking".
+ */
 private fun localizedWorkingBase(detail: String?): String = when (detail) {
     "starting" -> localized(Str.composer_status_starting)
     "running" -> localized(Str.composer_status_working)
     else -> localized(Str.composer_status_thinking)
 }
 
-/** `formatLowWorkingStatus` in the app's language: base + tool + tool count + duration, joined with " · ". */
+/** Low-detail working status: [baseLabel] + the running tool + the tool count + [durationLabel], joined with " · ". */
 private fun localizedLowWorkingStatus(
     baseLabel: String,
     detail: String?,
@@ -1769,7 +1772,7 @@ private fun localizedLowWorkingStatus(
     return parts.joinToString(" · ")
 }
 
-/** `formatDuration` in the app's language: the two largest units ("1 minute 4 seconds"). */
+/** Elapsed time in its two largest units ("5 seconds", "3 minutes 5 seconds", "1 hour 2 minutes"). */
 private fun localizedDuration(totalSeconds: Long): String {
     val s = maxOf(0L, totalSeconds)
     val days = (s / 86400).toInt()
