@@ -18,3 +18,17 @@ plugins {
     // is loaded once for the whole build rather than per-subproject classloader.
     alias(libs.plugins.compose.hot.reload) apply false
 }
+
+// #142: no Compose source-information or trace-marker strings (nor the calls that carry them) in any
+// module. They only serve Android Studio's Layout Inspector source links and composition tracing, and
+// on the web client they were 276 KB of the gzip ceiling (CI: 9381 -> 9105 KB, apps/web's
+// maxGzipBytes). `-Psupermux.composeSourceInfo=true` turns both back on for a local inspector session.
+val composeSourceInfo = providers.gradleProperty("supermux.composeSourceInfo").orNull == "true"
+subprojects {
+    plugins.withId("org.jetbrains.kotlin.plugin.compose") {
+        extensions.configure<org.jetbrains.kotlin.compose.compiler.gradle.ComposeCompilerGradlePluginExtension> {
+            includeSourceInformation.set(composeSourceInfo)
+            includeTraceMarkers.set(composeSourceInfo)
+        }
+    }
+}
