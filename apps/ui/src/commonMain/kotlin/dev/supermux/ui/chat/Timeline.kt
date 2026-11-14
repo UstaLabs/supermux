@@ -838,6 +838,8 @@ private fun InlineDiff(text: String) {
 @Composable
 fun TimelineItemRow(
     item: TimelineItem,
+    /** #144: the chat's agent, named on a "Compacted" line's summary. */
+    agentName: String = "",
     media: AttachmentMedia = AttachmentMedia.None,
     onOpenFile: (FilePathRef) -> Unit = {},
     highDetail: Boolean = false,
@@ -851,6 +853,8 @@ fun TimelineItemRow(
 ) {
     LocalChatCompositionProbe.current?.let { probe -> SideEffect { probe("row") } }
     when (item) {
+        // #144: a compaction ended: a quiet line, not a reply (its text is only for apps that predate it).
+        is TimelineItem.Msg if item.entry.compaction != null -> CompactionLine(item.entry.compaction!!, agentName)
         is TimelineItem.Msg -> {
             val text = item.entry.text
             val atts = item.entry.attachments
