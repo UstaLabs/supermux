@@ -144,8 +144,9 @@ internal fun ContextRingControl(
     val used = context?.used ?: 0L
     val size = context?.size ?: 0L
     val frac = if (size > 0) (used.toFloat() / size).coerceIn(0f, 1f) else 0f
-    val pct = if (size > 0) "${((used * 100 + size / 2) / size)}%" else ""
-    val level = if (context != null) contextLevel(used, size, threshold) else ContextLevel.Normal
+    // A window the agent didn't report (size 0, Antigravity before its DB answers): tokens, no %.
+    val pct = if (size > 0) "${((used * 100 + size / 2) / size)}%" else if (context != null) tokensLabel(used) else ""
+    val level = if (context != null && size > 0) contextLevel(used, size, threshold) else ContextLevel.Normal
     val fill = when {
         compacting -> cs.primary
         level == ContextLevel.Over -> cs.error
@@ -174,7 +175,7 @@ internal fun ContextRingControl(
                 for (i in 0 until 12) drawArc(track, i * 30f, 18f, false, Offset(inset, inset), arcSize, style = Stroke(stroke))
             } else {
                 drawArc(track, 0f, 360f, false, Offset(inset, inset), arcSize, style = Stroke(stroke))
-                drawArc(fill, -90f, 360f * frac, false, Offset(inset, inset), arcSize, style = Stroke(stroke, cap = StrokeCap.Round))
+                if (size > 0) drawArc(fill, -90f, 360f * frac, false, Offset(inset, inset), arcSize, style = Stroke(stroke, cap = StrokeCap.Round))
             }
         }
         if (pointer && context != null) {
@@ -312,6 +313,8 @@ private fun ColumnScope.MainView(
         if (live == null) {
             Spacer(Modifier.height(6.dp))
             Text(localized(Str.context_src_none, agentName), color = cs.onSurfaceVariant, fontSize = 13.sp, lineHeight = 18.sp)
+        } else if (live.size <= 0) {
+            Text(localized(Str.context_tokens_no_window, tokensLabel(live.used)), color = cs.onSurfaceVariant, fontSize = 12.sp)
         } else {
             Text(localized(Str.context_of_tokens, tokensLabel(live.used), tokensLabel(live.size)), color = cs.onSurfaceVariant, fontSize = 12.sp)
             Spacer(Modifier.height(12.dp))
@@ -334,7 +337,7 @@ private fun ColumnScope.MainView(
                 Text(localized(Str.context_compacting_detail, agentName), color = cs.onSurfaceVariant, fontSize = 12.sp)
             }
         }
-    } else if (lastCompaction?.status == "completed") {
+    } else if (lastCompaction?.status == "completed" && live != null) {
         StateBox(padH) {
             Icon(Icons.Filled.Check, null, tint = Color(0xFF53BE70), modifier = Modifier.size(16.dp))
             val before = lastCompaction.before

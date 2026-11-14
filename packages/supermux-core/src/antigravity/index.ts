@@ -22,6 +22,7 @@ import { agyPromptBlocks, antigravityAttachments, loadAntigravityState, removeAn
 import { createAntigravityNormalizer } from "./normalize.js"
 import { agyTransport, type AgyExit, type AgyTransport } from "./transport.js"
 import { antigravityUpdaterEnv } from "./updater.js"
+import { readConversationWindow } from "./window.js"
 import { files, host } from "@supermux/platform"
 
 export { createAntigravityNormalizer, type AntigravityNormalizer } from "./normalize.js"
@@ -224,12 +225,16 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
       active?.completion.reject(error)
       if (!closed) context.onExit(error)
     }
+    /** #144: where agy keeps its conversations (set at each launch), and the window last read from them. */
+    let currentCliDir: string | undefined
+    let knownWindow: number | undefined
     function meta(p: Proc) {
       return { agentSessionId, epoch: p.epoch, model: model ?? null, permissions }
     }
 
     function onMessage(p: Proc, frame: Record<string, any>) {
       if (proc !== p) return
+      const cliDir = currentCliDir
       const cid = frame.conversation_id ?? frame.step_update?.conversation_id ?? frame.result?.conversation_id
       if (agentSessionId && typeof cid === "string" && cid && cid !== agentSessionId) {
         // agy did not have the conversation and started another one (stderr: `conversation "<id>" not found`).
@@ -241,6 +246,16 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
         return
       }
       context.onUpdate({ protocol: "native", value: frame })
+      // #144: the window, from agy's own conversation DB, at start and after each turn (a model switch changes it).
+      if ((frame.event === "init" || frame.event === "result") && cliDir) {
+        const id = typeof cid === "string" && cid ? cid : agentSessionId
+        if (id) void readConversationWindow(cliDir, id).then(size => {
+          if (size && size !== knownWindow && proc === p && !closed) {
+            knownWindow = size
+            context.onUpdate({ protocol: "native", value: { event: "context_window", size } })
+          }
+        })
+      }
       if (frame.event === "init" && typeof frame.conversation_id === "string" && frame.conversation_id) p.init.resolve(frame.conversation_id)
       if (frame.event !== "result") return
       const r = frame.result && typeof frame.result === "object" ? frame.result : {}
@@ -300,6 +315,7 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
       await stopping
       const env = launchEnv(options.inheritEnv, options.env, context.profile)
       const cliDir = prepareCliDir(env)
+      currentCliDir = cliDir
       // Never launch --conversation for a conversation agy lacks: it would start (and orphan) a new one.
       if (agentSessionId && conversationMissing(cliDir, agentSessionId) &&!(await keeperAgentRunning(keeper.stateDirectory, context.sessionId))) {
         const error = conversationLost(agentSessionId)

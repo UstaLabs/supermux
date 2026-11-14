@@ -1457,7 +1457,7 @@ fun ChatPanel(
                     dev.supermux.ui.shell.ConnectionStrip(inChat = true)
                     // #144: close to where the agent compacts by itself: offer to compact now.
                     session.context?.let { ctx ->
-                        val near = contextLevel(ctx.used, ctx.size, contextThreshold) != ContextLevel.Normal
+                        val near = ctx.size > 0 && contextLevel(ctx.used, ctx.size, contextThreshold) != ContextLevel.Normal
                         if (near && !state.compacting && !contextHintDismissed && session.capabilities?.compact == true) {
                             ContextHint(
                                 agentName = agentName,
