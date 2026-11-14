@@ -37,6 +37,10 @@ enum PushGroupState {
     /// `SupermuxNotifContent`'s Info.plist (see project.yml) and the category the app
     /// registers on launch.
     static let chatCategory = "supermux.chat"
+    /// #143: an agent's permission prompt, answered from the notification (Allow behind the unlock, Deny at once).
+    static let promptCategory = "supermux.prompt"
+    static let allowAction = "supermux.prompt.allow"
+    static let rejectAction = "supermux.prompt.reject"
 
     /// `sessionId → ["count": Int, "items": [["t": text, "at": time]]]`. Single source of
     /// truth for the collapsed notification's count/body, the expanded transcript, AND the
