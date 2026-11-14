@@ -7,7 +7,7 @@ import { CancelledError, SessionChain, ensureLiveWith, type ChainToken } from ".
 
 const log = makeLogger("inbox/delivery")
 
-export type InboxBusy = "queue" | "interrupt"
+export type InboxBusy = "queue" | "interrupt" | "stop"
 
 export type InboxDeliveryDeps = {
   store: InboxStore

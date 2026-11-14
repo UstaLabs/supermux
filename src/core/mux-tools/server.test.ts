@@ -326,6 +326,21 @@ describe("message_session", () => {
     expect(sent).toEqual([{ from: { name: "worker", id: t.worker.id }, to: [t.pa.id], text: "hi", busy: "interrupt" }])
   })
 
+  // #143: interrupt waits for a running tool call; stop_now cuts it off and needs interrupt=true.
+  test("stop_now with interrupt is the hard stop; stop_now without interrupt is refused", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    const sent: any[] = []
+    t.ports.getInbox = () => ({
+      send: (_from, to, _text, busy) => { sent.push(busy); return { ids: { [to[0]!]: "m_1" } } },
+    })
+    const c = await connect(AgentKind.Claude, t.worker.id)
+    await call(c, "message_session", { to: [t.pa.id], text: "hi", interrupt: true, stop_now: true })
+    await call(c, "message_session", { to: [t.pa.id], text: "hi", interrupt: true, stop_now: false })
+    expect(sent).toEqual(["stop", "interrupt"])
+    expect(await t.m.orchestration(t.worker.id, { name: "message_session", args: { to: [t.pa.id], text: "hi", interrupt: false, stop_now: true } }))
+      .toEqual({ ok: false, error: "stop_now needs interrupt=true" })
+  })
+
   // The MCP SDK validates arguments against the JSON schema before the handler runs, so the
   // handler's own checks (which the external shim's socket path relies on) are driven directly.
   test("bad arguments are refused by the handler", async () => {
