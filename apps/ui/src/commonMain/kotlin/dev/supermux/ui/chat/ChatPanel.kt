@@ -288,6 +288,8 @@ data class ChatState(
      * the end.
      */
     val readMarkAtOpen: String? = null,
+    /** #144: this chat's agent is compacting the conversation now. */
+    val compacting: Boolean = false,
 )
 
 /**
@@ -346,6 +348,10 @@ class ChatActions(
     /** #92: the wait for a usage-limit reset — drop it, or resume now. */
     val cancelLimitWait: suspend () -> Unit = {},
     val resumeLimitWait: suspend () -> Unit = {},
+    /** #144: what fills the context window and what this chat used (GET /sessions/<id>/context); null = can't say. */
+    val loadContext: suspend () -> dev.supermux.net.SessionContextDto? = { null },
+    /** #144 Compact, with a note on what to keep where the agent takes one. False when it was refused. */
+    val compact: suspend (note: String?) -> Boolean = { false },
 )
 
 /** [ChatActions] wired to a [HostStore] for one session — desktop's ergonomics, kept. */
@@ -381,6 +387,8 @@ fun rememberChatActions(
             pickReasoning = { level -> app.switchReasoning(session.id, level) },
             fastSupported = { model -> app.fastSupported(session.agent, model) },
             pickFast = { on -> app.switchFastMode(session.id, on) },
+            loadContext = { app.sessionContext(session.id) },
+            compact = { note -> app.compact(session.id, note) },
             ensureMessagesLoaded = { app.ensureMessagesLoaded(session.id) },
             loadProxies = loadProxies ?: { app.proxies() },
             respondRequest = { requestId, answer -> app.respondRequest(session.id, requestId, answer) },
@@ -409,6 +417,7 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
     val bgTasksMap by app.bgTasks.collectAsState()
     val commandsMap by app.commands.collectAsState()
     val commandsResolvedMap by app.commandsResolved.collectAsState()
+    val compactingMap by app.compacting.collectAsState()
     val walkthrough = app.walkthroughState<WalkthroughState>(sessionId)
     val requestsMap by app.requests.collectAsState()
     val closedRequestsMap by app.closedRequests.collectAsState()
@@ -431,6 +440,7 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
         sending = sessionId in pending,
         commands = commandsMap[sessionId].orEmpty(),
         commandsResolved = commandsResolvedMap[sessionId] ?: false,
+        compacting = sessionId in compactingMap,
         walkthroughUnread = walkthrough.unreadReplies,
         walkthroughUnreadStepId = walkthrough.unreadStepId,
         requests = requestsMap[sessionId].orEmpty(),
@@ -1142,10 +1152,35 @@ fun ChatPanel(
             }
         }
 
+        // #144: the context ring, its panel and the near-autocompact line, per chat.
+        var contextOpen by remember(session.id) { mutableStateOf(false) }
+        var contextOnCompact by remember(session.id) { mutableStateOf(false) }
+        var contextThreshold by remember(session.id) { mutableStateOf<Long?>(null) }
+        var contextHintDismissed by remember(session.id) { mutableStateOf(false) }
+        val agentName = dev.supermux.ui.accounts.agentDisplayName(session.agent)
+        val lastCompaction = remember(state.messages) { state.messages.lastOrNull { it.compaction != null }?.compaction }
         val composer: @Composable () -> Unit = {
             Composer(
                 draft = draft,
                 onDraftChange = onDraftChange,
+                contextControl = {
+                    ContextRingControl(
+                        agentName = agentName,
+                        context = session.context,
+                        canCompact = session.capabilities?.compact == true,
+                        compactNote = session.capabilities?.compactNote == true,
+                        compacting = state.compacting,
+                        lastCompaction = lastCompaction,
+                        actions = actions,
+                        pointer = dev.supermux.ui.adaptive.LocalPointerAvailable.current,
+                        open = contextOpen,
+                        onOpenChange = { contextOpen = it; if (!it) contextOnCompact = false },
+                        startOnCompact = contextOnCompact,
+                        onStartOnCompactConsumed = { contextOnCompact = false },
+                        threshold = contextThreshold,
+                        onThreshold = { contextThreshold = it },
+                    )
+                },
                 sending = sending,
                 // Stop lives in the composer's trailing slot on every host.
                 agentWorking = working,
@@ -1277,6 +1312,7 @@ fun ChatPanel(
                             i in foldedRows -> Unit
                             else -> TimelineItemRow(
                                 item = item,
+                                agentName = dev.supermux.ui.accounts.agentDisplayName(session.agent),
                                 media = actions.media,
                                 onOpenFile = rowOpenFile,
                                 highDetail = highDetail,
@@ -1419,6 +1455,19 @@ fun ChatPanel(
                     WalkthroughUnreadChip(state, onOpenWalkthrough, Modifier.align(Alignment.CenterHorizontally))
                     // Card #121: offline or reconnecting, just above the composer.
                     dev.supermux.ui.shell.ConnectionStrip(inChat = true)
+                    // #144: close to where the agent compacts by itself: offer to compact now.
+                    session.context?.let { ctx ->
+                        val near = contextLevel(ctx.used, ctx.size, contextThreshold) != ContextLevel.Normal
+                        if (near && !state.compacting && !contextHintDismissed && session.capabilities?.compact == true) {
+                            ContextHint(
+                                agentName = agentName,
+                                context = ctx,
+                                threshold = contextThreshold,
+                                onCompactNow = { contextOnCompact = true; contextOpen = true },
+                                onDismiss = { contextHintDismissed = true },
+                            )
+                        }
+                    }
                     // A pointer host can still raise a soft keyboard (a tablet with a mouse, DeX
                     // with the phone as touchpad), so the composer clears it here too; the inset
                     // is zero on a desktop, where this is the layout it always was.
