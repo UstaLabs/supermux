@@ -48,14 +48,16 @@ class ContextColumnsTest {
                     }
                 }
             }
-            for (tag in listOf("context_row_tokens", "context_row_pct")) {
-                val rights = onAllNodesWithTag(tag).fetchSemanticsNodes().map { it.boundsInRoot.right }
-                assertTrue(rights.size == rows.size + 1, "$tag: ${rights.size} rows")
-                assertTrue(rights.all { abs(it - rights.first()) < 0.5f }, "$tag right edges differ (sheet=$sheet dark=$dark): $rights")
-            }
+            // The screenshots first, so a failure below still leaves them to look at.
             System.getenv("CONTEXT_SHOTS_DIR")?.let { dir ->
                 File(dir).mkdirs()
                 ImageIO.write(onRoot().captureToImage().toAwtImage(), "png", File(dir, "context-columns-${if (sheet) "sheet" else "popover"}-${if (dark) "dark" else "light"}.png"))
+            }
+            for (tag in listOf("context_row_tokens", "context_row_pct")) {
+                // Unmerged: a row that opens more is clickable, which merges its texts into the row's own node.
+                val rights = onAllNodesWithTag(tag, useUnmergedTree = true).fetchSemanticsNodes().map { it.boundsInRoot.right }
+                assertTrue(rights.size == rows.size + 1, "$tag: ${rights.size} rows")
+                assertTrue(rights.all { abs(it - rights.first()) < 0.5f }, "$tag right edges differ (sheet=$sheet dark=$dark): $rights")
             }
         }
     }
