@@ -5,12 +5,12 @@ import { loadFinishConfig } from "./finish-config"
 
 test("defaults when no config file", () => {
   const dir = mkdtempSync(join(tmpdir(), "mux-cfg-"))
-  expect(loadFinishConfig(dir)).toEqual({ defaultAction: "auto", archiveOnMerge: true, prRequiresGreen: false })
+  expect(loadFinishConfig(dir)).toEqual({ defaultAction: "auto", archiveOnMerge: true })
 })
 test("reads .mux/finish.json overrides", () => {
   const dir = mkdtempSync(join(tmpdir(), "mux-cfg-")); mkdirSync(join(dir, ".mux"))
   writeFileSync(join(dir, ".mux", "finish.json"), JSON.stringify({ defaultAction: "pr", archiveOnMerge: false }))
-  expect(loadFinishConfig(dir)).toEqual({ defaultAction: "pr", archiveOnMerge: false, prRequiresGreen: false })
+  expect(loadFinishConfig(dir)).toEqual({ defaultAction: "pr", archiveOnMerge: false })
 })
 test("ignores malformed json → defaults", () => {
   const dir = mkdtempSync(join(tmpdir(), "mux-cfg-")); mkdirSync(join(dir, ".mux"))

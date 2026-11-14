@@ -394,7 +394,7 @@ export interface WebChannelOpts {
   respondRequest?: (sessionId: string, requestId: string, answer: unknown) => Promise<{ ok: true } | { ok: false; error: string }>
   getSessionAgent?: (name: string) => { agent: AgentKind; model?: string; reasoningLevel?: string } | undefined
   interruptSession?: (id: string) => Promise<{ ok: boolean; reason?: string }>
-  finishSession?: (id: string, req: { action: "merge"|"pr"|"keep"|"discard"; skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string; keep?: boolean }) => Promise<import("../../core/worktree/finish-job").FinishJob | { error: string }>
+  finishSession?: (id: string, req: { action: "merge"|"pr"|"keep"|"discard"; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prTitle?: string; prBody?: string; keep?: boolean }) => Promise<import("../../core/worktree/finish-job").FinishJob | { error: string }>
   finishReadiness?: (id: string) => import("../../core/worktree/readiness").FinishReadiness | { error: string }
   reviewList?: (id: string) => import("../../core/review/store").Comment[]
   reviewAdd?: (id: string, c: Omit<import("../../core/review/store").NewComment, "sessionId">) => import("../../core/review/store").Comment
@@ -409,8 +409,6 @@ export interface WebChannelOpts {
   sendUserMessage?: (id: string, text: string) => Promise<{ ok: boolean; reason?: string }>
   getWalkthrough?: (id: string) => import("../../core/walkthrough/store").Walkthrough | undefined
   reviewSession?: (id: string) => { workdir: string; repoRoot?: string; baseCommits?: Record<string, string> } | undefined
-  verifySuggest?: (id: string) => { content: string; source: string } | undefined
-  verifySave?: (id: string, content: string) => { ok: boolean; reason?: string }
   spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; account?: string; worktree?: boolean; baseBranch?: string; inheritFrom?: string; workspaceId?: string; viewId?: string; firstMessage?: string; firstAttachments?: InboundAttachment[]; /** Card #75: the app's own id for the first message (`web-<uuid>`). */ firstMessageId?: string; device?: string; /** Card #75: the app's session-start trace (`x-mux-trace: S…/<req>`). */ perfTrace?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; repo_root?: string; session_branch?: string }>
   createDraft?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; draftPayload?: { text?: string; attachments?: unknown[] } }) => Promise<{ id: string; name: string; workdir: string; agent: AgentKind }>
   killSession?: (name: string) => Promise<void>
@@ -4094,11 +4092,9 @@ export class WebChannel implements Channel {
       const action = body.action === "pr" || body.action === "keep" || body.action === "discard" ? body.action : "merge"
       const result = await this.opts.finishSession(id, {
         action,
-        skipVerify: body.skipVerify === true,
         commitFirst: body.commitFirst === true,
         commitMessage: typeof body.commitMessage === "string" ? body.commitMessage : undefined,
         draft: body.draft === true,
-        prRequiresGreen: body.prRequiresGreen === true,
         prTitle: typeof body.prTitle === "string" ? body.prTitle : undefined,
         prBody: typeof body.prBody === "string" ? body.prBody : undefined,
         keep: body.keep === true,
@@ -4169,19 +4165,6 @@ export class WebChannel implements Channel {
       const text = String(body.text ?? "").trim()
       if (!text) return this.json({ error: "text required" }, 400)
       return this.json(await this.opts.sendUserMessage(id, text))
-    }
-    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/verify\/suggest$/)) {
-      const id = decodeURIComponent(path.split("/")[2]!)
-      const s = this.opts.verifySuggest?.(id)
-      return s ? this.json(s) : this.json({ error: "not worktree-backed" }, 400)
-    }
-    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/verify\/save$/)) {
-      const id = decodeURIComponent(path.split("/")[2]!)
-      if (!this.opts.verifySave) return this.json({ error: "not configured" }, 503)
-      const body = await req.json().catch(() => ({})) as Record<string, unknown>
-      const content = String(body.content ?? "")
-      if (!content.trim()) return this.json({ error: "content required" }, 400)
-      return this.json(this.opts.verifySave(id, content))
     }
     // #122 phase 4: whose dev server a port's preview is, so its comments go to that session by default.
     if (method === "GET" && path.match(/^\/ports\/\d+\/owner$/)) {

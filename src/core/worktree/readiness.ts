@@ -12,13 +12,11 @@ export interface FinishReadiness {
   conflictPreflight: "clean" | "will_conflict" | "unknown"
   recommended: "merge" | "pr"
   nothingToLand: boolean
-  prRequiresGreen: boolean
 }
 
 export interface ReadinessInput {
   repoRoot: string; worktreeDir: string; sessionBranch: string; baseBranch: string
   defaultAction?: "auto" | "merge" | "pr"
-  prRequiresGreen?: boolean
 }
 
 export function computeReadiness(s: ReadinessInput): FinishReadiness {
@@ -42,6 +40,5 @@ export function computeReadiness(s: ReadinessInput): FinishReadiness {
     insertions: stats.insertions, deletions: stats.deletions,
     hasRemote: rs.hasRemote, baseHasUpstream, ghAvailable: gh,
     conflictPreflight, recommended, nothingToLand,
-    prRequiresGreen: s.prRequiresGreen ?? false,
   }
 }
