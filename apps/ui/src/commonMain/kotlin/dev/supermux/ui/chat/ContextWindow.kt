@@ -852,6 +852,36 @@ internal fun ContextHint(agentName: String, context: ContextUsageDto, threshold:
 }
 
 /**
+ * #146: the agent's usage limit is close and a long wait would find the cache cold: "5-hour limit 88% used · compact
+ * now so the restart after the reset is cheap" · Not now · Compact now. Same look as [ContextHint].
+ */
+@Composable
+internal fun LimitCompactHint(usedPct: Int, onCompactNow: () -> Unit, onDismiss: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth().padding(start = 14.dp, end = 10.dp, bottom = 6.dp).testTag("limit_compact_hint"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Box(Modifier.size(7.dp).clip(CircleShape).background(cs.tertiary))
+        Text(
+            localized(Str.context_limit_hint, "$usedPct%"),
+            color = cs.onSurfaceVariant, fontSize = 12.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            localized(Str.context_not_now), color = cs.onSurfaceVariant, fontSize = 12.5.sp,
+            modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onDismiss).padding(horizontal = 4.dp, vertical = 2.dp),
+        )
+        Text(
+            localized(Str.context_compact_now), color = cs.primary, fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
+            modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onCompactNow).padding(horizontal = 4.dp, vertical = 2.dp)
+                .testTag("limit_compact_hint_compact"),
+        )
+    }
+}
+
+/**
  * The "Compacted" line in a chat (ChatPanel's NewMessagesLine, in onSurfaceVariant): "Compacted · 262k → 20k".
  * Where the agent kept a summary (Claude, OpenCode) a tap shows it, with the note the user asked to keep.
  */

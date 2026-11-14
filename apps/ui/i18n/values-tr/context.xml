@@ -15,6 +15,7 @@
     <string name="context_compact_now">Şimdi sıkıştır</string>
     <string name="context_not_now">Şimdi değil</string>
     <string name="context_hint_threshold">Bağlam %1$s dolu · %2$s %3$s noktasında kendiliğinden sıkıştırır</string>
+    <string name="context_limit_hint">5 saatlik sınırın %1$s kadarı kullanıldı · sıfırlanmadan sonraki başlangıç ucuz olsun diye şimdi sıkıştır</string>
     <string name="context_hint_full">Bağlam %1$s dolu · neredeyse dolu</string>
     <string name="context_what_fills">Neyle dolu</string>
     <string name="context_free">Boş</string>

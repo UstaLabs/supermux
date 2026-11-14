@@ -34,6 +34,9 @@ class AccountsActions(
     /** #92: wait for the first limit reset and carry on (ON unless turned off). Loaded with [loadAutoSwitch]. */
     val autoResume: Flow<Boolean?> = flowOf(null),
     val setAutoResume: suspend (Boolean) -> AccountResult<Boolean> = { NOT_WIRED },
+    /** #146: compact by itself before a usage-limit wait (opt-in). */
+    val compactBeforeWait: Flow<Boolean?> = flowOf(null),
+    val setCompactBeforeWait: suspend (Boolean) -> AccountResult<Boolean> = { NOT_WIRED },
     val addAccount: suspend (agent: String, method: String, secret: String, label: String?) -> AccountResult<AccountDto> =
         { _, _, _, _ -> NOT_WIRED },
     val removeAccount: suspend (id: String, deleteHome: Boolean) -> AccountResult<Unit> = { _, _ -> NOT_WIRED },
@@ -60,6 +63,8 @@ fun rememberAccountsActions(app: HostStore): AccountsActions = remember(app) {
         setAutoSwitch = { app.setAccountsAutoSwitch(it) },
         autoResume = app.accountsAutoResume,
         setAutoResume = { app.setAccountsAutoResume(it) },
+        compactBeforeWait = app.accountsCompactBeforeWait,
+        setCompactBeforeWait = { app.setAccountsCompactBeforeWait(it) },
         addAccount = { agent, method, secret, label -> app.addAccount(agent, method, secret, label) },
         removeAccount = { id, deleteHome -> app.removeAccount(id, deleteHome) },
         startLogin = { agent, email -> app.startAccountLogin(agent, email = email) },
@@ -82,6 +87,8 @@ fun rememberAccountsActions(fleet: FleetStore): AccountsActions = remember(fleet
         setAutoSwitch = { fleet.activeApp()?.setAccountsAutoSwitch(it) ?: NOT_WIRED },
         autoResume = fleet.activeAccountsAutoResume,
         setAutoResume = { fleet.activeApp()?.setAccountsAutoResume(it) ?: NOT_WIRED },
+        compactBeforeWait = fleet.activeAccountsCompactBeforeWait,
+        setCompactBeforeWait = { fleet.activeApp()?.setAccountsCompactBeforeWait(it) ?: NOT_WIRED },
         addAccount = { agent, method, secret, label ->
             fleet.activeApp()?.addAccount(agent, method, secret, label) ?: NOT_WIRED
         },

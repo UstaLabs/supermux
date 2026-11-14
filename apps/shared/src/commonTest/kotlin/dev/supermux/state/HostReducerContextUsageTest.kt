@@ -53,3 +53,23 @@ class HostReducerCompactionTest {
         assertEquals(dev.supermux.proto.SessionCapabilitiesDto(compact = false, compactNote = false), row.capabilities)
     }
 }
+
+/** #146: the "compact before the limit" advice arrives per session and goes away with a null one. */
+class HostReducerCompactAdviceTest {
+    private val session = dev.supermux.proto.SessionInfo(id = "s1", name = "fix", workdir = "/w", agent = "claude")
+
+    @Test fun advice_is_set_and_cleared() {
+        val advice = dev.supermux.proto.CompactAdviceDto(usedPct = 88, resetsAt = 1_791_651_000_000, auto = false)
+        var state = reduceHostFrame(HostState(), ServerFrame.SessionAdded(session))
+        state = reduceHostFrame(state, ServerFrame.CompactAdvice(session = "s1", advice = advice))
+        assertEquals(advice, state.sessions.single().compactAdvice)
+        state = reduceHostFrame(state, ServerFrame.CompactAdvice(session = "s1", advice = null))
+        assertEquals(null, state.sessions.single().compactAdvice)
+    }
+
+    @Test fun the_setting_decodes_from_accounts_settings() {
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true; classDiscriminator = "type" }
+        val frame = json.decodeFromString<ServerFrame>("""{"type":"accounts_settings","autoSwitch":false,"autoResume":true,"compactBeforeWait":true}""")
+        assertEquals(ServerFrame.AccountsSettings(autoSwitch = false, autoResume = true, compactBeforeWait = true), frame)
+    }
+}

@@ -1588,12 +1588,12 @@ data class AccountRemovalPlanDto(
 /** GET/PUT /settings/accounts. [autoSwitch]: move a session to another account on a usage limit (default off).
  *  [autoResume] (#92): when every account is out, wait for the first reset and carry on (default on). */
 @Serializable
-data class AccountsSettingsDto(val autoSwitch: Boolean = false, val autoResume: Boolean = true)
+data class AccountsSettingsDto(val autoSwitch: Boolean = false, val autoResume: Boolean = true, val compactBeforeWait: Boolean = false)
 
 /** PUT /settings/accounts body: only the toggle being written. A null field is left out (explicitNulls=false),
  *  so writing one never resets the other (encodeDefaults would send its default). */
 @Serializable
-private data class AccountsSettingsPatch(val autoSwitch: Boolean? = null, val autoResume: Boolean? = null)
+private data class AccountsSettingsPatch(val autoSwitch: Boolean? = null, val autoResume: Boolean? = null, val compactBeforeWait: Boolean? = null)
 
 /** POST /sessions/<id>/account → the session's account after the switch. */
 @Serializable
@@ -2781,6 +2781,14 @@ class BrokerApi(
             authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(AccountsSettingsPatch(autoResume = enabled)))
+        })
+
+    /** PUT /settings/accounts {compactBeforeWait} (#146). */
+    suspend fun setAccountsCompactBeforeWait(enabled: Boolean): AccountsSettingsDto =
+        decode(http.put("$httpBase/settings/accounts") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(AccountsSettingsPatch(compactBeforeWait = enabled)))
         })
 
     /** DELETE /sessions/<id>/limit-wait — the session no longer resumes by itself (#92). */

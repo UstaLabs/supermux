@@ -15,6 +15,7 @@
     <string name="context_compact_now">Compact now</string>
     <string name="context_not_now">Not now</string>
     <string name="context_hint_threshold">Context %1$s full · %2$s compacts by itself at %3$s</string>
+    <string name="context_limit_hint">5-hour limit %1$s used · compact now so the restart after the reset is cheap</string>
     <string name="context_hint_full">Context %1$s full · nearly full</string>
     <string name="context_what_fills">What fills it</string>
     <string name="context_free">Free</string>

@@ -470,6 +470,11 @@ class FleetStore(
 
     /** The ACTIVE host's auto-resume setting ([HostStore.accountsAutoResume], #92). */
     @OptIn(ExperimentalCoroutinesApi::class)
+    val activeAccountsCompactBeforeWait: StateFlow<Boolean?> =
+        combine(hostApps, _activeHost) { _, _ -> activeApp() }
+            .distinctUntilChanged()
+            .flatMapLatest { app -> app?.accountsCompactBeforeWait ?: flowOf(null) }
+            .stateIn(fleetScope, SharingStarted.Eagerly, null)
     val activeAccountsAutoResume: StateFlow<Boolean?> =
         combine(hostApps, _activeHost) { _, _ -> activeApp() }
             .distinctUntilChanged()

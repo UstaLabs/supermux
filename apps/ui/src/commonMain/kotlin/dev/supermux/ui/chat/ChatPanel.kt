@@ -1161,6 +1161,8 @@ fun ChatPanel(
         var contextOnCompact by remember(session.id) { mutableStateOf(false) }
         var contextThreshold by remember(session.id) { mutableStateOf<Long?>(null) }
         var contextHintDismissed by remember(session.id) { mutableStateOf(false) }
+        // #146: "Not now" on the limit line holds for this window (a new reset time shows it again).
+        var limitHintDismissedFor by remember(session.id) { mutableStateOf<Long?>(null) }
         val agentName = dev.supermux.ui.accounts.agentDisplayName(session.agent)
         val lastCompaction = remember(state.messages) { state.messages.lastOrNull { it.compaction != null }?.compaction }
         val composer: @Composable () -> Unit = {
@@ -1463,8 +1465,19 @@ fun ChatPanel(
                     WalkthroughUnreadChip(state, onOpenWalkthrough, Modifier.align(Alignment.CenterHorizontally))
                     // Card #121: offline or reconnecting, just above the composer.
                     dev.supermux.ui.shell.ConnectionStrip(inChat = true)
+                    // #146: close to the usage limit, with a long wait ahead: compact first (it wins over #144's line).
+                    val limitAdvice = session.compactAdvice?.takeIf {
+                        !state.compacting && session.capabilities?.compact == true && limitHintDismissedFor != it.resetsAt
+                    }
+                    if (limitAdvice != null) {
+                        LimitCompactHint(
+                            usedPct = limitAdvice.usedPct,
+                            onCompactNow = { contextOnCompact = true; contextOpen = true },
+                            onDismiss = { limitHintDismissedFor = limitAdvice.resetsAt },
+                        )
+                    }
                     // #144: close to where the agent compacts by itself: offer to compact now.
-                    session.context?.let { ctx ->
+                    if (limitAdvice == null) session.context?.let { ctx ->
                         val near = ctx.size > 0 && contextLevel(ctx.used, ctx.size, contextThreshold) != ContextLevel.Normal
                         if (near && !state.compacting && !contextHintDismissed && session.capabilities?.compact == true) {
                             ContextHint(

@@ -65,6 +65,8 @@ data class SessionInfo(
     val context: ContextUsageDto? = null,
     /** Broker-derived behaviour flags; only #144's Compact flags are read here. Null on an older broker. */
     val capabilities: SessionCapabilitiesDto? = null,
+    /** #146: compact now, before the usage limit's wait (the agent's 5-hour window is close to its wall). */
+    val compactAdvice: CompactAdviceDto? = null,
 )
 
 /** #92: when a session resumes by itself after a usage limit, and on which account. ISO times. */
@@ -771,7 +773,7 @@ sealed interface ServerFrame {
 
     /** The accounts settings changed (PUT /settings/accounts). */
     @Serializable @SerialName("accounts_settings")
-    data class AccountsSettings(val autoSwitch: Boolean = false, val autoResume: Boolean = true) : ServerFrame
+    data class AccountsSettings(val autoSwitch: Boolean = false, val autoResume: Boolean = true, val compactBeforeWait: Boolean = false) : ServerFrame
 
     /** #92: a session's wait for a usage-limit reset was made, replaced or dropped ([wait] null). */
     @Serializable @SerialName("limit_wait")
@@ -854,6 +856,10 @@ sealed interface ServerFrame {
     /** One of [session]'s councils changed; [council] is its full latest view (upsert by id). */
     @Serializable @SerialName("council_update")
     data class CouncilUpdate(val session: String, val council: CouncilView) : ServerFrame
+
+    /** #146: a session's "compact before the limit" advice changed (null: none now). */
+    @Serializable @SerialName("compact_advice")
+    data class CompactAdvice(val session: String, val advice: CompactAdviceDto? = null) : ServerFrame
 
     /** #144: a session's compaction started ("in_progress") or ended (its line follows as a message_append). */
     @Serializable @SerialName("compaction")
@@ -1178,3 +1184,7 @@ data class CompactionDto(
     val summary: String? = null,
     val error: String? = null,
 )
+
+/** #146: the 5-hour window is [usedPct] full and resets at [resetsAt] (epoch ms); [auto]: at 95%+, where the opt-in mode acts. */
+@Serializable
+data class CompactAdviceDto(val usedPct: Int, val resetsAt: Long, val auto: Boolean = false)
