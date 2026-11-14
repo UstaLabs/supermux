@@ -1254,6 +1254,9 @@ const doorStarts = new Set<string>()
 const checkoutsInFlight = new Set<string>()
 /** gracefulShutdown has begun (declared here: the session chain reads it). */
 let shuttingDown = false
+/** Each session's context window, as its agent last reported it (#144). In memory: the next request reports again. */
+const contextUsage = new Map<string, { used: number; size: number }>()
+
 const sessionChain = new SessionChain({
   isLive: (id) => isLiveWith(liveness, id),
   ensureLive: (id) => ensureLiveWith(liveness, id),
@@ -2201,6 +2204,11 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
       announceAgentModelsChanged([agent])
     },
   })
+  // How full the agent's context window is (#144): kept for the snapshot, pushed to every client as it changes.
+  adapter.on("context-update", (ctx: { used: number; size: number }) => {
+    contextUsage.set(sessionId, { used: ctx.used, size: ctx.size })
+    webChannel?.broadcastToAll({ type: "context_usage", session: sessionId, used: ctx.used, size: ctx.size })
+  })
   adapter.on("commands-update", () => {
     const name = registry.get(sessionId)?.name
     if (name) {
@@ -2897,6 +2905,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         permissionMode: resolvePermissionMode(s.agent, s.permissionMode),
         ...sessionAccountFields(s),
         limitWait: limitWaitFields(limitWaits.get(s.id)),
+        context: contextUsage.get(s.id),
         status: s.status,
         session_branch: s.session_branch || undefined,
         repo_root: s.repo_root || undefined,

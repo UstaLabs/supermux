@@ -289,6 +289,8 @@ export interface SessionSnapshot {
   avatar?: string
   model?: string
   permissionMode?: string
+  /** How full the agent's context window is (#144), when the agent reports it. */
+  context?: { used: number; size: number }
   session_branch?: string
   repo_root?: string
   git?: import("../../core/worktree/lite-status").GitLiteStatus

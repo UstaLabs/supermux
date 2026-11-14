@@ -273,6 +273,8 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   availableCommands?: AgentCommandEntry[]
   /** The models the agent offered at its last start (ACP options; Cursor's model list, #102). */
   offeredModels?: AgentModelEntry[]
+  /** How full the agent's context window is, as it last reported (#144); undefined until it reports. */
+  contextUsage?: { used: number; size: number }
 
   onUsageUpdate?: (data: CodexUsage) => void
   getPrevUsage?: () => CodexUsage | null
@@ -377,6 +379,11 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       onModels: (models) => {
         this.offeredModels = models
         this.emit("models-update", { kind: "models-update" })
+      },
+      onContext: (context) => {
+        if (this.contextUsage?.used === context.used && this.contextUsage.size === context.size) return
+        this.contextUsage = { used: context.used, size: context.size }
+        this.emit("context-update", { kind: "context-update", ...this.contextUsage })
       },
       onUsage: (rateLimits) => {
         const data = codexUsageFromRateLimits(rateLimits, this.getPrevUsage?.() ?? null)
