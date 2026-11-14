@@ -38,7 +38,7 @@ import kotlin.test.assertTrue
  *     the /finish request body so the test can assert its shape, and answers a readiness GET.
  *
  * Android parity: apps/android/.../AppViewModel.kt (`_finishJobs` seed ~L195, FinishJobFrame
- * ~L275, SessionGit ~L301, finish/finishReadiness/verifySuggest/verifySave ~L535).
+ * ~L275, SessionGit ~L301, finishReadiness/mergeIntoBase).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class DesktopFinishTest {
@@ -98,39 +98,7 @@ class DesktopFinishTest {
         assertTrue(s.finishJobs.value.containsKey("s1"))
     }
 
-    @Test fun clear_finish_job_removes_the_entry() {
-        val s = state()
-        s.reduce(ServerFrame.Snapshot(sessions = listOf(session("s1", finishJob = job("s1")))))
-        assertTrue(s.finishJobs.value.containsKey("s1"))
-        s.clearFinishJob("s1")
-        assertFalse(s.finishJobs.value.containsKey("s1"))
-    }
-
     // ── Ack state (header unacked dot; lives in app state so it survives session switches) ─────────
-
-    @Test fun ack_finish_persists_and_survives_a_simulated_session_switch() {
-        val s = state()
-        // A failed job the user opens (acks) — record its startedAt.
-        s.ackFinish("s1", startedAt = 42.0)
-        assertTrue(s.isFinishAcked("s1", 42.0))
-        assertEquals(mapOf("s1" to 42.0), s.ackedFinish.value)
-        // "Switching" A→B→A is just re-reading the same app-state map — the ack is unchanged, so the
-        // dot stays hidden (the desktop-specific bug the per-composable state caused). A DIFFERENT
-        // startedAt (a new job) is not acked.
-        assertTrue(s.isFinishAcked("s1", 42.0))
-        assertFalse(s.isFinishAcked("s1", 99.0))
-    }
-
-    @Test fun clear_finish_job_also_clears_the_ack_entry() {
-        val s = state()
-        s.reduce(ServerFrame.Snapshot(sessions = listOf(session("s1", finishJob = job("s1")))))
-        s.ackFinish("s1", startedAt = 7.0)
-        assertTrue(s.isFinishAcked("s1", 7.0))
-        s.clearFinishJob("s1")
-        // Card gone → ack forgotten too (no stale acked-startedAt lingering).
-        assertFalse(s.isFinishAcked("s1", 7.0))
-        assertTrue(s.ackedFinish.value.isEmpty())
-    }
 
     // ── Reducer: session_git ─────────────────────────────────────────────────────────
 
@@ -199,29 +167,32 @@ class DesktopFinishTest {
         )
     }
 
-    @Test fun finish_sends_the_action_and_skip_verify_and_returns_true_on_2xx() = runTest {
+    /** #72: waits for [HostStore.mergeIntoBase]'s kickoff report (it runs on the store's own scope). */
+    private suspend fun mergeKickoff(app: HostStore): Boolean {
+        val done = kotlinx.coroutines.CompletableDeferred<Boolean>()
+        app.mergeIntoBase("sess-1") { done.complete(it) }
+        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            kotlinx.coroutines.withTimeout(10_000) { done.await() }
+        }
+    }
+
+    @Test fun merge_into_base_sends_merge_with_keep_and_no_checks_choice() = runTest {
         val recorded = mutableListOf<Rec>()
         val app = appRecording(recorded)
 
-        val ok = app.finish("sess-1", action = "merge", skipVerify = true)
-
-        assertTrue(ok)
+        assertTrue(mergeKickoff(app))
         val rec = recorded.single { it.path.endsWith("/finish") }
         assertEquals("/sessions/sess-1/finish", rec.path)
-        // The body carries the action + skipVerify (explicitNulls=false drops the untouched fields).
         assertTrue("\"action\":\"merge\"" in rec.body, "action missing: ${rec.body}")
-        assertTrue("\"skipVerify\":true" in rec.body, "skipVerify missing: ${rec.body}")
-        assertTrue("commitFirst" !in rec.body, "untouched commitFirst must be omitted: ${rec.body}")
+        assertTrue("\"keep\":true" in rec.body, "keep missing: ${rec.body}")
+        assertTrue("skipVerify" !in rec.body, "the checks gate is gone: ${rec.body}")
     }
 
-    @Test fun finish_returns_false_when_the_kickoff_is_rejected() = runTest {
+    @Test fun merge_into_base_reports_a_refused_kickoff() = runTest {
         val recorded = mutableListOf<Rec>()
-        // A non-2xx makes BrokerApi.decode throw (SKIE CancellationException) → runCatching.isSuccess=false.
         val app = appRecording(recorded, finishStatus = HttpStatusCode.InternalServerError)
 
-        val ok = app.finish("sess-1", action = "discard")
-
-        assertFalse(ok)
+        assertFalse(mergeKickoff(app))
     }
 
     @Test fun finish_readiness_decodes_the_preflight_snapshot() = runTest {
@@ -234,6 +205,5 @@ class DesktopFinishTest {
         assertEquals("main", readiness?.base)
         assertEquals(2, readiness?.ahead)
         assertEquals(1, readiness?.behind)
-        assertTrue(readiness?.prRequiresGreen == true)
     }
 }

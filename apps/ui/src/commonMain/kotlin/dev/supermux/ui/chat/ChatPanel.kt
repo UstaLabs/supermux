@@ -519,11 +519,6 @@ fun ChatPanel(
     onForceLinksMenuConsumed: () -> Unit = {},
     /** The globe/links affordance; receives the loaded proxies + the one-shot force-open flag. */
     headerLinks: @Composable RowScope.(List<ProxyDto>, Boolean, () -> Unit) -> Unit = { _, _, _ -> },
-    /**
-     * The Finish flow, in the chat header. NEW ON DESKTOP: desktop's `FinishDialog` was dead code
-     * (nothing ever opened it) — passing bindings here is what puts Finish on a desktop chat.
-     */
-    finish: FinishBindings? = null,
     /** The ⋮ overflow (rename/mute/kill/continue) — the host owns it; cluster G moves it here. */
     headerActions: @Composable RowScope.() -> Unit = {},
     /** Opens the workspace's singleton Changes pane in walkthrough mode. */

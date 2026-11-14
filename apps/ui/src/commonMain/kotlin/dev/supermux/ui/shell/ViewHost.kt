@@ -68,7 +68,6 @@ import dev.supermux.ui.chat.MarkdownFiles
 import dev.supermux.ui.chat.ChatState
 import dev.supermux.ui.chat.ComposerExternalAttach
 import dev.supermux.ui.chat.ComposerExternalDictate
-import dev.supermux.ui.chat.FinishBindings
 import dev.supermux.ui.display.DisplayPanel
 import dev.supermux.ui.editor.DiffPane
 import dev.supermux.ui.editor.DiffState
@@ -386,19 +385,6 @@ private fun ChatViewPane(
         UnknownViewHint("chat", modifier)
         return
     }
-    val finish = FinishBindings(
-        job = finishJobs[sessionId],
-        readiness = { actions.finishReadiness(sessionId) },
-        // On the STORE's scope, not this panel's: switching views mid-kickoff must not cancel the
-        // request.
-        finish = { action, skipVerify, commitFirst, commitMessage, onKickoff ->
-            actions.kickoffFinish(sessionId, action, skipVerify, commitFirst, commitMessage, onKickoff)
-        },
-        clearJob = { actions.clearFinishJob(sessionId) },
-        verifySuggest = { actions.verifySuggest(sessionId) },
-        verifySave = { actions.verifySave(sessionId, it) },
-        sendToAgent = { actions.sendMessage(sessionId, it) },
-    )
     // A tap on a file path in the transcript opens a `file` pane.
     val tapFileSystem = actions.sessionFileSystem(sessionId)
     val openTappedPath = rememberOpenTappedPath(workdir, tapFileSystem, onOpenFile)
@@ -425,7 +411,6 @@ private fun ChatViewPane(
                 // Mute is the one session control this panel can perform without a dialog; rename/kill
                 // live in OverflowMenu (the header slot below), so they stay out of the slash menu here.
                 onRequestMute = { actions.setMute(sessionId, !(session.mute ?: false)) },
-                finish = finish,
                 forceLinksMenu = forceLinksMenu,
                 onForceLinksMenuConsumed = onForceLinksMenuConsumed,
                 headerLinks = { proxies, force, onForceConsumed ->
@@ -524,7 +509,6 @@ private fun ChatViewPane(
             session = session,
             working = state.agent?.busy == true,
             sessionLinks = sessionLinks,
-            finish = finish,
             onGitOp = gitOp,
             onRename = { name -> actions.rename(sessionId, name) },
             onToggleMute = { muted -> actions.setMute(sessionId, muted) },
