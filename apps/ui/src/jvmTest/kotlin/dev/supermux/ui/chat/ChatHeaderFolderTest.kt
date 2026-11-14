@@ -13,7 +13,9 @@ import androidx.compose.ui.semantics.getOrNull
 import dev.supermux.proto.SessionInfo
 import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.platform.FileManager
-import dev.supermux.ui.platform.LocalSessionOnThisComputer
+import dev.supermux.ui.platform.FolderOpener
+import dev.supermux.ui.platform.LocalFolderOpener
+import dev.supermux.ui.platform.LocalPlatform
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -28,7 +30,10 @@ class ChatHeaderFolderTest {
     @Composable
     private fun Panel(onThisComputer: Boolean) {
         val app = androidx.compose.runtime.remember { testHostStore() }
-        CompositionLocalProvider(LocalSessionOnThisComputer provides { onThisComputer }) {
+        // As the shell provides it: from the platform's file manager, if it has one.
+        val platform = LocalPlatform.current
+        val opener = platform.fileManager?.let { FolderOpener(it, { onThisComputer }, platform::openFolder) }
+        CompositionLocalProvider(LocalFolderOpener provides opener) {
             ChatPanel(
                 session = session,
                 state = rememberChatState(app, session.id),

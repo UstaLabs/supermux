@@ -1064,15 +1064,14 @@ fun ChatPanel(
                     if (showProject && projectName.isNotEmpty()) {
                         // #149: on this computer the crumb opens the session's folder in Finder / Explorer.
                         val openFolder = dev.supermux.ui.platform.rememberOpenFolder(session.id, session.workdir)
-                        val fileManager = dev.supermux.ui.platform.LocalPlatform.current.fileManager
                         Row(
                             Modifier
                                 .weight(1f, fill = false)
                                 .then(
-                                    if (openFolder != null && fileManager != null) {
+                                    if (openFolder != null) {
                                         Modifier
                                             .clip(RoundedCornerShape(4.dp))
-                                            .clickable(onClickLabel = dev.supermux.ui.platform.openFolderLabel(fileManager)) { openFolder() }
+                                            .clickable(onClickLabel = openFolder.label) { openFolder.open() }
                                             .pointerHoverIcon(androidx.compose.ui.input.pointer.PointerIcon.Hand)
                                     } else {
                                         Modifier

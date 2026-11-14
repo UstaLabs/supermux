@@ -884,11 +884,14 @@ fun SupermuxApp(
     }
     // #149: whose folders open in Finder / Explorer here: a session whose host is this computer.
     val sessionHosts by fleet.sessionHost.collectAsState()
-    val sessionOnThisComputer: (String) -> Boolean = remember(sessionHosts, isLocalHost) {
-        { sid -> isLocalHost(fleet.hostIdOfSession(sid)) }
+    val shellPlatform = LocalPlatform.current
+    val folderOpener = remember(sessionHosts, isLocalHost, shellPlatform) {
+        shellPlatform.fileManager?.let { manager ->
+            dev.supermux.ui.platform.FolderOpener(manager, { sid -> isLocalHost(fleet.hostIdOfSession(sid)) }, shellPlatform::openFolder)
+        }
     }
     CompositionLocalProvider(
-        dev.supermux.ui.platform.LocalSessionOnThisComputer provides sessionOnThisComputer,
+        dev.supermux.ui.platform.LocalFolderOpener provides folderOpener,
         dev.supermux.ui.chat.LocalChatSearch provides chatSearch,
         dev.supermux.ui.retain.LocalRetainedUiState provides fleet.retainedUi,
         dev.supermux.ui.chat.LocalComposerAttachmentStore provides attachmentStore,
