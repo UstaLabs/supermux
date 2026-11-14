@@ -9,6 +9,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.getOrNull
 import dev.supermux.proto.SessionInfo
 import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.platform.FileManager
