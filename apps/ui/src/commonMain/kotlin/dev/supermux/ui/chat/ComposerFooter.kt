@@ -54,6 +54,10 @@ import dev.supermux.ui.ChatDetailLevel
 import kotlinx.coroutines.launch
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.theme.Radii
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.StringKey
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.localizedLabels
 
 /**
  * One 24dp line under the composer card. Renders nothing but the detail chip when the session has
@@ -75,6 +79,15 @@ fun ComposerFooter(
     val sheets = !dev.supermux.ui.adaptive.LocalPointerAvailable.current &&
         dev.supermux.ui.adaptive.LocalWindowWidthClass.current == dev.supermux.ui.adaptive.WindowWidthClass.Compact
 
+    val levelNames = localizedLabels(ChatDetailLevel.entries, ::detailLevelRes)
+    val detailRows = listOf(
+        ChatDetailLevel.LOW to localized(Str.composer_detail_low_hint),
+        ChatDetailLevel.MEDIUM to localized(Str.composer_detail_medium_hint),
+        ChatDetailLevel.HIGH to localized(Str.composer_detail_high_hint),
+    )
+    val detailLabel = localized(Str.composer_detail_chip, levelNames.getValue(detail))
+    val detailTitle = localized(Str.composer_detail_title)
+
     Row(
         modifier.fillMaxWidth().height(24.dp).testTag("composer_footer"),
         verticalAlignment = Alignment.CenterVertically,
@@ -84,20 +97,15 @@ fun ComposerFooter(
                 icon = { tint ->
                     Icon(Icons.Outlined.Tune, null, tint = tint, modifier = Modifier.size(12.dp))
                 },
-                label = "Detail: ${detail.label}",
+                label = detailLabel,
                 trailingChevron = true,
                 tag = "footer_detail",
                 onClick = { detailOpen = true },
             )
-            val detailRows = listOf(
-                ChatDetailLevel.LOW to "Messages only · tools on status line",
-                ChatDetailLevel.MEDIUM to "Messages + tool summaries",
-                ChatDetailLevel.HIGH to "Everything, tool args and all",
-            )
             if (sheets && detailOpen) {
                 PickerSheet(
-                    title = "Detail",
-                    options = detailRows.map { (level, hint) -> level.wire to "${level.label} · $hint" },
+                    title = detailTitle,
+                    options = detailRows.map { (level, hint) -> level.wire to "${levelNames.getValue(level)} · $hint" },
                     current = detail.wire,
                     onPick = { wire ->
                         detailRows.firstOrNull { it.first.wire == wire }?.let { (level, _) ->
@@ -110,11 +118,7 @@ fun ComposerFooter(
             DropdownMenu(expanded = detailOpen && !sheets, onDismissRequest = { detailOpen = false }) {
                 // Same three rows (and the same one-line explanations) the ⋮ submenu offers, so
                 // the two entry points can never drift apart.
-                listOf(
-                    ChatDetailLevel.LOW to "Messages only · tools on status line",
-                    ChatDetailLevel.MEDIUM to "Messages + tool summaries",
-                    ChatDetailLevel.HIGH to "Everything, tool args and all",
-                ).forEach { (level, hint) ->
+                detailRows.forEach { (level, hint) ->
                     DropdownMenuItem(
                         text = {
                             Row(
@@ -123,7 +127,7 @@ fun ComposerFooter(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Text(
-                                    level.label,
+                                    levelNames.getValue(level),
                                     color = if (level == detail) cs.primary else cs.onSurface,
                                 )
                                 Text(hint, fontSize = 11.sp, color = cs.onSurfaceVariant)
@@ -155,6 +159,13 @@ fun ComposerFooter(
             }
         }
     }
+}
+
+/** The detail level's name, shared with Settings › General. */
+private fun detailLevelRes(level: ChatDetailLevel): StringKey = when (level) {
+    ChatDetailLevel.LOW -> Str.general_chat_detail_low
+    ChatDetailLevel.MEDIUM -> Str.general_chat_detail_medium
+    ChatDetailLevel.HIGH -> Str.general_chat_detail_high
 }
 
 /** A borderless, muted chip: no fill and no outline, so the strip reads as a caption rather

@@ -81,6 +81,9 @@ import dev.supermux.fs.pathLeaf
 import dev.supermux.net.MessageSearchHit
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.formatCatalogText
+import dev.supermux.ui.i18n.localized
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -188,12 +191,20 @@ fun chatFindMatches(items: List<TimelineItem>, query: String): List<Int> {
     }
 }
 
-/** "3/17", "No results", "" before a query. */
-internal fun findCountLabel(query: String, matches: Int, current: Int): String = when {
+/** "3/17", "No results", "" before a query. English: the UI reads [localizedFindCountLabel]. */
+internal fun findCountLabel(query: String, matches: Int, current: Int): String =
+    findCountLabel(query, matches, current, "No results") // i18n-ok: test twin
+
+private fun findCountLabel(query: String, matches: Int, current: Int, noResults: String): String = when {
     query.isBlank() -> ""
-    matches == 0 -> "No results"
-    else -> "${if (current >= 0) current + 1 else "–"}/$matches"
+    matches == 0 -> noResults
+    else -> "${if (current >= 0) current + 1 else "–"}/$matches" // i18n-ok: a counter, digits only
 }
+
+/** [findCountLabel] in the app's language. */
+@Composable
+private fun localizedFindCountLabel(query: String, matches: Int, current: Int): String =
+    findCountLabel(query, matches, current, localized(Str.chatline_search_no_results))
 
 /** [text] with every case-insensitive occurrence of [query] bold in [color]. */
 internal fun highlightMatches(text: String, query: String, color: Color): AnnotatedString = buildAnnotatedString {
@@ -245,7 +256,7 @@ internal fun ChatFindBar(
                 SearchField(
                     query = find.query,
                     onQueryChange = { find.query = it },
-                    placeholder = if (allChats) "Search all chats" else "Find in chat",
+                    placeholder = if (allChats) localized(Str.chatline_search_all_chats_hint) else localized(Str.chatline_search_find_in_chat),
                     focusRequests = find.focusRequests,
                     onEnter = { shift -> if (!allChats) { if (shift) onNewer() else onOlder() } },
                     onUp = { if (!allChats) onOlder() },
@@ -256,16 +267,16 @@ internal fun ChatFindBar(
                 )
                 if (!allChats) {
                     Text(
-                        text = findCountLabel(find.query, matchCount, find.current),
+                        text = localizedFindCountLabel(find.query, matchCount, find.current),
                         color = cs.onSurfaceVariant,
                         fontSize = 11.sp,
                         maxLines = 1,
                         modifier = Modifier.widthIn(min = 40.dp).padding(horizontal = 4.dp).testTag(CHAT_FIND_COUNT_TAG),
                     )
-                    BarIcon(Icons.Filled.KeyboardArrowUp, "Older match", "chat_find_prev", onOlder)
-                    BarIcon(Icons.Filled.KeyboardArrowDown, "Newer match", "chat_find_next", onNewer)
+                    BarIcon(Icons.Filled.KeyboardArrowUp, localized(Str.chatline_search_older_match), "chat_find_prev", onOlder)
+                    BarIcon(Icons.Filled.KeyboardArrowDown, localized(Str.chatline_search_newer_match), "chat_find_next", onNewer)
                 }
-                BarIcon(Icons.Filled.Close, "Close find", "chat_find_close") { find.close() }
+                BarIcon(Icons.Filled.Close, localized(Str.chatline_search_close_find), "chat_find_close") { find.close() }
             }
             if (host != null) {
                 ScopeTabs(
@@ -326,10 +337,10 @@ private fun ChatSearchResults(
     val q = query.trim()
     val (hits, failed) = rememberFleetMessageHits(host, q)
     val status = when {
-        q.isEmpty() -> "Type to search every chat"
-        failed -> "Search failed"
-        hits == null -> "Searching…"
-        hits.isEmpty() -> "No messages match"
+        q.isEmpty() -> localized(Str.chatline_search_type_to_search)
+        failed -> localized(Str.chatline_search_failed)
+        hits == null -> localized(Str.chatline_search_searching)
+        hits.isEmpty() -> localized(Str.chatline_search_no_messages)
         else -> null
     }
     if (status != null) {
@@ -356,11 +367,20 @@ private fun ChatSearchResults(
  * A hit's line: who said it, then the snippet. The user's own message reads "You: "; a message from
  * another session (or supermux, or a council) names its sender, without the ids agents are shown.
  */
-internal fun chatSearchHitText(hit: MessageSearchHit): String = when {
-    hit.channel == "inbox" -> "${hit.from_session_name?.takeIf { it.isNotBlank() } ?: "Another session"}: ${noticePlainText(hit.snippet)}"
-    hit.direction == "inbound" -> "You: ${hit.snippet}"
+internal fun chatSearchHitText(hit: MessageSearchHit): String =
+    chatSearchHitText(hit, "Another session", "You: %1\$s") // i18n-ok: test twin
+
+/** [anotherSession] names an unnamed sender; [youSaid] is a template (`%1$s` = the snippet). */
+private fun chatSearchHitText(hit: MessageSearchHit, anotherSession: String, youSaid: String): String = when {
+    hit.channel == "inbox" -> "${hit.from_session_name?.takeIf { it.isNotBlank() } ?: anotherSession}: ${noticePlainText(hit.snippet)}" // i18n-ok: sender, then the text
+    hit.direction == "inbound" -> formatCatalogText(youSaid, arrayOf(hit.snippet))
     else -> hit.snippet
 }
+
+/** [chatSearchHitText] in the app's language. */
+@Composable
+private fun localizedChatSearchHitText(hit: MessageSearchHit): String =
+    chatSearchHitText(hit, localized(Str.chatline_search_another_session), localized(Str.chatline_search_you_said))
 
 /** One fleet hit: chat name · project, when, and the snippet with [query] picked out. */
 @Composable
@@ -375,7 +395,7 @@ fun ChatSearchHitRow(hit: MessageSearchHit, query: String, now: Long, onClick: (
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                hit.session_name.ifBlank { "Untitled chat" },
+                hit.session_name.ifBlank { localized(Str.chatline_search_untitled_chat) },
                 color = cs.onSurface,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
@@ -400,7 +420,7 @@ fun ChatSearchHitRow(hit: MessageSearchHit, query: String, now: Long, onClick: (
             }
         }
         Text(
-            highlightMatches(chatSearchHitText(hit), query, cs.primary),
+            highlightMatches(localizedChatSearchHitText(hit), query, cs.primary),
             color = cs.onSurfaceVariant,
             fontSize = 12.sp,
             maxLines = 2,
@@ -413,8 +433,8 @@ fun ChatSearchHitRow(hit: MessageSearchHit, query: String, now: Long, onClick: (
 @Composable
 private fun ScopeTabs(scope: ChatSearchScope, onScope: (ChatSearchScope) -> Unit, modifier: Modifier = Modifier) {
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
-        ScopeTab("This chat", scope == ChatSearchScope.ThisChat, "chat_find_scope_this") { onScope(ChatSearchScope.ThisChat) }
-        ScopeTab("All chats", scope == ChatSearchScope.AllChats, "chat_find_scope_all") { onScope(ChatSearchScope.AllChats) }
+        ScopeTab(localized(Str.chatline_search_this_chat), scope == ChatSearchScope.ThisChat, "chat_find_scope_this") { onScope(ChatSearchScope.ThisChat) }
+        ScopeTab(localized(Str.chatline_search_all_chats), scope == ChatSearchScope.AllChats, "chat_find_scope_all") { onScope(ChatSearchScope.AllChats) }
     }
 }
 

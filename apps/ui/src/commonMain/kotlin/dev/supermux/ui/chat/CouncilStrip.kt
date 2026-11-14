@@ -69,6 +69,8 @@ import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.Stroke
 import kotlinx.coroutines.delay
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 
 /** A council still running: open, and one of its members works in the current round. */
 internal fun isRunningCouncil(c: CouncilView): Boolean = c.status == "open" && c.members.any { it.status == "working" }
@@ -78,10 +80,17 @@ internal fun isRunningCouncil(c: CouncilView): Boolean = c.status == "open" && c
  * does now ("Claude: Searching the web…"), else the round's latest answer. Members idle without an
  * answer ("" in [live]) say nothing.
  */
-internal fun councilStripLines(c: CouncilView, live: Map<String, String>): List<String> {
+internal fun councilStripLines(
+    c: CouncilView,
+    live: Map<String, String>,
+    /** A working member with no live line says this (the strip passes it in the app's language). */
+    working: String = "Working", // i18n-ok: test twin
+    /** What [COUNCIL_THINKING] is shown as. */
+    thinking: String = COUNCIL_THINKING,
+): List<String> {
     val doing = c.members.filter { it.status == "working" }.mapNotNull { m ->
         val now = live[m.session]
-        if (now == "") null else "${councilMemberWho(m).first}: ${now ?: "Working"}"
+        if (now == "") null else "${councilMemberWho(m).first}: ${now?.let { if (it == COUNCIL_THINKING) thinking else it } ?: working}" // i18n-ok: joins a name and translated words
     }
     if (doing.isNotEmpty()) return doing
     val said = c.rounds.firstOrNull { it.round == c.round }?.reports?.maxByOrNull { it.seq } ?: return emptyList()
@@ -138,7 +147,7 @@ private fun CouncilStrip(item: TimelineItem.CouncilCard, onOpenFile: (FilePathRe
 private fun Head(c: CouncilView, open: Boolean, onToggle: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val live = LocalCouncilActivity.current
-    val lines = councilStripLines(c, live)
+    val lines = councilStripLines(c, live, localized(Str.chatcard_council_working), localized(Str.chatcard_council_thinking))
     // The members take turns: one line at a time, every few seconds, like a conversation.
     var turn by rememberSaveable(c.id) { mutableIntStateOf(0) }
     LaunchedEffect(c.id, lines.size) {
@@ -152,7 +161,7 @@ private fun Head(c: CouncilView, open: Boolean, onToggle: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .clickable(onClickLabel = if (open) "Hide the council" else "Show the council", onClick = onToggle)
+            .clickable(onClickLabel = if (open) localized(Str.chatcard_council_hide_strip) else localized(Str.chatcard_council_show_strip), onClick = onToggle)
             .pointerHoverIcon(PointerIcon.Hand)
             .testTag("council-strip-head:${c.id}")
             .padding(start = Space.md, end = Space.sm, top = 7.dp, bottom = 7.dp),
@@ -164,7 +173,7 @@ private fun Head(c: CouncilView, open: Boolean, onToggle: () -> Unit) {
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Text(
-                listOfNotNull(c.name.takeIf { it.isNotBlank() }, "Round ${c.round}", councilHeadline(c).first).joinToString(" · "),
+                listOfNotNull(c.name.takeIf { it.isNotBlank() }, localized(Str.chatcard_council_round, c.round), councilHeadline(c).first).joinToString(" · "),
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
                 color = cs.onSurface,
@@ -206,15 +215,16 @@ private fun Avatar(c: CouncilView, m: CouncilMember, activity: String?) {
         "reported" -> cs.primary.copy(alpha = 0.6f)
         else -> cs.outlineVariant
     }
+    val stateWords = "${councilMemberWho(m).first}, ${councilStatusWord(status)}"
     Box(
         Modifier
             .size(28.dp)
             .testTag("council-strip-avatar:${c.id}:${m.letter}")
-            .semantics { stateDescription = "${councilMemberWho(m).first}, ${councilStatusWord(status)}" },
+            .semantics { stateDescription = stateWords },
         contentAlignment = Alignment.Center,
     ) {
         if (working) {
-            val alpha by rememberLiveLoop(1f, 0.25f, infiniteRepeatable(tween(600), RepeatMode.Reverse), label = "council-strip-ring")
+            val alpha by rememberLiveLoop(1f, 0.25f, infiniteRepeatable(tween(600), RepeatMode.Reverse), label = "council-strip-ring") // i18n-ok: animation label
             Box(Modifier.size(26.dp).alpha(alpha).border(1.5.dp, cs.primary, CircleShape))
         } else {
             Box(Modifier.size(26.dp).border(1.dp, ring, CircleShape))

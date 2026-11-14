@@ -138,8 +138,6 @@ import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.countToolsSince
 import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.effectiveChatDetail
-import dev.supermux.ui.formatLowWorkingStatus
-import dev.supermux.ui.workingBaseLabel
 import dev.supermux.ui.keys.AppCommands
 import dev.supermux.ui.keys.LocalShortcutDispatcher
 import dev.supermux.ui.keys.RegisterCommand
@@ -152,7 +150,6 @@ import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.ui.turnBoundaryMs
-import dev.supermux.util.formatDuration
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
@@ -168,6 +165,9 @@ import kotlin.time.Clock
 import dev.supermux.ui.accounts.LimitWaitStrip
 import dev.supermux.ui.i18n.Plurals
 import dev.supermux.ui.i18n.localizedPlural
+import androidx.compose.runtime.ReadOnlyComposable
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 
 /** Reading-width cap for the composer so it lines up with the timeline's own cap. */
 private val CONTENT_MAX_WIDTH = 860.dp
@@ -899,12 +899,13 @@ fun ChatPanel(
         }
         findQueryShown = find.query
     }
+    val revealGoneNotice = localized(Str.composer_reveal_gone)
     LaunchedEffect(revealTarget, timelineItems, state.historyLoaded) {
         val target = revealTarget ?: return@LaunchedEffect
         if (timelineItems.none { (it as? TimelineItem.Msg)?.entry?.id == target }) {
             if (state.historyLoaded) {
                 revealTarget = null
-                platform.notices.show("That message is no longer in the chat")
+                platform.notices.show(revealGoneNotice)
             }
             return@LaunchedEffect
         }
@@ -938,19 +939,23 @@ fun ChatPanel(
         dead -> null
         working && agent != null -> {
             if (hideTools) {
-                val base = when (agent.detail) { "running" -> "running"; "starting" -> "starting"; else -> "thinking" }
-                formatLowWorkingStatus(base, agent.detail, agent.tool, toolCountSinceTurn(), "")
+                val base = when (agent.detail) {
+                    "running" -> localized(Str.composer_status_running)
+                    "starting" -> localized(Str.composer_status_starting)
+                    else -> localized(Str.composer_status_thinking)
+                }
+                localizedLowWorkingStatus(base, agent.detail, agent.tool, toolCountSinceTurn(), "")
             } else {
                 when (agent.detail) {
-                    "running" -> "running ${agent.tool ?: "tool"}…"
-                    "starting" -> "starting…"
-                    else -> "thinking…"
+                    "running" -> localized(Str.composer_status_running_tool, agent.tool ?: localized(Str.composer_status_tool))
+                    "starting" -> localized(Str.composer_status_starting_now)
+                    else -> localized(Str.composer_status_thinking_now)
                 }
             }
         }
-        sending -> "sending…"
+        sending -> localized(Str.composer_status_sending_now)
         agent != null && agent.agentsRunning > 0 -> agentsWorkingLabel(agent.agentsRunning)
-        agent?.waiting == true -> "waiting (${agent.bgOpen} background)"
+        agent?.waiting == true -> localized(Str.composer_status_waiting_background, agent.bgOpen)
         else -> null
     }
     val statusColor = if (agent?.waiting == true && agent.agentsRunning == 0 && !working && !sending) sem.warning else cs.primary
@@ -997,7 +1002,7 @@ fun ChatPanel(
     val chromeFraction by animateFloatAsState(
         targetValue = if (chromeCollapsed) 0f else 1f,
         animationSpec = tween(200),
-        label = "chatChrome",
+        label = "chatChrome", // i18n-ok: an animation label
     )
     LaunchedEffect(chromeCollapsed) { onChromeHiddenChange(chromeCollapsed) }
     // The cards' cap ([chatViewportPx]): the transcript's height only while the chrome is shown and still. A wide view
@@ -1114,7 +1119,7 @@ fun ChatPanel(
                 ) {
                     Icon(
                         Icons.Filled.Search,
-                        contentDescription = "Search chats",
+                        contentDescription = localized(Str.composer_search_chats),
                         tint = cs.onSurfaceVariant,
                         modifier = Modifier.size(17.dp),
                     )
@@ -1134,7 +1139,7 @@ fun ChatPanel(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = "Not responding",
+                    text = localized(Str.composer_not_responding),
                     color = cs.onErrorContainer,
                     fontWeight = FontWeight.Medium,
                     fontSize = 13.sp,
@@ -1165,7 +1170,7 @@ fun ChatPanel(
                 onControl = onControl,
                 handledControlKinds = handledControls,
                 openModelPickerNonce = openModelPicker,
-                placeholder = DEFAULT_COMPOSER_PLACEHOLDER,
+                placeholder = defaultComposerPlaceholder(),
                 externalAttach = externalAttach,
                 onExternalAttachConsumed = onExternalAttachConsumed,
                 leadingChips = composerChips,
@@ -1332,11 +1337,15 @@ fun ChatPanel(
                     modifier = Modifier.size(32.dp),
                 )
                 Text(
-                    "Start the conversation",
+                    localized(Str.composer_start_conversation),
                     style = MaterialTheme.typography.titleMedium,
                     color = cs.onSurface,
                 )
-                listOf("What's the current state?", "Run the tests", "Summarize recent changes")
+                listOf(
+                    localized(Str.composer_starter_state),
+                    localized(Str.composer_starter_tests),
+                    localized(Str.composer_starter_summarize),
+                )
                     .forEachIndexed { i, prompt ->
                         Surface(
                             onClick = {
@@ -1488,7 +1497,7 @@ private fun WalkthroughUnreadChip(
         onClick = { onOpenWalkthrough(state.walkthroughUnreadStepId) },
         modifier = modifier.testTag("walkthrough_unread_chip"),
     ) {
-        Text("💬 ${state.walkthroughUnread} new walkthrough replies")
+        Text(localizedPlural(Plurals.composer_walkthrough_unread, state.walkthroughUnread, state.walkthroughUnread))
     }
 }
 
@@ -1552,7 +1561,7 @@ private fun JumpToBottomButton(
                 .testTag("chat_jump_to_bottom"),
         ) {
             Box(contentAlignment = Alignment.Center) {
-                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Scroll to bottom", modifier = Modifier.size(22.dp))
+                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = localized(Str.composer_scroll_to_bottom), modifier = Modifier.size(22.dp))
             }
         }
         if (newCount > 0) {
@@ -1629,18 +1638,18 @@ private fun WorkingIndicator(
         }
     }
     val elapsed = agent.workingSince?.let { ((now - it).coerceAtLeast(0)) / 1000 }
-    val durationLabel = elapsed?.let { formatDuration(it) } ?: ""
+    val durationLabel = elapsed?.let { localizedDuration(it) } ?: ""
     // Medium: platform baseline (working/thinking + tool). Low: shared enrichment with tool count.
     val label = if (detailLow) {
-        formatLowWorkingStatus(
-            baseLabel = workingBaseLabel(agent.detail),
+        localizedLowWorkingStatus(
+            baseLabel = localizedWorkingBase(agent.detail),
             detail = agent.detail,
             tool = agent.tool,
             toolCount = toolCount,
             durationLabel = durationLabel,
         )
     } else {
-        val base = workingBaseLabel(agent.detail) +
+        val base = localizedWorkingBase(agent.detail) +
             (agent.tool?.takeIf { agent.detail == "running" }?.let { " · $it" } ?: "")
         base + (if (durationLabel.isNotEmpty()) " · $durationLabel" else "")
     }
@@ -1654,7 +1663,7 @@ private fun WorkingIndicator(
 @Composable
 private fun SendingIndicator(onStop: () -> Unit) {
     StatusRow(
-        label = "sending",
+        label = localized(Str.composer_status_sending),
         color = MaterialTheme.colorScheme.primary,
         stopTag = "sending_stop",
         onStop = onStop,
@@ -1668,14 +1677,63 @@ private fun SendingIndicator(onStop: () -> Unit) {
 @Composable
 private fun WaitingIndicator(bgOpen: Int) {
     StatusRow(
-        label = "waiting · " + if (bgOpen == 1) "1 background task" else "$bgOpen background tasks",
+        label = localizedPlural(Plurals.composer_status_waiting_tasks, bgOpen, bgOpen),
         color = LocalSemantics.current.warning,
         stopTag = null,
         onStop = {},
     )
 }
 
-private fun agentsWorkingLabel(n: Int) = if (n == 1) "1 agent working" else "$n agents working"
+@Composable
+@ReadOnlyComposable
+private fun agentsWorkingLabel(n: Int): String = localizedPlural(Plurals.composer_status_agents_working, n, n)
+
+/** The shared module's working word (`workingBaseLabel`), in the app's language. */
+@Composable
+@ReadOnlyComposable
+private fun localizedWorkingBase(detail: String?): String = when (detail) {
+    "starting" -> localized(Str.composer_status_starting)
+    "running" -> localized(Str.composer_status_working)
+    else -> localized(Str.composer_status_thinking)
+}
+
+/** `formatLowWorkingStatus` in the app's language: base + tool + tool count + duration, joined with " · ". */
+@Composable
+@ReadOnlyComposable
+private fun localizedLowWorkingStatus(
+    baseLabel: String,
+    detail: String?,
+    tool: String?,
+    toolCount: Int,
+    durationLabel: String,
+): String {
+    val parts = mutableListOf(baseLabel)
+    if (detail == "running" && !tool.isNullOrBlank()) parts.add(tool)
+    if (toolCount > 0) parts.add(localizedPlural(Plurals.composer_status_tools, toolCount, toolCount))
+    if (durationLabel.isNotEmpty()) parts.add(durationLabel)
+    return parts.joinToString(" · ")
+}
+
+/** `formatDuration` in the app's language: the two largest units ("1 minute 4 seconds"). */
+@Composable
+@ReadOnlyComposable
+private fun localizedDuration(totalSeconds: Long): String {
+    val s = maxOf(0L, totalSeconds)
+    val days = (s / 86400).toInt()
+    val hours = ((s % 86400) / 3600).toInt()
+    val minutes = ((s % 3600) / 60).toInt()
+    val seconds = (s % 60).toInt()
+    val d = localizedPlural(Plurals.composer_duration_days, days, days)
+    val h = localizedPlural(Plurals.composer_duration_hours, hours, hours)
+    val m = localizedPlural(Plurals.composer_duration_minutes, minutes, minutes)
+    val sec = localizedPlural(Plurals.composer_duration_seconds, seconds, seconds)
+    return when {
+        days > 0 -> if (hours > 0) "$d $h" else d
+        hours > 0 -> if (minutes > 0) "$h $m" else h
+        minutes > 0 -> if (seconds > 0) "$m $sec" else m
+        else -> sec
+    }
+}
 
 /**
  * The parent's turn is over but agents it started are still running: the session is working.
@@ -1684,7 +1742,7 @@ private fun agentsWorkingLabel(n: Int) = if (n == 1) "1 agent working" else "$n 
 @Composable
 private fun AgentsWorkingIndicator(agentsRunning: Int) {
     StatusRow(
-        label = agentsWorkingLabel(agentsRunning) + "…",
+        label = localized(Str.composer_status_ellipsis, agentsWorkingLabel(agentsRunning)),
         color = MaterialTheme.colorScheme.primary,
         stopTag = null,
         onStop = {},
@@ -1714,11 +1772,11 @@ private fun StatusRow(label: String, color: androidx.compose.ui.graphics.Color, 
             ) {
                 Icon(
                     Icons.Filled.Square,
-                    contentDescription = "Stop",
+                    contentDescription = localized(Str.composer_stop),
                     tint = cs.error,
                     modifier = Modifier.size(10.dp),
                 )
-                Text("stop", fontFamily = MonoFontFamily, fontSize = 11.sp, color = cs.error)
+                Text(localized(Str.composer_status_stop), fontFamily = MonoFontFamily, fontSize = 11.sp, color = cs.error)
             }
         }
     }

@@ -75,4 +75,25 @@ the catalog (İ, not I): Kotlin's uppercase() has no Turkish "i".
 | credits | kredi | |
 | billing cycle | fatura dönemi | |
 | percent | %62 | Turkish puts % first: "%%1$d" |
+| council | konsey | |
+| subagent | alt ajan | |
+| round (a council) | tur | |
+| verdict | karar | |
+| "To X" / "Message X…" | "Alıcı: X" / "X için mesaj…" | no case ending on a name |
+| "Allow X?" | "X için izin verilsin mi?" | |
+| skill | beceri | |
+| walkthrough | anlatım | not "tur" (that is a council round) |
+| viewer | görüntüleyici | |
+| truncated | kısaltıldı | |
+| finish (a chat's work) | bitir | |
+| merge | birleştir | |
+| commit | commit | kept |
+| base branch | temel dal | |
+| remote (git) | uzak depo | |
+| transcribe | yazıya dök | |
+| built-in | yerleşik | |
+| plugin | eklenti | |
+| isolated (worktree mode) | ayrık | |
+| fast mode | hızlı mod | |
+| star / unstar | yıldızla / yıldızı kaldır | |
 | supermux | supermux | the brand, never translated or capitalised |

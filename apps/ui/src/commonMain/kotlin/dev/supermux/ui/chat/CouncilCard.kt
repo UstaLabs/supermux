@@ -73,6 +73,8 @@ import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.Stroke
 import dev.supermux.ui.widgets.AlertDialog
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 
 // ── the model the card draws (pure, tested) ──────────────────────────────────────────────────
 
@@ -91,16 +93,25 @@ internal fun councilLatestReport(c: CouncilView, letter: String, round: Int): Co
 internal fun isLiveCouncilMember(m: CouncilMember): Boolean = m.status != "killed" && m.status != "crashed"
 
 /** How far the current round is, in words: "2 of 3 answered", "all answered". True while someone works. */
+@Composable
 internal fun councilHeadline(c: CouncilView): Pair<String, Boolean> {
     val working = c.members.count { it.status == "working" }
     val reported = c.members.count { it.status == "reported" }
-    val text = if (reported == c.members.size) "all answered" else "$reported of ${c.members.size} answered"
+    val text = if (reported == c.members.size) localized(Str.chatcard_council_all_answered) else localized(Str.chatcard_council_answered_of, reported, c.members.size)
     return text to (working > 0)
 }
 
+/** What [councilActivityLine] says for a member thinking: a marker, shown as [councilActivityText] words. */
+internal const val COUNCIL_THINKING = "Thinking" // i18n-ok: a marker, shown translated by councilActivityText
+
+/** A member's live line as shown: [COUNCIL_THINKING] in the app's language, a tool's own words as they are. */
+@Composable
+internal fun councilActivityText(line: String): String =
+    if (line == COUNCIL_THINKING) localized(Str.chatcard_council_thinking) else line
+
 /**
  * What a working member is doing right now, from its own live state: the tool call it is in (its
- * description when the agent gave one, else the tool's title or name), else "Thinking". Null when
+ * description when the agent gave one, else the tool's title or name), else [COUNCIL_THINKING]. Null when
  * it is not working.
  */
 internal fun councilActivityLine(agent: dev.supermux.proto.AgentStatus?, events: List<dev.supermux.proto.ActivityEvent>?): String? {
@@ -109,7 +120,7 @@ internal fun councilActivityLine(agent: dev.supermux.proto.AgentStatus?, events:
     if (tool != null && tool.phase != "completed" && tool.phase != "failed") {
         (tool.description ?: tool.title ?: tool.tool)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
     }
-    if (agent.detail == "thinking" || agent.tool == null) return "Thinking"
+    if (agent.detail == "thinking" || agent.tool == null) return COUNCIL_THINKING
     return agent.tool
 }
 
@@ -133,13 +144,18 @@ fun councilActivityOf(
 val LocalCouncilActivity = androidx.compose.runtime.compositionLocalOf<Map<String, String>> { emptyMap() }
 
 /** "council-3 · Round 2 · focus: background noise". */
+@Composable
 internal fun councilSubtitle(c: CouncilView): String =
-    listOfNotNull(c.name.takeIf { it.isNotBlank() }, "Round ${c.round}", c.focus?.takeIf { it.isNotBlank() }?.let { "focus: $it" })
-        .joinToString(" · ")
+    listOfNotNull(
+        c.name.takeIf { it.isNotBlank() },
+        localized(Str.chatcard_council_round, c.round),
+        c.focus?.takeIf { it.isNotBlank() }?.let { localized(Str.chatcard_council_focus, it) },
+    ).joinToString(" · ")
 
 /** "Round 1", "Round 2 · noise". */
+@Composable
 internal fun councilRoundLabel(round: Int, focus: String?): String =
-    if (focus.isNullOrBlank()) "Round $round" else "Round $round · $focus"
+    if (focus.isNullOrBlank()) localized(Str.chatcard_council_round, round) else localized(Str.chatcard_council_round_focus, round, focus)
 
 /** The rounds the chips offer: every round the broker has, and at least the current one. */
 internal fun councilRounds(c: CouncilView): List<Pair<Int, String?>> {
@@ -170,16 +186,17 @@ internal fun councilPreviewText(text: String): String =
         .trim()
 
 /** What a row says under its name for [status] in [round]: the report, or why there is none. */
+@Composable
 internal fun councilPreview(c: CouncilView, m: CouncilMember, round: Int, status: String, failure: String?): String {
     val report = councilLatestReport(c, m.letter, round)
     return when {
         status == "reported" && report != null -> councilPreviewText(report.text)
-        status == "working" -> "Working"
-        status == "failed" -> failure?.let(::councilPreviewText) ?: "Failed"
-        status == "crashed" -> "Crashed"
-        status == "killed" -> "Stopped"
+        status == "working" -> localized(Str.chatcard_council_working)
+        status == "failed" -> failure?.let(::councilPreviewText) ?: localized(Str.chatcard_council_failed)
+        status == "crashed" -> localized(Str.chatcard_council_crashed)
+        status == "killed" -> localized(Str.chatcard_council_stopped)
         report != null -> councilPreviewText(report.text)
-        else -> "No answer in round $round"
+        else -> localized(Str.chatcard_council_no_answer_in_round, round)
     }
 }
 
@@ -269,7 +286,7 @@ private fun Header(c: CouncilView, rounds: List<Pair<Int, String?>>, selected: I
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier
                 .clip(RoundedCornerShape(4.dp))
-                .clickable(onClickLabel = if (questionOpen) "Fold the question" else "Show the whole question") { questionOpen = !questionOpen }
+                .clickable(onClickLabel = if (questionOpen) localized(Str.chatcard_council_fold_question) else localized(Str.chatcard_council_show_question)) { questionOpen = !questionOpen }
                 .pointerHoverIcon(PointerIcon.Hand)
                 .testTag("council-question:${c.id}"),
         )
@@ -315,8 +332,8 @@ private fun MemberRow(
     val idle = status == "working" && activity == ""
     val working = status == "working" && !idle
     val preview = when {
-        idle -> "Idle, hasn't answered"
-        working -> activity ?: "Working"
+        idle -> localized(Str.chatcard_council_idle)
+        working -> activity?.let { councilActivityText(it) } ?: localized(Str.chatcard_council_working)
         else -> councilPreview(c, m, round, status, failure)
     }
     val previewColor = when (status) {
@@ -324,10 +341,11 @@ private fun MemberRow(
         "reported" -> cs.onSurface
         else -> cs.onSurfaceVariant
     }
+    val statusWord = councilStatusWord(status)
     Row(
         Modifier
             .fillMaxWidth()
-            .clickable(onClickLabel = if (expanded) "Hide answers" else "Show answers", onClick = onToggle)
+            .clickable(onClickLabel = if (expanded) localized(Str.chatcard_council_hide_answers) else localized(Str.chatcard_council_show_answers), onClick = onToggle)
             .pointerHoverIcon(PointerIcon.Hand)
             .testTag("council-row:${c.id}:${m.letter}")
             .padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 10.dp),
@@ -370,7 +388,7 @@ private fun MemberRow(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier
                             .testTag("council-preview:${c.id}:${m.letter}")
-                            .semantics { stateDescription = councilStatusWord(status) },
+                            .semantics { stateDescription = statusWord },
                     )
                 }
             }
@@ -379,13 +397,14 @@ private fun MemberRow(
 }
 
 /** The status as a word, for screen readers (the card shows no badge). */
+@Composable
 internal fun councilStatusWord(status: String): String = when (status) {
-    "reported" -> "answered"
-    "working" -> "working"
-    "failed" -> "failed"
-    "crashed" -> "crashed"
-    "killed" -> "stopped"
-    "none" -> "no answer"
+    "reported" -> localized(Str.chatcard_council_status_answered)
+    "working" -> localized(Str.chatcard_council_status_working)
+    "failed" -> localized(Str.chatcard_council_status_failed)
+    "crashed" -> localized(Str.chatcard_council_status_crashed)
+    "killed" -> localized(Str.chatcard_council_status_stopped)
+    "none" -> localized(Str.chatcard_council_status_none)
     else -> status
 }
 
@@ -405,7 +424,7 @@ private fun MemberReports(c: CouncilView, m: CouncilMember, onOpenFile: (FilePat
         verticalArrangement = Arrangement.spacedBy(Space.sm),
     ) {
         if (byRound.isEmpty()) {
-            Text("No answers yet.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+            Text(localized(Str.chatcard_council_no_answers_yet), style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
         }
         for ((r, reports) in byRound) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -443,7 +462,7 @@ private fun Verdict(c: CouncilView) {
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Text(
-            if (verdict != null) "Verdict" else councilEndedLabel(c),
+            if (verdict != null) localized(Str.chatcard_council_verdict) else councilEndedLabel(c),
             style = MaterialTheme.typography.labelMedium,
             color = cs.onSurfaceVariant,
         )
@@ -452,10 +471,11 @@ private fun Verdict(c: CouncilView) {
 }
 
 /** Who ended a council that has no verdict. */
+@Composable
 internal fun councilEndedLabel(c: CouncilView): String = when (c.endedBy) {
-    "user" -> "Stopped by you"
-    "empty" -> "Ended: no members left"
-    else -> "Ended"
+    "user" -> localized(Str.chatcard_council_ended_by_you)
+    "empty" -> localized(Str.chatcard_council_ended_empty)
+    else -> localized(Str.chatcard_council_ended)
 }
 
 /** The card's foot: Show / Hide answers, and Stop as a quiet text action while the council is open. */
@@ -466,14 +486,14 @@ private fun Footer(c: CouncilView, endCouncil: ((String) -> Unit)?) {
     var confirming by remember(c.id) { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().padding(start = 14.dp, end = 6.dp, bottom = 4.dp), horizontalArrangement = Arrangement.End) {
         TextButton(onClick = { confirming = true }, modifier = Modifier.testTag("council-stop:${c.id}")) {
-            Text("Stop council", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+            Text(localized(Str.chatcard_council_stop_council), style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
         }
     }
     if (confirming) {
         AlertDialog(
             onDismissRequest = { confirming = false },
-            title = { Text("Stop ${c.name.ifBlank { "the council" }}?") },
-            text = { Text("This ends the council and stops its members. Their answers stay here.") },
+            title = { Text(if (c.name.isBlank()) localized(Str.chatcard_council_stop_title_unnamed) else localized(Str.chatcard_council_stop_title, c.name)) },
+            text = { Text(localized(Str.chatcard_council_stop_body)) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -481,9 +501,9 @@ private fun Footer(c: CouncilView, endCouncil: ((String) -> Unit)?) {
                         endCouncil(c.id)
                     },
                     modifier = Modifier.testTag("council-stop-confirm:${c.id}"),
-                ) { Text("Stop", color = cs.error) }
+                ) { Text(localized(Str.chatcard_council_stop), color = cs.error) }
             },
-            dismissButton = { TextButton(onClick = { confirming = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { confirming = false }) { Text(localized(Str.chatcard_council_cancel)) } },
         )
     }
 }
@@ -493,7 +513,7 @@ private fun Footer(c: CouncilView, endCouncil: ((String) -> Unit)?) {
 /** A working member's dot, breathing (1.2s, down to 30%). */
 @Composable
 private fun PulsingDot(color: Color) {
-    val alpha by rememberLiveLoop(1f, 0.3f, infiniteRepeatable(tween(600), RepeatMode.Reverse), label = "council-pulse")
+    val alpha by rememberLiveLoop(1f, 0.3f, infiniteRepeatable(tween(600), RepeatMode.Reverse), label = "council-pulse") // i18n-ok: animation label
     Box(Modifier.size(6.dp).alpha(alpha).clip(CircleShape).background(color))
 }
 

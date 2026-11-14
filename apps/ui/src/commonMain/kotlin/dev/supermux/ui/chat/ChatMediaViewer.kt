@@ -122,6 +122,9 @@ import dev.supermux.ui.work.DownloadItemRing
 import dev.supermux.ui.work.rememberDownloads
 import dev.supermux.work.DownloadState
 import dev.supermux.ui.widgets.Dialog
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.formatCatalogText
+import dev.supermux.ui.i18n.localized
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -286,6 +289,7 @@ internal fun ChatMediaViewerContent(
     }
 
     val savedWords = rememberSavedWords()
+    val cantDownload = localized(Str.chatline_media_cant_download, "%1\$s")
 
     // Save SAVES, on a phone too (#95): a picture or a video into its gallery, any other file into its files, and it
     // says where. It used to run the tap's rule, which on a phone is Open or Share: the chooser or the share sheet.
@@ -293,7 +297,7 @@ internal fun ChatMediaViewerContent(
         val item = current
         val handle = resolve(item)
         scope.launch {
-            val couldNot = { platform.notices.show("Couldn't download ${item.name}") }
+            val couldNot = { platform.notices.show(formatCatalogText(cantDownload, arrayOf(item.name))) }
             val said: (SavedFile?) -> Unit = { saved -> saved?.let { savedNotice(it, pointer, savedWords) }?.let(platform.notices::show) }
             // The FILE, through the fleet's downloads: closing the viewer lets go of it, and it waits in the bar.
             if (startDownload(downloads, handle.media, handle.att, platform, pointer, onFailed = couldNot, then = { said(saveDownload(platform, pointer, downloads, it)) })) return@launch
@@ -348,7 +352,7 @@ internal fun ChatMediaViewerContent(
             chromeShown = false
         }
     }
-    val chromeAlpha by animateFloatAsState(if (chromeShown) 1f else 0f, animationSpec = tween(CHROME_FADE_MS), label = "viewer chrome")
+    val chromeAlpha by animateFloatAsState(if (chromeShown) 1f else 0f, animationSpec = tween(CHROME_FADE_MS), label = "viewer chrome") // i18n-ok: animation label
     val chrome = Modifier.graphicsLayer { alpha = chromeAlpha }.hoverable(chromeHover)
 
     // A click or tap on a picture hides the bars until the next one, as photo viewers do: the top
@@ -502,10 +506,10 @@ internal fun ChatMediaViewerContent(
                 }
                 if (pointer && items.size > 1) {
                     androidx.compose.animation.AnimatedVisibility(!barsHidden && page > 0, Modifier.align(Alignment.CenterStart), enter = fadeIn(tween(BARS_MS)), exit = fadeOut(tween(BARS_MS))) {
-                        SideArrow(MediaIcons.ChevronLeft, "Previous", "chat_media_viewer_prev", { go(-1) }, chrome)
+                        SideArrow(MediaIcons.ChevronLeft, localized(Str.chatline_media_previous), "chat_media_viewer_prev", { go(-1) }, chrome)
                     }
                     androidx.compose.animation.AnimatedVisibility(!barsHidden && page < items.lastIndex, Modifier.align(Alignment.CenterEnd), enter = fadeIn(tween(BARS_MS)), exit = fadeOut(tween(BARS_MS))) {
-                        SideArrow(MediaIcons.ChevronRight, "Next", "chat_media_viewer_next", { go(+1) }, chrome)
+                        SideArrow(MediaIcons.ChevronRight, localized(Str.chatline_media_next), "chat_media_viewer_next", { go(+1) }, chrome)
                     }
                 }
             }
@@ -555,7 +559,7 @@ private fun ViewerPicture(handle: MediaHandle, name: String, transform: Lightbox
                     }
                     .testTag("chat_media_viewer_image"),
             )
-            AttachmentImage.Failed -> ViewerNotice("Couldn't load this picture")
+            AttachmentImage.Failed -> ViewerNotice(localized(Str.chatline_media_picture_failed))
             AttachmentImage.Loading -> ViewerSpinner()
         }
     }
@@ -600,7 +604,7 @@ private fun ViewerClip(
     }
     val located = uri
     when {
-        failed -> ViewerNotice("Couldn't play this video here. Save it to watch it.")
+        failed -> ViewerNotice(localized(Str.chatline_media_video_failed))
         stopped -> Box(Modifier.fillMaxSize().clickable { stopped = false }.testTag("chat_media_viewer_poster")) {
             ClipPoster(handle.att, handle.media, 0, "chat_media_viewer", Sizes.videoPlayGlyph)
             if (download != null && download.state !is DownloadState.Done) {
@@ -696,11 +700,11 @@ private fun ViewerTitleBar(
         }
         Spacer(Modifier.weight(1f))
         if (picture) {
-            BarButton(MediaIcons.ZoomOut, "Zoom out", "chat_media_viewer_zoom_out", onZoomOut)
-            BarButton(MediaIcons.ZoomIn, "Zoom in", "chat_media_viewer_zoom_in", onZoomIn)
+            BarButton(MediaIcons.ZoomOut, localized(Str.chatline_media_zoom_out), "chat_media_viewer_zoom_out", onZoomOut)
+            BarButton(MediaIcons.ZoomIn, localized(Str.chatline_media_zoom_in), "chat_media_viewer_zoom_in", onZoomIn)
         }
-        BarButton(MediaIcons.Save, "Save", "chat_media_viewer_save", onSave)
-        BarButton(MediaIcons.Close, "Close", "chat_media_viewer_close", onClose)
+        BarButton(MediaIcons.Save, localized(Str.chatline_media_save), "chat_media_viewer_save", onSave)
+        BarButton(MediaIcons.Close, localized(Str.chatline_media_close), "chat_media_viewer_close", onClose)
     }
 }
 
@@ -769,11 +773,11 @@ private fun ViewerTopBar(
         }
         Spacer(Modifier.weight(1f))
         if (picture) {
-            ViewerButton(MediaIcons.ZoomOut, "Zoom out", "chat_media_viewer_zoom_out", onZoomOut)
-            ViewerButton(MediaIcons.ZoomIn, "Zoom in", "chat_media_viewer_zoom_in", onZoomIn)
+            ViewerButton(MediaIcons.ZoomOut, localized(Str.chatline_media_zoom_out), "chat_media_viewer_zoom_out", onZoomOut)
+            ViewerButton(MediaIcons.ZoomIn, localized(Str.chatline_media_zoom_in), "chat_media_viewer_zoom_in", onZoomIn)
         }
-        ViewerButton(MediaIcons.Save, "Save", "chat_media_viewer_save", onSave)
-        ViewerButton(MediaIcons.Close, "Close", "chat_media_viewer_close", onClose)
+        ViewerButton(MediaIcons.Save, localized(Str.chatline_media_save), "chat_media_viewer_save", onSave)
+        ViewerButton(MediaIcons.Close, localized(Str.chatline_media_close), "chat_media_viewer_close", onClose)
     }
 }
 
@@ -869,9 +873,9 @@ private fun ViewerStrip(
                 val size by animateDpAsState(
                     if (selected) Media.viewerThumbCurrent else Media.viewerThumbSize,
                     animationSpec = tween(STRIP_MS),
-                    label = "strip tile",
+                    label = "strip tile", // i18n-ok: animation label
                 )
-                val dim by animateFloatAsState(if (selected) 1f else 0.6f, animationSpec = tween(STRIP_MS), label = "strip tile alpha")
+                val dim by animateFloatAsState(if (selected) 1f else 0.6f, animationSpec = tween(STRIP_MS), label = "strip tile alpha") // i18n-ok: animation label
                 Box(
                     Modifier
                         .size(size)

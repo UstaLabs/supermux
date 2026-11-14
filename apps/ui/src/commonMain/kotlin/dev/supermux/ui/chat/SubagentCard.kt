@@ -138,6 +138,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
 import androidx.compose.material.icons.outlined.Info
+import dev.supermux.ui.i18n.Plurals
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.localizedPlural
 
 // ── pure helpers (unit-tested) ────────────────────────────────────────────────────────────────
 
@@ -159,11 +163,19 @@ internal fun compactCount(n: Long): String = when {
     else -> "${(n / 100_000) / 10.0}M".replace(".0M", "M")
 }
 
-/** "14 tool calls · 23k tokens" — only the counters the agent actually reported. */
+/** "14 tool calls · 23k tokens" — only the counters the agent actually reported. English: the card shows [localizedSubagentStatsLine]. */
 internal fun subagentStatsLine(s: Subagent): String? = listOfNotNull(
-    s.stats.toolCalls?.takeIf { it > 0 }?.let { if (it == 1) "1 tool call" else "$it tool calls" },
-    s.stats.tokens?.takeIf { it > 0 }?.let { "${compactCount(it)} tokens" },
-    s.stats.turns?.takeIf { it > 1 }?.let { "$it turns" },
+    s.stats.toolCalls?.takeIf { it > 0 }?.let { if (it == 1) "1 tool call" else "$it tool calls" }, // i18n-ok: test twin
+    s.stats.tokens?.takeIf { it > 0 }?.let { "${compactCount(it)} tokens" }, // i18n-ok: test twin
+    s.stats.turns?.takeIf { it > 1 }?.let { "$it turns" }, // i18n-ok: test twin
+).joinToString(" · ").ifEmpty { null }
+
+/** [subagentStatsLine] in the app's language. */
+@Composable
+private fun localizedSubagentStatsLine(s: Subagent): String? = listOfNotNull(
+    s.stats.toolCalls?.takeIf { it > 0 }?.let { localizedPlural(Plurals.chatcard_subagent_tool_calls, it, it) },
+    s.stats.tokens?.takeIf { it > 0 }?.let { localized(Str.chatcard_subagent_tokens, compactCount(it)) },
+    s.stats.turns?.takeIf { it > 1 }?.let { localizedPlural(Plurals.chatcard_subagent_turns, it, it) },
 ).joinToString(" · ").ifEmpty { null }
 
 /** How long it ran (finished) or has been running (live). Null when the start is unknown. */
@@ -207,7 +219,12 @@ internal data class RunningItem(
  * are NOT one of those subagents seen through the task channel (same launching call, or the same
  * id) — Claude reports a background agent both ways, and two rows for one agent is noise.
  */
-internal fun runningItems(subagents: List<Subagent>, bgTasks: List<ServerFrame.BgTask>): List<RunningItem> {
+internal fun runningItems(
+    subagents: List<Subagent>,
+    bgTasks: List<ServerFrame.BgTask>,
+    /** What a background shell's row says it is doing (the strip passes it in the app's language). */
+    shellLabel: String = "background shell", // i18n-ok: test twin
+): List<RunningItem> {
     val running = subagents.filter { it.running }.sortedBy { it.startedAt }
     val calls = subagents.mapNotNull { it.parentCallId }.toSet()
     val ids = subagents.flatMap { listOfNotNull(it.id, it.nativeId) }.toSet()
@@ -215,7 +232,7 @@ internal fun runningItems(subagents: List<Subagent>, bgTasks: List<ServerFrame.B
         t.status == "running" && t.id !in ids && (t.callId == null || t.callId !in calls)
     }
     return running.map { RunningItem("s:${it.id}", it.displayName, it.activity?.takeIf { a -> a.isNotBlank() }, it.startedAt, it.id) } +
-        tasks.map { RunningItem("t:${it.id}", it.label.ifBlank { it.kind }, if (it.kind == "shell") "background shell" else it.kind, it.startedAt, null) }
+        tasks.map { RunningItem("t:${it.id}", it.label.ifBlank { it.kind }, if (it.kind == "shell") shellLabel else it.kind, it.startedAt, null) }
 }
 
 /** One bar on a strip lane: a tool call, or a run of the same tool back to back (epoch millis). */
@@ -300,12 +317,12 @@ internal fun laneBars(s: Subagent, activity: List<ActivityEvent>, now: Long): Li
     val withThinking = mutableListOf<LaneBar>()
     var prevEnd = s.startedAt.takeIf { it > 0 }
     for (bar in out) {
-        if (prevEnd != null && bar.start - prevEnd >= LANE_MIN_THINK_MS) withThinking += LaneBar(prevEnd, bar.start, "Thinking", thinking = true)
+        if (prevEnd != null && bar.start - prevEnd >= LANE_MIN_THINK_MS) withThinking += LaneBar(prevEnd, bar.start, "Thinking", thinking = true) // i18n-ok: never shown (ThinkingView)
         withThinking += bar
         prevEnd = maxOf(prevEnd ?: bar.end, bar.end)
     }
     if (s.running && out.none { it.live } && prevEnd != null && now - prevEnd >= LANE_MIN_THINK_MS) {
-        withThinking += LaneBar(prevEnd, now, "Thinking", live = true, thinking = true)
+        withThinking += LaneBar(prevEnd, now, "Thinking", live = true, thinking = true) // i18n-ok: never shown (ThinkingView)
     }
     return withThinking
 }
@@ -358,14 +375,25 @@ internal val Subagent.typeTag: String?
 internal val Subagent.displayName: String
     get() = realName ?: description?.takeIf { it.isNotBlank() } ?: id.take(8)
 
-/** How it ended, in words (null while running): who ended it matters more than the phase. */
+/** How it ended, in words (null while running): who ended it matters more than the phase. English: the card shows [localizedEndedLabel]. */
 internal fun endedLabel(s: Subagent): String? = when {
     s.running -> null
-    s.status == "failed" -> "failed"
-    s.endedBy == "parent" -> "closed by the main agent"
-    s.endedBy == "client" -> "stopped by you"
-    s.status == "cancelled" -> "stopped"
-    else -> "done"
+    s.status == "failed" -> "failed" // i18n-ok: test twin
+    s.endedBy == "parent" -> "closed by the main agent" // i18n-ok: test twin
+    s.endedBy == "client" -> "stopped by you" // i18n-ok: test twin
+    s.status == "cancelled" -> "stopped" // i18n-ok: test twin
+    else -> "done" // i18n-ok: test twin
+}
+
+/** [endedLabel] in the app's language. */
+@Composable
+private fun localizedEndedLabel(s: Subagent): String? = when {
+    s.running -> null
+    s.status == "failed" -> localized(Str.chatcard_subagent_ended_failed)
+    s.endedBy == "parent" -> localized(Str.chatcard_subagent_ended_by_parent)
+    s.endedBy == "client" -> localized(Str.chatcard_subagent_ended_by_you)
+    s.status == "cancelled" -> localized(Str.chatcard_subagent_ended_stopped)
+    else -> localized(Str.chatcard_subagent_ended_done)
 }
 
 /** One block of the expanded card, in time order. */
@@ -547,7 +575,7 @@ fun SubagentCard(
                     StatusBlock(s, now)
                     Icon(
                         if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                        contentDescription = if (expanded) "Collapse" else "Expand",
+                        contentDescription = if (expanded) localized(Str.chatcard_subagent_collapse) else localized(Str.chatcard_subagent_expand),
                         tint = cs.onSurfaceVariant,
                         modifier = Modifier.padding(start = 2.dp).size(IconSize.md + 2.dp),
                     )
@@ -563,14 +591,14 @@ fun SubagentCard(
                     )
                 }
                 // New replies, then who + how: the agent type as a mono tag, "background", counters.
-                val stats = subagentStatsLine(s)
+                val stats = localizedSubagentStatsLine(s)
                 val type = s.typeTag
                 val badge = unread.takeIf { it > 0 && !expanded }
                 if (badge != null || type != null || s.background == true || stats != null) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         badge?.let { UnreadBadge(it, s.id) }
                         type?.let { Tag(it) }
-                        if (s.background == true) Tag("background")
+                        if (s.background == true) Tag(localized(Str.chatcard_subagent_tag_background))
                         if (stats != null) {
                             Text(
                                 stats,
@@ -604,7 +632,7 @@ private fun AgentBadge(status: String) {
         else -> cs.primaryContainer to cs.onPrimaryContainer
     }
     Box(Modifier.size(24.dp).clip(CircleShape).background(bg), contentAlignment = Alignment.Center) {
-        Icon(Icons.Filled.SmartToy, contentDescription = "Subagent", tint = fg, modifier = Modifier.size(14.dp))
+        Icon(Icons.Filled.SmartToy, contentDescription = localized(Str.chatcard_subagent_icon), tint = fg, modifier = Modifier.size(14.dp))
     }
 }
 
@@ -613,7 +641,7 @@ private fun AgentBadge(status: String) {
 private fun UnreadBadge(n: Int, id: String) {
     val cs = MaterialTheme.colorScheme
     Text(
-        if (n == 1) "1 new reply" else "$n new replies",
+        localizedPlural(Plurals.chatcard_subagent_new_replies, n, n),
         style = MaterialTheme.typography.labelSmall,
         fontWeight = FontWeight.SemiBold,
         color = cs.onPrimary,
@@ -636,7 +664,7 @@ fun SubagentMarker(entryId: String, text: String, name: String?, onOpen: (() -> 
     val cs = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(Radii.md)
     val body = markerBody(text)
-    val who = name ?: text.removePrefix("↪ to ").substringBefore(": ").takeIf { text.startsWith("↪ to ") } ?: "a subagent"
+    val who = name ?: text.removePrefix("↪ to ").substringBefore(": ").takeIf { text.startsWith("↪ to ") } ?: localized(Str.chatcard_subagent_marker_someone)
     Row(Modifier.fillMaxWidth().padding(start = Space.xl), horizontalArrangement = Arrangement.End) {
         Row(
             Modifier
@@ -650,7 +678,7 @@ fun SubagentMarker(entryId: String, text: String, name: String?, onOpen: (() -> 
         ) {
             Icon(Icons.Filled.SmartToy, contentDescription = null, tint = cs.primary, modifier = Modifier.padding(top = 2.dp).size(IconSize.sm))
             Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                Text("To $who", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = cs.primary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(localized(Str.chatcard_subagent_marker_to, who), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = cs.primary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(body, style = MaterialTheme.typography.bodySmall, color = cs.onSurface, maxLines = 3, overflow = TextOverflow.Ellipsis)
             }
         }
@@ -681,16 +709,20 @@ private fun StatusBlock(s: Subagent, now: Long) {
     val cs = MaterialTheme.colorScheme
     val sem = LocalSemantics.current
     val elapsed = subagentElapsedMs(s, now)?.let(::compactElapsed)
+    // A plain finish, decided on the English twin (logic only, never shown).
+    val done = endedLabel(s) == "done"
+    // The clock is mono (it ticks), and so is a bare done / failed; a sentence of who-ended-it is not.
     val (text, color) = when (s.status) {
-        "running" -> (elapsed ?: "running") to cs.primary
-        "failed" -> (if (elapsed != null) "failed · $elapsed" else "failed") to cs.error
+        "running" -> (elapsed ?: localized(Str.chatcard_subagent_running)) to cs.primary
+        "failed" -> (if (elapsed != null) localized(Str.chatcard_subagent_failed_elapsed, elapsed) else localized(Str.chatcard_subagent_ended_failed)) to cs.error
         else -> {
             // Who ended it reads first ("closed by the main agent", "stopped by you"); a plain
             // finish keeps its time.
-            val ended = endedLabel(s) ?: s.status
-            (if (ended == "done" && elapsed != null) "done · $elapsed" else ended) to cs.onSurfaceVariant
+            val ended = localizedEndedLabel(s) ?: s.status
+            (if (done && elapsed != null) localized(Str.chatcard_subagent_done_elapsed, elapsed) else ended) to cs.onSurfaceVariant
         }
     }
+    val mono = s.running || s.status == "running" || s.status == "failed" || done || text.firstOrNull()?.isDigit() == true
     Row(
         Modifier.padding(top = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -698,11 +730,10 @@ private fun StatusBlock(s: Subagent, now: Long) {
     ) {
         if (s.running) {
             CircularProgressIndicator(Modifier.size(11.dp), color = cs.primary, strokeWidth = 1.5.dp)
-        } else if (endedLabel(s) == "done") {
+        } else if (done) {
             Box(Modifier.size(6.dp).clip(CircleShape).background(sem.success))
         }
-        // The clock is mono (it ticks); a sentence of who-ended-it is not.
-        if (s.running || text.first().isDigit() || text.startsWith("done") || text.startsWith("failed")) {
+        if (mono) {
             Text(text, fontFamily = MonoFontFamily, fontSize = 11.sp, color = color, maxLines = 1)
         } else {
             Text(text, style = MaterialTheme.typography.labelMedium, color = color, maxLines = 1, modifier = Modifier.testTag("subagent-ended:${s.id}"))
@@ -746,6 +777,10 @@ private fun ExpandedBody(
     var stopError by kept::stopError
     var note by kept::note
     val thread = remember(s, item.children, item.spawn) { threadOf(s, item.children, item.spawn?.output) }
+    // Resolved here: send() and stop() run outside the composition.
+    val sentViaMain = localized(Str.chatcard_subagent_sent_via_main)
+    val sendFailed = localized(Str.chatcard_subagent_send_failed)
+    val stopFailed = localized(Str.chatcard_subagent_stop_failed)
 
     fun send() {
         val text = draft.trim()
@@ -756,9 +791,9 @@ private fun ExpandedBody(
             busy = false
             if (r.ok) {
                 draft = ""
-                note = if (r.via == "relay" || s.messaging == "relay") "Sent via the main agent" else null
+                note = if (r.via == "relay" || s.messaging == "relay") sentViaMain else null
             } else {
-                messageError = r.error?.takeIf { it.isNotBlank() } ?: "Couldn't send the message"
+                messageError = r.error?.takeIf { it.isNotBlank() } ?: sendFailed
             }
         }
     }
@@ -768,7 +803,7 @@ private fun ExpandedBody(
         scope.launch {
             val r = actions.stop(s.id)
             busy = false
-            if (!r.ok) stopError = r.error?.takeIf { it.isNotBlank() } ?: "Couldn't stop this agent"
+            if (!r.ok) stopError = r.error?.takeIf { it.isNotBlank() } ?: stopFailed
         }
     }
 
@@ -797,7 +832,7 @@ private fun ExpandedBody(
             }
         }
         if (thread.isEmpty() && s.running) {
-            Text("Getting started…", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+            Text(localized(Str.chatcard_subagent_getting_started), style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
         }
 
         // ── what the user can do, truthfully ──
@@ -830,7 +865,7 @@ private fun ExpandedBody(
                 }
                 if (s.canStop) {
                     CardButton(
-                        label = "Stop",
+                        label = localized(Str.chatcard_subagent_stop),
                         style = CardButtonStyle.Danger,
                         enabled = !busy,
                         testTag = "subagent-stop:${s.id}",
@@ -884,7 +919,7 @@ private fun TaskBlock(text: String, id: String) {
             .testTag("subagent-task:$id"),
         verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
-        Text("Task from the main agent", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, color = cs.onSurfaceVariant)
+        Text(localized(Str.chatcard_subagent_task_from_main), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, color = cs.onSurfaceVariant)
         Text(
             text,
             style = MaterialTheme.typography.bodySmall,
@@ -892,7 +927,7 @@ private fun TaskBlock(text: String, id: String) {
             maxLines = if (open || !long) Int.MAX_VALUE else 3,
             overflow = TextOverflow.Ellipsis,
         )
-        if (long) Toggle(if (open) "Show less" else "Show more") { open = !open }
+        if (long) Toggle(if (open) localized(Str.chatcard_show_less) else localized(Str.chatcard_show_more)) { open = !open }
     }
 }
 
@@ -901,7 +936,7 @@ private fun TaskBlock(text: String, id: String) {
 private fun MineBubble(text: String, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
     Column(modifier.fillMaxWidth().padding(start = Space.xl), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text("You", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+        Text(localized(Str.chatcard_subagent_you), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
         Text(
             text,
             style = MaterialTheme.typography.bodyMedium,
@@ -958,7 +993,7 @@ private fun StepsBlock(tools: List<TimelineItem.Tool>, highDetail: Boolean, key:
             }
             .padding(start = Space.md),
     ) {
-        if (hidden > 0) Toggle(if (hidden == 1) "Show 1 earlier step" else "Show $hidden earlier steps") { all = true }
+        if (hidden > 0) Toggle(localizedPlural(Plurals.chatcard_subagent_earlier_steps, hidden, hidden)) { all = true }
         tools.drop(hidden).forEach { ToolCard(it.event, it.status, it.output, it.resultBody, highDetail) }
     }
 }
@@ -969,13 +1004,13 @@ private fun ResultBlock(entry: ThreadEntry.Result, onOpenFile: (dev.supermux.ui.
     var open by remember(entry.text) { mutableStateOf(false) }
     val long = entry.text.length > 600 || entry.text.count { it == '\n' } > 8
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text("Result", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, color = cs.onSurfaceVariant)
+        Text(localized(Str.chatcard_subagent_result), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, color = cs.onSurfaceVariant)
         Box(Modifier.fillMaxWidth().then(if (long && !open) Modifier.heightIn(max = 180.dp).clip(RoundedCornerShape(0.dp)) else Modifier)) {
             ThreadProse { MarkdownBody(entry.text, Modifier.fillMaxWidth(), onOpenFile = onOpenFile) }
         }
-        if (long) Toggle(if (open) "Show less" else "Show more") { open = !open }
+        if (long) Toggle(if (open) localized(Str.chatcard_show_less) else localized(Str.chatcard_show_more)) { open = !open }
         if (entry.clipped && (open || !long)) {
-            Text("The broker kept the first 8k characters of this result.", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+            Text(localized(Str.chatcard_subagent_result_clipped), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
         }
     }
 }
@@ -1013,6 +1048,7 @@ private fun MessageField(
     val cs = MaterialTheme.colorScheme
     var focused by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(Radii.sm)
+    val placeholder = localized(Str.chatcard_subagent_message_placeholder, name)
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(
             Modifier
@@ -1040,17 +1076,17 @@ private fun MessageField(
                 decorationBox = { inner ->
                     Box(contentAlignment = Alignment.CenterStart) {
                         if (value.isEmpty()) {
-                            Text("Message $name…", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(placeholder, style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         inner()
                     }
                 },
             )
-            IconBtn(Icons.AutoMirrored.Filled.Send, "Send", "subagent-message-send:$id", cs.primary, enabled = enabled && value.isNotBlank(), onClick = onSend)
+            IconBtn(Icons.AutoMirrored.Filled.Send, localized(Str.chatcard_subagent_send), "subagent-message-send:$id", cs.primary, enabled = enabled && value.isNotBlank(), onClick = onSend)
         }
         if (relay) {
             Text(
-                "Sent via the main agent — it passes your message on.",
+                localized(Str.chatcard_subagent_relay_hint),
                 style = MaterialTheme.typography.labelSmall,
                 color = cs.onSurfaceVariant,
                 modifier = Modifier.testTag("subagent-relay-hint:$id"),
@@ -1121,7 +1157,8 @@ fun RunningStrip(
     /** The session's agent kind ("claude", "codex", …): its subagents wear its logo. */
     agent: String? = null,
 ) {
-    val items = remember(subagents, bgTasks) { runningItems(subagents, bgTasks) }
+    val shellLabel = localized(Str.chatcard_subagent_strip_background_shell)
+    val items = remember(subagents, bgTasks, shellLabel) { runningItems(subagents, bgTasks, shellLabel) }
     Box(modifier.fillMaxWidth().animateContentSize()) {
         if (items.isEmpty()) return@Box
         val cs = MaterialTheme.colorScheme
@@ -1140,10 +1177,13 @@ fun RunningStrip(
         ) {
             val agents = items.count { it.subagentId != null }
             val tasks = items.size - agents
-            val summary = listOfNotNull(
-                agents.takeIf { it > 0 }?.let { if (it == 1) "1 agent" else "$it agents" },
-                tasks.takeIf { it > 0 }?.let { if (it == 1) "1 task" else "$it tasks" },
-            ).joinToString(" · ") + " running"
+            val summary = localized(
+                Str.chatcard_subagent_strip_running,
+                listOfNotNull(
+                    agents.takeIf { it > 0 }?.let { localizedPlural(Plurals.chatcard_subagent_strip_agents, it, it) },
+                    tasks.takeIf { it > 0 }?.let { localizedPlural(Plurals.chatcard_subagent_strip_tasks, it, it) },
+                ).joinToString(" · "),
+            )
             when {
                 open -> LanesView(items, subagents, bgTasks, activity, agent, now, summary, onCollapse = { open = false }, onOpenSubagent = onOpenSubagent)
                 folds -> Row(
@@ -1157,7 +1197,7 @@ fun RunningStrip(
                     horizontalArrangement = Arrangement.spacedBy(Space.sm),
                 ) {
                     Text(summary, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = cs.onSurface, modifier = Modifier.weight(1f))
-                    Text("Show", style = MaterialTheme.typography.labelMedium, color = cs.primary)
+                    Text(localized(Str.chatcard_subagent_strip_show), style = MaterialTheme.typography.labelMedium, color = cs.primary)
                     Icon(Icons.Filled.ExpandLess, contentDescription = null, tint = cs.primary, modifier = Modifier.size(IconSize.md))
                 }
                 else -> StripRow(items.single(), now, onOpenSubagent, onExpand = { open = true })
@@ -1183,7 +1223,7 @@ private fun StripRow(item: RunningItem, now: Long, onOpenSubagent: (String) -> U
         if (clickable) {
             CircularProgressIndicator(Modifier.size(11.dp), color = cs.primary, strokeWidth = 1.5.dp)
         } else {
-            Icon(Icons.Filled.Terminal, contentDescription = "Background task", tint = cs.onSurfaceVariant, modifier = Modifier.size(12.dp))
+            Icon(Icons.Filled.Terminal, contentDescription = localized(Str.chatcard_subagent_strip_background_task), tint = cs.onSurfaceVariant, modifier = Modifier.size(12.dp))
         }
         // Label keeps its words; the activity takes whatever width is left and ellipsizes.
         Text(
@@ -1216,7 +1256,7 @@ private fun StripRow(item: RunningItem, now: Long, onOpenSubagent: (String) -> U
                 .testTag("subagent-strip-lanes"),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(Icons.Filled.ExpandLess, contentDescription = "Show timeline", tint = cs.onSurfaceVariant, modifier = Modifier.size(IconSize.md))
+            Icon(Icons.Filled.ExpandLess, contentDescription = localized(Str.chatcard_subagent_strip_show_timeline), tint = cs.onSurfaceVariant, modifier = Modifier.size(IconSize.md))
         }
     }
 }
@@ -1250,7 +1290,7 @@ private fun LanesView(
         PulseDot(cs.primary)
         Text(summary, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = cs.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         Text(
-            "Last ${window / 1000}s",
+            localized(Str.chatcard_subagent_strip_last_seconds, (window / 1000).toInt()),
             fontSize = 12.sp,
             color = cs.onSurfaceVariant,
             modifier = Modifier
@@ -1258,7 +1298,7 @@ private fun LanesView(
                 .background(cs.onSurface.copy(alpha = 0.06f))
                 .padding(horizontal = 8.dp, vertical = 2.dp),
         )
-        Icon(Icons.Filled.ExpandMore, contentDescription = "Show less", tint = cs.onSurfaceVariant, modifier = Modifier.size(IconSize.md))
+        Icon(Icons.Filled.ExpandMore, contentDescription = localized(Str.chatcard_show_less), tint = cs.onSurfaceVariant, modifier = Modifier.size(IconSize.md))
     }
     Box(Modifier.fillMaxWidth().heightIn(min = 1.dp, max = 1.dp).background(cs.outlineVariant.copy(alpha = 0.45f)))
     val glide = rememberGlidingNow(window)
@@ -1296,7 +1336,7 @@ private fun rememberGlidingNow(window: Long): State<Long> {
 @Composable
 private fun PulseDot(color: Color) {
     val alpha by rememberLiveLoop(
-        1f, 0.45f, infiniteRepeatable(tween(800, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "strip-pulse",
+        1f, 0.45f, infiniteRepeatable(tween(800, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "strip-pulse", // i18n-ok: animation label
     )
     Box(Modifier.size(7.dp).graphicsLayer { this.alpha = alpha }.clip(CircleShape).background(color))
 }
@@ -1341,7 +1381,7 @@ private fun LaneAxis(window: Long, nameWidth: Dp) {
                     Text(laneTickLabel(ago), fontSize = 11.sp, color = cs.onSurface.copy(alpha = 0.32f), maxLines = 1, style = TabularNums)
                 }
                 Text(
-                    "now",
+                    localized(Str.chatcard_subagent_strip_now),
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Medium,
                     color = cs.primary,
@@ -1382,7 +1422,7 @@ private val TabularNums = androidx.compose.ui.text.TextStyle(fontFeatureSettings
 private fun LaneRow(lane: Lane, agent: String?, now: Long, glide: State<Long>, window: Long, nameWidth: Dp, last: Boolean, onOpenSubagent: (String) -> Unit) {
     // Rows in view: one per call running at the same time, eased so a second row grows in.
     val rows = 1 + (lane.bars.filter { it.end >= now - window || it.live }.maxOfOrNull { it.row } ?: 0)
-    val laneHeight by animateDpAsState(LANE_HEIGHT + (LANE_BAR_HEIGHT + LANE_ROW_GAP) * (rows - 1), tween(250, easing = FastOutSlowInEasing), label = "lane-height")
+    val laneHeight by animateDpAsState(LANE_HEIGHT + (LANE_BAR_HEIGHT + LANE_ROW_GAP) * (rows - 1), tween(250, easing = FastOutSlowInEasing), label = "lane-height") // i18n-ok: animation label
     val cs = MaterialTheme.colorScheme
     val clickable = lane.subagentId != null
     val running = lane.status == "running"
@@ -1405,7 +1445,7 @@ private fun LaneRow(lane: Lane, agent: String?, now: Long, glide: State<Long>, w
                 } else {
                     Icon(
                         if (clickable) Icons.Filled.SmartToy else Icons.Filled.Terminal,
-                        contentDescription = if (clickable) null else "Background task",
+                        contentDescription = if (clickable) null else localized(Str.chatcard_subagent_strip_background_task),
                         tint = cs.onSurfaceVariant,
                         modifier = Modifier.size(15.dp),
                     )
@@ -1423,8 +1463,11 @@ private fun LaneRow(lane: Lane, agent: String?, now: Long, glide: State<Long>, w
                         modifier = Modifier.weight(1f, fill = false),
                     )
                     if (!compact) when (lane.status) {
-                        "failed" -> LaneChip("Failed", cs.error)
-                        "completed", "cancelled" -> LaneChip(if (lane.status == "completed") "Done" else "Stopped", cs.onSurfaceVariant)
+                        "failed" -> LaneChip(localized(Str.chatcard_subagent_lane_failed), cs.error)
+                        "completed", "cancelled" -> LaneChip(
+                            if (lane.status == "completed") localized(Str.chatcard_subagent_lane_done) else localized(Str.chatcard_subagent_lane_stopped),
+                            cs.onSurfaceVariant,
+                        )
                     }
                 }
                 val elapsed = lane.startedAt.takeIf { it > 0 }?.let { compactElapsed((lane.endedAt ?: now) - it) }
@@ -1559,8 +1602,8 @@ private fun laneBarColors(bar: LaneBar, dim: Boolean): Pair<Color, Color> {
         else -> null
     }
     val base = cardSurface()
-    val fill by animateColorAsState((accent?.copy(alpha = 0.12f) ?: cs.onSurface.copy(alpha = if (dim) 0.04f else 0.06f)).compositeOver(base), tween(300), label = "lane-bar-fill")
-    val ink by animateColorAsState(accent ?: cs.onSurface.copy(alpha = if (dim) 0.45f else 0.62f), tween(300), label = "lane-bar-ink")
+    val fill by animateColorAsState((accent?.copy(alpha = 0.12f) ?: cs.onSurface.copy(alpha = if (dim) 0.04f else 0.06f)).compositeOver(base), tween(300), label = "lane-bar-fill") // i18n-ok: animation label
+    val ink by animateColorAsState(accent ?: cs.onSurface.copy(alpha = if (dim) 0.45f else 0.62f), tween(300), label = "lane-bar-ink") // i18n-ok: animation label
     return fill to ink
 }
 
@@ -1607,11 +1650,11 @@ private fun ThinkingView(live: Boolean, modifier: Modifier) {
     val cs = MaterialTheme.colorScheme
     val appear = remember { Animatable(if (live) 0f else 1f) }
     LaunchedEffect(Unit) { appear.animateTo(1f, tween(500, easing = FastOutSlowInEasing)) }
-    val liveness = animateFloatAsState(if (live) 1f else 0f, tween(600, easing = FastOutSlowInEasing), label = "lane-think-live")
+    val liveness = animateFloatAsState(if (live) 1f else 0f, tween(600, easing = FastOutSlowInEasing), label = "lane-think-live") // i18n-ok: animation label
     // Seconds 0..60, looping; every square's frequency is a whole number of cycles per minute, so
     // the loop is seamless. Only runs while the gap is (or is fading from) live.
     val clock = if (live || liveness.value > 0.01f) {
-        rememberLiveLoop(0f, 60f, infiniteRepeatable(tween(60_000, easing = LinearEasing)), label = "lane-think")
+        rememberLiveLoop(0f, 60f, infiniteRepeatable(tween(60_000, easing = LinearEasing)), label = "lane-think") // i18n-ok: animation label
     } else null
     val hot = cs.primary
     val cold = cs.onSurface

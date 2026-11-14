@@ -93,6 +93,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
+import androidx.compose.runtime.ReadOnlyComposable
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 
 /** Where a device recognises dictation. Persisted per device as [wire] (`SettingsKeys.DICTATION_MODE`). */
 enum class DictationMode(val wire: String) {
@@ -424,7 +427,7 @@ class DictationController(
             !rawFallback.isNullOrBlank() -> appendToDraft(rawFallback)
             else -> {
                 failedAudio = audio
-                fail("Transcription failed")
+                fail(DICTATION_FAILED)
             }
         }
     }
@@ -724,7 +727,7 @@ class DictationController(
                 if (fin != null) {
                     when {
                         fin.text.isNotBlank() || s.lastShown.isNotBlank() -> writeStreamText(s, fin.text)
-                        else -> fail("Didn't catch that")
+                        else -> fail(DICTATION_NOT_CAUGHT)
                     }
                     liveTranscript = null
                     if (fin.pendingEdit) {
@@ -741,7 +744,7 @@ class DictationController(
                 liveTranscript = null
                 closeStream(s)
                 if (audio == null) {
-                    fail("Didn't catch that")
+                    fail(DICTATION_NOT_CAUGHT)
                     return@launch
                 }
                 // What the stream already showed stays if the upload fails too.
@@ -1009,7 +1012,7 @@ class DictationController(
                 try {
                     val draft = try { live?.stop().orEmpty() } finally { liveSessionOpen = false }
                     if (draft.isBlank()) {
-                        fail("Didn't catch that")
+                        fail(DICTATION_NOT_CAUGHT)
                         return@launch
                     }
                     transcribeAndAppend(rawFallback = draft) { transcribeDraft(draft) }
@@ -1046,7 +1049,7 @@ class DictationController(
                     liveTranscript = null
                     if (upToDate != null) return@launch
                     if (audio == null) {
-                        fail("Didn't catch that")
+                        fail(DICTATION_NOT_CAUGHT)
                         return@launch
                     }
                     // The words since the last pass, merged into the text so far.
@@ -1264,20 +1267,33 @@ fun MicButton(
                     modifier = Modifier.size(14.dp), strokeWidth = 1.5.dp, color = cs.primary,
                 )
                 micUnavailable -> Icon(
-                    Icons.Filled.MicOff, contentDescription = "Microphone unavailable",
+                    Icons.Filled.MicOff, contentDescription = localized(Str.composer_dictation_mic_unavailable),
                     tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp),
                 )
                 recording -> Icon(
-                    Icons.Filled.Stop, contentDescription = "Stop and transcribe",
+                    Icons.Filled.Stop, contentDescription = localized(Str.composer_dictation_stop),
                     tint = cs.onError, modifier = Modifier.size(16.dp),
                 )
                 else -> Icon(
-                    Icons.Outlined.Mic, contentDescription = "Record voice",
+                    Icons.Outlined.Mic, contentDescription = localized(Str.composer_dictation_record),
                     tint = cs.onSurfaceVariant, modifier = Modifier.size(if (pointer) 18.dp else 22.dp),
                 )
             }
         }
     }
+}
+
+/** The controller's failure words, kept English for its tests; [localizedDictationMessage] shows them translated. */
+internal const val DICTATION_FAILED = "Transcription failed" // i18n-ok: test twin
+internal const val DICTATION_NOT_CAUGHT = "Didn't catch that" // i18n-ok: test twin
+
+/** A [DictationController] banner / error in the app's language (anything else is shown as given). */
+@Composable
+@ReadOnlyComposable
+internal fun localizedDictationMessage(message: String): String = when (message) {
+    DICTATION_FAILED -> localized(Str.composer_dictation_failed)
+    DICTATION_NOT_CAUGHT -> localized(Str.composer_dictation_not_caught)
+    else -> message
 }
 
 /** "Transcribing…" indicator (parity with iOS transcribingBar). */
@@ -1297,7 +1313,7 @@ fun TranscribingIndicator(modifier: Modifier = Modifier) {
             color = cs.primary,
             strokeWidth = 1.5.dp,
         )
-        Text("Transcribing…", color = cs.onSurfaceVariant, fontSize = 12.sp)
+        Text(localized(Str.composer_dictation_transcribing), color = cs.onSurfaceVariant, fontSize = 12.sp)
     }
 }
 
@@ -1306,9 +1322,9 @@ fun TranscribingIndicator(modifier: Modifier = Modifier) {
 fun MicDeniedDialog(onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Microphone access needed") },
-        text = { Text("Enable microphone access in Settings to dictate messages.") },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
+        title = { Text(localized(Str.composer_dictation_mic_denied_title)) },
+        text = { Text(localized(Str.composer_dictation_mic_denied_body)) },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(localized(Str.composer_ok)) } },
         modifier = Modifier.testTag("mic_denied_dialog"),
     )
 }
@@ -1341,12 +1357,12 @@ fun RecordingBar(
             IconButton(onClick = onCancel, modifier = Modifier.testTag("voice_cancel")) {
                 Icon(
                     Icons.Filled.Delete,
-                    contentDescription = "Discard recording",
+                    contentDescription = localized(Str.composer_dictation_discard),
                     tint = cs.onSurfaceVariant,
                     modifier = Modifier.size(18.dp),
                 )
             }
-            val blink by rememberLiveLoop(1f, 0.3f, infiniteRepeatable(tween(600), RepeatMode.Reverse), label = "rec")
+            val blink by rememberLiveLoop(1f, 0.3f, infiniteRepeatable(tween(600), RepeatMode.Reverse), label = "rec") // i18n-ok: an animation label
             Box(
                 Modifier
                     .size(8.dp)
@@ -1370,7 +1386,7 @@ fun RecordingBar(
                 ) {
                     Icon(
                         Icons.Filled.Stop,
-                        contentDescription = "Stop and transcribe",
+                        contentDescription = localized(Str.composer_dictation_stop),
                         tint = cs.onError,
                         modifier = Modifier.size(16.dp),
                     )
@@ -1401,19 +1417,19 @@ fun DictationFailureBar(
             .testTag("composer_dictation_failed"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(message, color = cs.error, fontSize = 12.sp, modifier = Modifier.weight(1f))
+        Text(localizedDictationMessage(message), color = cs.error, fontSize = 12.sp, modifier = Modifier.weight(1f))
         TextButton(onClick = onRetry, modifier = Modifier.testTag("dictation_retry")) {
-            Text("Retry", fontSize = 12.sp)
+            Text(localized(Str.composer_dictation_retry), fontSize = 12.sp)
         }
         if (onAttach != null) {
             TextButton(onClick = onAttach, modifier = Modifier.testTag("dictation_attach")) {
-                Text("Send as audio", fontSize = 12.sp)
+                Text(localized(Str.composer_dictation_send_audio), fontSize = 12.sp)
             }
         }
         IconButton(onClick = onDismiss, modifier = Modifier.testTag("dictation_dismiss")) {
             Icon(
                 Icons.Filled.Close,
-                contentDescription = "Dismiss",
+                contentDescription = localized(Str.composer_dismiss),
                 tint = cs.onSurfaceVariant,
                 modifier = Modifier.size(16.dp),
             )

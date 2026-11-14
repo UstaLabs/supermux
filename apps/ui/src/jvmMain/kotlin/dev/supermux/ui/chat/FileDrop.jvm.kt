@@ -29,6 +29,8 @@ import java.io.File
 import java.io.RandomAccessFile
 import java.net.URI
 import java.nio.ByteBuffer
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 
 /** Converts the file-URI strings from `DragData.FilesList.readFiles()` back into [File]s. Compose
  *  Desktop's drag source encodes each dropped OS file as `File.toURI().toString()` (a `file:` URI),
@@ -106,9 +108,10 @@ actual fun ComposerContextMenu(
     onPasteImage: () -> Unit,
     content: @Composable () -> Unit,
 ) {
+    val pasteLabel = localized(Str.composer_paste_image)
     ContextMenuArea(
         items = {
-            if (pasteEnabled) listOf(ContextMenuItem("Paste image") { onPasteImage() }) else emptyList()
+            if (pasteEnabled) listOf(ContextMenuItem(pasteLabel) { onPasteImage() }) else emptyList()
         },
         content = content,
     )

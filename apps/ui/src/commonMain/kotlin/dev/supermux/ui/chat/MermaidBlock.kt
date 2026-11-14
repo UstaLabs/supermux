@@ -48,6 +48,8 @@ import com.swithun.cmpmermaid.core.MermaidThemePreset
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.widgets.Dialog
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 
 /** Tallest an inline diagram may be before it shrinks (keeping its aspect) — pinch in place, or open it full size. */
 private val MaxInlineHeight: Dp = 420.dp
@@ -78,7 +80,7 @@ fun MermaidBlock(source: String) {
             // The code view has its own copy button in that corner, so the toggle back to the
             // diagram joins its row instead of sitting on top of it.
             FencedCodeBlock(source) {
-                CornerButton(Icons.Filled.Code, "Show diagram", true) { showCode = false }
+                CornerButton(Icons.Filled.Code, localized(Str.chatline_media_show_diagram), true) { showCode = false }
             }
         } else {
             BoxWithConstraints(
@@ -116,7 +118,7 @@ fun MermaidBlock(source: String) {
                         source = source,
                         modifier = Modifier.width(fitW).height(fitH).zoomedBy(inline),
                         theme = theme,
-                        contentDescription = "Mermaid diagram",
+                        contentDescription = localized(Str.chatline_media_mermaid_diagram),
                         onError = { failed = true },
                         onRenderResult = { r ->
                             if (r is GMResult.Ok) sceneSize = r.value.width to r.value.height
@@ -128,11 +130,11 @@ fun MermaidBlock(source: String) {
         }
         if (!showCode) {
             Row(Modifier.align(Alignment.TopEnd).padding(Space.xs)) {
-                CornerButton(Icons.Filled.Code, "Show source", false) { showCode = true }
+                CornerButton(Icons.Filled.Code, localized(Str.chatline_media_show_source), false) { showCode = true }
                 if (inline.scale > LightboxTransform.MIN) {
-                    CornerButton(Icons.Filled.ZoomOutMap, "Fit diagram", false) { inline.scaleTo(LightboxTransform.MIN) }
+                    CornerButton(Icons.Filled.ZoomOutMap, localized(Str.chatline_media_fit_diagram), false) { inline.scaleTo(LightboxTransform.MIN) }
                 }
-                CornerButton(Icons.Filled.OpenInFull, "Open fullscreen", false) { fullscreen = true }
+                CornerButton(Icons.Filled.OpenInFull, localized(Str.chatline_media_open_fullscreen), false) { fullscreen = true }
             }
         }
     }
@@ -172,13 +174,13 @@ private fun MermaidViewer(source: String, theme: MermaidTheme, onDismiss: () -> 
             )
             Row(Modifier.align(Alignment.TopEnd).padding(Space.sm)) {
                 IconButton(onClick = { transform.zoomBy(1f / LightboxTransform.STEP) }, modifier = Modifier.testTag("mermaid_viewer_zoom_out")) {
-                    Icon(Icons.Filled.Remove, contentDescription = "Zoom out", tint = cs.onSurface)
+                    Icon(Icons.Filled.Remove, contentDescription = localized(Str.chatline_media_zoom_out), tint = cs.onSurface)
                 }
                 IconButton(onClick = { transform.zoomBy(LightboxTransform.STEP) }, modifier = Modifier.testTag("mermaid_viewer_zoom_in")) {
-                    Icon(Icons.Filled.Add, contentDescription = "Zoom in", tint = cs.onSurface)
+                    Icon(Icons.Filled.Add, contentDescription = localized(Str.chatline_media_zoom_in), tint = cs.onSurface)
                 }
                 IconButton(onClick = onDismiss) {
-                    Icon(Icons.Filled.Close, contentDescription = "Close", tint = cs.onSurface)
+                    Icon(Icons.Filled.Close, contentDescription = localized(Str.chatline_media_close), tint = cs.onSurface)
                 }
             }
         }

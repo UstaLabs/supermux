@@ -21,6 +21,8 @@ import dev.supermux.ui.platform.PickedFile
 import dev.supermux.ui.widgets.PointerAnchoredMenu
 import org.w3c.files.FileList
 import org.w3c.files.get
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 
 /** The dropped `FileList` as upload-ready [PickedFile]s — the SAME funnel the attach dialog uses.
  *  The browser's own `File.type` wins when it has one; otherwise the name's extension decides. */
@@ -81,7 +83,7 @@ actual fun ComposerContextMenu(
 ) {
     PointerAnchoredMenu(content = content) { dismiss ->
         DropdownMenuItem(
-            text = { Text("Paste image") },
+            text = { Text(localized(Str.composer_paste_image)) },
             enabled = pasteEnabled,
             onClick = {
                 dismiss()

@@ -18,6 +18,8 @@ import dev.supermux.chat.liveMarkdown
 import dev.supermux.state.LiveReply
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.theme.Space
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 
 /**
  * Card #76: the reply while the agent writes it. Same look and padding as the stored reply that takes its place
@@ -50,7 +52,7 @@ internal fun LiveThinkingRow(thinking: LiveReply, folded: Boolean) {
     Column(Modifier.fillMaxWidth().testTag("activity-reasoning-live").padding(vertical = 2.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
             if (!folded) CircularProgressIndicator(Modifier.size(12.dp), color = cs.onSurfaceVariant, strokeWidth = 1.5.dp)
-            Text("Thinking…", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+            Text(localized(Str.chatline_thinking), style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
         }
         if (!folded) {
             Text(

@@ -58,6 +58,10 @@ import dev.supermux.ui.session.AgentLogo
 import dev.supermux.ui.session.hasAgentLogo
 import dev.supermux.ui.theme.MonoFontFamily
 import org.jetbrains.compose.resources.painterResource
+import androidx.compose.runtime.ReadOnlyComposable
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.uppercaseInAppLanguage
 
 // The `/` menu (card #56, option B): the list on the left and, where there is room, the highlighted
 // command in full on the right — its argument syntax, aliases, where it comes from and its whole
@@ -117,7 +121,7 @@ fun SlashMenu(
             "$controlCount supermux".takeIf { controlCount > 0 },
         ).joinToString(" · ")
     } else {
-        "${model.rows.size} of ${agentCommandCount + controlCount}"
+        localized(Str.composer_slash_count_of, model.rows.size, agentCommandCount + controlCount)
     }
     Row(modifier) {
         Column(Modifier.then(if (detail) Modifier.fillMaxWidth(0.55f) else Modifier.fillMaxWidth()).fillMaxHeight()) {
@@ -134,7 +138,15 @@ fun SlashMenu(
             )
             MenuFooter(
                 left = count,
-                keys = if (detail) listOf("↑↓" to "") else listOf("↑↓" to "move", "↵" to if (runs) "run" else "insert", "esc" to "close"),
+                keys = if (detail) {
+                    listOf("↑↓" to "")
+                } else {
+                    listOf(
+                        "↑↓" to localized(Str.composer_slash_key_move),
+                        "↵" to if (runs) localized(Str.composer_slash_key_run) else localized(Str.composer_slash_key_insert),
+                        "esc" to localized(Str.composer_slash_key_close),
+                    )
+                },
             )
         }
         if (detail) {
@@ -283,7 +295,7 @@ private fun SlashRowView(
             )
             // Supermux's own commands run on pick; the source of the highlighted one is named.
             val tail = when {
-                cmd.action != null && !insertOnly -> "runs"
+                cmd.action != null && !insertOnly -> localized(Str.composer_slash_runs)
                 selected -> sourceLabel(cmd)
                 else -> null
             }
@@ -342,9 +354,11 @@ private fun SlashDetail(
                 }
                 val also = cmd.aliases.filter { it != cmd.name }
                 if (also.isNotEmpty()) {
+                    val alsoWord = localized(Str.composer_slash_also)
                     Text(
                         buildAnnotatedString {
-                            append("Also ")
+                            append(alsoWord)
+                            append(" ")
                             also.forEachIndexed { i, a ->
                                 if (i > 0) append("  ")
                                 withStyle(SpanStyle(color = cs.onSurface, fontFamily = MonoFontFamily)) { append(cmd.sigil + a) }
@@ -357,7 +371,13 @@ private fun SlashDetail(
                 }
             }
         }
-        MenuFooter(left = "", keys = listOf("↵" to if (runs) "run now" else "insert", "esc" to "close"))
+        MenuFooter(
+            left = "",
+            keys = listOf(
+                "↵" to if (runs) localized(Str.composer_slash_key_run_now) else localized(Str.composer_slash_key_insert),
+                "esc" to localized(Str.composer_slash_key_close),
+            ),
+        )
     }
 }
 
@@ -401,7 +421,7 @@ private fun MenuHeader(title: String, count: Int?) {
         verticalAlignment = Alignment.Bottom,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Text(title.uppercase(), color = cs.onSurfaceVariant, fontSize = 10.5.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.6.sp, maxLines = 1)
+        Text(title.uppercaseInAppLanguage(), color = cs.onSurfaceVariant, fontSize = 10.5.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.6.sp, maxLines = 1)
         count?.let { Text("$it", color = cs.onSurfaceVariant.copy(alpha = 0.6f), fontSize = 10.5.sp, maxLines = 1) }
     }
 }
@@ -527,24 +547,30 @@ internal fun firstClause(desc: String): String {
 }
 
 /** A short source label for the highlighted row of the narrow list. */
+@Composable
+@ReadOnlyComposable
 private fun sourceLabel(cmd: SlashCommand): String? = when (cmd.source) {
-    SlashCommand.SOURCE_BUILTIN -> "built-in"
+    SlashCommand.SOURCE_BUILTIN -> localized(Str.composer_slash_source_builtin)
     SlashCommand.SOURCE_PLUGIN -> cmd.plugin
-    SlashCommand.SOURCE_PROJECT -> "this project"
-    SlashCommand.SOURCE_USER -> "your skill"
+    SlashCommand.SOURCE_PROJECT -> localized(Str.composer_slash_source_project)
+    SlashCommand.SOURCE_USER -> localized(Str.composer_slash_source_user)
     else -> null
 }
 
 /** The detail's source line. */
+@Composable
+@ReadOnlyComposable
 private fun sourceLong(cmd: SlashCommand, agentLabel: String): String? = when {
-    cmd.action != null -> "supermux · runs now"
-    cmd.source == SlashCommand.SOURCE_BUILTIN -> "$agentLabel built-in"
-    cmd.source == SlashCommand.SOURCE_PLUGIN && !cmd.plugin.isNullOrBlank() -> "${cmd.plugin} plugin"
-    cmd.source == SlashCommand.SOURCE_PROJECT -> "This project"
-    cmd.source == SlashCommand.SOURCE_USER -> "Your skill"
+    cmd.action != null -> localized(Str.composer_slash_long_runs_now)
+    cmd.source == SlashCommand.SOURCE_BUILTIN -> localized(Str.composer_slash_long_builtin, agentLabel)
+    cmd.source == SlashCommand.SOURCE_PLUGIN && !cmd.plugin.isNullOrBlank() -> localized(Str.composer_slash_long_plugin, cmd.plugin!!)
+    cmd.source == SlashCommand.SOURCE_PROJECT -> localized(Str.composer_slash_long_project)
+    cmd.source == SlashCommand.SOURCE_USER -> localized(Str.composer_slash_long_user)
     else -> null
 }
 
 /** "Claude", "Codex", … for the session's agent; "Agent" when there is none. */
+@Composable
+@ReadOnlyComposable
 fun agentLabelOf(agent: String?): String =
-    agent?.lowercase()?.let { dev.supermux.ui.accounts.agentDisplayName(it) } ?: "Agent"
+    agent?.lowercase()?.let { dev.supermux.ui.accounts.agentDisplayName(it) } ?: localized(Str.composer_slash_agent)
