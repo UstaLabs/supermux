@@ -57,6 +57,7 @@ import dev.supermux.desktop.platform.installMacTrackpadMagnify
 import dev.supermux.desktop.platform.prunePasteCache
 import dev.supermux.desktop.platform.isMacOs
 import dev.supermux.desktop.platform.ScreenWatch
+import dev.supermux.desktop.platform.rememberWindowCovered
 import dev.supermux.desktop.platform.screenProbe
 import dev.supermux.desktop.host.DesktopHostBootstrap
 import dev.supermux.desktop.host.BackgroundQuitNotice
@@ -2012,6 +2013,12 @@ fun main() {
                         }
                     }
 
+                    // Card #132: covered by other windows, the decorative loops stand still too. Looks only:
+                    // push muting stays on screenSeen and focus.
+                    val windowCovered by rememberWindowCovered(
+                        handle = { window.windowHandle },
+                        watch = windowVisible && !windowState.isMinimized && screenSeen,
+                    )
                     CompositionLocalProvider(
                         // Settings ▸ Hosting reads the app-wide supervisor (null where the app does not host).
                         LocalHostSupervisor provides supervisor.takeIf { hostsNatively },
@@ -2019,8 +2026,8 @@ fun main() {
                         LocalPairedHostStore provides hostStore,
                         LocalHostingFleet provides fleet,
                         LocalHostingSessions provides fleetFacts.localSessions,
-                        // Card #108: living avatars stand still while nobody can see them.
-                        LocalAvatarsLive provides (windowVisible && !windowState.isMinimized && screenSeen),
+                        // Cards #108/#132: living avatars and decorative loops stand still while nobody can see them.
+                        LocalAvatarsLive provides (windowVisible && !windowState.isMinimized && screenSeen && !windowCovered),
                     ) {
                         // Card #54: the Load Timings panel (View ▸ Load Timings) floats over the app.
                         androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) {

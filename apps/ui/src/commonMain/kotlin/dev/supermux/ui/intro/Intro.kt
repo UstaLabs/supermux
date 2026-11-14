@@ -31,10 +31,8 @@ import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -140,6 +138,7 @@ import dev.supermux.ui.resources.agent_codex
 import dev.supermux.ui.resources.agent_cursor
 import dev.supermux.ui.resources.agent_grok
 import dev.supermux.ui.resources.agent_antigravity
+import dev.supermux.ui.session.rememberLiveLoop
 import dev.supermux.ui.theme.GeistFontFamily
 import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.MonoFontFamily
@@ -411,12 +410,7 @@ private fun SkyBackground(page: Int, dark: Boolean) {
     val orbY by animateFloatAsState(p.orbY, tween(900, easing = FastOutSlowInEasing), label = "orbY") // i18n-ok: animation label
     val orbScale by animateFloatAsState(p.orbScale, tween(900, easing = FastOutSlowInEasing), label = "orbS") // i18n-ok: animation label
 
-    val cloudShift by rememberInfiniteTransition(label = "clouds").animateFloat( // i18n-ok: animation label
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(70_000, easing = LinearEasing), RepeatMode.Restart),
-        label = "cloudShift", // i18n-ok: animation label
-    )
+    val cloudShift by rememberLiveLoop(0f, 1f, infiniteRepeatable(tween(70_000, easing = LinearEasing), RepeatMode.Restart), label = "clouds") // i18n-ok: animation label
 
     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(top, mid, low)))) {
         Canvas(Modifier.fillMaxSize()) {
@@ -1157,10 +1151,7 @@ fun FirstRunIntroOverlay(
     }
 
     // Hard-blinking block cursor (threshold below), independent of the main timeline.
-    val blink by rememberInfiniteTransition().animateFloat(
-        initialValue = 0f, targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(530, easing = LinearEasing), RepeatMode.Restart),
-    )
+    val blink by rememberLiveLoop(0f, 1f, infiniteRepeatable(tween(530, easing = LinearEasing), RepeatMode.Restart), label = "caret") // i18n-ok: animation label
     val cursorOn = blink < 0.5f
 
     val measurer = rememberTextMeasurer()

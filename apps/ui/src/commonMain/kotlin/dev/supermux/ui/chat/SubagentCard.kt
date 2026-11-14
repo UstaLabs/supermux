@@ -35,9 +35,7 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.State
 import androidx.compose.runtime.key
@@ -127,7 +125,9 @@ import dev.supermux.proto.Subagent
 import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.retain.rememberRetainedScope
 import dev.supermux.ui.session.AgentLogo
+import dev.supermux.ui.session.LocalAvatarsLive
 import dev.supermux.ui.session.hasAgentLogo
+import dev.supermux.ui.session.rememberLiveLoop
 import dev.supermux.ui.theme.IconSize
 import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.MonoFontFamily
@@ -1280,7 +1280,10 @@ private fun LanesView(
 @Composable
 private fun rememberGlidingNow(window: Long): State<Long> {
     val state = remember { mutableLongStateOf(Clock.System.now().toEpochMilliseconds()) }
-    LaunchedEffect(window) {
+    // The track glides only while the window can be seen (#132); it catches up on the next tick.
+    val live = LocalAvatarsLive.current
+    LaunchedEffect(window, live) {
+        if (!live) return@LaunchedEffect
         val step = (window / 700).coerceIn(16L, 1_000L)
         while (true) {
             state.longValue = Clock.System.now().toEpochMilliseconds()
@@ -1292,11 +1295,8 @@ private fun rememberGlidingNow(window: Long): State<Long> {
 
 @Composable
 private fun PulseDot(color: Color) {
-    val alpha by rememberInfiniteTransition(label = "strip-pulse").animateFloat(
-        initialValue = 1f,
-        targetValue = 0.45f,
-        animationSpec = infiniteRepeatable(tween(800, easing = FastOutSlowInEasing), RepeatMode.Reverse),
-        label = "strip-pulse-alpha",
+    val alpha by rememberLiveLoop(
+        1f, 0.45f, infiniteRepeatable(tween(800, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "strip-pulse",
     )
     Box(Modifier.size(7.dp).graphicsLayer { this.alpha = alpha }.clip(CircleShape).background(color))
 }
@@ -1611,12 +1611,7 @@ private fun ThinkingView(live: Boolean, modifier: Modifier) {
     // Seconds 0..60, looping; every square's frequency is a whole number of cycles per minute, so
     // the loop is seamless. Only runs while the gap is (or is fading from) live.
     val clock = if (live || liveness.value > 0.01f) {
-        rememberInfiniteTransition(label = "lane-think").animateFloat(
-            initialValue = 0f,
-            targetValue = 60f,
-            animationSpec = infiniteRepeatable(tween(60_000, easing = LinearEasing)),
-            label = "lane-think-clock",
-        )
+        rememberLiveLoop(0f, 60f, infiniteRepeatable(tween(60_000, easing = LinearEasing)), label = "lane-think")
     } else null
     val hot = cs.primary
     val cold = cs.onSurface
