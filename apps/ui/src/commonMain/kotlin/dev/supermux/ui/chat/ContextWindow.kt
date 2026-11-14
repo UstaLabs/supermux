@@ -245,10 +245,7 @@ private fun ContextPanel(
         when (val v = view) {
             ContextView.Main -> MainView(sheet, padH, listPad, agentName, context, report, loading, canCompact, compacting, lastCompaction) { view = it }
             ContextView.Compact -> CompactView(sheet, padH, agentName, context, compactNote, actions, onBack = { view = ContextView.Main }, onDone = onClose)
-            ContextView.Mcp -> McpView(sheet, padH, listPad, report, onBack = { view = ContextView.Main }) { view = ContextView.Server(it) }
-            is ContextView.Server -> ServerView(sheet, padH, listPad, report, v.name) { view = ContextView.Mcp }
-            ContextView.Skills -> SkillsView(sheet, padH, listPad, report) { view = ContextView.Main }
-            ContextView.Memory -> MemoryView(sheet, padH, listPad, report) { view = ContextView.Main }
+            else -> DetailView(v, sheet, padH, listPad, report) { view = it }
         }
     }
 }
@@ -554,23 +551,70 @@ private fun UsedBadge(count: Int) {
 /** How many times this chat called each tool (from the broker's record): name → count. */
 private fun usedCounts(report: SessionContextDto?): Map<String, Int> = report?.used.orEmpty().associate { it.name to it.count }
 
+/** One row of a drill-in list: a name (over a detail), a used/not-used badge where counted, its tokens, a chevron when it opens more. */
+private data class ListItem(
+    val name: String,
+    val tokens: Long? = null,
+    val detail: String? = null,
+    /** Times this chat called it; null where calls aren't counted (memory files, servers). */
+    val count: Int? = null,
+    val mono: Boolean = true,
+    val onClick: (() -> Unit)? = null,
+)
+
+private data class ListSection(val label: String?, val trailing: String? = null, val items: List<ListItem>)
+
 @Composable
-private fun ToolRow(sheet: Boolean, name: String, count: Int, tokens: Long?) {
+private fun ListRow(sheet: Boolean, item: ListItem) {
     val cs = MaterialTheme.colorScheme
+    val dim = item.count == 0
     Row(
-        Modifier.fillMaxWidth().height(if (sheet) 36.dp else 28.dp).padding(horizontal = 10.dp),
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = if (sheet) 36.dp else 28.dp)
+            .clip(RoundedCornerShape(if (sheet) 14.dp else 10.dp))
+            .then(if (item.onClick != null) Modifier.clickable(onClick = item.onClick) else Modifier)
+            .padding(horizontal = 10.dp, vertical = if (item.detail != null) (if (sheet) 8.dp else 5.dp) else 0.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text(
-            name,
-            color = if (count > 0) cs.onSurface else cs.onSurfaceVariant,
-            fontSize = 12.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        UsedBadge(count)
-        if (tokens != null) Text(tokensLabel(tokens), color = if (count > 0) cs.onSurface else cs.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.width(48.dp), maxLines = 1)
+        Column(Modifier.weight(1f)) {
+            Text(
+                item.name,
+                color = if (dim) cs.onSurfaceVariant else cs.onSurface,
+                fontSize = if (item.mono) 12.sp else 13.sp,
+                fontFamily = if (item.mono) FontFamily.Monospace else null,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            item.detail?.let { Text(it, color = cs.onSurfaceVariant, fontSize = 11.5.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        }
+        item.count?.let { UsedBadge(it) }
+        item.tokens?.let { Text(tokensLabel(it), color = if (dim) cs.onSurfaceVariant else cs.onSurface, fontSize = 13.sp, maxLines = 1) }
+        if (item.onClick != null) Icon(Icons.Filled.ChevronRight, null, tint = cs.onSurfaceVariant.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
     }
+}
+
+/** A read-only drill-in: back · title · total, an optional callout, its sections of rows, and a note. */
+@Composable
+private fun DrillList(
+    sheet: Boolean,
+    padH: androidx.compose.ui.unit.Dp,
+    listPad: androidx.compose.ui.unit.Dp,
+    title: String,
+    sub: String?,
+    callout: String?,
+    sections: List<ListSection>,
+    note: String?,
+    onBack: () -> Unit,
+) {
+    BackHeader(padH, title, sub, onBack)
+    if (callout != null) Callout(callout, padH)
+    sections.forEach { section ->
+        if (section.items.isEmpty()) return@forEach
+        if (section.label != null) SectionLabel(section.label, listPad, sheet, section.trailing)
+        Column(Modifier.padding(horizontal = listPad)) { section.items.forEach { ListRow(sheet, it) } }
+    }
+    if (note != null) Note(note, listPad)
 }
 
 @Composable
@@ -591,81 +635,88 @@ private fun Callout(text: String, padH: androidx.compose.ui.unit.Dp) {
     )
 }
 
+/** The drill-ins over Claude's per-item lists (#144: read-only; MCP management is #145), one list each. */
 @Composable
-private fun McpView(sheet: Boolean, padH: androidx.compose.ui.unit.Dp, listPad: androidx.compose.ui.unit.Dp, report: SessionContextDto?, onBack: () -> Unit, open: (String) -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    val tools = report?.breakdown?.mcpTools.orEmpty()
+private fun DetailView(
+    view: ContextView,
+    sheet: Boolean,
+    padH: androidx.compose.ui.unit.Dp,
+    listPad: androidx.compose.ui.unit.Dp,
+    report: SessionContextDto?,
+    go: (ContextView) -> Unit,
+) {
+    val b = report?.breakdown
     val used = usedCounts(report)
-    val servers = tools.filter { it.loaded }.groupBy { it.server }
-        .map { (server, list) -> Triple(server, list, list.sumOf { it.tokens }) }
-        .sortedByDescending { it.third }
-    val usedTools = { server: String, list: List<dev.supermux.net.McpToolCostDto> -> list.count { (used["mcp__${server}__${it.name}"] ?: 0) > 0 } }
-    val idle = servers.filter { (s, list, _) -> usedTools(s, list) == 0 }
-    BackHeader(padH, localized(Str.context_mcp_title), "${tokensLabel(servers.sumOf { it.third })} · ${servers.size}", onBack)
-    if (idle.isNotEmpty()) Callout(localized(Str.context_mcp_idle, idle.size, servers.size, tokensLabel(idle.sumOf { it.third })), padH)
-    SectionLabel(localized(Str.context_mcp_servers), listPad, sheet, localized(Str.context_used_in_chat))
-    Column(Modifier.padding(horizontal = listPad)) {
-        servers.forEach { (server, list, total) ->
-            val n = usedTools(server, list)
-            DrillRow(
-                sheet,
-                icon = {},
-                title = server,
-                detail = if (n > 0) localized(Str.context_server_tools_used, list.size, n) else localized(Str.context_server_tools_none, list.size),
-                tag = "context_mcp_server",
-                trailing = tokensLabel(total),
-            ) { open(server) }
+    val total = { items: List<Long> -> tokensLabel(items.sum()) }
+    when (view) {
+        ContextView.Mcp -> {
+            val calls = { server: String, name: String -> used["mcp__${server}__${name}"] ?: 0 }
+            val servers = b?.mcpTools.orEmpty().filter { it.loaded }.groupBy { it.server }
+                .map { (server, tools) -> Triple(server, tools, tools.sumOf { it.tokens }) }
+                .sortedByDescending { it.third }
+            val usedIn = { server: String, tools: List<dev.supermux.net.McpToolCostDto> -> tools.count { calls(server, it.name) > 0 } }
+            val idle = servers.filter { (s, tools, _) -> usedIn(s, tools) == 0 }
+            DrillList(
+                sheet, padH, listPad,
+                title = localized(Str.context_mcp_title),
+                sub = "${total(servers.map { it.third })} · ${servers.size}",
+                callout = if (idle.isEmpty()) null else localized(Str.context_mcp_idle, idle.size, servers.size, total(idle.map { it.third })),
+                sections = listOf(ListSection(localized(Str.context_mcp_servers), localized(Str.context_used_in_chat), servers.map { (server, tools, tokens) ->
+                    val n = usedIn(server, tools)
+                    ListItem(
+                        server, tokens, mono = false,
+                        detail = if (n > 0) localized(Str.context_server_tools_used, tools.size, n) else localized(Str.context_server_tools_none, tools.size),
+                        onClick = { go(ContextView.Server(server)) },
+                    )
+                })),
+                note = localized(Str.context_mcp_note),
+                onBack = { go(ContextView.Main) },
+            )
         }
-    }
-    Note(localized(Str.context_mcp_note), listPad)
-}
-
-@Composable
-private fun ServerView(sheet: Boolean, padH: androidx.compose.ui.unit.Dp, listPad: androidx.compose.ui.unit.Dp, report: SessionContextDto?, server: String, onBack: () -> Unit) {
-    val all = report?.breakdown?.mcpTools.orEmpty().filter { it.server == server }
-    val used = usedCounts(report)
-    val count = { name: String -> used["mcp__${server}__${name}"] ?: 0 }
-    val loaded = all.filter { it.loaded }.sortedWith(compareByDescending<dev.supermux.net.McpToolCostDto> { count(it.name) > 0 }.thenByDescending { it.tokens })
-    val deferred = all.filterNot { it.loaded }
-    BackHeader(padH, server, "${tokensLabel(loaded.sumOf { it.tokens })} · ${all.size}", onBack)
-    SectionLabel(localized(Str.context_tools), listPad, sheet, localized(Str.context_in_context))
-    Column(Modifier.padding(horizontal = listPad)) { loaded.forEach { ToolRow(sheet, it.name, count(it.name), it.tokens) } }
-    if (deferred.isNotEmpty()) {
-        SectionLabel(localized(Str.context_deferred_group), listPad, sheet)
-        Column(Modifier.padding(horizontal = listPad)) { deferred.forEach { ToolRow(sheet, it.name, count(it.name), it.tokens) } }
-    }
-}
-
-@Composable
-private fun SkillsView(sheet: Boolean, padH: androidx.compose.ui.unit.Dp, listPad: androidx.compose.ui.unit.Dp, report: SessionContextDto?, onBack: () -> Unit) {
-    val skills = report?.breakdown?.skills.orEmpty()
-    val used = usedCounts(report)
-    val count = { name: String -> used["Skill:$name"] ?: 0 }
-    val sorted = skills.sortedWith(compareByDescending<dev.supermux.net.SkillCostDto> { count(it.name) > 0 }.thenByDescending { it.tokens })
-    BackHeader(padH, localized(Str.context_skills_title), "${tokensLabel(skills.sumOf { it.tokens })} · ${skills.size}", onBack)
-    Callout(localized(Str.context_skills_used, skills.count { count(it.name) > 0 }, skills.size), padH)
-    SectionLabel(localized(Str.context_skills_title), listPad, sheet, localized(Str.context_in_context))
-    Column(Modifier.padding(horizontal = listPad)) { sorted.forEach { ToolRow(sheet, it.name, count(it.name), it.tokens) } }
-    Note(localized(Str.context_skills_note), listPad)
-}
-
-@Composable
-private fun MemoryView(sheet: Boolean, padH: androidx.compose.ui.unit.Dp, listPad: androidx.compose.ui.unit.Dp, report: SessionContextDto?, onBack: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    val files = report?.breakdown?.memoryFiles.orEmpty()
-    BackHeader(padH, localized(Str.context_memory_title), "${tokensLabel(files.sumOf { it.tokens })} · ${files.size}", onBack)
-    Column(Modifier.padding(horizontal = listPad)) {
-        files.forEach { f ->
-            Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = if (sheet) 10.dp else 7.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(f.path, color = cs.onSurface, fontSize = 12.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    f.type?.let { Text(it, color = cs.onSurfaceVariant, fontSize = 11.5.sp) }
-                }
-                Text(tokensLabel(f.tokens), color = cs.onSurface, fontSize = 13.sp, modifier = Modifier.padding(start = 8.dp))
-            }
+        is ContextView.Server -> {
+            val all = b?.mcpTools.orEmpty().filter { it.server == view.name }
+            val item = { t: dev.supermux.net.McpToolCostDto -> ListItem(t.name, t.tokens, count = used["mcp__${view.name}__${t.name}"] ?: 0) }
+            val loaded = all.filter { it.loaded }.map(item).sortedWith(compareByDescending<ListItem> { (it.count ?: 0) > 0 }.thenByDescending { it.tokens })
+            DrillList(
+                sheet, padH, listPad,
+                title = view.name,
+                sub = "${total(all.filter { it.loaded }.map { it.tokens })} · ${all.size}",
+                callout = null,
+                sections = listOf(
+                    ListSection(localized(Str.context_tools), localized(Str.context_in_context), loaded),
+                    ListSection(localized(Str.context_deferred_group), null, all.filterNot { it.loaded }.map(item)),
+                ),
+                note = null,
+                onBack = { go(ContextView.Mcp) },
+            )
         }
+        ContextView.Skills -> {
+            val skills = b?.skills.orEmpty().map { ListItem(it.name, it.tokens, count = used["Skill:${it.name}"] ?: 0) }
+                .sortedWith(compareByDescending<ListItem> { (it.count ?: 0) > 0 }.thenByDescending { it.tokens })
+            DrillList(
+                sheet, padH, listPad,
+                title = localized(Str.context_skills_title),
+                sub = "${total(skills.mapNotNull { it.tokens })} · ${skills.size}",
+                callout = localized(Str.context_skills_used, skills.count { (it.count ?: 0) > 0 }, skills.size),
+                sections = listOf(ListSection(localized(Str.context_skills_title), localized(Str.context_in_context), skills)),
+                note = localized(Str.context_skills_note),
+                onBack = { go(ContextView.Main) },
+            )
+        }
+        ContextView.Memory -> {
+            val files = b?.memoryFiles.orEmpty()
+            DrillList(
+                sheet, padH, listPad,
+                title = localized(Str.context_memory_title),
+                sub = "${total(files.map { it.tokens })} · ${files.size}",
+                callout = null,
+                sections = listOf(ListSection(null, null, files.map { ListItem(it.path, it.tokens, detail = it.type) })),
+                note = localized(Str.context_memory_note),
+                onBack = { go(ContextView.Main) },
+            )
+        }
+        else -> Unit
     }
-    Note(localized(Str.context_memory_note), listPad)
 }
 
 /** For agents that report no per-item costs: what this chat called, by name and count only. */
@@ -679,7 +730,7 @@ private fun UsedInChat(sheet: Boolean, listPad: androidx.compose.ui.unit.Dp, age
         Text(localized(Str.context_used_none), color = cs.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.padding(horizontal = listPad + 10.dp, vertical = 4.dp))
     } else {
         Column(Modifier.padding(horizontal = listPad)) {
-            used.forEach { u -> ToolRow(sheet, u.name.replaceFirst("Skill:", "Skill · "), u.count, null) }
+            used.forEach { u -> ListRow(sheet, ListItem(u.name.replaceFirst("Skill:", "Skill · "), count = u.count)) }
         }
     }
     Note(localized(Str.context_used_note, agentName), listPad)
