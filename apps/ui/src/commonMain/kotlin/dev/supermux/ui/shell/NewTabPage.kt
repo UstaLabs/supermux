@@ -77,6 +77,8 @@ import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Motion
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.i18n.localizedPlural
+import dev.supermux.ui.i18n.timeAgoText
+import dev.supermux.util.TimeAgo
 import dev.supermux.ui.session.AgentLogo
 import dev.supermux.workspace.NewViewKind
 
@@ -322,32 +324,7 @@ internal fun PhoneNewTabPage(
 private const val NEW_TAB_GLYPH = "new-tab-glyph"
 
 /** A session closed in this workspace, as its row shows it. */
-internal data class ClosedSessionRow(val id: String, val name: String, val agent: String, val ago: ClosedAgo)
-
-/** How long ago a session was closed, read like a clock. */
-internal sealed interface ClosedAgo {
-    data object JustNow : ClosedAgo
-    data class Minutes(val n: Int) : ClosedAgo
-    data class Hours(val n: Int) : ClosedAgo
-    data class Days(val n: Int) : ClosedAgo
-}
-
-internal fun closedAgo(nowMs: Long, closedAtMs: Long): ClosedAgo {
-    val minutes = ((nowMs - closedAtMs).coerceAtLeast(0) / 60_000).toInt()
-    return when {
-        minutes < 1 -> ClosedAgo.JustNow
-        minutes < 60 -> ClosedAgo.Minutes(minutes)
-        minutes < 24 * 60 -> ClosedAgo.Hours(minutes / 60)
-        else -> ClosedAgo.Days(minutes / (24 * 60))
-    }
-}
-
-private fun agoText(ago: ClosedAgo): String = when (ago) {
-    ClosedAgo.JustNow -> localized(Str.new_tab_closed_just_now)
-    is ClosedAgo.Minutes -> localizedPlural(Plurals.new_tab_closed_minutes, ago.n, ago.n)
-    is ClosedAgo.Hours -> localizedPlural(Plurals.new_tab_closed_hours, ago.n, ago.n)
-    is ClosedAgo.Days -> localizedPlural(Plurals.new_tab_closed_days, ago.n, ago.n)
-}
+internal data class ClosedSessionRow(val id: String, val name: String, val agent: String, val ago: TimeAgo)
 
 /**
  * One row of the page: no frame and no fill at rest; the selected row (and the one under the pointer) wears a soft
@@ -419,6 +396,6 @@ private fun ClosedSessionItem(c: ClosedSessionRow, selected: Boolean, touch: Boo
         Spacer(Modifier.width(12.dp))
         Text(c.name, color = cs.onSurface, fontSize = if (touch) 15.sp else 13.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         Spacer(Modifier.width(12.dp))
-        Text(agoText(c.ago), color = cs.onSurfaceVariant, fontSize = 12.sp, maxLines = 1)
+        Text(timeAgoText(c.ago), color = cs.onSurfaceVariant, fontSize = 12.sp, maxLines = 1)
     }
 }

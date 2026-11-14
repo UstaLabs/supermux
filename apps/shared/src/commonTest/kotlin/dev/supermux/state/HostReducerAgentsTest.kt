@@ -23,8 +23,9 @@ class HostReducerAgentsTest {
         assertEquals("personal_assistant", state.sessions.single().role)
     }
 
-    @Test fun the_pinned_group_is_labelled_agents() {
+    @Test fun the_pinned_group_has_no_path_label() {
+        // The UI names it ("Agents") in the app's language.
         val state = reduceHostFrame(HostState(), ServerFrame.SessionAdded(agent))
-        assertEquals("Agents", groupSessions(state.sessions, home = "/home/u").first().label)
+        assertEquals("", groupSessions(state.sessions, home = "/home/u").first().label)
     }
 }

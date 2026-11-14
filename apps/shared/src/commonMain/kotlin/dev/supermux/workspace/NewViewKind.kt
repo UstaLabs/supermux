@@ -1,7 +1,8 @@
 package dev.supermux.workspace
 
 /**
- * The view kinds a New tab offers (#91). Order is the order of its rows, and of their keys 1–6.
+ * The view kinds a New tab offers (#91). Order is the order of its rows, and of their keys 1–6; the
+ * UI words each row (NewTabs.kt newTabChoices).
  *
  * [wire] is the view kind the broker stores, and it is NOT unique: Diff is an `editor` view whose
  * state says `mode = "diff"` (spec §7.2), exactly like Editor is an `editor` in `tree` mode. So the
@@ -16,16 +17,15 @@ package dev.supermux.workspace
  */
 enum class NewViewKind(
     val wire: String,
-    val label: String,
     val tag: String = wire,
     val singleton: Boolean = false,
 ) {
-    CHAT("chat", "Chat"),
-    TERMINAL("terminal", "Terminal"),
-    EDITOR("editor", "Files", singleton = true),
-    DIFF("editor", "Changes", tag = "diff", singleton = true),
-    DISPLAY("display", "Display"),
+    CHAT("chat"),
+    TERMINAL("terminal"),
+    EDITOR("editor", singleton = true),
+    DIFF("editor", tag = "diff", singleton = true),
+    DISPLAY("display"),
 
     /** A web page (#105): a site, or a port on the host through its preview link. Several per workspace. */
-    BROWSER("browser", "Browser"),
+    BROWSER("browser"),
 }

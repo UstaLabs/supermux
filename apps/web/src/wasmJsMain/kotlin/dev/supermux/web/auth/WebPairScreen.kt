@@ -25,6 +25,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import kotlinx.browser.window
 
 /**
@@ -65,7 +67,7 @@ fun WebPairScreen(
     fun go() {
         val token = PAIR_LINK.find(link.trim())?.groupValues?.get(1)
         if (token == null) {
-            error = "That does not look like a pairing link. It should end in /pair?t=<token>."
+            error = localized(Str.host_app_web_not_pair_link)
             return
         }
         window.location.href = "${window.location.origin}/pair?t=$token"
@@ -78,18 +80,13 @@ fun WebPairScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(
-                    if (offline) "Can't reach the broker" else "Pair this browser",
+                    localized(if (offline) Str.host_app_web_cant_reach else Str.host_app_web_pair_title),
                     style = MaterialTheme.typography.headlineSmall,
                 )
                 Text(
                     when (state) {
-                        is SessionState.Offline ->
-                            "The broker did not answer (${state.error}). It may be starting up, asleep or " +
-                                "unreachable from this network — nothing is wrong with this browser."
-                        is SessionState.Unpaired ->
-                            "This broker is already set up (${state.reason}). From a paired device open " +
-                                "your machine's page in Settings (Devices), add a device, and open the link it shows here — or " +
-                                "paste it below."
+                        is SessionState.Offline -> localized(Str.host_app_web_offline_text, state.error)
+                        is SessionState.Unpaired -> localized(Str.host_app_web_unpaired_text, state.reason)
                         is SessionState.Paired -> ""
                     },
                     style = MaterialTheme.typography.bodyMedium,
@@ -100,7 +97,7 @@ fun WebPairScreen(
                     OutlinedTextField(
                         value = link,
                         onValueChange = { link = it; error = null },
-                        label = { Text("Pairing link") },
+                        label = { Text(localized(Str.host_pairing_link)) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                         isError = error != null,
@@ -111,10 +108,10 @@ fun WebPairScreen(
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (!offline) {
-                        Button(onClick = ::go, enabled = link.isNotBlank()) { Text("Open link") }
+                        Button(onClick = ::go, enabled = link.isNotBlank()) { Text(localized(Str.host_app_web_open_link)) }
                     }
                     TextButton(onClick = onRetry, enabled = !checking) {
-                        Text(if (checking) "Checking…" else "Check again")
+                        Text(localized(if (checking) Str.machine_checking else Str.host_app_web_check_again))
                     }
                 }
             }

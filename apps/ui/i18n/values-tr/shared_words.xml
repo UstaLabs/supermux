@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #123: words for what :shared computes, in Turkish. Same keys and placeholders as values/shared_words.xml.
+     Terms: docs/i18n/glossary.md. -->
+<resources>
+    <string name="words_time_yesterday">Dün %1$s</string>
+    <string name="words_time_month_day">%2$d %1$s</string>
+    <string name="words_time_jan">Oca</string>
+    <string name="words_time_feb">Şub</string>
+    <string name="words_time_mar">Mar</string>
+    <string name="words_time_apr">Nis</string>
+    <string name="words_time_may">May</string>
+    <string name="words_time_jun">Haz</string>
+    <string name="words_time_jul">Tem</string>
+    <string name="words_time_aug">Ağu</string>
+    <string name="words_time_sep">Eyl</string>
+    <string name="words_time_oct">Eki</string>
+    <string name="words_time_nov">Kas</string>
+    <string name="words_time_dec">Ara</string>
+    <string name="words_view_new_chat">Yeni sohbet</string>
+    <string name="words_view_page">Sayfa</string>
+    <string name="words_view_port">port %1$d</string>
+    <string name="words_agent_name_control">Ad kontrol karakteri içeremez</string>
+    <string name="words_agent_name_empty">Bir ad girin</string>
+    <string name="words_agent_name_too_long">Ad en fazla 80 karakter olabilir</string>
+    <string name="words_agent_name_dot">Ad nokta ile başlayamaz</string>
+    <string name="words_agent_name_slash">Ad / veya \\ içeremez</string>
+    <string name="words_git_failed">%1$s başarısız</string>
+    <string name="words_git_done">%1$s tamamlandı</string>
+</resources>

@@ -35,7 +35,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.chat.chatTimeLabel
+import dev.supermux.chat.chatTime
+import dev.supermux.ui.i18n.chatTimeText
 import dev.supermux.chat.parseChatTs
 import dev.supermux.proto.LimitWaitDto
 import dev.supermux.ui.i18n.Str
@@ -47,7 +48,7 @@ import dev.supermux.ui.theme.Stroke
 import kotlinx.coroutines.delay
 import kotlin.time.Clock
 
-private fun at(wait: LimitWaitDto, nowMs: Long): String = chatTimeLabel(wait.resumeAt, nowMs) ?: localized(Str.limit_soon)
+private fun at(wait: LimitWaitDto, nowMs: Long): String = chatTime(wait.resumeAt, nowMs)?.let(::chatTimeText) ?: localized(Str.limit_soon)
 
 /** The session row's line: "Waiting · resumes 18:13". */
 fun limitWaitRowText(wait: LimitWaitDto, nowMs: Long): String =

@@ -41,7 +41,7 @@ import dev.supermux.ui.chat.testHostStore
 import dev.supermux.ui.editor.DocumentStore
 import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.platform.NO_CAPS
-import dev.supermux.workspace.viewTitle
+import dev.supermux.ui.i18n.viewTitle
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.serialization.json.JsonObject

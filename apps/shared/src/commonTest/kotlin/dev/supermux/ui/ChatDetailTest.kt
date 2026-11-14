@@ -27,26 +27,4 @@ class ChatDetailTest {
         assertEquals(ChatDetailLevel.HIGH, sanitizeSetLevel(ChatDetailLevel.HIGH))
         assertEquals(ChatDetailLevel.LOW, sanitizeSetLevel(ChatDetailLevel.LOW))
     }
-
-    @Test
-    fun formatLowWorkingStatus_matrix() {
-        assertEquals(
-            "Working… · 12 seconds",
-            formatLowWorkingStatus("Working…", "thinking", null, 0, "12 seconds"),
-        )
-        assertEquals(
-            "Working… · Bash · 1 tool · 4 seconds",
-            formatLowWorkingStatus("Working…", "running", "Bash", 1, "4 seconds"),
-        )
-    }
-
-    // Card #75: a session that was not up is being woken (agent_state detail "starting").
-    @Test
-    fun working_label_says_starting_while_the_session_wakes() {
-        assertEquals("starting", workingBaseLabel("starting"))
-        assertEquals("working", workingBaseLabel("running"))
-        assertEquals("thinking", workingBaseLabel("thinking"))
-        assertEquals("thinking", workingBaseLabel(null))
-        assertEquals("starting · 3 seconds", formatLowWorkingStatus(workingBaseLabel("starting"), "starting", null, 0, "3 seconds"))
-    }
 }

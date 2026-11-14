@@ -27,7 +27,6 @@ import dev.supermux.proto.GitLiteStatusDto
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.gitBadge
 import dev.supermux.state.ContinueHandoff
-import dev.supermux.chat.gitOpResultLabel
 import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.platform.NO_CAPS
 import dev.supermux.ui.session.LocalContextMenuAvailable

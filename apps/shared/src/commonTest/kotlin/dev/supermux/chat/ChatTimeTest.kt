@@ -15,22 +15,22 @@ class ChatTimeTest {
     private val utc = 0L
 
     @Test fun today_isJustHoursAndMinutes() {
-        assertEquals("12:34", formatChatTime(now, now, utc))
-        assertEquals("00:00", formatChatTime(now - 45_296_000L, now, utc)) // same day, midnight
+        assertEquals(ChatTime("12:34"), formatChatTime(now, now, utc))
+        assertEquals(ChatTime("00:00"), formatChatTime(now - 45_296_000L, now, utc)) // same day, midnight
     }
 
     @Test fun yesterday_isLabelled() {
-        assertEquals("Yesterday 12:34", formatChatTime(now - 86_400_000L, now, utc))
+        assertEquals(ChatTime("12:34", yesterday = true), formatChatTime(now - 86_400_000L, now, utc))
     }
 
     @Test fun older_isADate() {
-        assertEquals("2026-09-01 12:34", formatChatTime(now - 4 * 86_400_000L, now, utc))
+        assertEquals(ChatTime("12:34", date = "2026-09-01"), formatChatTime(now - 4 * 86_400_000L, now, utc))
     }
 
     @Test fun offsetMovesTheLocalDay() {
         // 23:34Z with a +02:00 zone is 01:34 the NEXT local day — and "today" moves with it.
         val late = now + 11 * 3_600_000L
-        assertEquals("01:34", formatChatTime(late, late, 2 * 3_600_000L))
+        assertEquals(ChatTime("01:34"), formatChatTime(late, late, 2 * 3_600_000L))
     }
 
     @Test fun parseChatTs_acceptsEpochSecondsMillisAndIso() {
@@ -53,11 +53,11 @@ class ChatTimeTest {
         assertEquals(Triple(1970, 1, 1), civilFromDays(0))
     }
 
-    @Test fun chatTimeLabel_nullWhenUnparseable() {
-        assertNull(chatTimeLabel("junk", now))
-        // A parseable ts always produces a label; its wording depends on the host zone, so only
-        // the shape is asserted here (formatChatTime's own cases pin the wording).
-        val label = chatTimeLabel("1788611696000", now)
-        kotlin.test.assertTrue(label != null && label.contains(":"), "expected an HH:mm-shaped label, got $label")
+    @Test fun chatTime_nullWhenUnparseable() {
+        assertNull(chatTime("junk", now))
+        // A parseable ts always produces a time; which day it lands on depends on the host zone, so
+        // only the clock's shape is asserted here (formatChatTime's own cases pin the rest).
+        val time = chatTime("1788611696000", now)
+        kotlin.test.assertTrue(time != null && time.clock.length == 5 && time.clock[2] == ':', "expected an HH:mm clock, got $time")
     }
 }

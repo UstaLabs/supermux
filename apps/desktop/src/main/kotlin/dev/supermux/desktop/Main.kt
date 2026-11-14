@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.ui.res.painterResource
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.widgets.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -1025,14 +1027,14 @@ fun main() {
             val perfPanelVisible by dev.supermux.util.PerfTrace.panelVisible.collectAsState()
             val mainMenu = listOf(
                 MainMenuGroup(
-                    "File",
+                    localized(Str.host_app_desktop_menu_file),
                     'F',
                     listOf(
-                        MainMenuEntry.Action("New Session", menuShortcutFor(AppCommands.NewSession), enabled = shortcuts.rememberCanInvoke(AppCommands.NewSession)) { shortcuts.invokeFromMenu(AppCommands.NewSession) },
-                        MainMenuEntry.Action("New Terminal", menuShortcutFor(AppCommands.NewTerminal), enabled = shortcuts.rememberCanInvoke(AppCommands.NewTerminal)) { shortcuts.invokeFromMenu(AppCommands.NewTerminal) },
+                        MainMenuEntry.Action(localized(Str.host_app_desktop_menu_new_session), menuShortcutFor(AppCommands.NewSession), enabled = shortcuts.rememberCanInvoke(AppCommands.NewSession)) { shortcuts.invokeFromMenu(AppCommands.NewSession) },
+                        MainMenuEntry.Action(localized(Str.host_app_desktop_menu_new_terminal), menuShortcutFor(AppCommands.NewTerminal), enabled = shortcuts.rememberCanInvoke(AppCommands.NewTerminal)) { shortcuts.invokeFromMenu(AppCommands.NewTerminal) },
                         // Through the seam (cluster G1); AppShell binds the live registry into it.
-                        MainMenuEntry.Action("Move workspace to New Window") { DesktopWindowHostController.tearOutCanvas() },
-                        MainMenuEntry.Action("Move group to New Window") {
+                        MainMenuEntry.Action(localized(Str.host_app_desktop_menu_move_workspace)) { DesktopWindowHostController.tearOutCanvas() },
+                        MainMenuEntry.Action(localized(Str.host_app_desktop_menu_move_group)) {
                             val bind = ui.panesBind
                             if (bind != null) {
                                 val tree = bind.ws.layoutSync.tree
@@ -1043,18 +1045,18 @@ fun main() {
                                 }
                             }
                         },
-                        MainMenuEntry.Action("Archived…") { ui.openArchived() },
-                        MainMenuEntry.Action("Displays…") { ui.openDisplays() },
-                        MainMenuEntry.Action("Usage…") { ui.openUsage() },
+                        MainMenuEntry.Action(localized(Str.host_app_desktop_menu_archived)) { ui.openArchived() },
+                        MainMenuEntry.Action(localized(Str.host_app_desktop_menu_displays)) { ui.openDisplays() },
+                        MainMenuEntry.Action(localized(Str.host_app_desktop_menu_usage)) { ui.openUsage() },
                         // On a Mac ⌘, is the app menu's (above): File's item shows no key, so the key isn't claimed twice.
-                        MainMenuEntry.Action("Settings…", if (isMacOs()) null else menuShortcutFor(AppCommands.OpenSettings), enabled = shortcuts.rememberCanInvoke(AppCommands.OpenSettings)) { shortcuts.invokeFromMenu(AppCommands.OpenSettings) },
+                        MainMenuEntry.Action(localized(Str.shell_settings_ellipsis), if (isMacOs()) null else menuShortcutFor(AppCommands.OpenSettings), enabled = shortcuts.rememberCanInvoke(AppCommands.OpenSettings)) { shortcuts.invokeFromMenu(AppCommands.OpenSettings) },
                         // Existing items keep working — they open the Settings hub focused on
                         // that page (same overlay as Settings…, not a separate stack): Coding, at
                         // its code-intelligence row (#97; once "Editor / LSP…").
-                        MainMenuEntry.Action("Coding…") { ui.openLspSettings() },
-                        MainMenuEntry.Action("Check for Updates…") { ui.openAppUpdate() },
+                        MainMenuEntry.Action(localized(Str.shell_coding_ellipsis)) { ui.openLspSettings() },
+                        MainMenuEntry.Action(localized(Str.host_app_desktop_menu_check_updates)) { ui.openAppUpdate() },
                         MainMenuEntry.Separator,
-                        MainMenuEntry.Action("Unpair…") { showUnpairConfirm = true },
+                        MainMenuEntry.Action(localized(Str.host_app_desktop_menu_unpair)) { showUnpairConfirm = true },
                     ),
                 ),
                 // The standard set, then Paste image (#134). ⌘V / Ctrl+V in the composer pastes an image itself
@@ -1066,7 +1068,7 @@ fun main() {
                     pasteImage = { ui.requestPasteImage() },
                 ),
                 MainMenuGroup(
-                    "View",
+                    localized(Str.host_app_desktop_menu_view),
                     'V',
                     listOf(
                         // Only the sidebar is left: Editor/Terminal/Display were toggles for the
@@ -1074,13 +1076,13 @@ fun main() {
                         // created, split and closed on its own layout tree, from the tab strip's
                         // "+" — so there is nothing here to check on or off.
                         MainMenuEntry.Toggle(
-                            "Show Sidebar",
+                            localized(Str.host_app_desktop_menu_show_sidebar),
                             checked = !ui.sidebarCollapsed,
                             shortcut = menuShortcutFor(AppCommands.ToggleSidebar),
                             enabled = shortcuts.rememberCanInvoke(AppCommands.ToggleSidebar),
                         ) { shortcuts.invokeFromMenu(AppCommands.ToggleSidebar) },
                         // Card #54: this launch's timeline, chat opens, WebSocket and HTTP traffic.
-                        MainMenuEntry.Toggle("Load Timings", checked = perfPanelVisible) {
+                        MainMenuEntry.Toggle(localized(Str.host_app_desktop_menu_load_timings), checked = perfPanelVisible) {
                             dev.supermux.util.PerfTrace.panelVisible.value = !perfPanelVisible
                         },
                     ),
@@ -1970,7 +1972,7 @@ fun main() {
                             delay(3_000)
                             ui.openLspSettings()
                             val added = app.lspAddCustom(
-                                id = "m4g4-live-check", label = "M4g-4 Live Check", command = "true",
+                                id = "m4g4-live-check", label = "M4g-4 Live Check", command = "true", // i18n-ok: dev hook, never shown to users
                                 extensions = listOf(".m4g4livecheck"),
                             )
                             println("[lsp-add-remove] added throwaway server: ok=${added?.ok}")
@@ -2135,8 +2137,8 @@ fun main() {
                     if (showUnpairConfirm) {
                         AlertDialog(
                             onDismissRequest = { showUnpairConfirm = false },
-                            title = { Text("Unpair this device?") },
-                            text = { Text("This removes the saved pairing credentials and returns to the onboarding screen. Your sessions on the broker are untouched.") },
+                            title = { Text(localized(Str.host_app_desktop_unpair_title)) },
+                            text = { Text(localized(Str.host_app_desktop_unpair_text)) },
                             confirmButton = {
                                 TextButton(onClick = {
                                     // Clear the legacy credential AND forget every fleet host
@@ -2145,10 +2147,10 @@ fun main() {
                                     hostStore.list().map { it.recordId }.forEach { fleet.forgetHost(it) }
                                     showUnpairConfirm = false
                                     paired = false
-                                }) { Text("Unpair") }
+                                }) { Text(localized(Str.host_app_desktop_unpair)) }
                             },
                             dismissButton = {
-                                TextButton(onClick = { showUnpairConfirm = false }) { Text("Cancel") }
+                                TextButton(onClick = { showUnpairConfirm = false }) { Text(localized(Str.shell_cancel)) }
                             },
                         )
                     }
@@ -2381,7 +2383,7 @@ private fun MdImageVerifyOverlay(source: String) {
                 .testTag("sm_md_image_message"),
         ) {
             Text(
-                "SM_MD_IMAGE verification",
+                "SM_MD_IMAGE verification", // i18n-ok: dev verification hook
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelMedium,
                 modifier = Modifier.padding(bottom = Space.sm),

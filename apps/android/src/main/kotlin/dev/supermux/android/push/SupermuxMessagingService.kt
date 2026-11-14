@@ -30,6 +30,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlin.math.absoluteValue
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 
 /**
  * Firebase Cloud Messaging entry point for native push.
@@ -158,7 +160,6 @@ class SupermuxMessagingService : FirebaseMessagingService() {
         private const val PLATFORM = "android"
 
         const val CHANNEL_ID = "sessions"
-        const val CHANNEL_NAME = "Sessions"
         const val EXTRA_SESSION_ID = "supermux.sessionId"
 
         /** All session notifications share this group so they stack together. */
@@ -319,9 +320,9 @@ class SupermuxMessagingService : FirebaseMessagingService() {
             if (mgr.getNotificationChannel(CHANNEL_ID) != null) return
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                CHANNEL_NAME,
+                localized(Str.host_app_android_channel_sessions),
                 NotificationManager.IMPORTANCE_HIGH,
-            ).apply { description = "Agent session updates" }
+            ).apply { description = localized(Str.host_app_android_channel_sessions_description) }
             mgr.createNotificationChannel(channel)
         }
 

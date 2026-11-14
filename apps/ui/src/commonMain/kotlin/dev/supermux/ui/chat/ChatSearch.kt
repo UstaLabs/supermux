@@ -76,7 +76,8 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.chat.TimelineItem
-import dev.supermux.chat.chatTimeLabel
+import dev.supermux.chat.chatTime
+import dev.supermux.ui.i18n.chatTimeText
 import dev.supermux.fs.pathLeaf
 import dev.supermux.net.MessageSearchHit
 import dev.supermux.ui.theme.Radii
@@ -397,7 +398,7 @@ fun ChatSearchHitRow(hit: MessageSearchHit, query: String, now: Long, onClick: (
                 )
             }
             Spacer(Modifier.weight(1f))
-            chatTimeLabel(hit.ts, now)?.let {
+            chatTime(hit.ts, now)?.let(::chatTimeText)?.let {
                 Text(it, color = cs.onSurfaceVariant, fontSize = 11.sp, maxLines = 1)
             }
         }

@@ -2,6 +2,8 @@ package dev.supermux.desktop.host
 
 import dev.supermux.desktop.platform.DesktopOs
 import dev.supermux.desktop.platform.windowsPowerShell
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
@@ -36,11 +38,9 @@ object BrokerService {
     /** ERROR_CANCELLED: what the elevated batch exits with when the UAC prompt is declined. */
     internal const val UAC_DECLINED_EXIT = 1223
 
-    const val WINDOWS_STOP_FAILED =
-        "Couldn't stop the background service to update it; it keeps running the previous version."
+    val WINDOWS_STOP_FAILED get() = localized(Str.host_app_desktop_service_stop_failed)
 
-    const val WINDOWS_UPDATE_DECLINED =
-        "Couldn't update the background service (permission declined); still running the previous version."
+    val WINDOWS_UPDATE_DECLINED get() = localized(Str.host_app_desktop_service_update_declined)
 
     /** Set in the Scheduled Task broker's env: it runs under the task's restart loop. */
     const val WINDOWS_TASK_ENV = "MUX_WINDOWS_TASK"
@@ -1064,10 +1064,10 @@ Terminal=false
 
     /** The error's sentence naming [holders] of [port], each with its pid and command line, so a report carries them. */
     fun describePortHolders(port: Int, holders: List<PortHolder>): String =
-        "Port $port is still held by " + holders.joinToString("; ") { h ->
-            if (h.name.isEmpty()) "a process that has exited (pid ${h.pid}), through a handle another process kept"
-            else "${h.name} (pid ${h.pid})" + (h.commandLine.takeIf { it.isNotBlank() }?.let { ": ${it.take(300)}" } ?: "")
-        } + "."
+        localized(Str.host_app_desktop_port_held, port, holders.joinToString("; ") { h ->
+            if (h.name.isEmpty()) localized(Str.host_app_desktop_port_held_exited, h.pid)
+            else "${h.name} (pid ${h.pid})" + (h.commandLine.takeIf { it.isNotBlank() }?.let { ": ${it.take(300)}" } ?: "") // i18n-ok: process name and command line
+        })
 
     private fun taskkillArgv(pids: List<Long>): List<String> =
         listOf("taskkill", "/F") + pids.flatMap { listOf("/PID", it.toString()) }
@@ -1206,7 +1206,7 @@ Terminal=false
     private fun schtasksScript(calls: List<List<String>>): String = "$SYSTEM_MODULES_ONLY " + calls.joinToString("; ") { args ->
         val call = "& $SCHTASKS ${args.joinToString(" ") { powershellLiteral(it) }}"
         // /End fails when the task is not running, which is fine: keep going to the next call.
-        if (args.firstOrNull() == "/End") call else "$call; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }"
+        if (args.firstOrNull() == "/End") call else "$call; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }" // i18n-ok: PowerShell script
     }
 
     /** Windows PowerShell by its System32 path, never whatever `powershell.exe` the search path finds first. */

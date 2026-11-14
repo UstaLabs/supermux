@@ -1,6 +1,7 @@
 package dev.supermux.host
 
 import dev.supermux.proto.SessionInfo
+import dev.supermux.util.TimeAgo
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
@@ -60,19 +61,19 @@ class FleetModelTest {
         assertEquals("Build Box", hostDisplayLabel("Build Box"))
     }
 
-    // ── formatLastSeen ─────────────────────────────────────────────────────────
+    // ── lastSeenAgo ─────────────────────────────────────────────────────────
     @Test fun lastSeen_buckets() {
         val now = 1_000_000_000_000L
-        assertEquals("", formatLastSeen(now, 0L))
-        assertEquals("just now", formatLastSeen(now, now - 5_000L))
-        assertEquals("5m ago", formatLastSeen(now, now - 5 * 60_000L))
-        assertEquals("2h ago", formatLastSeen(now, now - 2 * 3_600_000L))
-        assertEquals("3d ago", formatLastSeen(now, now - 3 * 86_400_000L))
+        assertEquals(null, lastSeenAgo(now, 0L))
+        assertEquals(TimeAgo.JustNow, lastSeenAgo(now, now - 5_000L))
+        assertEquals(TimeAgo.Minutes(5), lastSeenAgo(now, now - 5 * 60_000L))
+        assertEquals(TimeAgo.Hours(2), lastSeenAgo(now, now - 2 * 3_600_000L))
+        assertEquals(TimeAgo.Days(3), lastSeenAgo(now, now - 3 * 86_400_000L))
     }
 
     @Test fun lastSeen_futureClampsToJustNow() {
         val now = 1_000L
-        assertEquals("just now", formatLastSeen(now, now + 10_000L))
+        assertEquals(TimeAgo.JustNow, lastSeenAgo(now, now + 10_000L))
     }
 
     // ── HostView derivations ────────────────────────────────────────────────────

@@ -169,6 +169,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
 import dev.supermux.ui.i18n.localized
+import dev.supermux.util.timeAgo
 
 
 /**
@@ -1622,7 +1623,7 @@ private fun NewTabView(newTab: ViewDto, hostId: String, current: WorkspaceDto, w
             }
         },
         onClose = { app.closeWorkspaceView(current.id, newTab.id) },
-        closed = closed.map { c -> ClosedSessionRow(c.id, c.name, c.agent, closedAgo(now, parseChatTs(c.closedAt) ?: now)) },
+        closed = closed.map { c -> ClosedSessionRow(c.id, c.name, c.agent, timeAgo(now, parseChatTs(c.closedAt) ?: now)) },
         onReopen = { sessionId ->
             app.reopenClosedSession(current.id, sessionId, groupIdOf(layoutSync.tree, newTab.id)) { id ->
                 ui.windows.expandClaim(hostId, setOf(id), layoutSync.tree)

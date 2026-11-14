@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #123: the platform hosts in Turkish — same keys and placeholders as values/hosts.xml (tests/i18n-strings.test.ts).
+     Terms: docs/i18n/glossary.md. -->
+<resources>
+    <!-- Desktop: the main menu -->
+    <string name="host_app_desktop_menu_file">Dosya</string>
+    <string name="host_app_desktop_menu_new_session">Yeni oturum</string>
+    <string name="host_app_desktop_menu_new_terminal">Yeni terminal</string>
+    <string name="host_app_desktop_menu_move_workspace">Çalışma alanını yeni pencereye taşı</string>
+    <string name="host_app_desktop_menu_move_group">Grubu yeni pencereye taşı</string>
+    <string name="host_app_desktop_menu_archived">Arşiv…</string>
+    <string name="host_app_desktop_menu_displays">Ekranlar…</string>
+    <string name="host_app_desktop_menu_usage">Kullanım…</string>
+    <string name="host_app_desktop_menu_check_updates">Güncellemeleri denetle…</string>
+    <string name="host_app_desktop_menu_unpair">Eşleştirmeyi kaldır…</string>
+    <string name="host_app_desktop_menu_view">Görünüm</string>
+    <string name="host_app_desktop_menu_show_sidebar">Kenar çubuğunu göster</string>
+    <string name="host_app_desktop_menu_load_timings">Yükleme süreleri</string>
+    <string name="host_app_desktop_menu_edit">Düzen</string>
+    <string name="host_app_desktop_menu_undo">Geri al</string>
+    <string name="host_app_desktop_menu_redo">Yinele</string>
+    <string name="host_app_desktop_menu_cut">Kes</string>
+    <string name="host_app_desktop_menu_copy">Kopyala</string>
+    <string name="host_app_desktop_menu_paste">Yapıştır</string>
+    <string name="host_app_desktop_menu_select_all">Tümünü seç</string>
+    <string name="host_app_desktop_main_menu">Ana menü</string>
+
+    <!-- Desktop: unpair -->
+    <string name="host_app_desktop_unpair_title">Bu cihazın eşleştirmesi kaldırılsın mı?</string>
+    <string name="host_app_desktop_unpair_text">Kayıtlı eşleştirme kimlik bilgileri silinir ve başlangıç ekranına dönülür. Sunucudaki oturumlarınıza dokunulmaz.</string>
+    <string name="host_app_desktop_unpair">Eşleştirmeyi kaldır</string>
+
+    <!-- Desktop: hosting dialogs -->
+    <string name="host_app_desktop_quit_title">supermux'tan çıkılsın mı?</string>
+    <string name="host_app_desktop_quit">Çık</string>
+    <string name="host_app_desktop_takeover_text">supermux bu bilgisayarda zaten çalışıyor (uygulamanın dışında kurulmuş). Uygulama onu yönetip güncellesin mi?</string>
+    <string name="host_app_desktop_manage_it">Yönet</string>
+    <string name="host_app_desktop_leave_it">Dokunma</string>
+    <string name="host_app_desktop_downgrade_text">Daha yeni bir supermux çalışıyor. Uygulama ona yetişene kadar çalışmaya devam etsin mi?</string>
+    <string name="host_app_desktop_keep_it">Devam etsin</string>
+    <string name="host_app_desktop_use_bundled">Bu uygulamanın sürümünü kullan</string>
+
+    <!-- Desktop: the tray header and Settings › Hosting's status -->
+    <plurals name="host_app_desktop_sessions">
+        <item quantity="one">%1$d oturum</item>
+        <item quantity="other">%1$d oturum</item>
+    </plurals>
+    <string name="host_app_desktop_tray_quitting">Çıkılıyor…</string>
+    <string name="host_app_desktop_tray_cant_reach">%1$s makinesine ulaşılamıyor · yeniden deneniyor</string>
+    <string name="host_app_desktop_tray_connected_to">Bağlı: %1$s</string>
+    <string name="host_app_desktop_tray_starting">supermux başlatılıyor…</string>
+    <string name="host_app_desktop_restart">Yeniden başlat</string>
+    <string name="host_app_desktop_tray_restarting">supermux beklenmedik şekilde durdu · yeniden başlatılıyor (deneme %1$d)</string>
+    <string name="host_app_desktop_tray_cant_start">supermux başlatılamıyor</string>
+    <string name="host_app_desktop_tray_waiting">supermux sizi bekliyor</string>
+    <string name="host_app_desktop_tray_running_managed">supermux çalışıyor · %1$s · uygulamanın dışında yönetiliyor</string>
+    <string name="host_app_desktop_tray_running_port">supermux çalışıyor · %1$s · port %2$d</string>
+    <string name="host_app_desktop_tray_running">supermux çalışıyor · %1$s</string>
+    <string name="host_app_desktop_status_running_outside">Çalışıyor · uygulamanın dışında kurulmuş</string>
+    <string name="host_app_desktop_status_running">Çalışıyor · %1$s</string>
+
+    <!-- Desktop: what quitting does -->
+    <string name="host_app_desktop_quit_background">supermux arka planda çalışmaya devam edecek.</string>
+    <string name="host_app_desktop_quit_background_awake">supermux arka planda çalışmaya devam eder ve bu bilgisayarı uyanık tutar. Uyuyabilmesi için 'Bu bilgisayarı uyanık tut' ayarını kapatın.</string>
+    <string name="host_app_desktop_quit_stops">Bu, supermux'u durdurur.</string>
+    <plurals name="host_app_desktop_quit_stops_sessions">
+        <item quantity="one">Bu, supermux'u ve çalışan %1$d oturumunuzu durdurur.</item>
+        <item quantity="other">Bu, supermux'u ve çalışan %1$d oturumunuzu durdurur.</item>
+    </plurals>
+
+    <!-- Desktop: the hosting wizard -->
+    <string name="host_app_desktop_wizard_error_start">Yerel sunucu başlatılamadı. Sunucu bu makinede çalışabiliyor mu?</string>
+    <string name="host_app_desktop_wizard_error_claim">Yerel sunucudan eşleştirme kodu oluşturulamadı.</string>
+    <string name="host_app_desktop_wizard_headline">Bu bilgisayar ajanlarınızı barındırmaya hazır. Karekodu telefonunuzla tarayın.</string>
+    <string name="host_app_desktop_wizard_keepalive_help">Uygulamadan çıksanız, oturumu kapatsanız ya da yeniden başlatsanız da ajanlarınıza ulaşabilirsiniz.</string>
+    <string name="host_app_desktop_wizard_set_up_elsewhere">Bu bilgisayarda, bu uygulamanın dışında kurulmuş bir supermux makinesi zaten çalışıyor ve bu uygulama ona dokunmuyor. Burada kullanmak için bunun yerine ona bağlanın.</string>
+    <string name="host_app_desktop_wizard_relay_on">Uzaktan erişim relay.supermux.dev üzerinden açık.</string>
+    <string name="host_app_desktop_wizard_relay_off">Telefonunuz bu bilgisayara yerel ağınızda doğrudan ulaşır. Her yerden ulaşmak için uzaktan erişimi daha sonra açın; bağlantı supermux aktarıcısı üzerinden geçer.</string>
+    <string name="host_app_desktop_wizard_preparing">Bu bilgisayar makine olarak kuruluyor…</string>
+    <string name="host_app_desktop_wizard_connect_instead">Bunun yerine başka bir sunucuya bağlan</string>
+    <string name="host_app_desktop_wizard_qr">Eşleştirme karekodu</string>
+    <string name="host_app_desktop_git_title_mac">Apple geliştirici araçlarını kurun — isteğe bağlı</string>
+    <string name="host_app_desktop_git_body_mac">Ajanlar onlarsız da çalışır; git özelliklerini (worktree'ler, farklar, değişiklik takibi) açarlar.</string>
+    <string name="host_app_desktop_git_title">git'i kurun — isteğe bağlı</string>
+    <string name="host_app_desktop_git_body">Ajanlar git olmadan da çalışır; git özelliklerini (worktree'ler, farklar, değişiklik takibi) açar.</string>
+    <string name="host_app_desktop_git_skip">Atla</string>
+    <string name="host_app_desktop_git_failed">Yükleyici başlatılamadı.</string>
+    <string name="host_app_desktop_git_install_failed">Kurulamadı: %1$s</string>
+
+    <!-- Desktop: starting and stopping the broker (shown in Settings › Hosting and as notifications) -->
+    <string name="host_app_desktop_launch_service_didnt_start">hizmet başlamadı</string>
+    <string name="host_app_desktop_launch_unsupported">bu sistemde desteklenmiyor</string>
+    <string name="host_app_desktop_launch_background_failed">supermux arka planda çalışır durumda tutulamadı: %1$s</string>
+    <string name="host_app_desktop_launch_restart_failed">Arka plan hizmeti yeniden başlatılamadı: %1$s</string>
+    <string name="host_app_desktop_launch_stop_failed">Arka plan hizmeti durdurulamadı: %1$s</string>
+    <string name="host_app_desktop_launch_autostart_failed">Oturum açılışındaki otomatik başlatma kaldırılamadı: %1$s</string>
+    <string name="host_app_desktop_launch_not_bundled">supermux sunucusu bu uygulamayla birlikte gelmiyor</string>
+    <string name="host_app_desktop_launch_stopped_starting">supermux başlarken durdu.</string>
+    <string name="host_app_desktop_launch_no_answer">supermux %1$d portunda yanıt vermedi.</string>
+    <string name="host_app_desktop_launch_running_not_answering">supermux bu bilgisayarda zaten çalışıyor (pid %1$d) ama %2$d portunda yanıt vermiyor. Ondan çıkıp tekrar deneyin.</string>
+    <string name="host_app_desktop_launch_another_started">Bu arada %1$d portunda başka bir supermux başladı. Tekrar deneyin.</string>
+    <string name="host_app_desktop_launch_still_background">supermux arka plan kurulumundan hâlâ çalışıyor. Ondan çıkıp tekrar deneyin.</string>
+    <string name="host_app_desktop_launch_still_answers">supermux durdurulduktan sonra da %1$d portunda yanıt veriyor. Tekrar deneyin.</string>
+    <string name="host_app_desktop_service_stop_failed">Güncellemek için arka plan hizmeti durdurulamadı; önceki sürümle çalışmaya devam ediyor.</string>
+    <string name="host_app_desktop_service_update_declined">Arka plan hizmeti güncellenemedi (izin verilmedi); hâlâ önceki sürümle çalışıyor.</string>
+    <string name="host_app_desktop_port_held">%1$d portu hâlâ şunun elinde: %2$s.</string>
+    <string name="host_app_desktop_port_held_exited">sonlanmış bir işlem (pid %1$d), başka bir işlemin tuttuğu bir tanıtıcı aracılığıyla</string>
+
+    <!-- Desktop: the overlay's hold-to-talk key -->
+    <string name="host_app_desktop_overlay_hold_to_talk">Herhangi bir uygulamadan basılı tutup konuşun</string>
+    <string name="host_app_desktop_overlay_hold_right_option">Sağ ⌥ tuşunu tek başına basılı tutup konuşun; göndermek için bırakın. macOS önce Girdi İzleme izni ister.</string>
+    <string name="host_app_desktop_overlay_hold_key">%1$s tuşlarını basılı tutup konuşun; göndermek için bırakın. İzin gerekmez.</string>
+    <string name="host_app_desktop_overlay_asks_input_monitoring">%1$s · Girdi İzleme izni ister</string>
+    <string name="host_app_desktop_overlay_key_taken">%1$s başka bir uygulama tarafından kullanılıyor: buradan başka bir tuş seçin.</string>
+    <string name="host_app_desktop_overlay_allow_input_monitoring">Girdi İzleme'ye izin ver</string>
+    <string name="host_app_desktop_overlay_wayland_no_portal">Herhangi bir uygulamadan basılı tutup konuşmak için GNOME 48+ ya da KDE Plasma 5.27+ gerekir; konuşmak için Ajanınızı basılı tutun.</string>
+    <string name="host_app_desktop_overlay_wayland_asking">Kısayolu onaylamanız bekleniyor…</string>
+    <string name="host_app_desktop_overlay_wayland_declined">Masaüstünün bu tuşu supermux'a vermesine izin verilmedi. Yeniden sorulması için buradan tekrar seçin.</string>
+    <string name="host_app_desktop_overlay_wayland_failed">Masaüstü bu tuşu supermux'a veremedi; konuşmak için Ajanınızı basılı tutun ya da tekrar denemek için buradan yeniden seçin.</string>
+
+    <!-- Android: the chat screen -->
+    <string name="host_app_android_folder_itself">Bu, proje klasörünün kendisi</string>
+    <string name="host_app_android_not_responding">yanıt vermiyor</string>
+    <string name="host_app_android_panel_chat">Sohbet</string>
+    <string name="host_app_android_panel_editor">Düzenleyici</string>
+    <string name="host_app_android_panel_terminal">Terminal</string>
+    <string name="host_app_android_panel_display">Ekran</string>
+    <string name="host_app_android_terminal_unavailable">Terminal kullanılamıyor</string>
+    <string name="host_app_android_display_unavailable">Ekran kullanılamıyor</string>
+    <string name="host_app_android_kill_text">Bu, "%1$s" oturumunu hemen sonlandırır.</string>
+
+    <!-- Android: the assistant overlay's notification -->
+    <string name="host_app_android_overlay_channel">Asistan katmanı</string>
+    <string name="host_app_android_overlay_channel_description">Asistanınızı diğer uygulamaların üzerinde tutar.</string>
+    <string name="host_app_android_overlay_your_assistant">Asistanınız</string>
+    <string name="host_app_android_overlay_it">o</string>
+    <string name="host_app_android_overlay_resting">%1$s dinleniyor</string>
+    <string name="host_app_android_overlay_in_corner">%1$s yanınızda</string>
+    <string name="host_app_android_overlay_sharing">%1$s ekranınızı görüyor: söylediklerinizle birlikte gider. Durdurmak için %1$s üzerine iki kez dokunun.</string>
+    <string name="host_app_android_overlay_hidden_text">Bir sonraki yanıtıyla geri gelir.</string>
+    <string name="host_app_android_overlay_tap_screen">Sohbet için dokunun, konuşmak için basılı tutun, ekranınızı göstermek için iki kez dokunun.</string>
+    <string name="host_app_android_overlay_tap">Sohbet için dokunun, konuşmak için basılı tutun.</string>
+    <string name="host_app_android_overlay_stop_sharing">Paylaşımı durdur</string>
+    <string name="host_app_android_overlay_show">Göster</string>
+    <string name="host_app_android_overlay_couldnt_ask_share">Ekran paylaşımı istenemedi.</string>
+    <string name="host_app_android_overlay_screen_off_in_settings">Ekranınızı gösterme, Ayarlar › Gizlilik ve deneyler bölümünde kapalı.</string>
+    <string name="host_app_android_overlay_couldnt_share">Ekran paylaşılamadı.</string>
+
+    <!-- Android: push notifications -->
+    <string name="host_app_android_push_photo">Bir fotoğraf gönderdi</string>
+    <string name="host_app_android_push_voice">Bir sesli mesaj gönderdi</string>
+    <string name="host_app_android_push_audio">Ses gönderdi</string>
+    <string name="host_app_android_push_video_note">Bir video notu gönderdi</string>
+    <string name="host_app_android_push_document">Bir belge gönderdi</string>
+    <string name="host_app_android_channel_sessions">Oturumlar</string>
+    <string name="host_app_android_channel_sessions_description">Ajan oturumu güncellemeleri</string>
+
+    <!-- Android: app update notifications -->
+    <string name="host_app_android_update_channel_progress">Uygulama güncellemesi indirme</string>
+    <string name="host_app_android_update_channel_progress_description">Uygulama güncellemesi kurulurken indirme ilerlemesini gösterir</string>
+    <string name="host_app_android_update_channel_alerts">Uygulama güncellemesi uyarıları</string>
+    <string name="host_app_android_update_channel_alerts_description">Bir uygulama güncellemesi kurulmaya hazır olduğunda ya da başarısız olduğunda uyarır</string>
+    <string name="host_app_android_update_progress">%%1$d · %2$s / %3$s</string>
+    <string name="host_app_android_update_starting">İndirme başlatılıyor…</string>
+    <string name="host_app_android_update_downloading">Güncelleme indiriliyor</string>
+    <string name="host_app_android_update_downloaded">Güncelleme indirildi</string>
+    <string name="host_app_android_update_tap_install">Kurmak için dokunun</string>
+    <string name="host_app_android_update_failed_body">İndirme ya da kurulum başarısız oldu</string>
+    <string name="host_app_android_update_failed">Güncelleme başarısız oldu</string>
+
+    <!-- Web: pairing and the push banner -->
+    <string name="host_app_web_not_pair_link">Bu bir eşleştirme bağlantısına benzemiyor. /pair?t=&lt;token> ile bitmeli.</string>
+    <string name="host_app_web_cant_reach">Sunucuya ulaşılamıyor</string>
+    <string name="host_app_web_pair_title">Bu tarayıcıyı eşleştir</string>
+    <string name="host_app_web_offline_text">Sunucu yanıt vermedi (%1$s). Başlıyor, uykuda ya da bu ağdan ulaşılamıyor olabilir — bu tarayıcıda bir sorun yok.</string>
+    <string name="host_app_web_unpaired_text">Bu sunucu zaten kurulmuş (%1$s). Eşleştirilmiş bir cihazda Ayarlar'da (Cihazlar) makinenizin sayfasını açın, bir cihaz ekleyin ve gösterdiği bağlantıyı burada açın — ya da aşağıya yapıştırın.</string>
+    <string name="host_app_web_open_link">Bağlantıyı aç</string>
+    <string name="host_app_web_check_again">Tekrar denetle</string>
+    <string name="host_app_web_push_banner">Ajan yanıtları için bildirimleri açın</string>
+    <string name="host_app_web_push_failed">Bildirimler açılamadı</string>
+    <string name="host_app_web_enable">Aç</string>
+    <string name="host_app_web_not_now">Şimdi değil</string>
+
+    <!-- iOS -->
+    <string name="host_app_ios_already_open">supermux başka bir pencerede zaten açık.</string>
+</resources>

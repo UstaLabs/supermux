@@ -12,7 +12,7 @@ import kotlin.test.assertEquals
  *
  * Time deviation, updated for `:ui`: `java.time` cannot come into commonMain, so both formatters
  * take `now` as epoch MILLIS and the one calendar step ("resets Jul 14") goes through `:shared`'s
- * `shortMonthDayLabel`, which is the civil-date maths chat timestamps already use. The tests still
+ * `localMonthDay`, which is the civil-date maths chat timestamps already use. The tests still
  * build their fixtures with `java.time` — this source set is the JVM one.
  */
 class UsageResetFormatTest {

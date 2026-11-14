@@ -91,7 +91,7 @@ class ShellActions(
     // ── git ops (the header menus' Fetch / Pull / Push / Publish) ─────────────────────────────
     /**
      * Each returns the broker's [GitOpResult], or null when the op failed / no host owns the
-     * session. The menus turn that into a label ([dev.supermux.chat.gitOpResultLabel] inline on a
+     * session. The menus turn that into a label ([gitOpResultLabel] inline on a
      * pointer, [gitOpResultText] through `Platform.notices` under touch) — never into a throw.
      */
     val gitFetch: suspend (sessionId: String) -> GitOpResult? = { null },

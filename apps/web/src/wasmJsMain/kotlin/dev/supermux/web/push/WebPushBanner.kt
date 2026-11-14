@@ -19,6 +19,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.platform.LocalPlatform
 import kotlinx.browser.localStorage
 import org.w3c.dom.get
@@ -69,7 +71,7 @@ fun WebPushBanner(registrar: WebPushRegistrar, modifier: Modifier = Modifier) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Column(Modifier.weight(1f)) {
-                Text("Enable notifications for agent replies", style = MaterialTheme.typography.bodyMedium)
+                Text(localized(Str.host_app_web_push_banner), style = MaterialTheme.typography.bodyMedium)
             }
             TextButton(
                 enabled = !busy,
@@ -84,19 +86,19 @@ fun WebPushBanner(registrar: WebPushRegistrar, modifier: Modifier = Modifier) {
                         // AFTER a grant is not: the user clicked Enable, said yes, and would
                         // otherwise watch the strip vanish with nothing turned on.
                         if (registrar.requestPermissionNow() == "granted" && !registrar.register()) {
-                            notices.show("Couldn't enable notifications")
+                            notices.show(localized(Str.host_app_web_push_failed))
                         }
                         busy = false
                     }
                 },
-            ) { Text("Enable") }
+            ) { Text(localized(Str.host_app_web_enable)) }
             TextButton(
                 enabled = !busy,
                 onClick = {
                     dismissed = true
                     localStorage[BANNER_DISMISSED_KEY] = "1"
                 },
-            ) { Text("Not now") }
+            ) { Text(localized(Str.host_app_web_not_now)) }
         }
     }
 }

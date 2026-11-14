@@ -17,13 +17,6 @@ enum class ChatDetailLevel {
             HIGH -> "high"
         }
 
-    val label: String
-        get() = when (this) {
-            LOW -> "Low"
-            MEDIUM -> "Medium"
-            HIGH -> "High"
-        }
-
     companion object {
         fun parse(raw: String?): ChatDetailLevel = when (raw?.lowercase()) {
             "low" -> LOW
@@ -78,33 +71,3 @@ fun countToolsSince(
     toolTimestampsMs: List<Long>,
     sinceMs: Long,
 ): Int = toolTimestampsMs.count { it >= sinceMs }
-
-/**
- * What a working session is doing, from its agent_state detail: "starting" while a session that was
- * not up is being woken (card #75), "working" while it runs a tool, else "thinking".
- */
-fun workingBaseLabel(detail: String?): String = when (detail) {
-    "starting" -> "starting"
-    "running" -> "working"
-    else -> "thinking"
-}
-
-/**
- * Low-mode working status: platform [baseLabel] + optional tool + count + duration.
- * Segments joined with " · ".
- */
-fun formatLowWorkingStatus(
-    baseLabel: String,
-    detail: String?,
-    tool: String?,
-    toolCount: Int,
-    durationLabel: String,
-): String {
-    val parts = mutableListOf(baseLabel)
-    if (detail == "running" && !tool.isNullOrBlank()) parts.add(tool)
-    if (toolCount > 0) {
-        parts.add(if (toolCount == 1) "1 tool" else "$toolCount tools")
-    }
-    if (durationLabel.isNotEmpty()) parts.add(durationLabel)
-    return parts.joinToString(" · ")
-}

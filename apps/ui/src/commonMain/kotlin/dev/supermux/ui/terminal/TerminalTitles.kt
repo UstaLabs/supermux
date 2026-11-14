@@ -3,7 +3,7 @@ package dev.supermux.ui.terminal
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.staticCompositionLocalOf
 import dev.supermux.proto.ViewDto
-import dev.supermux.workspace.viewTitle
+import dev.supermux.ui.i18n.viewTitle
 
 /**
  * The window title each live terminal VIEW's program last set (OSC 0/2), by view id.

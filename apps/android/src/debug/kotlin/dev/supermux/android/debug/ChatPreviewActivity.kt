@@ -43,7 +43,7 @@ class ChatPreviewActivity : ComponentActivity() {
                 id = "m1",
                 ts = ts(12),
                 direction = "inbound",
-                text = "Can you summarize the chat layout plan and keep it short?",
+                text = "Can you summarize the chat layout plan and keep it short?", // i18n-ok: debug preview
             ),
             LogEntry(
                 id = "m2",
@@ -61,25 +61,25 @@ Minimal chrome, no heavy animation.""",
                 id = "m3",
                 ts = ts(8),
                 direction = "inbound",
-                text = "Looks good — ship the Android version first.",
+                text = "Looks good — ship the Android version first.", // i18n-ok: debug preview
             ),
             LogEntry(
                 id = "m4",
                 ts = ts(6),
                 direction = "outbound",
-                text = "Done. User bubbles sit on the right; agent text is full-bleed with a quiet `HH:mm` + copy row. The session-log dots and spine are gone.",
+                text = "Done. User bubbles sit on the right; agent text is full-bleed with a quiet `HH:mm` + copy row. The session-log dots and spine are gone.", // i18n-ok: debug preview
             ),
             LogEntry(
                 id = "m5",
                 ts = ts(2),
                 direction = "inbound",
-                text = "Nice. Screenshot it on the emulator please.",
+                text = "Nice. Screenshot it on the emulator please.", // i18n-ok: debug preview
             ),
             LogEntry(
                 id = "m6",
                 ts = ts(1),
                 direction = "outbound",
-                text = "On it — installing the debug build and capturing the chat stream now.",
+                text = "On it — installing the debug build and capturing the chat stream now.", // i18n-ok: debug preview
             ),
         )
 
@@ -88,8 +88,8 @@ Minimal chrome, no heavy animation.""",
                 ts = ts(10),
                 kind = "tool",
                 tool = "Edit",
-                title = "Edit: Timeline.kt",
-                description = "Timeline.kt",
+                title = "Edit: Timeline.kt", // i18n-ok: debug preview
+                description = "Timeline.kt", // i18n-ok: debug preview
                 callId = "c1",
                 phase = "completed",
             ),
@@ -110,7 +110,7 @@ Minimal chrome, no heavy animation.""",
                         .statusBarsPadding(),
                 ) {
                     Text(
-                        text = "chat preview",
+                        text = "chat preview", // i18n-ok: debug preview
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = Space.md, vertical = Space.sm),
