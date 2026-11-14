@@ -46,6 +46,8 @@ data class HostState(
     val councils: Map<String, List<dev.supermux.proto.CouncilView>> = emptyMap(),
     val commands: Map<String, List<SlashCommand>> = emptyMap(),
     val commandsResolved: Map<String, Boolean> = emptyMap(),
+    /** #144: sessions whose compaction is running (session id → compaction id). */
+    val compacting: Map<String, String> = emptyMap(),
     val lastRead: Map<String, String> = emptyMap(),
     val finishJobs: Map<String, FinishJobDto> = emptyMap(),
     val lspStatus: Map<String, ServerFrame.LspStatus> = emptyMap(),

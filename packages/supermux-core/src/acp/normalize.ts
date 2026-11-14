@@ -223,7 +223,7 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
   /** Each model's context window and the one in use (#144): Grok reports usage per call but no window with it. */
   const windows: { current?: string; sizes: Record<string, number> } = { sizes: {} }
   const grokCompaction = { seq: 0, open: false }
-  const driverCompaction: { seq: number; open: boolean; before?: number } = { seq: 0, open: false }
+  const driverCompaction: { seq: number; open: boolean; before?: number; summary?: string } = { seq: 0, open: false }
   let lastContextUsed: number | undefined
   let lastModelsJson: string | undefined
   let firstSession: string | undefined
@@ -444,6 +444,11 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
       return used > 0 ? [{ kind: "usage", context: { used, size } }] : []
     }
     if (sub && (kind === "available_commands_update" || kind === "usage_update" || kind === "session_info_update" || kind === "current_mode_update" || kind === "config_option_update")) return []
+    if (driverCompaction.open && !sub && (kind === "agent_message_chunk" || kind === "agent_thought_chunk")) {
+      // OpenCode streams its compaction summary as an ordinary message (#144): it belongs to the Compacted line.
+      if (kind === "agent_message_chunk") driverCompaction.summary = (driverCompaction.summary ?? "") + contentText(value.content)
+      return []
+    }
     if (kind === "agent_message_chunk") {
       const prefix = takeThoughts(scope)
       if (prefix.length && !str(value.messageId)) scope.thoughtSeq += 1
@@ -856,6 +861,7 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
         driverCompaction.seq += 1
         driverCompaction.open = true
         driverCompaction.before = lastContextUsed
+        driverCompaction.summary = undefined
         return [{ kind: "compaction", compactionId: `compact-${driverCompaction.seq}`, status: "in_progress" }]
       }
       if (!driverCompaction.open || (status !== "completed" && status !== "failed" && status !== "cancelled")) return []
@@ -864,6 +870,7 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
       return [{
         kind: "compaction", compactionId: `compact-${driverCompaction.seq}`, status,
         ...(status === "completed" && driverCompaction.before != null ? { before: driverCompaction.before } : {}),
+        ...(status === "completed" && driverCompaction.summary?.trim() ? { summary: driverCompaction.summary.trim() } : {}),
         ...(error ? { error } : {}),
       }]
     }

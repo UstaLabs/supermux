@@ -383,6 +383,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
         this.offeredModels = models
         this.emit("models-update", { kind: "models-update" })
       },
+      onCompaction: (compaction) => { this.emit("compaction", { kind: "compaction", ...compaction }) },
       onToolUsed: (name) => { this.toolUses.set(name, (this.toolUses.get(name) ?? 0) + 1) },
       onContext: (context) => {
         if (this.contextUsage?.used === context.used && this.contextUsage.size === context.size) return
@@ -401,6 +402,16 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   get effort(): string | undefined { return this._effort }
   get fast(): boolean { return this._fast }
   get permissionMode(): string | undefined { return this._permissionMode }
+
+  /**
+   * #144 Compact: queued like a message (it runs after the turn in progress). The note is kept only where the agent
+   * takes one. Throws when the agent can't compact or the session isn't running.
+   */
+  async compact(note?: string): Promise<void> {
+    const session = this.session
+    if (!session) throw new Error("The agent isn't running")
+    await session.compact({ ...(note ? { note } : {}), whenBusy: "queue" })
+  }
 
   /** What fills the context window, asked of the agent now (#144); undefined when it can't say or isn't running. */
   async contextBreakdown(): Promise<ContextBreakdown | undefined> {

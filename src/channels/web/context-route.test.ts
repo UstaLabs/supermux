@@ -37,3 +37,21 @@ test("an unknown session is a 404; a broker without the wiring a 503", async () 
   await channel!.stop(); channel = undefined
   expect((await (await start({}))()).status).toBe(503)
 })
+
+test("POST /sessions/:id/compact queues a Compact with its note; refusals keep their status (#144)", async () => {
+  const calls: Array<[string, string | undefined]> = []
+  let refuse: { status: number; error: string } | undefined
+  await start({ compactSession: async (id, note) => { calls.push([id, note]); return refuse ? { ok: false, ...refuse } : { ok: true } } })
+  const token = new DeviceStore((channel as any).opts.devicesFile).mint("t2").token
+  const post = (body: unknown) => fetch(`http://127.0.0.1:${channel!.boundPort}/sessions/s%201/compact`, {
+    method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body),
+  })
+  expect((await post({ note: "keep the decisions" })).status).toBe(202)
+  expect((await post({})).status).toBe(202)
+  expect((await post({ note: 5 })).status).toBe(400)
+  refuse = { status: 400, error: "Cursor can't be asked to compact" }
+  const no = await post({})
+  expect(no.status).toBe(400)
+  expect(await no.json()).toEqual({ error: "Cursor can't be asked to compact" })
+  expect(calls).toEqual([["s 1", "keep the decisions"], ["s 1", undefined], ["s 1", undefined]])
+})

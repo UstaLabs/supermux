@@ -2854,3 +2854,15 @@ acrossGrok("tools the chat started are counted for 'used in this chat' (#144)", 
   await flush()
   expect([...adapter.toolUses.values()].reduce((a, b) => a + b, 0)).toBe(2)
 })
+
+acrossGrok("a compaction notice becomes the adapter's compaction event (#144)", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  const seen: unknown[] = []
+  adapter.on("compaction", (e: unknown) => seen.push(e))
+  await adapter.start()
+  fake.emit({ protocol: "native", value: { method: "_x.ai/session_notification", params: { update: { sessionUpdate: "auto_compact_completed", tokens_before: 28200, tokens_after: 28200 } } } })
+  await flush()
+  expect(seen).toEqual([{ kind: "compaction", compactionId: "grok-compact-1", status: "completed", before: 28200 }])
+})

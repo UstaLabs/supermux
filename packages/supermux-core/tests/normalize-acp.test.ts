@@ -257,3 +257,14 @@ test("OpenCode: the driver's compaction marks become compaction events, from the
   expect(n(mark("completed"))).toEqual([{ kind: "compaction", compactionId: "compact-1", status: "completed", before: 171000 }])
   expect(n(acp("usage_update", { used: 18000, size: 200000 }))[0]).toMatchObject({ context: { used: 18000, size: 200000 } })
 })
+
+test("OpenCode: what streams during the driver's compaction is its summary, not a reply (#144)", () => {
+  const n = createAcpNormalizer({ vendor: "opencode" })
+  const mark = (status: string) => ({ protocol: "native" as const, value: { method: "compaction", params: { status } } })
+  n(mark("in_progress"))
+  expect(n(acp("agent_message_chunk", { content: { type: "text", text: "Summary: the user " } }))).toEqual([])
+  expect(n(acp("agent_message_chunk", { content: { type: "text", text: "asked for X." } }))).toEqual([])
+  expect(n(mark("completed"))).toEqual([{ kind: "compaction", compactionId: "compact-1", status: "completed", summary: "Summary: the user asked for X." }])
+  // The turn produced a compaction: no "nothing happened" warning at its end.
+  expect(n.flush().some(b => b.kind === "warning")).toBe(false)
+})

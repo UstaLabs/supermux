@@ -368,6 +368,8 @@ export interface WebChannelOpts {
    * tools this chat used. Undefined for an unknown session.
    */
   getSessionContext?: (id: string) => Promise<SessionContextReport | undefined>
+  /** #144 Compact: queued like a message; the note is kept only where the agent takes one. */
+  compactSession?: (id: string, note?: string) => Promise<{ ok: true } | { ok: false; status: number; error: string }>
   getSessionBgTasks?: (name: string) => unknown[]
   /** Latest view of each subagent of a session (snapshot `subagents`; live `subagent_update`). */
   getSessionSubagents?: (id: string) => unknown[]
@@ -4372,6 +4374,14 @@ export class WebChannel implements Channel {
       const result = await this.opts.switchReasoningLevel(id, reasoningLevel, applyNow)
       if (!result.ok) return this.json({ error: result.error }, 400)
       return this.json({ ok: true, status: result.status }, result.status === "queued" ? 202 : 200)
+    }
+    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/compact$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      if (body.note !== undefined && typeof body.note !== "string") return this.json({ error: "note must be a string" }, 400)
+      if (!this.opts.compactSession) return this.json({ error: "not configured" }, 503)
+      const result = await this.opts.compactSession(id, body.note as string | undefined)
+      return result.ok ? this.json({ ok: true }, 202) : this.json({ error: result.error }, result.status)
     }
     if (method === "GET" && path.match(/^\/sessions\/[^/]+\/context$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
