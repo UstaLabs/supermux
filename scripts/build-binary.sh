@@ -160,6 +160,9 @@ if [ "$TARGET" != "windows-x64" ]; then
   fi
 fi
 
+# Brotli siblings for the staged assets (#142), once, here: idempotent, so a prebuilt bundle that
+# already carries them (release.yml's web-client job) costs nothing.
+bun scripts/precompress-static.ts
 # Embed the freshly-staged web client: rewrites the committed stub with per-file imports.
 bun scripts/generate-static-manifest.ts
 

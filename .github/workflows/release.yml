@@ -396,6 +396,11 @@ jobs:
       - name: Build the web client
         working-directory: apps
         run: ./gradlew :web:stageForBroker --console=plain -PsupermuxVersion="${{ steps.ver.outputs.version }}"
+      # Brotli siblings (#142), made once here so no downstream job (binaries, installers, docker under
+      # QEMU) spends the ~1.5 min of q11 again; precompress-static.ts is idempotent for them.
+      - uses: oven-sh/setup-bun@v2
+      - name: Precompress the web client (brotli)
+        run: bun scripts/precompress-static.ts
       - uses: actions/upload-artifact@v4
         with:
           name: web-client
