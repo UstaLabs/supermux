@@ -340,8 +340,8 @@ export interface WebAccountsApi {
   resumeLimitWait?(sessionId: string): Promise<boolean>
   /** #92 demo: a real wait on the session, resuming in `minutes`; false when there is no such session. */
   forceLimitWait?(sessionId: string, minutes: number): boolean
-  getSettings(): { autoSwitch: boolean; autoResume?: boolean }
-  setSettings(patch: Record<string, unknown>): { autoSwitch: boolean; autoResume?: boolean }
+  getSettings(): { autoSwitch: boolean; autoResume?: boolean; compactBeforeWait?: boolean }
+  setSettings(patch: Record<string, unknown>): { autoSwitch: boolean; autoResume?: boolean; compactBeforeWait?: boolean }
 }
 
 export interface WebChannelOpts {

@@ -391,6 +391,8 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
         this.emit("context-update", { kind: "context-update", ...this.contextUsage })
       },
       onUsage: (rateLimits) => {
+        // #146: the raw reading too (Claude's five_hour utilization isn't a CodexUsage): the compact advisor reads it.
+        this.emit("rate-limits", rateLimits)
         const data = codexUsageFromRateLimits(rateLimits, this.getPrevUsage?.() ?? null)
         if (data) this.onUsageUpdate?.(data)
       },

@@ -81,6 +81,7 @@ import {
 } from "./core/accounts/broker-accounts"
 import { setSessionAccount as moveSessionAccount } from "./core/accounts/session-account"
 import { LimitWaits, clockTime, resumeAfterLimit, type LimitWait } from "./core/accounts/limit-wait"
+import { CompactAdvisor } from "./core/usage/compact-advisor"
 import { getSessionBackend } from "./core/runtime"
 import { createAgentRpc } from "./core/agent-rpc"
 import { buildRpcPrompt } from "./core/agent-rpc/prompts"
@@ -1262,6 +1263,19 @@ function compactionText(c: { status: string; before?: number; after?: number; er
   return c.before != null && c.after != null ? `Compacted · ${k(c.before)} → ${k(c.after)}` : c.before != null ? `Compacted · was ${k(c.before)}` : "Compacted"
 }
 
+/** #146: suggest compacting before a usage-limit wait (and, opted in, do it). */
+const compactAdvisor = new CompactAdvisor({
+  now: () => Date.now(),
+  autoEnabled: () => accountsSettings().compactBeforeWait,
+  onAdvice: (id, advice) => webChannel?.broadcastToAll({ type: "compact_advice", session: id, advice }),
+  compact: (id) => {
+    void compactSession(id).then((r) => {
+      if (!r.ok) log.warn("auto_compact_refused", { session: id, err: r.error })
+      else log.info("auto_compact_before_wait", { session: id })
+    })
+  },
+})
+
 /** #144: the note a Compact was asked with, until its compaction ends (it goes on the "Compacted" line). */
 const compactNotes = new Map<string, string>()
 
@@ -2235,10 +2249,15 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
       announceAgentModelsChanged([agent])
     },
   })
+  // #146: the agent's own limit readings, and at each turn's end whether to compact before the wall.
+  adapter.on("rate-limits", (raw: unknown) => compactAdvisor.noteRateLimits(sessionId, adapter.kind, raw))
+  adapter.on("turn-start", () => compactAdvisor.turnStarted(sessionId))
+  adapter.on("turn-complete", () => compactAdvisor.turnCompleted(sessionId, adapter.kind, contextUsage.get(sessionId)?.used))
   // #144: a compaction starts (every client shows it at once) and ends as a "Compacted" line kept in the chat.
   adapter.on("compaction", (c: { compactionId: string; status: "in_progress" | "completed" | "failed" | "cancelled"; before?: number; after?: number; trigger?: "manual" | "auto"; summary?: string; error?: string }) => {
     webChannel?.broadcastToAll({ type: "compaction", session: sessionId, id: c.compactionId, status: c.status })
     if (c.status === "in_progress") return
+    if (c.status === "completed") compactAdvisor.compacted(sessionId)
     const note = compactNotes.get(sessionId)
     compactNotes.delete(sessionId)
     if (c.status === "completed" && c.after != null) {
@@ -2968,6 +2987,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         ...sessionAccountFields(s),
         limitWait: limitWaitFields(limitWaits.get(s.id)),
         context: contextUsage.get(s.id),
+        compactAdvice: compactAdvisor.current(s.id),
         status: s.status,
         session_branch: s.session_branch || undefined,
         repo_root: s.repo_root || undefined,
@@ -3546,15 +3566,17 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         const account = s.account || `${s.agent}:system`
         return !!limitWaits.wait(s.id, { account, resetsAt: new Date(Date.now() + minutes * 60_000), background: false })
       },
-      getSettings: () => ({ autoSwitch: accountsSettings().autoSwitch, autoResume: accountsSettings().autoResume }),
+      getSettings: () => ({ autoSwitch: accountsSettings().autoSwitch, autoResume: accountsSettings().autoResume, compactBeforeWait: accountsSettings().compactBeforeWait }),
       setSettings: (patch) => {
         if (patch.autoSwitch !== undefined && typeof patch.autoSwitch !== "boolean") throw new AccountsApiError(400, "autoSwitch must be a boolean", "invalid_input")
         if (patch.autoResume !== undefined && typeof patch.autoResume !== "boolean") throw new AccountsApiError(400, "autoResume must be a boolean", "invalid_input")
+        if (patch.compactBeforeWait !== undefined && typeof patch.compactBeforeWait !== "boolean") throw new AccountsApiError(400, "compactBeforeWait must be a boolean", "invalid_input")
+        if (typeof patch.compactBeforeWait === "boolean") settings.set(SETTINGS_KEY_ACCOUNTS, { ...accountsSettings(), compactBeforeWait: patch.compactBeforeWait })
         if (typeof patch.autoSwitch === "boolean") settings.set(SETTINGS_KEY_ACCOUNTS, { ...accountsSettings(), autoSwitch: patch.autoSwitch })
         if (typeof patch.autoResume === "boolean") settings.set(SETTINGS_KEY_ACCOUNTS, { ...accountsSettings(), autoResume: patch.autoResume })
         // Turned off: nothing that waits now resumes by itself.
         if (patch.autoResume === false) for (const wait of limitWaits.list()) limitWaits.cancel(wait.sessionId)
-        const next = { autoSwitch: accountsSettings().autoSwitch, autoResume: accountsSettings().autoResume }
+        const next = { autoSwitch: accountsSettings().autoSwitch, autoResume: accountsSettings().autoResume, compactBeforeWait: accountsSettings().compactBeforeWait }
         webChannel?.broadcastToAll({ type: "accounts_settings", ...next })
         return next
       },
