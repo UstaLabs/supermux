@@ -6,7 +6,7 @@
  *   2. a paired one opens the seeded session, and a fenced Kotlin block in the reply renders in the
  *      chat's code editor: its font comes from the TERMINAL's JetBrains Mono path and never the
  *      editor's (the editor's copy is no longer shipped), and with the real syntax module staged
- *      (MUX_SMOKE_REQUIRE_SYNTAX=1) the Kotlin grammar loads and the block draws in more than one colour;
+ *      (MUX_SMOKE_REQUIRE_SYNTAX=1) the syntax module loads and the block draws in more than one colour;
  *   3. a Terminal tab opens and the terminal engine wasm loads;
  *   4. every wasm the browser fetched with br offered came back br, and an explicit br request for
  *      the app wasm is answered with the precompressed sibling.
@@ -119,13 +119,14 @@ export async function main(): Promise<void> {
     const syntaxWasm = seen.find((s) => /supermux-syntax-[0-9a-f]{8}\.wasm/.test(s.url))
     if (requireSyntax) {
       if (!syntaxWasm || syntaxWasm.status !== 200 || syntaxWasm.bytes === 0) fail("the syntax module did not load", seen)
-      if (!grammar || grammar.status !== 200) fail("the Kotlin grammar tables were not fetched", seen)
+      // Kotlin's grammar is built into the syntax module; only the code-only grammars fetch a .sesz table.
+      if (grammar && grammar.status !== 200) fail(`the Kotlin grammar table answered ${grammar.status}`, seen)
       const box = await block.boundingBox()
       if (!box) fail("the code block has no box on screen")
       const png = await page.screenshot({ clip: box, path: join(shots, "2b-code-block-crop.png") })
       const colours = await colourCount(page, png)
       if (colours < 2) fail(`the code block draws in ${colours} colour(s): no syntax highlighting`)
-      console.log(`bundle smoke: highlighting ok (${colours} colour buckets, grammar ${grammar.url})`)
+      console.log(`bundle smoke: highlighting ok (${colours} colour buckets, syntax module ${syntaxWasm.bytes} bytes)`)
     } else {
       console.log(`bundle smoke: syntax module ${syntaxWasm ? `${syntaxWasm.bytes} bytes` : "not requested"} — highlighting not required (MUX_SMOKE_REQUIRE_SYNTAX unset)`)
     }
