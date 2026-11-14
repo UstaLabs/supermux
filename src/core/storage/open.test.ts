@@ -7,10 +7,20 @@ import { tmpdir } from "os"
 import { join } from "path"
 import { openDb, runMigrations } from "./db"
 import { initStorage, isLockedError } from "./open"
+import { host } from "@supermux/platform"
 
 const dirs: string[] = []
-// Windows releases a closed SQLite file (and its -wal/-shm) a moment late: EBUSY on an immediate rm.
-afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) })
+// Windows frees a closed SQLite file (and its -wal/-shm) late, sometimes seconds later: EBUSY on rm. A temp dir
+// left behind there is harmless, so after the retries a Windows EBUSY is let go; anywhere else it still fails.
+afterEach(() => {
+  for (const d of dirs.splice(0)) {
+    try {
+      rmSync(d, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 })
+    } catch (err) {
+      if (!(host.windows() && (err as { code?: string }).code === "EBUSY")) throw err
+    }
+  }
+})
 const tmp = () => { const d = mkdtempSync(join(tmpdir(), "storage-open-")); dirs.push(d); return d }
 
 const locked = () => Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" })
