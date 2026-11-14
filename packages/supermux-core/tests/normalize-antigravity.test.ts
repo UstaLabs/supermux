@@ -162,3 +162,17 @@ describe("antigravity normalizer (real agy 1.3.4 captures)", () => {
     expect(agyToolInput(undefined)).toBeUndefined()
   })
 })
+
+describe("compaction (#144)", () => {
+  test("a checkpoint step is agy's compaction; what it read is the context before it (real 1.5.9 frame)", () => {
+    const n = createAntigravityNormalizer(); n.newGeneration("g")
+    const step = (state: string, usage?: Record<string, number>) => ({ protocol: "native" as const, value: { event: "step_update", step_update: {
+      conversation_id: "c", step_index: 5, state, step_type: "checkpoint", ...(usage ? { usage } : {}) } } })
+    expect(n(step("ACTIVE"))).toEqual([{ kind: "compaction", compactionId: "g:5", status: "in_progress" }])
+    expect(n(step("DONE", { input_tokens: 2964, output_tokens: 301, thinking_tokens: 0, cache_read_tokens: 21037, total_tokens: 3265 })))
+      .toEqual([{ kind: "compaction", compactionId: "g:5", status: "completed", before: 24001 }])
+    // A DONE without an ACTIVE before it still completes once.
+    const m = createAntigravityNormalizer(); m.newGeneration("h")
+    expect(m(step("DONE"))).toEqual([{ kind: "compaction", compactionId: "h:5", status: "completed" }])
+  })
+})

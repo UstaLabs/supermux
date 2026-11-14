@@ -220,7 +220,11 @@ export type NormalizedBodyBase =
       cost?: { amount: number; currency: string }
       rateLimits?: unknown
     }
-  | { kind: "compaction"; compactionId: string; status: CompactionStatus; summary?: string; error?: string }
+  | {
+      kind: "compaction"; compactionId: string; status: CompactionStatus; summary?: string; error?: string
+      /** #144: who started it (the user's Compact, or the agent on its own), and the context before → after, when known. */
+      trigger?: "manual" | "auto"; before?: number; after?: number
+    }
   /** The agent started a new, empty conversation in place of the old one (Claude /clear); the session runs on in it. */
   | { kind: "conversation-reset"; agentSessionId: string; previousAgentSessionId: string; trigger?: string }
   /**

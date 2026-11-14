@@ -315,6 +315,25 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
    * frames of one request report once.
    */
   const context: { used?: number; size?: number; model?: string; reported?: number } = {}
+  /**
+   * A compaction under way (#144): "compacting" opens it, compact_boundary gives its sizes, and Claude's summary (a
+   * synthetic replayed user frame) or the turn's result completes it.
+   */
+  let compaction: { id: string; trigger?: "manual" | "auto"; before?: number; after?: number; bounded?: boolean } | undefined
+  const COMPACT_SUMMARY = "This session is being continued from a previous conversation"
+
+  function compactionDone(summary?: string): NormalizedBody[] {
+    if (!compaction?.bounded) return []
+    const done = compaction
+    compaction = undefined
+    return [{
+      kind: "compaction", compactionId: done.id, status: "completed",
+      ...(done.trigger ? { trigger: done.trigger } : {}),
+      ...(done.before != null ? { before: done.before } : {}),
+      ...(done.after != null ? { after: done.after } : {}),
+      ...(summary ? { summary } : {}),
+    }]
+  }
 
   function requestSize(message: Record<string, unknown>): number | undefined {
     const usage = rec(message.usage)
@@ -816,6 +835,27 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
         }]
       }
       if (subtype && (subtype.startsWith("hook_") || subtype === "hook")) return []
+      if (subtype === "status") {
+        if (frame.status === "compacting") {
+          compaction = { id: str(frame.uuid) ?? "compact" }
+          return [{ kind: "compaction", compactionId: compaction.id, status: "in_progress" }]
+        }
+        const result = str(frame.compact_result)
+        if (result && result !== "success" && compaction) {
+          const id = compaction.id
+          compaction = undefined
+          return [{ kind: "compaction", compactionId: id, status: "failed", error: str(frame.compact_error) ?? "Compaction failed" }]
+        }
+        return []
+      }
+      if (subtype === "compact_boundary") {
+        const meta = rec(frame.compact_metadata)
+        const trigger = meta?.trigger === "manual" || meta?.trigger === "auto" ? meta.trigger : undefined
+        const before = num(meta?.pre_tokens), after = num(meta?.post_tokens)
+        compaction = { id: compaction?.id ?? str(frame.uuid) ?? "compact", ...(trigger ? { trigger } : {}), ...(before != null ? { before } : {}), ...(after != null ? { after } : {}), bounded: true }
+        if (after != null) context.used = after
+        return contextUpdate()
+      }
       if (subtype === "commands_changed") {
         const commands = claudeCommands(frame.commands)
         return commands ? [{ kind: "commands-update", commands }] : []
@@ -859,6 +899,10 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
     if (type === "user") {
       const message = rec(frame.message)
       if (!message) return []
+      if (compaction?.bounded && frame.isSynthetic === true && typeof message.content === "string" && message.content.startsWith(COMPACT_SUMMARY)) {
+        const at = message.content.indexOf("Summary:")
+        return compactionDone((at >= 0 ? message.content.slice(at) : message.content).trim())
+      }
       return mapUserContent(message, undefined, frame)
     }
     if (type === "rate_limit_event") {
@@ -881,7 +925,7 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
       if (window != null) context.size = window
       const ctx = context.used != null && context.size != null ? { used: context.used, size: context.size } : undefined
       if (ctx) context.reported = ctx.used
-      const out: NormalizedBody[] = [...take("reasoning"), ...take("assistant"), {
+      const out: NormalizedBody[] = [...take("reasoning"), ...take("assistant"), ...compactionDone(), {
         kind: "usage",
         ...(tokens ? { tokens } : {}),
         ...(cost ? { cost } : {}),

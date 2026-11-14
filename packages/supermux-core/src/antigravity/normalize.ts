@@ -87,6 +87,8 @@ type OpenTool = {
 export function createAntigravityNormalizer(options: { epoch?: string } = {}): AntigravityNormalizer {
   let epoch = options.epoch ?? "0"
   let aliases: Record<string, string> = {}
+  /** Checkpoint steps (agy's compaction, #144) whose start was already told. */
+  const checkpoints = new Set<string>()
   let text = new Map<string, string>()
   let tools = new Map<string, OpenTool>()
   let turn = { input: 0, output: 0, total: 0, seen: false }
@@ -232,6 +234,18 @@ export function createAntigravityNormalizer(options: { epoch?: string } = {}): A
       case "user_input": return finals()
       case "agent_response": return agentResponse(id, step)
       case "tool": return toolStep(id, step)
+      case "checkpoint": {
+        // agy's compaction (#144: /compact, or its own): it reads the whole context once, so its input is the "before".
+        if (step.state !== "DONE") {
+          if (checkpoints.has(id)) return []
+          checkpoints.add(id)
+          return [{ kind: "compaction", compactionId: id, status: "in_progress" }]
+        }
+        const usage = rec(step.usage)
+        const before = usage ? (num(usage.input_tokens) ?? 0) + (num(usage.cache_read_tokens) ?? 0) : 0
+        checkpoints.delete(id)
+        return [{ kind: "compaction", compactionId: id, status: "completed", ...(before > 0 ? { before } : {}) }]
+      }
       default: return []
     }
   }) as AntigravityNormalizer

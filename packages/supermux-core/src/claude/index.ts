@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { AgentDriver, CloseOptions, ContentBlock, PermissionHandler, PermissionsSpec } from '../types.js'
+import type { AgentDriver, AgentRuntime, CloseOptions, ContentBlock, PermissionHandler, PermissionsSpec } from '../types.js'
 import { requireCloseMode } from '../types.js'
 import { launchArgs, launchEnv } from '../launch.js'
 import { appliedFor, launchPermissions, validatePermissionsSpec } from '../permissions.js'
@@ -713,6 +713,11 @@ export function claude(options: ClaudeOptions): AgentDriver {
         normalizer.markClientStop(known.id)
         try { await rpc.request({ subtype: 'stop_task', task_id: known.taskId }) }
         catch (error) { normalizer.clearClientStop(known.id); throw error }
+      },
+      // #144 Compact: Claude's own /compact, which takes what to keep ("/compact <instructions>", verified on 2.1.308).
+      compactTakesNote: true,
+      async compact(note, signal) {
+        return (this as AgentRuntime).prompt([{ type: 'text', text: note?.trim() ? `/compact ${note.trim()}` : '/compact' }], signal)
       },
       async prompt(content, signal) {
         if (fatal || closed) throw fatal ?? new Error('Claude runtime closed')

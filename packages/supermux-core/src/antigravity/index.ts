@@ -429,6 +429,11 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
       agentSessionId,
       capabilities: { resume: true, steer: false, fork: false, detach: true, configure: true, permissions: true },
       nativeProtocol: "antigravity-stream-json",
+      // #144 Compact: agy's /compact (a checkpoint step); a note after it is kept in the summary (verified on 1.5.9).
+      compactTakesNote: true,
+      async compact(note, signal) {
+        return (this as AgentRuntime).prompt([{ type: 'text', text: note?.trim() ? `/compact ${note.trim()}` : '/compact' }], signal)
+      },
       async prompt(content, signal) {
         if (fatal || closed) throw fatal ?? new CoreError("runtime_closed", "Antigravity runtime closed")
         signal.throwIfAborted()
