@@ -31,7 +31,7 @@ import kotlin.test.assertEquals
  */
 @OptIn(ExperimentalTestApi::class)
 class RecentlyClosedTest {
-    private val kinds = NewViewKind.entries.map { NewTabChoice(it, NewTabGlyphs.Chat, it.label, "for ${it.label}") }
+    private val kinds = NewViewKind.entries.map { NewTabChoice(it, NewTabGlyphs.Chat, it.name, "for ${it.name}") }
     private val closed = listOf(
         ClosedSessionRow("s2", "Fix login redirect", "claude", TimeAgo.Minutes(12)),
         ClosedSessionRow("s1", "Release notes", "codex", TimeAgo.Hours(3)),
