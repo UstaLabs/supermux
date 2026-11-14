@@ -62,6 +62,26 @@ kotlin {
     }
 }
 
+// ── wasm-opt: two size flags on top of KGP's own list (#142) ─────────────────────────────────
+// `--generate-global-effects` lets binaryen learn which functions have no side effects BEFORE the
+// -O3/--gufa passes, so more calls fold away; `--minimize-rec-groups` regroups the GC types at the
+// end. Measured in CI on the shipped bundle (probe run 43531091146, sweep in tools/size-probe-142):
+// app wasm gzip 5,529,689 -> 5,469,716 bytes (-59 KB). -Oz, --converge and --unsubtyping each gave
+// <= 4 KB, an -Os pipeline was 40 KB WORSE. `binaryenArgs` is KGP's own single-module list (deprecated
+// for removal in Kotlin 2.5, where this moves to `binaryenArguments`); the check stops the build if a
+// KGP upgrade changes that list, because the flags' positions were measured against 2.4.10's.
+fun withSizeFlags(kgp: List<String>): MutableList<String> {
+    val i = kgp.indexOf("--type-ssa")
+    check(i >= 0 && "--closed-world" in kgp && kgp.last() == "-Oz" && "--generate-global-effects" !in kgp) {
+        "KGP's wasm-opt arguments changed ($kgp): re-measure #142's --generate-global-effects / --minimize-rec-groups"
+    }
+    return (kgp.take(i) + "--generate-global-effects" + kgp.drop(i) + "--minimize-rec-groups").toMutableList()
+}
+tasks.withType<org.jetbrains.kotlin.gradle.targets.wasm.binaryen.BinaryenExec>().configureEach {
+    @Suppress("DEPRECATION")
+    binaryenArgs = withSizeFlags(binaryenArgs)
+}
+
 // ── The terminal engine's browser assets ────────────────────────────────────────────────────
 //
 // MEASURED (terminal-core/consumer-smoke, 2026-09-22) and hit here for real in Plan 4 Task 4: the
