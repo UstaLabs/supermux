@@ -648,6 +648,8 @@ fun Composer(
     onSetPermissionMode: (String) -> Unit = {},
     /** #144: the context ring, drawn before the mic in the default toolbar; null = none. */
     contextControl: (@Composable () -> Unit)? = null,
+    /** #144: a line at the top INSIDE the card, above the field (touch's near-limit prompt); null = none. */
+    cardTopLine: (@Composable () -> Unit)? = null,
     onPickModel: (String) -> Unit = {},
     onPickReasoning: (String) -> Unit = {},
     /** Fast mode on/off for a model that offers it; null hides the toggle. */
@@ -1442,6 +1444,7 @@ fun Composer(
                         bottom = if (pointer) 8.dp else 6.dp,
                     ),
             ) {
+                cardTopLine?.invoke()
                 if (staging != null) {
                     // Pre-spawn strip: name + × only. There is no upload in flight to report on.
                     if (stagedFiles.isNotEmpty()) {
