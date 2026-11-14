@@ -63,10 +63,6 @@ class ShellActionsTest {
         assertTrue(actions.display.listDisplays().isEmpty())
         assertTrue(actions.launcherAgents().isEmpty())
         assertNull(actions.finishReadiness("s1"))
-        // The finish kickoff must report a REFUSAL rather than silently claiming acceptance.
-        var accepted: Boolean? = null
-        actions.kickoffFinish("s1", "merge", null, null, null) { accepted = it }
-        assertEquals(false, accepted)
         assertTrue(actions.lspStatus.value.isEmpty())
         assertTrue(actions.sessions.value.isEmpty())
         assertTrue(actions.finishJobs.value.isEmpty())
@@ -214,7 +210,6 @@ class ShellActionsTest {
         built.rename("s1", "renamed")
         built.setMute("s1", true)
         built.kill("s1")
-        built.clearFinishJob("s1")
         built.lspOpen("s1", "server")
         built.lspStatusQuery("s1", "a.kt")
         built.lspRpcOut("s1", "server", "{}")

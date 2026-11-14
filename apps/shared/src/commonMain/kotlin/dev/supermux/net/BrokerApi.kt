@@ -987,16 +987,7 @@ data class FinishReadiness(
     val conflictPreflight: String = "unknown", // "clean" | "will_conflict" | "unknown"
     val recommended: String = "merge",         // "merge" | "pr"
     val nothingToLand: Boolean = false,
-    val prRequiresGreen: Boolean = false,
 )
-
-/** POST /sessions/<id>/verify/suggest → suggested verify command/content + its source. */
-@Serializable
-data class VerifySuggestResult(val content: String = "", val source: String = "")
-
-/** POST /sessions/<id>/verify/save → { ok, reason? }. */
-@Serializable
-data class VerifySaveResult(val ok: Boolean = false, val reason: String? = null)
 
 // ─── Agents (GET/POST /api/pas) ─────────────────────────────────
 @Serializable
@@ -1715,17 +1706,14 @@ private data class AddDeviceBody(val name: String)
 @Serializable
 private data class FinishBody(
     val action: String? = null,
-    val skipVerify: Boolean? = null,
     val commitFirst: Boolean? = null,
     val commitMessage: String? = null,
     val prTitle: String? = null,
     val prBody: String? = null,
     val draft: Boolean? = null,
-    val prRequiresGreen: Boolean? = null,
+    /** #72: never archive the chat after a merge. */
+    val keep: Boolean? = null,
 )
-
-@Serializable
-private data class VerifySaveBody(val content: String)
 
 @Serializable
 private data class MessageBody(val text: String)
@@ -3062,33 +3050,24 @@ class BrokerApi(
     suspend fun finish(
         id: String,
         action: String? = null,
-        skipVerify: Boolean? = null,
         commitFirst: Boolean? = null,
         commitMessage: String? = null,
         prTitle: String? = null,
         prBody: String? = null,
         draft: Boolean? = null,
-        prRequiresGreen: Boolean? = null,
+        keep: Boolean? = null,
     ): FinishResult =
         decode(http.post("$httpBase/sessions/$id/finish") {
             authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(FinishBody(
-                action, skipVerify, commitFirst, commitMessage, prTitle, prBody, draft, prRequiresGreen,
+                action, commitFirst, commitMessage, prTitle, prBody, draft, keep,
             )))
         })
 
     /** GET /sessions/<id>/finish/readiness — preflight for the finish menu. */
     suspend fun finishReadiness(id: String): FinishReadiness =
         getJson("$httpBase/sessions/$id/finish/readiness")
-
-    /** POST /sessions/<id>/verify/suggest → { content, source }. */
-    suspend fun verifySuggest(id: String): VerifySuggestResult =
-        postReturningJson("$httpBase/sessions/$id/verify/suggest", EmptyBody())
-
-    /** POST /sessions/<id>/verify/save {content} → { ok, reason? }. */
-    suspend fun verifySave(id: String, content: String): VerifySaveResult =
-        postReturningJson("$httpBase/sessions/$id/verify/save", VerifySaveBody(content))
 
     /** POST /sessions/<id>/message — post a message to the agent (e.g. a "Send to agent" fix request). */
     suspend fun sendMessage(id: String, text: String) {

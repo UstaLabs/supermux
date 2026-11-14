@@ -47,7 +47,6 @@ import dev.supermux.net.FinishResult
 import dev.supermux.net.FsEntry
 import dev.supermux.net.HostIdentity
 import dev.supermux.net.PairClaimResult
-import dev.supermux.net.VerifySuggestResult
 import dev.supermux.net.VncClient
 import dev.supermux.net.VncStatus
 import dev.supermux.proto.FinishJobDto
@@ -62,8 +61,6 @@ import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.LocalHardwareKeyboard
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.FakeSettingsStore
-import dev.supermux.ui.chat.FinishBindings
-import dev.supermux.ui.chat.FinishHeaderButton
 import dev.supermux.ui.chat.PlatformTestProviders
 import dev.supermux.ui.chat.testHostStore
 import dev.supermux.ui.display.DisplayActions
@@ -1238,146 +1235,6 @@ class ConfigurationChangeWorkTest {
         awaitGone("tree_inline_field")
         waitUntil(timeoutMillis = 10_000) { broker.count("POST /workspaces/w1/views") == 1 }
         assertEquals(1, broker.count("POST /fs/ops"))
-    }
-
-    // ── One level down: the Finish flow ──────────────────────────────────────────────────────────
-    //
-    // Only Android's session-only chat draws the Finish button (a workspace chat's header has no
-    // slot for it), so the header button and its flow run here on their own, inside the fleet's
-    // retained state, as that chat draws them.
-
-    private val branchSession = SessionInfo(id = "s1", name = "feature", workdir = "/w", agent = "claude", session_branch = "feat/x")
-
-    /** A finish that stopped on uncommitted changes: the flow asks for a commit message. */
-    private val uncommitted = FinishJobDto(
-        sessionId = "s1", action = "merge", status = "failed",
-        outcome = FinishResult(status = "uncommitted", files = listOf("a.kt")),
-    )
-
-    /** A finish that stopped because the repo has no verify.sh: the flow offers to generate one. */
-    private val noVerify = FinishJobDto(sessionId = "s1", action = "merge", status = "failed", outcome = FinishResult(status = "no_verify"))
-
-    @Composable
-    private fun FinishHeader(job: FinishJobDto, suggest: suspend () -> VerifySuggestResult? = { null }) {
-        SupermuxTheme(appearance = AppearanceMode.DARK) {
-            FinishHeaderButton(
-                session = branchSession,
-                bindings = FinishBindings(
-                    job = job,
-                    readiness = { null },
-                    finish = { _, _, _, _, _ -> },
-                    clearJob = {},
-                    verifySuggest = suggest,
-                    verifySave = { null },
-                    sendToAgent = {},
-                ),
-            )
-        }
-    }
-
-    private fun ComposeUiTest.writeACommitMessage() {
-        onNodeWithTag("finish_button").performClick()
-        await("finish_commit_message")
-        onNodeWithTag("finish_commit_message").performTextReplacement("Fix the login bug")
-        waitForIdle()
-    }
-
-    @Test fun the_finish_flow_and_its_commit_message_survive_a_recreation() = runComposeUiTest {
-        val retained = retainedUi()
-        val platform = FakePlatform()
-        val prefs = prefs()
-        val activity = Recreation(this)
-        activity.setContent {
-            PlatformTestProviders(platform, pointer = false, widthClass = WindowWidthClass.Compact, inputMode = InputMode.Touch, uiPrefs = prefs) {
-                CompositionLocalProvider(LocalRetainedUiState provides retained) { FinishHeader(uncommitted) }
-            }
-        }
-        writeACommitMessage()
-
-        activity.recreate()
-
-        await("finish_commit_message")
-        assertEquals("Fix the login bug", onNodeWithTag("finish_commit_message").editableText())
-    }
-
-    @Test fun the_finish_flow_and_its_commit_message_survive_a_move_to_the_wide_layout() = runComposeUiTest {
-        val retained = retainedUi()
-        val platform = FakePlatform()
-        val prefs = prefs()
-        var wide by mutableStateOf(false)
-        setContent {
-            val width = if (wide) WindowWidthClass.Expanded else WindowWidthClass.Compact
-            PlatformTestProviders(platform, pointer = false, widthClass = width, inputMode = InputMode.Touch, uiPrefs = prefs) {
-                CompositionLocalProvider(LocalRetainedUiState provides retained) {
-                    // Rebuilt somewhere else in the tree, as the shell's wide layout does.
-                    if (wide) Row { FinishHeader(uncommitted) } else Column { FinishHeader(uncommitted) }
-                }
-            }
-        }
-        writeACommitMessage()
-
-        wide = true
-        waitForIdle()
-
-        // A dialog now, not a sheet, with what was written.
-        await("finish_commit_message")
-        assertEquals("Fix the login bug", onNodeWithTag("finish_commit_message").editableText())
-    }
-
-    private val generatedVerify = VerifySuggestResult(content = "#!/bin/sh\nbun test\n", source = "package.json")
-
-    private fun ComposeUiTest.generateAVerifyScript(gate: Gate) {
-        onNodeWithTag("finish_button").performClick()
-        awaitText("Generate verify")
-        onNodeWithText("Generate verify").performClick()
-        awaitHeld(gate)
-    }
-
-    @Test fun a_verify_script_generated_during_a_recreation_lands_in_the_flow() = runComposeUiTest {
-        val retained = retainedUi()
-        val platform = FakePlatform()
-        val prefs = prefs()
-        val gate = Gate()
-        val suggest: suspend () -> VerifySuggestResult? = { gate.hold(); generatedVerify }
-        val activity = Recreation(this)
-        activity.setContent {
-            PlatformTestProviders(platform, pointer = false, widthClass = WindowWidthClass.Compact, inputMode = InputMode.Touch, uiPrefs = prefs) {
-                CompositionLocalProvider(LocalRetainedUiState provides retained) { FinishHeader(noVerify, suggest) }
-            }
-        }
-        generateAVerifyScript(gate)
-
-        activity.recreate()
-        gate.release.complete(Unit)
-
-        // The flow is open again, and the draft it was generating is in it, ready to edit.
-        await("finish_verify_draft")
-        assertEquals(generatedVerify.content, onNodeWithTag("finish_verify_draft").editableText())
-    }
-
-    @Test fun a_verify_script_generated_during_a_move_to_the_wide_layout_lands_in_the_flow() = runComposeUiTest {
-        val retained = retainedUi()
-        val platform = FakePlatform()
-        val prefs = prefs()
-        val gate = Gate()
-        val suggest: suspend () -> VerifySuggestResult? = { gate.hold(); generatedVerify }
-        var wide by mutableStateOf(false)
-        setContent {
-            val width = if (wide) WindowWidthClass.Expanded else WindowWidthClass.Compact
-            PlatformTestProviders(platform, pointer = false, widthClass = width, inputMode = InputMode.Touch, uiPrefs = prefs) {
-                CompositionLocalProvider(LocalRetainedUiState provides retained) {
-                    if (wide) Row { FinishHeader(noVerify, suggest) } else Column { FinishHeader(noVerify, suggest) }
-                }
-            }
-        }
-        generateAVerifyScript(gate)
-
-        wide = true
-        waitForIdle()
-        gate.release.complete(Unit)
-
-        await("finish_verify_draft")
-        assertEquals(generatedVerify.content, onNodeWithTag("finish_verify_draft").editableText())
     }
 
     // ── One level down: a display's VNC password ─────────────────────────────────────────────────

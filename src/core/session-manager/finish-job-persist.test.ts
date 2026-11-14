@@ -15,7 +15,7 @@ test("setFinishJob persists to db and survives a store reload", () => {
     sessionId: id,
     action: "merge" as const,
     status: "done" as const,
-    outcome: { status: "integrated" as const, base: "main", branch: "mux/x", mergedSha: "abc", verified: null, cleanedUp: true },
+    outcome: { status: "integrated" as const, base: "main", branch: "mux/x", mergedSha: "abc", cleanedUp: true },
     startedAt: 1,
     endedAt: 2,
   }

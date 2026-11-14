@@ -96,8 +96,6 @@ import dev.supermux.state.ContinueHandoff
 import dev.supermux.ui.ChatDetailLevel
 import dev.supermux.ui.chat.ContinueConversationFlow
 import dev.supermux.ui.chat.ContinueMenuItem
-import dev.supermux.ui.chat.FinishBindings
-import dev.supermux.ui.chat.FinishHeaderButton
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.retain.rememberRetained
@@ -683,7 +681,6 @@ fun ChatViewHeader(
     session: SessionInfo,
     working: Boolean,
     sessionLinks: List<ProxyDto>,
-    finish: FinishBindings,
     onGitOp: (String) -> Unit,
     /** Rename / Mute / Kill — Android's tablet overflow had none of the three; desktop's did, and
      *  its dialogs come with them. [onToggleMute] receives the DESIRED next state. */
