@@ -126,6 +126,12 @@ class ContractTest {
         assertEquals(listOf(reply.stream), snapshot.streams.values.single().map { it.stream })
     }
 
+    // #143: the agent's own reason for asking reaches the card.
+    @Test fun request_reason_survives_the_wire() {
+        val ask = json.decodeFromString<ServerFrame>(load("request_open")) as ServerFrame.RequestOpen
+        assertEquals("Dangerous rm operation on possibly-empty variable path", ask.request.reason)
+    }
+
     @Test fun subagent_fields_survive_the_wire() {
         val row = json.decodeFromString<ServerFrame>(load("activity_append_subagent")) as ServerFrame.ActivityAppend
         assertEquals("af3c70a348a6a6b7a", row.event.subagentId)

@@ -1047,6 +1047,11 @@ data class PromptRequest(
     val subagentId: String? = null,
     val subagentName: String? = null,
     val subagentDescription: String? = null,
+    /**
+     * #143: the agent's own reason for asking, in its words (Claude Code's decision_reason, e.g. a safety check that
+     * asks even in bypassPermissions). Absent when the agent gave none, and on older brokers.
+     */
+    val reason: String? = null,
 )
 
 /** One question inside a `kind=question` request. Broker JSON-stringifies the list into [PromptRequest.body]. */
