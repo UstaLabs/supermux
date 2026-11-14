@@ -462,6 +462,16 @@ data class AddViewBody(
     val groupId: String? = null,
 )
 
+/** A session closed in a workspace (#135): what its New tab page lists to reopen. */
+@Serializable
+data class ClosedSessionDto(val id: String, val name: String, val agent: String, val closedAt: String? = null)
+
+@Serializable
+data class ClosedSessionsResponse(val sessions: List<ClosedSessionDto> = emptyList())
+
+@Serializable
+data class ReopenClosedSessionBody(val groupId: String? = null)
+
 @Serializable
 data class PatchViewBody(
     val title: String? = null,
@@ -2458,6 +2468,18 @@ class BrokerApi(
             authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(body))
+        })
+
+    /** GET /workspaces/{id}/closed-sessions — the sessions closed in it, newest first (#135). */
+    suspend fun closedSessions(workspaceId: String): List<ClosedSessionDto> =
+        getJson<ClosedSessionsResponse>("$httpBase/workspaces/$workspaceId/closed-sessions").sessions
+
+    /** POST /workspaces/{id}/closed-sessions/{sid}/reopen — the same session back, as a chat tab in [groupId]. */
+    suspend fun reopenClosedSession(workspaceId: String, sessionId: String, groupId: String?): ViewDto =
+        decode(http.post("$httpBase/workspaces/$workspaceId/closed-sessions/$sessionId/reopen") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(ReopenClosedSessionBody(groupId)))
         })
 
     /** PATCH /workspaces/{wid}/views/{vid} */

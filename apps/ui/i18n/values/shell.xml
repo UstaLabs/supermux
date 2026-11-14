@@ -169,4 +169,23 @@
     <string name="shell_extra_window_main_closed">This window shows part of a workspace from the main supermux window, which is closed.</string>
     <string name="shell_open_supermux">Open supermux</string>
     <string name="widgets_copy">Copy</string>
+    <!-- #135: the New tab page's sessions closed in its workspace -->
+    <string name="new_tab_recently_closed">Recently closed</string>
+    <plurals name="new_tab_closed_count">
+        <item quantity="one">%1$d session closed in this workspace</item>
+        <item quantity="other">%1$d sessions closed in this workspace</item>
+    </plurals>
+    <string name="new_tab_closed_just_now">just now</string>
+    <plurals name="new_tab_closed_minutes">
+        <item quantity="one">%1$d min ago</item>
+        <item quantity="other">%1$d min ago</item>
+    </plurals>
+    <plurals name="new_tab_closed_hours">
+        <item quantity="one">%1$d h ago</item>
+        <item quantity="other">%1$d h ago</item>
+    </plurals>
+    <plurals name="new_tab_closed_days">
+        <item quantity="one">yesterday</item>
+        <item quantity="other">%1$d days ago</item>
+    </plurals>
 </resources>
