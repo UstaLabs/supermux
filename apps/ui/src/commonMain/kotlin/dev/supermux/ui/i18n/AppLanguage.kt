@@ -47,6 +47,12 @@ class LoadedLanguage(val language: String, val chosen: Catalog?, val english: Ca
  */
 private val shown = mutableStateOf<LoadedLanguage?>(null)
 
+/**
+ * The language the app is showing now ("en", "tr"): what the broker words this device's notifications in (#123).
+ * English outside any provider. Snapshot state, so a composition that reads it recomposes when the language changes.
+ */
+fun shownLanguageTag(): String = shown.value?.language ?: "en"
+
 /** Tests only: show [language] as if a provider did (null = back to English). */
 internal fun showForTest(language: LoadedLanguage?) {
     shown.value = language

@@ -69,6 +69,8 @@ export interface InboundMessage {
   attachments?: InboundAttachment[]
   /** #104: a click in an html card sent this text; the card is one of the target session's. */
   from_card?: { id: string; title: string }
+  /** #123: the sender's language tag where the channel knows it (Telegram's from.language_code); replies use it. */
+  lang?: string
 }
 
 export interface Channel {

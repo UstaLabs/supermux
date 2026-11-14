@@ -160,6 +160,7 @@ import { loadOrGenerateVapid } from "./core/push/vapid"
 import { PushSubscriptionStore } from "./core/push/subscriptions"
 import { createPushSender } from "./core/push/sender"
 import { firePushForReply, firePushToAll } from "./core/push/hook"
+import { brokerLang, t as brokerText, type MessageKey } from "./core/i18n/messages"
 import { DevicePushTokenStore } from "./core/push/device-tokens"
 import { createRelayClient } from "./core/push/relay-adapter"
 import { ViewingTracker } from "./core/push/viewing-tracker"
@@ -1156,6 +1157,8 @@ const vapidSubject = process.env.MUX_WEB_VAPID_SUBJECT ?? (() => {
 const vapid = loadOrGenerateVapid(join(STATE_DIR, "push-keys.json"), vapidSubject)
 const pushStore = new PushSubscriptionStore(db)
 const pushSender = createPushSender({ vapid, store: pushStore })
+/** #123: a web device's language, as its app said when it subscribed (undefined = English). */
+const pushLangOf = (device: string): string | undefined => pushStore.get(device)?.lang
 const deviceTokenStore = new DevicePushTokenStore(db)
 const relayUrl = process.env.MUX_PUSH_RELAY_URL ?? "https://push.supermux.dev"
 const nativeSender = createRelayClient({ store: deviceTokenStore, relayUrl })
@@ -1202,7 +1205,7 @@ const telegram: TelegramChannel | undefined = hasTelegram
 // The Telegram /command menu (one entry per session). A session start refreshes it in the background
 // (card #75); a failure is logged once until a refresh succeeds.
 const telegramMenu = menuRefresher(
-  async () => { if (telegram) await telegram.refreshMenu(buildMenuEntries(registry)) },
+  async () => { if (telegram) await telegram.refreshMenu(buildMenuEntries(registry), { tr: buildMenuEntries(registry, "tr") }) },
   (err) => log.warn("refresh_telegram_menu_failed", { err }),
 )
 const WA_GOWA_URL = appConfig.whatsappGowaUrl || undefined
@@ -1711,6 +1714,7 @@ async function onAssistantMessage(
         isMuted: () => !!registry.get(sessionId)?.mute,
         isInternal: () => !!registry.get(sessionId)?.internal,
         devices: () => pushStore.all().map((s) => s.device),
+        langOf: pushLangOf,
         presentOn: (sid) => viewingTracker.presentDevicesFor(sid),
         nativeSender,
         nativeDevices,
@@ -1873,28 +1877,32 @@ async function onFinishTerminal(sessionId: string, sessionName: string, job: Fin
 function fireFinishPush(sessionName: string, sessionId: string, job: FinishJob): void {
   const o = job.outcome
   if (!o) return
-  let text: string | null = null
-  const br = sessionName
+  const vars: Record<string, string> = { branch: sessionName }
+  let key: MessageKey | null = null
   switch (o.status) {
-    case "integrated": text = `✅ Merged ${br} into ${o.base}`; break
-    case "pr_opened": text = `📤 PR opened for ${br}`; break
-    case "branch_published": text = `📤 Pushed ${br} — open the PR manually`; break
-    case "discarded": text = `🗑️ Discarded ${br}`; break
-    case "tests_failed": text = `❌ Tests failed in ${br}`; break
-    case "sync_conflict": case "dirty_overlap": text = `⚠️ Conflicts finishing ${br}`; break
-    case "push_auth_failed": text = `🔒 Push auth failed for ${br}`; break
-    case "push_rejected": text = `⚠️ Push rejected (diverged) for ${br}`; break
-    case "uncommitted": text = `⚠️ Uncommitted changes in ${br}`; break
-    case "no_verify": text = `⚠️ No verify configured for ${br}`; break
-    case "non_ff": text = `⚠️ ${br} — base moved, retry the merge`; break
-    case "error": text = `❌ Finish failed for ${br}`; break
+    case "integrated": key = "finish.integrated"; vars.base = o.base; break
+    case "pr_opened": key = "finish.pr_opened"; break
+    case "branch_published": key = "finish.branch_published"; break
+    case "discarded": key = "finish.discarded"; break
+    case "tests_failed": key = "finish.tests_failed"; break
+    case "sync_conflict": case "dirty_overlap": key = "finish.conflicts"; break
+    case "push_auth_failed": key = "finish.push_auth_failed"; break
+    case "push_rejected": key = "finish.push_rejected"; break
+    case "uncommitted": key = "finish.uncommitted"; break
+    case "no_verify": key = "finish.no_verify"; break
+    case "non_ff": key = "finish.non_ff"; break
+    case "error": key = "finish.error"; break
     // kept / nothing_to_do → no push
   }
-  if (!text) return
+  if (!key) return
+  const notice = key
+  // #123: each web device gets the notice in its language; native devices and the payload's own text are English.
   void firePushToAll({
     sender: pushSender, nativeSender, nativeDevices,
     devices: () => pushStore.all().map((s) => s.device),
-    payload: { session: sessionName, sessionId, text, ts: new Date().toISOString() },
+    langOf: pushLangOf,
+    textFor: (lang) => brokerText(lang, notice, vars),
+    payload: { session: sessionName, sessionId, text: brokerText("en", notice, vars), ts: new Date().toISOString() },
     trigger: "finish",
   }).catch((err) => log.warn("push_hook_failed", { err: err?.message ?? String(err) }))
 }
@@ -4537,6 +4545,8 @@ ch.on("inbound", async (msg: InboundMessage) => {
     text: (msg.text ?? "").slice(0, 80),
     reply_to: msg.reply_to_message_id,
   })
+  // #123: this channel's replies are worded in the sender's language (Telegram's language_code), English otherwise.
+  const lang = brokerLang(msg.lang)
   const decision = classifyInbound(
     { chat_id: msg.chat_id, text: msg.text ?? "", reply_to: msg.reply_to_message_id },
     registry,
@@ -4558,6 +4568,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
       messageLog,
       chat_id: msg.chat_id,
       fromSession: undefined,
+      lang: msg.lang,
       spawnSession: async (workdir: string, name?: string, agent?: AgentKind, model?: string, reasoningLevel?: string, permissionMode?: string) => {
         const r = await spawnSession({ workdir, requestedName: name, agent, model, reasoningLevel, permissionMode })
         // The row exists when spawnSession resolves (all agents) — flip the
@@ -4599,8 +4610,8 @@ ch.on("inbound", async (msg: InboundMessage) => {
 
   if (decision.kind === "error") {
     const text = decision.reason === "no_active_session"
-      ? "No active session. Create one in the app, or use /spawn <workdir> [as name]."
-      : `routing error: ${decision.reason}`
+      ? brokerText(lang, "chat.no_active_session")
+      : brokerText(lang, "chat.routing_error", { reason: decision.reason })
     await ch.send({ op: "reply", chat_id: msg.chat_id, text, disable_notification: false })
     return
   }
@@ -4608,14 +4619,14 @@ ch.on("inbound", async (msg: InboundMessage) => {
   // session route
   const session = registry.get(decision.id)
   if (!session) {
-    await ch.send({ op: "reply", chat_id: msg.chat_id, text: `no such session: ${decision.name}`, disable_notification: false })
+    await ch.send({ op: "reply", chat_id: msg.chat_id, text: brokerText(lang, "cmd.no_such_session", { name: decision.name }), disable_notification: false })
     return
   }
 
   // A suspended session is woken by this message on its chain, after it is logged (below); a failed
   // wake is said in this chat once. Telegram shows no "starting", so it says so here.
   if (session.status === "suspended") {
-    await ch.send({ op: "reply", chat_id: msg.chat_id, text: `Resuming session "${session.name}"...`, disable_notification: true })
+    await ch.send({ op: "reply", chat_id: msg.chat_id, text: brokerText(lang, "chat.resuming", { name: session.name }), disable_notification: true })
   }
 
   const activeId = registry.getActive(msg.chat_id)
@@ -4631,7 +4642,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
           await adapter.respondRequest(open.requestId, answer)
           const label = open.options.find((o) => o.id === ("optionId" in answer ? answer.optionId : undefined))?.label
             ?? decision.text
-          await ch.send({ op: "reply", chat_id: msg.chat_id, text: `answered: ${label}`, disable_notification: true })
+          await ch.send({ op: "reply", chat_id: msg.chat_id, text: brokerText(lang, "chat.answered", { label }), disable_notification: true })
         } catch (err) {
           log.warn("request_respond_failed", { session: session.id, err: String(err) })
         }
@@ -4675,7 +4686,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
       log.warn("send_inbound.adapter_missing", { session: session.name, agent: session.agent ?? "claude" })
       await ch.send({
         op: "reply", chat_id: msg.chat_id,
-        text: `⚠ ${session.agent ?? "claude"} session "${session.name}" is not responding (adapter disconnected). Try /kill + re-spawn.`,
+        text: brokerText(lang, "chat.not_responding", { agent: session.agent ?? "claude", name: session.name }),
         disable_notification: false,
       })
     } else {

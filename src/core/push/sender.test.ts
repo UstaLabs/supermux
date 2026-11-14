@@ -6,7 +6,7 @@ import type { Logger } from "../../shared/log"
 
 function store() {
   const db = new Database(":memory:")
-  db.run(`CREATE TABLE push_subscriptions (device TEXT PRIMARY KEY, endpoint TEXT NOT NULL, p256dh TEXT NOT NULL, auth TEXT NOT NULL, user_agent TEXT, created_at TEXT NOT NULL, last_used_at TEXT)`)
+  db.run(`CREATE TABLE push_subscriptions (device TEXT PRIMARY KEY, endpoint TEXT NOT NULL, p256dh TEXT NOT NULL, auth TEXT NOT NULL, user_agent TEXT, lang TEXT, created_at TEXT NOT NULL, last_used_at TEXT)`)
   const s = new PushSubscriptionStore(db)
   s.upsert({ device: "browser", endpoint: "https://push.example/ep", keys: { p256dh: "a", auth: "b" } })
   return s
