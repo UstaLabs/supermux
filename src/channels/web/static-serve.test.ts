@@ -166,3 +166,72 @@ describe("serveStatic /assets/ gzip cache", () => {
     expect(decompressed).toBe("z".repeat(200_000))
   })
 })
+
+// #142: the staged bundle carries brotli siblings (`x.wasm.br`, written by scripts/precompress-static.ts)
+// and the broker serves them to clients that accept br. gzip stays the fallback.
+describe("serveStatic precompressed brotli siblings", () => {
+  function stagedWasm(dir: string, name = "app-0123abcd.wasm"): { raw: Buffer; br: Buffer } {
+    mkdirSync(join(dir, "assets"), { recursive: true })
+    const raw = Buffer.alloc(8192, 7)
+    const br = Buffer.from("pretend-brotli-bytes")
+    writeFileSync(join(dir, "assets", name), raw)
+    writeFileSync(join(dir, "assets", `${name}.br`), br)
+    return { raw, br }
+  }
+
+  test("a client that accepts br gets the .br sibling with the original's type and caching", async () => {
+    const dir = tmp()
+    const { br } = stagedWasm(dir)
+    const res = serveStatic({ staticDir: dir, embedded: {}, path: "/assets/app-0123abcd.wasm", acceptEncoding: "gzip, deflate, br, zstd" })
+    expect(res!.headers.get("content-encoding")).toBe("br")
+    expect(res!.headers.get("content-type")).toBe("application/wasm")
+    expect(res!.headers.get("cache-control")).toContain("immutable")
+    expect(res!.headers.get("vary")).toBe("Accept-Encoding")
+    expect(Buffer.from(await res!.arrayBuffer()).equals(br)).toBe(true)
+  })
+
+  test("a gzip-only client still gets gzip", () => {
+    const dir = tmp()
+    stagedWasm(dir)
+    const res = serveStatic({ staticDir: dir, embedded: {}, path: "/assets/app-0123abcd.wasm", acceptEncoding: "gzip, deflate" })
+    expect(res!.headers.get("content-encoding")).toBe("gzip")
+    expect(res!.headers.get("vary")).toBe("Accept-Encoding")
+  })
+
+  test("br;q=0 is a refusal, not an offer", () => {
+    const dir = tmp()
+    stagedWasm(dir)
+    const res = serveStatic({ staticDir: dir, embedded: {}, path: "/assets/app-0123abcd.wasm", acceptEncoding: "gzip, br;q=0" })
+    expect(res!.headers.get("content-encoding")).toBe("gzip")
+  })
+
+  test("a .br older than its original is stale and ignored (a file restaged in place)", () => {
+    const dir = tmp()
+    stagedWasm(dir)
+    const past = new Date(Date.now() - 60_000)
+    utimesSync(join(dir, "assets", "app-0123abcd.wasm.br"), past, past)
+    const res = serveStatic({ staticDir: dir, embedded: {}, path: "/assets/app-0123abcd.wasm", acceptEncoding: "br, gzip" })
+    expect(res!.headers.get("content-encoding")).toBe("gzip")
+  })
+
+  test("embedded (compiled binary) mode serves the embedded .br too", async () => {
+    const embDir = tmp()
+    const { br } = stagedWasm(embDir)
+    const embedded = {
+      "/assets/app-0123abcd.wasm": join(embDir, "assets", "app-0123abcd.wasm"),
+      "/assets/app-0123abcd.wasm.br": join(embDir, "assets", "app-0123abcd.wasm.br"),
+    }
+    const res = serveStatic({ staticDir: "/nonexistent", embedded, path: "/assets/app-0123abcd.wasm", acceptEncoding: "br" })
+    expect(res!.headers.get("content-encoding")).toBe("br")
+    expect(res!.headers.get("content-type")).toBe("application/wasm")
+    expect(Buffer.from(await res!.arrayBuffer()).equals(br)).toBe(true)
+  })
+
+  test("no .br sibling: unchanged gzip behaviour even when br is offered", () => {
+    const dir = tmp()
+    mkdirSync(join(dir, "assets"), { recursive: true })
+    writeFileSync(join(dir, "assets", "lone-0123abcd.wasm"), Buffer.alloc(4096, 0))
+    const res = serveStatic({ staticDir: dir, embedded: {}, path: "/assets/lone-0123abcd.wasm", acceptEncoding: "br, gzip" })
+    expect(res!.headers.get("content-encoding")).toBe("gzip")
+  })
+})
