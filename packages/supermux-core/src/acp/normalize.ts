@@ -194,6 +194,8 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
   const vendor = options.vendor
   const toolNames = new Map<string, string>()
   let lastCommandsJson: string | undefined
+  /** Each model's context window and the one in use (#144): Grok reports usage per call but no window with it. */
+  const windows: { current?: string; sizes: Record<string, number> } = { sizes: {} }
   let lastModelsJson: string | undefined
   let firstSession: string | undefined
   const scopes = new Map<string, Scope>()
@@ -393,6 +395,14 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
     const kind = value.sessionUpdate
     const subagentId = scope.subagentId
     if (kind === "turn_completed" || kind === "user_message_chunk") return []
+    if (kind === "response_completed") {
+      // Grok, one per model call: what that call sent is how full the window is now (#144).
+      const usage = rec(value.usage)
+      const size = windows.current ? windows.sizes[windows.current] : undefined
+      if (sub || !usage || size == null) return []
+      const used = (num(usage.input_tokens) ?? 0) + (num(usage.cache_read_input_tokens) ?? 0) + (num(usage.cache_creation_input_tokens) ?? 0)
+      return used > 0 ? [{ kind: "usage", context: { used, size } }] : []
+    }
     if (sub && (kind === "available_commands_update" || kind === "usage_update" || kind === "session_info_update" || kind === "current_mode_update" || kind === "config_option_update")) return []
     if (kind === "agent_message_chunk") {
       const prefix = takeThoughts(scope)
@@ -535,13 +545,15 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
       const optionsList = Array.isArray(value.configOptions) ? value.configOptions : []
       const modelOpt = optionsList.map(rec).find(row => row && (row.id === "model" || row.name === "model"))
       const model = modelOpt ? str(modelOpt.value) ?? str(modelOpt.currentValue) : undefined
+      if (model) windows.current = model
       return [{ kind: "mode-update", ...(model ? { model } : {}) }]
     }
     if (kind === "session_info_update") {
       return [{ kind: "session-info", ...("title" in value ? { title: (value.title as string | null | undefined) ?? null } : {}) }]
     }
     if (kind === "usage_update") {
-      const used = typeof value.used === "number" ? value.used : undefined
+      // OpenCode sends used 0 (with the failed model's window) after a refused turn: no size, the last good one stands.
+      const used = typeof value.used === "number" && value.used > 0 ? value.used : undefined
       const size = typeof value.size === "number" ? value.size : undefined
       const costRow = rec(value.cost)
       return [{
@@ -794,6 +806,14 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
   }
 
   function mapNative(method: string, params: unknown): NormalizedBody[] {
+    if (method === "model_windows") {
+      // The driver forwards each model's context window and the current one (Grok's _meta.modelState).
+      const p = rec(params)
+      const current = str(p?.current)
+      if (current) windows.current = current
+      for (const [id, size] of Object.entries(rec(p?.windows) ?? {})) if (typeof size === "number") windows.sizes[id] = size
+      return []
+    }
     if (method === "config_options") {
       // The driver forwards a session start's configOptions (#102): the agent's own model list.
       const options = Array.isArray(rec(params)?.configOptions) ? rec(params)!.configOptions as unknown[] : []
