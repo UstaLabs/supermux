@@ -344,6 +344,15 @@ private fun PermissionBody(
         val args = argumentRows(body)
         if (args != null) ArgumentRows(args, request.requestId) else QuotedBody(request, body, expanded, onToggleExpand)
     }
+    // #143: why the agent stops here (a safety check asks even in bypass), in its own words, under what it asks.
+    request.reason?.takeIf { it.isNotBlank() }?.let { reason ->
+        Text(
+            reason,
+            style = MaterialTheme.typography.bodySmall,
+            color = cs.onSurfaceVariant,
+            modifier = Modifier.fillMaxWidth().padding(top = Space.sm).testTag("request-reason:${request.requestId}"),
+        )
+    }
 
     val allows = request.options.filter { it.isAllow() }
     val rejects = request.options.filterNot { it.isAllow() }
