@@ -9,7 +9,8 @@ import { openDb, runMigrations } from "./db"
 import { initStorage, isLockedError } from "./open"
 
 const dirs: string[] = []
-afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
+// Windows releases a closed SQLite file (and its -wal/-shm) a moment late: EBUSY on an immediate rm.
+afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) })
 const tmp = () => { const d = mkdtempSync(join(tmpdir(), "storage-open-")); dirs.push(d); return d }
 
 const locked = () => Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" })
