@@ -75,6 +75,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameMillis
@@ -293,7 +294,7 @@ private const val BUBBLE_CHARS = 150
 private const val THINKING_MAX_MS = 90_000L
 
 /**
- * Pops the bubble when the Agent replies (unless its chat is open) and shows the reply as it is actually written: its
+ * Pops the bubble when the Agent replies (unless its chat is open, here or in the app in front: #154) and shows the reply as it is actually written: its
  * live text under the chat's own ink-edge reveal (#76), which the stored reply then finishes. A reply nobody saw being
  * written (live replies off in Settings, an older broker) shows as it is, at once. Shown whole, it folds into the count
  * after a while (not while you read it all). It asks for its Agent's live text without claiming the chat is on screen.
@@ -307,12 +308,23 @@ fun OverlayReplies(fleet: FleetStore, agent: OverlayAgent?, ui: OverlayUiState) 
         fleet.pinLive(setOf(id))
         onDispose { fleet.pinLive(emptySet()) }
     }
-    val live by (remember(fleet, id) { fleet.appFor(id) }?.liveReplies ?: NoLiveReplies).collectAsState()
+    val app = remember(fleet, id) { fleet.appFor(id) }
+    val live by (app?.liveReplies ?: NoLiveReplies).collectAsState()
     val writing = live[id]?.lastOrNull { !it.thinking }
+    // Card #154: its chat open in the app, in front, on this device: the reply is read there, not popped up again.
+    val onScreen by (app?.chatsOnScreen ?: NoChatsOnScreen).collectAsState()
+    val seen = id in onScreen
+    val seenNow by rememberUpdatedState(seen)
+    LaunchedEffect(seen) {
+        if (seen) {
+            ui.reply = null
+            ui.reveal = null
+        }
+    }
     // A reply being written: the bubble shows it, and follows it as more is written.
     LaunchedEffect(writing?.stream, writing?.text) {
         val w = writing ?: return@LaunchedEffect
-        if (ui.chatOpen) return@LaunchedEffect
+        if (ui.chatOpen || seen) return@LaunchedEffect
         val shown = ui.reply
         if (shown?.stream == w.stream) {
             if (!shown.done) ui.reply = shown.copy(text = w.text)
@@ -327,7 +339,7 @@ fun OverlayReplies(fleet: FleetStore, agent: OverlayAgent?, ui: OverlayUiState) 
     // A stored reply finishes the reveal of the stream it replaces; one nobody saw being written shows as it is.
     LaunchedEffect(id) {
         fleet.agentReplies.collect { ev ->
-            if (ev.session != id || ui.chatOpen) return@collect
+            if (ev.session != id || ui.chatOpen || seenNow) return@collect
             val text = ev.entry.text.orEmpty()
             if (messagePlainText(text).isEmpty()) return@collect
             val continues = ev.entry.stream != null && ui.reply?.stream == ev.entry.stream && ui.reveal?.finished == false
@@ -369,6 +381,9 @@ fun OverlayReplies(fleet: FleetStore, agent: OverlayAgent?, ui: OverlayUiState) 
 
 /** A host not known yet has nothing being written. */
 private val NoLiveReplies: StateFlow<Map<String, List<LiveReply>>> = MutableStateFlow(emptyMap())
+
+/** A host not known yet has no chat on screen. */
+private val NoChatsOnScreen: StateFlow<Set<String>> = MutableStateFlow(emptySet())
 
 /**
  * Hold-to-talk: the composer's own dictation, so the overlay hears exactly as the chat's mic does. When
