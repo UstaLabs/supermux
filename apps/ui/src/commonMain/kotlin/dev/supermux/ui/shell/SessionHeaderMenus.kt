@@ -111,6 +111,10 @@ import dev.supermux.ui.widgets.AlertDialog
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
 import kotlinx.coroutines.launch
+import dev.supermux.ui.i18n.localized
+import androidx.compose.runtime.rememberUpdatedState
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.StringKey
 
 // ── Pure, testable bits (no Compose) ──────────────────────────────────────────────────
 
@@ -126,17 +130,47 @@ fun sessionProxies(proxies: List<ProxyDto>, session: SessionInfo): List<ProxyDto
  * to the badge; this one spells the failure modes out ("Push rejected — pull first") because a
  * toast is all the user gets.
  */
-fun gitOpResultText(r: GitOpResult?): String = when (r?.status) {
-    null -> "Failed"
-    "pushed" -> "Pushed"
-    "up_to_date" -> "Up to date"
-    "clean" -> "Pulled"
-    "rejected_non_ff" -> "Push rejected — pull first"
-    "conflict" -> "Conflict in ${r.files.size} file(s)"
-    "dirty" -> "Uncommitted changes block the pull"
-    "auth_failed" -> "Auth failed"
-    "error" -> r.message ?: "Error"
+fun gitOpResultText(r: GitOpResult?, words: GitOpWords = GitOpWords()): String = when (r?.status) {
+    null -> words.failed
+    "pushed" -> words.pushed
+    "up_to_date" -> words.upToDate
+    "clean" -> words.pulled
+    "rejected_non_ff" -> words.rejected
+    "conflict" -> words.conflict(r.files.size)
+    "dirty" -> words.dirty
+    "auth_failed" -> words.authFailed
+    "error" -> r.message ?: words.error
     else -> r.status
+}
+
+/** [gitOpResultText]'s words: English by default (the tests'), [localizedGitOpWords] in the app's language. */
+data class GitOpWords(
+    val failed: String = "Failed", // i18n-ok: English default (tests); the UI passes localizedGitOpWords()
+    val pushed: String = "Pushed", // i18n-ok: English default (tests)
+    val upToDate: String = "Up to date", // i18n-ok: English default (tests)
+    val pulled: String = "Pulled", // i18n-ok: English default (tests)
+    val rejected: String = "Push rejected — pull first", // i18n-ok: English default (tests)
+    val conflict: (Int) -> String = { "Conflict in $it file(s)" }, // i18n-ok: English default (tests)
+    val dirty: String = "Uncommitted changes block the pull", // i18n-ok: English default (tests)
+    val authFailed: String = "Auth failed", // i18n-ok: English default (tests)
+    val error: String = "Error", // i18n-ok: English default (tests)
+)
+
+/** [GitOpWords] in the app's language, looked up here so a coroutine can word its notice. */
+@Composable
+fun localizedGitOpWords(): GitOpWords {
+    val conflict = localizedTemplate(Str.shell_git_conflict)
+    return GitOpWords(
+        failed = localized(Str.shell_git_failed),
+        pushed = localized(Str.shell_git_pushed),
+        upToDate = localized(Str.shell_git_up_to_date),
+        pulled = localized(Str.shell_git_pulled),
+        rejected = localized(Str.shell_git_rejected),
+        conflict = { n -> conflict(n.toString()) },
+        dirty = localized(Str.shell_git_dirty),
+        authFailed = localized(Str.shell_git_auth_failed),
+        error = localized(Str.shell_git_error),
+    )
 }
 
 /**
@@ -156,6 +190,7 @@ enum class GitMenuForceOp { OPEN, FETCH, PULL }
 fun rememberGitOpRunner(sessionId: String, actions: ShellActions): (String) -> Unit {
     val notices = LocalPlatform.current.notices
     val scope = rememberCoroutineScope()
+    val words by rememberUpdatedState(localizedGitOpWords())
     return remember(sessionId, actions, notices, scope) {
         { op: String ->
             scope.launch {
@@ -166,7 +201,7 @@ fun rememberGitOpRunner(sessionId: String, actions: ShellActions): (String) -> U
                     "publish" -> actions.gitPublish(sessionId)
                     else -> null
                 }
-                notices.show(gitOpResultText(result))
+                notices.show(gitOpResultText(result, words))
             }
             Unit
         }
@@ -263,24 +298,24 @@ fun GitBadgeMenu(
             )
             DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                 DropdownMenuItem(
-                    text = { Text("Fetch") },
+                    text = { Text(localized(Str.shell_git_fetch)) },
                     modifier = Modifier.testTag("git_fetch"),
                     onClick = { run("Fetch", onFetch) },
                 )
                 DropdownMenuItem(
-                    text = { Text("Pull") },
+                    text = { Text(localized(Str.shell_git_pull)) },
                     modifier = Modifier.testTag("git_pull"),
                     onClick = { run("Pull", onPull) },
                 )
                 if (shouldPublish(session.git)) {
                     DropdownMenuItem(
-                        text = { Text("Publish") },
+                        text = { Text(localized(Str.shell_git_publish)) },
                         modifier = Modifier.testTag("git_publish"),
                         onClick = { run("Publish", onPublish) },
                     )
                 } else {
                     DropdownMenuItem(
-                        text = { Text("Push") },
+                        text = { Text(localized(Str.shell_git_push)) },
                         modifier = Modifier.testTag("git_push"),
                         onClick = { run("Push", onPush) },
                     )
@@ -335,7 +370,7 @@ fun SessionLinksMenu(
         IconButton(onClick = { expanded = true }, modifier = Modifier.testTag("session_links")) {
             Icon(
                 Icons.Outlined.Public,
-                contentDescription = "Links",
+                contentDescription = localized(Str.shell_links),
                 tint = cs.onSurfaceVariant,
                 modifier = Modifier.size(18.dp),
             )
@@ -429,11 +464,14 @@ fun OverflowMenu(
     // Right-click parity (F3's RowContextMenu): a pointer host reaches the three session actions
     // without opening the menu. Inert on Android — which is why the ⋮ button below is NOT gated on
     // it: an inert-menu host must still carry every action visibly.
+    val renameWord = localized(Str.shell_rename)
+    val muteWord = localized(if (muted) Str.shell_unmute else Str.shell_mute)
+    val killWord = localized(Str.shell_kill)
     val contextEntries: () -> List<RowContextMenuEntry> = {
         if (!showSessionRows) emptyList() else listOf(
-            RowContextMenuEntry("Rename") { renameText = session.name; showRename = true },
-            RowContextMenuEntry(if (muted) "Unmute" else "Mute") { onToggleMute(!muted) },
-            RowContextMenuEntry("Kill") { showKill = true },
+            RowContextMenuEntry(renameWord) { renameText = session.name; showRename = true },
+            RowContextMenuEntry(muteWord) { onToggleMute(!muted) },
+            RowContextMenuEntry(killWord) { showKill = true },
         )
     }
 
@@ -442,7 +480,7 @@ fun OverflowMenu(
             IconButton(onClick = { expanded = true }, modifier = Modifier.testTag(buttonTag)) {
                 Icon(
                     Icons.Outlined.MoreVert,
-                    contentDescription = "More",
+                    contentDescription = localized(Str.shell_more),
                     tint = cs.onSurfaceVariant,
                     modifier = Modifier.size(18.dp),
                 )
@@ -457,8 +495,8 @@ fun OverflowMenu(
                 DropdownMenuItem(
                     text = {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Detail")
-                            Text(chatDetail.label, color = cs.onSurfaceVariant)
+                            Text(localized(Str.shell_detail))
+                            Text(localized(chatDetailRes(chatDetail)), color = cs.onSurfaceVariant)
                         }
                     },
                     modifier = Modifier.testTag(detailTag),
@@ -471,47 +509,47 @@ fun OverflowMenu(
                     }
                 }
                 if (onGitOp != null && session.git != null) {
-                    GitRow("Fetch", Icons.Outlined.Download, "overflow_git_fetch") {
+                    GitRow(localized(Str.shell_git_fetch), Icons.Outlined.Download, "overflow_git_fetch") {
                         expanded = false; onGitOp("fetch")
                     }
-                    GitRow("Pull", Icons.Outlined.CallMerge, "overflow_git_pull") {
+                    GitRow(localized(Str.shell_git_pull), Icons.Outlined.CallMerge, "overflow_git_pull") {
                         expanded = false; onGitOp("pull")
                     }
                     if (shouldPublish(session.git)) {
-                        GitRow("Publish", Icons.Outlined.CloudOff, "overflow_git_publish") {
+                        GitRow(localized(Str.shell_git_publish), Icons.Outlined.CloudOff, "overflow_git_publish") {
                             expanded = false; onGitOp("publish")
                         }
                     } else {
-                        GitRow("Push", Icons.Outlined.CloudUpload, "overflow_git_push") {
+                        GitRow(localized(Str.shell_git_push), Icons.Outlined.CloudUpload, "overflow_git_push") {
                             expanded = false; onGitOp("push")
                         }
                     }
                 }
                 if (showManagementRows) {
                     DropdownMenuItem(
-                        text = { Text("Usage") },
+                        text = { Text(localized(Str.shell_usage)) },
                         modifier = Modifier.testTag("overflow_usage"),
                         onClick = { expanded = false; onUsage() },
                     )
                     DropdownMenuItem(
-                        text = { Text("Coding…") },
+                        text = { Text(localized(Str.shell_coding_ellipsis)) },
                         modifier = Modifier.testTag("overflow_lsp_settings"),
                         onClick = { expanded = false; onLspSettings() },
                     )
                 }
                 if (showSessionRows) {
                     DropdownMenuItem(
-                        text = { Text("Rename") },
+                        text = { Text(renameWord) },
                         modifier = Modifier.testTag("overflow_rename"),
                         onClick = { expanded = false; renameText = session.name; showRename = true },
                     )
                     DropdownMenuItem(
-                        text = { Text(if (muted) "Unmute" else "Mute") },
+                        text = { Text(muteWord) },
                         modifier = Modifier.testTag("overflow_mute"),
                         onClick = { expanded = false; onToggleMute(!muted) },
                     )
                     DropdownMenuItem(
-                        text = { Text("Kill", color = cs.error) },
+                        text = { Text(killWord, color = cs.error) },
                         modifier = Modifier.testTag("overflow_kill"),
                         onClick = { expanded = false; showKill = true },
                     )
@@ -522,15 +560,15 @@ fun OverflowMenu(
                 onDismissRequest = { detailSubmenu = false },
             ) {
                 listOf(
-                    ChatDetailLevel.LOW to "Messages only · tools on status line",
-                    ChatDetailLevel.MEDIUM to "Quiet tool lines between messages",
-                    ChatDetailLevel.HIGH to "Terminal windows & file diffs",
+                    ChatDetailLevel.LOW to localized(Str.shell_detail_low_description),
+                    ChatDetailLevel.MEDIUM to localized(Str.shell_detail_medium_description),
+                    ChatDetailLevel.HIGH to localized(Str.shell_detail_high_description),
                 ).forEach { (level, desc) ->
                     DropdownMenuItem(
                         text = {
                             Column {
                                 Text(
-                                    level.label,
+                                    localized(chatDetailRes(level)),
                                     fontWeight = if (chatDetail == level) FontWeight.SemiBold else FontWeight.Normal,
                                 )
                                 Text(desc, color = cs.onSurfaceVariant, fontSize = 12.sp)
@@ -552,12 +590,12 @@ fun OverflowMenu(
     if (showRename) {
         AlertDialog(
             onDismissRequest = { showRename = false },
-            title = { Text("Rename session") },
+            title = { Text(localized(Str.shell_rename_session)) },
             text = {
                 OutlinedTextField(
                     value = renameText,
                     onValueChange = { renameText = it },
-                    label = { Text("Name") },
+                    label = { Text(localized(Str.shell_name)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().testTag("overflow_rename_field"),
                 )
@@ -567,23 +605,23 @@ fun OverflowMenu(
                     onClick = { onRename(renameText.trim()); showRename = false },
                     enabled = renameText.isNotBlank(),
                     modifier = Modifier.testTag("overflow_rename_confirm"),
-                ) { Text("Rename") }
+                ) { Text(renameWord) }
             },
-            dismissButton = { TextButton(onClick = { showRename = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { showRename = false }) { Text(localized(Str.shell_cancel)) } },
         )
     }
     if (showKill) {
         AlertDialog(
             onDismissRequest = { showKill = false },
-            title = { Text("Kill session?") },
-            text = { Text("This ends \"${session.name}\" and its agent. This can't be undone.") },
+            title = { Text(localized(Str.shell_kill_session_title)) },
+            text = { Text(localized(Str.shell_kill_session_text, session.name)) },
             confirmButton = {
                 TextButton(
                     onClick = { onKill(); showKill = false },
                     modifier = Modifier.testTag("overflow_kill_confirm"),
-                ) { Text("Kill", color = cs.error) }
+                ) { Text(killWord, color = cs.error) }
             },
-            dismissButton = { TextButton(onClick = { showKill = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { showKill = false }) { Text(localized(Str.shell_cancel)) } },
         )
     }
     if (showContinue && onContinue != null) {
@@ -606,6 +644,13 @@ private class HeaderDialogs(name: String) {
     var renameText by mutableStateOf(name)
     var kill by mutableStateOf(false)
     var continueOpen by mutableStateOf(false)
+}
+
+/** [level]'s name, as Settings › General words it. */
+private fun chatDetailRes(level: ChatDetailLevel): StringKey = when (level) {
+    ChatDetailLevel.LOW -> Str.general_chat_detail_low
+    ChatDetailLevel.MEDIUM -> Str.general_chat_detail_medium
+    ChatDetailLevel.HIGH -> Str.general_chat_detail_high
 }
 
 /** One git row of [OverflowMenu] — Android's shape (label + leading glyph), Material icons. */
@@ -683,7 +728,7 @@ fun ChatViewHeader(
         }
         LocalChatSearch.current?.let { search ->
             IconButton(onClick = { search.openFind(session.id) }, modifier = Modifier.testTag("chat_find_open")) {
-                Icon(Icons.Outlined.Search, contentDescription = "Search chats", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Icon(Icons.Outlined.Search, contentDescription = localized(Str.shell_search_chats), tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         SessionLinksMenu(session = session, proxies = sessionLinks)

@@ -55,6 +55,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.supermux.net.AddDeviceResponse
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.settings.DevicesSettingsActions
 import dev.supermux.ui.theme.IconSize
@@ -68,7 +70,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** The device name the wizard always mints — Vue's `api.addDevice("phone")`. */
-private const val PHONE_DEVICE_NAME = "phone"
+private const val PHONE_DEVICE_NAME = "phone" // i18n-ok: wire value
 
 /** Vue's `setInterval(checkPairing, 1_000)`. */
 private const val PAIR_POLL_MS = 1_000L
@@ -130,7 +132,8 @@ fun SetupPhoneStep(
     val minting = remember { MintJobHolder() }
     var loading by remember { mutableStateOf(true) }
     var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    // The last mint failed (shown as an error until the next one starts).
+    var mintFailed by remember { mutableStateOf(false) }
     var copied by remember { mutableStateOf(0) }
 
     suspend fun mint(refresh: Boolean) {
@@ -141,10 +144,10 @@ fun SetupPhoneStep(
             paired = false
         }
         loading = true
-        error = null
+        mintFailed = false
         val minted = devices.deviceAdd(PHONE_DEVICE_NAME)
         if (minted == null) {
-            error = "Couldn't create a phone pairing code."
+            mintFailed = true
         } else {
             pairing = minted
             paired = false
@@ -228,13 +231,13 @@ fun SetupPhoneStep(
                     modifier = Modifier.size(48.dp),
                 )
                 Text(
-                    "Your phone is connected",
+                    localized(Str.setup_phone_connected_title),
                     style = MaterialTheme.typography.headlineSmall,
                     color = cs.onSurface,
                     textAlign = TextAlign.Center,
                 )
                 Text(
-                    "Supermux is paired and ready to use on your phone.",
+                    localized(Str.setup_phone_connected_text),
                     style = MaterialTheme.typography.bodyMedium,
                     color = cs.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -244,7 +247,7 @@ fun SetupPhoneStep(
                     onClick = { minting.job = scope.launch { mint(refresh = true) } },
                     enabled = !busy,
                     modifier = Modifier.testTag("setup_phone_another"),
-                ) { Text("Connect another phone") }
+                ) { Text(localized(Str.setup_phone_another)) }
             } else {
                 Icon(
                     Icons.Filled.PhoneIphone,
@@ -253,13 +256,13 @@ fun SetupPhoneStep(
                     modifier = Modifier.size(40.dp),
                 )
                 Text(
-                    "Connect from your phone",
+                    localized(Str.setup_phone_title),
                     style = MaterialTheme.typography.headlineSmall,
                     color = cs.onSurface,
                     textAlign = TextAlign.Center,
                 )
                 Text(
-                    "Open Supermux on your iPhone, iPad, or Android device and scan this code.",
+                    localized(Str.setup_phone_text),
                     style = MaterialTheme.typography.bodyMedium,
                     color = cs.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -274,7 +277,7 @@ fun SetupPhoneStep(
                             modifier = Modifier.testTag("setup_phone_loading"),
                         )
                         Text(
-                            "Creating a secure pairing code…",
+                            localized(Str.setup_phone_creating),
                             style = MaterialTheme.typography.bodyMedium,
                             color = cs.onSurfaceVariant,
                             textAlign = TextAlign.Center,
@@ -290,8 +293,7 @@ fun SetupPhoneStep(
                         Spacer(Modifier.height(Space.sm))
                         if (qr == null) {
                             Text(
-                                "Couldn't render the QR — copy the link below and open it on " +
-                                    "your phone.",
+                                localized(Str.setup_phone_qr_failed),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = cs.onSurfaceVariant,
                                 textAlign = TextAlign.Center,
@@ -300,7 +302,7 @@ fun SetupPhoneStep(
                         } else {
                             Image(
                                 bitmap = qr,
-                                contentDescription = "Phone pairing QR code",
+                                contentDescription = localized(Str.setup_phone_qr_description),
                                 modifier = Modifier
                                     .size(PhoneQrSize)
                                     .clip(RoundedCornerShape(Radii.lg))
@@ -334,7 +336,7 @@ fun SetupPhoneStep(
                                     modifier = Modifier.size(IconSize.md),
                                 )
                                 Spacer(Modifier.size(Space.sm))
-                                Text(if (copied > 0) "Copied" else "Copy pairing link")
+                                Text(localized(if (copied > 0) Str.setup_phone_copied else Str.setup_phone_copy))
                             }
                             TextButton(
                                 onClick = { minting.job = scope.launch { mint(refresh = true) } },
@@ -347,12 +349,11 @@ fun SetupPhoneStep(
                                     modifier = Modifier.size(IconSize.md),
                                 )
                                 Spacer(Modifier.size(Space.sm))
-                                Text("Refresh code")
+                                Text(localized(Str.setup_phone_refresh))
                             }
                         }
                         Text(
-                            "The pairing link grants access to this host. Keep it private and only " +
-                                "scan it with your own device.",
+                            localized(Str.setup_phone_link_warning),
                             style = MaterialTheme.typography.labelSmall,
                             color = cs.onSurfaceVariant,
                             textAlign = TextAlign.Center,
@@ -360,9 +361,9 @@ fun SetupPhoneStep(
                     }
                 }
 
-                error?.let { message ->
+                if (mintFailed) {
                     Text(
-                        message,
+                        localized(Str.setup_phone_mint_failed),
                         style = MaterialTheme.typography.labelMedium,
                         color = cs.error,
                         textAlign = TextAlign.Center,
@@ -373,7 +374,7 @@ fun SetupPhoneStep(
                             onClick = { minting.job = scope.launch { mint(refresh = false) } },
                             enabled = !busy,
                             modifier = Modifier.testTag("setup_phone_retry"),
-                        ) { Text("Try again") }
+                        ) { Text(localized(Str.setup_phone_try_again)) }
                     }
                 }
             }

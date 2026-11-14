@@ -80,7 +80,7 @@ export type SessionManagerPorts = {
   getAgentRpc: () => { settle(requestId: string, data: unknown): void; fail(requestId: string, error: string): void }
   /** `let inboxDelivery` in main.ts is assigned after construction — deref lazily, never capture. */
   getInbox?: () => {
-    send(from: { name: string; id: string }, to: string[], text: string, busy: "queue" | "interrupt"): { ids: Record<string, string> }
+    send(from: { name: string; id: string }, to: string[], text: string, busy: "queue" | "interrupt" | "stop"): { ids: Record<string, string> }
   } | undefined
   /** Collaborators of the deliver() funnel. */
   inbound: {
@@ -729,10 +729,13 @@ export class SessionManager {
           return { ok: false, error: "to must be a non-empty array of session ids" }
         }
         if (typeof op.args.interrupt !== "boolean") return { ok: false, error: "interrupt must be true or false" }
+        // #143: interrupt=true lets a running tool call finish first; stop_now cuts it off.
+        const stopNow = op.args.stop_now === true
+        if (stopNow && !op.args.interrupt) return { ok: false, error: "stop_now needs interrupt=true" }
         const drafts = (to as string[]).filter((id) => { const r = this.registry.get(id); return !!r && isDraftSession(r) })
         if (drafts.length) return { ok: false, error: `draft session id: ${drafts.join(", ")} (${DRAFT_HAS_NO_AGENT})` }
         const text = stringArg(op.args, "text")
-        return { ok: true, value: inbox.send({ name: s.name, id: s.id }, to as string[], text, op.args.interrupt ? "interrupt" : "queue") }
+        return { ok: true, value: inbox.send({ name: s.name, id: s.id }, to as string[], text, stopNow ? "stop" : op.args.interrupt ? "interrupt" : "queue") }
       }
       case "kill_session": {
         if (!s) return { ok: false, error: "unknown session" }

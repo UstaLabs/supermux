@@ -16,7 +16,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flowOf
 
-private val NOT_WIRED: AccountResult.Failed = AccountResult.Failed(null, null, "Not available on this client")
+private val NOT_WIRED: AccountResult.Failed = AccountResult.Failed(null, null, "Not available on this client")  // i18n-ok: tests/previews and a fleet with no active host only; the broker-side failure text, not UI copy
 
 /**
  * Every broker call the accounts UI makes, in one holder (the settings-actions pattern). Defaults

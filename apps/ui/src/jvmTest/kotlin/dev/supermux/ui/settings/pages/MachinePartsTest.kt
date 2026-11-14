@@ -616,7 +616,7 @@ class MachinePartsTest {
 
     @Test fun limits_are_per_login_and_warn_from_ninety_percent() {
         val logins = limitLogins(usageData, now = 0)
-        assertEquals(listOf("Claude Code · your login", "Claude Code · Work", "Codex"), logins.map { it.title })
+        assertEquals(listOf("Claude Code" to true, "Claude Code · Work" to false, "Codex" to false), logins.map { it.title to it.yourLogin })
         assertEquals(listOf("5-hour" to 18, "Weekly" to 62), logins[0].windows.map { it.label to it.percent })
         assertEquals(listOf(true, false), logins[1].windows.map { it.warn })
         assertEquals(listOf("Weekly" to 41), logins[2].windows.map { it.label to it.percent })

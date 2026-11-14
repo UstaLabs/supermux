@@ -199,6 +199,21 @@ export class WorkspaceService {
     }
   }
 
+  /**
+   * #135: bring back a session closed in [workspaceId] — the same session, with its history — as a chat tab in
+   * [groupId] (or the first pane). Refuses one that is not this workspace's closed session. The tab is added only
+   * once the session is running again, so a failed resume leaves nothing behind.
+   */
+  async reopenClosedSession(workspaceId: string, sessionId: string, groupId?: string): Promise<ViewRecord> {
+    if (!this.store.closedSessions(workspaceId, Number.MAX_SAFE_INTEGER).some((s) => s.id === sessionId)) {
+      throw new Error("not a session closed in this workspace")
+    }
+    await this.deps.resumeSession(sessionId)
+    const view = this.store.addView(workspaceId, { kind: "chat", state: { sessionId }, groupId })
+    this.linkSession(sessionId, workspaceId)
+    return view
+  }
+
   private linkSession(sessionId: string, workspaceId: string): void {
     this.db?.run("UPDATE sessions SET workspace_id = ? WHERE id = ?", [workspaceId, sessionId])
   }

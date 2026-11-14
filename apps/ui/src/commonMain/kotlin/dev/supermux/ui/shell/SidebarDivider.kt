@@ -49,11 +49,13 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.panes.ColResizeIcon
 import dev.supermux.ui.panes.SplitSeamCenterOffset
 import dev.supermux.ui.panes.SplitSeamHairline
 import dev.supermux.ui.panes.seamDrag
 import dev.supermux.ui.panes.SplitSeamHitWidth
+import dev.supermux.ui.i18n.localized
 
 /**
  * Overlay on the sidebar↔detail seam: 1dp hairline + drag hit strip (resize only).
@@ -90,12 +92,12 @@ fun SidebarDivider(
         // only to be grabbed.
         targetValue = if (active) cs.primary.copy(alpha = 0.90f) else Color.Transparent,
         animationSpec = tween(120),
-        label = "sidebar_hairline_color",
+        label = "sidebar_hairline_color", // i18n-ok: animation label
     )
     val hairlineWidth by animateDpAsState(
         targetValue = if (active) 2.dp else SplitSeamHairline,
         animationSpec = tween(120),
-        label = "sidebar_hairline_width",
+        label = "sidebar_hairline_width", // i18n-ok: animation label
     )
 
     // Same overlay geometry as pane splitters ([SplitSeamOverlay] / [SplitSeamHitWidth]).
@@ -210,7 +212,7 @@ fun CompactSidebarDivider(
             ) {
                 Icon(
                     Icons.Filled.ChevronRight,
-                    contentDescription = "Collapse sidebar",
+                    contentDescription = localized(Str.shell_collapse_sidebar),
                     tint = cs.onSurfaceVariant,
                     modifier = Modifier
                         .size(16.dp)

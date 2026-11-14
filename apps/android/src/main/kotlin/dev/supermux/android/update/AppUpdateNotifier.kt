@@ -15,7 +15,7 @@ import dev.supermux.ui.update.formatUpdateProgress
 
 /**
  * Status-bar notifications for APK self-update: indeterminate/percent progress while
- * downloading, a short "installing" state, and a high-importance alert on failure.
+ * downloading, a "tap to install" state once the APK is on disk, and a high-importance alert on failure.
  *
  * Progress posts go to a low-importance channel (silent ongoing bar). Errors use a
  * separate default-importance channel so the user is actually alerted.
@@ -50,7 +50,7 @@ object AppUpdateNotifier {
                     CHANNEL_ALERT_NAME,
                     NotificationManager.IMPORTANCE_DEFAULT,
                 ).apply {
-                    description = "Alerts when an app update download or install fails"
+                    description = "Alerts when an app update is ready to install, or fails"
                 },
             )
         }
@@ -92,20 +92,31 @@ object AppUpdateNotifier {
         notify(context, builder)
     }
 
-    fun showInstalling(context: Context) {
+    /**
+     * The APK is on disk: tapping opens the system installer ([installIntent]). It outlives a dismissed or
+     * never-shown installer, so the update is never more than one tap away (#140). [alert] when the user is
+     * elsewhere and Android would not let us open the installer ourselves; silent when it just opened in front.
+     */
+    fun showReadyToInstall(context: Context, installIntent: Intent, alert: Boolean) {
         if (!canPost(context)) return
         ensureChannels(context)
-        val builder = NotificationCompat.Builder(context, CHANNEL_PROGRESS_ID)
+        val tap = PendingIntent.getActivity(
+            context,
+            NOTIFICATION_ID + 1,
+            installIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val builder = NotificationCompat.Builder(context, if (alert) CHANNEL_ALERT_ID else CHANNEL_PROGRESS_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
-            .setContentTitle("Installing update")
-            .setContentText("Opening system installer…")
+            .setContentTitle("Update downloaded")
+            .setContentText("Tap to install")
             .setProgress(0, 0, false)
             .setOngoing(false)
             .setOnlyAlertOnce(true)
             .setAutoCancel(true)
-            .setContentIntent(contentIntent(context))
+            .setContentIntent(tap)
             .setCategory(NotificationCompat.CATEGORY_STATUS)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(if (alert) NotificationCompat.PRIORITY_DEFAULT else NotificationCompat.PRIORITY_LOW)
         notify(context, builder)
     }
 

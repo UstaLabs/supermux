@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.keys.LocalShortcutDispatcher
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.runtime.collectAsState
@@ -315,9 +317,18 @@ fun BrowserPane(
     // (§5.6, first match), else the default chat.
     var chosenChat by remember(view.id) { mutableStateOf<String?>(null) }
     val chats = chat?.chats().orEmpty()
-    val portOwner = (shown?.let { displayAddress(it, previews.orEmpty(), byPort) } as? DisplayAddress.Preview)
-        ?.let { p -> previews.orEmpty().firstOrNull { it.port == p.port && it.sessionName.isNotEmpty() }?.sessionName }
-        ?.let { name -> chats.firstOrNull { it.second == name }?.first }
+    val previewPort = when (val shownAddress = shown?.let { displayAddress(it, previews.orEmpty(), byPort) }) {
+        is DisplayAddress.Preview -> shownAddress.port
+        is DisplayAddress.Local -> shownAddress.port
+        else -> null
+    }
+    // A named preview's proxy names its session; a by-port one asks the host whose process listens on the port.
+    val namedOwner = previewPort?.let { p -> previews.orEmpty().firstOrNull { it.port == p && it.sessionName.isNotEmpty() }?.sessionName }
+    var listenerOwner by remember(view.id, previewPort) { mutableStateOf<String?>(null) }
+    LaunchedEffect(previewPort, namedOwner) {
+        listenerOwner = if (previewPort != null && namedOwner == null) actions.portOwner(previewPort) else null
+    }
+    val portOwner = (namedOwner ?: listenerOwner)?.let { name -> chats.firstOrNull { it.second == name }?.first }
     val recipientId = chosenChat?.takeIf { id -> chats.any { it.first == id } } ?: portOwner
     val recipientName = recipientId?.let { id -> chats.firstOrNull { it.first == id }?.second } ?: chat?.recipient()
     val commentStatesFlow = remember(chat) { chat?.commentStates() ?: kotlinx.coroutines.flow.MutableStateFlow(emptyMap()) }
@@ -465,10 +476,14 @@ fun BrowserPane(
                     if (deviceOn && !phone) DeviceStage(device, fit = fitting, onScale = { stageScale = it }) { pageAndPicks() }
                     else Box(Modifier.fillMaxSize().testTag("browser-viewport")) { pageAndPicks() }
                     (state.phase as? WebViewPhase.Unavailable)?.let { unavailable ->
+                        // Why is the log's, not the person's (#137: a released Windows build told them to run winvm.sh).
+                        LaunchedEffect(unavailable) {
+                            println("[BrowserPane] no web engine: ${unavailable.reason}${unavailable.detail?.let { ": $it" }.orEmpty()}")
+                        }
                         BrowserMessage(
-                            "This device can't show web pages in a tab" + (unavailable.detail?.let { ": $it" } ?: "."),
+                            localized(Str.browser_unavailable),
                             "browser-unavailable",
-                            "Open in your browser" to { platform.openUrl(b.url) },
+                            localized(Str.browser_open_in_browser) to { platform.openUrl(b.url) },
                         )
                     }
                 }

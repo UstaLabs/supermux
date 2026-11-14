@@ -88,6 +88,8 @@ import dev.supermux.ui.accounts.SIGN_IN_EXPIRED
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.i18n.Plurals
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
@@ -99,6 +101,8 @@ import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.roundToInt
 import kotlin.time.Clock
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.localizedPlural
 
 // ─── Reset formatting (pure) ────────────────────────────────────────────────────────────────────
 
@@ -111,22 +115,26 @@ private val TouchTargetMin = 48.dp
 
 private fun nowMs(): Long = Clock.System.now().toEpochMilliseconds()
 
+// The pure formatters below word in English: the tests' twins (#123). The cards read each through its composable twin
+// (localizedResetIso, localizedCodexModelStatus …), which words the same parts in the app's language.
+
 /**
  * Claude windows (`ClaudeWindow.resetsAt`) + Cursor's `billingCycleEnd`: an ISO-8601 string
  * (both apps also fall back to a numeric epoch-millis string first). [now] is epoch millis,
  * injected for deterministic tests.
  */
-fun formatResetIso(resetsAt: String?, now: Long = nowMs()): String {
-    val s = resetsAt?.takeIf { it.isNotBlank() } ?: return ""
-    val ms = s.toLongOrNull() ?: parseIsoMillis(s) ?: return ""
-    return formatResetFromEpochMillis(ms, now)
-}
+fun formatResetIso(resetsAt: String?, now: Long = nowMs()): String = englishReset(resetTimeIso(resetsAt, now))
 
 /** Codex windows (`CodexWindow.resetsAt`): a Double of epoch SECONDS. */
-fun formatResetEpochSeconds(resetsAt: Double?, now: Long = nowMs()): String {
-    val secs = resetsAt ?: return ""
-    return formatResetFromEpochMillis((secs * 1000.0).toLong(), now)
-}
+fun formatResetEpochSeconds(resetsAt: Double?, now: Long = nowMs()): String = englishReset(resetTimeEpochSeconds(resetsAt, now))
+
+/** [formatResetIso] in the app's language. */
+@Composable
+fun localizedResetIso(resetsAt: String?, now: Long = nowMs()): String = localizedReset(resetTimeIso(resetsAt, now))
+
+/** [formatResetEpochSeconds] in the app's language. */
+@Composable
+fun localizedResetEpochSeconds(resetsAt: Double?, now: Long = nowMs()): String = localizedReset(resetTimeEpochSeconds(resetsAt, now))
 
 /**
  * Status line for one Codex per-model gate. A locked model with a known unlock time reads
@@ -137,9 +145,33 @@ fun codexModelStatus(model: CodexModelUsage, now: Long = nowMs()): String {
     val back = formatResetEpochSeconds(model.availableAt, now).removePrefix("resets ")
     return when {
         back.isNotEmpty() -> "locked · back $back"
-        model.creditsWouldEnable -> "locked · credits would unlock"
+        model.creditsWouldEnable -> "locked · credits would unlock" // i18n-ok: test twin
         else -> "locked"
     }
+}
+
+/** [codexModelStatus] in the app's language. */
+@Composable
+fun localizedCodexModelStatus(model: CodexModelUsage, now: Long = nowMs()): String = when {
+    model.available -> localized(Str.usage_model_available)
+    else -> when (val back = resetTimeEpochSeconds(model.availableAt, now)) {
+        ResetTime.Soon -> localized(Str.usage_model_back_soon)
+        is ResetTime.In ->
+            if (back.hours > 0) localized(Str.usage_model_back_in_hm, back.hours, back.minutes)
+            else localized(Str.usage_model_back_in_m, back.minutes)
+        is ResetTime.On -> localized(Str.usage_model_back_on, back.day)
+        null ->
+            if (model.creditsWouldEnable) localized(Str.usage_model_locked_credits)
+            else localized(Str.usage_model_locked)
+    }
+}
+
+/** The use-by date of the grant a redeem would spend (or the first grant with resets left); "" when unknown. */
+private fun claudeResetsUseBy(resets: ClaudeResets): String {
+    val grant = resets.grants.firstOrNull { it.id == resets.nextGrantId }
+        ?: resets.grants.firstOrNull { it.resetsLeft > 0 }
+    val endsMs = grant?.endsAtIso?.let { parseIsoMillis(it) }
+    return endsMs?.let { shortMonthDayLabel(it) }.orEmpty()
 }
 
 /**
@@ -147,44 +179,99 @@ fun codexModelStatus(model: CodexModelUsage, now: Long = nowMs()): String {
  * redeem would spend (or the first grant with resets left). "1 · use by Oct 22".
  */
 fun claudeResetsValue(resets: ClaudeResets): String {
-    val grant = resets.grants.firstOrNull { it.id == resets.nextGrantId }
-        ?: resets.grants.firstOrNull { it.resetsLeft > 0 }
-    val endsMs = grant?.endsAtIso?.let { parseIsoMillis(it) }
-    val by = endsMs?.let { shortMonthDayLabel(it) }.orEmpty()
-    return if (by.isEmpty()) "${resets.resetsLeft}" else "${resets.resetsLeft} · use by $by"
+    val by = claudeResetsUseBy(resets)
+    return if (by.isEmpty()) "${resets.resetsLeft}" else "${resets.resetsLeft} · use by $by" // i18n-ok: test twin
+}
+
+/** [claudeResetsValue] in the app's language. */
+@Composable
+fun localizedClaudeResetsValue(resets: ClaudeResets): String {
+    val by = claudeResetsUseBy(resets)
+    return if (by.isEmpty()) "${resets.resetsLeft}" else localized(Str.usage_resets_value_by, resets.resetsLeft, by)
+}
+
+/** Why a banked Claude reset can't be spent right now (see [claudeResetBlockedHint]). */
+internal enum class ResetBlocked { Paused, Cooldown, NeedsLimit, NotNow }
+
+internal fun claudeResetBlocked(resets: ClaudeResets): ResetBlocked? {
+    if (resets.nextGrantId != null) return null
+    val live = resets.grants.filter { it.resetsLeft > 0 }
+    return when {
+        live.isEmpty() -> null
+        live.all { it.paused } -> ResetBlocked.Paused
+        resets.cooldownUntilIso != null -> ResetBlocked.Cooldown
+        live.all { it.useRequiresLimit } && !resets.atLimit -> ResetBlocked.NeedsLimit
+        else -> ResetBlocked.NotNow
+    }
 }
 
 /**
  * Why a banked Claude reset can't be spent right now, or null when it can ([ClaudeResets.nextGrantId]
  * set). Shown under the row in place of the button.
  */
-fun claudeResetBlockedHint(resets: ClaudeResets): String? {
-    if (resets.nextGrantId != null) return null
-    val live = resets.grants.filter { it.resetsLeft > 0 }
-    return when {
-        live.isEmpty() -> null
-        live.all { it.paused } -> "Reset paused"
-        resets.cooldownUntilIso != null -> "Try again in a minute"
-        live.all { it.useRequiresLimit } && !resets.atLimit -> "Usable once you hit a limit"
-        else -> "Not usable right now"
+fun claudeResetBlockedHint(resets: ClaudeResets): String? = when (claudeResetBlocked(resets)) {
+    null -> null
+    ResetBlocked.Paused -> "Reset paused" // i18n-ok: test twin
+    ResetBlocked.Cooldown -> "Try again in a minute" // i18n-ok: test twin
+    ResetBlocked.NeedsLimit -> "Usable once you hit a limit" // i18n-ok: test twin
+    ResetBlocked.NotNow -> "Not usable right now" // i18n-ok: test twin
+}
+
+/** [claudeResetBlockedHint] in the app's language. */
+@Composable
+fun localizedClaudeResetBlockedHint(resets: ClaudeResets): String? = when (claudeResetBlocked(resets)) {
+    null -> null
+    ResetBlocked.Paused -> localized(Str.usage_reset_paused)
+    ResetBlocked.Cooldown -> localized(Str.usage_reset_try_minute)
+    ResetBlocked.NeedsLimit -> localized(Str.usage_reset_needs_limit)
+    ResetBlocked.NotNow -> localized(Str.usage_reset_not_now)
+}
+
+/** The windows a Claude reset grant clears, in order; unknown window ids are left out. */
+private enum class ClearedWindow { FiveHour, SevenDay, SevenDaySonnet, SevenDayOpus }
+
+private fun clearedWindows(clears: List<String>): List<ClearedWindow> = clears.mapNotNull {
+    when (it) {
+        "five_hour" -> ClearedWindow.FiveHour
+        "seven_day" -> ClearedWindow.SevenDay
+        "seven_day_sonnet" -> ClearedWindow.SevenDaySonnet
+        "seven_day_opus" -> ClearedWindow.SevenDayOpus
+        else -> null
     }
 }
 
 /** "5-hour and 7-day limits" from a grant's `clears`; unknown window ids are left out. */
 fun claudeResetClears(clears: List<String>): String {
-    val names = clears.mapNotNull {
+    val names = clearedWindows(clears).map {
         when (it) {
-            "five_hour" -> "5-hour"
-            "seven_day" -> "7-day"
-            "seven_day_sonnet" -> "7-day Sonnet"
-            "seven_day_opus" -> "7-day Opus"
-            else -> null
+            ClearedWindow.FiveHour -> "5-hour"
+            ClearedWindow.SevenDay -> "7-day"
+            ClearedWindow.SevenDaySonnet -> "7-day Sonnet" // i18n-ok: test twin
+            ClearedWindow.SevenDayOpus -> "7-day Opus" // i18n-ok: test twin
         }
     }
     return when (names.size) {
         0 -> "usage limits"
-        1 -> "${names[0]} limit"
+        1 -> "${names[0]} limit" // i18n-ok: test twin
         else -> names.dropLast(1).joinToString(", ") + " and ${names.last()} limits"
+    }
+}
+
+/** [claudeResetClears] in the app's language. */
+@Composable
+private fun localizedClaudeResetClears(clears: List<String>): String {
+    val names = clearedWindows(clears).map {
+        when (it) {
+            ClearedWindow.FiveHour -> localized(Str.usage_clears_five_hour)
+            ClearedWindow.SevenDay -> localized(Str.usage_clears_seven_day)
+            ClearedWindow.SevenDaySonnet -> localized(Str.usage_clears_seven_day_sonnet)
+            ClearedWindow.SevenDayOpus -> localized(Str.usage_clears_seven_day_opus)
+        }
+    }
+    return when (names.size) {
+        0 -> localized(Str.usage_clears_none)
+        1 -> localized(Str.usage_clears_one, names[0])
+        else -> localized(Str.usage_clears_many, names.dropLast(1).joinToString(", "), names.last())
     }
 }
 
@@ -193,9 +280,24 @@ fun claudeResetClears(clears: List<String>): String {
  * and a broker that predates the field sends "monthly".
  */
 fun grokPeriodLabel(periodType: String): String = when (periodType) {
-    "weekly" -> "Weekly credits"
-    "monthly" -> "Monthly credits"
+    "weekly" -> "Weekly credits" // i18n-ok: test twin
+    "monthly" -> "Monthly credits" // i18n-ok: test twin
     else -> "Credits"
+}
+
+/** [grokPeriodLabel] in the app's language. */
+@Composable
+fun localizedGrokPeriodLabel(periodType: String): String = when (periodType) {
+    "weekly" -> localized(Str.usage_grok_weekly_credits)
+    "monthly" -> localized(Str.usage_grok_monthly_credits)
+    else -> localized(Str.usage_credits)
+}
+
+/** Seconds since [fetchedAt] (ISO-8601 or epoch millis), never negative; null when missing or unparseable. */
+private fun fetchedAgoSeconds(fetchedAt: String?, now: Long): Long? {
+    val s = fetchedAt?.takeIf { it.isNotBlank() } ?: return null
+    val ms = s.toLongOrNull() ?: parseIsoMillis(s) ?: return null
+    return ((now - ms) / 1000L).coerceAtLeast(0L)
 }
 
 /**
@@ -203,14 +305,24 @@ fun grokPeriodLabel(periodType: String): String = when (periodType) {
  * numeric epoch-millis string). Blank when missing/unparseable — the card then omits the line.
  */
 fun formatFetchedAt(fetchedAt: String?, now: Long = nowMs()): String {
-    val s = fetchedAt?.takeIf { it.isNotBlank() } ?: return ""
-    val ms = s.toLongOrNull() ?: parseIsoMillis(s) ?: return ""
-    val diffSec = ((now - ms) / 1000L).coerceAtLeast(0L)
+    val diffSec = fetchedAgoSeconds(fetchedAt, now) ?: return ""
     return when {
         diffSec < 60L -> "as of just now"
         diffSec < 3600L -> "as of ${diffSec / 60}m ago"
         diffSec < 86_400L -> "as of ${diffSec / 3600}h ago"
         else -> "as of ${diffSec / 86_400}d ago"
+    }
+}
+
+/** [formatFetchedAt] in the app's language. */
+@Composable
+fun localizedFetchedAt(fetchedAt: String?, now: Long = nowMs()): String {
+    val diffSec = fetchedAgoSeconds(fetchedAt, now) ?: return ""
+    return when {
+        diffSec < 60L -> localized(Str.usage_as_of_now)
+        diffSec < 3600L -> localized(Str.usage_as_of_minutes, diffSec / 60)
+        diffSec < 86_400L -> localized(Str.usage_as_of_hours, diffSec / 3600)
+        else -> localized(Str.usage_as_of_days, diffSec / 86_400)
     }
 }
 
@@ -221,16 +333,51 @@ fun formatFetchedAt(fetchedAt: String?, now: Long = nowMs()): String {
  */
 private fun parseIsoMillis(s: String): Long? = parseChatTs(s)
 
-private fun formatResetFromEpochMillis(ms: Long, now: Long): String {
+/** When a window resets, before it is worded: soon, in [In.hours] h [In.minutes] m, or on a calendar [On.day]. */
+internal sealed interface ResetTime {
+    data object Soon : ResetTime
+    data class In(val hours: Int, val minutes: Int) : ResetTime
+    data class On(val day: String) : ResetTime
+}
+
+/** Null when there is nothing to say (no time, or a date that can't be labelled). */
+private fun resetTimeFromEpochMillis(ms: Long, now: Long): ResetTime? {
     val diff = ms - now
-    if (diff <= 0) return "resets soon"
+    if (diff <= 0) return ResetTime.Soon
     if (diff < MS_PER_DAY) {
-        val h = (diff / MS_PER_HOUR).toInt()
-        val m = ((diff % MS_PER_HOUR) / MS_PER_MINUTE).toInt()
-        return if (h > 0) "resets in ${h}h ${m}m" else "resets in ${m}m"
+        return ResetTime.In((diff / MS_PER_HOUR).toInt(), ((diff % MS_PER_HOUR) / MS_PER_MINUTE).toInt())
     }
     val label = shortMonthDayLabel(ms)
-    return if (label.isEmpty()) "" else "resets $label"
+    return if (label.isEmpty()) null else ResetTime.On(label)
+}
+
+internal fun resetTimeIso(resetsAt: String?, now: Long): ResetTime? {
+    val s = resetsAt?.takeIf { it.isNotBlank() } ?: return null
+    val ms = s.toLongOrNull() ?: parseIsoMillis(s) ?: return null
+    return resetTimeFromEpochMillis(ms, now)
+}
+
+internal fun resetTimeEpochSeconds(resetsAt: Double?, now: Long): ResetTime? {
+    val secs = resetsAt ?: return null
+    return resetTimeFromEpochMillis((secs * 1000.0).toLong(), now)
+}
+
+private fun englishReset(r: ResetTime?): String = when (r) {
+    null -> ""
+    ResetTime.Soon -> "resets soon"
+    is ResetTime.In -> if (r.hours > 0) "resets in ${r.hours}h ${r.minutes}m" else "resets in ${r.minutes}m"
+    is ResetTime.On -> "resets ${r.day}"
+}
+
+/** "resets in 1h 24m" / "resets soon" / "resets Oct 22" in the app's language; "" for null. */
+@Composable
+internal fun localizedReset(r: ResetTime?): String = when (r) {
+    null -> ""
+    ResetTime.Soon -> localized(Str.usage_resets_soon)
+    is ResetTime.In ->
+        if (r.hours > 0) localized(Str.usage_resets_in_hm, r.hours, r.minutes)
+        else localized(Str.usage_resets_in_m, r.minutes)
+    is ResetTime.On -> localized(Str.usage_resets_on, r.day)
 }
 
 private fun clampPct(v: Double): Double = v.coerceIn(0.0, 100.0)
@@ -345,7 +492,7 @@ fun UsageWindowRow(label: String, usedPct: Double, resetLine: String) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(label, color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.weight(1f))
-            Text("${pct.roundToInt()}% used", color = cs.onSurface, fontSize = 12.sp)
+            Text(localized(Str.usage_percent_used, pct.roundToInt()), color = cs.onSurface, fontSize = 12.sp)
         }
         LinearProgressIndicator(
             progress = { (pct / 100.0).toFloat().coerceIn(0f, 1f) },
@@ -393,7 +540,7 @@ fun accountCardTag(base: String, accountId: String?): String =
 @Composable
 private fun UsageUnavailable(provider: String, error: String?, errorCode: String?, onSignIn: (() -> Unit)?, signInTag: String) {
     if (errorCode == SIGN_IN_EXPIRED) SignInExpiredNotice(provider, errorCode, onSignIn, signInTag)
-    else Text(error ?: "Not available", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+    else Text(error ?: localized(Str.usage_not_available), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
 }
 
 /**
@@ -405,17 +552,18 @@ private fun UsageUnavailable(provider: String, error: String?, errorCode: String
 private fun SignInExpiredNotice(provider: String, errorCode: String?, onSignIn: (() -> Unit)?, signInTag: String) {
     if (errorCode != SIGN_IN_EXPIRED) return
     val cs = MaterialTheme.colorScheme
-    Text("$provider sign-in expired", color = cs.onSurface, fontSize = 12.sp)
+    Text(localized(Str.usage_sign_in_expired, provider), color = cs.onSurface, fontSize = 12.sp)
     if (onSignIn != null) {
         OutlinedButton(onClick = onSignIn, modifier = Modifier.padding(top = Space.sm).testTag(signInTag)) {
-            Text("Sign in again", color = cs.onSurface, fontSize = 13.sp)
+            Text(localized(Str.usage_sign_in_again), color = cs.onSurface, fontSize = 13.sp)
         }
     }
 }
 
 /** Label for the system login's card: only needed to tell it apart from the agent's other accounts. */
+@Composable
 private fun systemCardLabel(usage: UsageResponse?, agent: String): String? =
-    if (usage?.accounts?.any { it.agent == agent } == true) "System login" else null
+    if (usage?.accounts?.any { it.agent == agent } == true) localized(Str.accounts_system_login) else null
 
 // ─── Provider cards ─────────────────────────────────────────────────────────────────────────────
 
@@ -443,11 +591,11 @@ fun ClaudeUsageCard(
     // Un-keyed for the same reason as CodexUsageCard: the note outlives the refreshed `claude`.
     var redeeming by remember { mutableStateOf(false) }
     var showDialog by remember { mutableStateOf(false) }
-    var note by remember { mutableStateOf<String?>(null) }
+    var redeemed by remember { mutableStateOf<Redeemed<ClaudeResetResult>?>(null) }
     val resets = claude?.resets?.takeIf { it.resetsLeft > 0 }
     UsageCard(
         title = accountCardTitle("Claude", account),
-        subtitle = "Pro plan",
+        subtitle = localized(Str.usage_pro_plan),
         enabled = claude != null,
         modifier = Modifier.testTag(accountCardTag("usage_card_claude", accountId)),
         asOf = asOf,
@@ -458,16 +606,16 @@ fun ClaudeUsageCard(
         if (claude == null) {
             UsageUnavailable("Claude", error, errorCode, onSignIn, accountCardTag("usage_sign_in_claude", accountId))
         } else {
-            UsageWindowRow("5-hour window", claude.fiveHour.used, formatResetIso(claude.fiveHour.resetsAt, now))
-            UsageWindowRow("7-day window", claude.sevenDay.used, formatResetIso(claude.sevenDay.resetsAt, now))
-            claude.sevenDaySonnet?.let { UsageWindowRow("7-day Sonnet", it.used, formatResetIso(it.resetsAt, now)) }
-            claude.sevenDayFable?.let { UsageWindowRow("7-day Fable", it.used, formatResetIso(it.resetsAt, now)) }
+            UsageWindowRow(localized(Str.usage_five_hour_window), claude.fiveHour.used, localizedResetIso(claude.fiveHour.resetsAt, now))
+            UsageWindowRow(localized(Str.usage_seven_day_window), claude.sevenDay.used, localizedResetIso(claude.sevenDay.resetsAt, now))
+            claude.sevenDaySonnet?.let { UsageWindowRow(localized(Str.usage_seven_day_sonnet), it.used, localizedResetIso(it.resetsAt, now)) }
+            claude.sevenDayFable?.let { UsageWindowRow(localized(Str.usage_seven_day_fable), it.used, localizedResetIso(it.resetsAt, now)) }
             claude.extraUsage?.takeIf { it.enabled }?.let { e ->
-                UsageFooterRow("Extra usage", "${dollars(e.usedCredits)} / ${dollars(e.monthlyLimit)}")
+                UsageFooterRow(localized(Str.usage_extra_usage), "${dollars(e.usedCredits)} / ${dollars(e.monthlyLimit)}")
             }
             if (resets != null) {
-                UsageFooterRow("🎟️ Resets banked", claudeResetsValue(resets))
-                val hint = claudeResetBlockedHint(resets)
+                UsageFooterRow(localized(Str.usage_resets_banked), localizedClaudeResetsValue(resets))
+                val hint = localizedClaudeResetBlockedHint(resets)
                 if (hint != null) {
                     Text(
                         hint,
@@ -481,13 +629,13 @@ fun ClaudeUsageCard(
                         enabled = !redeeming,
                         modifier = Modifier.padding(top = Space.sm).testTag("claude_redeem_button"),
                     ) {
-                        Text(if (redeeming) "Redeeming…" else "Use a reset", color = cs.onSurface, fontSize = 13.sp)
+                        Text(localized(if (redeeming) Str.usage_redeeming else Str.usage_use_a_reset), color = cs.onSurface, fontSize = 13.sp)
                     }
                 }
             }
-            note?.let {
+            redeemed?.let {
                 Text(
-                    it,
+                    localizedClaudeResetNote(it.result),
                     color = cs.onSurfaceVariant,
                     fontSize = 11.sp,
                     modifier = Modifier.padding(top = Space.xs).testTag("claude_redeem_note"),
@@ -500,12 +648,9 @@ fun ClaudeUsageCard(
         val grant = resets.grants.firstOrNull { it.id == resets.nextGrantId }
         AlertDialog(
             onDismissRequest = { showDialog = false },
-            title = { Text("Use a banked reset?") },
+            title = { Text(localized(Str.usage_redeem_title)) },
             text = {
-                Text(
-                    "Refills your ${claudeResetClears(grant?.clears.orEmpty())} now. " +
-                        "Spends 1 of ${resets.resetsLeft}; your weekly reset day stays the same.",
-                )
+                Text(localized(Str.usage_claude_redeem_text, localizedClaudeResetClears(grant?.clears.orEmpty()), resets.resetsLeft))
             },
             confirmButton = {
                 TextButton(
@@ -514,36 +659,52 @@ fun ClaudeUsageCard(
                         scope.launch {
                             redeeming = true
                             val r = onRedeem?.invoke()
-                            note = claudeResetNote(r)
+                            redeemed = Redeemed(r)
                             redeeming = false
                             onRedeemed()
                         }
                     },
                     modifier = Modifier.testTag("claude_redeem_confirm"),
-                ) { Text("Use reset", color = cs.primary) }
+                ) { Text(localized(Str.usage_use_reset), color = cs.primary) }
             },
             dismissButton = {
                 TextButton(
                     onClick = { showDialog = false },
                     modifier = Modifier.testTag("claude_redeem_cancel"),
-                ) { Text("Cancel") }
+                ) { Text(localized(Str.usage_cancel)) }
             },
         )
     }
 }
 
-/** The transient inline status line after a Claude redeem attempt. */
+/** A redeem's answer, kept so its note is worded at render time, in the app's language (null result = it failed). */
+private class Redeemed<T>(val result: T?)
+
+/** The transient inline status line after a Claude redeem attempt. English: the tests' twin of [localizedClaudeResetNote]. */
 fun claudeResetNote(r: ClaudeResetResult?): String {
     if (r == null) return "Reset failed"
     return when (r.result) {
         "reset" -> "✓ Limits reset" + (r.resetsLeft?.let { " · $it left" } ?: "")
-        "not_limited" -> "Your limits were already clear — nothing was used"
-        "already_used" -> "That reset was already used"
-        "cooldown" -> "A reset is still going through — try again in a minute"
-        "ineligible", "no_reset" -> "No reset available to use"
-        "unavailable" -> "Couldn't use a reset right now — try again later"
-        else -> "Reset request completed"
+        "not_limited" -> "Your limits were already clear — nothing was used" // i18n-ok: test twin
+        "already_used" -> "That reset was already used" // i18n-ok: test twin
+        "cooldown" -> "A reset is still going through — try again in a minute" // i18n-ok: test twin
+        "ineligible", "no_reset" -> "No reset available to use" // i18n-ok: test twin
+        "unavailable" -> "Couldn't use a reset right now — try again later" // i18n-ok: test twin
+        else -> "Reset request completed" // i18n-ok: test twin
     }
+}
+
+/** [claudeResetNote] in the app's language. */
+@Composable
+fun localizedClaudeResetNote(r: ClaudeResetResult?): String = when (r?.result) {
+    null -> localized(Str.usage_reset_failed)
+    "reset" -> r?.resetsLeft?.let { localized(Str.usage_claude_reset_done_left, it) } ?: localized(Str.usage_claude_reset_done)
+    "not_limited" -> localized(Str.usage_claude_not_limited)
+    "already_used" -> localized(Str.usage_claude_already_used)
+    "cooldown" -> localized(Str.usage_claude_cooldown)
+    "ineligible", "no_reset" -> localized(Str.usage_claude_no_reset)
+    "unavailable" -> localized(Str.usage_claude_unavailable)
+    else -> localized(Str.usage_reset_completed)
 }
 
 /**
@@ -576,10 +737,10 @@ fun CodexUsageCard(
     // are similarly un-keyed local state that outlives the re-fetch).
     var redeeming by remember { mutableStateOf(false) }
     var showDialog by remember { mutableStateOf(false) }
-    var note by remember { mutableStateOf<String?>(null) }
+    var redeemed by remember { mutableStateOf<Redeemed<CodexResetResult>?>(null) }
     UsageCard(
         title = accountCardTitle("Codex", account),
-        subtitle = codex?.plan?.takeIf { it.isNotBlank() } ?: "unknown",
+        subtitle = codex?.plan?.takeIf { it.isNotBlank() } ?: localized(Str.usage_unknown),
         enabled = codex != null,
         modifier = Modifier.testTag(accountCardTag("usage_card_codex", accountId)),
         asOf = asOf,
@@ -594,7 +755,7 @@ fun CodexUsageCard(
                         .background(cs.error.copy(alpha = 0.1f))
                         .padding(horizontal = Space.sm, vertical = 2.dp),
                 ) {
-                    Text("limit reached", color = cs.error, fontSize = 10.sp, fontWeight = FontWeight.Medium)
+                    Text(localized(Str.usage_limit_reached_badge), color = cs.error, fontSize = 10.sp, fontWeight = FontWeight.Medium)
                 }
             }
         } else null,
@@ -602,37 +763,38 @@ fun CodexUsageCard(
         if (codex == null) {
             UsageUnavailable("Codex", error, errorCode, onSignIn, accountCardTag("usage_sign_in_codex", accountId))
         } else {
+            val usageWindow = localized(Str.usage_window)
             codex.windows.forEach { window ->
                 UsageWindowRow(
-                    window.label.ifBlank { "Usage window" },
+                    window.label.ifBlank { usageWindow },
                     window.used,
-                    formatResetEpochSeconds(window.resetsAt, now),
+                    localizedResetEpochSeconds(window.resetsAt, now),
                 )
             }
             // Per-model gates (e.g. Astra), independent of the windows above.
             codex.models.forEach { model ->
                 UsageFooterRow(
                     model.label.ifBlank { model.id },
-                    codexModelStatus(model, now),
+                    localizedCodexModelStatus(model, now),
                     valueColor = if (model.available) semantics.success else semantics.warning,
                 )
             }
             codex.credits?.takeIf { it.hasCredits }?.let { cr ->
-                UsageFooterRow("Credits balance", "${cr.balance} credits")
+                UsageFooterRow(localized(Str.usage_credits_balance), localized(Str.usage_credits_amount, cr.balance))
             }
-            UsageFooterRow("🎟️ Resets banked", "${codex.resetCredits}")
+            UsageFooterRow(localized(Str.usage_resets_banked), "${codex.resetCredits}")
             if (codex.resetCredits > 0 && onRedeem != null) {
                 OutlinedButton(
                     onClick = { showDialog = true },
                     enabled = !redeeming,
                     modifier = Modifier.padding(top = Space.sm).testTag("codex_redeem_button"),
                 ) {
-                    Text(if (redeeming) "Redeeming…" else "Use a reset", color = cs.onSurface, fontSize = 13.sp)
+                    Text(localized(if (redeeming) Str.usage_redeeming else Str.usage_use_a_reset), color = cs.onSurface, fontSize = 13.sp)
                 }
             }
-            note?.let {
+            redeemed?.let {
                 Text(
-                    it,
+                    localizedCodexResetNote(it.result),
                     color = cs.onSurfaceVariant,
                     fontSize = 11.sp,
                     modifier = Modifier.padding(top = Space.xs).testTag("codex_redeem_note"),
@@ -644,8 +806,8 @@ fun CodexUsageCard(
     if (showDialog && codex != null) {
         AlertDialog(
             onDismissRequest = { showDialog = false },
-            title = { Text("Use a banked reset?") },
-            text = { Text("Spends 1 of ${codex.resetCredits} to clear your rate-limit windows now.") },
+            title = { Text(localized(Str.usage_redeem_title)) },
+            text = { Text(localized(Str.usage_codex_redeem_text, codex.resetCredits)) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -653,34 +815,45 @@ fun CodexUsageCard(
                         scope.launch {
                             redeeming = true
                             val r = onRedeem?.invoke()
-                            note = codexResetNote(r)
+                            redeemed = Redeemed(r)
                             redeeming = false
                             onRedeemed()
                         }
                     },
                     modifier = Modifier.testTag("codex_redeem_confirm"),
-                ) { Text("Use reset", color = cs.primary) }
+                ) { Text(localized(Str.usage_use_reset), color = cs.primary) }
             },
             dismissButton = {
                 TextButton(
                     onClick = { showDialog = false },
                     modifier = Modifier.testTag("codex_redeem_cancel"),
-                ) { Text("Cancel") }
+                ) { Text(localized(Str.usage_cancel)) }
             },
         )
     }
 }
 
-/** Both apps' `codexResetNote` — the transient inline status line after a redeem attempt. */
+/** Both apps' `codexResetNote` — the transient inline status line after a redeem attempt. English: the tests' twin. */
 fun codexResetNote(r: CodexResetResult?): String {
     if (r == null) return "Reset failed"
     return when (r.code) {
         "reset" -> "✓ Reset — cleared ${r.windowsReset} window${if (r.windowsReset == 1) "" else "s"}"
-        "nothing_to_reset" -> "Nothing to reset right now"
-        "no_credit" -> "No banked resets left"
-        "already_redeemed" -> "That reset was already redeemed"
-        else -> "Reset request completed"
+        "nothing_to_reset" -> "Nothing to reset right now" // i18n-ok: test twin
+        "no_credit" -> "No banked resets left" // i18n-ok: test twin
+        "already_redeemed" -> "That reset was already redeemed" // i18n-ok: test twin
+        else -> "Reset request completed" // i18n-ok: test twin
     }
+}
+
+/** [codexResetNote] in the app's language. */
+@Composable
+fun localizedCodexResetNote(r: CodexResetResult?): String = when (r?.code) {
+    null -> localized(Str.usage_reset_failed)
+    "reset" -> (r?.windowsReset ?: 0).let { localizedPlural(Plurals.usage_codex_reset_done, it, it) }
+    "nothing_to_reset" -> localized(Str.usage_codex_nothing)
+    "no_credit" -> localized(Str.usage_codex_no_credit)
+    "already_redeemed" -> localized(Str.usage_codex_already_redeemed)
+    else -> localized(Str.usage_reset_completed)
 }
 
 @Composable
@@ -698,7 +871,7 @@ fun CursorUsageCard(
     val cs = MaterialTheme.colorScheme
     UsageCard(
         title = accountCardTitle("Cursor", account),
-        subtitle = "Billing cycle",
+        subtitle = localized(Str.usage_billing_cycle),
         enabled = cursor != null,
         modifier = Modifier.testTag(accountCardTag("usage_card_cursor", accountId)),
         asOf = asOf,
@@ -709,9 +882,9 @@ fun CursorUsageCard(
         if (cursor == null) {
             UsageUnavailable("Cursor", error, errorCode, onSignIn, accountCardTag("usage_sign_in_cursor", accountId))
         } else {
-            UsageWindowRow("Usage", cursor.totalPercentUsed, formatResetIso(cursor.billingCycleEnd, now))
+            UsageWindowRow(localized(Str.usage_usage), cursor.totalPercentUsed, localizedResetIso(cursor.billingCycleEnd, now))
             if (cursor.spendAvailable) {
-                UsageFooterRow("Spend", "${money(cursor.totalSpendCents)} / ${money(cursor.includedCents)} included")
+                UsageFooterRow(localized(Str.usage_spend), localized(Str.usage_spend_included, money(cursor.totalSpendCents), money(cursor.includedCents)))
             }
             SignInExpiredNotice("Cursor", errorCode, onSignIn, accountCardTag("usage_sign_in_cursor", accountId))
         }
@@ -736,11 +909,11 @@ fun OpenCodeUsageCard(
     val plan = opencode?.plan
     val go = plan?.go?.takeIf { plan.status == "active" }
     UsageCard(
-        title = "opencode",
+        title = "opencode", // i18n-ok: brand
         subtitle = when {
             go != null -> listOfNotNull("OpenCode Go", plan.email?.ifBlank { null }).joinToString(" · ")
             plan != null -> "OpenCode"
-            else -> "Local usage · all time"
+            else -> localized(Str.usage_local_all_time)
         },
         enabled = opencode != null,
         modifier = Modifier.testTag("usage_card_opencode"),
@@ -751,33 +924,34 @@ fun OpenCodeUsageCard(
         badge = opencode?.takeIf { plan == null }?.let { u -> { Text(dollars(u.totalCostUsd), color = cs.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp) } },
     ) {
         if (opencode == null) {
-            Text(error ?: "Not available", color = cs.onSurfaceVariant, fontSize = 12.sp)
+            Text(error ?: localized(Str.usage_not_available), color = cs.onSurfaceVariant, fontSize = 12.sp)
             return@UsageCard
         }
         if (go != null) {
-            OpenCodeGoWindow("5 hours", go.rolling, now)
-            OpenCodeGoWindow("Weekly", go.weekly, now)
-            OpenCodeGoWindow("Monthly", go.monthly, now)
+            OpenCodeGoWindow(localized(Str.usage_five_hours), go.rolling, now)
+            OpenCodeGoWindow(localized(Str.usage_weekly), go.weekly, now)
+            OpenCodeGoWindow(localized(Str.usage_monthly), go.monthly, now)
         } else if (plan != null) {
             OpenCodePlanLine(plan, onSignIn)
         }
         plan?.free?.let { free ->
-            val reset = freeResetLabel(free.resetsAtIso, now)
+            val reset = localizedFreeResetLabel(free.resetsAtIso, now)
             UsageFooterRow(
-                "Free models",
-                listOf(if (free.reached) "Limit reached" else "Daily limit", reset).filter { it.isNotEmpty() }.joinToString(" · "),
+                localized(Str.usage_free_models),
+                listOf(localized(if (free.reached) Str.usage_limit_reached else Str.usage_daily_limit), reset)
+                    .filter { it.isNotEmpty() }.joinToString(" · "),
                 valueColor = if (free.reached) cs.error else null,
             )
         }
         if (plan == null) {
-            UsageFooterRow("Input", tokens(opencode.inputTokens))
-            UsageFooterRow("Output", tokens(opencode.outputTokens))
-            UsageFooterRow("Cache read", tokens(opencode.cacheReadTokens))
-            UsageFooterRow("Cache write", tokens(opencode.cacheWriteTokens))
+            UsageFooterRow(localized(Str.usage_input), tokens(opencode.inputTokens))
+            UsageFooterRow(localized(Str.usage_output), tokens(opencode.outputTokens))
+            UsageFooterRow(localized(Str.usage_cache_read), tokens(opencode.cacheReadTokens))
+            UsageFooterRow(localized(Str.usage_cache_write), tokens(opencode.cacheWriteTokens))
         } else {
-            UsageFooterRow("Local spend", dollars(opencode.totalCostUsd))
+            UsageFooterRow(localized(Str.usage_local_spend), dollars(opencode.totalCostUsd))
         }
-        UsageFooterRow("Activity", "${opencode.sessions} sessions · ${opencode.messages} messages")
+        UsageFooterRow(localized(Str.usage_activity), localized(Str.usage_activity_value, opencode.sessions, opencode.messages))
     }
 }
 
@@ -786,7 +960,28 @@ fun OpenCodeUsageCard(
  * on the next local day (00:00 UTC is 03:00 in Istanbul). "" when [iso] is unreadable.
  */
 internal fun freeResetLabel(iso: String?, now: Long, offsetMs: Long? = null): String {
-    val at = iso?.let { parseIsoMillis(it) } ?: return ""
+    val (days, hhmm) = freeResetDay(iso, now, offsetMs) ?: return ""
+    return when (days) {
+        0L -> "resets $hhmm"
+        1L -> "resets tomorrow $hhmm"
+        else -> formatResetIso(iso, now)
+    }
+}
+
+/** [freeResetLabel] in the app's language. */
+@Composable
+internal fun localizedFreeResetLabel(iso: String?, now: Long): String {
+    val (days, hhmm) = freeResetDay(iso, now, null) ?: return ""
+    return when (days) {
+        0L -> localized(Str.usage_resets_on, hhmm)
+        1L -> localized(Str.usage_resets_tomorrow, hhmm)
+        else -> localizedResetIso(iso, now)
+    }
+}
+
+/** How many local days after today [iso] falls (0 today, 1 tomorrow …) and its local HH:mm; null when unreadable. */
+private fun freeResetDay(iso: String?, now: Long, offsetMs: Long?): Pair<Long, String>? {
+    val at = iso?.let { parseIsoMillis(it) } ?: return null
     val offset = offsetMs ?: localUtcOffsetMs(at)
     val day = 86_400_000L
     val local = at + offset
@@ -794,28 +989,26 @@ internal fun freeResetLabel(iso: String?, now: Long, offsetMs: Long? = null): St
     val nowDay = (now + offset).floorDiv(day)
     val minute = local.mod(day) / 60_000L
     val hhmm = "${(minute / 60).toString().padStart(2, '0')}:${(minute % 60).toString().padStart(2, '0')}"
-    return when (atDay) {
-        nowDay -> "resets $hhmm"
-        nowDay + 1 -> "resets tomorrow $hhmm"
-        else -> formatResetIso(iso, now)
-    }
+    return (atDay - nowDay) to hhmm
 }
 
 @Composable
 private fun OpenCodeGoWindow(label: String, meter: OpenCodeGoMeter, now: Long) {
-    val reset = formatResetIso(meter.resetsAtIso, now)
-    UsageWindowRow(label, meter.percent, if (meter.limited) listOf("Limit reached", reset).filter { it.isNotEmpty() }.joinToString(" · ") else reset)
+    val reset = localizedResetIso(meter.resetsAtIso, now)
+    val limitReached = localized(Str.usage_limit_reached)
+    UsageWindowRow(label, meter.percent, if (meter.limited) listOf(limitReached, reset).filter { it.isNotEmpty() }.joinToString(" · ") else reset)
 }
 
 /** The plan's one line when there are no meters: no Go plan, signed out, expired (with a sign-in), or unreadable. */
 @Composable
 private fun OpenCodePlanLine(plan: OpenCodePlan, onSignIn: (() -> Unit)?) {
     val cs = MaterialTheme.colorScheme
+    val error = plan.error
     val (line, action) = when (plan.status) {
-        "none" -> "No OpenCode Go plan." to null
-        "signed_out" -> "Not signed in to OpenCode." to "Sign in"
-        "expired" -> "OpenCode sign-in expired." to "Sign in again"
-        else -> "Couldn't read OpenCode Go limits${plan.error?.let { ": $it" } ?: "."}" to null
+        "none" -> localized(Str.usage_opencode_no_plan) to null
+        "signed_out" -> localized(Str.usage_opencode_signed_out) to localized(Str.usage_sign_in)
+        "expired" -> localized(Str.usage_opencode_expired) to localized(Str.usage_sign_in_again)
+        else -> (if (error != null) localized(Str.usage_opencode_read_failed_reason, error) else localized(Str.usage_opencode_read_failed)) to null
     }
     Text(line, color = cs.onSurface, fontSize = 12.sp)
     if (action != null && onSignIn != null) {
@@ -840,7 +1033,7 @@ fun GrokUsageCard(
     val cs = MaterialTheme.colorScheme
     UsageCard(
         title = accountCardTitle("Grok", account),
-        subtitle = grok?.plan?.ifBlank { null } ?: "unknown",
+        subtitle = grok?.plan?.ifBlank { null } ?: localized(Str.usage_unknown),
         enabled = grok != null,
         modifier = Modifier.testTag(accountCardTag("usage_card_grok", accountId)),
         asOf = asOf,
@@ -851,21 +1044,21 @@ fun GrokUsageCard(
         if (grok == null) {
             UsageUnavailable("Grok", error, errorCode, onSignIn, accountCardTag("usage_sign_in_grok", accountId))
         } else {
-            UsageWindowRow(grokPeriodLabel(grok.periodType), grok.percentUsed, formatResetIso(grok.billingPeriodEnd, now))
+            UsageWindowRow(localizedGrokPeriodLabel(grok.periodType), grok.percentUsed, localizedResetIso(grok.billingPeriodEnd, now))
             // Only worth their own rows when xAI splits the pool across more than one product.
             if (grok.products.size > 1) {
                 grok.products.forEach { product ->
-                    UsageFooterRow(product.product, "${product.percentUsed.roundToInt()}% used")
+                    UsageFooterRow(product.product, localized(Str.usage_percent_used, product.percentUsed.roundToInt()))
                 }
             }
             if (grok.monthlyLimit > 0) {
-                UsageFooterRow("Credits", "${grok.used.toLong()} / ${grok.monthlyLimit.toLong()}")
+                UsageFooterRow(localized(Str.usage_credits), "${grok.used.toLong()} / ${grok.monthlyLimit.toLong()}")
             }
             if (grok.onDemandCap > 0) {
-                UsageFooterRow("On-demand", "${grok.onDemandUsed.toLong()} / ${grok.onDemandCap.toLong()}")
+                UsageFooterRow(localized(Str.usage_on_demand), "${grok.onDemandUsed.toLong()} / ${grok.onDemandCap.toLong()}")
             }
             if (grok.prepaidBalance > 0) {
-                UsageFooterRow("Prepaid balance", "${grok.prepaidBalance.toLong()}")
+                UsageFooterRow(localized(Str.usage_prepaid_balance), "${grok.prepaidBalance.toLong()}")
             }
             SignInExpiredNotice("Grok", errorCode, onSignIn, accountCardTag("usage_sign_in_grok", accountId))
         }
@@ -890,7 +1083,7 @@ fun AntigravityUsageCard(
 ) {
     UsageCard(
         title = accountCardTitle("Antigravity", account),
-        subtitle = "unknown",
+        subtitle = localized(Str.usage_unknown),
         enabled = antigravity != null,
         modifier = Modifier.testTag("usage_card_antigravity"),
         asOf = asOf,
@@ -902,10 +1095,11 @@ fun AntigravityUsageCard(
             UsageUnavailable("Antigravity", error, errorCode, onSignIn, "usage_sign_in_antigravity")
         } else {
             if (antigravity.windows.isEmpty()) {
-                Text("Antigravity reported no usage limits for this account.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                Text(localized(Str.usage_antigravity_no_limits), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
             }
+            val usageWindow = localized(Str.usage_window)
             antigravity.windows.forEach { w ->
-                UsageWindowRow(w.label.ifBlank { "Usage window" }, w.used, formatResetIso(w.resetsAt, now))
+                UsageWindowRow(w.label.ifBlank { usageWindow }, w.used, localizedResetIso(w.resetsAt, now))
             }
             SignInExpiredNotice("Antigravity", errorCode, onSignIn, "usage_sign_in_antigravity")
         }
@@ -1070,12 +1264,12 @@ fun UsageScreen(
         Scaffold(
             topBar = {
                 TopAppBar(
-                    title = { Text("Usage", color = cs.onSurface) },
+                    title = { Text(localized(Str.usage_title), color = cs.onSurface) },
                     navigationIcon = {
                         IconButton(onClick = onBack, modifier = Modifier.testTag("usage_back")) {
                             Icon(
                                 Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back",
+                                contentDescription = localized(Str.usage_back),
                                 tint = cs.onSurface,
                             )
                         }
@@ -1089,7 +1283,7 @@ fun UsageScreen(
                             ) {
                                 Icon(
                                     Icons.Filled.Refresh,
-                                    contentDescription = "Refresh",
+                                    contentDescription = localized(Str.usage_refresh),
                                     tint = if (loading) cs.onSurfaceVariant else cs.onSurface,
                                 )
                             }
@@ -1124,7 +1318,7 @@ private fun UsageHeaderRow(loading: Boolean, onBack: () -> Unit, onRefresh: (sus
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            "Usage",
+            localized(Str.usage_title),
             color = cs.onSurface,
             fontSize = 16.sp,
             fontWeight = FontWeight.SemiBold,
@@ -1138,7 +1332,7 @@ private fun UsageHeaderRow(loading: Boolean, onBack: () -> Unit, onRefresh: (sus
             ) {
                 Icon(
                     Icons.Filled.Refresh,
-                    contentDescription = "Refresh",
+                    contentDescription = localized(Str.usage_refresh),
                     tint = if (loading) cs.onSurfaceVariant else cs.onSurface,
                     modifier = Modifier.size(18.dp),
                 )
@@ -1147,7 +1341,7 @@ private fun UsageHeaderRow(loading: Boolean, onBack: () -> Unit, onRefresh: (sus
         IconButton(onClick = onBack, modifier = actionSize.testTag("usage_back")) {
             Icon(
                 Icons.Filled.Close,
-                contentDescription = "Close",
+                contentDescription = localized(Str.usage_close),
                 tint = cs.onSurfaceVariant,
                 modifier = Modifier.size(18.dp),
             )
@@ -1178,7 +1372,7 @@ private fun UsageBody(
             }
             usage == null && !loading -> {
                 Text(
-                    "Unable to load usage data.",
+                    localized(Str.usage_load_failed),
                     color = cs.onSurfaceVariant,
                     modifier = Modifier.align(Alignment.Center).padding(Space.lg),
                 )
@@ -1194,7 +1388,7 @@ private fun UsageBody(
                     ClaudeUsageCard(
                         usage?.claude,
                         usage?.errors?.get("claude"),
-                        asOf = formatFetchedAt(usage?.fetchedAt?.get("claude"), now),
+                        asOf = localizedFetchedAt(usage?.fetchedAt?.get("claude"), now),
                         refreshing = usage?.refreshing?.contains("claude") == true,
                         now = now,
                         onRedeem = onRedeemClaude,
@@ -1208,7 +1402,7 @@ private fun UsageBody(
                         usage?.codex,
                         usage?.errors?.get("codex"),
                         onRedeem = onRedeem,
-                        asOf = formatFetchedAt(usage?.fetchedAt?.get("codex"), now),
+                        asOf = localizedFetchedAt(usage?.fetchedAt?.get("codex"), now),
                         refreshing = usage?.refreshing?.contains("codex") == true,
                         now = now,
                         onRedeemed = onRedeemed,
@@ -1220,7 +1414,7 @@ private fun UsageBody(
                     CursorUsageCard(
                         usage?.cursor,
                         usage?.errors?.get("cursor"),
-                        asOf = formatFetchedAt(usage?.fetchedAt?.get("cursor"), now),
+                        asOf = localizedFetchedAt(usage?.fetchedAt?.get("cursor"), now),
                         refreshing = usage?.refreshing?.contains("cursor") == true,
                         now = now,
                         account = systemCardLabel(usage, "cursor"),
@@ -1231,7 +1425,7 @@ private fun UsageBody(
                     OpenCodeUsageCard(
                         usage?.opencode,
                         usage?.errors?.get("opencode"),
-                        asOf = formatFetchedAt(usage?.fetchedAt?.get("opencode"), now),
+                        asOf = localizedFetchedAt(usage?.fetchedAt?.get("opencode"), now),
                         refreshing = usage?.refreshing?.contains("opencode") == true,
                         now = now,
                         onSignIn = signInFor("opencode"),
@@ -1240,7 +1434,7 @@ private fun UsageBody(
                     GrokUsageCard(
                         usage?.grok,
                         usage?.errors?.get("grok"),
-                        asOf = formatFetchedAt(usage?.fetchedAt?.get("grok"), now),
+                        asOf = localizedFetchedAt(usage?.fetchedAt?.get("grok"), now),
                         refreshing = usage?.refreshing?.contains("grok") == true,
                         now = now,
                         account = systemCardLabel(usage, "grok"),
@@ -1251,7 +1445,7 @@ private fun UsageBody(
                     AntigravityUsageCard(
                         usage?.antigravity,
                         usage?.errors?.get("antigravity"),
-                        asOf = formatFetchedAt(usage?.fetchedAt?.get("antigravity"), now),
+                        asOf = localizedFetchedAt(usage?.fetchedAt?.get("antigravity"), now),
                         refreshing = usage?.refreshing?.contains("antigravity") == true,
                         now = now,
                         account = systemCardLabel(usage, "antigravity"),
@@ -1272,7 +1466,7 @@ private fun UsageBody(
 @Composable
 private fun AccountUsageCards(usage: UsageResponse?, agent: String, now: Long, onSignIn: ((agent: String, accountId: String?) -> Unit)?) {
     usage?.accounts?.filter { it.agent == agent }?.forEach { a ->
-        val asOf = formatFetchedAt(a.fetchedAt, now)
+        val asOf = localizedFetchedAt(a.fetchedAt, now)
         val signIn = onSignIn?.let { { it(agent, a.id) } }
         when {
             !a.quota -> NoQuotaAccountCard(a)
@@ -1296,15 +1490,15 @@ private fun NoQuotaAccountCard(account: AccountUsage) {
     UsageCard(
         title = accountCardTitle(agentTitle(account.agent), account.label),
         subtitle = when {
-            apiKey -> "API key"
-            systemOnly -> "Google account"
-            else -> "No usage limits"
+            apiKey -> localized(Str.accounts_option_api_key)
+            systemOnly -> localized(Str.usage_google_account)
+            else -> localized(Str.usage_no_limits)
         },
         enabled = true,
         modifier = Modifier.testTag(accountCardTag("usage_card_${account.agent}", account.id)),
     ) {
         Text(
-            if (systemOnly) "Usage shows for the system login only." else "Billed per token, so there is no usage limit to show.",
+            localized(if (systemOnly) Str.usage_system_login_only else Str.usage_billed_per_token),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontSize = 12.sp,
         )

@@ -57,11 +57,14 @@ import dev.supermux.workspace.toDomainOrNull
 import kotlinx.browser.document
 import kotlinx.browser.window
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.async
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.configureWebResources
+import dev.supermux.ui.i18n.preloadCatalogs
+import dev.supermux.ui.i18n.versionedResourcePath
 
 /**
  * The browser half of the walkthrough seam — `:shared`'s [WalkthroughSeam] over `:ui`'s
@@ -96,7 +99,8 @@ fun main() {
     document.addEventListener("contextmenu", { it.preventDefault() })
     // stageForBroker puts the Compose resource tree under assets/ so it inherits the broker's
     // immutable cache rule; the runtime must look for it there. The two MUST agree.
-    configureWebResources { resourcePathMapping { path -> "assets/$path" } }
+    // The string catalogs (#123) carry their content version: one release's strings never come from another's cache.
+    configureWebResources { resourcePathMapping { path -> "assets/" + versionedResourcePath(path) } }
     WebAppState.install()
 
     val settings = LocalStorageSettingsStore()
@@ -132,6 +136,9 @@ fun main() {
     val platform = WebPlatform(push = push)
 
     appScope.launch {
+        // #123: the strings load beside the probe below, never after it: the first frame waits only for whichever
+        // finishes last, and the catalogs come from the browser's cache after the first visit.
+        val catalogs = async { preloadCatalogs(uiPrefs.language.first()) }
         val appearanceSeed = uiPrefs.appearance(AppearanceMode.SYSTEM).first()
         val textScaleSeed = uiPrefs.textScale.first()
         // Nothing to drain — the browser had no pre-KMP store under these keys (the Vue app's
@@ -140,6 +147,7 @@ fun main() {
         val shellSeed = uiPrefs.seedShellState()
         val collapsedPathsSeed = uiPrefs.collapsedProjectPaths.first()
         var gate by mutableStateOf(session.probe())
+        catalogs.await()
 
         ComposeViewport(document.body!!) {
             val appearance by uiPrefs.appearance(AppearanceMode.SYSTEM).collectAsState(appearanceSeed)

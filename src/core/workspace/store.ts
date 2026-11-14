@@ -37,6 +37,9 @@ export type AddViewInput = {
  * a route call, not on every agent frame, so the cache would buy nothing and
  * would be one more thing to keep coherent.
  */
+/** A session closed in a workspace (#135): what the New tab page lists to reopen. */
+export type ClosedSession = { id: string; name: string; agent: string; closedAt: string | null }
+
 export class WorkspaceStore {
   constructor(private readonly db: Db) {}
 
@@ -156,6 +159,19 @@ export class WorkspaceStore {
     return this.listViews(workspaceId)
       .filter((v) => v.kind === "chat")
       .map((v) => (v.state as ChatViewState).sessionId)
+  }
+
+  /**
+   * The sessions closed in [workspaceId] (#135), newest first, at most [limit]: its own (workspace_id), archived, and
+   * in none of its chat tabs. Closing a chat tab archives its session and keeps its workspace, so nothing else is kept.
+   */
+  closedSessions(workspaceId: string, limit = 20): ClosedSession[] {
+    const shown = new Set(this.chatSessionIds(workspaceId))
+    const rows = this.db.query(
+      "SELECT id, name, agent, killed_at FROM sessions WHERE workspace_id = ? AND status = 'archived' ORDER BY killed_at DESC, id",
+    ).all(workspaceId) as { id: string; name: string; agent: string; killed_at: string | null }[]
+    return rows.filter((r) => !shown.has(r.id)).slice(0, limit)
+      .map((r) => ({ id: r.id, name: r.name, agent: r.agent, closedAt: r.killed_at }))
   }
 
   addView(workspaceId: string, input: AddViewInput): ViewRecord {

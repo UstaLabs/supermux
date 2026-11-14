@@ -29,10 +29,10 @@ package dev.supermux.desktop.shell
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
@@ -44,8 +44,11 @@ import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
 import java.awt.event.WindowEvent
 import java.awt.event.WindowStateListener
+import java.beans.PropertyChangeListener
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.LayoutCoordinates
@@ -233,7 +236,8 @@ internal fun Window.isNativeMacFullscreen(): Boolean {
 /**
  * Live start padding for title-bar controls: JBR [CustomTitleBar.getLeftInset] when present
  * (updates as traffic lights hide in fullscreen), otherwise the windowed 78.dp fallback or
- * a small gutter when the window is covering the display.
+ * a small gutter when the window is covering the display. Read again when macOS announces a change
+ * ([listenForTitleBarChanges]), then a few times while JBR settles: never on a timer at rest (#132).
  */
 @Composable
 fun rememberMacTrafficLightsInset(
@@ -245,33 +249,75 @@ fun rememberMacTrafficLightsInset(
         fullscreen = window.isNativeMacFullscreen(),
     )
     var inset by remember(window, titleBar) { mutableStateOf(read()) }
+    val scope = rememberCoroutineScope()
     DisposableEffect(window, titleBar) {
-        val refresh = {
+        val settle = SettlingRefresh(scope) {
             val next = read()
             if (next != inset) inset = next
         }
-        val stateListener = WindowStateListener { refresh() }
-        val sizeListener = object : ComponentAdapter() {
-            override fun componentResized(e: ComponentEvent) = refresh()
-            override fun componentMoved(e: ComponentEvent) = refresh()
-        }
-        window.addWindowStateListener(stateListener)
-        window.addComponentListener(sizeListener)
-        refresh()
+        val stop = listenForTitleBarChanges(window, settle::poke)
+        settle.poke()
         onDispose {
-            window.removeWindowStateListener(stateListener)
-            window.removeComponentListener(sizeListener)
-        }
-    }
-    // JBR can apply the new leftInset a tick after the resize/fullscreen animation.
-    LaunchedEffect(window, titleBar) {
-        while (isActive) {
-            val next = read()
-            if (next != inset) inset = next
-            delay(200)
+            stop()
+            settle.cancel()
         }
     }
     return inset
+}
+
+/**
+ * How long after an announced change the inset is read again. JBR applies a new leftInset a tick after
+ * the resize or full-screen animation (about 0.7 s), so the last look comes well after it.
+ */
+internal val MAC_INSET_SETTLE_MS = listOf(100L, 300L, 800L, 1_500L)
+
+/** [refresh] now, and again at each of [settleMs] after the latest [poke]; nothing once that has passed. */
+internal class SettlingRefresh(
+    private val scope: CoroutineScope,
+    private val settleMs: List<Long> = MAC_INSET_SETTLE_MS,
+    private val refresh: () -> Unit,
+) {
+    private var settling: Job? = null
+
+    fun poke() {
+        refresh()
+        settling?.cancel()
+        settling = scope.launch {
+            var at = 0L
+            for (t in settleMs) {
+                delay(t - at)
+                at = t
+                refresh()
+            }
+        }
+    }
+
+    fun cancel() {
+        settling?.cancel()
+    }
+}
+
+/**
+ * Calls [changed] whenever AWT announces something that can move the traffic lights: a resize or move
+ * (full screen in and out ends in one), a window-state change (zoom, minimise), being shown, and another
+ * screen or backing scale (`graphicsConfiguration`). Returns what removes the listeners.
+ */
+internal fun listenForTitleBarChanges(window: Window, changed: () -> Unit): () -> Unit {
+    val state = WindowStateListener { changed() }
+    val bounds = object : ComponentAdapter() {
+        override fun componentResized(e: ComponentEvent) = changed()
+        override fun componentMoved(e: ComponentEvent) = changed()
+        override fun componentShown(e: ComponentEvent) = changed()
+    }
+    val screen = PropertyChangeListener { changed() }
+    window.addWindowStateListener(state)
+    window.addComponentListener(bounds)
+    window.addPropertyChangeListener("graphicsConfiguration", screen)
+    return {
+        window.removeWindowStateListener(state)
+        window.removeComponentListener(bounds)
+        window.removePropertyChangeListener("graphicsConfiguration", screen)
+    }
 }
 
 /**

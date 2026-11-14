@@ -63,8 +63,10 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.widgets.submitOnEnter
+import dev.supermux.ui.i18n.localized
 
 /** "Search settings": the wash, a search glyph, a clear button while there is a query, Escape clears. */
 @Composable
@@ -72,7 +74,7 @@ fun KitSearchField(
     query: String,
     onQueryChange: (String) -> Unit,
     modifier: Modifier = Modifier,
-    hint: String = "Search settings",
+    hint: String = localized(Str.machine_kit_search_settings),
     shortcut: String? = null,
     focusRequester: FocusRequester = remember { FocusRequester() },
 ) {
@@ -81,6 +83,7 @@ fun KitSearchField(
     val shape = RoundedCornerShape(if (m.phone) 9.dp else 7.dp)
     val size = if (m.phone) 15.sp else 12.5.sp
     val clearSrc = remember { MutableInteractionSource() }
+    val clearSearch = localized(Str.machine_kit_clear_search)
     BasicTextField(
         value = query,
         onValueChange = onQueryChange,
@@ -116,7 +119,7 @@ fun KitSearchField(
                     // Compose already widens a small touch target by itself.
                     query.isNotEmpty() -> Icon(
                         KitGlyphs.Close,
-                        contentDescription = "Clear search",
+                        contentDescription = clearSearch,
                         tint = c.faint,
                         modifier = Modifier
                             .clickable(interactionSource = clearSrc, indication = null, role = Role.Button) {
@@ -251,7 +254,7 @@ fun KitTextField(
                             }
                             if (secret) {
                                 TextActionBase(
-                                    if (shown) "Hide" else "Show",
+                                    if (shown) localized(Str.machine_kit_hide) else localized(Str.machine_kit_show),
                                     onClick = {
                                         refocus = focused || actionFocused
                                         shown = !shown
@@ -311,7 +314,7 @@ fun KitCopyCommand(command: String, modifier: Modifier = Modifier) {
     ) {
         SelectionContainer(Modifier.weight(1f)) { Text(command, fontFamily = MonoFontFamily, fontSize = 12.5.sp, color = c.text) }
         TextActionBase(
-            if (copied) "Copied" else "Copy",
+            if (copied) localized(Str.machine_kit_copied) else localized(Str.machine_kit_copy),
             onClick = {
                 platform.copyToClipboard(command)
                 copied = true

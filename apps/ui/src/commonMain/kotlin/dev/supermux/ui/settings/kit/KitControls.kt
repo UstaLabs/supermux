@@ -80,7 +80,9 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.ui.adaptive.LocalPointerAvailable
+import dev.supermux.ui.i18n.Str
 import kotlin.math.roundToInt
+import dev.supermux.ui.i18n.localized
 
 /**
  * On touch (no pointer) a standalone control's hit target grows to 48 dp without changing how it looks. Rows are
@@ -206,8 +208,8 @@ fun KitCheckbox(
 @Composable
 internal fun KitToggleTrack(checked: Boolean, enabled: Boolean, modifier: Modifier = Modifier) {
     val c = kitColors()
-    val knobX by animateDpAsState(if (checked) 14.dp else 2.dp, tween(120), label = "kit-toggle-knob")
-    val track by animateColorAsState(if (checked) c.accent else c.line, tween(120), label = "kit-toggle-track")
+    val knobX by animateDpAsState(if (checked) 14.dp else 2.dp, tween(120), label = "kit-toggle-knob") // i18n-ok: animation debug label
+    val track by animateColorAsState(if (checked) c.accent else c.line, tween(120), label = "kit-toggle-track") // i18n-ok: animation debug label
     Box(
         modifier
             .size(30.dp, 18.dp)
@@ -426,8 +428,10 @@ fun KitStepper(
 ) {
     val c = kitColors()
     val m = kitMetrics()
+    val decrease = localized(Str.machine_kit_decrease, label)
+    val increase = localized(Str.machine_kit_increase, label)
     Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        StepButton("−", "Decrease $label", value > range.first, { onChange((value - 1).coerceIn(range)) }, "${tag}_minus")
+        StepButton("−", decrease, value > range.first, { onChange((value - 1).coerceIn(range)) }, "${tag}_minus")
         Text(
             "$value",
             fontSize = m.value,
@@ -438,7 +442,7 @@ fun KitStepper(
                 .testTag("${tag}_value"),
             textAlign = TextAlign.Center,
         )
-        StepButton("+", "Increase $label", value < range.last, { onChange((value + 1).coerceIn(range)) }, "${tag}_plus")
+        StepButton("+", increase, value < range.last, { onChange((value + 1).coerceIn(range)) }, "${tag}_plus")
     }
 }
 

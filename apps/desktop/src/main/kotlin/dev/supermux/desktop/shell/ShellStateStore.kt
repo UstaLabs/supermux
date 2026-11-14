@@ -46,6 +46,8 @@ data class PersistedUiState(
     val appearance: String? = null,
     /** Detached extra windows. Missing on older ui-state.json → empty list. */
     val windows: List<PersistedWindowHost> = emptyList(),
+    /** The main window's last place and size (#134). Missing → the first-run default. */
+    val mainWindow: dev.supermux.desktop.platform.SavedWindow? = null,
 )
 
 class ShellStateStore(val path: Path = defaultPath()) {

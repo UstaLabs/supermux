@@ -20,9 +20,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.git_include_in_commit
 
 /**
  * #72: whether a file (or every file) goes into the next commit — git's index as a small box:
@@ -32,7 +31,7 @@ import dev.supermux.ui.resources.git_include_in_commit
 internal fun IncludeBox(state: String, enabled: Boolean, tag: String, onToggle: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(4.dp)
-    val label = localized(Res.string.git_include_in_commit)
+    val label = localized(Str.git_include_in_commit)
     Box(
         Modifier
             .size(32.dp)

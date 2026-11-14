@@ -150,6 +150,8 @@ import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.collectViewIds
 import dev.supermux.workspace.firstGroupId
 import dev.supermux.workspace.groupIdOf
+import dev.supermux.chat.parseChatTs
+import dev.supermux.net.ClosedSessionDto
 import dev.supermux.workspace.isBrowserView
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
@@ -157,6 +159,7 @@ import dev.supermux.workspace.openSingletonView
 import dev.supermux.workspace.setActiveViewInGroup
 import dev.supermux.ui.panes.PaneStripEnd
 import androidx.compose.material.icons.outlined.Tab
+import dev.supermux.ui.i18n.Str
 import dev.supermux.workspace.toDomainOrNull
 import dev.supermux.ui.terminal.liveViewTitle
 import dev.supermux.ui.retain.newRetainedPageOpening
@@ -165,6 +168,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.localizedLabels
 
 
 /**
@@ -369,6 +374,11 @@ private fun WorkspacePanesBody(
     val windowsSeam = LocalPlatform.current.windows
     val notices = LocalPlatform.current.notices
     TrackFocusedFileView(ws)
+    val bulkLabels = localizedLabels(BulkClose.entries) { it.labelRes }
+    val newTabWord = localized(Str.shell_new_tab)
+    val closeTabWord = localized(Str.shell_close_tab)
+    val viewWord = localized(Str.shell_view)
+    val moveToNewWindowWord = localized(Str.shell_move_to_new_window)
     // Tabs a bulk close (tab menu ▸ Close to the Right / Left / All) still has to close, fed one at
     // a time to the tab's own close action (see nextBulkClose).
     val bulkQueue = remember(current.id) { mutableStateListOf<String>() }
@@ -386,7 +396,7 @@ private fun WorkspacePanesBody(
     }
 
     fun bulkEntries(itemId: String): List<RowContextMenuEntry> =
-        bulkCloseEntries(groupViewIdsOf(layout, itemId), itemId) { which, ids -> bulkClose(itemId, which, ids) }
+        bulkCloseEntries(groupViewIdsOf(layout, itemId), itemId, bulkLabels) { which, ids -> bulkClose(itemId, which, ids) }
 
     val tearOff = remember(windowsSeam, hostId, ws, current.id) { windowsSeam?.tabTearOff(hostId, ws, current.id) }
     // The "+" and the split buttons open New tabs (#91): views of kind "new" that ask what to show. The split
@@ -435,7 +445,7 @@ private fun WorkspacePanesBody(
     PaneHost(
         layout = layout,
         tearOff = tearOff,
-        titleFor = { vid -> viewsById[vid]?.let { if (it.isNewTab()) "New tab" else liveViewTitle(it, sessionNames::get) } ?: "view" },
+        titleFor = { vid -> viewsById[vid]?.let { if (it.isNewTab()) newTabWord else liveViewTitle(it, sessionNames::get) } ?: viewWord },
         onCloseView = { onCloseCandidate(viewsById[it]) },
         onEdit = { edit -> layoutSync.edit(edit) },
         addSlot = { groupId ->
@@ -466,10 +476,10 @@ private fun WorkspacePanesBody(
             if (v.isNewTab()) {
                 DefaultTabChip(
                     itemId = itemId,
-                    title = "New tab",
+                    title = newTabWord,
                     state = tabState,
                     labelFont = GeistFontFamily,
-                    closeLabel = "Close tab",
+                    closeLabel = closeTabWord,
                     onClose = { _ -> onCloseCandidate(v) },
                     icon = {
                         Icon(
@@ -498,14 +508,14 @@ private fun WorkspacePanesBody(
                 if (filePath == null) {
                     RowContextMenu(
                         items = {
-                            listOf(RowContextMenuEntry("Move to New Window") { onTearOutTab(itemId) }) +
+                            listOf(RowContextMenuEntry(moveToNewWindowWord) { onTearOutTab(itemId) }) +
                                 bulkEntries(itemId)
                         },
                     ) {
                         Box(Modifier.testTag("tab-move-to-window-$itemId")) {
                         DefaultTabChip(
                             itemId = itemId,
-                            title = v?.let { liveViewTitle(it, sessionNames::get) } ?: "view",
+                            title = v?.let { liveViewTitle(it, sessionNames::get) } ?: viewWord,
                             state = tabState,
                             dot = if (v.tabUnread(tabState.selected, unreadSessions)) LocalSemantics.current.success else null,
                             labelFont = GeistFontFamily,
@@ -634,6 +644,8 @@ fun PhoneWorkspacePanes(
     // A Browser tab closed here or elsewhere lets its live page go (#105).
     dev.supermux.ui.browser.ReleaseClosedBrowserTabs(viewsById.values)
     val kept = rememberWorkspacePanesKept(current.id)
+    val bulkLabels = localizedLabels(BulkClose.entries) { it.labelRes }
+    val viewWord = localized(Str.shell_view)
     var showAdd by kept::addViewOpen
     val closeCandidate = kept.closingViewId?.let { viewsById[it] }
     var walkthroughSessionId by kept::walkthroughSessionId
@@ -651,7 +663,7 @@ fun PhoneWorkspacePanes(
     }
 
     fun bulkEntries(itemId: String): List<RowContextMenuEntry> =
-        bulkCloseEntries(tabs.viewIds, itemId) { which, ids ->
+        bulkCloseEntries(tabs.viewIds, itemId, bulkLabels) { which, ids ->
             if (which != BulkClose.ALL) app.setActiveView(current.id, itemId)
             bulkQueue.addAll(ids.filterNot { it in bulkQueue })
         }
@@ -923,7 +935,7 @@ fun PhoneWorkspacePanes(
                         )
                         file?.let { (_, path) -> PhoneFileUnsavedDot(ws.documents, path) }
                         Text(
-                            selectedView?.let { liveViewTitle(it, sessionNames::get) } ?: "view",
+                            selectedView?.let { liveViewTitle(it, sessionNames::get) } ?: viewWord,
                             fontFamily = MonoFontFamily,
                             style = MaterialTheme.typography.bodyMedium,
                             maxLines = 1,
@@ -943,7 +955,7 @@ fun PhoneWorkspacePanes(
         Box(Modifier.weight(1f).fillMaxWidth().onGloballyPositioned { page = it }.then(swipeShift).nestedScroll(swipeNested)) {
             if (retained.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("No views", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(localized(Str.shell_no_views), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             } else {
                 retained.forEach { id ->
@@ -998,7 +1010,7 @@ fun PhoneWorkspacePanes(
                 viewIds = tabs.viewIds,
                 selectedId = picking?.let { it.second } ?: tabs.selectedId,
                 viewFor = { viewsById[it] },
-                titleFor = { id -> viewsById[id]?.let { liveViewTitle(it, sessionNames::get) } ?: "view" },
+                titleFor = { id -> viewsById[id]?.let { liveViewTitle(it, sessionNames::get) } ?: viewWord },
                 unread = { id -> viewsById[id].tabUnread(id == tabs.selectedId, unreadSessions) },
                 unsaved = { id -> viewsById[id]?.filePathOrNull()?.let(ws.documents::isDirty) == true },
                 thumbnails = thumbnails,
@@ -1027,7 +1039,7 @@ fun PhoneWorkspacePanes(
             val handoff = swipeTo == null
             SwipeNeighbour(
                 view = viewsById[nid],
-                title = viewsById[nid]?.let { liveViewTitle(it, sessionNames::get) } ?: "view",
+                title = viewsById[nid]?.let { liveViewTitle(it, sessionNames::get) } ?: viewWord,
                 bitmap = thumbnails[nid],
                 offsetX = {
                     if (handoff) 0f
@@ -1334,6 +1346,8 @@ private fun WorkspacePaneContent(
                 onExternalAttachConsumed = { ui.externalAttach = null },
                 externalDictate = ui.externalDictate,
                 onExternalDictateConsumed = { ui.externalDictate = null },
+                focusComposerFor = ui.composerFocusFor,
+                onComposerFocusConsumed = { ui.composerFocusFor = null },
                 pasteImageFor = ui.selectedId,
                 pasteImageRequestNonce = ui.pasteImageRequestNonce,
                 onPasteImageRequestConsumed = { ui.pasteImageRequestNonce = 0L },
@@ -1471,7 +1485,7 @@ internal fun TabLongPressMenu(
         ) {
             if (onMoveToNewWindow != null) {
                 DropdownMenuItem(
-                    text = { Text("Move to New Window") },
+                    text = { Text(localized(Str.shell_move_to_new_window)) },
                     leadingIcon = { Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null) },
                     onClick = {
                         open = false
@@ -1580,6 +1594,10 @@ internal fun closeTabTarget(tree: LayoutNode, focusedViewId: String?): String? {
 private fun NewTabView(newTab: ViewDto, hostId: String, current: WorkspaceDto, ws: WorkspaceSession, app: HostStore, ui: ShellUiState) {
     val layoutSync = ws.layoutSync
     var opening by remember { mutableStateOf<NewViewKind?>(null) }
+    // #135: the sessions closed in this workspace, asked for once per New tab.
+    var closed by remember { mutableStateOf<List<ClosedSessionDto>>(emptyList()) }
+    LaunchedEffect(current.id) { closed = runCatching { app.api.closedSessions(current.id) }.getOrDefault(emptyList()) }
+    val now = remember(closed) { Clock.System.now().toEpochMilliseconds() }
     NewTabPage(
         choices = newTabChoices(current, layoutSync.tree, ws.viewsById),
         workspace = current.name,
@@ -1607,5 +1625,13 @@ private fun NewTabView(newTab: ViewDto, hostId: String, current: WorkspaceDto, w
             }
         },
         onClose = { app.closeWorkspaceView(current.id, newTab.id) },
+        closed = closed.map { c -> ClosedSessionRow(c.id, c.name, c.agent, closedAgo(now, parseChatTs(c.closedAt) ?: now)) },
+        onReopen = { sessionId ->
+            app.reopenClosedSession(current.id, sessionId, groupIdOf(layoutSync.tree, newTab.id)) { id ->
+                ui.windows.expandClaim(hostId, setOf(id), layoutSync.tree)
+                layoutSync.edit { pickedInPlace(it, newTab.id, id) }
+                app.closeWorkspaceView(current.id, newTab.id)
+            }
+        },
     )
 }

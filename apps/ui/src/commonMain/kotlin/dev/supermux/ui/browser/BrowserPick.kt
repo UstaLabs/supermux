@@ -62,16 +62,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.browser_comment_remove
-import dev.supermux.ui.resources.browser_comment_to
-import dev.supermux.ui.resources.browser_comment_close
-import dev.supermux.ui.resources.browser_comment_sent
-import dev.supermux.ui.resources.browser_comment_seen
-import dev.supermux.ui.resources.browser_comment_done
-import dev.supermux.ui.resources.browser_comment_answered
-import dev.supermux.ui.resources.browser_comment_dismissed
 import dev.supermux.ui.settings.kit.KitGlyphs
 import dev.supermux.ui.settings.kit.KitTextAction
 import dev.supermux.ui.settings.kit.kitColors
@@ -447,11 +439,11 @@ private fun CommentPopover(open: Pick, pick: PickState, w: Dp, h: Dp) {
 internal fun statusLine(c: dev.supermux.net.BrowserCommentDto): String {
     val word = localized(
         when (c.status) {
-            "seen" -> Res.string.browser_comment_seen
-            "done" -> Res.string.browser_comment_done
-            "answered" -> Res.string.browser_comment_answered
-            "dismissed" -> Res.string.browser_comment_dismissed
-            else -> Res.string.browser_comment_sent
+            "seen" -> Str.browser_comment_seen
+            "done" -> Str.browser_comment_done
+            "answered" -> Str.browser_comment_answered
+            "dismissed" -> Str.browser_comment_dismissed
+            else -> Str.browser_comment_sent
         },
     )
     return if (c.note.isNullOrBlank()) word else "$word · ${c.note}"
@@ -484,9 +476,9 @@ private fun SentComment(open: Pick, comment: dev.supermux.net.BrowserCommentDto,
         Text("\u201C${open.comment}\u201D", fontSize = 13.sp, color = c.text)
         Text(statusLine(comment), fontSize = 12.sp, color = if (comment.status == "done") c.ok else c.dim)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            KitTextAction(localized(Res.string.browser_comment_remove), { pick.remove(open) }, Modifier.testTag("browser-pick-remove"))
+            KitTextAction(localized(Str.browser_comment_remove), { pick.remove(open) }, Modifier.testTag("browser-pick-remove"))
             Spacer(Modifier.width(8.dp))
-            KitTextAction(localized(Res.string.browser_comment_close), { pick.editing = null })
+            KitTextAction(localized(Str.browser_comment_close), { pick.editing = null })
         }
     }
 }
@@ -618,7 +610,7 @@ internal fun PickSendBar(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        Text(localized(Res.string.browser_comment_to, recipient.orEmpty()), fontSize = 12.5.sp, color = c.accent, maxLines = 1)
+                        Text(localized(Str.browser_comment_to, recipient.orEmpty()), fontSize = 12.5.sp, color = c.accent, maxLines = 1)
                         androidx.compose.material3.Icon(KitGlyphs.ChevronDown, contentDescription = null, tint = c.dim, modifier = Modifier.size(12.dp))
                     }
                     dev.supermux.ui.widgets.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {

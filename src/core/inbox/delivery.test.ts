@@ -137,9 +137,10 @@ test("each message keeps its own busy mode, in order", async () => {
   const h = harness({ "bbbb-2": {} })
   h.delivery.send(A, ["bbbb-2"], "one", "queue")
   h.delivery.send(A, ["bbbb-2"], "two", "interrupt")
+  h.delivery.send(A, ["bbbb-2"], "three", "stop")
   await h.delivery.idle()
-  expect(bodies(h.delivered)).toEqual(["one", "two"])
-  expect(h.delivered.map((d) => d.meta.busy)).toEqual(["queue", "interrupt"])
+  expect(bodies(h.delivered)).toEqual(["one", "two", "three"])
+  expect(h.delivered.map((d) => d.meta.busy)).toEqual(["queue", "interrupt", "stop"])
 })
 
 test("when the recipient can't be made deliverable nothing is marked delivered, and the next send retries", async () => {

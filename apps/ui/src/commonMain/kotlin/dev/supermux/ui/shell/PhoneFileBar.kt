@@ -36,18 +36,21 @@ import androidx.compose.ui.unit.dp
 import dev.supermux.fs.pathLeaf
 import dev.supermux.ui.editor.DocumentStore
 import dev.supermux.ui.editor.isMarkdownPath
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.rememberHaptics
+import dev.supermux.ui.i18n.localized
 
 /** The unsaved-changes dot before a file's name, drawn in the name's own colour. */
 @Composable
 internal fun UnsavedDot(color: Color, modifier: Modifier = Modifier, size: Dp = 7.dp) {
+    val unsaved = localized(Str.shell_unsaved_changes)
     Box(
         modifier
             .size(size)
             .background(color, CircleShape)
-            .semantics { contentDescription = "Unsaved changes" },
+            .semantics { contentDescription = unsaved },
     )
 }
 
@@ -82,6 +85,7 @@ internal fun PhoneFileActions(
     val cs = MaterialTheme.colorScheme
     val notices = LocalPlatform.current.notices
     val haptics = rememberHaptics()
+    val couldNotSave = localizedTemplate(Str.shell_could_not_save)
 
     if (isMarkdownPath(path)) {
         val preview = previewModes[viewId] == true
@@ -91,7 +95,7 @@ internal fun PhoneFileActions(
         ) {
             Icon(
                 imageVector = if (preview) Icons.Filled.Edit else Icons.Filled.Visibility,
-                contentDescription = if (preview) "Edit" else "Preview",
+                contentDescription = localized(if (preview) Str.shell_edit else Str.shell_preview),
                 tint = if (preview) cs.primary else cs.onSurfaceVariant,
                 modifier = Modifier.size(20.dp),
             )
@@ -105,7 +109,7 @@ internal fun PhoneFileActions(
                 val doc = documents.get(path) ?: return@FilledTonalButton
                 haptics.perform(HapticKind.Confirm)
                 documents.save(doc) { written ->
-                    if (!written) notices.show("Couldn't save ${pathLeaf(path)}")
+                    if (!written) notices.show(couldNotSave(pathLeaf(path)))
                 }
             },
             enabled = !saving,
@@ -119,7 +123,7 @@ internal fun PhoneFileActions(
             if (saving) {
                 CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = cs.primary)
             } else {
-                Text("Save")
+                Text(localized(Str.shell_save))
             }
         }
     }

@@ -77,12 +77,12 @@ fun SplitSeamOverlay(
     val hairlineColor by animateColorAsState(
         targetValue = if (active) cs.primary.copy(alpha = 0.90f) else idleColor ?: cs.onSurface.copy(alpha = 0.18f),
         animationSpec = tween(120),
-        label = "split_hairline_color",
+        label = "split_hairline_color", // i18n-ok: animation label
     )
     val hairlineWidth by animateDpAsState(
         targetValue = if (active) 2.dp else SplitSeamHairline,
         animationSpec = tween(120),
-        label = "split_hairline_width",
+        label = "split_hairline_width", // i18n-ok: animation label
     )
 
     Box(

@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #123: English, the source, for Settings › Voice, Privacy & labs, Memory, the word list, Coding, Keyboard shortcuts
+     and the App version rows. Every key here also lives in values-tr/settings_pages.xml with the same placeholders
+     (tests/i18n-strings.test.ts). Keys are settings_page_thing. Terms and tone: docs/i18n/glossary.md. -->
+<resources>
+    <!-- Shared by these pages -->
+    <string name="settings_pages_on_machine">on %1$s</string>
+    <string name="settings_pages_on_this_machine">on this machine</string>
+    <string name="settings_pages_on_this_computer">on this computer</string>
+    <string name="settings_pages_on_this_phone">on this phone</string>
+    <string name="settings_pages_on_this_device">on this device</string>
+    <string name="settings_pages_couldnt_reach">Couldn't reach %1$s.</string>
+    <string name="settings_pages_couldnt_reach_this_machine">Couldn't reach this machine.</string>
+    <string name="settings_pages_try_again">Try again</string>
+    <string name="settings_pages_default">Default</string>
+    <string name="settings_pages_advanced">Advanced</string>
+    <string name="settings_pages_couldnt_save">Couldn't save.</string>
+    <string name="settings_pages_loading">Loading…</string>
+    <string name="settings_pages_close">Close</string>
+    <string name="settings_pages_done">Done</string>
+
+    <!-- Settings › Coding -->
+    <string name="settings_coding_editor">Editor &amp; terminal</string>
+    <string name="settings_coding_code_intelligence">Code intelligence</string>
+
+    <!-- Settings › Keyboard shortcuts: between two key chords -->
+    <string name="settings_shortcuts_or">or</string>
+
+    <!-- Settings › General › App version -->
+    <string name="settings_update_app_version">App version</string>
+    <string name="settings_update_version_build">%1$s (build %2$s)</string>
+    <string name="settings_update_checking">Checking…</string>
+    <string name="settings_update_downloaded">%1$s is downloaded</string>
+    <string name="settings_update_ready">%1$s is ready</string>
+    <string name="settings_update_up_to_date">up to date</string>
+    <string name="settings_update_install_restart">Install and restart</string>
+    <string name="settings_update_install">Install</string>
+    <string name="settings_update_download">Download</string>
+    <string name="settings_update_check">Check for updates</string>
+    <string name="settings_update_check_failed">Couldn't check for updates.</string>
+    <string name="settings_update_no_installer">Update is available but no installer file was published for this release.</string>
+    <string name="settings_update_release_notes">Release notes</string>
+    <string name="settings_update_allow_installs">Allow installs from supermux</string>
+    <string name="settings_update_open_settings">Open settings</string>
+    <string name="settings_update_android_asks">Android asks once before supermux can install its own updates.</string>
+    <string name="settings_update_background">Download updates in the background</string>
+    <string name="settings_update_background_description">A new version downloads quietly, then asks before restarting. Off: you choose when to download.</string>
+
+    <!-- Settings › Voice › Words to spell your way -->
+    <string name="settings_glossary_back">Voice</string>
+    <string name="settings_glossary_save_failed">Couldn't save — reverted</string>
+    <string name="settings_glossary_empty">No words yet. Add the names dictation keeps getting wrong.</string>
+    <string name="settings_glossary_remove">Remove</string>
+    <string name="settings_glossary_add_word">Add a word</string>
+    <string name="settings_glossary_placeholder">A name or term, e.g. Supermux</string>
+    <string name="settings_glossary_add">Add</string>
+
+    <!-- Settings › Privacy & labs -->
+    <string name="settings_privacy_title">Privacy</string>
+    <string name="settings_privacy_labs">Labs</string>
+    <string name="settings_privacy_off_on">Turned off on %1$s.</string>
+    <string name="settings_privacy_off_on_this_machine">Turned off on this machine.</string>
+    <string name="settings_privacy_test_build">A test build of supermux: nothing is sent.</string>
+    <string name="settings_privacy_send_stats">Send anonymous usage statistics</string>
+    <string name="settings_privacy_send_stats_description">Which agents, models and features you use. Never prompts, code, paths or names.</string>
+    <string name="settings_privacy_change_failed">Couldn't change the setting.</string>
+    <string name="settings_privacy_recent_events">Recent events</string>
+    <string name="settings_privacy_what_we_send">What we send</string>
+    <string name="settings_privacy_recent_description">The last events from %1$s, exactly as sent.</string>
+    <string name="settings_privacy_recent_description_this_machine">The last events from this machine, exactly as sent.</string>
+    <string name="settings_privacy_nothing_yet">Nothing recorded yet.</string>
+    <string name="settings_privacy_sent">sent</string>
+    <string name="settings_privacy_queued">queued</string>
+    <string name="settings_privacy_overlay">Assistant overlay</string>
+    <string name="settings_privacy_overlay_description">Your default Agent floats over other apps: tap it to chat, hold it to talk.</string>
+    <string name="settings_privacy_experimental">Experimental</string>
+    <string name="settings_privacy_overlay_allow">Allow “Display over other apps” for supermux, then come back here.</string>
+    <string name="settings_privacy_overlay_open_again">Open the setting again</string>
+    <string name="settings_privacy_overlay_screen">Let it see your screen</string>
+
+    <!-- Settings › Memory -->
+    <string name="settings_memory_shared">Memory is shared by every agent on %1$s.</string>
+    <string name="settings_memory_shared_this_machine">Memory is shared by every agent on this machine.</string>
+    <string name="settings_memory_nightly">Tidy up memory every night</string>
+    <string name="settings_memory_nightly_description">An agent reads what your sessions learned, merges it and keeps it short.</string>
+    <string name="settings_memory_next">Next tidy-up</string>
+    <string name="settings_memory_running">Running…</string>
+    <string name="settings_memory_run_now">Run now</string>
+    <string name="settings_memory_run_failed">Couldn't start a tidy-up.</string>
+    <string name="settings_memory_done_by">Done by</string>
+    <string name="settings_memory_done_by_description">The default Agent's provider unless you pick another.</string>
+    <string name="settings_memory_model">Model</string>
+    <string name="settings_memory_effort">Effort</string>
+    <string name="settings_memory_at">At</string>
+    <string name="settings_memory_local_time">%1$s's local time.</string>
+    <string name="settings_memory_local_time_this_machine">This machine's local time.</string>
+
+    <!-- Settings › Voice -->
+    <string name="settings_voice_lang_tr">Turkish</string>
+    <string name="settings_voice_lang_en">English</string>
+    <string name="settings_voice_lang_de">German</string>
+    <string name="settings_voice_lang_fr">French</string>
+    <string name="settings_voice_lang_es">Spanish</string>
+    <string name="settings_voice_lang_it">Italian</string>
+    <string name="settings_voice_lang_pt">Portuguese</string>
+    <string name="settings_voice_lang_nl">Dutch</string>
+    <string name="settings_voice_lang_ru">Russian</string>
+    <string name="settings_voice_lang_uk">Ukrainian</string>
+    <string name="settings_voice_lang_ar">Arabic</string>
+    <string name="settings_voice_lang_fa">Persian</string>
+    <string name="settings_voice_lang_bs">Bosnian</string>
+    <string name="settings_voice_lang_sq">Albanian</string>
+    <string name="settings_voice_lang_zh">Chinese</string>
+    <string name="settings_voice_lang_ja">Japanese</string>
+    <string name="settings_voice_detect_automatically">Detect automatically</string>
+    <string name="settings_voice_tts_device">Device's own voice</string>
+    <plurals name="settings_voice_words">
+        <item quantity="one">%1$d word</item>
+        <item quantity="other">%1$d words</item>
+    </plurals>
+    <string name="settings_voice_speech_recognition">Speech recognition</string>
+    <string name="settings_voice_speech_recognition_description">Turns what you say into text.</string>
+    <string name="settings_voice_speech_recognition_unused_phone">Not used while this phone turns speech into text.</string>
+    <string name="settings_voice_speech_recognition_unused_device">Not used while this device turns speech into text.</string>
+    <string name="settings_voice_speech_recognition_failed">Couldn't save speech recognition.</string>
+    <string name="settings_voice_languages">Languages</string>
+    <string name="settings_voice_languages_description">Leave empty to detect automatically.</string>
+    <string name="settings_voice_languages_sheet_description">What you dictate in. Pick several if you mix them; leave all off to detect automatically.</string>
+    <string name="settings_voice_languages_failed">Couldn't save languages.</string>
+    <string name="settings_voice_glossary">Words to spell your way</string>
+    <string name="settings_voice_glossary_description">Names and terms dictation and agents keep exactly as you write them.</string>
+    <string name="settings_voice_glossary_failed">Couldn't load</string>
+    <string name="settings_voice_read_aloud">Read replies aloud</string>
+    <string name="settings_voice_read_aloud_failed">Couldn't save how replies are read.</string>
+    <string name="settings_voice_preview">Preview</string>
+    <string name="settings_voice_tidy_up_note">Only used when speech is recognised on a phone or by Whisper; ChatGPT and Claude already return clean text.</string>
+    <string name="settings_voice_tidy_up_engine">Tidy-up engine</string>
+    <string name="settings_voice_tidy_up_engine_failed">Couldn't save the tidy-up engine.</string>
+    <string name="settings_voice_tidy_up_model">Tidy-up model</string>
+    <string name="settings_voice_tidy_up_model_description">Default is %1$s's own.</string>
+    <string name="settings_voice_tidy_up_model_failed">Couldn't save the tidy-up model.</string>
+    <string name="settings_voice_this_phone">This phone</string>
+    <string name="settings_voice_this_device">This device</string>
+    <string name="settings_voice_dictation">Turn speech into text</string>
+    <string name="settings_voice_dictation_on_this_phone">On this phone</string>
+    <string name="settings_voice_dictation_on_this_device">On this device</string>
+    <string name="settings_voice_dictation_on_machine">On %1$s</string>
+    <string name="settings_voice_dictation_on_this_machine">On this machine</string>
+    <string name="settings_voice_dictation_description_phone">On this phone works offline and starts faster.</string>
+    <string name="settings_voice_dictation_description_device">On this device works offline and starts faster.</string>
+</resources>

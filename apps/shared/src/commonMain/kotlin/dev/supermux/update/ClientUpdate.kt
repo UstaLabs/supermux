@@ -48,6 +48,20 @@ fun HttpClientConfig<*>.installerDownloadTimeouts() {
     }
 }
 
+/**
+ * Where [ClientUpdateChecker.downloadTo] puts an installer's bytes as they arrive — memory for
+ * [ClientUpdateChecker.download], a file on a phone.
+ */
+interface DownloadSink {
+    /** Bytes written so far: where a resumed request picks up. */
+    val size: Long
+
+    fun write(bytes: ByteArray, offset: Int, length: Int)
+
+    /** The server ignored a Range and sent the whole file again: start over from empty. */
+    fun clear()
+}
+
 /** The server answered the installer download with a non-2xx status — not worth a resume. */
 private class DownloadHttpException(status: Int) : IllegalStateException("download HTTP $status")
 
@@ -342,7 +356,8 @@ class ClientUpdateChecker(
     }
 
     /**
-     * Download [url] fully into memory. Installer sizes are modest (APK/deb/msi/dmg).
+     * Download [url] fully into memory. Fine for a small file; an installer of 50+ MB on a phone
+     * goes through [downloadTo] and a file instead (#140).
      *
      * [onProgress] is invoked as bytes stream in: `(bytesReceived, contentLength?)`.
      * `contentLength` is null when the server omits Content-Length; on a resumed transfer both
@@ -357,10 +372,28 @@ class ClientUpdateChecker(
         onProgress: (suspend (bytesReceived: Long, contentLength: Long?) -> Unit)? = null,
     ): ByteArray {
         val out = Buffer()
+        downloadTo(url, object : DownloadSink {
+            override val size: Long get() = out.size
+            override fun write(bytes: ByteArray, offset: Int, length: Int) = out.write(bytes, offset, offset + length)
+            override fun clear() = out.clear()
+        }, onProgress)
+        return out.readByteArray()
+    }
+
+    /**
+     * [download], written into [sink] as it arrives rather than held in memory: a 51 MB APK held
+     * twice over (the buffer and its copy) is what a low-RAM phone kills the app for (#140).
+     * Resumes and restarts exactly as [download] does. Returns the size written.
+     */
+    suspend fun downloadTo(
+        url: String,
+        sink: DownloadSink,
+        onProgress: (suspend (bytesReceived: Long, contentLength: Long?) -> Unit)? = null,
+    ): Long {
         var total: Long? = null
         var attempt = 0
         while (true) {
-            val offset = out.size
+            val offset = sink.size
             try {
                 http.prepareGet(url) {
                     if (offset > 0) header(HttpHeaders.Range, "bytes=$offset-")
@@ -369,29 +402,29 @@ class ClientUpdateChecker(
                     val length = resp.contentLength()
                     if (offset > 0 && resp.status != HttpStatusCode.PartialContent) {
                         // The server ignored the Range: this body is the whole file again.
-                        out.clear()
+                        sink.clear()
                         total = length
                     } else if (total == null) {
                         total = length?.let { it + offset }
                     }
                     val channel = resp.bodyAsChannel()
                     val buf = ByteArray(DOWNLOAD_BUFFER_BYTES)
-                    onProgress?.invoke(out.size, total)
+                    onProgress?.invoke(sink.size, total)
                     while (true) {
                         val n = channel.readAvailable(buf, 0, buf.size)
                         if (n < 0) break
                         if (n == 0) continue
-                        out.write(buf, 0, n)
-                        onProgress?.invoke(out.size, total)
+                        sink.write(buf, 0, n)
+                        onProgress?.invoke(sink.size, total)
                     }
                 }
                 val expected = total
-                if (expected == null || out.size == expected) return out.readByteArray()
-                if (out.size > expected) {
-                    error("Content-Length mismatch: expected $expected bytes, but received ${out.size} bytes")
+                if (expected == null || sink.size == expected) return sink.size
+                if (sink.size > expected) {
+                    error("Content-Length mismatch: expected $expected bytes, but received ${sink.size} bytes")
                 }
                 // Short body without an exception: the connection closed cleanly mid-transfer.
-                throw IOException("connection closed at ${out.size} of $expected bytes")
+                throw IOException("connection closed at ${sink.size} of $expected bytes")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {

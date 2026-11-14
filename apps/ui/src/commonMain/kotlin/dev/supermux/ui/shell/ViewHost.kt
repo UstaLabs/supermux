@@ -82,6 +82,7 @@ import dev.supermux.ui.files.parentOf
 import dev.supermux.ui.files.tappedFileMissing
 import dev.supermux.fs.FileSystemService
 import dev.supermux.ui.editor.FilePane
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
 import dev.supermux.ui.prefs.EDITOR_LINE_WRAP_DEFAULT
@@ -91,6 +92,7 @@ import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.toEditorPath
 import kotlinx.coroutines.launch
+import dev.supermux.ui.i18n.localized
 
 /** Journey + desktop-parity tags for the workspace chat pane. */
 object WorkspaceChatPaneTestIds {
@@ -212,6 +214,9 @@ fun ViewHost(
     onExternalAttachConsumed: () -> Unit = {},
     externalDictate: Pair<String, ComposerExternalDictate>? = null,
     onExternalDictateConsumed: () -> Unit = {},
+    /** The chat whose composer takes the cursor once (#134). */
+    focusComposerFor: String? = null,
+    onComposerFocusConsumed: () -> Unit = {},
     pasteImageFor: String? = null,
     pasteImageRequestNonce: Long = 0L,
     onPasteImageRequestConsumed: () -> Unit = {},
@@ -244,6 +249,8 @@ fun ViewHost(
                         onExternalAttachConsumed = onExternalAttachConsumed,
                         externalDictate = externalDictate?.takeIf { it.first == sessionId }?.second,
                         onExternalDictateConsumed = onExternalDictateConsumed,
+                        focusComposer = focusComposerFor == sessionId,
+                        onComposerFocusConsumed = onComposerFocusConsumed,
                         // Addressed to one session so a workspace showing two chats pastes into the
                         // selected one, not both.
                         pasteImageRequestNonce = if (pasteImageFor == sessionId) pasteImageRequestNonce else 0L,
@@ -366,6 +373,8 @@ private fun ChatViewPane(
     onExternalAttachConsumed: () -> Unit,
     externalDictate: ComposerExternalDictate?,
     onExternalDictateConsumed: () -> Unit,
+    focusComposer: Boolean = false,
+    onComposerFocusConsumed: () -> Unit = {},
     pasteImageRequestNonce: Long,
     onPasteImageRequestConsumed: () -> Unit,
     modifier: Modifier,
@@ -455,6 +464,8 @@ private fun ChatViewPane(
                 onExternalAttachConsumed = onExternalAttachConsumed,
                 externalDictate = externalDictate,
                 onExternalDictateConsumed = onExternalDictateConsumed,
+                focusComposer = focusComposer,
+                onComposerFocusConsumed = onComposerFocusConsumed,
                 pasteImageRequestNonce = pasteImageRequestNonce,
                 onPasteImageRequestConsumed = onPasteImageRequestConsumed,
                 onOpenFile = openTappedPath,
@@ -482,6 +493,8 @@ private fun ChatViewPane(
                 onExternalAttachConsumed = onExternalAttachConsumed,
                 externalDictate = externalDictate,
                 onExternalDictateConsumed = onExternalDictateConsumed,
+                focusComposer = focusComposer,
+                onComposerFocusConsumed = onComposerFocusConsumed,
                 pasteImageRequestNonce = pasteImageRequestNonce,
                 onPasteImageRequestConsumed = onPasteImageRequestConsumed,
                 onOpenFile = openTappedPath,
@@ -503,7 +516,7 @@ private fun ChatViewPane(
     val headerFraction by animateFloatAsState(
         targetValue = if (chromeHidden) 0f else 1f,
         animationSpec = tween(200),
-        label = "chatBarHeader",
+        label = "chatBarHeader", // i18n-ok: animation label
     )
     Column(modifier.fillMaxSize().testTag(WorkspaceChatPaneTestIds.CHAT_VIEW)) {
         ChatViewHeader(
@@ -590,6 +603,7 @@ private fun rememberOpenTappedPath(
 ): (FilePathRef) -> Unit {
     val notices = LocalPlatform.current.notices
     val scope = rememberCoroutineScope()
+    val workspaceFolderItself by androidx.compose.runtime.rememberUpdatedState(localized(Str.shell_workspace_folder_itself))
     // One lambda while what it opens is the same: a new one each recomposition recomposed every markdown row it reached.
     val currentOpenFile by androidx.compose.runtime.rememberUpdatedState(onOpenFile)
     val currentFileSystem by androidx.compose.runtime.rememberUpdatedState(fileSystem)
@@ -598,7 +612,7 @@ private fun rememberOpenTappedPath(
         val onOpenFile = currentOpenFile
         val candidates = tappedPathCandidates(ref, workdir, relativeTo)
         if (candidates.isEmpty()) {
-            notices.show("That's the workspace folder itself")
+            notices.show(workspaceFolderItself)
         } else {
             scope.launch {
                 val found = candidates.firstOrNull { !tappedFileMissing(fileSystem, editorAbsolutePath(workdir, it)) }
@@ -852,8 +866,8 @@ private fun DisplayPanelForStream(
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                if (displayId.isBlank()) "No display is running"
-                else "Display $displayId is not running",
+                if (displayId.isBlank()) localized(Str.shell_no_display_running)
+                else localized(Str.shell_display_not_running, displayId),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 13.sp,
             )
@@ -881,14 +895,14 @@ fun UnknownViewHint(kind: String, modifier: Modifier = Modifier) {
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
-                "This client does not draw “$kind” yet",
+                localized(Str.shell_unknown_view, kind),
                 color = cs.onSurface,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
             )
             Spacer(Modifier.height(Space.xs))
             Text(
-                "Update Supermux to open this view",
+                localized(Str.shell_unknown_view_update),
                 color = cs.onSurfaceVariant,
                 fontFamily = MonoFontFamily,
                 fontSize = 12.sp,

@@ -18,9 +18,7 @@ package dev.supermux.ui.chat
 
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -70,6 +68,7 @@ import dev.supermux.proto.CouncilView
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.accounts.agentDisplayName
 import dev.supermux.ui.session.AgentLogo
+import dev.supermux.ui.session.rememberLiveLoop
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.Stroke
@@ -494,13 +493,7 @@ private fun Footer(c: CouncilView, endCouncil: ((String) -> Unit)?) {
 /** A working member's dot, breathing (1.2s, down to 30%). */
 @Composable
 private fun PulsingDot(color: Color) {
-    val pulse = rememberInfiniteTransition(label = "council-pulse")
-    val alpha by pulse.animateFloat(
-        initialValue = 1f,
-        targetValue = 0.3f,
-        animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse),
-        label = "council-pulse-alpha",
-    )
+    val alpha by rememberLiveLoop(1f, 0.3f, infiniteRepeatable(tween(600), RepeatMode.Reverse), label = "council-pulse")
     Box(Modifier.size(6.dp).alpha(alpha).clip(CircleShape).background(color))
 }
 

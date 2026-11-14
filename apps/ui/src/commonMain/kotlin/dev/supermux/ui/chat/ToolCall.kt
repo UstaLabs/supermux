@@ -15,7 +15,6 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.keyframes
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -97,6 +96,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.Constraints
+import dev.supermux.ui.session.rememberLiveLoop
 import kotlin.math.roundToInt
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -532,10 +532,10 @@ private fun ShimmerLabel(text: String, shimmering: Boolean, style: TextStyle, co
     }
     var width by remember { mutableStateOf(1f) }
     val em = with(LocalDensity.current) { style.fontSize.toPx() }
-    val pos by rememberInfiniteTransition(label = "shimmer").animateFloat(
+    val pos by rememberLiveLoop(
         0f, 1f,
         infiniteRepeatable(keyframes { durationMillis = 2400; 0f at 0 using LinearEasing; 1f at 1800; 1f at 2399 }, RepeatMode.Restart),
-        label = "pos",
+        label = "shimmer",
     )
     val base = lerp(color, lerp(c.textMuted, color, 0.12f), strength)
     val x = width * pos
@@ -581,9 +581,7 @@ private fun StatusIcon(status: ToolCallStatus) {
 
 @Composable
 private fun Spinner(color: Color) {
-    val angle by rememberInfiniteTransition(label = "spin").animateFloat(
-        0f, 360f, infiniteRepeatable(tween(800, easing = LinearEasing)), label = "a",
-    )
+    val angle by rememberLiveLoop(0f, 360f, infiniteRepeatable(tween(800, easing = LinearEasing)), label = "spin")
     Canvas(Modifier.size(14.dp)) {
         val w = 1.4.dp.toPx()
         drawArc(

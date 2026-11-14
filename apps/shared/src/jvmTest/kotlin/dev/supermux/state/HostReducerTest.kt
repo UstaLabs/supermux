@@ -69,6 +69,13 @@ class HostReducerTest {
         assertEquals("ready", reopened.lspStatus["s1|a.kt"]?.state)
     }
 
+    // #128: "no sessions" only means a fresh user once the broker has said so; before its first snapshot the list is
+    // just empty because nothing has arrived yet.
+    @Test fun aSnapshotMarksTheHostsSessionsAsLoaded() {
+        assertEquals(false, HostState().snapshotLoaded)
+        assertEquals(true, reduceHostFrame(HostState(), ServerFrame.Snapshot()).snapshotLoaded)
+    }
+
     @Test fun snapshotPopulatesSessionsAndLogs() {
         val entry = LogEntry(id = "m1", ts = "2026-01-01T00:00:00Z", direction = "outbound", text = "hi")
         val out = reduceHostFrame(

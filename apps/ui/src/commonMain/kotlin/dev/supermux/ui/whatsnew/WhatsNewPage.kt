@@ -23,8 +23,7 @@ import dev.supermux.ui.browser.LocalAppWebViews
 import dev.supermux.ui.chat.CardTheme
 import dev.supermux.ui.chat.cardDocument
 import dev.supermux.ui.chat.cardTheme
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.whatsnew_page_title
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.settings.kit.KitTopBar
 import dev.supermux.ui.settings.kit.kitColors
 import dev.supermux.ui.theme.LocalSemantics
@@ -93,7 +92,7 @@ fun WhatsNewPage(
     val page by produceState<String?>(null, version) { value = runCatching { loadEdition(version) }.getOrNull() }
     Column(modifier.fillMaxSize().background(c.pane).testTag("whats_new_page")) {
         KitTopBar(
-            localized(Res.string.whatsnew_page_title),
+            localized(Str.whatsnew_page_title),
             onBack = onBack,
             modifier = Modifier.padding(start = controls.start, end = controls.end, top = if (controls.band > 48.dp) controls.band - 48.dp else 0.dp),
             backTag = "whats_new_back",

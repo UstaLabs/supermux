@@ -1957,6 +1957,18 @@ class HostStore(
         }
     }
 
+    /** #135: the same closed session back in [workspaceId], as a chat tab in [groupId]. */
+    fun reopenClosedSession(workspaceId: String, sessionId: String, groupId: String?, onFailed: () -> Unit = {}, onReopened: (String) -> Unit = {}) {
+        stateScope.launch {
+            runCatching { api.reopenClosedSession(workspaceId, sessionId, groupId) }
+                .onSuccess { onReopened(it.id) }
+                .onFailure {
+                    println("[HostStore] reopenClosedSession failed: $it")
+                    onFailed()
+                }
+        }
+    }
+
     fun closeWorkspaceView(workspaceId: String, viewId: String) {
         stateScope.launch {
             runCatching { api.closeView(workspaceId, viewId) }

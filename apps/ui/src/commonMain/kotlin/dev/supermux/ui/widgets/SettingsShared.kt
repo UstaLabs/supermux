@@ -43,10 +43,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
+import dev.supermux.ui.i18n.localized
 
 /** Enter-to-submit: fire [submit] (and consume the event) on Enter/NumPad-Enter when [enabled]. */
 fun Modifier.submitOnEnter(enabled: Boolean, submit: () -> Unit): Modifier =
@@ -181,7 +183,7 @@ fun CopyableCommand(command: String, modifier: Modifier = Modifier) {
         }) {
             Icon(
                 if (copied) Icons.Filled.Check else Icons.Filled.ContentCopy,
-                contentDescription = "Copy",
+                contentDescription = localized(Str.widgets_copy),
                 tint = cs.primary,
                 modifier = Modifier.size(18.dp),
             )

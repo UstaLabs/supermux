@@ -10,3 +10,5 @@ internal actual fun applyPlatformLanguage(tag: String?) {
     val next = tag?.let(Locale::forLanguageTag) ?: home
     if (Locale.getDefault() != next) Locale.setDefault(next)
 }
+
+internal actual fun systemLanguage(): String = (system ?: Locale.getDefault()).language

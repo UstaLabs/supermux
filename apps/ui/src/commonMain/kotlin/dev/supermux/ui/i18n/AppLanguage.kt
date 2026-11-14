@@ -1,15 +1,19 @@
-// #123: the app's language. Strings live in composeResources/values (English, the source) and values-<tag>; the
-// system's language picks among them unless this device chose one in Settings › General.
+// #123: the app's language. Strings live in apps/ui/i18n/values (English, the source) and values-<tag>, compiled to
+// compact catalogs (Catalog.kt); the system's language picks among them unless this device chose one in Settings › General.
 package dev.supermux.ui.i18n
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.compositionLocalOf
-import org.jetbrains.compose.resources.PluralStringResource
-import org.jetbrains.compose.resources.StringResource
-import org.jetbrains.compose.resources.pluralStringResource
-import org.jetbrains.compose.resources.stringResource
+import androidx.compose.ui.text.intl.Locale
+import androidx.compose.ui.text.toUpperCase
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 
 /**
  * A language the app ships. [tag] is the stored value and the resource qualifier (null = follow the system);
@@ -28,21 +32,30 @@ enum class AppLanguage(val tag: String?, val endonym: String) {
 }
 
 /** The language in force below [ProvideAppLanguage]; [localized] reads it so a change recomposes every text. */
+/** The language in force below [ProvideAppLanguage]; text in capitals and formatting read it. */
 val LocalAppLanguage = compositionLocalOf { AppLanguage.SYSTEM }
 
+/** The catalogs [localized] reads: the language in force (a shipped tag) and English, the fallback. */
+class LoadedLanguage(val language: String, val chosen: Catalog?, val english: Catalog?)
+
+/** Unprovided (a test or preview outside the theme): English, read when first asked for. */
+val LocalCatalogs = compositionLocalOf<LoadedLanguage?> { null }
+
 /**
- * Points the platform's locale at [language] (null tag = back to the system's), the one place the resource library
- * reads it: the JVM's and Android's default locale, iOS's AppleLanguages, the browser's navigator.languages.
+ * Points the platform's locale at [language] (null tag = back to the system's): the JVM's and Android's default
+ * locale, iOS's AppleLanguages, the browser's navigator.languages. Formatting and capitals read it.
  */
 internal expect fun applyPlatformLanguage(tag: String?)
 
-/**
- * Makes [language] the one every [localized] text below resolves in, without a restart. Compose's own resources read
- * the platform locale but don't observe it, so [localized] also reads [LocalAppLanguage]: a change recomposes each
- * text in place, keeping every screen's state (a `key()` around the app, the documented route, would reset it all).
- */
+/** The system's own language (two letters), as it was before [applyPlatformLanguage] changed anything. */
+internal expect fun systemLanguage(): String
+
 private var providers = 0
 
+/**
+ * Makes [language] the one every [localized] text below reads, without a restart: its catalog and English are
+ * provided together, so a change recomposes each text in place and keeps every screen's state.
+ */
 @Composable
 fun ProvideAppLanguage(language: AppLanguage, content: @Composable () -> Unit) {
     applyPlatformLanguage(language.tag)
@@ -51,19 +64,86 @@ fun ProvideAppLanguage(language: AppLanguage, content: @Composable () -> Unit) {
         providers++
         onDispose { if (--providers == 0) applyPlatformLanguage(null) }
     }
-    CompositionLocalProvider(LocalAppLanguage provides language, content = content)
+    val tag = shippedLanguage(language.tag ?: systemLanguage())
+    val english by catalogState("en")
+    val chosen by catalogState(tag)
+    CompositionLocalProvider(
+        LocalAppLanguage provides language,
+        LocalCatalogs provides LoadedLanguage(tag, chosen, english),
+        content = content,
+    )
 }
 
-/** A string in the app's language. Use this, never `stringResource` directly (tests/i18n-strings.test.ts). */
+/** [language]'s catalog: at once where it can be read synchronously or was preloaded, else when its read finishes. */
+// Not produceState: its state is remembered without the key, so a new language would keep the old catalog.
 @Composable
-fun localized(resource: StringResource, vararg args: Any): String {
-    LocalAppLanguage.current
-    return stringResource(resource, *args)
+private fun catalogState(language: String): State<Catalog?> {
+    val state = remember(language) { mutableStateOf(Catalogs.now(language)) }
+    if (state.value == null) LaunchedEffect(language) { state.value = Catalogs.load(language) }
+    return state
+}
+
+/** Outside any provider (a test, a preview): English, read once and kept by [Catalogs]. */
+@Composable
+@ReadOnlyComposable
+private fun loadedLanguage(): LoadedLanguage =
+    LocalCatalogs.current ?: LoadedLanguage("en", null, Catalogs.now("en"))
+
+/**
+ * A string in the app's language, English where the language lacks it. Use this, never `stringResource`. The
+ * plain overload exists for size: most calls have no arguments, and a vararg call builds an array at every one of
+ * them (~850 call sites, measurable in the web bundle).
+ */
+@Composable
+@ReadOnlyComposable
+fun localized(key: StringKey): String {
+    val l = loadedLanguage()
+    return lookup(key, l.chosen, l.english)
+}
+
+/** [localized] with one placeholder: the commonest shape, kept off the vararg so no call site builds an array. */
+@Composable
+@ReadOnlyComposable
+fun localized(key: StringKey, arg: Any): String {
+    val l = loadedLanguage()
+    return formatCatalogText(lookup(key, l.chosen, l.english), arrayOf(arg))
+}
+
+/** [localized] with `%1$s` / `%1$d` placeholders filled from [args]. */
+@Composable
+@ReadOnlyComposable
+fun localized(key: StringKey, vararg args: Any): String {
+    val l = loadedLanguage()
+    return formatCatalogText(lookup(key, l.chosen, l.english), args)
+}
+
+/** A count's string whose only placeholder is the count itself (the commonest shape: `localizedPlural(k, n, n)`). */
+@Composable
+@ReadOnlyComposable
+fun localizedPlural(key: PluralKey, count: Int, arg: Any): String {
+    val l = loadedLanguage()
+    return formatCatalogText(lookupPlural(key, l.language, count, l.chosen, l.english), arrayOf(arg))
 }
 
 /** A count's string in the app's language, with that language's plural rules. */
 @Composable
-fun localizedPlural(resource: PluralStringResource, count: Int, vararg args: Any): String {
+@ReadOnlyComposable
+fun localizedPlural(key: PluralKey, count: Int, vararg args: Any): String {
+    val l = loadedLanguage()
+    return formatCatalogText(lookupPlural(key, l.language, count, l.chosen, l.english), args)
+}
+
+/** Each option's label in the app's language, looked up once so a plain `(T) -> String` (a kit's optionLabel) can read it. */
+@Composable
+fun <T> localizedLabels(options: List<T>, key: (T) -> StringKey): Map<T, String> =
+    options.associateWith { localized(key(it)) }
+
+/**
+ * This text in capitals by the app language's rules: Turkish "i" becomes "İ" (Kotlin's `uppercase()` knows no
+ * language and gives "I"). Use it for every translated text shown in capitals.
+ */
+@Composable
+fun String.uppercaseInAppLanguage(): String {
     LocalAppLanguage.current
-    return pluralStringResource(resource, count, *args)
+    return toUpperCase(Locale.current)
 }

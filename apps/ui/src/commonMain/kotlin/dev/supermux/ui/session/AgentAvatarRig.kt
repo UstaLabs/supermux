@@ -5,16 +5,21 @@
 // Mirrors src/core/agents/avatar/renderer.js — keep the two in step.
 package dev.supermux.ui.session
 
+import androidx.compose.animation.core.InfiniteRepeatableSpec
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.withInfiniteAnimationFrameMillis
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -349,8 +354,23 @@ private fun mix(a: V, b: V, k: Float): V {
 
 // ── Rendering ────────────────────────────────────────────────────────────────────────────────
 
-/** False while nobody can see the window (hidden, minimised, screen locked): avatars stand still. */
+/**
+ * False while nobody can see the window (hidden, minimised, covered, screen locked): avatars and the other
+ * purely decorative loops (spinners, shimmers, pulses) stand still (#108, #132). Only looks read it, never state.
+ */
 val LocalAvatarsLive = compositionLocalOf { true }
+
+/**
+ * A decorative loop from [initial] to [target] that stands at [initial] while [LocalAvatarsLive] is false, so a
+ * spinner or a pulse nobody can see asks for no frames (#132).
+ */
+@Composable
+fun rememberLiveLoop(initial: Float, target: Float, spec: InfiniteRepeatableSpec<Float>, label: String): State<Float> =
+    if (LocalAvatarsLive.current) {
+        rememberInfiniteTransition(label = label).animateFloat(initial, target, spec, label = label)
+    } else {
+        remember(initial) { mutableFloatStateOf(initial) }
+    }
 
 /**
  * How fast an avatar's clock ticks: smooth under the pointer, slower idle, slowest asleep, still
@@ -367,22 +387,23 @@ internal fun avatarFps(state: String, hovered: Boolean, live: Boolean): Int = wh
  * A clock (ms) that ticks [fps] times a second, carrying on from where it was when the rate changes;
  * 0 stops it. At 60 it ticks with the screen's frames. Below that its ticks land on a grid of the frame
  * time shared by every clock at that rate, so a window of avatars redraws [fps] times a second in all.
+ * An infinite animation to Compose: a test with an auto-advancing clock stops it, as it does a looping transition.
  */
 @Composable
 fun rememberAvatarClock(fps: Int): Long {
     var now by remember { mutableLongStateOf(0L) }
     LaunchedEffect(fps) {
         if (fps <= 0) return@LaunchedEffect
-        var frame = withFrameMillis { it }
+        var frame = withInfiniteAnimationFrameMillis { it }
         val start = frame - now
         if (fps >= 60) {
-            while (true) withFrameMillis { now = it - start }
+            while (true) withInfiniteAnimationFrameMillis { now = it - start }
         } else {
             val period = 1000L / fps
             while (true) {
                 delay(period - frame % period)
                 // Set inside the frame, so it is drawn in this frame rather than asking for another.
-                withFrameMillis { frame = it; now = it - start }
+                withInfiniteAnimationFrameMillis { frame = it; now = it - start }
             }
         }
     }

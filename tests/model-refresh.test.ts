@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test"
 import { ModelCache } from "../src/core/models/cache"
-import { refreshModelCache } from "../src/core/models/refresh"
+import { refreshModelCache, seedModelCache, SharedRefreshes } from "../src/core/models/refresh"
 import type { ModelInfo } from "../src/core/models/discovery"
 
 const claudeModels: ModelInfo[] = [
@@ -61,4 +61,41 @@ test("refreshModelCache resolves to the agents whose list actually changed", asy
   expect(await refreshModelCache(cache, { claude: async () => [] })).toEqual([])
   const renamed = [{ ...claudeModels[0]!, displayName: "Claude Opus 4.8 (new)" }]
   expect(await refreshModelCache(cache, { claude: async () => renamed })).toEqual(["claude"])
+})
+
+// #129 follow-up: GET /models waits for discovery while the cache is empty, and Claude's discovery runs Claude Code
+// (~2.5 s), so a boot without the lists learned last time showed "Settings" on the model chip until it was done.
+test("seedModelCache fills an empty cache from the lists learned before, of any age", () => {
+  const cache = new ModelCache()
+  const learned = { get: (agent: string) => (agent === "claude" ? claudeModels : undefined) }
+  expect(seedModelCache(cache, learned, ["claude", "codex"])).toEqual(["claude"])
+  expect(cache.get("claude")).toEqual(claudeModels)
+  expect(cache.get("codex")).toEqual([])
+  // Seeded entries are expired, so the next refresh still asks the agent.
+  expect(cache.isExpired("claude", 60_000)).toBe(true)
+})
+
+test("seedModelCache never replaces a list already in the cache", () => {
+  const cache = new ModelCache()
+  const fresh: ModelInfo[] = [{ id: "claude-fable-5-1", displayName: "Fable 5.1", agent: "claude" }]
+  cache.set("claude", fresh)
+  expect(seedModelCache(cache, { get: () => claudeModels }, ["claude"])).toEqual([])
+  expect(cache.get("claude")).toEqual(fresh)
+})
+
+test("SharedRefreshes runs one discovery per agent at a time, so a /models during the boot refresh joins it", async () => {
+  const refreshes = new SharedRefreshes()
+  let starts = 0
+  let finish!: () => void
+  const start = () => { starts++; return new Promise<void>((resolve) => { finish = resolve }) }
+  const boot = refreshes.run("claude", start)
+  const request = refreshes.run("claude", start)
+  expect(request).toBe(boot)
+  expect(starts).toBe(1)
+  finish()
+  await boot
+  // Once done, the next refresh starts afresh.
+  void refreshes.run("claude", start)
+  expect(starts).toBe(2)
+  finish()
 })

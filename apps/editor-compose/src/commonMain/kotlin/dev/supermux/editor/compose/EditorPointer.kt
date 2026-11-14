@@ -6,6 +6,7 @@ import androidx.compose.ui.input.pointer.AwaitPointerEventScope
 import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.PointerKeyboardModifiers
@@ -13,6 +14,7 @@ import androidx.compose.ui.input.pointer.isAltPressed
 import androidx.compose.ui.input.pointer.isCtrlPressed
 import androidx.compose.ui.input.pointer.isMetaPressed
 import androidx.compose.ui.input.pointer.isPrimaryPressed
+import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.isShiftPressed
 import dev.supermux.editor.core.EditorSelection
 import dev.supermux.editor.core.SelectionRange
@@ -191,7 +193,10 @@ internal class EditorPointer(private val c: EditorController, private val scope:
             touch = TouchPress(change.id.value, change.position, change.uptimeMillis)
             return // a finger's press is also the start of a scroll: leave it to the scrollable
         }
-        if (!event.buttons.isPrimaryPressed) return
+        if (!event.buttons.isPrimaryPressed) {
+            if (event.buttons.isSecondaryPressed) onSecondaryPress(change)
+            return
+        }
         if (c.widgetAt(change.position)) return
         if (change.isConsumed && c.inlineWidgetAt(change.position)) return
         // A placeholder chip (a fold's "⋯"): the plugin's to act on (unfold), not a caret.
@@ -251,6 +256,25 @@ internal class EditorPointer(private val c: EditorController, private val scope:
                 select(EditorSelection.cursor(at))
             }
         }
+        change.consume()
+    }
+
+    /**
+     * A right-click (#138): the selection menu at the pointer, as CM6's browser context menu was. Outside
+     * the selection the caret moves there first; inside, the selection stays for Cut and Copy. Widgets,
+     * chips and the gutter keep their own presses.
+     */
+    private fun onSecondaryPress(change: PointerInputChange) {
+        val pos = change.position
+        if (c.widgetAt(pos) || c.chipAt(pos) != null || c.gutterHit(pos) != null) return
+        if (change.isConsumed && c.inlineWidgetAt(pos)) return
+        drag = null
+        c.handles = TouchHandles.NONE
+        c.requestFocus()
+        val at = offsetAt(pos)
+        if (c.view.state.selection.ranges.none { !it.empty && at >= it.from && at <= it.to }) select(EditorSelection.cursor(at))
+        c.menuShown = true
+        c.menuPoint = pos
         change.consume()
     }
 

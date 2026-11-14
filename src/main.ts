@@ -189,13 +189,14 @@ import { join, dirname, resolve, isAbsolute, sep } from "path"
 import { fileURLToPath } from "url"
 import type { AgentAdapter, LiveDeltaEvent, LiveEndEvent, RequestOpenEvent, SubagentActivityEvent, SubagentEvent, SubagentSnapshotEvent, TaskEvent, TurnCompleteEvent, TurnFailedEvent } from "./core/agents/types"
 import { ModelCache } from "./core/models/cache"
+import { discoverClaude, discoverClaudeModelsViaCli } from "./core/models/claude-models"
 import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels, discoverWithAccounts, type DiscoveryLaunch, type ModelInfo } from "./core/models/discovery"
 import { followAdapterModels, LearnedModels } from "./core/models/learned"
 import { discoverGrokModels } from "./core/agents/grok/model-discovery"
 import { grokHasScheduledTasks } from "./core/agents/grok/scheduled-tasks"
 import { keeperAgentRunning } from "../packages/supermux-core/src/keeper/index.js"
 import { discoverAntigravityModels } from "./core/agents/antigravity/model-discovery"
-import { refreshModelCache, type ModelDiscoverers } from "./core/models/refresh"
+import { refreshModelCache, seedModelCache, SharedRefreshes, type ModelDiscoverers } from "./core/models/refresh"
 import { listOpenCodeProviders, setOpenCodeApiKey, startOpenCodeOAuth, finishOpenCodeOAuth } from "./core/agents/opencode/auth-ops"
 import { openCodeConsoleFingerprint } from "./core/agents/opencode/console"
 import { onOpenCodeFreeLimit } from "./core/usage/opencode-free"
@@ -259,7 +260,7 @@ import { deriveName, ensureUnique } from "./core/session-manager/naming"
 import { InboxStore } from "./core/inbox/store"
 import { InboxCursorStore } from "./core/inbox/cursor"
 import { InboxDelivery } from "./core/inbox/delivery"
-import { dirs, files as platformFiles, host, paths, proc } from "@supermux/platform"
+import { dirs, files as platformFiles, host, paths, ports, proc } from "@supermux/platform"
 
 const log = makeLogger("main")
 // Under the desktop app's Windows Scheduled Task loop? Captured once and removed from the env so
@@ -1061,7 +1062,14 @@ function accountAware(agent: AgentKind, discover: (launch?: DiscoveryLaunch) => 
 }
 
 const modelDiscoverers: ModelDiscoverers = {
-  [AgentKind.Claude]: accountAware(AgentKind.Claude, (launch) => discoverClaudeModels({ launch })),
+  // #129: Claude's list from Claude Code itself (a live session's initialize, else a control-only claude), the API as
+  // the fallback: no credential of ours, so a Mac's Keychain login lists its models without any prompt.
+  [AgentKind.Claude]: () => discoverClaude({
+    learned: learnedModels,
+    cli: (launch) => discoverClaudeModelsViaCli({ launch }),
+    api: (launch) => discoverClaudeModels({ launch }),
+    accounts: () => accountDiscoveryLaunches(AgentKind.Claude),
+  }),
   [AgentKind.Codex]: accountAware(AgentKind.Codex, (launch) => discoverCodexModels({ launch })),
   [AgentKind.Cursor]: accountAware(AgentKind.Cursor, (launch) => discoverCursorModels({ launch, learned: () => learnedModels.get(AgentKind.Cursor) })),
   [AgentKind.OpenCode]: accountAware(AgentKind.OpenCode, (launch) => discoverOpenCodeModels({ launch })),
@@ -1078,12 +1086,24 @@ const modelDiscoverers: ModelDiscoverers = {
 // the event loop.
 const MODEL_REFRESH_INTERVAL_MS = 15 * 60_000
 
-function refreshModels(discoverers: ModelDiscoverers = modelDiscoverers): Promise<void> {
-  return refreshModelCache(modelCache, discoverers, {
-    onEmpty: (agent) => log.warn("model_discovery_empty", { agent }),
-  }).then((changed) => {
-    if (changed.length > 0) announceAgentModelsChanged(changed)
-  })
+// One discovery per agent at a time: the boot or periodic refresh and a GET /models join the same one, so Claude Code
+// (Claude's discovery) never runs twice at once. Resolves to whether the agent's cached list changed.
+const modelRefreshes = new SharedRefreshes<boolean>()
+
+function discoverAgentModels(agent: AgentKind): Promise<boolean> {
+  const discover = modelDiscoverers[agent]
+  if (!discover) return Promise.resolve(false)
+  return modelRefreshes.run(agent, () => refreshModelCache(modelCache, { [agent]: discover }, {
+    onEmpty: (empty) => log.warn("model_discovery_empty", { agent: empty }),
+  }).then((changed) => changed.length > 0))
+}
+
+/** Every agent's models, announced once for all the lists that changed. */
+async function refreshModels(): Promise<void> {
+  const agents = Object.keys(modelDiscoverers) as AgentKind[]
+  const changed = await Promise.all(agents.map(discoverAgentModels))
+  const announced = agents.filter((_, i) => changed[i])
+  if (announced.length > 0) announceAgentModelsChanged(announced)
 }
 
 /**
@@ -1095,17 +1115,10 @@ function announceAgentModelsChanged(agents: AgentKind[]): void {
   webChannel?.broadcastToAll({ type: "agent_models_changed" })
 }
 
-const agentModelRefreshes = new Map<AgentKind, Promise<void>>()
-
 function refreshAgentModels(agent: AgentKind): Promise<void> {
-  const running = agentModelRefreshes.get(agent)
-  if (running) return running
-  const discover = modelDiscoverers[agent]
-  if (!discover) return Promise.resolve()
-  const refresh = refreshModels({ [agent]: discover })
-    .finally(() => agentModelRefreshes.delete(agent))
-  agentModelRefreshes.set(agent, refresh)
-  return refresh
+  return discoverAgentModels(agent).then((changed) => {
+    if (changed) announceAgentModelsChanged([agent])
+  })
 }
 
 function lookupModels(agent: AgentKind) {
@@ -1759,7 +1772,7 @@ async function interruptSessionById(sessionId: string): Promise<{ ok: boolean; r
   return r
 }
 
-type FinishRequest = { action: FinishAction; skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string }
+type FinishRequest = { action: FinishAction; skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string; /** #72: never archive the chat after a merge (the new UI's merge leaves it open). */ keep?: boolean }
 
 async function finishSessionById(sessionId: string, req: FinishRequest): Promise<FinishJob | { error: string }> {
   const s = registry.get(sessionId)
@@ -1776,15 +1789,15 @@ async function finishSessionById(sessionId: string, req: FinishRequest): Promise
   return startFinishJob(session, opts, {
     onUpdate: (job) => webChannel?.broadcastToAll({ type: "finish_job", session: sessionId, job }),
     persist: (job) => { try { registry.sessions.setFinishJob(sessionId, job) } catch {} },
-    notify: (job) => { void onFinishTerminal(sessionId, sessionName, job) },
+    notify: (job) => { void onFinishTerminal(sessionId, sessionName, job, req.keep === true) },
   })
 }
 
-async function onFinishTerminal(sessionId: string, sessionName: string, job: FinishJob): Promise<void> {
+async function onFinishTerminal(sessionId: string, sessionName: string, job: FinishJob, keep = false): Promise<void> {
   fireFinishPush(sessionName, sessionId, job)
   const status = job.outcome?.status
   const s = registry.get(sessionId)
-  const archiveMerge = job.action === "merge" && status === "integrated" && (!s?.repo_root || loadFinishConfig(s.repo_root).archiveOnMerge)
+  const archiveMerge = !keep && job.action === "merge" && status === "integrated" && (!s?.repo_root || loadFinishConfig(s.repo_root).archiveOnMerge)
   const archiveDiscard = job.action === "discard" && status === "discarded"
   if (archiveMerge || archiveDiscard) {
     try {
@@ -3258,6 +3271,9 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       })
       return viewDto(v)
     },
+    getClosedSessions: (workspaceId) => registry.workspaces.closedSessions(workspaceId),
+    reopenClosedSession: async (workspaceId, sessionId, groupId) =>
+      viewDto(await workspaceService.reopenClosedSession(workspaceId, sessionId, groupId)),
     getWorkspaceView: (viewId) => {
       const v = registry.workspaces.getView(viewId)
       return v ? viewDto(v) : undefined
@@ -3353,6 +3369,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     startDisplay: (args) => displayManager.start({ sessionDisplayName: args.sessionName, provider: args.provider as any, device: args.device, width: args.width, height: args.height }),
     stopDisplay: (id) => displayManager.stop(id),
     getSessionWorkdir: (id) => registry.get(id)?.workdir,
+    getSessionGitBase: (id) => {
+      const s = registry.get(id)
+      return s?.repo_root && s.base_branch && s.base_branch !== "HEAD" ? { repoRoot: s.repo_root, base: s.base_branch } : undefined
+    },
     folderReady: (path) => folderReady({
       sessions: () => registry.list(),
       pending: (id) => sessionChain.pending(id),
@@ -3470,6 +3490,12 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       return added
     },
     browserCommentsList: (id) => browserCommentStore.list(id),
+    portOwner: (port) => {
+      const byPid = new Map(registry.list().filter((s) => s.pid > 0).map((s) => [s.pid, s] as const))
+      const pid = ports.ownerAmong(port, new Set(byPid.keys()))
+      const owner = pid === null ? undefined : byPid.get(pid)
+      return owner ? { sessionId: owner.id, sessionName: owner.name } : null
+    },
     reviewAdd: (id, c) => {
       const comment = reviewStore.add({ ...c, sessionId: id })
       webChannel?.broadcastToAll({ type: "review_comment", sessionId: id, comment })
@@ -4602,6 +4628,14 @@ agentStateStore.on("change", (sessionId: string, state) => {
   const workdir = registry.get(sessionId)?.workdir
   if (workdir) worktreeService.touchWorkdir(workdir)
 })
+// #122 phase 4: a turn the agent starts after a Browser tab's comments were sent is it having seen them: their pins say so.
+agentStateStore.on("change", (sessionId: string, state: { phase: string; workingSince?: number }) => {
+  if (state.phase !== "thinking" && state.phase !== "running") return
+  if (state.workingSince === undefined) return
+  for (const comment of browserCommentStore.markSeen(sessionId, state.workingSince, new Date().toISOString())) {
+    webChannel?.broadcastToAll({ type: "browser_comment", sessionId, comment })
+  }
+})
 agentStateStore.on("thoughtComplete", (sessionId: string, durationMs: number, now: number) => {
   const sec = Math.max(1, Math.round(durationMs / 1000))
   activityStore.append(sessionId, { ts: new Date(now).toISOString(), kind: "thinking", title: `Thought for ${sec}s` })
@@ -4969,6 +5003,8 @@ telemetry.start()
 proxyLivenessMonitor.start()
 worktreeService.start()
 if (!IS_TEST_BROKER) {
+  // The lists learned last run answer GET /models at once; the refresh below replaces them.
+  seedModelCache(modelCache, learnedModels, Object.keys(modelDiscoverers) as AgentKind[])
   refreshModels().catch((err) => log.warn("model_cache_init_failed", { err: String(err) }))
 }
 const modelRefreshInterval = IS_TEST_BROKER ? undefined : setInterval(() => {

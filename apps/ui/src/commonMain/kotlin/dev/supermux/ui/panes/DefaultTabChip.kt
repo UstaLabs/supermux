@@ -48,6 +48,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 
 /**
  * The default tab chip: an icon, a label and a close affordance, as a sheet tab.
@@ -72,7 +74,7 @@ fun DefaultTabChip(
      * Accessibility label for the close affordance. The caller supplies it because only the caller
      * knows what a tab holds — "view", "file", "tab" are all content vocabulary.
      */
-    closeLabel: String = "Close view",
+    closeLabel: String? = null,
     /**
      * A status mark (e.g. a chat's unread), null for none: a badge on [icon], or a dot before the
      * label without one. The caller picks the colour, so this layer stays content-free.
@@ -108,7 +110,7 @@ fun DefaultTabChip(
         TabClose(
             visible = state.selected || hovered,
             onClick = { onClose(itemId) },
-            label = closeLabel,
+            label = closeLabel ?: localized(Str.panes_close_view),
             modifier = Modifier.testTag("tab-close-$itemId"),
         )
     }

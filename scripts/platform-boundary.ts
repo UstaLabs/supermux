@@ -102,6 +102,19 @@ export const RULES: Rule[] = [
     use: "a folder link: fs.symlink(target, path, \"junction\"); a file link: files.linkFile; a private file: files.makePrivate",
   },
   {
+    // #129, Ahmet: the broker never raises a Keychain or other OS security prompt. Whether reading the macOS Keychain
+    // prompts depends on each item's ACL, which another app (Claude Code's next token refresh) can change at any time.
+    id: "keychain",
+    lang: "ts",
+    patterns: [
+      /\b(?:find|dump|add|delete)-(?:generic|internet)-password\b|\bdump-keychain\b|\bsecurity\s+(?:find|dump)-/,
+      /\bBun\.secrets\b/,
+      /\bSec(?:Item|Keychain)[A-Z]\w*/,
+    ],
+    allowed: ["packages/platform/src/credentials.ts"],
+    use: "never read the macOS Keychain (it can prompt): an agent's login comes from its files or its env; credentials.* reads Windows' store only",
+  },
+  {
     id: "signals",
     lang: "ts",
     patterns: [/\bprocess\.kill\(\s*-/, /["']SIG(?:KILL|HUP|WINCH|USR1|USR2|QUIT)["']/],

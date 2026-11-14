@@ -137,11 +137,6 @@ import dev.supermux.ui.platform.Platform
 import dev.supermux.ui.work.handOverAsTapped
 import dev.supermux.ui.work.saveDownload
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.saved_file
-import dev.supermux.ui.resources.saved_to_downloads
-import dev.supermux.ui.resources.saved_to_gallery
-import dev.supermux.ui.resources.saved_to_photos
 import dev.supermux.ui.platform.SavedFile
 import dev.supermux.ui.platform.SavedPlace
 import dev.supermux.ui.work.DownloadItemRing
@@ -178,6 +173,7 @@ import io.github.kdroidfilter.composemediaplayer.VideoPlayerSurface
 import io.github.kdroidfilter.composemediaplayer.rememberVideoPlayerState
 import dev.supermux.chat.previewFilename
 import dev.supermux.fs.fileNameOf
+import dev.supermux.ui.i18n.Str
 
 // ---------------------------------------------------------------------------
 // Reading width
@@ -1049,11 +1045,20 @@ private fun TaskCard(event: ActivityEvent) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Space.sm),
     ) {
-        Text(event.title ?: event.taskKind ?: "task", style = MaterialTheme.typography.labelMedium)
+        // The title gives way (#141): it wraps, up to two lines, and the status keeps its own width on one line.
+        Text(
+            event.title ?: event.taskKind ?: "task",
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
         Text(
             status,
             style = MaterialTheme.typography.labelSmall,
             color = pillColor,
+            maxLines = 1,
+            softWrap = false,
             modifier = Modifier
                 .clip(RoundedCornerShape(Radii.sm))
                 .background(pillColor.copy(alpha = 0.15f))
@@ -2468,10 +2473,10 @@ internal fun savedNotice(saved: SavedFile, pointer: Boolean, words: SavedWords):
 /** [SavedWords] in the app's language. */
 @Composable
 internal fun rememberSavedWords(): SavedWords {
-    val photos = localized(Res.string.saved_to_photos)
-    val gallery = localized(Res.string.saved_to_gallery)
-    val downloads = localized(Res.string.saved_to_downloads)
-    val chosen = localized(Res.string.saved_file, "%1\$s")
+    val photos = localized(Str.saved_to_photos)
+    val gallery = localized(Str.saved_to_gallery)
+    val downloads = localized(Str.saved_to_downloads)
+    val chosen = localized(Str.saved_file, "%1\$s")
     return remember(photos, gallery, downloads, chosen) {
         SavedWords(photos, gallery, downloads) { name -> chosen.replace("%1\$s", name) }
     }

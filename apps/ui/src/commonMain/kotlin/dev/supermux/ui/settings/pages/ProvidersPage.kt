@@ -27,6 +27,8 @@ import dev.supermux.net.AgentInstallStatus
 import dev.supermux.state.AccountResult
 import dev.supermux.ui.accounts.AccountsActions
 import dev.supermux.ui.accounts.accountsFor
+import dev.supermux.ui.i18n.Plurals
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.settings.AgentsLoadState
 import dev.supermux.ui.settings.SettingsPlace
@@ -51,6 +53,11 @@ import dev.supermux.ui.settings.kit.kitColors
 import dev.supermux.ui.settings.normalizeInstallState
 import dev.supermux.ui.settings.settingsTitle
 import dev.supermux.ui.settings.statusLabel
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.localizedPlural
+import dev.supermux.ui.settings.localizedInstallFailureMessage
+import dev.supermux.ui.settings.localizedSettingsTitle
+import dev.supermux.ui.settings.localizedStatusLabel
 import kotlinx.coroutines.launch
 
 /**
@@ -68,10 +75,10 @@ fun ProvidersPage(
     showAccountSettings: Boolean = true,
 ) {
     KitPage(
-        settingsTitle(SettingsPlace(SettingsSection.Providers)),
+        localizedSettingsTitle(SettingsPlace(SettingsSection.Providers)),
         modifier,
         scope = { KitMachineScope() },
-        lede = "The coding agents ${providerMachine()} can run, and the logins they use.",
+        lede = localized(Str.providers_lede, providerMachine()),
         anchor = anchor,
         onAnchorShown = onAnchorShown,
         tag = "agent_settings_screen",
@@ -89,14 +96,14 @@ fun ProvidersPage(
                 Spacer(Modifier.height(18.dp))
                 LimitRows(accounts)
             }
-            KitNote("Model, effort and permissions are picked per chat, in the composer.")
+            KitNote(localized(Str.providers_composer_note))
         }
     }
 }
 
 /** The machine as a sentence names it mid-way: its name, or "this machine" when Settings knows none. */
 @Composable
-internal fun providerMachine(): String = LocalSettingsMachines.current?.current?.name ?: "this machine"
+internal fun providerMachine(): String = LocalSettingsMachines.current?.current?.name ?: localized(Str.providers_this_machine)
 
 /** A provider's name as the prototype writes it: Claude's agent is "Claude Code". */
 internal fun providerName(kind: String): String = settingsTitle(SettingsPlace(SettingsSection.Providers, kind))
@@ -116,14 +123,14 @@ internal fun providerMark(kind: String): String = when (kind) {
 @Composable
 private fun ProvidersList(providers: ProvidersState, accounts: List<AccountDto>, onOpen: (String) -> Unit) {
     when (val s = providers.load) {
-        AgentsLoadState.Loading -> KitNote("Loading…", Modifier.testTag("agent_settings_loading"))
+        AgentsLoadState.Loading -> KitNote(localized(Str.providers_loading), Modifier.testTag("agent_settings_loading"))
         AgentsLoadState.Empty -> Column(Modifier.testTag("agent_settings_empty")) {
-            KitNote("${currentMachineName()} reported no coding agents.")
-            KitTextAction("Try again", providers::reload, Modifier.testTag("agent_settings_retry"))
+            KitNote(localized(Str.providers_no_agents, currentMachineName()))
+            KitTextAction(localized(Str.providers_try_again), providers::reload, Modifier.testTag("agent_settings_retry"))
         }
         is AgentsLoadState.Error -> Column(Modifier.testTag("agent_settings_error")) {
-            KitNote("Couldn't reach ${providerMachine()}.")
-            KitTextAction("Try again", providers::reload, Modifier.testTag("agent_settings_retry"))
+            KitNote(localized(Str.providers_couldnt_reach, providerMachine()))
+            KitTextAction(localized(Str.providers_try_again), providers::reload, Modifier.testTag("agent_settings_retry"))
         }
         is AgentsLoadState.Ready -> KitItemList {
             s.statuses.forEach { status -> ProviderItem(status, providers.holder(status.kind), accounts, onOpen) }
@@ -139,15 +146,16 @@ private fun ProviderItem(status: AgentInstallStatus, p: ProviderState, all: List
     val added = mine.count { !it.system }
     val installFailed = !status.installed && !p.installActive &&
         (p.installRequestFailed || p.installTimedOut || normalizeInstallState(p.install?.state) == "failed")
-    val line = when {
+    val base = when {
         installFailed -> when {
-            p.installRequestFailed -> "Couldn't start the install."
-            p.installTimedOut -> "The install timed out."
-            else -> installFailureMessage(p.install)
+            p.installRequestFailed -> localized(Str.providers_install_start_failed)
+            p.installTimedOut -> localized(Str.providers_install_timed_out)
+            else -> localizedInstallFailureMessage(p.install)
         }
-        status.authed && email != null -> "Your login · $email"
-        else -> statusLabel(status)
-    } + if (added > 0 && status.installed) " + $added more" else ""
+        status.authed && email != null -> localized(Str.providers_your_login_email, email)
+        else -> localizedStatusLabel(status)
+    }
+    val line = if (added > 0 && status.installed) localizedPlural(Plurals.providers_line_more, added, base, added) else base
     // `agent_row_‹kind›` is the tag the shell's tests have always found a provider by.
     Box(Modifier.testTag("agent_row_$kind")) {
         KitItem(
@@ -161,12 +169,12 @@ private fun ProviderItem(status: AgentInstallStatus, p: ProviderState, all: List
             when {
                 !status.installed && p.installActive ->
                     // Its own node (the item merges what it holds), so the running install can be found by its tag.
-                    KitItemStatus("Installing…", modifier = Modifier.semantics(mergeDescendants = true) {}.testTag("agent_install_running_$kind"))
+                    KitItemStatus(localized(Str.providers_installing), modifier = Modifier.semantics(mergeDescendants = true) {}.testTag("agent_install_running_$kind"))
                 !status.installed ->
-                    KitGhostButton("Install", onClick = p::startInstall, modifier = Modifier.testTag("agent_install_start_$kind"))
-                p.loginActive -> KitItemStatus("Signing in…")
-                status.signInExpired -> KitItemStatus("Sign in again", warn = true)
-                status.authed || kind == "opencode" -> KitItemStatus("Ready", dot = KitDot.Ok)
+                    KitGhostButton(localized(Str.providers_install), onClick = p::startInstall, modifier = Modifier.testTag("agent_install_start_$kind"))
+                p.loginActive -> KitItemStatus(localized(Str.providers_signing_in))
+                status.signInExpired -> KitItemStatus(localized(Str.providers_sign_in_again), warn = true)
+                status.authed || kind == "opencode" -> KitItemStatus(localized(Str.providers_ready), dot = KitDot.Ok)
             }
         }
     }
@@ -181,6 +189,7 @@ private fun LimitRows(accounts: AccountsActions) {
     var pendingSwitch by remember { mutableStateOf<Boolean?>(null) }
     var pendingResume by remember { mutableStateOf<Boolean?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    val saveFailed = localized(Str.providers_setting_save_failed)
 
     fun save(on: Boolean, pending: (Boolean?) -> Unit, call: suspend (Boolean) -> AccountResult<Boolean>) {
         pending(on)
@@ -188,25 +197,24 @@ private fun LimitRows(accounts: AccountsActions) {
         scope.launch {
             val r = call(on)
             pending(null)
-            if (r is AccountResult.Failed) error = r.message ?: "Couldn't save the setting."
+            if (r is AccountResult.Failed) error = r.message ?: saveFailed
         }
     }
 
     KitToggleRow(
-        "Switch accounts at a limit",
+        localized(Str.providers_auto_switch),
         checked = pendingSwitch ?: autoSwitch ?: false,
         onCheckedChange = { save(it, { v -> pendingSwitch = v }, accounts.setAutoSwitch) },
         modifier = Modifier.kitAnchor("auto-switch").testTag("accounts-autoswitch"),
-        description = "With two logins for a provider, a chat moves to the other one when the first runs out. " +
-            "Not for Cursor or logins kept apart.",
+        description = localized(Str.providers_auto_switch_description),
     )
     KitToggleRow(
-        "Resume after a limit reset",
+        localized(Str.providers_auto_resume),
         // On unless turned off.
         checked = pendingResume ?: autoResume ?: true,
         onCheckedChange = { save(it, { v -> pendingResume = v }, accounts.setAutoResume) },
         modifier = Modifier.kitAnchor("limit-resume").testTag("accounts-autoresume"),
-        description = "When every login has run out, the chat waits for the first reset and then carries on.",
+        description = localized(Str.providers_auto_resume_description),
     )
     error?.let {
         Text(it, fontSize = 12.sp, color = kitColors().warn, modifier = Modifier.padding(top = 6.dp).testTag("accounts-autoswitch-error"))

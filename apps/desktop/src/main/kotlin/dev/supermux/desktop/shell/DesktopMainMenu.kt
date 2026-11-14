@@ -97,6 +97,61 @@ fun List<MainMenuGroup>.menuChords(): Set<KeyChord> = flatMap { it.entries }.map
     }
 }.toSet()
 
+/**
+ * Edit (#134, ADEMark: it had only "Paste image"): Undo, Redo, Cut, Copy, Paste, Select All, the device's own keys, then
+ * Paste image. The focused field owns these keys: a click [sendKey]s the item's key to it, and the macOS menu's echo of a
+ * press the field already handled ([isEcho]) does nothing, so nothing is pasted twice. Paste image has no key: the
+ * composer's own paste takes images.
+ */
+fun editMenu(
+    os: KeyOs,
+    isEcho: (KeyChord) -> Boolean,
+    sendKey: (MenuShortcut) -> Unit,
+    pasteImage: () -> Unit,
+): MainMenuGroup {
+    val mac = os == KeyOs.Apple
+    fun key(k: Key, shift: Boolean = false) = MenuShortcut(k, ctrl = !mac, meta = mac, shift = shift)
+    fun item(label: String, shortcut: MenuShortcut) = MainMenuEntry.Action(label, shortcut) {
+        val chord = shortcut.chord()
+        if (chord == null || !isEcho(chord)) sendKey(shortcut)
+    }
+    return MainMenuGroup(
+        "Edit",
+        'E',
+        listOf(
+            item("Undo", key(Key.Z)),
+            item("Redo", key(Key.Z, shift = true)),
+            MainMenuEntry.Separator,
+            item("Cut", key(Key.X)),
+            item("Copy", key(Key.C)),
+            item("Paste", key(Key.V)),
+            item("Select All", key(Key.A)),
+            MainMenuEntry.Separator,
+            MainMenuEntry.Action("Paste image", onClick = pasteImage),
+        ),
+    )
+}
+
+// A key [sendMenuKey] is delivering: a menu that fires on unhandled keys (Swing's) must not take it back.
+private var sendingMenuKey = false
+
+/** Edit's click: [shortcut] pressed and released on [window]'s focused component, as if typed. */
+fun sendMenuKey(window: java.awt.Window, shortcut: MenuShortcut) {
+    if (sendingMenuKey) return
+    val target = window.mostRecentFocusOwner ?: window
+    val mods = (if (shortcut.meta) KeyEvent.META_DOWN_MASK else 0) or (if (shortcut.ctrl) KeyEvent.CTRL_DOWN_MASK else 0) or
+        (if (shortcut.shift) KeyEvent.SHIFT_DOWN_MASK else 0) or (if (shortcut.alt) KeyEvent.ALT_DOWN_MASK else 0)
+    val code = shortcut.key.nativeKeyCode
+    sendingMenuKey = true
+    try {
+        val now = System.currentTimeMillis()
+        target.dispatchEvent(KeyEvent(target, KeyEvent.KEY_PRESSED, now, mods, code, KeyEvent.CHAR_UNDEFINED))
+        target.dispatchEvent(KeyEvent(target, KeyEvent.KEY_RELEASED, now, mods, code, KeyEvent.CHAR_UNDEFINED))
+    } finally {
+        sendingMenuKey = false
+    }
+}
+
 sealed interface MainMenuEntry {
     data class Action(val label: String, val shortcut: MenuShortcut? = null, val enabled: Boolean = true, val onClick: () -> Unit) : MainMenuEntry
     data class Toggle(val label: String, val checked: Boolean, val shortcut: MenuShortcut? = null, val enabled: Boolean = true, val onToggle: () -> Unit) : MainMenuEntry

@@ -166,6 +166,8 @@ import kotlin.math.exp
 import kotlin.math.max
 import kotlin.time.Clock
 import dev.supermux.ui.accounts.LimitWaitStrip
+import dev.supermux.ui.i18n.Plurals
+import dev.supermux.ui.i18n.localizedPlural
 
 /** Reading-width cap for the composer so it lines up with the timeline's own cap. */
 private val CONTENT_MAX_WIDTH = 860.dp
@@ -504,6 +506,9 @@ fun ChatPanel(
     onExternalAttachConsumed: () -> Unit = {},
     externalDictate: ComposerExternalDictate? = null,
     onExternalDictateConsumed: () -> Unit = {},
+    /** Put the cursor in the composer once (#134: the chat the app opens on, with a pointer). */
+    focusComposer: Boolean = false,
+    onComposerFocusConsumed: () -> Unit = {},
     pasteImageRequestNonce: Long = 0L,
     onPasteImageRequestConsumed: () -> Unit = {},
     /** The host's own attach chips above the composer's field (see [Composer]'s `leadingChips`). */
@@ -577,10 +582,15 @@ fun ChatPanel(
     // remember(session.id) resets on switch so a stale catalog never flashes.
     var modelsData by remember(session.id) { mutableStateOf<ModelsResponse?>(null) }
     var reasoningData by remember(session.id) { mutableStateOf<ReasoningResponse?>(null) }
+    var catalogsLoaded by remember(session.id) { mutableStateOf(false) }
     var openModelPicker by remember(session.id) { mutableLongStateOf(0L) }
     suspend fun refreshCatalogs() {
-        modelsData = actions.loadModels()
-        reasoningData = actions.loadReasoning()
+        try {
+            modelsData = actions.loadModels()
+            reasoningData = actions.loadReasoning()
+        } finally {
+            catalogsLoaded = true
+        }
     }
     LaunchedEffect(session.id) { refreshCatalogs() }
     // Re-read when the model or a catalog refresh changes; the catalog itself is the host's cache.
@@ -971,6 +981,14 @@ fun ChatPanel(
     }
     var panelWidth by remember { mutableStateOf(0.dp) }
     var composerFocused by remember(session.id) { mutableStateOf(false) }
+    // #134: the chat the app opens on takes the cursor once, after its composer is laid out.
+    val composerFocus = remember(session.id) { androidx.compose.ui.focus.FocusRequester() }
+    LaunchedEffect(focusComposer) {
+        if (!focusComposer) return@LaunchedEffect
+        androidx.compose.runtime.withFrameNanos { }
+        runCatching { composerFocus.requestFocus() }
+        onComposerFocusConsumed()
+    }
     val narrowView = panelWidth > 0.dp && panelWidth < CHAT_CHROME_AUTO_HIDE_MAX_WIDTH
     val autoHideAllowed = narrowView && !emptySession && !(composerFocused && !pointer)
     LaunchedEffect(autoHideAllowed) { if (!autoHideAllowed) chrome.show() }
@@ -1154,10 +1172,12 @@ fun ChatPanel(
                 dropState = dropState,
                 externalDictate = externalDictate,
                 onExternalDictateConsumed = onExternalDictateConsumed,
+                focusRequester = composerFocus,
                 pasteImageRequestNonce = pasteImageRequestNonce,
                 onPasteImageRequestConsumed = onPasteImageRequestConsumed,
                 models = modelsData,
                 reasoning = reasoningData,
+                catalogsLoading = !catalogsLoaded,
                 sessionModel = session.model,
                 sessionReasoning = session.reasoningLevel,
                 sessionAgent = session.agent,
@@ -1563,7 +1583,7 @@ private fun NewMessagesLine(count: Int) {
     ) {
         Box(Modifier.weight(1f).height(1.dp).background(cs.primary.copy(alpha = 0.45f)))
         Text(
-            if (count == 1) "1 new message" else "$count new messages",
+            localizedPlural(Plurals.chat_new_messages, count, count),
             color = cs.primary,
             fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold,

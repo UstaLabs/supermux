@@ -20,6 +20,16 @@ Turning hosting off asks **Stop hosting?** first, because it stops your running 
 
 If supermux was already installed on this computer from the terminal, the app offers to manage it. Choose **Manage it** to let the app keep it updated, or **Leave it alone**.
 
+### Proxy and gateway settings on a Mac
+
+Agents get the settings you give every program on your Mac with `launchctl setenv`, like `HTTPS_PROXY` for a company proxy or `ANTHROPIC_BASE_URL` for an LLM gateway:
+
+```sh
+launchctl setenv HTTPS_PROXY http://proxy.example.com:3128
+```
+
+Run it in Terminal on the Mac itself, not over ssh: an ssh session keeps its own settings that the Mac's apps never see. A new setting reaches your agents after a restart. Quit and reopen the app, or, with **Keep running in the background** on, choose **Restart** in **Settings ▸ Hosting** or the menu bar, because quitting the app leaves your agents running.
+
 ## Keep this computer awake
 
 A computer that sleeps can't run agents. **Keep this computer awake** stops it from sleeping while supermux runs; the screen can still turn off. It's on by default in the desktop app.

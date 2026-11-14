@@ -5,7 +5,7 @@ import { launchArgs, launchEnv } from '../launch.js'
 import { appliedFor, launchPermissions, validatePermissionsSpec } from '../permissions.js'
 import type { RequestPermissionResponse } from '@agentclientprotocol/sdk'
 import { transport } from './transport.js'
-import { createClaudeNormalizer } from './normalize.js'
+import { createClaudeNormalizer, initializeReplyForHost } from './normalize.js'
 import { CoreError } from '../errors.js'
 import { CLAUDE_CONTEXT, appliedContext, claudeContextArgs, editPluginFolder } from '../context/agents.js'
 import { EMPTY_CONTEXT_FINGERPRINT } from '../context/index.js'
@@ -535,7 +535,10 @@ export function claude(options: ClaudeOptions): AgentDriver {
      * host as the native frame it is, and the normalizer turns it into commands-update — no prompt needed.
      */
     function forwardCommands(reply: any) {
-      if (Array.isArray(reply?.response?.commands)) context.onUpdate({ protocol: 'native', value: { type: 'control_response', response: reply } })
+      // Never the signed-in account the reply also carries (#129): only what the host turns into commands and models.
+      if (Array.isArray(reply?.response?.commands) || Array.isArray(reply?.response?.models)) {
+        context.onUpdate({ protocol: 'native', value: { type: 'control_response', response: initializeReplyForHost(reply) } })
+      }
     }
     /**
      * A second initialize: Claude 2.1.308 answers with the live list and keeps its MCP servers and permission mode.

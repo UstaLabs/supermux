@@ -99,7 +99,12 @@ import dev.supermux.ui.settings.search.SettingsSearchGroup
 import dev.supermux.ui.settings.search.SettingsSearchIndex
 import dev.supermux.ui.settings.search.searchSettings
 import dev.supermux.ui.adaptive.LocalWindowControlsInsets
-import dev.supermux.ui.settings.search.settingsPageTitle
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.StringKey
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.uppercaseInAppLanguage
+import dev.supermux.ui.settings.search.LocalizedSearchEntry
+import dev.supermux.ui.settings.search.localizedSearchEntries
 import dev.supermux.ui.widgets.LocalIosBackSwipe
 import dev.supermux.ui.widgets.SwipeBackHandler
 import dev.supermux.ui.widgets.SwipeBackPages
@@ -270,6 +275,9 @@ fun SettingsHub(
         mediaCache = platform.mediaCache != null,
     )
     val railSections = railSections(keyboard)
+    // Each page's name in the app's language, looked up here so the rows and search groups below can read it.
+    val pageTitles = SettingsSection.entries.associateWith { localizedSettingsTitle(SettingsPlace(it), labs = labs) }
+    val searchWords = localizedSearchEntries(searchIndex, pageTitles)
 
     var identityDirty by remember { mutableStateOf(false) }
     var showDiscardDialog by remember { mutableStateOf(false) }
@@ -280,7 +288,9 @@ fun SettingsHub(
     var query by rememberSaveable { mutableStateOf("") }
     val searchFocus = remember { FocusRequester() }
     var searchFocused by remember { mutableStateOf(false) }
-    val groups = remember(query, searchCtx, searchIndex) { searchSettings(query, searchCtx, searchIndex) }
+    val groups = remember(query, searchCtx, searchIndex, searchWords) {
+        searchSettings(query, searchCtx, searchIndex, translations = searchWords)
+    }
 
     /**
      * The compact hub's landing target: no section is `Route.Settings`'s default and means "just
@@ -588,7 +598,7 @@ fun SettingsHub(
 
     /** The search group's name: the Machine page is the current machine's. */
     fun groupTitle(s: SettingsSection): String =
-        machines?.current?.name?.takeIf { s == SettingsSection.Machine } ?: settingsPageTitle(s, searchCtx)
+        machines?.current?.name?.takeIf { s == SettingsSection.Machine } ?: pageTitles.getValue(s)
 
     @Composable
     fun Slot(target: HubTarget) {
@@ -653,7 +663,7 @@ fun SettingsHub(
                 under = {
                     Column(Modifier.fillMaxSize().background(c.pane).testTag("settings_index")) {
                         KitTopBar(
-                            "Settings",
+                            localized(Str.settings_title),
                             onBack = { leave() },
                             backTag = "settings_hub_back",
                             titleTag = "settings_index_title",
@@ -673,16 +683,16 @@ fun SettingsHub(
                                 }
                                 for (s in railSections) {
                                     KitNavRow(
-                                        label = settingsPageTitle(s, searchCtx),
+                                        label = pageTitles.getValue(s),
                                         glyph = s.glyph(),
                                         selected = false,
                                         onClick = { open(HubTarget.Sec(s)) },
                                         modifier = Modifier.testTag("settings_row_${s.name.lowercase()}"),
-                                        description = s.desc(labs),
+                                        description = localized(s.descRes(labs)),
                                     )
                                 }
                             } else {
-                                SearchResults(query, groups, ::groupTitle) { pickResult(it) }
+                                SearchResults(query, groups, ::groupTitle, searchWords) { pickResult(it) }
                             }
                         }
                     }
@@ -695,7 +705,7 @@ fun SettingsHub(
                         Column(Modifier.fillMaxSize().background(c.pane)) {
                             KitTopBar(
                                 title = when (target) {
-                                    is HubTarget.Sec -> settingsTitle(placeOf(target), machines?.current?.name, labs)
+                                    is HubTarget.Sec -> localizedSettingsTitle(placeOf(target), machines?.current?.name, labs)
                                 },
                                 onBack = { leave() },
                             )
@@ -753,7 +763,7 @@ fun SettingsHub(
                         }
                         for (s in railSections) {
                             KitNavRow(
-                                label = settingsPageTitle(s, searchCtx),
+                                label = pageTitles.getValue(s),
                                 glyph = s.glyph(),
                                 selected = widePage == HubTarget.Sec(s),
                                 onClick = { open(HubTarget.Sec(s)) },
@@ -761,7 +771,7 @@ fun SettingsHub(
                             )
                         }
                     } else {
-                        SearchResults(query, groups, ::groupTitle) { pickResult(it) }
+                        SearchResults(query, groups, ::groupTitle, searchWords) { pickResult(it) }
                     }
                     }
                 }
@@ -792,14 +802,14 @@ fun SettingsHub(
 
     if (showDiscardDialog) {
         KitSheet(
-            "Discard unsaved changes?",
+            localized(Str.settings_discard_title),
             onDismiss = { cancelDiscard() },
-            description = "You have unsaved edits. Leave without saving?",
+            description = localized(Str.settings_discard_description),
             tag = "settings_discard_dialog",
             buttons = {
-                KitGhostButton("Keep editing", onClick = { cancelDiscard() }, modifier = Modifier.testTag("settings_discard_cancel"))
+                KitGhostButton(localized(Str.settings_discard_keep), onClick = { cancelDiscard() }, modifier = Modifier.testTag("settings_discard_cancel"))
                 KitGhostButton(
-                    "Discard",
+                    localized(Str.settings_discard_confirm),
                     onClick = { confirmDiscard() },
                     modifier = Modifier.testTag("settings_discard_confirm"),
                     destructive = true,
@@ -816,6 +826,7 @@ private fun RailHeader(onBack: () -> Unit) {
     val src = remember { MutableInteractionSource() }
     val hovered by src.collectIsHoveredAsState()
     val shape = RoundedCornerShape(6.dp)
+    val back = localized(Str.settings_back)
     Row(
         Modifier.fillMaxWidth().height(38.dp).padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -829,14 +840,14 @@ private fun RailHeader(onBack: () -> Unit) {
                 .background(if (hovered) c.wash else Color.Transparent)
                 .clickable(interactionSource = src, indication = null, role = Role.Button, onClick = onBack)
                 .kitFocusRing(src, shape)
-                .semantics { contentDescription = "Back" }
+                .semantics { contentDescription = back }
                 .testTag("settings_hub_back"),
             contentAlignment = Alignment.Center,
         ) {
             Icon(KitGlyphs.Back, contentDescription = null, tint = c.dim, modifier = Modifier.size(16.dp))
         }
         Text(
-            "Settings",
+            localized(Str.settings_title),
             fontSize = 14.sp,
             fontWeight = FontWeight.SemiBold,
             color = c.text,
@@ -851,13 +862,14 @@ private fun SearchResults(
     query: String,
     groups: List<SettingsSearchGroup>,
     titleOf: (SettingsSection) -> String,
+    words: Map<SettingsSearchEntry, LocalizedSearchEntry>,
     onPick: (SettingsSearchEntry) -> Unit,
 ) {
     val c = kitColors()
     val m = kitMetrics()
     if (groups.isEmpty()) {
         Text(
-            "No settings match “$query”.",
+            localized(Str.settings_search_none, query),
             fontSize = 12.5.sp,
             color = c.faint,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 16.dp).testTag("settings_search_empty"),
@@ -867,7 +879,7 @@ private fun SearchResults(
     Column(Modifier.padding(horizontal = 4.dp).testTag("settings_search_results")) {
         for (g in groups) {
             Text(
-                titleOf(g.section).uppercase(),
+                titleOf(g.section).uppercaseInAppLanguage(),
                 fontSize = 10.5.sp,
                 fontWeight = FontWeight.SemiBold,
                 letterSpacing = 0.63.sp,
@@ -888,8 +900,8 @@ private fun SearchResults(
                         .padding(horizontal = 8.dp, vertical = 6.dp)
                         .testTag("settings_result_${g.section.name.lowercase()}_${e.anchor ?: "page"}"),
                 ) {
-                    Text(highlight(e.label, query, c.accent), fontSize = if (m.phone) 15.sp else 13.sp, color = c.text)
-                    if (e.anchor == null) Text("Page", fontSize = 11.5.sp, color = c.faint)
+                    Text(highlight(words[e]?.label ?: e.label, query, c.accent), fontSize = if (m.phone) 15.sp else 13.sp, color = c.text)
+                    if (e.anchor == null) Text(localized(Str.settings_search_page), fontSize = 11.5.sp, color = c.faint)
                 }
             }
         }
@@ -928,13 +940,13 @@ internal fun SettingsSection.glyph(): ImageVector = when (this) {
 }
 
 /** One-line "what is behind this row" on the phone's index (#97 spec §2.1). [labs]: this device has lab features. */
-internal fun SettingsSection.desc(labs: Boolean): String = when (this) {
-    SettingsSection.General -> "Theme, text size, live replies, updates"
-    SettingsSection.KeyboardShortcuts -> "Every shortcut on this keyboard"
-    SettingsSection.Providers -> "Sign in, extra logins, switch at a limit"
-    SettingsSection.Voice -> "Dictation, languages, read aloud"
-    SettingsSection.Coding -> "GitHub & GitLab, editor, code intelligence"
-    SettingsSection.Memory -> "Nightly tidy-up of what agents learn"
-    SettingsSection.PrivacyLabs -> if (labs) "Usage statistics, experiments" else "Usage statistics"
-    SettingsSection.Machine -> "Status, devices, shared links, disk"
+internal fun SettingsSection.descRes(labs: Boolean): StringKey = when (this) {
+    SettingsSection.General -> Str.settings_desc_general
+    SettingsSection.KeyboardShortcuts -> Str.settings_desc_shortcuts
+    SettingsSection.Providers -> Str.settings_desc_providers
+    SettingsSection.Voice -> Str.settings_desc_voice
+    SettingsSection.Coding -> Str.settings_desc_coding
+    SettingsSection.Memory -> Str.settings_desc_memory
+    SettingsSection.PrivacyLabs -> if (labs) Str.settings_desc_privacy_labs else Str.settings_desc_privacy
+    SettingsSection.Machine -> Str.settings_desc_machine
 }

@@ -2,13 +2,8 @@ package dev.supermux.ui.chat
 
 import androidx.compose.runtime.Composable
 import dev.supermux.proto.GitLiteStatusDto
+import dev.supermux.ui.i18n.Plurals
 import dev.supermux.ui.i18n.localizedPlural
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.git_sign_base_moved
-import dev.supermux.ui.resources.git_sign_changed
-import dev.supermux.ui.resources.git_sign_not_in_base
-import dev.supermux.ui.resources.git_sign_to_pull
-import dev.supermux.ui.resources.git_sign_to_push
 
 /**
  * What the composer footer says about a session's work tree (#72): one fact, the one that asks for
@@ -40,9 +35,9 @@ fun composerGitSign(git: GitLiteStatusDto?): ComposerGitSign? {
 
 @Composable
 fun ComposerGitSign.label(): String = when (this) {
-    is ComposerGitSign.Changed -> localizedPlural(Res.plurals.git_sign_changed, files, files)
-    is ComposerGitSign.NotInBase -> localizedPlural(Res.plurals.git_sign_not_in_base, commits, commits, base)
-    is ComposerGitSign.BaseMoved -> localizedPlural(Res.plurals.git_sign_base_moved, commits, commits, base)
-    is ComposerGitSign.ToPush -> localizedPlural(Res.plurals.git_sign_to_push, commits, commits)
-    is ComposerGitSign.ToPull -> localizedPlural(Res.plurals.git_sign_to_pull, commits, commits)
+    is ComposerGitSign.Changed -> localizedPlural(Plurals.git_sign_changed, files, files)
+    is ComposerGitSign.NotInBase -> localizedPlural(Plurals.git_sign_not_in_base, commits, commits, base)
+    is ComposerGitSign.BaseMoved -> localizedPlural(Plurals.git_sign_base_moved, commits, commits, base)
+    is ComposerGitSign.ToPush -> localizedPlural(Plurals.git_sign_to_push, commits, commits)
+    is ComposerGitSign.ToPull -> localizedPlural(Plurals.git_sign_to_pull, commits, commits)
 }

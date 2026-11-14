@@ -163,19 +163,9 @@ object HostingCopy {
     const val LID_OTHER_USER = "The lid helper is installed for another user. Tick to reinstall it for you."
     const val LID_HOME_UNSUPPORTED = "Not available for this account's home folder."
     const val LID_PAUSED_ON_BATTERY = "Paused while on battery"
-    const val LID_WAITING = "Waiting for your password…"
-    const val LID_UNINSTALL = "Uninstall lid helper"
+    const val LID_WAITING = "Waiting for your password…" // shown as machine_hosting_lid_waiting
+    const val LID_UNINSTALL = "Uninstall lid helper" // shown as machine_hosting_lid_uninstall
     const val REBOOT = "After a restart, supermux starts when you log in."
-    const val AUTO_LOGIN =
+    const val AUTO_LOGIN = // shown as machine_hosting_auto_login
         "To start without anyone at the keyboard, turn on Automatic Login in System Settings ▸ Users & Groups."
-
-    /** The confirm shown before turning hosting off. */
-    fun stopConfirm(sessions: Int): String {
-        val stops = when {
-            sessions <= 0 -> "This stops supermux and removes it from startup."
-            sessions == 1 -> "This stops supermux and your 1 running session, and removes it from startup."
-            else -> "This stops supermux and your $sessions running sessions, and removes it from startup."
-        }
-        return "Stop hosting? $stops Your data stays in ~/.mux."
-    }
 }

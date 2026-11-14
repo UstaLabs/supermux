@@ -462,6 +462,16 @@ data class AddViewBody(
     val groupId: String? = null,
 )
 
+/** A session closed in a workspace (#135): what its New tab page lists to reopen. */
+@Serializable
+data class ClosedSessionDto(val id: String, val name: String, val agent: String, val closedAt: String? = null)
+
+@Serializable
+data class ClosedSessionsResponse(val sessions: List<ClosedSessionDto> = emptyList())
+
+@Serializable
+data class ReopenClosedSessionBody(val groupId: String? = null)
+
 @Serializable
 data class PatchViewBody(
     val title: String? = null,
@@ -1327,6 +1337,10 @@ data class BrowserCommentInput(val number: Int, val comment: String, val selecto
 
 @Serializable
 data class BrowserCommentsBody(val url: String? = null, val viewedAs: String? = null, val comments: List<BrowserCommentInput>)
+
+/** #122 phase 4: the session whose process listens on a port (its dev server). */
+@Serializable
+data class PortOwnerDto(val sessionId: String, val sessionName: String)
 
 @Serializable
 data class BrowserCommentsResult(val comments: List<BrowserCommentDto> = emptyList())
@@ -2454,6 +2468,18 @@ class BrokerApi(
             authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(body))
+        })
+
+    /** GET /workspaces/{id}/closed-sessions — the sessions closed in it, newest first (#135). */
+    suspend fun closedSessions(workspaceId: String): List<ClosedSessionDto> =
+        getJson<ClosedSessionsResponse>("$httpBase/workspaces/$workspaceId/closed-sessions").sessions
+
+    /** POST /workspaces/{id}/closed-sessions/{sid}/reopen — the same session back, as a chat tab in [groupId]. */
+    suspend fun reopenClosedSession(workspaceId: String, sessionId: String, groupId: String?): ViewDto =
+        decode(http.post("$httpBase/workspaces/$workspaceId/closed-sessions/$sessionId/reopen") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(ReopenClosedSessionBody(groupId)))
         })
 
     /** PATCH /workspaces/{wid}/views/{vid} */
@@ -3722,6 +3748,12 @@ class BrokerApi(
     /** GET /workspaces/<id>/fs/refs */
     suspend fun workspaceFsRefs(workspaceId: String): FsRefsResult =
         getJson("$httpBase/workspaces/$workspaceId/fs/refs")
+
+    /** #122 phase 4: GET /ports/<port>/owner → whose dev server listens there; null when no session's does (404). */
+    suspend fun portOwner(port: Int): PortOwnerDto? {
+        val res = http.get("$httpBase/ports/$port/owner") { authHeader() }
+        return if (res.status.value == 200) json.decodeFromString(PortOwnerDto.serializer(), res.bodyAsText()) else null
+    }
 
     /** #122 phase 4: POST /sessions/<id>/browser/comments → the comments as stored, with their ids. */
     suspend fun addBrowserComments(sessionId: String, body: BrowserCommentsBody): List<BrowserCommentDto> =

@@ -49,3 +49,13 @@ test("what the agent reads: the open comments as markdown, with their ids", () =
   expect(md).toContain("http://localhost:5173/checkout")
   expect(s.markdown([])).toBe("No open browser comments.")
 })
+
+test("a turn the agent starts after a comment was sent marks it seen; not one sent during that turn", () => {
+  const s = store()
+  const [a] = s.addBatch("s1", batch, "2026-11-12T10:00:00.000Z")
+  expect(s.markSeen("s1", Date.parse("2026-11-12T09:59:00.000Z"), "2026-11-12T10:01:00.000Z")).toEqual([]) // a turn that began before it
+  const seen = s.markSeen("s1", Date.parse("2026-11-12T10:00:30.000Z"), "2026-11-12T10:00:31.000Z")
+  expect(seen.map((c) => [c.id, c.status])).toContainEqual([a!.id, "seen"])
+  expect(s.markSeen("s1", Date.parse("2026-11-12T10:05:00.000Z"), "2026-11-12T10:05:01.000Z")).toEqual([]) // already seen: nothing new
+  expect(s.markSeen("s2", Date.parse("2026-11-12T10:05:00.000Z"), "x")).toEqual([])
+})

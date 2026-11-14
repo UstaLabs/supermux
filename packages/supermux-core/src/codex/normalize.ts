@@ -738,7 +738,9 @@ export function createCodexNormalizer(): CodexNormalizer {
           }
         : undefined
       const size = num(usage?.modelContextWindow)
-      const used = num(total?.totalTokens)
+      // `total` adds up the whole thread and never drops; `last` is the latest request, so what the window
+      // holds now (all zeros right after a compaction).
+      const used = num(rec(usage?.last)?.totalTokens)
       return [{
         kind: "usage",
         ...(tokens ? { tokens } : {}),

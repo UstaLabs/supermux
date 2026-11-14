@@ -24,6 +24,7 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import dev.supermux.ui.editor.isMarkdownPath
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.panes.TabChipRow
 import dev.supermux.ui.panes.TabClose
 import dev.supermux.ui.panes.TabIcon
@@ -32,6 +33,7 @@ import dev.supermux.ui.theme.GeistFontFamily
 import dev.supermux.ui.panes.TabSlotState
 import dev.supermux.ui.session.RowContextMenu
 import dev.supermux.ui.session.RowContextMenuEntry
+import dev.supermux.ui.i18n.localized
 
 /**
  * A tab for a `file` pane: the per-file controls, on the file's own tab.
@@ -62,12 +64,13 @@ fun WorkspaceFileTab(
     val cs = MaterialTheme.colorScheme
     val hover = remember { MutableInteractionSource() }
     val hovered by hover.collectIsHoveredAsState()
+    val moveToNewWindow = localized(Str.shell_move_to_new_window)
 
     // Cluster G8: the shared right-click wrapper (F3's `RowContextMenu`), so this tab compiles on
     // a host with no `ContextMenuArea`. Inert under touch — the file tab's save / preview / close
     // are all visible affordances, and tear-out needs a second OS window anyway.
     RowContextMenu(
-        items = { listOf(RowContextMenuEntry("Move to New Window", onMoveToNewWindow)) + extraMenu() },
+        items = { listOf(RowContextMenuEntry(moveToNewWindow, onMoveToNewWindow)) + extraMenu() },
     ) {
     TabChipRow(hover, Modifier.testTag("tab-move-to-window-$itemId")) {
         TabIcon(badge = null) {
@@ -94,7 +97,7 @@ fun WorkspaceFileTab(
             ) {
                 Icon(
                     imageVector = if (previewMode) Icons.Filled.Edit else Icons.Filled.Visibility,
-                    contentDescription = if (previewMode) "Edit" else "Preview",
+                    contentDescription = localized(if (previewMode) Str.shell_edit else Str.shell_preview),
                     tint = if (previewMode) cs.primary else cs.onSurfaceVariant,
                     modifier = Modifier.size(12.dp),
                 )
@@ -118,7 +121,7 @@ fun WorkspaceFileTab(
             ) {
                 Icon(
                     Icons.Filled.Check,
-                    contentDescription = "Save",
+                    contentDescription = localized(Str.shell_save),
                     tint = cs.primary,
                     modifier = Modifier.size(12.dp),
                 )
@@ -128,7 +131,7 @@ fun WorkspaceFileTab(
         TabClose(
             visible = state.selected || hovered,
             onClick = { onClose(itemId) },
-            label = "Close view",
+            label = localized(Str.shell_close_view),
             modifier = Modifier.testTag("tab-close-$itemId"),
         )
     }

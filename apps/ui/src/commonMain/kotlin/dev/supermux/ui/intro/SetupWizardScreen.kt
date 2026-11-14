@@ -50,6 +50,9 @@ import dev.supermux.ui.platform.LocalPlatform
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.supermux.net.AgentInstallStatus
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.StringKey
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.resources.Res
 import dev.supermux.ui.resources.mux_logo
 import dev.supermux.ui.settings.AgentSettingsActions
@@ -63,8 +66,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.painterResource
 
-/** The five steps, in order — Vue's `ONBOARDING_STEP_LABELS`. */
-val SetupStepLabels = listOf("Welcome", "Providers", "Git Hosting", "Connect Your Phone", "Done")
+/** The five steps' names, in order — Vue's `ONBOARDING_STEP_LABELS`. */
+val SetupStepLabels: List<StringKey> = listOf(
+    Str.setup_step_welcome,
+    Str.setup_step_providers,
+    Str.setup_step_git_hosting,
+    Str.setup_step_phone,
+    Str.setup_step_done,
+)
 
 private const val STEP_WELCOME = 0
 private const val STEP_AGENTS = 1
@@ -150,7 +159,7 @@ fun SetupWizardScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                "Setup",
+                localized(Str.setup_title),
                 style = MaterialTheme.typography.titleMedium,
                 color = cs.onSurface,
                 modifier = Modifier.weight(1f),
@@ -158,7 +167,7 @@ fun SetupWizardScreen(
             // ONE text node, not "Step N of 5" + a styled label: the header is what the browser
             // run (and these tests) match on, and two nodes cannot be matched as one string.
             Text(
-                "Step ${step + 1} of ${SetupStepLabels.size} — ${SetupStepLabels[step]}",
+                localized(Str.setup_header, step + 1, SetupStepLabels.size, localized(SetupStepLabels[step])),
                 style = MaterialTheme.typography.labelMedium,
                 color = cs.onSurfaceVariant,
                 modifier = Modifier.testTag("setup_header"),
@@ -211,7 +220,7 @@ fun SetupWizardScreen(
                             modifier = Modifier.size(IconSize.md),
                         )
                         Spacer(Modifier.size(Space.sm))
-                        Text("Back")
+                        Text(localized(Str.setup_back))
                     }
                 }
                 Button(
@@ -219,7 +228,7 @@ fun SetupWizardScreen(
                     enabled = step != STEP_AGENTS || agentsCanProceed,
                     modifier = Modifier.testTag("setup_next"),
                 ) {
-                    Text(if (step == STEP_WELCOME) "Start" else "Next")
+                    Text(localized(if (step == STEP_WELCOME) Str.setup_start else Str.setup_next))
                     if (step > STEP_WELCOME) {
                         Spacer(Modifier.size(Space.sm))
                         Icon(
@@ -245,14 +254,13 @@ private fun SetupWelcomeStep() {
             modifier = Modifier.size(56.dp),
         )
         Text(
-            "Welcome to supermux",
+            localized(Str.setup_welcome_title),
             style = MaterialTheme.typography.headlineSmall,
             color = cs.onSurface,
             textAlign = TextAlign.Center,
         )
         Text(
-            "supermux drives coding agents from your phone or laptop. Let's connect one and get " +
-                "you set up in just a few steps.",
+            localized(Str.setup_welcome_text),
             style = MaterialTheme.typography.bodyMedium,
             color = cs.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -274,7 +282,8 @@ private fun SetupDoneStep(
 ) {
     val cs = MaterialTheme.colorScheme
     var finishing by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    // The `onboarded` write failed: the step says so under its button.
+    var failed by remember { mutableStateOf(false) }
 
     SetupCenteredColumn {
         Icon(
@@ -284,13 +293,13 @@ private fun SetupDoneStep(
             modifier = Modifier.size(56.dp),
         )
         Text(
-            "You're all set!",
+            localized(Str.setup_done_title),
             style = MaterialTheme.typography.headlineSmall,
             color = cs.onSurface,
             textAlign = TextAlign.Center,
         )
         Text(
-            "supermux is ready — create a session for the project you want to work on.",
+            localized(Str.setup_done_text),
             style = MaterialTheme.typography.bodyMedium,
             color = cs.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -298,9 +307,12 @@ private fun SetupDoneStep(
         // The first-run telemetry notice (TELEMETRY.md); the switch is in Settings → Privacy & labs
         // (Settings → Privacy where the device has no assistant overlay).
         Text(
-            "supermux sends anonymous usage events: no prompts, code, paths or names. " +
-                "You can turn this off in Settings → " +
-                    (if (LocalPlatform.current.caps.assistantOverlay) "Privacy & labs" else "Privacy") + ".",
+            localized(
+                Str.setup_telemetry_notice,
+                localized(
+                    if (LocalPlatform.current.caps.assistantOverlay) Str.setup_privacy_and_labs else Str.setup_privacy,
+                ),
+            ),
             style = MaterialTheme.typography.bodySmall,
             color = cs.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -311,14 +323,14 @@ private fun SetupDoneStep(
             onClick = {
                 if (finishing) return@Button
                 finishing = true
-                error = null
+                failed = false
                 scope.launch {
                     val ok = onFinish()
                     finishing = false
                     if (ok) {
                         onCreateFirstSession()
                     } else {
-                        error = "Couldn't finish setup. Check the connection and try again."
+                        failed = true
                     }
                 }
             },
@@ -333,11 +345,11 @@ private fun SetupDoneStep(
                 )
                 Spacer(Modifier.size(Space.sm))
             }
-            Text("Create your first session")
+            Text(localized(Str.setup_create_first_session))
         }
-        error?.let {
+        if (failed) {
             Text(
-                it,
+                localized(Str.setup_finish_failed),
                 style = MaterialTheme.typography.labelMedium,
                 color = cs.error,
                 textAlign = TextAlign.Center,

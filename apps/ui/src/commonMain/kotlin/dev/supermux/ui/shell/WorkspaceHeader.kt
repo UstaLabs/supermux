@@ -29,8 +29,10 @@ import dev.supermux.ui.theme.Space
 import dev.supermux.net.GitOpResult
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.gitBadge
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.session.RowContextMenu
 import dev.supermux.ui.session.RowContextMenuEntry
+import dev.supermux.ui.i18n.localized
 
 /**
  * The workspace header strip. Renders NOTHING when [gitSession] is null (no chat session to read
@@ -54,12 +56,13 @@ fun WorkspaceHeader(
 ) {
     if (gitSession == null || gitBadge(gitSession.git) == null) return
     val cs = MaterialTheme.colorScheme
+    val moveWorkspace = localized(Str.shell_move_workspace_to_new_window)
     // Cluster G8: the shared right-click wrapper (F3's `RowContextMenu`) — inert where there is
     // no right-click, which is also where there is no second OS window to move a workspace into.
     RowContextMenu(
         items = {
             if (onMoveWorkspaceToNewWindow == null) emptyList()
-            else listOf(RowContextMenuEntry("Move workspace to New Window", onMoveWorkspaceToNewWindow))
+            else listOf(RowContextMenuEntry(moveWorkspace, onMoveWorkspaceToNewWindow))
         },
     ) {
     Row(

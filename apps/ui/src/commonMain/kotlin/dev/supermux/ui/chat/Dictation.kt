@@ -24,9 +24,7 @@
 package dev.supermux.ui.chat
 
 import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -76,6 +74,7 @@ import dev.supermux.ui.platform.MicCapture
 import dev.supermux.ui.prefs.LocalUiPrefsOrNull
 import dev.supermux.ui.retain.LocalRetainedUiState
 import dev.supermux.ui.retain.rememberRetainedScope
+import dev.supermux.ui.session.rememberLiveLoop
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.NoHaptics
@@ -1347,12 +1346,7 @@ fun RecordingBar(
                     modifier = Modifier.size(18.dp),
                 )
             }
-            val blink by rememberInfiniteTransition(label = "rec").animateFloat(
-                initialValue = 1f,
-                targetValue = 0.3f,
-                animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse),
-                label = "dot",
-            )
+            val blink by rememberLiveLoop(1f, 0.3f, infiniteRepeatable(tween(600), RepeatMode.Reverse), label = "rec")
             Box(
                 Modifier
                     .size(8.dp)

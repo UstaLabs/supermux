@@ -382,6 +382,17 @@ class ShortcutRootTest {
         assertFalse(dispatcher.onPreview(keyEvent(Key.Unknown, KeyEventType.Unknown, ',')), "a ',' typed after the release is the user's")
     }
 
+    // #134: Edit › Copy and friends aren't app commands; the field owns the key. The menu's echo of a press is told
+    // from a click by the chord alone.
+    @Test fun aPlainChordsMenuEchoIsToldFromAClick() {
+        val dispatcher = dispatcherWith(KeyOs.Apple, AppCommands.NewSession) {}
+        val copy = KeyChord("c", meta = true)
+        dispatcher.nativeMenuChords = setOf(copy)
+        dispatcher.onWindowKey(keyEvent(Key.C, KeyEventType.KeyDown, 'c', meta = true))
+        assertTrue(dispatcher.isMenuEcho(copy), "the press the field already handled")
+        assertFalse(dispatcher.isMenuEcho(copy), "a click after it is a click")
+    }
+
     @Test fun theMacMenusEchoOfAKeyIsIgnored() {
         var ran = 0
         val dispatcher = dispatcherWith(KeyOs.Apple, AppCommands.NewSession) { ran++ }

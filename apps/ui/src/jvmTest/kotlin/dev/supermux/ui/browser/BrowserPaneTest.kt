@@ -86,7 +86,8 @@ class BrowserPaneTest {
         fun loads(): List<String> = calls.filter { it.startsWith("load:") && "url:" in it }.map { it.substringAfter("url:") }
     }
 
-    private fun Rig.actions(previews: List<ProxyDto> = emptyList(), cookie: PreviewCookieDto? = null, byPort: String? = null) = BrowserActions(
+    private fun Rig.actions(previews: List<ProxyDto> = emptyList(), cookie: PreviewCookieDto? = null, byPort: String? = null, portOwner: (Int) -> String? = { null }) = BrowserActions(
+        portOwner = { portOwner(it) },
         saveView = { _, _, state, title -> writes += state to title; true },
         proxies = { previews },
         byPort = { byPort },
@@ -848,6 +849,21 @@ class BrowserPaneTest {
         assertEquals(listOf<String?>("s2"), sink.sentTo)
     }
 
+    /** A by-port preview's comments go to the session whose process listens on that port (the broker finds it). */
+    @Test fun aByPortPreviewsCommentsGoToTheSessionListeningOnIt() = runComposeUiTest {
+        val rig = Rig()
+        val sink = ChatSink(stores = true)
+        showWithChat(
+            rig, mutableStateOf(view("http://localhost:3000/app")), sink,
+            rig.actions(byPort = "https://relay.test/p/{port}/", cookie = cookie, portOwner = { port -> if (port == 3000) "Docs agent" else null }),
+        )
+        pickPay(rig, "x")
+        waitUntil(timeoutMillis = 5_000) { runCatching { onNodeWithTag("browser-pick-recipient").assertTextContains("Docs agent", substring = true) }.isSuccess }
+        onNodeWithTag("browser-pick-send").performClick()
+        waitUntil(timeoutMillis = 5_000) { sink.messages.isNotEmpty() }
+        assertEquals(listOf<String?>("s2"), sink.sentTo)
+    }
+
     /** "Add to message" (⌥Send in the design) leaves them in the chat's composer, unsent. */
     @Test fun addToMessageLeavesThemInTheComposer() = runComposeUiTest {
         val rig = Rig()
@@ -1042,11 +1058,17 @@ class BrowserPaneTest {
         onNodeWithTag("browser-menu-desktop-site").assertDoesNotExist()
     }
 
+    /**
+     * #137: in plain words, and only those: why the engine failed (the fake says "fake"; a released Windows build said
+     * "winvm.sh build, then Gradle") goes to the log, not to the person.
+     */
     @Test fun noEngineHereSaysSoAndOffersTheSystemBrowser() = runComposeUiTest {
         val rig = Rig().apply { engines.unavailable = UnavailableReason.NotImplemented }
         val platform = FakePlatform()
         show(rig, mutableStateOf(view("https://vitejs.dev/")), rig.actions(), platform)
         waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag("browser-unavailable").fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithText("Web pages can't be shown in a tab on this computer.", useUnmergedTree = true).assertExists()
+        onNodeWithText("fake", substring = true, useUnmergedTree = true).assertDoesNotExist()
         onNodeWithText("Open in your browser").performClick()
         assertEquals(listOf("https://vitejs.dev/"), platform.openedUrls)
     }

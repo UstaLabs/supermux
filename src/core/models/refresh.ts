@@ -48,3 +48,32 @@ export async function refreshModelCache(
   )
   return changed
 }
+
+/**
+ * Fills the empty cache entries from the lists learned on an earlier run (any age), so GET /models answers at once
+ * instead of waiting for discovery (Claude's runs Claude Code, ~2.5 s). The entries are stored as expired, so the next
+ * refresh still asks the agent. Resolves to the agents seeded.
+ */
+export function seedModelCache(cache: ModelCache, learned: { get(agent: AgentKind): ModelInfo[] | undefined }, agents: readonly AgentKind[]): AgentKind[] {
+  const seeded: AgentKind[] = []
+  for (const agent of agents) {
+    const models = learned.get(agent)
+    if (!models?.length || cache.get(agent).length > 0) continue
+    cache.set(agent, models, 0)
+    seeded.push(agent)
+  }
+  return seeded
+}
+
+/** One discovery per agent at a time: a refresh asked for while one runs joins it (the boot refresh and a GET /models). */
+export class SharedRefreshes<T = void> {
+  private running = new Map<AgentKind, Promise<T>>()
+
+  run(agent: AgentKind, start: () => Promise<T>): Promise<T> {
+    const running = this.running.get(agent)
+    if (running) return running
+    const refresh = start().finally(() => this.running.delete(agent))
+    this.running.set(agent, refresh)
+    return refresh
+  }
+}

@@ -11,7 +11,9 @@ import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.rightClick
 import dev.supermux.editor.core.EditorSelection
 import dev.supermux.editor.core.EditorState
 import dev.supermux.editor.core.SelectionRange
@@ -139,6 +141,33 @@ class SelectionMenuTest {
         f.view.typeText("q")
         waitForIdle()
         assertFalse(menuShown())
+    }
+
+    // #138: a right-click did nothing on desktop (onPress returned on any non-primary button).
+    @Test fun aRightClickOutsideTheSelectionMovesTheCaretAndOpensTheMenuThere() = editorTest(EditorState.create(text)) { f ->
+        val target = f.view.state.doc.lineStart(2) + 5
+        onNodeWithTag(EDITOR_TAG).performMouseInput { rightClick(f.at(target)) }
+        waitForIdle()
+        assertEquals(EditorSelection.cursor(target), f.view.state.selection, "the caret did not move to the right-click")
+        assertTrue(menuShown(), "no menu after a right-click")
+        assertTrue(has("Select All"))
+        val anchor = f.controller.menuAnchor()
+        assertTrue((anchor.center - f.at(target)).getDistance() < 1f && anchor.width == 0f, "the menu points at $anchor, not the click")
+        onNodeWithTag(EDITOR_TAG).performMouseInput { click(f.at(target + 3)) }
+        waitForIdle()
+        assertFalse(menuShown(), "a left-click left the menu open")
+        assertNull(f.controller.menuPoint)
+    }
+
+    @Test fun aRightClickInTheSelectionKeepsItForCopy() = editorTest(EditorState.create(text)) { f ->
+        val line = f.view.state.doc.lineStart(1)
+        f.view.dispatch(dev.supermux.editor.core.TransactionSpec(selection = EditorSelection.single(line + 11, line + 15)))
+        onNodeWithTag(EDITOR_TAG).performMouseInput { rightClick(f.at(line + 13)) }
+        waitForIdle()
+        assertEquals(SelectionRange(line + 11, line + 15), f.view.state.selection.main, "the right-click dropped the selection")
+        assertTrue(has("Cut") && has("Copy"))
+        tapItem("Copy")
+        assertEquals("some", f.clipboard.text)
     }
 
     @Test fun thePlatformToolbarGetsTheSameItems() {

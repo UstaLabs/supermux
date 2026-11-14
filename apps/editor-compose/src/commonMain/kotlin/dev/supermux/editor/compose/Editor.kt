@@ -742,10 +742,19 @@ internal class EditorController(
 
     /**
      * The selection menu (Cut, Copy, Paste, Select All) was asked for: after a long press, a tap in
-     * the selection or on the caret's handle, the end of a handle drag. It is hidden while
-     * [menuHeld] (a handle is being dragged) or [scrolling], and reappears after.
+     * the selection or on the caret's handle, the end of a handle drag, a right-click. It is hidden
+     * while [menuHeld] (a handle is being dragged) or [scrolling], and reappears after.
      */
-    var menuShown: Boolean by mutableStateOf(false)
+    var menuShown: Boolean
+        get() = menuShownState
+        set(value) {
+            menuShownState = value
+            if (!value) menuPoint = null
+        }
+    private var menuShownState by mutableStateOf(false)
+
+    /** Where a right-click opened the menu (surface pixels), or null: it points at the selection. Cleared when it hides. */
+    var menuPoint: androidx.compose.ui.geometry.Offset? by mutableStateOf(null)
     var menuHeld: Boolean by mutableStateOf(false)
     var scrolling: Boolean by mutableStateOf(false)
 
@@ -754,9 +763,10 @@ internal class EditorController(
 
     /**
      * Where the menu points, in surface pixels: the main range's rows (their full width when it
-     * spans rows) or the caret, limited to the viewport.
+     * spans rows) or the caret, limited to the viewport; a right-click's point when it opened the menu.
      */
     fun menuAnchor(): Rect {
+        menuPoint?.let { return Rect(it, it) }
         val main = view.state.selection.main
         val a = caretRectOnScreen(main.from)
         val b = if (main.empty) a else caretRectOnScreen(main.to)

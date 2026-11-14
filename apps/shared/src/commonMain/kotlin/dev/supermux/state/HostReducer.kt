@@ -33,6 +33,7 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
                 else -> frame.archivedWorkspaces
             },
             archivedPending = frame.archivedLazy && state.archivedWorkspaces.isEmpty(),
+            snapshotLoaded = true,
             projects = frame.projects,
             projectCatalogKnown = catalogKnown,
             messages = snapshotMessages(state, frame),

@@ -246,6 +246,21 @@ function guessImageMime(path: string, mime?: string): string {
 }
 
 /** One broker-facing adapter for every Core-backed agent. Differences live in CoreAdapterProfile. */
+/**
+ * #143: put before a message that ended a running turn (message_session interrupt=true). Claude Code reports a tool call
+ * cut off that way as "The user doesn't want to proceed with this tool use… STOP" + "[Request interrupted by user for
+ * tool use]", and the command itself may run on, so without this the agent stops and waits for a refusal nobody made.
+ */
+export const INBOX_INTERRUPT_NOTE =
+  "[supermux] The message below interrupted your turn. If a tool call came back as rejected (\"The user doesn't want to proceed…\" or \"[Request interrupted by user for tool use]\"), that was this interruption, not the user: nobody refused it. The command may still be running or already done, so check its state before you run it again."
+
+function withInterruptNote(content: ContentBlock[]): ContentBlock[] {
+  const i = content.findIndex((block) => block.type === "text")
+  if (i < 0) return [{ type: "text", text: INBOX_INTERRUPT_NOTE }, ...content]
+  const block = content[i] as ContentBlock & { type: "text"; text: string }
+  return content.map((b, j) => (j === i ? { ...block, text: `${INBOX_INTERRUPT_NOTE}\n\n${block.text}` } : b))
+}
+
 export class CoreAdapter extends EventEmitter implements AgentAdapter {
   readonly kind: AgentKind
   readonly sessionName: string
@@ -289,6 +304,9 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   private continueAfterInterrupt = false
   /** Inbox interrupts waiting for the turn to end (interruptKeepingQueue): no restart meanwhile. */
   private inboxInterruptWaits = 0
+  /** The turn's own tool calls in flight (#143): an inbox interrupt waits for them to finish. */
+  private readonly openTools = new Set<string>()
+  private toolsClosed: (() => void)[] = []
   /** The input epoch of the latest such wait: a Stop since then drops the waiting input, so it no longer holds a restart back. */
   private inboxInterruptEpoch = 0
   private turnActive = false
@@ -776,7 +794,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     // Before any await: an inbox interrupt ends the turn running at hand-over (deliverInbound calls
     // this synchronously), never one that starts later, such as the turn of a message handed over
     // just before it.
-    const handedOverDuring = meta?.busy === "interrupt" ? this.runningTurn() : undefined
+    const handedOverDuring = meta?.busy === "interrupt" || meta?.busy === "stop" ? this.runningTurn() : undefined
     // Counted until the core has it (the gate opens): pendingInput() sees it from the call on.
     this.handingOver++
     if (this.restarting) await this.restarting.catch(() => {})
@@ -799,11 +817,11 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       }
       await this.settleReopen()
       this.assertLive(epoch)
-      const content = await this.buildContent(text, meta, epoch)
+      let content = await this.buildContent(text, meta, epoch)
       this.assertLive(epoch)
       let session = this.requireSession()
-      if (meta?.busy === "interrupt") {
-        await this.interruptKeepingQueue(session, handedOverDuring)
+      if (meta?.busy === "interrupt" || meta?.busy === "stop") {
+        if (await this.interruptKeepingQueue(session, handedOverDuring, meta.busy === "interrupt")) content = withInterruptNote(content)
         // The idle it waited for also wakes a core-side reopen that was waiting for the turn to end:
         // a context or tool reload takes the queue (still paused) to a new Session; an account switch
         // closes the old Session and cancels it. Either way, follow the new Session. No await from
@@ -896,6 +914,24 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   }
 
   /** The turn running now: its Session and core turn id (in step with the session's state, unlike its events). */
+  private whenToolsClosed(): Promise<void> {
+    return this.openTools.size === 0 ? Promise.resolve() : new Promise((resolve) => this.toolsClosed.push(resolve))
+  }
+
+  /** Follows the turn's own tool calls (not a subagent's: its parent's Task call covers it). */
+  private trackTools(env: { kind: string; subagentId?: string; replay?: boolean; callId?: string; phase?: string }): void {
+    if (env.replay === true || env.subagentId) return
+    if (env.kind === "turn-start" || env.kind === "turn-complete") this.openTools.clear()
+    else if (env.kind === "tool-call" && env.callId) {
+      if (env.phase === "completed" || env.phase === "failed") this.openTools.delete(env.callId)
+      else this.openTools.add(env.callId)
+    } else return
+    if (this.openTools.size > 0) return
+    const waiting = this.toolsClosed
+    this.toolsClosed = []
+    for (const resolve of waiting) resolve()
+  }
+
   private runningTurn(): RunningTurn | undefined {
     const session = this.current()
     const turnId = session?.snapshot().turnId
@@ -913,12 +949,22 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
    * failed) interrupt only makes that wait last until the turn ends on its own; it is logged. No
    * restart meanwhile (setConfiguration): it would close the session under the waiting input.
    */
-  private async interruptKeepingQueue(session: Session, handedOverDuring: RunningTurn | undefined): Promise<void> {
-    if (!handedOverDuring || handedOverDuring.session !== session || session.snapshot().turnId !== handedOverDuring.turnId) return
+  private async interruptKeepingQueue(session: Session, handedOverDuring: RunningTurn | undefined, afterTools = false): Promise<boolean> {
+    const stillRuns = () => !!handedOverDuring && handedOverDuring.session === session && session.snapshot().turnId === handedOverDuring.turnId
+    if (!stillRuns()) return false
     const generation = this.startEpoch
     this.inboxInterruptWaits++
     this.inboxInterruptEpoch = this.inputEpoch
     try {
+      // #143: a tool call in flight finishes first (or the turn ends on its own), so no command is cut off half done.
+      // One still waiting for a permission answer has not run, so it is not waited for.
+      if (afterTools && this.openTools.size > 0 && session.requests.list().length === 0) {
+        await Promise.race([this.whenToolsClosed(), session.whenIdle().catch(() => {})])
+        if (!stillRuns()) {
+          try { await session.whenIdle() } catch {}
+          return false
+        }
+      }
       let outcome: InterruptResult["status"] | "failed"
       let err: string | undefined
       try {
@@ -944,6 +990,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     } finally {
       this.inboxInterruptWaits--
     }
+    return true
   }
 
   private async restartNative(next: ConfigurationPatch & { permissionMode?: string }): Promise<void> {
@@ -1204,6 +1251,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       if (this.stallTimer) this.disarmStall()
       const thinkingStream = this.bridge.handle(event.event)
       const env = event.event
+      this.trackTools(env as unknown as { kind: string; subagentId?: string; replay?: boolean; callId?: string; phase?: string })
       const cards = this.activity.handle({ ...env, event: env }, Date.now())
       // Card #76: the stored thinking takes the live thinking's place in the app.
       if (thinkingStream) for (const card of cards) if (card.kind === "reasoning") card.stream = thinkingStream

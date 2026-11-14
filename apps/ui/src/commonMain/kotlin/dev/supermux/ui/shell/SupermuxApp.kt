@@ -167,8 +167,6 @@ import dev.supermux.ui.session.rememberSessionListActions
 import dev.supermux.ui.session.withWorkspaceOps
 import dev.supermux.ui.settings.SettingsHub
 import dev.supermux.ui.whatsnew.LocalOpenWhatsNew
-import dev.supermux.ui.resources.whatsnew_card_prompt
-import dev.supermux.ui.resources.Res
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.whatsnew.WhatsNewAction
 import dev.supermux.ui.whatsnew.WhatsNewPage
@@ -181,6 +179,7 @@ import dev.supermux.ui.settings.kit.KitMachine
 import dev.supermux.ui.settings.kit.SettingsMachines
 import dev.supermux.ui.settings.kit.THIS_COMPUTER_ID
 import dev.supermux.host.formatLastSeen
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.update.AppUpdateCard
 import dev.supermux.ui.update.announceUpdate
@@ -220,6 +219,8 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.notify.localizedNotifyWords
 
 /**
  * Which chats of one workspace are actually ON SCREEN (spec §11).
@@ -306,7 +307,7 @@ fun SupermuxApp(
     onLauncherDraftFlush: ((dev.supermux.state.LauncherDraft) -> Unit)? = null,
     autoSelect: Boolean = false,
     autoSelectName: String? = null,
-    defaultDeviceName: String = "This device",
+    defaultDeviceName: String? = null,
     sessionListMode: SessionListMode = SessionListMode.Workspaces,
     groupByProject: Boolean = true,
     onGroupByProjectChange: (Boolean) -> Unit = {},
@@ -359,7 +360,12 @@ fun SupermuxApp(
     val localBrokerCap = LocalPlatform.current.caps.localBroker
     // "last seen 2h ago" moves on with the clock, nudged once a minute.
     val settingsClock = rememberRailClock()
-    val settingsMachines = remember(hostViews, activeHostId, localBrokerCap, settingsClock) {
+    val runningWord = localized(Str.shell_machine_running)
+    val offlineWord = localized(Str.shell_machine_offline)
+    val notHostingWord = localized(Str.shell_machine_not_hosting)
+    val thisComputerWord = localized(Str.shell_this_computer)
+    val offlineSeen = localizedTemplate(Str.shell_machine_offline_seen)
+    val settingsMachines = remember(hostViews, activeHostId, localBrokerCap, settingsClock, runningWord, offlineWord, notHostingWord, thisComputerWord) {
         val now = settingsClock
         val paired = hostViews.map { h ->
             val seen = formatLastSeen(now, h.lastSeenAt)
@@ -369,16 +375,16 @@ fun SupermuxApp(
                 local = isLocalHost(h.hostId),
                 online = h.online,
                 status = when {
-                    h.online -> "Running"
-                    seen.isEmpty() -> "Offline"
-                    else -> "Offline · last seen $seen"
+                    h.online -> runningWord
+                    seen.isEmpty() -> offlineWord
+                    else -> offlineSeen(seen)
                 },
                 lastSeen = seen,
             )
         }
         // Desktop can always host: with no local host paired, a "This computer" card still opens Hosting (spec §11).
         val all = if (localBrokerCap && paired.none { it.local }) {
-            listOf(KitMachine(THIS_COMPUTER_ID, "This computer", local = true, online = false, status = "Not hosting")) + paired
+            listOf(KitMachine(THIS_COMPUTER_ID, thisComputerWord, local = true, online = false, status = notHostingWord)) + paired
         } else {
             paired
         }
@@ -473,6 +479,15 @@ fun SupermuxApp(
     val projectImageScope = rememberCoroutineScope()
     val projectImageCache = remember(fleet, projectImageScope) { ProjectImageCache(projectImageScope) }
     val uiPrefs = LocalUiPrefs.current
+    // #128: no sessions at all → open on starting one, once, as soon as the sessions are known.
+    val noSessions by fleet.noSessions.collectAsState()
+    // #134: otherwise, with a pointer, the chat the app opens on is ready to type in.
+    val launchPointer = dev.supermux.ui.adaptive.LocalPointerAvailable.current
+    LaunchedEffect(noSessions) {
+        noSessions?.let { none ->
+            if (!ui.openLauncherOnFirstRun(loaded = true, hasSessions = !none)) ui.focusComposerOnLaunch(launchPointer)
+        }
+    }
     // What's new (#90): the sidebar card after an update, and its page.
     val appPlatform = LocalPlatform.current
     val whatsNew = rememberWhatsNew(
@@ -579,6 +594,7 @@ fun SupermuxApp(
 
     // Observe live agent replies and decide whether to raise an OS notification. Keyed on
     // [appForeground] so the collector relaunches with a freshly captured value.
+    val notifyWords by rememberUpdatedState(localizedNotifyWords())
     LaunchedEffect(fleet, appForeground) {
         fleet.agentReplies.collect { event ->
             val target = fleet.sessions.value.firstOrNull { it.id == event.session }
@@ -589,14 +605,16 @@ fun SupermuxApp(
                 selectedId = ui.selectedId,
                 windowFocused = appForeground,
                 muted = target?.mute ?: false,
+                words = notifyWords,
             )
         }
     }
 
     // A download that finished with nobody waiting for it (#95, decision 2a) opens nothing: it waits in the activity
     // bar, and a small notice says so.
+    val downloadedNotice by rememberUpdatedState(localizedTemplate(Str.shell_downloaded))
     LaunchedEffect(fleet) {
-        fleet.downloads.unclaimedCompletions.collect { notices.show("${it.name} downloaded") }
+        fleet.downloads.unclaimedCompletions.collect { notices.show(downloadedNotice(it.name)) }
     }
 
     // Sessions changed: reconcile the selection against the live set (empty-guarded) and prune
@@ -786,11 +804,12 @@ fun SupermuxApp(
         )
     }
 
+    val noHostConnected = localized(Str.shell_no_host_connected)
     val onNewChatInWorkspace: (WorkspaceDto) -> Unit = { w ->
         overlayScope.launch {
             val recordId = fleet.activeHost.value
             if (recordId == null) {
-                notices.show("No host connected")
+                notices.show(noHostConnected)
             } else {
                 runCatching { ui.selectSession(fleet.newChatInWorkspace(recordId, w.id, w.workdir)) }
                     .onFailure { notices.show(dev.supermux.state.spawnFailureMessage(it)) }
@@ -1227,7 +1246,7 @@ fun SupermuxApp(
                                 metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
                             ) { route ->
                                 EscapeBox("whats_new_overlay", onEscape = { ui.goBack() }) {
-                                    val cardPrompt = localized(Res.string.whatsnew_card_prompt)
+                                    val cardPrompt = localized(Str.whatsnew_card_prompt)
                                     // A "Try it" is offered only where it can work: a Browser tab needs a workspace on show
                                     // (and an app whose links open in its own tabs), a card prompt an open chat.
                                     val actions = WhatsNewAction.entries.filterTo(mutableSetOf()) { a ->
@@ -1266,7 +1285,7 @@ fun SupermuxApp(
                                     RetainedPage {
                                         AddHostScreen(
                                             onBack = { ui.goBack() },
-                                            defaultDeviceName = defaultDeviceName,
+                                            defaultDeviceName = defaultDeviceName ?: localized(Str.shell_this_device),
                                             onClaim = { payload, name -> fleet.addHost(payload, name) },
                                             onClaimLegacy = { pair -> fleet.addLegacyHost(pair) },
                                             onClaimByUrl = { url, name, allow -> fleet.addHostByUrl(url, name, allow) },
@@ -1565,7 +1584,7 @@ private fun ShellHome(
             val springWidth by animateDpAsState(
                 targetValue = targetWidth,
                 animationSpec = if (resizing) snap() else spring(stiffness = Spring.StiffnessMediumLow),
-                label = "sidebarWidth",
+                label = "sidebarWidth", // i18n-ok: animation label
             )
             // While dragging, draw the target directly: even a snap() runs in the animation's
             // coroutine and lands a frame after the drag, which reads as the sidebar trailing
@@ -1758,7 +1777,7 @@ private fun ShellHome(
                         enter togetherWith exit
                     }
                 },
-                label = "sessionListOverlay",
+                label = "sessionListOverlay", // i18n-ok: animation label
                 modifier = Modifier.fillMaxSize().zIndex(2f),
             ) { showList ->
                 // Both states fill the screen. An empty state measured 0×0, so every open and close
@@ -1824,9 +1843,9 @@ private fun ShellDetailForeground(
             ) {
                 Text(
                     if (archived != null) {
-                        "“${archived.name}” is archived. Restore it from the menu to continue."
+                        localized(Str.shell_workspace_archived_named, archived.name)
                     } else {
-                        "This workspace is archived. Restore it from the menu to continue."
+                        localized(Str.shell_workspace_archived)
                     },
                     color = cs.onSurfaceVariant,
                 )
@@ -1836,7 +1855,7 @@ private fun ShellDetailForeground(
             Box(
                 Modifier.fillMaxSize().zIndex(2f).background(cs.surfaceContainerLow),
                 contentAlignment = Alignment.Center,
-            ) { Text("select a session", color = cs.onSurfaceVariant) }
+            ) { Text(localized(Str.shell_select_session), color = cs.onSurfaceVariant) }
         }
         activeWorkspace == null -> {
             // The session belongs to no workspace (an old broker, or a settled row). A host with a
@@ -1853,7 +1872,7 @@ private fun ShellDetailForeground(
                         .background(cs.surfaceContainerLow)
                         .testTag("workspace_welcome"),
                     contentAlignment = Alignment.Center,
-                ) { Text("select a workspace", color = cs.onSurfaceVariant) }
+                ) { Text(localized(Str.shell_select_workspace), color = cs.onSurfaceVariant) }
             }
         }
         else -> Unit
@@ -2190,14 +2209,14 @@ private fun UnavailableSessionPane(onBack: () -> Unit) {
                 IconButton(onClick = onBack, modifier = Modifier.testTag("session_unavailable_back")) {
                     Icon(
                         Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
+                        contentDescription = localized(Str.shell_back),
                         tint = cs.onSurface,
                         modifier = Modifier.size(18.dp),
                     )
                 }
             }
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("This session is no longer available", color = cs.onSurfaceVariant)
+                Text(localized(Str.shell_session_unavailable), color = cs.onSurfaceVariant)
             }
         }
     }

@@ -1,5 +1,6 @@
 package dev.supermux.webview.sample.checks
 
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asSkiaBitmap
 import dev.supermux.webview.DialogResult
 import dev.supermux.webview.NavigationDecision
@@ -24,6 +25,9 @@ import kotlin.time.Duration.Companion.seconds
  * process can't load a page, nor show one in a window). Each goes through the public engine SPI only, as the runtime does.
  */
 object EngineChecks {
+    /** A colour no page or window here has, to tell the underlay apart. */
+    private val UNDERLAY = Color(0xFF2E7D32)
+
     /** Starts [content] in [engine] as the runtime does: configured, then loaded. */
     private fun start(engine: WebEngine, content: WebContent, javaScript: Boolean = true) {
         engine.configure(setupFor(content, javaScript))
@@ -416,10 +420,44 @@ object EngineChecks {
         },
     )
 
+    /**
+     * A transparent page lies on its underlay, not on what is under the canvas (a Mac window's black backing): the page
+     * view, under the canvas, paints [PageSetup.underlay] behind the page from the lease's start (#104).
+     */
+    val underlay: List<Check> = listOf(
+        Check("a-transparent-page-lies-on-its-underlay") {
+            val engine = engine()
+            val content = page("clear", script = "document.body.style.background = 'transparent';")
+            val events = record(engine)
+            show(engine)
+            engine.configure(setupFor(content).copy(transparentBackground = true, underlay = UNDERLAY))
+            engine.load(content)
+            events.await("first paint") { it == EngineEvent.FirstPaint }
+            events.await("\$ready", matches = ::isReady)
+            delay(500)
+            val bounds = assertNotNull(shownBounds, "the page's place on screen")
+            // The page's lower half: nothing of its own there, so only what lies behind it shows.
+            val clear = bounds.copy(top = bounds.top + bounds.height / 2)
+            val pixels = assertNotNull(platform.copy(clear)?.pixels(), "a copy of the screen")
+            val want = intArrayOf(0x2E, 0x7D, 0x32)
+            var off = 0
+            var i = 0
+            while (i < pixels.rgba.size) {
+                if ((0..2).any { c -> kotlin.math.abs((pixels.rgba[i + c].toInt() and 0xff) - want[c]) > 8 }) off++
+                i += 4
+            }
+            val total = pixels.width * pixels.height
+            val mid = (pixels.height / 2 * pixels.width + pixels.width / 2) * 4
+            val seen = (0..2).joinToString("") { c -> (pixels.rgba[mid + c].toInt() and 0xff).toString(16).padStart(2, '0') }
+            println("MEASURE underlay ${pixels.width}x${pixels.height}: $off of $total pixels not the underlay; the middle is #$seen")
+            assertTrue(off * 100 <= total, "$off of $total pixels behind the clear page aren't the underlay; the middle is #$seen")
+        },
+    )
+
     /** The handoff from a cover to the live page, frame by frame, once per scenario ([HandoffChecks]). */
     val handoff: List<Check> = HandoffChecks.all
 
-    val all: List<Check> = basics + bridgeAndPolicy + lifecycle + keepAlive + snapshots + handoff
+    val all: List<Check> = basics + bridgeAndPolicy + lifecycle + keepAlive + snapshots + underlay + handoff
 
     /** Checks too long for every run, run only by name (`-only`): the handoff, five rounds in a row. */
     val onDemand: List<Check> = listOf(HandoffChecks.fiveRuns)

@@ -98,6 +98,8 @@ internal fun RunSettingsControl(
     header: (@Composable (sheet: Boolean) -> Unit)? = null,
     /** The account (a new chat's choice, or the one a running chat runs on), as a drill-in row of the panel. */
     account: RunSettingsAccount? = null,
+    /** The catalogs are still on their way: no stand-in label, so the pill doesn't read "Settings" before the model (#134). */
+    loading: Boolean = false,
 ) {
     val cs = MaterialTheme.colorScheme
     val modelLabel = models?.let { shortModelName(composerModelLabel(modelCurrent, it), it) }
@@ -127,7 +129,7 @@ internal fun RunSettingsControl(
                 Icon(Icons.Filled.AutoAwesome, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(13.dp))
             }
             Text(
-                text = modelLabel ?: effortLabel ?: "Settings",
+                text = modelLabel ?: effortLabel ?: if (loading) "" else "Settings",
                 color = cs.onSurface.copy(alpha = 0.85f),
                 fontSize = 13.sp,
                 maxLines = 1,

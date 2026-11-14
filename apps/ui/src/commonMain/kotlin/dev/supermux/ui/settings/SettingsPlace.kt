@@ -1,9 +1,13 @@
 // Where inside Settings a page is (#97): the section, an optional second-level page, an optional row to land on.
 package dev.supermux.ui.settings
 
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import dev.supermux.ui.accounts.agentDisplayName
 import dev.supermux.ui.accounts.ACCOUNT_AGENTS
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.StringKey
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.nav.Route
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.settings.kit.MACHINE_FALLBACK_NAME
@@ -68,7 +72,8 @@ fun settingsSubOrNull(section: SettingsSection, sub: String?): String? = sub?.ta
 
 /**
  * A page's title: the phone's top bar and the wide page heading. [machineName] names the Machine page; [labs] is
- * false on a device without lab features, where Privacy & labs is just "Privacy".
+ * false on a device without lab features, where Privacy & labs is just "Privacy". English: search matches it as well
+ * as the translation, and screens show [localizedSettingsTitle].
  */
 fun settingsTitle(place: SettingsPlace, machineName: String? = null, labs: Boolean = true): String {
     val sub = place.sub
@@ -83,6 +88,35 @@ fun settingsTitle(place: SettingsPlace, machineName: String? = null, labs: Boole
             else -> machineName ?: MACHINE_FALLBACK_NAME
         }
         else -> place.section.label
+    }
+}
+
+/** A section's own name. */
+fun SettingsSection.titleRes(): StringKey = when (this) {
+    SettingsSection.General -> Str.settings_section_general
+    SettingsSection.KeyboardShortcuts -> Str.settings_section_shortcuts
+    SettingsSection.Providers -> Str.settings_section_providers
+    SettingsSection.Voice -> Str.settings_section_voice
+    SettingsSection.Coding -> Str.settings_section_coding
+    SettingsSection.Memory -> Str.settings_section_memory
+    SettingsSection.PrivacyLabs -> Str.settings_section_privacy_labs
+    SettingsSection.Machine -> Str.settings_section_machine
+}
+
+/** [settingsTitle] in the app's language (#123): what a page's bar, the rail and the index show. */
+@Composable
+fun localizedSettingsTitle(place: SettingsPlace, machineName: String? = null, labs: Boolean = true): String {
+    val sub = place.sub
+    return when (place.section) {
+        SettingsSection.Providers -> if (sub != null) providerTitle(sub) else localized(place.section.titleRes())
+        SettingsSection.Voice -> localized(if (sub == GLOSSARY_SUB) Str.settings_title_glossary else place.section.titleRes())
+        SettingsSection.PrivacyLabs -> localized(if (labs) Str.settings_section_privacy_labs else Str.settings_section_privacy)
+        SettingsSection.Machine -> when (sub) {
+            MachineSub.COMPUTER -> localized(Str.settings_title_this_computer)
+            MachineSub.WORKTREES -> localized(Str.settings_title_chat_worktrees)
+            else -> machineName ?: localized(Str.settings_title_this_machine)
+        }
+        else -> localized(place.section.titleRes())
     }
 }
 

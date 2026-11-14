@@ -1,6 +1,7 @@
 // Accounts in the app UI (slice A3b): the pure half — what each agent offers, how an account and a
 // usage window read, and how a guided login's phase maps to what the sheet shows. No Compose here,
-// so all of it is unit-tested directly.
+// so all of it is unit-tested directly. Its words are English, the tests' twins (#123): the UI reads each through its
+// composable twin in AccountsWidgets.kt (localizedAddOptionTitle, localizedLoginFailureText …), in the app's language.
 package dev.supermux.ui.accounts
 
 import dev.supermux.net.AccountDto
@@ -39,26 +40,26 @@ fun addOptionTitle(agent: String, option: AddAccountOption): String = when (opti
             else -> agentDisplayName(agent)
         }
     }"
-    AddAccountOption.Token -> "Paste a token"
-    AddAccountOption.ApiKey -> "API key"
+    AddAccountOption.Token -> "Paste a token" // i18n-ok: test twin
+    AddAccountOption.ApiKey -> "API key" // i18n-ok: test twin
 }
 
 /** One line under each option. Codex's is the only explanation its sign-in gets. */
 fun addOptionHint(agent: String, option: AddAccountOption): String = when (option) {
     AddAccountOption.Login -> when (agent) {
-        "codex" -> "Becomes a token account that supermux keeps signed in."
-        "claude" -> "Your Pro or Max subscription, signed in on this machine."
-        "antigravity" -> "Sign in with your Google account; paste the code the page shows."
-        else -> "A subscription login, kept on this machine."
+        "codex" -> "Becomes a token account that supermux keeps signed in." // i18n-ok: test twin
+        "claude" -> "Your Pro or Max subscription, signed in on this machine." // i18n-ok: test twin
+        "antigravity" -> "Sign in with your Google account; paste the code the page shows." // i18n-ok: test twin
+        else -> "A subscription login, kept on this machine." // i18n-ok: test twin
     }
     // The command itself is the next step's copyable line, the only command Settings shows (#97 spec §6).
-    AddAccountOption.Token -> "A long-lived token you make once in a terminal."
+    AddAccountOption.Token -> "A long-lived token you make once in a terminal." // i18n-ok: test twin
     AddAccountOption.ApiKey -> when (agent) {
-        "claude" -> "An Anthropic API key, billed per token."
-        "codex" -> "An OpenAI API key, billed per token."
-        "opencode" -> "An OpenCode key from opencode.ai/auth, for Zen and Go."
-        "antigravity" -> "A Gemini API key."
-        else -> "Billed per token."
+        "claude" -> "An Anthropic API key, billed per token." // i18n-ok: test twin
+        "codex" -> "An OpenAI API key, billed per token." // i18n-ok: test twin
+        "opencode" -> "An OpenCode key from opencode.ai/auth, for Zen and Go." // i18n-ok: test twin
+        "antigravity" -> "A Gemini API key." // i18n-ok: test twin
+        else -> "Billed per token." // i18n-ok: test twin
     }
 }
 
@@ -66,7 +67,7 @@ fun addOptionHint(agent: String, option: AddAccountOption): String = when (optio
 fun methodLabel(method: String): String? = when (method) {
     "subscription" -> "Subscription"
     "token" -> "Token"
-    "api_key" -> "API key"
+    "api_key" -> "API key" // i18n-ok: test twin
     "helper" -> "Helper"
     else -> null
 }
@@ -82,31 +83,52 @@ fun accountShortLabel(account: AccountDto): String =
 fun accountIdentityLine(account: AccountDto): String? {
     val email = account.identity?.email?.takeIf { it.isNotBlank() }
     if (account.system) {
-        return if (email != null) "Signed in as $email · this machine's login" else "This machine's login"
+        return if (email != null) "Signed in as $email · this machine's login" else "This machine's login" // i18n-ok: test twin
     }
     val who = email ?: account.identity?.org?.takeIf { it.isNotBlank() }
     return who?.takeIf { it != account.label }
 }
 
-/** `five_hour` → `5h`, `seven_day` → `weekly`, Codex's `300m` / `10080m` likewise. */
-fun usageWindowName(name: String): String {
+/**
+ * A usage window's name before it is worded: weekly / daily, [count] hours or minutes, or the broker's [raw] name; with
+ * Claude's [model] ("Opus") when the window is a model's own. [usageWindowName] words it in English, the UI's
+ * localizedUsageWindowName in the app's language.
+ */
+internal data class UsageWindowLabel(val kind: Kind, val count: Int = 0, val raw: String = "", val model: String? = null) {
+    enum class Kind { Weekly, Daily, Hours, Minutes, Raw }
+}
+
+internal fun parseUsageWindowName(name: String): UsageWindowLabel {
     val n = name.lowercase()
     n.removeSuffix("m").toIntOrNull()?.takeIf { n.endsWith("m") }?.let { mins ->
         return when {
-            mins == 10_080 -> "weekly"
-            mins == 1_440 -> "daily"
-            mins % 60 == 0 -> "${mins / 60}h"
-            else -> "${mins}m"
+            mins == 10_080 -> UsageWindowLabel(UsageWindowLabel.Kind.Weekly)
+            mins == 1_440 -> UsageWindowLabel(UsageWindowLabel.Kind.Daily)
+            mins % 60 == 0 -> UsageWindowLabel(UsageWindowLabel.Kind.Hours, mins / 60)
+            else -> UsageWindowLabel(UsageWindowLabel.Kind.Minutes, mins)
         }
     }
-    val base = when {
-        n.startsWith("five_hour") -> "5h"
-        n.startsWith("seven_day") -> "weekly"
-        n.startsWith("one_day") || n.startsWith("daily") -> "daily"
-        else -> return n.replace('_', ' ')
-    }
     val model = n.substringAfter('_').substringAfter('_', "").takeIf { it.isNotBlank() }
-    return if (model != null) "$base ${model.replace('_', ' ').replaceFirstChar { it.uppercase() }}" else base
+        ?.replace('_', ' ')?.replaceFirstChar { it.uppercase() }
+    return when {
+        n.startsWith("five_hour") -> UsageWindowLabel(UsageWindowLabel.Kind.Hours, 5, model = model)
+        n.startsWith("seven_day") -> UsageWindowLabel(UsageWindowLabel.Kind.Weekly, model = model)
+        n.startsWith("one_day") || n.startsWith("daily") -> UsageWindowLabel(UsageWindowLabel.Kind.Daily, model = model)
+        else -> UsageWindowLabel(UsageWindowLabel.Kind.Raw, raw = n.replace('_', ' '))
+    }
+}
+
+/** `five_hour` → `5h`, `seven_day` → `weekly`, Codex's `300m` / `10080m` likewise. English (tests); the UI words it with localizedUsageWindowName. */
+fun usageWindowName(name: String): String {
+    val w = parseUsageWindowName(name)
+    val base = when (w.kind) {
+        UsageWindowLabel.Kind.Weekly -> "weekly" // i18n-ok: test twin
+        UsageWindowLabel.Kind.Daily -> "daily" // i18n-ok: test twin
+        UsageWindowLabel.Kind.Hours -> "${w.count}h"
+        UsageWindowLabel.Kind.Minutes -> "${w.count}m"
+        UsageWindowLabel.Kind.Raw -> w.raw
+    }
+    return if (w.model != null) "$base ${w.model}" else base
 }
 
 /** "5h 62% · resets in 1h 24m". [now] is epoch millis (injected by tests). */
@@ -164,8 +186,8 @@ fun signInAgainEmail(account: AccountDto): String? =
 /** What a removal does to the account's chats (#106), from GET /accounts/<id>/removal; null when it moves none. */
 fun removalSentence(plan: AccountRemovalPlanDto?): String? = when {
     plan == null || plan.sessions <= 0 -> null
-    plan.sessions == 1 -> "Its chat moves to ${plan.toLabel}."
-    else -> "Its ${plan.sessions} chats move to ${plan.toLabel}."
+    plan.sessions == 1 -> "Its chat moves to ${plan.toLabel}." // i18n-ok: test twin
+    else -> "Its ${plan.sessions} chats move to ${plan.toLabel}." // i18n-ok: test twin
 }
 
 /** An account's name in a sentence: the user's label, else the signed-in email, else its id. */
@@ -200,7 +222,7 @@ fun loginView(state: AccountLoginStateDto?, agent: String, existing: List<Accoun
         else -> LoginView.Starting
     }
 
-private val COLLIDING_ID = Regex("""Account (\S+) is already""")
+internal val COLLIDING_ID = Regex("""Account (\S+) is already""")
 
 /** The failure in plain words (the CLI's own message for login_failed). */
 fun loginFailureText(state: AccountLoginStateDto, agent: String, existing: List<AccountDto>): String {
@@ -210,13 +232,13 @@ fun loginFailureText(state: AccountLoginStateDto, agent: String, existing: List<
             val id = state.error?.let { COLLIDING_ID.find(it)?.groupValues?.get(1) }
             val other = existing.firstOrNull { it.id == id }
             when {
-                id != null && isSystemAccountId(id) -> "This is already your $name login on this machine."
-                other != null -> "This login is already added as ${accountShortLabel(other)}."
-                else -> "This login is already added."
+                id != null && isSystemAccountId(id) -> "This is already your $name login on this machine." // i18n-ok: test twin
+                other != null -> "This login is already added as ${accountShortLabel(other)}." // i18n-ok: test twin
+                else -> "This login is already added." // i18n-ok: test twin
             }
         }
-        "login_timeout" -> "The sign-in wasn't finished in time. Try again when you're ready."
-        "login_cancelled" -> "The sign-in was cancelled."
+        "login_timeout" -> "The sign-in wasn't finished in time. Try again when you're ready." // i18n-ok: test twin
+        "login_cancelled" -> "The sign-in was cancelled." // i18n-ok: test twin
         "login_failed" -> state.error?.takeIf { it.isNotBlank() }?.let { "Sign-in failed: $it" } ?: "Sign-in failed."
         else -> state.error?.takeIf { it.isNotBlank() } ?: "Sign-in failed."
     }
@@ -224,9 +246,9 @@ fun loginFailureText(state: AccountLoginStateDto, agent: String, existing: List<
 
 /** The text for a refused session switch (POST /sessions/<id>/account). */
 fun sessionSwitchFailureText(code: String?, message: String?): String = when (code) {
-    "session_busy" -> "Busy right now — try again after this turn."
-    "session_not_running" -> "Start the session first, then switch."
-    "unknown_account" -> "That account no longer exists."
+    "session_busy" -> "Busy right now — try again after this turn." // i18n-ok: test twin
+    "session_not_running" -> "Start the session first, then switch." // i18n-ok: test twin
+    "unknown_account" -> "That account no longer exists." // i18n-ok: test twin
     "account_unsupported" -> message ?: "This account can't run sessions yet."
     else -> message?.takeIf { it.isNotBlank() } ?: "Couldn't switch account."
 }

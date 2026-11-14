@@ -1,7 +1,7 @@
 // The language guards (card #123). Two checks over the Kotlin apps:
 //
 // 1. Hard-coded UI text. A string literal the user reads (Text("…"), label = "…", a Kit row's title) belongs in
-//    composeResources/values/strings.xml. Today's code has many, so tests/i18n-hardcoded.baseline.json records how
+//    apps/<module>/i18n/values/*.xml (compiled by :ui:generateI18n). Today's code has many, so tests/i18n-hardcoded.baseline.json records how
 //    many each file has, and tests/i18n-strings.test.ts fails when a count RISES (new hard-coded text) or FALLS
 //    (lower the baseline: it only shrinks). Rewrite it from the current tree with:
 //      bun scripts/i18n-strings.ts --write
@@ -22,12 +22,18 @@ export const BASELINE = join(ROOT, "tests", "i18n-hardcoded.baseline.json")
 /** Harnesses and samples a user never runs, and engines whose literals are error messages, never shown as UI. */
 const NOT_SHIPPED = ["apps/mermaid-core/", "apps/terminal-core/", "apps/editor-core/", "apps/editor-sample/", "apps/terminal-sample/", "apps/webview-sample/", "apps/webview-wpetest/", "apps/webview-wintest/", "apps/webview-compose-testing/"]
 
-// A literal in a position the user reads: a Text's first argument, a named UI parameter, or a Kit row's title.
+// A literal in a position the user reads: a Text's first argument (also when an if picks it), a named UI parameter,
+// or a Kit row's title — each also on the next line. Matched over the whole file, comments blanked first.
+const STR = String.raw`"((?:[^"\\\n]|\\.)*)"`
 const UI_LITERAL = [
-  /\bText\(\s*"((?:[^"\\]|\\.)*)"/g,
-  /\b(?:label|title|text|contentDescription|placeholder|subtitle|description|hint|tooltip|button|message|confirmLabel|dismissLabel|actionLabel|emptyText)\s*=\s*"((?:[^"\\]|\\.)*)"/g,
-  /\bKit[A-Z]\w*\(\s*"((?:[^"\\]|\\.)*)"/g,
+  new RegExp(String.raw`\bText\(\s*` + STR, "g"),
+  new RegExp(String.raw`\bText\(\s*if\s*\([^)]*\)\s*` + STR + String.raw`\s*else\s*` + STR, "g"),
+  new RegExp(String.raw`\b(?:label|title|text|contentDescription|placeholder|subtitle|description|hint|tooltip|button|message|confirmLabel|dismissLabel|actionLabel|emptyText)\s*=\s*` + STR, "g"),
+  new RegExp(String.raw`\bKit[A-Z]\w*\(\s*` + STR, "g"),
 ]
+// Text a when branch or an if/else picks: a sentence or a phrase ("Connecting…", "Offline · …"), never one
+// lowercase word (a wire value, an id).
+const PICKED = new RegExp(String.raw`(?:->|\belse)\s*` + STR, "g")
 const OK = /\/\/\s*i18n-ok\b(.*)$/
 
 /** Words remain once templates are taken out: "$count" and "${a} · ${b}" are no text to translate. */
@@ -36,21 +42,46 @@ function isText(literal: string): boolean {
   return /[A-Za-z]{2,}/.test(words)
 }
 
-export function scanText(file: string, source: string): Hit[] {
+function isPhrase(literal: string): boolean {
+  return isText(literal) && /^[A-Z0-9$]/.test(literal) && /[\s…]/.test(literal)
+}
+
+/** Comments become spaces of the same length, so offsets and line numbers still point into the source. */
+function blankComments(source: string): string {
+  return source.replace(/"(?:[^"\\\n]|\\.)*"|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, m => (m.startsWith('"') ? m : m.replace(/[^\n]/g, " ")))
+}
+
+/** One line per "\n": a Windows checkout's "\r\n" would leave a "\r" no `.` in a regex matches (the i18n-ok marker). */
+export function lf(text: string): string {
+  return text.replace(/\r\n?/g, "\n")
+}
+
+export function scanText(file: string, text: string): Hit[] {
+  const source = lf(text)
   const lines = source.split("\n")
-  const hits: Hit[] = []
-  lines.forEach((text, i) => {
-    if (/^\s*(\/\/|\*|\/\*)/.test(text)) return
-    const ok = OK.exec(text) ?? (i > 0 ? OK.exec(lines[i - 1]!) : null)
-    for (const pattern of UI_LITERAL) {
-      for (const match of text.matchAll(pattern)) {
-        if (!isText(match[1]!)) continue
-        if (ok && ok[1]!.replace(/^[:\s]+/, "").trim()) continue
-        hits.push({ file, line: i + 1, text: text.trim() })
+  const code = blankComments(source)
+  const lineAt = (offset: number) => code.slice(0, offset).split("\n").length
+  const marked = (line: number) => {
+    const ok = OK.exec(lines[line - 1]!) ?? (line > 1 ? OK.exec(lines[line - 2]!) : null)
+    return ok !== null && ok[1]!.replace(/^[:\s]+/, "").trim() !== ""
+  }
+  const found = new Map<number, Hit>()
+  const add = (offset: number, literal: string) => {
+    const line = lineAt(offset)
+    if (!marked(line)) found.set(offset, { file, line, text: lines[line - 1]!.trim() })
+  }
+  for (const pattern of UI_LITERAL) {
+    for (const m of code.matchAll(pattern)) {
+      for (let g = 1; g < m.length; g++) {
+        if (m[g] === undefined || !isText(m[g]!)) continue
+        add(m.index! + m[0].lastIndexOf(`"${m[g]}"`), m[g]!)
       }
     }
-  })
-  return hits
+  }
+  for (const m of code.matchAll(PICKED)) {
+    if (isPhrase(m[1]!)) add(m.index! + m[0].indexOf('"'), m[1]!)
+  }
+  return [...found.values()].sort((a, b) => a.line - b.line)
 }
 
 /** A repository path with "/" on every OS: Bun's Glob answers with "\\" on Windows, and the baseline's keys use "/". */
@@ -106,7 +137,7 @@ export function readBaseline(path: string = BASELINE): Counts {
 /** key → its placeholders (sorted); a plural's key is `name#quantity`. */
 export function parseCatalog(xml: string): Catalog {
   const catalog: Catalog = new Map()
-  const body = xml.replace(/<!--[\s\S]*?-->/g, "")
+  const body = lf(xml).replace(/<!--[\s\S]*?-->/g, "")
   for (const m of body.matchAll(/<string\s+name="([^"]+)"[^>]*>([\s\S]*?)<\/string>/g)) {
     catalog.set(m[1]!, placeholders(m[2]!))
   }
@@ -125,7 +156,7 @@ function placeholders(text: string): string[] {
 /** Each module's English catalog with its translations: `{ dir, english, translations: { lang: path } }`. */
 export function catalogs(root: string = ROOT): { dir: string; english: string; translations: Record<string, string> }[] {
   const out = []
-  for (const found of new Glob("apps/*/src/*/composeResources/values/*.xml").scanSync({ cwd: root })) {
+  for (const found of new Glob("apps/*/i18n/values/*.xml").scanSync({ cwd: root })) {
     const english = repoPath(found)
     const dir = english.slice(0, english.indexOf("/values/"))
     const name = english.slice(english.lastIndexOf("/") + 1)

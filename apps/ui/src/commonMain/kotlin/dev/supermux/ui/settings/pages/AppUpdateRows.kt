@@ -23,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.platform.AppUpdater
 import dev.supermux.ui.platform.InFlightWork
 import dev.supermux.ui.platform.LocalPlatform
@@ -42,6 +43,7 @@ import dev.supermux.ui.update.formatUpdateProgress
 import dev.supermux.ui.update.installCaption
 import dev.supermux.ui.update.installerKindFrom
 import dev.supermux.ui.work.rememberDownloads
+import dev.supermux.ui.i18n.localized
 import kotlinx.coroutines.flow.first
 import dev.supermux.ui.whatsnew.WhatsNewLink
 import dev.supermux.ui.whatsnew.highlightsFor
@@ -61,11 +63,13 @@ fun AppUpdateRows(
     val s = update.release
     val version = (s?.currentVersion ?: updater.currentVersion).takeIf { it.isNotBlank() }
     val code = s?.currentVersionCode ?: updater.currentVersionCode
-    val versionText = listOfNotNull("supermux", version).joinToString(" ") + (code?.let { " (build $it)" } ?: "")
+    val product = listOfNotNull("supermux", version).joinToString(" ") // i18n-ok: the brand and a version number
+    val versionText = if (code != null) localized(Str.settings_update_version_build, product, code.toString()) else product
+    val appVersion = localized(Str.settings_update_app_version)
     val rowModifier = modifier.kitAnchor("app-version").testTag("general_app-version")
 
     if (!canUpdate) {
-        KitRow("App version", rowModifier, description = versionText, descriptionTag = "app_update_version")
+        KitRow(appVersion, rowModifier, description = versionText, descriptionTag = "app_update_version")
         WhatsNewLink(updater.currentVersion, Modifier.padding(bottom = 6.dp))
         return
     }
@@ -121,15 +125,15 @@ fun AppUpdateRows(
     val state: String? = when {
         installing -> formatUpdateProgress(update.bytesReceived, update.contentLength)
         waiting -> finishingLabel(work)
-        loading -> "Checking…"
+        loading -> localized(Str.settings_update_checking)
         s == null || feedError != null -> null
-        ready != null -> "${s.latestVersion} is downloaded"
-        s.updateAvailable -> "${s.latestVersion} is ready"
-        else -> "up to date"
+        ready != null -> localized(Str.settings_update_downloaded, s.latestVersion.toString())
+        s.updateAvailable -> localized(Str.settings_update_ready, s.latestVersion.toString())
+        else -> localized(Str.settings_update_up_to_date)
     }
     val busy = installing || waiting || loading
     KitRow(
-        "App version",
+        appVersion,
         rowModifier,
         description = versionText + (state?.let { " · $it" } ?: ""),
         descriptionTag = "app_update_version",
@@ -138,13 +142,13 @@ fun AppUpdateRows(
         when {
             busy -> Unit
             ready != null -> KitGhostButton(
-                if (restarts) "Install and restart" else "Install",
+                localized(if (restarts) Str.settings_update_install_restart else Str.settings_update_install),
                 onClick = { installReady() },
                 modifier = Modifier.testTag("app_update_install"),
             )
-            installable -> KitGhostButton("Download", onClick = { download() }, modifier = Modifier.testTag("app_update_install"))
+            installable -> KitGhostButton(localized(Str.settings_update_download), onClick = { download() }, modifier = Modifier.testTag("app_update_install"))
             s == null || feedError != null || s.updateAvailable -> Unit
-            else -> KitGhostButton("Check for updates", onClick = { check() }, modifier = Modifier.testTag("general_check_updates"))
+            else -> KitGhostButton(localized(Str.settings_update_check), onClick = { check() }, modifier = Modifier.testTag("general_check_updates"))
         }
     }
 
@@ -152,7 +156,7 @@ fun AppUpdateRows(
         WhatsNewLink(updater.currentVersion)
         when {
             checkFailed || feedError != null -> ErrorLine(
-                feedError ?: update.error ?: "Couldn't check for updates.",
+                feedError ?: update.error ?: localized(Str.settings_update_check_failed),
                 tag = "app_update_message",
                 onRetry = { check() },
             )
@@ -161,7 +165,7 @@ fun AppUpdateRows(
                     ready != null -> if (restarts) KitNote(RESTART_CAPTION)
                     installable -> KitNote(installCaption(installerKindFrom(s.downloadUrl)))
                     // Deliberately installer-agnostic: this fires on every host, and only one of them ships an APK.
-                    else -> KitNote("Update is available but no installer file was published for this release.")
+                    else -> KitNote(localized(Str.settings_update_no_installer))
                 }
                 val highlights = highlightsFor(s.highlights, LocalPlatform.current.releasePlatform)
                 if (highlights.isNotEmpty()) {
@@ -176,7 +180,7 @@ fun AppUpdateRows(
                 }
                 if (s.notesUrl != null) {
                     KitTextAction(
-                        "Release notes",
+                        localized(Str.settings_update_release_notes),
                         onClick = { updater.openReleaseNotes() },
                         modifier = Modifier.padding(top = 4.dp).testTag("app_update_notes"),
                     )
@@ -194,21 +198,21 @@ fun AppUpdateRows(
         // Only a platform with an unknown-sources gate raises this (Android). Download already jumped to the system
         // page once; this row is what the user comes back to.
         KitActionRow(
-            "Allow installs from supermux",
-            button = "Open settings",
+            localized(Str.settings_update_allow_installs),
+            button = localized(Str.settings_update_open_settings),
             onClick = { updater.openInstallPermissionSettings() },
             modifier = Modifier.testTag("app_update_permission"),
-            description = update.error ?: "Android asks once before supermux can install its own updates.",
+            description = update.error ?: localized(Str.settings_update_android_asks),
             buttonTag = "app_update_permission_action",
         )
     }
     if (updater.offersBackgroundUpdates) {
         KitToggleRow(
-            "Download updates in the background",
+            localized(Str.settings_update_background),
             checked = update.background,
             onCheckedChange = { updater.setBackgroundUpdates(it) },
             modifier = Modifier.testTag("app_update_background"),
-            description = "A new version downloads quietly, then asks before restarting. Off: you choose when to download.",
+            description = localized(Str.settings_update_background_description),
         )
     }
 }
@@ -218,5 +222,5 @@ fun AppUpdateRows(
 private fun ErrorLine(text: String, tag: String, onRetry: () -> Unit) {
     val c = kitColors()
     Text(text, fontSize = 12.sp, lineHeight = 18.sp, color = c.danger, modifier = Modifier.padding(top = 2.dp).testTag(tag))
-    KitTextAction("Try again", onClick = onRetry, modifier = Modifier.testTag("app_update_retry"))
+    KitTextAction(localized(Str.settings_pages_try_again), onClick = onRetry, modifier = Modifier.testTag("app_update_retry"))
 }

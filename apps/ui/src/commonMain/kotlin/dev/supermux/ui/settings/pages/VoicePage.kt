@@ -38,6 +38,9 @@ import dev.supermux.state.HostStore
 import dev.supermux.ui.chat.DictationMode
 import dev.supermux.ui.chat.MessageTts
 import dev.supermux.ui.chat.resolveDictationMode
+import dev.supermux.ui.i18n.Plurals
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.StringKey
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.prefs.LocalUiPrefsOrNull
@@ -65,9 +68,11 @@ import dev.supermux.ui.settings.kit.kitColors
 import dev.supermux.ui.settings.kit.kitDeviceNoun
 import dev.supermux.ui.settings.kit.kitFocusRing
 import dev.supermux.ui.settings.kit.kitMetrics
-import dev.supermux.ui.settings.settingsTitle
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.localizedPlural
+import dev.supermux.ui.settings.localizedSettingsTitle
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -91,40 +96,60 @@ internal fun sttEngineLabel(id: String): String = STT_ENGINES.firstOrNull { it.i
 
 // Dictation languages (ISO-639-1) — the broker's `voiceLanguages`. Several at once is the point:
 // codex-realtime turns them into a "mixes Turkish and English" prompt rather than a pin.
+/** A dictation language: its code, its English name (the plain helpers below) and its name in the app's language. */
+private data class VoiceLanguage(val code: String, val english: String, val name: StringKey)
+
 private val VOICE_LANGUAGES = listOf(
-    "tr" to "Turkish",
-    "en" to "English",
-    "de" to "German",
-    "fr" to "French",
-    "es" to "Spanish",
-    "it" to "Italian",
-    "pt" to "Portuguese",
-    "nl" to "Dutch",
-    "ru" to "Russian",
-    "uk" to "Ukrainian",
-    "ar" to "Arabic",
-    "fa" to "Persian",
-    "bs" to "Bosnian",
-    "sq" to "Albanian",
-    "zh" to "Chinese",
-    "ja" to "Japanese",
+    VoiceLanguage("tr", "Turkish", Str.settings_voice_lang_tr),
+    VoiceLanguage("en", "English", Str.settings_voice_lang_en),
+    VoiceLanguage("de", "German", Str.settings_voice_lang_de),
+    VoiceLanguage("fr", "French", Str.settings_voice_lang_fr),
+    VoiceLanguage("es", "Spanish", Str.settings_voice_lang_es),
+    VoiceLanguage("it", "Italian", Str.settings_voice_lang_it),
+    VoiceLanguage("pt", "Portuguese", Str.settings_voice_lang_pt),
+    VoiceLanguage("nl", "Dutch", Str.settings_voice_lang_nl),
+    VoiceLanguage("ru", "Russian", Str.settings_voice_lang_ru),
+    VoiceLanguage("uk", "Ukrainian", Str.settings_voice_lang_uk),
+    VoiceLanguage("ar", "Arabic", Str.settings_voice_lang_ar),
+    VoiceLanguage("fa", "Persian", Str.settings_voice_lang_fa),
+    VoiceLanguage("bs", "Bosnian", Str.settings_voice_lang_bs),
+    VoiceLanguage("sq", "Albanian", Str.settings_voice_lang_sq),
+    VoiceLanguage("zh", "Chinese", Str.settings_voice_lang_zh),
+    VoiceLanguage("ja", "Japanese", Str.settings_voice_lang_ja),
 )
 
 internal fun voiceLanguageLabel(code: String): String =
-    VOICE_LANGUAGES.firstOrNull { it.first == code }?.second ?: code
+    VOICE_LANGUAGES.firstOrNull { it.code == code }?.english ?: code
 
-/** "English, Turkish" in the order they were picked; "Detect automatically" for none. */
+/** "English, Turkish" in the order they were picked; "Detect automatically" for none. English: the UI reads [localizedLanguagesSummary]. */
 internal fun voiceLanguagesSummary(codes: List<String>): String =
-    if (codes.isEmpty()) "Detect automatically" else codes.joinToString(", ") { voiceLanguageLabel(it) }
+    if (codes.isEmpty()) "Detect automatically" else codes.joinToString(", ") { voiceLanguageLabel(it) } // i18n-ok: the English twin of localizedLanguagesSummary
+
+/** A language's name in the app's language; a code outside the list shows as itself. */
+@Composable
+private fun localizedLanguageName(code: String): String =
+    VOICE_LANGUAGES.firstOrNull { it.code == code }?.let { localized(it.name) } ?: code
+
+/** [voiceLanguagesSummary] in the app's language. */
+@Composable
+private fun localizedLanguagesSummary(codes: List<String>): String {
+    if (codes.isEmpty()) return localized(Str.settings_voice_detect_automatically)
+    return codes.map { localizedLanguageName(it) }.joinToString(", ")
+}
 
 // Read-aloud engines — MessageTts uses platform (say/espeak/Android TTS) or codex (the machine's /speak).
 private val TTS_ENGINES = listOf(
-    Choice("platform", "Device's own voice"),
+    Choice("platform", "Device's own voice"), // i18n-ok: the English twin; the UI reads localizedTtsEngineLabel
     Choice("codex", "ChatGPT"),
 )
 private const val DEFAULT_TTS_ENGINE = "platform"
 
 internal fun ttsEngineLabel(id: String): String = TTS_ENGINES.firstOrNull { it.id == id }?.label ?: id
+
+/** [ttsEngineLabel] in the app's language: the device's voice is described, ChatGPT is a name. */
+@Composable
+private fun localizedTtsEngineLabel(id: String): String =
+    if (id == "platform") localized(Str.settings_voice_tts_device) else ttsEngineLabel(id)
 
 // Tidy-up engines — a curated mirror of ENGINES in src/core/agent-api/index.ts. `family` is the
 // AgentKind whose models GET /models?agent= returns for that engine.
@@ -142,8 +167,8 @@ internal fun voiceEngineFamily(id: String): String =
 internal fun voiceEngineLabel(id: String): String =
     VOICE_ENGINES.firstOrNull { it.id == id }?.label ?: id
 
-/** "3 words", "1 word". */
-internal fun wordCount(n: Int): String = if (n == 1) "1 word" else "$n words"
+/** "3 words", "1 word" — English; the UI reads the settings_voice_words plural. */
+internal fun wordCount(n: Int): String = if (n == 1) "1 word" else "$n words" // i18n-ok: the English twin of settings_voice_words
 
 internal const val ERROR_AUTO_RETRY_MS = 3_000L
 private const val PREVIEW_TTS_SAMPLE = "Hello from Supermux."
@@ -299,11 +324,27 @@ fun VoicePage(
     val prefs = LocalUiPrefsOrNull.current
     val explicitMode by remember(prefs) { prefs?.dictationMode ?: flowOf(null) }.collectAsState(null)
     val mode = resolveDictationMode(explicitMode, codexAvailable, hasDeviceStt)
-    val noun = if (kitDeviceNoun() == "phone") "phone" else "device"
-    val machine = machineInSentence()
+    val phone = kitDeviceNoun() == "phone"
+    val machineName = LocalSettingsMachines.current?.current?.name
+    val couldntReach = pagesCouldntReach()
+    val sttFailed = localized(Str.settings_voice_speech_recognition_failed)
+    val ttsFailed = localized(Str.settings_voice_read_aloud_failed)
+    val engineFailed = localized(Str.settings_voice_tidy_up_engine_failed)
+    val modelFailed = localized(Str.settings_voice_tidy_up_model_failed)
+    val languagesFailed = localized(Str.settings_voice_languages_failed)
+    val defaultLabel = localized(Str.settings_pages_default)
+    val ttsLabels = TTS_ENGINES.associate { it.id to localizedTtsEngineLabel(it.id) }
+    val onThisDevice = localized(
+        if (phone) Str.settings_voice_dictation_on_this_phone else Str.settings_voice_dictation_on_this_device,
+    )
+    val onMachine = if (machineName != null) {
+        localized(Str.settings_voice_dictation_on_machine, machineName)
+    } else {
+        localized(Str.settings_voice_dictation_on_this_machine)
+    }
 
     KitPage(
-        settingsTitle(SettingsPlace(SettingsSection.Voice)),
+        localizedSettingsTitle(SettingsPlace(SettingsSection.Voice)),
         modifier,
         scope = { KitMachineScope() },
         anchor = anchor,
@@ -314,9 +355,9 @@ fun VoicePage(
             !online -> KitOfflineNote()
             loadState is VoiceLoadState.Loading -> Unit
             loadState is VoiceLoadState.Error -> {
-                KitNote("Couldn't reach $machine.", Modifier.testTag("voice_settings_error"))
+                KitNote(couldntReach, Modifier.testTag("voice_settings_error"))
                 KitTextAction(
-                    "Try again",
+                    localized(Str.settings_pages_try_again),
                     onClick = { reloadKey++ },
                     modifier = Modifier.padding(top = 4.dp).testTag("voice_settings_retry"),
                 )
@@ -324,7 +365,7 @@ fun VoicePage(
             else -> {
                 val sttInUse = mode == DictationMode.Broker
                 KitOptionsRow(
-                    label = "Speech recognition",
+                    label = localized(Str.settings_voice_speech_recognition),
                     options = STT_ENGINES.map { it.id },
                     selected = sttEngine,
                     onSelect = { picked ->
@@ -335,47 +376,53 @@ fun VoicePage(
                         scope.launch {
                             if (!actions.saveVoiceStt(picked)) {
                                 sttEngine = previous
-                                saveError = VoiceField.STT to "Couldn't save speech recognition."
+                                saveError = VoiceField.STT to sttFailed
                             }
                         }
                     },
                     optionLabel = ::sttEngineLabel,
                     modifier = Modifier.kitAnchor("speech-engine").testTag("voice_stt_row"),
-                    description = if (sttInUse) "Turns what you say into text." else "Not used while this $noun turns speech into text.",
+                    description = localized(
+                        when {
+                            sttInUse -> Str.settings_voice_speech_recognition_description
+                            phone -> Str.settings_voice_speech_recognition_unused_phone
+                            else -> Str.settings_voice_speech_recognition_unused_device
+                        },
+                    ),
                     enabled = sttInUse,
                     optionTag = { "voice_stt_chip_option_$it" },
                 )
                 ErrorUnder(saveError, VoiceField.STT)
 
                 KitValueRow(
-                    label = "Languages",
-                    value = voiceLanguagesSummary(languages),
+                    label = localized(Str.settings_voice_languages),
+                    value = localizedLanguagesSummary(languages),
                     modifier = Modifier.kitAnchor("languages").testTag("voice_languages_chip"),
-                    description = "Leave empty to detect automatically.",
+                    description = localized(Str.settings_voice_languages_description),
                     onClick = { languagesOpen = true },
                 )
                 if (!languagesOpen) ErrorUnder(saveError, VoiceField.LANGUAGES)
 
                 KitValueRow(
-                    label = "Words to spell your way",
+                    label = localized(Str.settings_voice_glossary),
                     value = when {
-                        words != null -> wordCount(words!!)
-                        wordsFailed -> "Couldn't load"
+                        words != null -> localizedPlural(Plurals.settings_voice_words, words!!, words!!)
+                        wordsFailed -> localized(Str.settings_voice_glossary_failed)
                         else -> ""
                     },
                     modifier = Modifier.kitAnchor("glossary").testTag("voice_glossary_link"),
-                    description = "Names and terms dictation and agents keep exactly as you write them.",
+                    description = localized(Str.settings_voice_glossary_description),
                     onClick = { onOpenSub(GLOSSARY_SUB) },
                 )
 
                 KitRow(
-                    label = "Read replies aloud",
+                    label = localized(Str.settings_voice_read_aloud),
                     modifier = Modifier.kitAnchor("read-aloud").testTag("voice_tts_row"),
                 ) {
                     val previewTts = LocalPlatform.current.tts
                     MenuValue(
-                        value = ttsEngineLabel(ttsEngine),
-                        options = TTS_ENGINES.map { it.id to it.label },
+                        value = ttsLabels[ttsEngine] ?: ttsEngine,
+                        options = TTS_ENGINES.map { it.id to ttsLabels.getValue(it.id) },
                         onPick = { picked ->
                             if (picked == ttsEngine) return@MenuValue
                             val previous = ttsEngine
@@ -384,25 +431,25 @@ fun VoicePage(
                             scope.launch {
                                 if (!actions.saveVoiceTts(picked)) {
                                     ttsEngine = previous
-                                    saveError = VoiceField.TTS to "Couldn't save how replies are read."
+                                    saveError = VoiceField.TTS to ttsFailed
                                 }
                             }
                         },
                         tag = "voice_tts_chip",
-                        menuLabel = "Read replies aloud",
+                        menuLabel = localized(Str.settings_voice_read_aloud),
                     )
                     KitGhostButton(
-                        "Preview",
+                        localized(Str.settings_voice_preview),
                         onClick = { MessageTts.toggle(previewTts, PREVIEW_TTS_SAMPLE) },
                         modifier = Modifier.testTag("voice_tts_preview"),
                     )
                 }
                 ErrorUnder(saveError, VoiceField.TTS)
 
-                KitFold("Advanced", anchors = setOf("tidy-up-engine", "tidy-up-model"), tag = "voice_advanced") {
-                    KitNote("Only used when speech is recognised on a phone or by Whisper; ChatGPT and Claude already return clean text.")
+                KitFold(localized(Str.settings_pages_advanced), anchors = setOf("tidy-up-engine", "tidy-up-model"), tag = "voice_advanced") {
+                    KitNote(localized(Str.settings_voice_tidy_up_note))
                     MenuValueRow(
-                        label = "Tidy-up engine",
+                        label = localized(Str.settings_voice_tidy_up_engine),
                         value = voiceEngineLabel(engine),
                         options = VOICE_ENGINES.map { it.id to it.label },
                         onPick = { picked ->
@@ -416,7 +463,7 @@ fun VoicePage(
                                 if (!actions.saveVoiceCleanup(picked, "")) {
                                     engine = previousEngine
                                     selectedModel = previousModel
-                                    saveError = VoiceField.ENGINE to "Couldn't save the tidy-up engine."
+                                    saveError = VoiceField.ENGINE to engineFailed
                                 } else {
                                     models = actions.loadModels(voiceEngineFamily(picked))
                                 }
@@ -427,13 +474,13 @@ fun VoicePage(
                     )
                     ErrorUnder(saveError, VoiceField.ENGINE)
                     MenuValueRow(
-                        label = "Tidy-up model",
+                        label = localized(Str.settings_voice_tidy_up_model),
                         value = if (selectedModel.isEmpty()) {
-                            "Default"
+                            defaultLabel
                         } else {
                             models.firstOrNull { it.id == selectedModel }?.displayName ?: selectedModel
                         },
-                        options = listOf("" to "Default") + models.map { it.id to it.displayName },
+                        options = listOf("" to defaultLabel) + models.map { it.id to it.displayName },
                         onPick = { picked ->
                             if (picked == selectedModel) return@MenuValueRow
                             val previous = selectedModel
@@ -442,12 +489,12 @@ fun VoicePage(
                             scope.launch {
                                 if (!actions.saveVoiceCleanup(null, picked)) {
                                     selectedModel = previous
-                                    saveError = VoiceField.MODEL to "Couldn't save the tidy-up model."
+                                    saveError = VoiceField.MODEL to modelFailed
                                 }
                             }
                         },
                         modifier = Modifier.kitAnchor("tidy-up-model"),
-                        description = "Default is ${voiceEngineLabel(engine)}'s own.",
+                        description = localized(Str.settings_voice_tidy_up_model_description, voiceEngineLabel(engine)),
                         tag = "voice_cleanup_model_chip",
                     )
                     ErrorUnder(saveError, VoiceField.MODEL)
@@ -456,15 +503,17 @@ fun VoicePage(
         }
 
         if (hasDeviceStt && prefs != null) {
-            KitSectionHead(if (noun == "phone") "This phone" else "This device")
+            KitSectionHead(localized(if (phone) Str.settings_voice_this_phone else Str.settings_voice_this_device))
             KitOptionsRow(
-                label = "Turn speech into text",
+                label = localized(Str.settings_voice_dictation),
                 options = listOf(DictationMode.Device, DictationMode.Broker),
                 selected = mode,
                 onSelect = { picked -> scope.launch { prefs.putDictationMode(picked) } },
-                optionLabel = { if (it == DictationMode.Device) "On this $noun" else "On $machine" },
+                optionLabel = { if (it == DictationMode.Device) onThisDevice else onMachine },
                 modifier = Modifier.kitAnchor("dictation").testTag("voice_mode_row"),
-                description = "On this $noun works offline and starts faster.",
+                description = localized(
+                    if (phone) Str.settings_voice_dictation_description_phone else Str.settings_voice_dictation_description_device,
+                ),
                 optionTag = { "voice_mode_chip_option_${it.wire}" },
             )
         }
@@ -481,7 +530,7 @@ fun VoicePage(
                 scope.launch {
                     if (!actions.saveVoiceLanguages(next)) {
                         languages = previous
-                        saveError = VoiceField.LANGUAGES to "Couldn't save languages."
+                        saveError = VoiceField.LANGUAGES to languagesFailed
                     }
                 }
             },
@@ -489,10 +538,6 @@ fun VoicePage(
         )
     }
 }
-
-/** The machine as a sentence names it mid-way: its name, or "this machine" when Settings knows none. */
-@Composable
-private fun machineInSentence(): String = LocalSettingsMachines.current?.current?.name ?: "this machine"
 
 /** "Couldn't save …" under the row whose save failed. */
 @Composable
@@ -515,16 +560,17 @@ private fun LanguagesSheet(
     onDismiss: () -> Unit,
 ) {
     // A stored code outside the curated list still shows (and can be turned off).
-    val options = VOICE_LANGUAGES + selected.filter { c -> VOICE_LANGUAGES.none { it.first == c } }.map { it to it }
+    val options = VOICE_LANGUAGES.map { it.code to localized(it.name) } +
+        selected.filter { c -> VOICE_LANGUAGES.none { it.code == c } }.map { it to it }
     KitSheet(
-        title = "Languages",
+        title = localized(Str.settings_voice_languages),
         onDismiss = onDismiss,
-        description = "What you dictate in. Pick several if you mix them; leave all off to detect automatically.",
+        description = localized(Str.settings_voice_languages_sheet_description),
         tag = "voice_languages_sheet",
-        buttons = { KitGhostButton("Done", onClick = onDismiss, modifier = Modifier.testTag("voice_languages_done")) },
+        buttons = { KitGhostButton(localized(Str.settings_pages_done), onClick = onDismiss, modifier = Modifier.testTag("voice_languages_done")) },
     ) {
         KitToggleRow(
-            label = "Detect automatically",
+            label = localized(Str.settings_voice_detect_automatically),
             checked = selected.isEmpty(),
             onCheckedChange = { on -> if (on && selected.isNotEmpty()) onChange(emptyList()) },
             modifier = Modifier.testTag("voice_languages_chip_option_auto"),

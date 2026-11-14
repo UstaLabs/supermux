@@ -274,6 +274,24 @@ test("each desktop distribution carries its client terminal engine", () => {
   }
 })
 
+// #137: no Windows release had the web view's glue, so every Browser tab and HTML card said it can't show pages. The
+// glue is built on the runner, required by Gradle's staging, loaded once, and read back out of the packaged jar.
+test("the Windows desktop carries the web view's glue: built, required, loaded, and read back from the package", () => {
+  expect(windowsJob).toContain('WEBVIEW_REQUIRE_WINDOWS_GLUE: "1"')
+  const build = windowsJob.indexOf("webview-compose/native/windows/ci-build.ps1 -Arch x64")
+  const load = windowsJob.indexOf("--tests 'dev.supermux.webview.engine.windows.WinGlueLoadTest'")
+  const image = windowsJob.indexOf(":desktop:createDistributable")
+  const check = windowsJob.indexOf("scripts/check-packaged-webview-glue.py")
+  expect(build).toBeGreaterThan(-1)
+  expect(load).toBeGreaterThan(build)
+  expect(image).toBeGreaterThan(load)
+  expect(check).toBeGreaterThan(image)
+  expect(windowsJob.slice(check)).toContain("x64 apps/webview-compose/native/windows/wv2.h")
+  // The load test skips where the variable isn't set: the step reads its report back and fails on a skip.
+  expect(windowsJob.slice(load, image)).toContain("TEST-dev.supermux.webview.engine.windows.WinGlueLoadTest.xml")
+  expect(windowsJob.slice(load, image)).toContain("[int]$suite.skipped -ne 0")
+})
+
 test("POSIX desktop packages carry the verified zmx bundle; Windows keeps sessiond", () => {
   for (const job of [linuxDesktopJob, composeMacJob]) {
     expect(job).toContain("check-zmx-bundle.sh")
@@ -450,4 +468,16 @@ test("a release with a What's new edition takes its notes from it: GitHub's list
 test("a tag stays off TestFlight when the repo variable TESTFLIGHT_ON_TAG is off", () => {
   expect(workflow).toContain('if [ "${{ vars.TESTFLIGHT_ON_TAG }}" = "off" ]; then')
   expect(workflow).toContain('{ [ "$tag_upload" = 1 ] || [ "${{ inputs.ios_testflight_upload }}" = "true" ]; }')
+})
+
+// #138: a fresh Windows install showed every file as plain text. The packaged image's own runtime must highlight.
+test("Windows release highlights a file with the packaged editor before signing and packaging", () => {
+  const image = position(":desktop:createDistributable")
+  const selfCheck = position("dev.supermux.editor.syntax.SyntaxSelfCheck")
+  const sign = position("bun ../scripts/certum-sign/sign.ts @files")
+  const msi = position(":desktop:packageMsi -x :desktop:createDistributable")
+  expect(image).toBeLessThan(selfCheck)
+  expect(selfCheck).toBeLessThan(sign)
+  expect(selfCheck).toBeLessThan(msi)
+  expect(windowsJob).toContain('if ($LASTEXITCODE -ne 0) { throw "the packaged editor cannot highlight on Windows')
 })

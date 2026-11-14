@@ -45,24 +45,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.ui.resources.Res
-import dev.supermux.ui.resources.whatsnew_card_count
-import dev.supermux.ui.resources.whatsnew_card_count_anywhere
-import dev.supermux.ui.resources.whatsnew_card_explore
-import dev.supermux.ui.resources.whatsnew_card_title
-import dev.supermux.ui.resources.whatsnew_dismiss
-import dev.supermux.ui.resources.whatsnew_place_android
-import dev.supermux.ui.resources.whatsnew_place_iphone
-import dev.supermux.ui.resources.whatsnew_place_linux
-import dev.supermux.ui.resources.whatsnew_place_mac
-import dev.supermux.ui.resources.whatsnew_place_web
-import dev.supermux.ui.resources.whatsnew_place_win
-import dev.supermux.ui.resources.whatsnew_reopen
+import dev.supermux.ui.i18n.Plurals
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.StringKey
 import dev.supermux.ui.settings.kit.KitTextAction
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.Stroke
-import org.jetbrains.compose.resources.StringResource
 
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.i18n.localizedPlural
@@ -73,13 +62,13 @@ import dev.supermux.ui.i18n.localizedPlural
  */
 data class WhatsNewOffer(val version: String, val chapters: Int, val platform: ReleasePlatform?, val appVersion: String? = null)
 
-private fun ReleasePlatform.place(): StringResource = when (this) {
-    ReleasePlatform.Mac -> Res.string.whatsnew_place_mac
-    ReleasePlatform.Windows -> Res.string.whatsnew_place_win
-    ReleasePlatform.Linux -> Res.string.whatsnew_place_linux
-    ReleasePlatform.Web -> Res.string.whatsnew_place_web
-    ReleasePlatform.Android -> Res.string.whatsnew_place_android
-    ReleasePlatform.IPhone -> Res.string.whatsnew_place_iphone
+private fun ReleasePlatform.place(): StringKey = when (this) {
+    ReleasePlatform.Mac -> Str.whatsnew_place_mac
+    ReleasePlatform.Windows -> Str.whatsnew_place_win
+    ReleasePlatform.Linux -> Str.whatsnew_place_linux
+    ReleasePlatform.Web -> Str.whatsnew_place_web
+    ReleasePlatform.Android -> Str.whatsnew_place_android
+    ReleasePlatform.IPhone -> Str.whatsnew_place_iphone
 }
 
 /**
@@ -117,7 +106,7 @@ private fun WhatsNewCardBody(offer: WhatsNewOffer, onExplore: () -> Unit, onDism
             Icon(Icons.Outlined.Redeem, contentDescription = null, tint = cs.onSurface, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(10.dp))
             Text(
-                localized(Res.string.whatsnew_card_title, offer.appVersion ?: offer.version),
+                localized(Str.whatsnew_card_title, offer.appVersion ?: offer.version),
                 color = cs.onSurface,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Medium,
@@ -128,15 +117,15 @@ private fun WhatsNewCardBody(offer: WhatsNewOffer, onExplore: () -> Unit, onDism
             IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp).testTag("whats_new_card_dismiss")) {
                 Icon(
                     Icons.Default.Close,
-                    contentDescription = localized(Res.string.whatsnew_dismiss),
+                    contentDescription = localized(Str.whatsnew_dismiss),
                     tint = cs.onSurfaceVariant,
                     modifier = Modifier.size(18.dp),
                 )
             }
         }
         Spacer(Modifier.height(Space.sm))
-        val count = offer.platform?.let { localizedPlural(Res.plurals.whatsnew_card_count, offer.chapters, offer.chapters, localized(it.place())) }
-            ?: localizedPlural(Res.plurals.whatsnew_card_count_anywhere, offer.chapters, offer.chapters)
+        val count = offer.platform?.let { localizedPlural(Plurals.whatsnew_card_count, offer.chapters, offer.chapters, localized(it.place())) }
+            ?: localizedPlural(Plurals.whatsnew_card_count_anywhere, offer.chapters, offer.chapters)
         Text(
             count,
             color = cs.onSurfaceVariant,
@@ -154,7 +143,7 @@ private fun WhatsNewCardBody(offer: WhatsNewOffer, onExplore: () -> Unit, onDism
             contentPadding = PaddingValues(horizontal = Space.sm),
             modifier = Modifier.fillMaxWidth().padding(end = Space.sm).height(36.dp).testTag("whats_new_card_explore"),
         ) {
-            Text(localized(Res.string.whatsnew_card_explore), fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+            Text(localized(Str.whatsnew_card_explore), fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
         }
     }
 }
@@ -234,7 +223,7 @@ fun WhatsNewLink(currentVersion: String, modifier: Modifier = Modifier) {
     val open = LocalOpenWhatsNew.current ?: return
     val version = editionFor(currentVersion) ?: return
     KitTextAction(
-        localized(Res.string.whatsnew_reopen, version),
+        localized(Str.whatsnew_reopen, version),
         onClick = { open(version) },
         modifier = modifier.testTag("app_update_whats_new_link"),
     )

@@ -57,6 +57,37 @@ class ComposerPillsTest {
         assertEquals("opus", composerModelSelectedId("opus"))
     }
 
+    // #134: a restored session's pill read "Settings" until the model list arrived.
+    @Test fun the_pill_never_reads_settings_while_the_model_list_loads() = runComposeUiTest {
+        var data by mutableStateOf<ModelsResponse?>(null)
+        var loading by mutableStateOf(true)
+        setPlatformContent {
+            Composer(
+                draft = "", onDraftChange = {}, sending = false, agentWorking = false,
+                onSend = { _, _ -> }, onInterrupt = {},
+                models = data, catalogsLoading = loading, fastMode = false,
+            )
+        }
+        onNodeWithTag("composer-model-pill").assertIsDisplayed()
+        onNodeWithText("Settings").assertDoesNotExist()
+        data = models
+        loading = false
+        waitForIdle()
+        onNodeWithText("Opus").assertIsDisplayed()
+        onNodeWithText("Settings").assertDoesNotExist()
+    }
+
+    @Test fun an_agent_with_no_model_list_keeps_settings_once_loaded() = runComposeUiTest {
+        setPlatformContent {
+            Composer(
+                draft = "", onDraftChange = {}, sending = false, agentWorking = false,
+                onSend = { _, _ -> }, onInterrupt = {},
+                models = null, catalogsLoading = false, fastMode = false,
+            )
+        }
+        onNodeWithText("Settings").assertIsDisplayed()
+    }
+
     // ── model pill UX ───────────────────────────────────────────────────────────
     @Test fun model_pill_shows_current_opens_menu_and_a_pick_fires_and_updates() = runComposeUiTest {
         var picked: String? = null

@@ -54,7 +54,8 @@ object DesktopUpdateSource {
      * The quiet Windows update's helper (#113): wait for this app to exit (Windows Installer replaces its files only once
      * they are free), run msiexec with a progress bar only and wait for it, then start the app again, whatever the
      * install answered. Its paths come in the environment, never as code; no double quote anywhere, since Java can't
-     * escape one inside a Windows argument.
+     * escape one inside a Windows argument. This is the only start after an update: the MSI's own "Launch supermux"
+     * (#136) sits on the wizard's last page, which /passive never shows.
      */
     internal const val WINDOWS_UPDATE_SCRIPT =
         "try { Wait-Process -Id ([int]\$env:$UPDATE_APP_PID) -Timeout 120 -ErrorAction SilentlyContinue } catch {}; " +

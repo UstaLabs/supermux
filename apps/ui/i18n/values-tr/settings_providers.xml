@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #123: Turkish. Same keys and placeholders as values/settings_providers.xml; terms and tone: docs/i18n/glossary.md. -->
+<resources>
+    <string name="providers_lede">%1$s üzerinde çalışabilen kodlama ajanları ve kullandıkları girişler.</string>
+    <string name="providers_this_machine">bu makine</string>
+    <string name="providers_composer_note">Model, efor ve izinler her sohbette, yazma alanında seçilir.</string>
+    <string name="providers_loading">Yükleniyor…</string>
+    <string name="providers_no_agents">%1$s hiç kodlama ajanı bildirmedi.</string>
+    <string name="providers_try_again">Tekrar dene</string>
+    <string name="providers_couldnt_reach">%1$s ile bağlantı kurulamadı.</string>
+    <string name="providers_install_start_failed">Kurulum başlatılamadı.</string>
+    <string name="providers_install_timed_out">Kurulum zaman aşımına uğradı.</string>
+    <string name="providers_your_login_email">Girişiniz · %1$s</string>
+    <plurals name="providers_line_more">
+        <item quantity="one">%1$s + %2$d tane daha</item>
+        <item quantity="other">%1$s + %2$d tane daha</item>
+    </plurals>
+    <string name="providers_installing">Kuruluyor…</string>
+    <string name="providers_install">Kur</string>
+    <string name="providers_signing_in">Giriş yapılıyor…</string>
+    <string name="providers_sign_in_again">Yeniden giriş yap</string>
+    <string name="providers_ready">Hazır</string>
+    <string name="providers_setting_save_failed">Ayar kaydedilemedi.</string>
+    <string name="providers_auto_switch">Limitte hesap değiştir</string>
+    <string name="providers_auto_switch_description">Bir sağlayıcı için iki girişiniz varsa, ilki tükendiğinde sohbet diğerine geçer. Cursor ve ayrı tutulan girişler için geçerli değildir.</string>
+    <string name="providers_auto_resume">Limit sıfırlanınca devam et</string>
+    <string name="providers_auto_resume_description">Tüm girişler tükendiğinde sohbet ilk sıfırlanmayı bekler ve sonra devam eder.</string>
+
+    <string name="providers_not_on_machine">%1$s, %2$s üzerinde yok.</string>
+    <string name="providers_sign_in_expired">Girişin süresi doldu</string>
+    <string name="providers_this_machines_login">Bu makinenin girişi</string>
+    <string name="providers_not_signed_in">Giriş yapılmadı</string>
+    <string name="providers_sign_in">Giriş yap</string>
+    <string name="providers_codex_hint">Giriş için ChatGPT ▸ Settings ▸ Security altında "Allow device code login" açık olmalıdır.</string>
+    <string name="providers_use_token">Bunun yerine token kullan</string>
+    <string name="providers_sign_in_start_failed">Giriş başlatılamadı.</string>
+    <string name="providers_sign_in_timed_out">Giriş zaman aşımına uğradı — %1$s erişilemiyor olabilir.</string>
+    <string name="providers_generating_link">Giriş bağlantısı oluşturuluyor — bu birkaç saniye sürebilir…</string>
+    <string name="providers_cancel">İptal</string>
+    <string name="providers_signed_in">Giriş yapıldı.</string>
+    <string name="providers_sign_in_failed">Giriş başarısız: %1$s</string>
+    <string name="providers_unknown_error">bilinmeyen hata</string>
+    <string name="providers_sign_in_cancelled">Giriş iptal edildi.</string>
+    <string name="providers_close">Kapat</string>
+    <string name="providers_open_page_hint">Giriş sayfasını açın ve isteği onaylayın.</string>
+    <string name="providers_open_sign_in_page">Giriş sayfasını aç</string>
+    <string name="providers_copy_link">Bağlantıyı kopyala</string>
+    <string name="providers_enter_code_there">Bu kodu orada girin:</string>
+    <string name="providers_waiting_approval">Onayınız bekleniyor…</string>
+    <string name="providers_paste_code_hint">Ardından sayfanın gösterdiği kodu yapıştırın:</string>
+    <string name="providers_paste_code">Kodu yapıştırın</string>
+    <string name="providers_submit">Gönder</string>
+
+    <string name="providers_save_failed">Kaydedilemedi — bağlantıyı kontrol edip tekrar deneyin.</string>
+    <string name="providers_paste_token_title">Token yapıştırın</string>
+    <string name="providers_paste_api_key_title">API anahtarı yapıştırın</string>
+    <string name="providers_token_description">%1$s üzerindeki kendi %2$s girişi için bir token.</string>
+    <string name="providers_saving">Kaydediliyor…</string>
+    <string name="providers_save">Kaydet</string>
+    <string name="providers_claude_token_hint">Tarayıcısı olan bir bilgisayarda bunu çalıştırın ve yazdırdığı token'ı yapıştırın:</string>
+    <string name="providers_openai_key_hint">OpenAI API anahtarınızı yapıştırın.</string>
+    <string name="providers_cursor_key_hint">Cursor API anahtarınızı yapıştırın.</string>
+    <string name="providers_gemini_key_hint">Gemini API anahtarınızı yapıştırın.</string>
+    <string name="providers_api_key_hint">Bir API anahtarı yapıştırın.</string>
+
+    <string name="providers_not_installed">%1$s henüz %2$s üzerinde kurulu değil. Onunla sohbet başlatmak için kurun.</string>
+    <string name="providers_stop_watching">İzlemeyi bırak</string>
+    <string name="providers_stop_watching_hint">Yalnızca bu sayfanın güncellenmesi durur. Kurulum %1$s üzerinde sürmeye devam eder.</string>
+    <string name="providers_installed">Kuruldu.</string>
+    <string name="providers_stopped_watching">İzleme bırakıldı. Kurulum %1$s üzerinde hâlâ sürüyor olabilir — kontrol etmek için İlerlemeyi izle'ye dokunun.</string>
+    <string name="providers_watch_progress">İlerlemeyi izle</string>
+    <string name="providers_retry_install">Kurulumu yeniden dene</string>
+    <string name="providers_install_timed_out_machine">Kurulum zaman aşımına uğradı — %1$s erişilemiyor olabilir.</string>
+
+    <string name="providers_opencode_plan">OpenCode Go veya Zen</string>
+    <string name="providers_opencode_plan_description">Bu makineyi opencode.ai üzerinde bir kodla onaylayın.</string>
+    <string name="providers_opencode_sign_in">OpenCode ile giriş yap</string>
+    <string name="providers_opencode_model_providers">OpenCode içindeki model sağlayıcıları</string>
+    <string name="providers_refresh">Yenile</string>
+    <string name="providers_opencode_free_note">Ücretsiz modeller hemen çalışır. Daha fazlası için bir abonelik bağlayın.</string>
+    <string name="providers_opencode_load_failed">Sağlayıcılar yüklenemedi.</string>
+    <string name="providers_opencode_none">Bağlanacak başka sağlayıcı yok.</string>
+    <string name="providers_key_save_failed">Anahtar kaydedilemedi — bağlantıyı kontrol edip tekrar deneyin.</string>
+    <string name="providers_opencode_key">OpenCode anahtarı (Zen + Go)</string>
+    <string name="providers_opencode_key_description">OpenCode'un kendi modelleri için, bu makinenin OpenCode'unda.</string>
+    <string name="providers_get_key">Anahtar al</string>
+    <string name="providers_opencode_key_placeholder">OpenCode anahtarı</string>
+    <string name="providers_connected">Bağlı</string>
+    <string name="providers_browser_opened">Bir tarayıcı sekmesi açıldı. Orada onaylayın, ardından kodu yapıştırın:</string>
+    <string name="providers_reopen_sign_in">Girişi yeniden aç</string>
+    <string name="providers_finishing">Tamamlanıyor…</string>
+    <string name="providers_finish">Tamamla</string>
+    <string name="providers_oauth_finish_failed">Giriş tamamlanamadı — kodu kontrol edip tekrar deneyin.</string>
+    <string name="providers_login_via_browser">Tarayıcıyla giriş yap</string>
+    <string name="providers_oauth_start_failed">Tarayıcıyla giriş başlatılamadı.</string>
+    <string name="providers_api_key">API anahtarı</string>
+</resources>

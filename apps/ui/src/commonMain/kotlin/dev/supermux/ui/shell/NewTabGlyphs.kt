@@ -112,6 +112,19 @@ internal object NewTabGlyphs {
         }
     }
 
+    /** A clock: the sessions closed in this workspace (#135). */
+    val Recent: ImageVector by lazy {
+        glyph("recent") {
+            moveTo(20f, 12f)
+            arcTo(8f, 8f, 0f, isMoreThanHalf = true, isPositiveArc = true, x1 = 4f, y1 = 12f)
+            arcTo(8f, 8f, 0f, isMoreThanHalf = true, isPositiveArc = true, x1 = 20f, y1 = 12f)
+            close()
+            moveTo(12f, 7.5f)
+            lineTo(12f, 12f)
+            lineTo(15f, 14f)
+        }
+    }
+
     /** A pane with a second one beside it, on the right. */
     val SplitRight: ImageVector by lazy {
         glyph("split-right") {

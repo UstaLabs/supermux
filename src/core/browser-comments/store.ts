@@ -97,6 +97,15 @@ export class BrowserCommentStore {
     return this.get(id)
   }
 
+  /**
+   * The session's agent began a turn at [turnStartedAt] (epoch ms): the comments sent before it are seen now (it has
+   * them in its context, in the chat's message). Those it changed, for the clients.
+   */
+  markSeen(sessionId: string, turnStartedAt: number, now: string): BrowserComment[] {
+    const sent = this.list(sessionId).filter((c) => c.status === "sent" && Date.parse(c.createdAt) <= turnStartedAt)
+    return sent.map((c) => this.setStatus(c.id, "seen", null, now)!).filter(Boolean)
+  }
+
   /** What an agent reads: each comment with its id (to answer it), the element and the page it was on. */
   markdown(comments: BrowserComment[]): string {
     if (!comments.length) return "No open browser comments."

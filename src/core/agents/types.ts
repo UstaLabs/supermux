@@ -157,8 +157,9 @@ export type InboundMeta = {
   system_generated?: string
   /** Inbox delivery (spec §1.3): "queue" waits for the running turn (never steers);
    *  "interrupt" ends the turn running when send() is called (if it still runs; a later turn is left
-   *  alone) and keeps other waiting input. Absent: the agent's usual busy behavior. */
-  busy?: "queue" | "interrupt"
+   *  alone) and keeps other waiting input, but first lets a tool call in flight finish (#143); "stop" does the same
+   *  at once, cutting off a running tool call. Absent: the agent's usual busy behavior. */
+  busy?: "queue" | "interrupt" | "stop"
 }
 
 export interface AgentAdapter extends EventEmitter {
