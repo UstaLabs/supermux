@@ -6,6 +6,7 @@
     <string name="context_title">Context window</string>
     <string name="context_pct_used">%1$s used</string>
     <string name="context_of_tokens">%1$s of %2$s tokens</string>
+    <string name="context_tokens_no_window">%1$s tokens · the window isn't reported</string>
     <string name="context_compacts_at">Compacts by itself at %1$s</string>
     <string name="context_warn_limit_title">Close to the limit.</string>
     <string name="context_warn_limit_body">At %1$s %2$s summarizes the conversation by itself; early details may be lost. Compact now to choose the moment.</string>

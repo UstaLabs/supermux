@@ -6,6 +6,7 @@
     <string name="context_title">Bağlam penceresi</string>
     <string name="context_pct_used">%1$s kullanılmış</string>
     <string name="context_of_tokens">%2$s token içinden %1$s</string>
+    <string name="context_tokens_no_window">%1$s token · pencere bildirilmiyor</string>
     <string name="context_compacts_at">%1$s noktasında kendiliğinden sıkıştırır</string>
     <string name="context_warn_limit_title">Sınıra yakın.</string>
     <string name="context_warn_limit_body">%1$s noktasında %2$s konuşmayı kendiliğinden özetler; baştaki ayrıntılar kaybolabilir. Anı sen seçmek için şimdi sıkıştır.</string>
