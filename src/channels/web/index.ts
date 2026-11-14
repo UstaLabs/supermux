@@ -4068,6 +4068,18 @@ export class WebChannel implements Channel {
       return this.json({ ok: true })
     }
     {
+      // #143: answer an agent's prompt over HTTP, e.g. from a notification's Allow / Deny with the app closed. Same
+      // answer as the WebSocket's request_respond; like every API route, only a paired device's token gets here.
+      const ask = method === "POST" ? path.match(/^\/sessions\/([^/]+)\/requests\/([^/]+)$/) : null
+      if (ask) {
+        if (!this.opts.respondRequest) return this.json({ ok: false, error: "requests not available" }, 503)
+        const body = await req.json().catch(() => ({})) as Record<string, unknown>
+        if (!body.answer || typeof body.answer !== "object") return this.json({ ok: false, error: "answer is required" }, 400)
+        const result = await this.opts.respondRequest(decodeURIComponent(ask[1]!), decodeURIComponent(ask[2]!), body.answer)
+        return result.ok ? this.json({ ok: true }) : this.json({ ok: false, error: result.error }, 409)
+      }
+    }
+    {
       const sub = method === "POST" ? path.match(/^\/sessions\/([^/]+)\/subagents\/([^/]+)\/(message|stop)$/) : null
       if (sub) {
         const id = decodeURIComponent(sub[1]!)
