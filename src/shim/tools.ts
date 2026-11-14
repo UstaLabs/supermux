@@ -316,8 +316,9 @@ const ORCHESTRATION_TOOLS = [
   {
     name: "message_session",
     description: "Send a message to other sessions' inboxes, by session id. The message wakes each receiving session. " +
-      "interrupt=false (the usual choice) delivers after the current turn ends. interrupt=true ends its current turn now, " +
-      "cutting off any tool call it is running (a build, an rsync, a deletion), so use it only when that work must stop. " +
+      "interrupt=false (the usual choice) delivers after the current turn ends. interrupt=true ends its current turn as " +
+      "soon as the tool call it is running (if any) has finished. stop_now=true with interrupt=true ends it at once, " +
+      "cutting off a running tool call (a build, an rsync, a deletion) half done: only when that work must stop now. " +
       "Your normal reply already reaches the user: this is only for other sessions.",
     annotations: SENDS_ONLY,
     inputSchema: {
@@ -326,6 +327,7 @@ const ORCHESTRATION_TOOLS = [
         to: { type: "array", items: { type: "string" }, minItems: 1, description: "Session ids" },
         text: { type: "string" },
         interrupt: { type: "boolean" },
+        stop_now: { type: "boolean" },
       },
       required: ["to", "text", "interrupt"],
     },
