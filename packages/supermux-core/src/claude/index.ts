@@ -302,6 +302,7 @@ export function claude(options: ClaudeOptions): AgentDriver {
             detail: {
               ...(typeof request?.input?.command === 'string' ? { command: request.input.command } : {}),
               ...(typeof request?.blocked_path === 'string' ? { blockedPath: request.blocked_path } : {}),
+              ...(typeof request?.decision_reason === 'string' && request.decision_reason ? { reason: request.decision_reason } : {}),
             },
           }, signal)).catch(() => cancelledPermission),
           cancellation,

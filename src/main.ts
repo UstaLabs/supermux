@@ -159,7 +159,7 @@ import { FileStore } from "./core/files/store"
 import { loadOrGenerateVapid } from "./core/push/vapid"
 import { PushSubscriptionStore } from "./core/push/subscriptions"
 import { createPushSender } from "./core/push/sender"
-import { firePushForReply, firePushToAll } from "./core/push/hook"
+import { firePushForReply, firePushForRequest, firePushToAll } from "./core/push/hook"
 import { brokerLang, t as brokerText, type MessageKey } from "./core/i18n/messages"
 import { DevicePushTokenStore } from "./core/push/device-tokens"
 import { createRelayClient } from "./core/push/relay-adapter"
@@ -2206,12 +2206,24 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
       options: ev.options,
       allowFreeText: ev.allowFreeText,
       blocking: ev.blocking,
+      ...(ev.reason ? { reason: ev.reason } : {}),
       ...(ev.subagentId ? { subagentId: ev.subagentId } : {}),
       ...(ev.subagentName ? { subagentName: ev.subagentName } : {}),
       ...(ev.subagentDescription ? { subagentDescription: ev.subagentDescription } : {}),
     }
     webChannel?.broadcastToAll({ type: "request_open", session: sessionId, request })
     const session = registry.get(sessionId)
+    // #143: a prompt blocks the agent until someone answers; a notification makes sure someone knows.
+    firePushForRequest({
+      sender: pushSender, sessionName: session?.name ?? sessionId, sessionId,
+      request: { requestId: ev.requestId, kind: ev.requestKind, title: ev.title, body: ev.body, options: ev.options, ...(ev.reason ? { reason: ev.reason } : {}) },
+      isInternal: () => !!registry.get(sessionId)?.internal,
+      devices: () => pushStore.all().map((s) => s.device),
+      presentOn: (sid) => viewingTracker.presentDevicesFor(sid),
+      nativeSender,
+      nativeDevices,
+      hostId: hostIdentity.hostId,
+    }).catch((err) => log.warn("push_hook_failed", { err: err?.message ?? String(err) }))
     const destination = resolveReplyTarget(sessionId)
     const addressed = parseAddress(destination)
     if (addressed?.channel === "telegram" && telegram) {

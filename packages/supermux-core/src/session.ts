@@ -1054,6 +1054,7 @@ function permissionBody(requestId: string, request: PermissionRequest): Extract<
     ...(typeof request.detail?.command === "string" ? { command: request.detail.command } : inputCommand ? { command: inputCommand } : {}),
     ...(typeof request.detail?.cwd === "string" ? { cwd: request.detail.cwd } : {}),
     ...(typeof request.detail?.blockedPath === "string" ? { blockedPath: request.detail.blockedPath } : {}),
+    ...(typeof request.detail?.reason === "string" && request.detail.reason ? { reason: request.detail.reason } : {}),
   } : undefined
   return {
     kind: "permission-request",

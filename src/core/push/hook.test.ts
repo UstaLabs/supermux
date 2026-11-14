@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { firePushForReply, firePushToAll, extractPreview } from "./hook"
+import { firePushForReply, firePushForRequest, firePushToAll, extractPreview } from "./hook"
 import type { Logger } from "../../shared/log"
 
 function recorder() {
@@ -210,4 +210,52 @@ test("firePushToAll without textFor sends the payload's text as it is", async ()
     trigger: "curator",
   })
   expect(web).toEqual(["curator notice"])
+})
+
+// #143: a permission prompt nobody saw blocked #117 for 23 min. A prompt pushes like a reply, with what a client
+// needs to answer from the notification.
+function requestArgs(over: any = {}) {
+  const sent: { device: string; payload: any }[] = []
+  const args = {
+    sender: { sendToDevice: async () => ({ ok: true as const }), sendToChat: async () => ({ ok: true as const }) },
+    sessionName: "Applets (#117)", sessionId: "sid",
+    request: {
+      requestId: "r1", kind: "permission" as const, title: "Allow Bash?", body: "rm -f ~/work/probe/*\nadb shell …",
+      options: [{ id: "allow_once", label: "Allow" }, { id: "reject_once", label: "Reject" }],
+    },
+    isInternal: () => false,
+    devices: () => [] as string[],
+    presentOn: () => [] as string[],
+    nativeSender: { sendToDevice: async (device: string, payload: any) => { sent.push({ device, payload }); return { ok: true as const } } },
+    nativeDevices: () => ["phone"],
+    hostId: "h1",
+    ...over,
+  }
+  return { args, sent }
+}
+
+test("a permission prompt pushes with its question, the first line of what it asks, and its answers", async () => {
+  const { args, sent } = requestArgs()
+  await firePushForRequest(args as any)
+  expect(sent).toHaveLength(1)
+  expect(sent[0]!.payload).toMatchObject({
+    session: "Applets (#117)", sessionId: "sid", hostId: "h1",
+    text: "Allow Bash? rm -f ~/work/probe/*",
+    request: { requestId: "r1", kind: "permission", options: [{ id: "allow_once", label: "Allow" }, { id: "reject_once", label: "Reject" }] },
+  })
+})
+
+test("a prompt pushes even when the session is muted (the agent is blocked), but never for an internal worker", async () => {
+  const muted = requestArgs({ isMuted: () => true })
+  await firePushForRequest(muted.args as any)
+  expect(muted.sent).toHaveLength(1)
+  const internal = requestArgs({ isInternal: () => true })
+  await firePushForRequest(internal.args as any)
+  expect(internal.sent).toHaveLength(0)
+})
+
+test("a prompt is not pushed to a device already showing the session", async () => {
+  const { args, sent } = requestArgs({ presentOn: () => ["phone"] })
+  await firePushForRequest(args as any)
+  expect(sent).toHaveLength(0)
 })

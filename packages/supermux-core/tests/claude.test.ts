@@ -677,3 +677,13 @@ test('a cancelled host permission with a message denies with that message', asyn
   try { expect(await r.prompt(input('permission'), signal())).toEqual({stopReason: 'end_turn'}) }
   finally { await r.close({ mode: "shutdown" }) }
 })
+
+// #143: Claude Code's own reason for asking (decision_reason, e.g. a safety check in bypassPermissions) reaches the host.
+test('a permission request passes Claude Code\'s decision_reason to the host as detail.reason', async () => {
+  let reason: string | undefined
+  const r = await hostDriver({PERM_REASON: 'Dangerous rm operation'}).open(ctx({
+    requestPermission: async (request) => { reason = request.detail?.reason; return {outcome: {outcome: 'selected', optionId: 'reject_once'}} },
+  }))
+  try { await r.prompt(input('permission'), signal()) } finally { await r.close({ mode: "shutdown" }) }
+  expect(reason).toBe('Dangerous rm operation')
+})
