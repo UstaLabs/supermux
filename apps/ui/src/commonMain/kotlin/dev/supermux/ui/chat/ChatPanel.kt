@@ -105,6 +105,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -1070,21 +1071,39 @@ fun ChatPanel(
                     // Breadcrumb, not a title: the PROJECT the session belongs to, then the session.
                     val projectName = projectLabel(session, inferHomeDir(session.workdir))
                     if (showProject && projectName.isNotEmpty()) {
-                        Icon(
-                            Icons.Outlined.FolderOpen,
-                            contentDescription = null,
-                            tint = cs.onSurfaceVariant,
-                            modifier = Modifier.size(14.dp),
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            text = projectName,
-                            fontSize = 13.sp,
-                            color = cs.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false),
-                        )
+                        // #149: on this computer the crumb opens the session's folder in Finder / Explorer.
+                        val openFolder = dev.supermux.ui.platform.rememberOpenFolder(session.id, session.workdir)
+                        Row(
+                            Modifier
+                                .weight(1f, fill = false)
+                                .then(
+                                    if (openFolder != null) {
+                                        Modifier
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .clickable(onClickLabel = openFolder.label) { openFolder.open() }
+                                            .pointerHoverIcon(androidx.compose.ui.input.pointer.PointerIcon.Hand)
+                                    } else {
+                                        Modifier
+                                    },
+                                )
+                                .testTag("chat_header_folder"),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                Icons.Outlined.FolderOpen,
+                                contentDescription = null,
+                                tint = cs.onSurfaceVariant,
+                                modifier = Modifier.size(14.dp),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = projectName,
+                                fontSize = 13.sp,
+                                color = cs.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                         Text(
                             text = "/",
                             fontSize = 13.sp,

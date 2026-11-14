@@ -189,4 +189,7 @@
     </plurals>
     <!-- #151: a close the broker refused; the tab is back -->
     <string name="shell_close_failed">%1$s kapatılamadı</string>
+    <string name="open_folder_finder">Finder'da göster</string>
+    <string name="open_folder_explorer">Dosya Gezgini'nde göster</string>
+    <string name="open_folder_files">Klasörü aç</string>
 </resources>
