@@ -1969,10 +1969,14 @@ class HostStore(
         }
     }
 
-    fun closeWorkspaceView(workspaceId: String, viewId: String) {
+    fun closeWorkspaceView(workspaceId: String, viewId: String, onDone: () -> Unit = {}, onFailed: () -> Unit = {}) {
         stateScope.launch {
             runCatching { api.closeView(workspaceId, viewId) }
-                .onFailure { println("[HostStore] closeWorkspaceView failed: $it") }
+                .onSuccess { onDone() }
+                .onFailure {
+                    println("[HostStore] closeWorkspaceView failed: $it")
+                    onFailed()
+                }
         }
     }
 
