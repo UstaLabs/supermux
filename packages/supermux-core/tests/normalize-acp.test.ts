@@ -212,3 +212,25 @@ test("readModelWindows: Grok's _meta.modelState and ACP's models give each model
   expect(readModelWindows({ models: { availableModels: [{ modelId: "m" }] } })).toBeUndefined()
   expect(readModelWindows(null)).toBeUndefined()
 })
+
+test("grokContextBreakdown: _x.ai/session/info's categories (its own `used` counts only the system prompt) (#144)", async () => {
+  const { grokContextBreakdown } = await import("../src/acp/normalize.js")
+  // Real 1.0.46 reply (the result is nested once more).
+  const reply = { result: { sessionId: "s", model: "grok-4.7", context: {
+    used: 1359, total: 256000, systemPromptTokens: 1359, toolDefinitionsCount: 26, toolDefinitionsTokens: 9282,
+    compactionCount: 0, messageCount: 2, messageTokens: 5353, freeTokens: 254641, usagePct: 1, autoCompactThresholdPercent: 80,
+    usageCategories: [{ label: "Skills", tokens: 5162, detail: "52 skills" }, { label: "Workflows", tokens: 181, detail: "2 workflows" }, { label: "AGENTS.md", tokens: 157, detail: "1 file" }],
+  } } }
+  expect(grokContextBreakdown(reply)).toEqual({
+    used: 21494, size: 256000, threshold: 204800,
+    categories: [
+      { id: "messages", name: "Messages", tokens: 5353, kind: "used" },
+      { id: "tool_definitions", name: "Tool definitions", tokens: 9282, kind: "used" },
+      { id: "system_prompt", name: "System prompt", tokens: 1359, kind: "used" },
+      { id: "skills", name: "Skills", tokens: 5162, kind: "used" },
+      { id: "workflows", name: "Workflows", tokens: 181, kind: "used" },
+      { id: "agents_md", name: "AGENTS.md", tokens: 157, kind: "used" },
+    ],
+  })
+  expect(grokContextBreakdown({ result: {} })).toBeUndefined()
+})

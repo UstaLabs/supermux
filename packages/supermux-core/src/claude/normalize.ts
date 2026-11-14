@@ -1,5 +1,5 @@
 /** Claude headless stream-json mapper. */
-import type { AgentUpdate, SubagentSnapshot } from "../types.js"
+import type { AgentUpdate, ContextBreakdown, SubagentSnapshot } from "../types.js"
 import type { AgentCommandEntry, AgentModelEntry, NormalizedBody, PlanEntryStatus, SubagentEndedBy, SubagentStats, TaskKind } from "../events/normalized.js"
 import { ACCOUNT_UNAVAILABLE_ERROR, NOT_SIGNED_IN_ERROR } from "../accounts/policy.js"
 import { REASON, SUBAGENT_STATE_METHOD, actionFields, actionsKey, endedReason, shortReason, type SubagentActions } from "../subagent-actions.js"
@@ -231,6 +231,49 @@ function statsOf(usage: unknown): SubagentStats | undefined {
   if (tokens !== undefined) stats.tokens = tokens
   if (durationMs !== undefined) stats.durationMs = durationMs
   return Object.keys(stats).length ? stats : undefined
+}
+
+const CATEGORY_KINDS = new Set(["used", "deferred", "buffer", "free"])
+
+/** Claude's get_context_usage reply → the breakdown (#144). Its grid and colours are the TUI's; they are dropped. */
+export function claudeContextBreakdown(reply: unknown): ContextBreakdown | undefined {
+  const r = rec(reply)
+  const used = num(r?.totalTokens)
+  const size = num(r?.maxTokens)
+  if (!r || used == null || size == null) return undefined
+  const rows = (value: unknown) => (Array.isArray(value) ? value : []).map(rec).filter((row): row is Record<string, unknown> => !!row)
+  const categories = rows(r.categories).flatMap(row => {
+    const id = str(row.id), name = str(row.name), tokens = num(row.tokens), kind = str(row.kind)
+    return id && name && tokens != null && kind && CATEGORY_KINDS.has(kind)
+      ? [{ id, name, tokens, kind: kind as ContextBreakdown["categories"][number]["kind"] }] : []
+  })
+  const mcpTools = rows(r.mcpTools).flatMap(row => {
+    const server = str(row.serverName), full = str(row.name), tokens = num(row.tokens)
+    if (!server || !full || tokens == null) return []
+    // mcp__<server>__<tool>: the tool's own name is what follows the server's prefix.
+    const name = full.startsWith(`mcp__${server}__`) ? full.slice(`mcp__${server}__`.length) : full
+    return [{ server, name, tokens, loaded: row.isLoaded !== false }]
+  })
+  const mcpInstructions = rows(r.mcpInstructions).flatMap(row => {
+    const server = str(row.serverName), tokens = num(row.tokens)
+    return server && tokens != null ? [{ server, tokens }] : []
+  })
+  const skills = rows(rec(r.skills)?.skillFrontmatter).flatMap(row => {
+    const name = str(row.name), tokens = num(row.tokens), source = str(row.source)
+    return name && tokens != null ? [{ name, tokens, ...(source ? { source } : {}) }] : []
+  })
+  const memoryFiles = rows(r.memoryFiles).flatMap(row => {
+    const path = str(row.path), tokens = num(row.tokens), type = str(row.type)
+    return path && tokens != null ? [{ path, ...(type ? { type } : {}), tokens }] : []
+  })
+  const threshold = r.isAutoCompactEnabled !== false ? num(r.autoCompactThreshold) : undefined
+  return {
+    used, size, ...(threshold != null ? { threshold } : {}), categories,
+    ...(mcpTools.length ? { mcpTools } : {}),
+    ...(mcpInstructions.length ? { mcpInstructions } : {}),
+    ...(skills.length ? { skills } : {}),
+    ...(memoryFiles.length ? { memoryFiles } : {}),
+  }
 }
 
 /** The window of the model the conversation runs on, from a result's modelUsage (the largest one if it isn't listed). */

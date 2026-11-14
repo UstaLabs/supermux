@@ -5,7 +5,7 @@ import { launchArgs, launchEnv } from '../launch.js'
 import { appliedFor, launchPermissions, validatePermissionsSpec } from '../permissions.js'
 import type { RequestPermissionResponse } from '@agentclientprotocol/sdk'
 import { transport } from './transport.js'
-import { createClaudeNormalizer, initializeReplyForHost } from './normalize.js'
+import { claudeContextBreakdown, createClaudeNormalizer, initializeReplyForHost } from './normalize.js'
 import { CoreError } from '../errors.js'
 import { CLAUDE_CONTEXT, appliedContext, claudeContextArgs, editPluginFolder } from '../context/agents.js'
 import { EMPTY_CONTEXT_FINGERPRINT } from '../context/index.js'
@@ -698,6 +698,12 @@ export function claude(options: ClaudeOptions): AgentDriver {
       async messageSubagent(subagentId, content) {
         if (fatal || closed) throw fatal ?? new CoreError('runtime_closed', 'Claude runtime closed')
         return { via: 'relay' as const, relay: claudeRelayPrompt(normalizer.subagent(subagentId)?.taskId ?? subagentId, content) }
+      },
+      async contextBreakdown() {
+        if (fatal || closed) throw fatal ?? new CoreError('runtime_closed', 'Claude runtime closed')
+        // "summary" answers from the last request's usage and local counts: no extra API call (verified on 2.1.308).
+        const reply = await rpc.request({ subtype: 'get_context_usage', detail: 'summary' }, { optional: true })
+        return claudeContextBreakdown(reply?.response)
       },
       async stopSubagent(subagentId) {
         if (fatal || closed) throw fatal ?? new CoreError('runtime_closed', 'Claude runtime closed')

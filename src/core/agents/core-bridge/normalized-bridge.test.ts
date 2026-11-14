@@ -335,3 +335,14 @@ test("a usage event's context reaches onContext; rate limits still reach onUsage
   expect(contexts).toEqual([{ used: 26955, size: 1000000 }])
   expect(limits).toEqual([{ five_hour: 1 }])
 })
+
+test("each tool the main thread starts is counted by name; a Skill call by its skill (#144)", () => {
+  const used: string[] = []
+  const b = createNormalizedBridge({ agent: "claude", emit: () => {}, onToolUsed: (name) => used.push(name) })
+  b.handle(env({ kind: "tool-call", callId: "c1", tool: "mcp__mux-shim__message_session", phase: "started", input: {} }))
+  b.handle(env({ kind: "tool-call", callId: "c1", tool: "mcp__mux-shim__message_session", phase: "completed" }))
+  b.handle(env({ kind: "tool-call", callId: "c2", tool: "Skill", phase: "started", input: { skill: "superpowers:brainstorming" } }))
+  b.handle(env({ kind: "tool-call", callId: "c3", tool: "Bash", phase: "started", input: {}, subagentId: "sub" }))
+  b.handle(env({ kind: "tool-call", callId: "c4", tool: "Read", phase: "started", input: {}, replay: true }))
+  expect(used).toEqual(["mcp__mux-shim__message_session", "Skill:superpowers:brainstorming"])
+})

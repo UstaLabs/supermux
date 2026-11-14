@@ -9,7 +9,7 @@ import type {
   HistoryOptions, HistoryPage, SessionConfiguration, CloseOptions,
   PendingRequest, PermissionOptionKind, PermissionRequest, PermissionResponse, RequestAnswer,
   QuestionRequest, QuestionResponse, PermissionsSpec, PermissionsApplied,
-  ContentBlock, SubagentMessageOptions, SubagentMessageDelivery, SubagentSnapshot, ConversationReset,
+  ContentBlock, SubagentMessageOptions, SubagentMessageDelivery, SubagentSnapshot, ConversationReset, ContextBreakdown,
 } from "./types.js"
 import { validatePermissionsSpec } from "./permissions.js"
 import type { ContextPatch, RuntimeContextControl, SessionContext, UpdateContextOptions, UpdateContextResult } from "./context/types.js"
@@ -413,6 +413,12 @@ export class Session {
         : { status: "unconfirmed", reason: completion.status === "cancelled" ? "The relay was cancelled" : "The relay turn failed" })
     })
     return { via: "relay", receipt, delivery }
+  }
+
+  /** What fills the context window now (#144); undefined when the agent doesn't report a breakdown. */
+  async contextBreakdown(): Promise<ContextBreakdown | undefined> {
+    this.assertReady()
+    return this.runtime.contextBreakdown ? this.runtime.contextBreakdown() : undefined
   }
 
   /** Stop one subagent without interrupting the main turn. */

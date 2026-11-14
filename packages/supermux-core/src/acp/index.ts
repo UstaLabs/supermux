@@ -8,7 +8,7 @@ import { ACTIVITY_OVERFLOW } from '../activity.js'
 import { CoreError, UnsupportedOperation } from '../errors.js'
 import { acpPermissionDecision, appliedFor, launchPermissions, validatePermissionsSpec } from '../permissions.js'
 import { connectAcpProcess, type AcpKeeperLimits } from './process.js'
-import { createAcpNormalizer, DRIVER_WARNING_METHOD, OPENCODE_FREE_LIMIT_METHOD, SUBAGENT_SESSION_METHOD, SUBAGENT_TURN_METHOD, type AcpNormalizer, type AcpVendor } from './normalize.js'
+import { createAcpNormalizer, grokContextBreakdown, DRIVER_WARNING_METHOD, OPENCODE_FREE_LIMIT_METHOD, SUBAGENT_SESSION_METHOD, SUBAGENT_TURN_METHOD, type AcpNormalizer, type AcpVendor } from './normalize.js'
 import { freeLoopbackPort, isOpenCodeEndpointMissing, newOpenCodeServerInfo, openCodeAskToAcp, openCodeServerClient, readOpenCodeServerInfo, type OpenCodePendingAsk, type OpenCodeServerClient, type OpenCodeServerInfo } from './opencode-server.js'
 import { detachedKeeperHooks, type KeeperFrameEvent } from '../keeper/client.js'
 import { REASON, SUBAGENT_STATE_METHOD } from '../subagent-actions.js'
@@ -1053,6 +1053,12 @@ export function acp(options: AcpOptions): AgentDriver {
         close,
         messageSubagent,
         stopSubagent,
+        // Grok says what fills its context (#144): `_x.ai/session/info`. The other ACP agents report totals only.
+        ...(options.vendor === 'grok' ? {
+          async contextBreakdown() {
+            return grokContextBreakdown(await ioWait(connection.extMethod('_x.ai/session/info', { sessionId: agentSessionId })))
+          },
+        } : {}),
       }
     }
     try {

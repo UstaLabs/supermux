@@ -2918,6 +2918,18 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       const s = registry.get(id)
       return s ? activityStore.get(s.id) : []
     },
+    getSessionContext: async (id) => {
+      const s = registry.get(id)
+      if (!s) return undefined
+      // #144: the core adapter asks its agent what fills the window and counts the tools this chat started.
+      const adapter = sessionManager.adapterFor(s.id) as unknown as {
+        contextBreakdown?: () => Promise<import("../packages/supermux-core/src/types.js").ContextBreakdown | undefined>
+        toolUses?: Map<string, number>
+      } | undefined
+      const breakdown = await adapter?.contextBreakdown?.()
+      const used = [...(adapter?.toolUses ?? new Map<string, number>())].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count)
+      return { ...(contextUsage.has(s.id) ? { context: contextUsage.get(s.id) } : {}), ...(breakdown ? { breakdown } : {}), used }
+    },
     getSessionAgentState: (id) => {
       const s = registry.get(id)
       const st = s ? agentStateStore.get(s.id) : { phase: "idle" as const, since: 0 }
