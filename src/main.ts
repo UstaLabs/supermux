@@ -250,7 +250,6 @@ import { buildAgentModels } from "./core/models/agent-models"
 import { createSessionBranch, createWorktree, ensureWorktreeAt, existingBranchNames, removeWorktree, worktreesRoot, type WorktreeHandle } from "./core/worktree/manager"
 import { startFinishJob, getFinishJob, clearFinishJob, type FinishJob, type FinishJobOpts, type FinishAction } from "./core/worktree/finish-job"
 import { computeReadiness, type FinishReadiness } from "./core/worktree/readiness"
-import { suggestVerify } from "./core/worktree/verify-suggest"
 import { loadFinishConfig } from "./core/worktree/finish-config"
 import { computeLiteStatus } from "./core/worktree/lite-status"
 import { GitStatusService, type ServiceSession } from "./core/worktree/git-status-service"
@@ -1772,7 +1771,7 @@ async function interruptSessionById(sessionId: string): Promise<{ ok: boolean; r
   return r
 }
 
-type FinishRequest = { action: FinishAction; skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string; /** #72: never archive the chat after a merge (the new UI's merge leaves it open). */ keep?: boolean }
+type FinishRequest = { action: FinishAction; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prTitle?: string; prBody?: string; /** #72: never archive the chat after a merge (the new UI's merge leaves it open). */ keep?: boolean }
 
 async function finishSessionById(sessionId: string, req: FinishRequest): Promise<FinishJob | { error: string }> {
   const s = registry.get(sessionId)
@@ -1783,8 +1782,7 @@ async function finishSessionById(sessionId: string, req: FinishRequest): Promise
   // discard must stop the live agent BEFORE its worktree is force-removed
   if (req.action === "discard") await killSession(sessionId).catch(() => {})
   const session = { id: sessionId, repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: s.session_branch, baseBranch: s.base_branch }
-  const cfg = loadFinishConfig(s.repo_root)
-  const opts: FinishJobOpts = { ...req, cleanup: false, prRequiresGreen: req.prRequiresGreen ?? cfg.prRequiresGreen }  // worktree removal handled by the archive path below
+  const opts: FinishJobOpts = { ...req, cleanup: false }  // worktree removal handled by the archive path below
   const sessionName = s.name
   return startFinishJob(session, opts, {
     onUpdate: (job) => webChannel?.broadcastToAll({ type: "finish_job", session: sessionId, job }),
@@ -1819,12 +1817,10 @@ function fireFinishPush(sessionName: string, sessionId: string, job: FinishJob):
     case "pr_opened": text = `📤 PR opened for ${br}`; break
     case "branch_published": text = `📤 Pushed ${br} — open the PR manually`; break
     case "discarded": text = `🗑️ Discarded ${br}`; break
-    case "tests_failed": text = `❌ Tests failed in ${br}`; break
     case "sync_conflict": case "dirty_overlap": text = `⚠️ Conflicts finishing ${br}`; break
     case "push_auth_failed": text = `🔒 Push auth failed for ${br}`; break
     case "push_rejected": text = `⚠️ Push rejected (diverged) for ${br}`; break
     case "uncommitted": text = `⚠️ Uncommitted changes in ${br}`; break
-    case "no_verify": text = `⚠️ No verify configured for ${br}`; break
     case "non_ff": text = `⚠️ ${br} — base moved, retry the merge`; break
     case "error": text = `❌ Finish failed for ${br}`; break
     // kept / nothing_to_do → no push
@@ -1843,7 +1839,7 @@ function finishReadinessById(sessionId: string): FinishReadiness | { error: stri
   if (!s) return { error: "no such session" }
   if (!s.repo_root || !s.session_branch || !s.base_branch) return { error: "session is not worktree-backed" }
   const cfg = loadFinishConfig(s.repo_root)
-  return computeReadiness({ repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: s.session_branch, baseBranch: s.base_branch, defaultAction: cfg.defaultAction, prRequiresGreen: cfg.prRequiresGreen })
+  return computeReadiness({ repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: s.session_branch, baseBranch: s.base_branch, defaultAction: cfg.defaultAction })
 }
 
 const TASK_KIND: Record<TaskEvent["taskKind"], BgTaskKind> = {
@@ -3511,19 +3507,6 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     sendUserMessage: (id, text) => deliverUserMessage(id, text),
     getWalkthrough: (id) => walkthroughStore.getCurrent(id),
     reviewSession: (id) => { const s = registry.get(id); return s ? { workdir: s.workdir, repoRoot: s.repo_root ?? undefined, baseCommits: s.base_commits ?? undefined } : undefined },
-    verifySuggest: (id) => { const s = registry.get(id); return s?.repo_root && s.session_branch ? suggestVerify(s.workdir) : undefined },
-    verifySave: (id, content) => {
-      const s = registry.get(id)
-      if (!s?.repo_root || !s.session_branch) return { ok: false, reason: "session is not worktree-backed" }
-      try {
-        const dir = join(s.workdir, ".mux")
-        mkdirSync(dir, { recursive: true })
-        const p = join(dir, "verify.sh")
-        writeFileSync(p, content.endsWith("\n") ? content : content + "\n")
-        platformFiles.makeExecutable(p)
-        return { ok: true }
-      } catch (err: any) { return { ok: false, reason: err?.message ?? String(err) } }
-    },
     getForgeConnections: () => forgeService.connections(),
     getForgeCliStatus: () => detectForgeClis(),
     addForgeConnection: (o) => forgeService.addConnection(o as any),

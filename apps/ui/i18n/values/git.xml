@@ -26,4 +26,78 @@
         <item quantity="other">%1$d of %2$d in the next commit</item>
     </plurals>
     <string name="git_include_in_commit">In the next commit</string>
+    <string name="git_commit">Commit</string>
+    <plurals name="git_commit_all">
+        <item quantity="one">Commit %1$d file</item>
+        <item quantity="other">Commit all %1$d</item>
+    </plurals>
+    <string name="git_commit_hint">Commit message: leave it empty and it's written for you</string>
+    <string name="git_more_commit_actions">More commit actions</string>
+    <string name="git_amend">Amend the last commit</string>
+    <string name="git_undo_commit">Undo the last commit</string>
+    <string name="git_committed">Committed: %1$s</string>
+    <string name="git_nothing_to_commit">Nothing to commit</string>
+    <string name="git_commit_failed">Commit failed: %1$s</string>
+    <string name="git_undone">Undone: %1$s. Its changes are back.</string>
+    <string name="git_undo_pushed">That commit is already pushed, so it isn't undone here</string>
+    <string name="git_undo_merge">A merge commit isn't undone here</string>
+    <string name="git_undo_none">There is no commit to undo</string>
+    <plurals name="git_base_moved_hint">
+        <item quantity="one">%2$s has %1$d new commit since this chat started.</item>
+        <item quantity="other">%2$s has %1$d new commits since this chat started.</item>
+    </plurals>
+    <string name="git_get_latest">Get latest from %1$s</string>
+    <plurals name="git_conflict_banner">
+        <item quantity="one">Getting the latest from %2$s stopped: %1$d file was changed on both sides.</item>
+        <item quantity="other">Getting the latest from %2$s stopped: %1$d files were changed on both sides.</item>
+    </plurals>
+    <string name="git_conflicts_settled">Every clash is settled. Continue the merge to finish it.</string>
+    <string name="git_ask_agent_resolve">Ask the agent to resolve</string>
+    <string name="git_cancel_merge">Cancel the merge</string>
+    <string name="git_use_mine">Use mine</string>
+    <string name="git_use_base">Use %1$s</string>
+    <string name="git_use_both">Use both</string>
+    <string name="git_ask_agent">Ask the agent</string>
+    <string name="git_continue_merge">Continue merge</string>
+    <string name="git_agent_resolve_prompt">Resolve the merge conflicts with %1$s in %2$s. Keep what both sides meant, then tell me what you chose.</string>
+    <string name="git_latest_up_to_date">Already has everything from %1$s</string>
+    <plurals name="git_latest_got">
+        <item quantity="one">Got %1$d commit from %2$s</item>
+        <item quantity="other">Got %1$d commits from %2$s</item>
+    </plurals>
+    <string name="git_latest_failed">Couldn't get the latest: %1$s</string>
+    <string name="git_merge_cancelled">Merge cancelled. Everything is as it was.</string>
+    <string name="git_merge_into">Merge into %1$s…</string>
+    <plurals name="git_merge_title">
+        <item quantity="one">Merge %1$d commit into %2$s</item>
+        <item quantity="other">Merge %1$d commits into %2$s</item>
+    </plurals>
+    <string name="git_merge_body">It goes into %1$s in your own folder. Nothing else there changes.</string>
+    <string name="git_merge_clash_warning">Some of it clashes with %1$s. It is merged in here first, so you can settle it before anything moves.</string>
+    <string name="git_merge_uncommitted">This chat has changes that aren't committed. Commit or undo them first.</string>
+    <string name="git_merge_confirm">Merge into %1$s</string>
+    <string name="git_cancel">Cancel</string>
+    <string name="git_merging">Merging into %1$s…</string>
+    <string name="git_merged">Merged into %1$s</string>
+    <string name="git_merge_dirty_base">%1$s in your folder has uncommitted changes in files this would touch</string>
+    <string name="git_merge_moved">%1$s moved while merging. Try again.</string>
+    <string name="git_merge_nothing">Nothing to merge: %1$s already has this chat's commits</string>
+    <string name="git_merge_failed">Couldn't merge: %1$s</string>
+    <string name="git_tab_changes">Changes</string>
+    <string name="git_tab_history">History</string>
+    <string name="git_history_chat">This chat</string>
+    <string name="git_history_empty">Commits made in this chat show up here.</string>
+    <string name="git_pushed">pushed</string>
+    <string name="git_copy_hash">Copy hash</string>
+    <string name="git_revert">Revert (a new commit that undoes it)</string>
+    <string name="git_branch_here">Create branch here…</string>
+    <string name="git_tag_here">Tag…</string>
+    <string name="git_name_branch">Name the new branch</string>
+    <string name="git_name_tag">Name the tag</string>
+    <string name="git_create">Create</string>
+    <string name="git_reverted">Reverted: %1$s</string>
+    <string name="git_revert_clash">Undoing it clashes with later changes, so nothing was done</string>
+    <string name="git_ref_made">Made %1$s</string>
+    <string name="git_ref_exists">%1$s already exists</string>
+    <string name="git_ref_bad">That name can't be used</string>
 </resources>

@@ -157,6 +157,7 @@ import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 import dev.supermux.workspace.openSingletonView
 import dev.supermux.workspace.setActiveViewInGroup
+import dev.supermux.workspace.splitGroup
 import dev.supermux.ui.panes.PaneStripEnd
 import androidx.compose.material.icons.outlined.Tab
 import dev.supermux.ui.i18n.Str
@@ -1262,7 +1263,7 @@ private fun WorkspacePaneContent(
                     groupIdOf(layoutSync.tree, v.id)?.also { opener.openEmpty(it) } != null
                 }
             }
-            // The workspace's one Changes view: shown where it is, else added to this chat's pane.
+            // The workspace's one Changes view: shown where it is, else opened beside this chat.
             val revealChanges: () -> Unit = {
                 val existing = openSingletonView(layout, viewsById, NewViewKind.DIFF)
                 if (existing != null) {
@@ -1272,9 +1273,8 @@ private fun WorkspacePaneContent(
                 } else {
                     val groupId = groupIdOf(layout, viewId)
                     if (groupId != null) {
-                        app.addWorkspaceView(current.id, NewViewKind.DIFF, groupId) { newViewId ->
-                            ui.windows.expandClaim(hostId, setOf(newViewId), layoutSync.tree)
-                        }
+                        // #72: beside the chat, not a tab over it (Ahmet).
+                        addChangesBeside(hostId, current, groupId, layoutSync, app, ui)
                     } else {
                         // A phone workspace has no groups to split: post the pane and let the
                         // broker's view order place it in the tab strip.
@@ -1575,6 +1575,19 @@ private fun splitWorkspace(direction: String, hostId: String, current: Workspace
     app.addNewTab(current.id, topRightGroupId(layoutSync.tree)) { id ->
         ui.windows.expandClaim(hostId, setOf(id), layoutSync.tree)
         layoutSync.edit { newTabToEdge(it, id, direction, pane) }
+    }
+}
+
+/**
+ * #72: the Changes view beside the chat — made in the chat's pane, then moved into a pane of its own to
+ * its right (the v3 design). A phone has no panes to split and keeps its own route.
+ */
+@OptIn(ExperimentalUuidApi::class)
+private fun addChangesBeside(hostId: String, current: WorkspaceDto, groupId: String, layoutSync: WorkspaceLayoutState, app: HostStore, ui: ShellUiState) {
+    val pane = Uuid.random().toString()
+    app.addWorkspaceView(current.id, NewViewKind.DIFF, groupId) { id ->
+        layoutSync.edit { splitGroup(it, groupId, id, "row", pane) }
+        ui.windows.expandClaim(hostId, setOf(id), layoutSync.tree)
     }
 }
 

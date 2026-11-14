@@ -26,4 +26,78 @@
         <item quantity="other">%2$d dosyadan %1$d tanesi sonraki commit'te</item>
     </plurals>
     <string name="git_include_in_commit">Sonraki commit'te</string>
+    <string name="git_commit">Commit et</string>
+    <plurals name="git_commit_all">
+        <item quantity="one">%1$d dosyayı commit et</item>
+        <item quantity="other">Tümünü commit et (%1$d)</item>
+    </plurals>
+    <string name="git_commit_hint">Commit mesajı: boş bırakırsanız sizin için yazılır</string>
+    <string name="git_more_commit_actions">Diğer commit işlemleri</string>
+    <string name="git_amend">Son commit'i düzelt</string>
+    <string name="git_undo_commit">Son commit'i geri al</string>
+    <string name="git_committed">Commit edildi: %1$s</string>
+    <string name="git_nothing_to_commit">Commit edilecek bir şey yok</string>
+    <string name="git_commit_failed">Commit başarısız: %1$s</string>
+    <string name="git_undone">Geri alındı: %1$s. Değişiklikleri geri geldi.</string>
+    <string name="git_undo_pushed">Bu commit zaten gönderildi, burada geri alınmaz</string>
+    <string name="git_undo_merge">Birleştirme commit'i burada geri alınmaz</string>
+    <string name="git_undo_none">Geri alınacak commit yok</string>
+    <plurals name="git_base_moved_hint">
+        <item quantity="one">Bu sohbet başladığından beri %2$s dalında %1$d yeni commit var.</item>
+        <item quantity="other">Bu sohbet başladığından beri %2$s dalında %1$d yeni commit var.</item>
+    </plurals>
+    <string name="git_get_latest">%1$s dalından en sonunu al</string>
+    <plurals name="git_conflict_banner">
+        <item quantity="one">%2$s dalından en son değişiklikleri alma durdu: %1$d dosya iki tarafta da değişmiş.</item>
+        <item quantity="other">%2$s dalından en son değişiklikleri alma durdu: %1$d dosya iki tarafta da değişmiş.</item>
+    </plurals>
+    <string name="git_conflicts_settled">Tüm çakışmalar çözüldü. Bitirmek için birleştirmeye devam edin.</string>
+    <string name="git_ask_agent_resolve">Ajandan çözmesini iste</string>
+    <string name="git_cancel_merge">Birleştirmeyi iptal et</string>
+    <string name="git_use_mine">Benimkini kullan</string>
+    <string name="git_use_base">%1$s sürümünü kullan</string>
+    <string name="git_use_both">İkisini de kullan</string>
+    <string name="git_ask_agent">Ajana sor</string>
+    <string name="git_continue_merge">Birleştirmeye devam et</string>
+    <string name="git_agent_resolve_prompt">%2$s içindeki %1$s ile birleştirme çakışmalarını çöz. İki tarafın da amacını koru, sonra neyi seçtiğini söyle.</string>
+    <string name="git_latest_up_to_date">%1$s dalındaki her şey zaten burada</string>
+    <plurals name="git_latest_got">
+        <item quantity="one">%2$s dalından %1$d commit alındı</item>
+        <item quantity="other">%2$s dalından %1$d commit alındı</item>
+    </plurals>
+    <string name="git_latest_failed">En son değişiklikler alınamadı: %1$s</string>
+    <string name="git_merge_cancelled">Birleştirme iptal edildi. Her şey eskisi gibi.</string>
+    <string name="git_merge_into">%1$s dalına birleştir…</string>
+    <plurals name="git_merge_title">
+        <item quantity="one">%1$d commit'i %2$s dalına birleştir</item>
+        <item quantity="other">%1$d commit'i %2$s dalına birleştir</item>
+    </plurals>
+    <string name="git_merge_body">Kendi klasörünüzdeki %1$s dalına girer. Orada başka hiçbir şey değişmez.</string>
+    <string name="git_merge_clash_warning">Bir kısmı %1$s ile çakışıyor. Önce burada birleştirilir, böylece hiçbir şey taşınmadan çözebilirsiniz.</string>
+    <string name="git_merge_uncommitted">Bu sohbette commit edilmemiş değişiklikler var. Önce commit edin ya da geri alın.</string>
+    <string name="git_merge_confirm">%1$s dalına birleştir</string>
+    <string name="git_cancel">İptal</string>
+    <string name="git_merging">%1$s dalına birleştiriliyor…</string>
+    <string name="git_merged">%1$s dalına birleştirildi</string>
+    <string name="git_merge_dirty_base">Klasörünüzdeki %1$s dalında, bunun dokunacağı dosyalarda commit edilmemiş değişiklikler var</string>
+    <string name="git_merge_moved">Birleştirme sırasında %1$s değişti. Tekrar deneyin.</string>
+    <string name="git_merge_nothing">Birleştirilecek bir şey yok: %1$s bu sohbetin commit'lerine zaten sahip</string>
+    <string name="git_merge_failed">Birleştirilemedi: %1$s</string>
+    <string name="git_tab_changes">Değişiklikler</string>
+    <string name="git_tab_history">Geçmiş</string>
+    <string name="git_history_chat">Bu sohbet</string>
+    <string name="git_history_empty">Bu sohbette yapılan commit'ler burada görünür.</string>
+    <string name="git_pushed">gönderildi</string>
+    <string name="git_copy_hash">Hash'i kopyala</string>
+    <string name="git_revert">Geri çevir (bunu geri alan yeni bir commit)</string>
+    <string name="git_branch_here">Burada dal oluştur…</string>
+    <string name="git_tag_here">Etiketle…</string>
+    <string name="git_name_branch">Yeni dalın adı</string>
+    <string name="git_name_tag">Etiketin adı</string>
+    <string name="git_create">Oluştur</string>
+    <string name="git_reverted">Geri çevrildi: %1$s</string>
+    <string name="git_revert_clash">Bunu geri almak sonraki değişikliklerle çakışıyor, hiçbir şey yapılmadı</string>
+    <string name="git_ref_made">%1$s oluşturuldu</string>
+    <string name="git_ref_exists">%1$s zaten var</string>
+    <string name="git_ref_bad">Bu ad kullanılamaz</string>
 </resources>

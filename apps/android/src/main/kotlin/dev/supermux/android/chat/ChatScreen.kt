@@ -137,8 +137,6 @@ import dev.supermux.ui.chat.ChatState
 import dev.supermux.ui.chat.ComposerActions
 import dev.supermux.ui.chat.ContinueConversationFlow
 import dev.supermux.ui.chat.ContinueMenuItem
-import dev.supermux.ui.chat.FinishBindings
-import dev.supermux.ui.chat.FinishHeaderButton
 import dev.supermux.ui.chat.rememberContinueSheetState
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.retain.rememberRetained
@@ -228,14 +226,6 @@ fun ChatScreen(
     loadContinueReasoning: suspend (String, String?) -> ReasoningResponse? = { _, _ -> null },
     onContinued: (String) -> Unit = {},
     onEditorConsumesBackChange: (Boolean) -> Unit = {},
-    // Finish flow — null/empty defaults keep the existing call (and ArchivedChatScreen) compiling.
-    finishJob: dev.supermux.proto.FinishJobDto? = null,                                  // finishJobs[session.id]
-    onFinishReadiness: suspend () -> dev.supermux.net.FinishReadiness? = { null },        // vm.fleet.finishReadiness(id)
-    onFinish: (action: String, skipVerify: Boolean?, commitFirst: Boolean?, commitMessage: String?, onKickoff: (Boolean) -> Unit) -> Unit = { _, _, _, _, cb -> cb(false) },
-    onClearFinishJob: () -> Unit = {},                                                    // vm.fleet.clearFinishJob(id)
-    onVerifySuggest: suspend () -> dev.supermux.net.VerifySuggestResult? = { null },      // vm.fleet.verifySuggest(id)
-    onVerifySave: suspend (String) -> dev.supermux.net.VerifySaveResult? = { null },      // vm.fleet.verifySave(id, content)
-    onSendToAgent: (String) -> Unit = {},                                                 // vm.fleet.sendMessage(id, text)
     sharedScope: SharedTransitionScope? = null,
     animScope: AnimatedVisibilityScope? = null,
 ) {
@@ -418,21 +408,6 @@ fun ChatScreen(
                         }
                     }
                 }
-
-                // Finish — only for worktree-backed sessions (the shared flow gates on
-                // session.session_branch itself, and owns the unacked-dot bookkeeping).
-                FinishHeaderButton(
-                    session = session,
-                    bindings = FinishBindings(
-                        job = finishJob,
-                        readiness = onFinishReadiness,
-                        finish = onFinish,
-                        clearJob = onClearFinishJob,
-                        verifySuggest = onVerifySuggest,
-                        verifySave = onVerifySave,
-                        sendToAgent = onSendToAgent,
-                    ),
-                )
 
                 // Overflow menu (⋮): Detail + rename / mute / displays / kill
                 Box {

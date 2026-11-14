@@ -476,6 +476,18 @@ fun DiffPane(
     retainKey: String? = null,
     /** #72: whole files into the next commit, or out of it (see [DiffView]); null: no boxes. */
     stageFiles: (suspend (repo: String, paths: List<String>, staged: Boolean) -> Boolean)? = null,
+    /** #72: commit / uncommit (see [DiffView]); null: no commit bar. */
+    gitWrite: (suspend (op: String, body: dev.supermux.net.CommitRequest) -> dev.supermux.net.GitWriteResult?)? = null,
+    /** #72: the chat's base by name, how far it moved on, "Get latest", and "Ask the agent" (see [DiffView]). */
+    baseName: String? = null,
+    baseBehind: Int = 0,
+    gitLatest: (suspend () -> dev.supermux.net.LatestResult?)? = null,
+    askAgent: ((String) -> Unit)? = null,
+    aheadOfBase: Int = 0,
+    mergeReadiness: (suspend () -> dev.supermux.net.FinishReadiness?)? = null,
+    mergeIntoBase: (() -> Unit)? = null,
+    mergeJob: dev.supermux.proto.FinishJobDto? = null,
+    history: (suspend () -> dev.supermux.net.GitHistory?)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val reviewState = reviewWalkthrough ?: walkthrough
@@ -580,6 +592,16 @@ fun DiffPane(
             baseText = baseText,
             retainKey = retainKey,
             stage = stageFiles,
+            gitWrite = gitWrite,
+            baseName = baseName,
+            baseBehind = baseBehind,
+            gitLatest = gitLatest,
+            askAgent = askAgent,
+            aheadOfBase = aheadOfBase,
+            mergeReadiness = mergeReadiness,
+            mergeIntoBase = mergeIntoBase,
+            mergeJob = mergeJob,
+            history = history,
         )
         }
     }

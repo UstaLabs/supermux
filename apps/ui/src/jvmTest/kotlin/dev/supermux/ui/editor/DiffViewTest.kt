@@ -72,6 +72,16 @@ class DiffViewTest {
         readFile: (suspend (String, String) -> Result<String>)? = null,
         prefs: UiPrefs = UiPrefs(InMemorySettingsStore()),
         stage: (suspend (String, List<String>, Boolean) -> Boolean)? = null,
+        gitWrite: (suspend (String, dev.supermux.net.CommitRequest) -> dev.supermux.net.GitWriteResult?)? = null,
+        baseName: String? = null,
+        baseBehind: Int = 0,
+        gitLatest: (suspend () -> dev.supermux.net.LatestResult?)? = null,
+        askAgent: ((String) -> Unit)? = null,
+        aheadOfBase: Int = 0,
+        mergeReadiness: (suspend () -> dev.supermux.net.FinishReadiness?)? = null,
+        mergeIntoBase: (() -> Unit)? = null,
+        mergeJob: dev.supermux.proto.FinishJobDto? = null,
+        history: (suspend () -> dev.supermux.net.GitHistory?)? = null,
     ): @androidx.compose.runtime.Composable () -> Unit = {
         CompositionLocalProvider(
             LocalUiPrefs provides prefs,
@@ -95,6 +105,16 @@ class DiffViewTest {
                 autoExpandAll = autoExpandAll,
                 readFile = readFile,
                 stage = stage,
+                gitWrite = gitWrite,
+                baseName = baseName,
+                baseBehind = baseBehind,
+                gitLatest = gitLatest,
+                askAgent = askAgent,
+                aheadOfBase = aheadOfBase,
+                mergeReadiness = mergeReadiness,
+                mergeIntoBase = mergeIntoBase,
+                mergeJob = mergeJob,
+                history = history,
             )
         }
         }
@@ -133,6 +153,193 @@ class DiffViewTest {
         onNodeWithTag("diff_include_all").performClick()
         waitForIdle()
         assertEquals(setOf(Triple("", listOf("a.txt", "b.txt"), true), Triple("lib", listOf("d.txt"), true)), calls.toSet())
+    }
+
+    private fun noneTicked() = listOf(
+        RepoDiff(repo = "", files = listOf(
+            DiffFile(path = "a.txt", status = "modified", staged = "none"),
+            DiffFile(path = "b.txt", status = "added", staged = "none"),
+        )),
+    )
+
+    @Test
+    fun with_nothing_ticked_the_button_commits_all_and_says_what_it_did() = runComposeUiTest {
+        val calls = mutableListOf<Pair<String, dev.supermux.net.CommitRequest>>()
+        setContent(host(noneTicked(), stage = { _, _, _ -> true }, gitWrite = { op, body ->
+            calls += op to body
+            dev.supermux.net.GitWriteResult(ok = true, subject = "Update a.txt and b.txt")
+        }))
+        waitForIdle()
+        onNodeWithText("Commit all 2").assertExists()
+        onNodeWithTag("commit_button").performClick()
+        waitForIdle()
+        assertEquals(listOf("commit" to dev.supermux.net.CommitRequest("", null, all = true)), calls)
+        onNodeWithText("Committed: Update a.txt and b.txt").assertExists()
+    }
+
+    @Test
+    fun a_ticked_file_makes_it_commit_with_the_message_typed() = runComposeUiTest {
+        val calls = mutableListOf<dev.supermux.net.CommitRequest>()
+        setContent(host(stagedDiff(), stage = { _, _, _ -> true }, gitWrite = { _, body -> calls += body; dev.supermux.net.GitWriteResult(ok = true, subject = "Fix") }))
+        waitForIdle()
+        onNodeWithText("Commit").assertExists()
+        onNodeWithTag("commit_message").performTextInput("Fix")
+        onNodeWithTag("commit_button").performClick()
+        waitForIdle()
+        assertEquals(listOf(dev.supermux.net.CommitRequest("", "Fix"), dev.supermux.net.CommitRequest("lib", "Fix")), calls)
+    }
+
+    @Test
+    fun an_undo_the_broker_refuses_says_why() = runComposeUiTest {
+        setContent(host(noneTicked(), stage = { _, _, _ -> true }, gitWrite = { _, _ -> dev.supermux.net.GitWriteResult(reason = "pushed") }))
+        waitForIdle()
+        onNodeWithTag("commit_more").performClick()
+        waitForIdle()
+        onNodeWithTag("commit_undo").performClick()
+        waitForIdle()
+        onNodeWithText("That commit is already pushed, so it isn't undone here").assertExists()
+    }
+
+    private fun midMerge(clash: Boolean) = listOf(
+        RepoDiff(repo = "", merging = true, files = listOf(
+            DiffFile(path = "src/App.jsx", status = "modified", staged = if (clash) "conflict" else "all"),
+            DiffFile(path = "b.txt", status = "modified", staged = "all"),
+        )),
+    )
+
+    @Test
+    fun a_base_that_moved_on_is_named_and_get_latest_says_what_it_got() = runComposeUiTest {
+        var asked = 0
+        setContent(host(noneTicked(), stage = { _, _, _ -> true }, gitWrite = { _, _ -> null }, baseName = "release/2.4", baseBehind = 5,
+            gitLatest = { asked++; dev.supermux.net.LatestResult(status = "clean", from = "origin/release/2.4", commits = 5) }))
+        waitForIdle()
+        onNodeWithText("release/2.4 has 5 new commits since this chat started.").assertExists()
+        onNodeWithTag("git_get_latest_link").performClick()
+        waitForIdle()
+        assertEquals(1, asked)
+        onNodeWithText("Got 5 commits from release/2.4").assertExists()
+    }
+
+    @Test
+    fun a_clash_names_the_base_offers_each_side_and_blocks_continue_until_settled() = runComposeUiTest {
+        val calls = mutableListOf<Pair<String, dev.supermux.net.CommitRequest>>()
+        val asked = mutableListOf<String>()
+        setContent(host(midMerge(clash = true), stage = { _, _, _ -> true }, baseName = "dev",
+            gitWrite = { op, body -> calls += op to body; dev.supermux.net.GitWriteResult(ok = true) }, askAgent = { asked += it }))
+        waitForIdle()
+        onNodeWithText("Getting the latest from dev stopped: 1 file was changed on both sides.").assertExists()
+        onNodeWithText("Continue merge").assertExists()
+        onNodeWithTag("commit_button").performClick()   // still clashing: nothing happens
+        waitForIdle()
+        assertEquals(emptyList(), calls)
+        onNodeWithTag("git_use_base:src/App.jsx").performClick()
+        waitForIdle()
+        assertEquals(listOf("resolve" to dev.supermux.net.CommitRequest("", path = "src/App.jsx", side = "theirs")), calls)
+        onNodeWithTag("git_ask_agent:src/App.jsx").performClick()
+        waitForIdle()
+        assertTrue(asked.single().contains("dev") && asked.single().contains("src/App.jsx"))
+        onNodeWithTag("git_cancel_merge").performClick()
+        waitForIdle()
+        assertEquals("abort", calls.last().first)
+    }
+
+    @Test
+    fun once_nothing_clashes_the_button_continues_the_merge() = runComposeUiTest {
+        val calls = mutableListOf<Pair<String, dev.supermux.net.CommitRequest>>()
+        setContent(host(midMerge(clash = false), stage = { _, _, _ -> true }, baseName = "dev",
+            gitWrite = { op, body -> calls += op to body; dev.supermux.net.GitWriteResult(ok = true, subject = "Merge branch 'dev'") }))
+        waitForIdle()
+        onNodeWithText("Every clash is settled. Continue the merge to finish it.").assertExists()
+        onNodeWithTag("commit_button").performClick()
+        waitForIdle()
+        assertEquals(listOf("commit" to dev.supermux.net.CommitRequest("", null)), calls)
+    }
+
+    private fun committedOnly() = listOf(RepoDiff(repo = "", files = listOf(DiffFile(path = "src/App.jsx", status = "modified"))))
+
+    @Test
+    fun merge_into_the_base_names_it_and_merges_on_confirm() = runComposeUiTest {
+        var merged = 0
+        setContent(host(committedOnly(), stage = { _, _, _ -> true }, gitWrite = { _, _ -> null }, baseName = "dev", aheadOfBase = 2,
+            mergeReadiness = { dev.supermux.net.FinishReadiness(base = "dev", ahead = 2) }, mergeIntoBase = { merged++ }))
+        waitForIdle()
+        onNodeWithTag("commit_more").performClick()
+        waitForIdle()
+        onNodeWithText("Merge into dev…").performClick()
+        waitForIdle()
+        onNodeWithText("Merge 2 commits into dev").assertExists()
+        onNodeWithTag("merge_run_checks").assertDoesNotExist()   // the checks gate is gone (Ahmet)
+        onNodeWithTag("merge_confirm").performClick()
+        waitForIdle()
+        assertEquals(1, merged)
+    }
+
+    @Test
+    fun a_chat_with_uncommitted_changes_is_asked_to_commit_before_merging() = runComposeUiTest {
+        var merged = 0
+        setContent(host(committedOnly(), stage = { _, _, _ -> true }, gitWrite = { _, _ -> null }, baseName = "dev", aheadOfBase = 1,
+            mergeReadiness = { dev.supermux.net.FinishReadiness(base = "dev", ahead = 1, dirtyFiles = listOf("x.txt")) }, mergeIntoBase = { merged++ }))
+        waitForIdle()
+        onNodeWithTag("commit_more").performClick()
+        waitForIdle()
+        onNodeWithTag("commit_merge").performClick()
+        waitForIdle()
+        onNodeWithText("This chat has changes that aren't committed. Commit or undo them first.").assertExists()
+        onNodeWithTag("merge_confirm").performClick()
+        waitForIdle()
+        assertEquals(0, merged)
+    }
+
+    @Test
+    fun nothing_ahead_of_the_base_offers_no_merge() = runComposeUiTest {
+        setContent(host(committedOnly(), stage = { _, _, _ -> true }, gitWrite = { _, _ -> null }, baseName = "dev", aheadOfBase = 0, mergeIntoBase = {}))
+        waitForIdle()
+        onNodeWithTag("commit_more").performClick()
+        waitForIdle()
+        onNodeWithTag("commit_merge").assertDoesNotExist()
+    }
+
+    private val sampleHistory = dev.supermux.net.GitHistory(
+        branch = "mux/search", base = "dev",
+        chat = listOf(dev.supermux.net.LogCommit("c41e9d2aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Add search box", "claude", 0, pushed = true)),
+        baseCommits = listOf(dev.supermux.net.LogCommit("9f3c2a1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "Bump SDK", "deniz", 0)),
+    )
+
+    @Test
+    fun the_history_tab_lists_the_chats_commits_then_the_bases_and_reverts_one() = runComposeUiTest {
+        val calls = mutableListOf<Pair<String, dev.supermux.net.CommitRequest>>()
+        setContent(host(committedOnly(), gitWrite = { op, b -> calls += op to b; dev.supermux.net.GitWriteResult(ok = true, sha = "abc") }, history = { sampleHistory }))
+        waitForIdle()
+        onNodeWithTag("diff_tab_history").performClick()
+        waitForIdle()
+        onNodeWithText("Add search box").assertExists()
+        onNodeWithText("pushed").assertExists()
+        onNodeWithText("Bump SDK").assertExists()
+        onNodeWithTag("git_commit_c41e9d2").performClick()
+        waitForIdle()
+        onNodeWithTag("git_revert").performClick()
+        waitForIdle()
+        assertEquals(listOf("revert" to dev.supermux.net.CommitRequest("", sha = "c41e9d2aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")), calls)
+        onNodeWithText("Reverted: Add search box").assertExists()
+    }
+
+    @Test
+    fun a_base_commit_can_be_named_but_not_reverted_here() = runComposeUiTest {
+        val calls = mutableListOf<Pair<String, dev.supermux.net.CommitRequest>>()
+        setContent(host(committedOnly(), gitWrite = { op, b -> calls += op to b; dev.supermux.net.GitWriteResult(ok = true) }, history = { sampleHistory }))
+        waitForIdle()
+        onNodeWithTag("diff_tab_history").performClick()
+        waitForIdle()
+        onNodeWithTag("git_commit_9f3c2a1").performClick()
+        waitForIdle()
+        onNodeWithTag("git_revert").assertDoesNotExist()
+        onNodeWithTag("git_branch_here").performClick()
+        waitForIdle()
+        onNodeWithTag("git_name_field").performTextInput("try/sdk")
+        onNodeWithTag("git_name_create").performClick()
+        waitForIdle()
+        assertEquals(listOf("branch" to dev.supermux.net.CommitRequest("", sha = "9f3c2a1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", name = "try/sdk")), calls)
+        onNodeWithText("Made try/sdk").assertExists()
     }
 
     @Test

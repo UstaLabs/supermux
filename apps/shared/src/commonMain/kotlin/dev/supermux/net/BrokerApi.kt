@@ -987,16 +987,7 @@ data class FinishReadiness(
     val conflictPreflight: String = "unknown", // "clean" | "will_conflict" | "unknown"
     val recommended: String = "merge",         // "merge" | "pr"
     val nothingToLand: Boolean = false,
-    val prRequiresGreen: Boolean = false,
 )
-
-/** POST /sessions/<id>/verify/suggest → suggested verify command/content + its source. */
-@Serializable
-data class VerifySuggestResult(val content: String = "", val source: String = "")
-
-/** POST /sessions/<id>/verify/save → { ok, reason? }. */
-@Serializable
-data class VerifySaveResult(val ok: Boolean = false, val reason: String? = null)
 
 // ─── Agents (GET/POST /api/pas) ─────────────────────────────────
 @Serializable
@@ -1207,6 +1198,7 @@ data class RepoDiff(
     val truncated: Boolean = false,
     val total: Int? = null,
     val error: String? = null,
+    val merging: Boolean = false,
 )
 
 @Serializable
@@ -1244,6 +1236,8 @@ data class RepoChanges(
     val truncated: Boolean = false,
     val total: Int = 0,
     val error: String? = null,
+    /** #72: a merge is in progress here (conflicts, or settled and waiting for "Continue merge"). */
+    val merging: Boolean = false,
 )
 
 @Serializable
@@ -1257,6 +1251,54 @@ data class ChangedFile(
     val baseBlob: String? = null,
     val size: Long? = null,
     val staged: String? = null,
+)
+
+/** POST …/git/commit and …/git/uncommit (#72): {repo} plus, for commit, the message and how. */
+@Serializable
+data class CommitRequest(
+    val repo: String,
+    val message: String? = null,
+    val all: Boolean = false,
+    val amend: Boolean = false,
+    /** resolve: the conflicted file and the side kept (mine | theirs | both). */
+    val path: String? = null,
+    val side: String? = null,
+    /** revert / branch / tag: the commit, and the new name. */
+    val sha: String? = null,
+    val name: String? = null,
+)
+
+/** GET …/git/history: the chat's commits (its branch minus its base) and the base's recent ones. */
+@Serializable
+data class GitHistory(
+    val branch: String? = null,
+    val base: String? = null,
+    val chat: List<LogCommit> = emptyList(),
+    val baseCommits: List<LogCommit> = emptyList(),
+)
+
+@Serializable
+data class LogCommit(val sha: String, val subject: String = "", val author: String = "", val at: Long = 0, val pushed: Boolean? = null)
+
+/** POST /sessions/<id>/git/latest: the base merged in (clean | up_to_date), stopped on a clash (conflict), or failed. */
+@Serializable
+data class LatestResult(
+    val status: String = "failed",
+    val from: String? = null,
+    val commits: Int = 0,
+    val files: List<String> = emptyList(),
+    val message: String? = null,
+)
+
+/** What a commit or an undo did: ok with the commit's subject, or why not (nothing | failed | none | merge | pushed). */
+@Serializable
+data class GitWriteResult(
+    val ok: Boolean = false,
+    val sha: String? = null,
+    val subject: String? = null,
+    val reason: String? = null,
+    val message: String? = null,
+    val error: String? = null,
 )
 
 /** POST …/git/stage (#72): whole files into the next commit, or out of it. */
@@ -1275,7 +1317,7 @@ fun ChangesResult.toFsDiffResult(): FsDiffResult = FsDiffResult(
                     baseBlob = f.baseBlob, size = f.size, lazy = true, staged = f.staged,
                 )
             },
-            baseSha = r.baseSha, truncated = r.truncated, total = r.total, error = r.error,
+            baseSha = r.baseSha, truncated = r.truncated, total = r.total, error = r.error, merging = r.merging,
         )
     },
     comments = comments,
@@ -1715,17 +1757,14 @@ private data class AddDeviceBody(val name: String)
 @Serializable
 private data class FinishBody(
     val action: String? = null,
-    val skipVerify: Boolean? = null,
     val commitFirst: Boolean? = null,
     val commitMessage: String? = null,
     val prTitle: String? = null,
     val prBody: String? = null,
     val draft: Boolean? = null,
-    val prRequiresGreen: Boolean? = null,
+    /** #72: never archive the chat after a merge. */
+    val keep: Boolean? = null,
 )
-
-@Serializable
-private data class VerifySaveBody(val content: String)
 
 @Serializable
 private data class MessageBody(val text: String)
@@ -3062,33 +3101,24 @@ class BrokerApi(
     suspend fun finish(
         id: String,
         action: String? = null,
-        skipVerify: Boolean? = null,
         commitFirst: Boolean? = null,
         commitMessage: String? = null,
         prTitle: String? = null,
         prBody: String? = null,
         draft: Boolean? = null,
-        prRequiresGreen: Boolean? = null,
+        keep: Boolean? = null,
     ): FinishResult =
         decode(http.post("$httpBase/sessions/$id/finish") {
             authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(FinishBody(
-                action, skipVerify, commitFirst, commitMessage, prTitle, prBody, draft, prRequiresGreen,
+                action, commitFirst, commitMessage, prTitle, prBody, draft, keep,
             )))
         })
 
     /** GET /sessions/<id>/finish/readiness — preflight for the finish menu. */
     suspend fun finishReadiness(id: String): FinishReadiness =
         getJson("$httpBase/sessions/$id/finish/readiness")
-
-    /** POST /sessions/<id>/verify/suggest → { content, source }. */
-    suspend fun verifySuggest(id: String): VerifySuggestResult =
-        postReturningJson("$httpBase/sessions/$id/verify/suggest", EmptyBody())
-
-    /** POST /sessions/<id>/verify/save {content} → { ok, reason? }. */
-    suspend fun verifySave(id: String, content: String): VerifySaveResult =
-        postReturningJson("$httpBase/sessions/$id/verify/save", VerifySaveBody(content))
 
     /** POST /sessions/<id>/message — post a message to the agent (e.g. a "Send to agent" fix request). */
     suspend fun sendMessage(id: String, text: String) {
@@ -3693,6 +3723,32 @@ class BrokerApi(
     /** GET /workspaces/<id>/fs/diff?base=<spec> */
     suspend fun workspaceFsDiff(workspaceId: String, base: String? = null): FsDiffResult =
         getJson("$httpBase/workspaces/$workspaceId/fs/diff" + if (base != null) "?base=${urlEncode(base)}" else "")
+
+    /** GET /<sessions|workspaces>/<id>/git/history?repo= */
+    suspend fun gitHistory(scope: String, id: String, repo: String): GitHistory =
+        getJson("$httpBase/$scope/$id/git/history?repo=${urlEncode(repo)}")
+
+    /** POST /sessions/<id>/git/latest: its answer, a refusal (409) included. */
+    suspend fun sessionGitLatest(sessionId: String): LatestResult {
+        val resp = http.post("$httpBase/sessions/$sessionId/git/latest") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody("{}")
+        }
+        val text = resp.bodyAsText()
+        return runCatching { json.decodeFromString<LatestResult>(text) }.getOrElse { LatestResult(message = text.take(200)) }
+    }
+
+    /** POST /workspaces/<id>/git/<commit|uncommit|resolve|abort>: the broker's answer, a refusal (409) included. */
+    suspend fun workspaceGitWrite(workspaceId: String, op: String, body: CommitRequest): GitWriteResult {
+        val resp = http.post("$httpBase/workspaces/$workspaceId/git/$op") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(body))
+        }
+        val text = resp.bodyAsText()
+        return runCatching { json.decodeFromString<GitWriteResult>(text) }.getOrElse { GitWriteResult(reason = "failed", message = text.take(200)) }
+    }
 
     /** POST /workspaces/<id>/git/stage — throws when the broker refuses. */
     suspend fun workspaceStage(workspaceId: String, repo: String, paths: List<String>, staged: Boolean) =

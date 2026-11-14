@@ -68,7 +68,6 @@ import dev.supermux.ui.chat.MarkdownFiles
 import dev.supermux.ui.chat.ChatState
 import dev.supermux.ui.chat.ComposerExternalAttach
 import dev.supermux.ui.chat.ComposerExternalDictate
-import dev.supermux.ui.chat.FinishBindings
 import dev.supermux.ui.display.DisplayPanel
 import dev.supermux.ui.editor.DiffPane
 import dev.supermux.ui.editor.DiffState
@@ -386,19 +385,6 @@ private fun ChatViewPane(
         UnknownViewHint("chat", modifier)
         return
     }
-    val finish = FinishBindings(
-        job = finishJobs[sessionId],
-        readiness = { actions.finishReadiness(sessionId) },
-        // On the STORE's scope, not this panel's: switching views mid-kickoff must not cancel the
-        // request.
-        finish = { action, skipVerify, commitFirst, commitMessage, onKickoff ->
-            actions.kickoffFinish(sessionId, action, skipVerify, commitFirst, commitMessage, onKickoff)
-        },
-        clearJob = { actions.clearFinishJob(sessionId) },
-        verifySuggest = { actions.verifySuggest(sessionId) },
-        verifySave = { actions.verifySave(sessionId, it) },
-        sendToAgent = { actions.sendMessage(sessionId, it) },
-    )
     // A tap on a file path in the transcript opens a `file` pane.
     val tapFileSystem = actions.sessionFileSystem(sessionId)
     val openTappedPath = rememberOpenTappedPath(workdir, tapFileSystem, onOpenFile)
@@ -425,7 +411,6 @@ private fun ChatViewPane(
                 // Mute is the one session control this panel can perform without a dialog; rename/kill
                 // live in OverflowMenu (the header slot below), so they stay out of the slash menu here.
                 onRequestMute = { actions.setMute(sessionId, !(session.mute ?: false)) },
-                finish = finish,
                 forceLinksMenu = forceLinksMenu,
                 onForceLinksMenuConsumed = onForceLinksMenuConsumed,
                 headerLinks = { proxies, force, onForceConsumed ->
@@ -524,7 +509,6 @@ private fun ChatViewPane(
             session = session,
             working = state.agent?.busy == true,
             sessionLinks = sessionLinks,
-            finish = finish,
             onGitOp = gitOp,
             onRename = { name -> actions.rename(sessionId, name) },
             onToggleMute = { muted -> actions.setMute(sessionId, muted) },
@@ -800,6 +784,10 @@ private fun DiffPaneForWorkspace(
     // The holder is null where the host installed no walkthrough seam (the builder checks the cap).
     val walkthrough = selectedWalkthroughId?.let { actions.walkthroughState(it) }
     val reviewWalkthrough = reviewSessionId?.let { actions.walkthroughState(it) }
+    // #72: the chat's base (its name and how far it moved on) for the merge notes.
+    val sessions by actions.sessions.collectAsState()
+    val reviewGit = reviewSessionId?.let { id -> sessions.firstOrNull { it.id == id }?.git }
+    val finishJobs by actions.finishJobs.collectAsState()
     DiffPane(
         diff = diff,
         walkthrough = walkthrough,
@@ -834,8 +822,17 @@ private fun DiffPaneForWorkspace(
         baseText = actions.workspaceChangesBlob?.let { f -> { repo, sha, force -> f(workspaceId, repo, sha, force) } },
         // The review drafts outlive the workspace's composition, which a rotation rebuilds (#89).
         retainKey = "diff:$workspaceId:$viewId",
-        // #72: the "in the next commit" boxes wait for the commit bar (car 4b); a box with no way to commit is half a feature.
-        stageFiles = null,
+        stageFiles = actions.workspaceStage?.let { f -> { repo, paths, on -> f(workspaceId, repo, paths, on) } },
+        gitWrite = actions.workspaceGitWrite?.let { f -> { op, body -> f(workspaceId, op, body) } },
+        baseName = reviewGit?.compareRef?.takeIf { reviewGit.mode == "base" && it.isNotEmpty() },
+        baseBehind = reviewGit?.takeIf { it.mode == "base" }?.behind ?: 0,
+        gitLatest = reviewSessionId?.let { id -> actions.sessionGitLatest?.let { f -> { f(id) } } },
+        askAgent = reviewSessionId?.let { id -> { text: String -> actions.sendMessage(id, text) } },
+        aheadOfBase = reviewGit?.takeIf { it.mode == "base" }?.ahead ?: 0,
+        mergeReadiness = reviewSessionId?.let { id -> { actions.finishReadiness(id) } },
+        mergeIntoBase = reviewSessionId?.let { id -> actions.mergeIntoBase?.let { f -> { f(id) {} } } },
+        mergeJob = reviewSessionId?.let { finishJobs[it] },
+        history = actions.gitHistory?.let { f -> { f(workspaceId, reviewSessionId, "") } },
         modifier = modifier.fillMaxSize(),
     )
 }

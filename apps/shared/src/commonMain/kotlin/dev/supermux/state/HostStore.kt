@@ -4,9 +4,8 @@
 // BrokerApi (HTTP) and reduces inbound ServerFrames into StateFlows the Compose UI observes.
 // The Milestone-1 surface is ported here — sessions / messages / activity / agentState / bgTasks /
 // commands + the send/viewing/control paths — plus the M3 editor filesystem surface (fsList/fsRead/
-// fsWrite/fsSearch) and the M4b finish
-// surface (the finish_job + session_git reducer branches + finish/finishReadiness/verifySuggest/
-// verifySave/clearFinishJob). Still-out-of-scope frames (LSP, displays) and features (uploads beyond
+// fsWrite/fsSearch) and the finish job's surface (the finish_job + session_git reducer branches,
+// finishReadiness, and #72's mergeIntoBase). Still-out-of-scope frames (LSP, displays) and features (uploads beyond
 // Send args, dictation, models/reasoning, drafts, push, notifications) are deliberately no-op'd so the
 // reducer stays a faithful subset of AppViewModel's `when (frame)`.
 package dev.supermux.state
@@ -14,6 +13,8 @@ package dev.supermux.state
 import dev.supermux.ui.isAbsoluteEditorPath
 import dev.supermux.state.AgentReplyEvent
 import dev.supermux.state.StagedUpload
+import dev.supermux.net.CommitRequest
+import dev.supermux.net.GitWriteResult
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.AddDeviceResponse
 import dev.supermux.net.AgentInstallJob
@@ -89,8 +90,6 @@ import dev.supermux.net.UpdateCommentBody
 import dev.supermux.net.UpdateStatus
 import dev.supermux.net.Walkthrough
 import dev.supermux.net.UsageResponse
-import dev.supermux.net.VerifySaveResult
-import dev.supermux.net.VerifySuggestResult
 import dev.supermux.net.ScrcpyClient
 import dev.supermux.net.VncClient
 import dev.supermux.net.WorktreeChangesDto
@@ -507,22 +506,13 @@ class HostStore(
     val lastRead: StateFlow<Map<String, String>> =
         _state.map { it.lastRead }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
 
-    // ── Finish flow (M4b) ──────────────────────────────────────────────────────────
-    // The last/in-flight finish job per session, keyed by session id (Android AppViewModel
-    // parity). Seeded from each SessionInfo.finish_job in the Snapshot and kept current by the
-    // FinishJobFrame reducer; the FinishDialog drives its 3-state machine (menu/running/outcome)
-    // off this flow. clearFinishJob drops an entry client-side once the user dismisses the outcome.
+    // ── The finish job ─────────────────────────────────────────────────────────────
+    // The last/in-flight finish job per session, keyed by session id. Seeded from each
+    // SessionInfo.finish_job in the Snapshot and kept current by the FinishJobFrame reducer;
+    // #72's "Merge into <base>" line reads it.
     val finishJobs: StateFlow<Map<String, FinishJobDto>> =
         _state.map { it.finishJobs }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
 
-    // Which finish result the user has "seen" (acked), per session id → the job's startedAt. The
-    // header's unacked dot derives from this vs the live finishJobs entry. It lives HERE (not as
-    // SessionDetail Compose state) because desktop reuses ONE SessionDetail across session
-    // selections (AppShell renders it without key(session.id)), so a switch A→B→A would reset
-    // per-composable ack state and wrongly re-show A's already-seen dot. Android sidesteps this via
-    // its NavHost backstack; on desktop the ack must survive the switch — so it's app state.
-    private val _ackedFinish = MutableStateFlow<Map<String, Double>>(emptyMap())
-    val ackedFinish: StateFlow<Map<String, Double>> = _ackedFinish
 
     // ── Notifications (M5-3) ────────────────────────────────────────────────────────
     // Raw agent-reply pulses (direction="outbound", op="reply" MessageAppend entries only),
@@ -1570,79 +1560,18 @@ class HostStore(
     suspend fun updateGlossary(terms: List<String>): List<String>? =
         runApi("updateGlossary") { api.updateGlossary(terms) }
 
-    // ── Finish flow (M4b; mirrors AppViewModel.finish/finishReadiness/verifySuggest/verifySave) ──
-    // The FinishDialog drives the whole job lifecycle off the [finishJobs] StateFlow; [finish] only
-    // KICKS OFF the async job — its terminal outcome arrives on the WS finish_job frame ([reduce]).
-    // The readiness/verify helpers getOrNull-degrade through [runApi] like the launcher wrappers.
+    // ── #72 "Merge into <base>": the broker's merge job; its progress lands on the finish_job frame ──
 
-    /**
-     * Kick off a finish job for the session's branch. `action`: "merge" | "pr" | "keep" | "discard".
-     * Fire-and-forget: returns only whether the POST was ACCEPTED (the job's progress/outcome lands
-     * on the finish_job frame, not here). Mirrors Android's `runCatching{api.finish}.isSuccess` — a
-     * non-2xx makes BrokerApi.decode throw (SKIE-safe), so isSuccess is the kickoff-accepted signal.
-     */
-    suspend fun finish(
-        id: String,
-        action: String,
-        skipVerify: Boolean? = null,
-        commitFirst: Boolean? = null,
-        commitMessage: String? = null,
-        prTitle: String? = null,
-        prBody: String? = null,
-        draft: Boolean? = null,
-        prRequiresGreen: Boolean? = null,
-    ): Boolean =
-        runCatching {
-            api.finish(id, action, skipVerify, commitFirst, commitMessage, prTitle, prBody, draft, prRequiresGreen)
-        }.isSuccess
-
-    /**
-     * Fire-and-forget finish kickoff on the STORE's own scope, reporting acceptance through
-     * [onKickoff]. The shared Finish flow calls this rather than awaiting [finish] on the panel's
-     * `rememberCoroutineScope`, which a view/session switch mid-kickoff would cancel. Mirrors
-     * [FleetStore.finish].
-     */
-    fun kickoffFinish(
-        id: String,
-        action: String,
-        skipVerify: Boolean? = null,
-        commitFirst: Boolean? = null,
-        commitMessage: String? = null,
-        onKickoff: (Boolean) -> Unit = {},
-    ) {
-        stateScope.launch {
-            onKickoff(finish(id, action, skipVerify, commitFirst, commitMessage))
-        }
+    /** #72: "Merge into <base>" — the merge job, never archiving the chat; [onKickoff] says whether
+     *  the broker ACCEPTED it (progress and outcome arrive on the finish_job frame, [finishJobs]). */
+    fun mergeIntoBase(id: String, onKickoff: (Boolean) -> Unit = {}) {
+        stateScope.launch { onKickoff(runCatching { api.finish(id, "merge", keep = true) }.isSuccess) }
     }
 
     /** Preflight snapshot for the finish menu (branch sync / diff / conflict / dirty). Null on failure. */
     suspend fun finishReadiness(id: String): FinishReadiness? =
         runApi("finishReadiness") { api.finishReadiness(id) }
 
-    /** Suggest a `.mux/verify.sh` for the no_verify recovery path. Null on failure. */
-    suspend fun verifySuggest(id: String): VerifySuggestResult? =
-        runApi("verifySuggest") { api.verifySuggest(id) }
-
-    /** Save an edited verify script (the FinishDialog auto-runs merge when `ok`). Null on failure. */
-    suspend fun verifySave(id: String, content: String): VerifySaveResult? =
-        runApi("verifySave") { api.verifySave(id, content) }
-
-    /** Dismiss a finished/failed job's card (client-side only; mirrors web `finishJob.clear(id)`).
-     *  The broker keeps its record — this only drops the local overlay so the dialog closes. Also
-     *  drops the ack entry: the card is gone, so its acked-startedAt no longer needs remembering. */
-    fun clearFinishJob(id: String) {
-        _state.update { it.copy(finishJobs = it.finishJobs - id) }
-        _ackedFinish.update { it - id }
-    }
-
-    /** Record that the user has SEEN (acked) the finish result for [id] at [startedAt] — bumped on
-     *  the FinishButton click. Survives session switches (unlike per-composable state). */
-    fun ackFinish(id: String, startedAt: Double) {
-        _ackedFinish.update { it + (id to startedAt) }
-    }
-
-    /** Whether the finish result for [id] at [startedAt] has been acked (its dot is "seen"). */
-    fun isFinishAcked(id: String, startedAt: Double): Boolean = _ackedFinish.value[id] == startedAt
 
     // ── Scratch / agent terminals (Android AppViewModel:439-444 parity) ──────────────
 
@@ -1748,6 +1677,18 @@ class HostStore(
         runApi("workspaceFsWrite") {
             if (isAbsoluteEditorPath(path)) { api.hostFsWrite(path, content); true } else api.workspaceFsWrite(workspaceId, path, content)
         } ?: false
+
+    /** #72: History; [sessionId] (its own base) when there is one, else the workspace's. Null on failure. */
+    suspend fun gitHistory(workspaceId: String, sessionId: String?, repo: String): dev.supermux.net.GitHistory? =
+        runApi("gitHistory") { if (sessionId != null) api.gitHistory("sessions", sessionId, repo) else api.gitHistory("workspaces", workspaceId, repo) }
+
+    /** #72: the session's base merged into its branch; null when the broker could not be reached. */
+    suspend fun sessionGitLatest(sessionId: String): dev.supermux.net.LatestResult? =
+        runApi("sessionGitLatest") { api.sessionGitLatest(sessionId) }
+
+    /** #72: commit / uncommit; null when the broker could not be reached. */
+    suspend fun workspaceGitWrite(workspaceId: String, op: String, body: CommitRequest): GitWriteResult? =
+        runApi("workspaceGitWrite") { api.workspaceGitWrite(workspaceId, op, body) }
 
     /** #72: puts whole files into the next commit, or takes them out → true on success. */
     suspend fun workspaceStage(workspaceId: String, repo: String, paths: List<String>, staged: Boolean): Boolean =

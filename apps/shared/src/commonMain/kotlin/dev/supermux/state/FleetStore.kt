@@ -82,8 +82,6 @@ import dev.supermux.net.TerminalClient
 import dev.supermux.net.TerminalSummary
 import dev.supermux.net.UpdateStatus
 import dev.supermux.net.UsageResponse
-import dev.supermux.net.VerifySaveResult
-import dev.supermux.net.VerifySuggestResult
 import dev.supermux.net.VncClient
 import dev.supermux.host.workspaceForSession
 import dev.supermux.proto.ActivityEvent
@@ -1376,9 +1374,6 @@ class FleetStore(
     /** One-shot read of the persisted draft (the composer restores it on open). */
     suspend fun loadDraft(sessionId: String): String = draft(sessionId).first().orEmpty()
     fun draft(sessionId: String): Flow<String?> = deps.settings.string(SettingsKeys.draft(sessionId))
-    fun clearFinishJob(id: String) { appFor(id)?.clearFinishJob(id) }
-    fun ackFinish(id: String, startedAt: Double) { appFor(id)?.ackFinish(id, startedAt) }
-    fun isFinishAcked(id: String, startedAt: Double): Boolean = appFor(id)?.isFinishAcked(id, startedAt) == true
 
     fun connectTerminal(sessionId: String, terminalId: String = "main"): TerminalClient =
         requireHost(appFor(sessionId)).connectTerminal(sessionId, terminalId)
@@ -1399,31 +1394,12 @@ class FleetStore(
     fun gitPush(id: String, onResult: (GitOpResult?) -> Unit) { fleetScope.launch { onResult(gitPush(id)) } }
     fun gitPublish(id: String, onResult: (GitOpResult?) -> Unit) { fleetScope.launch { onResult(gitPublish(id)) } }
 
-    /** Kick off a finish job; [onKickoff] reports whether the POST was ACCEPTED (progress lands on
-     *  the finish_job frame). Fire-and-forget so the menu can call it outside a coroutine. */
-    fun finish(
-        id: String,
-        action: String? = null,
-        skipVerify: Boolean? = null,
-        commitFirst: Boolean? = null,
-        commitMessage: String? = null,
-        prTitle: String? = null,
-        prBody: String? = null,
-        draft: Boolean? = null,
-        prRequiresGreen: Boolean? = null,
-        onKickoff: (Boolean) -> Unit = {},
-    ) {
-        fleetScope.launch {
-            val ok = appFor(id)?.finish(
-                id, action.orEmpty(), skipVerify, commitFirst, commitMessage, prTitle, prBody, draft, prRequiresGreen,
-            ) == true
-            onKickoff(ok)
-        }
+    fun mergeIntoBase(id: String, onKickoff: (Boolean) -> Unit = {}) {
+        val app = appFor(id) ?: return onKickoff(false)
+        app.mergeIntoBase(id, onKickoff)
     }
 
     suspend fun finishReadiness(id: String): FinishReadiness? = appFor(id)?.finishReadiness(id)
-    suspend fun verifySuggest(id: String): VerifySuggestResult? = appFor(id)?.verifySuggest(id)
-    suspend fun verifySave(id: String, content: String): VerifySaveResult? = appFor(id)?.verifySave(id, content)
 
     suspend fun sessionModels(id: String): ModelsResponse? = appFor(id)?.sessionModels(id)
     suspend fun sessionReasoning(id: String): ReasoningResponse? = appFor(id)?.sessionReasoning(id)
@@ -1626,6 +1602,11 @@ class FleetStore(
             ?: Result.failure(IllegalStateException("host offline"))
     suspend fun workspaceFsWrite(workspaceId: String, path: String, content: String): Boolean =
         appForWorkspace(workspaceId)?.workspaceFsWrite(workspaceId, path, content) == true
+    suspend fun sessionGitLatest(sessionId: String): dev.supermux.net.LatestResult? = appFor(sessionId)?.sessionGitLatest(sessionId)
+    suspend fun gitHistory(workspaceId: String, sessionId: String?, repo: String): dev.supermux.net.GitHistory? =
+        appForWorkspace(workspaceId)?.gitHistory(workspaceId, sessionId, repo)
+    suspend fun workspaceGitWrite(workspaceId: String, op: String, body: dev.supermux.net.CommitRequest): dev.supermux.net.GitWriteResult? =
+        appForWorkspace(workspaceId)?.workspaceGitWrite(workspaceId, op, body)
     suspend fun workspaceStage(workspaceId: String, repo: String, paths: List<String>, staged: Boolean): Boolean =
         appForWorkspace(workspaceId)?.workspaceStage(workspaceId, repo, paths, staged) == true
     suspend fun workspaceFsDiff(workspaceId: String, base: String? = null): FsDiffResult? =
