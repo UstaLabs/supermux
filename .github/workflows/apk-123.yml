@@ -10,8 +10,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: i18nprobe-before-d33a15a8e, sha: d33a15a8e8d3d8fac790073cac4167d0b9840211 }
-          - { name: i18nprobe-after-c82feb7b5, sha: c82feb7b5173f828f055962863088f6d31ca7302 }
+          - { name: i18nprobe-warm-before-67e8399de, sha: 67e8399dea500cba957b286394f2344d7d67e8f8 }
+          - { name: i18nprobe-warm-after-0cc0188a0, sha: 0cc0188a07e60406ade9077f8ed9049a3e7634cf }
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
