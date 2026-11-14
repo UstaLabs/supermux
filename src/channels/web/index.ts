@@ -4130,34 +4130,17 @@ export class WebChannel implements Channel {
       if (result && typeof result === "object" && "error" in result) return this.json(result, 400)
       return this.json(result)
     }
-    if (method === "GET" && path.match(/^\/sessions\/[^/]+\/git\/status$/)) {
-      const id = decodeURIComponent(path.split("/")[2]!)
-      const workdir = this.opts.getSessionWorkdir?.(id)
-      if (!workdir) return this.json({ error: "session not found" }, 404)
-      return this.json(remoteStatus(workdir))
-    }
-    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/fetch$/)) {
-      const id = decodeURIComponent(path.split("/")[2]!)
-      const workdir = this.opts.getSessionWorkdir?.(id)
-      if (!workdir) return this.json({ error: "session not found" }, 404)
-      return this.json(fetchRemote(workdir))
-    }
-    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/publish$/)) {
-      const id = decodeURIComponent(path.split("/")[2]!)
-      const workdir = this.opts.getSessionWorkdir?.(id)
-      if (!workdir) return this.json({ error: "session not found" }, 404)
-      return this.json(publishBranch(workdir))
-    }
-    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/push$/)) {
-      const id = decodeURIComponent(path.split("/")[2]!)
-      const workdir = this.opts.getSessionWorkdir?.(id)
-      if (!workdir) return this.json({ error: "session not found" }, 404)
-      return this.json(pushBranch(workdir))
-    }
-    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/pull$/)) {
-      const id = decodeURIComponent(path.split("/")[2]!)
-      const workdir = this.opts.getSessionWorkdir?.(id)
-      if (!workdir) return this.json({ error: "session not found" }, 404)
+    // A branch's sync with origin, for a chat with its own copy (sessions) and a chat in a folder (workspaces) alike.
+    const syncOp = path.match(/^\/(sessions|workspaces)\/([^/]+)\/git\/(status|fetch|publish|push|pull)$/)
+    if (syncOp && (method === "GET") === (syncOp[3] === "status")) {
+      const [, scope, rawId, op] = syncOp
+      const id = decodeURIComponent(rawId!)
+      const workdir = scope === "sessions" ? this.opts.getSessionWorkdir?.(id) : this.opts.getWorkspaceWorkdir?.(id)
+      if (!workdir) return this.json({ error: `${scope === "sessions" ? "session" : "workspace"} not found` }, 404)
+      if (op === "status") return this.json(remoteStatus(workdir))
+      if (op === "fetch") return this.json(fetchRemote(workdir))
+      if (op === "publish") return this.json(publishBranch(workdir))
+      if (op === "push") return this.json(pushBranch(workdir))
       return this.json(pullBranch(workdir))
     }
     if (method === "GET" && path.match(/^\/sessions\/[^/]+\/git\/branches$/)) {

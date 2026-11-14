@@ -263,6 +263,26 @@ test("undo get latest moves the branch back only while it is still where get lat
   expect(git(dir, "rev-parse", "HEAD")).toBe(base)
 })
 
+test("a chat in a folder (workspace) has status, publish, push, fetch and pull like a chat with its own copy", async () => {
+  const { dir, token } = await setup()
+  const origin = mkdtempSync(join(tmpdir(), "mux-origin-"))
+  git(origin, "init", "-q", "--bare")
+  git(dir, "remote", "add", "origin", origin)
+  git(dir, "commit", "-qam", "local work")
+  let st = (await (await get(token, "/workspaces/ws-1/git/status")).json()) as any
+  expect(st).toMatchObject({ isRepo: true, hasRemote: true, branch: "main", upstream: null })
+  expect(((await (await post(token, "/workspaces/ws-1/git/publish", {})).json()) as any).status).toBe("pushed")
+  st = (await (await get(token, "/workspaces/ws-1/git/status")).json()) as any
+  expect(st).toMatchObject({ upstream: "origin/main", ahead: 0, behind: 0 })
+  writeFileSync(join(dir, "a.txt"), "three\n"); git(dir, "commit", "-qam", "more")
+  expect(((await (await get(token, "/sessions/s-1/git/status")).json()) as any).ahead).toBe(1)
+  expect(((await (await post(token, "/workspaces/ws-1/git/push", {})).json()) as any).status).toBe("pushed")
+  expect(((await (await post(token, "/workspaces/ws-1/git/fetch", {})).json()) as any).ok).toBe(true)
+  expect(((await (await post(token, "/workspaces/ws-1/git/pull", {})).json()) as any).status).toBe("up_to_date")
+  expect((await get(token, "/workspaces/ws-x/git/status")).status).toBe(404)
+  expect((await post(token, "/workspaces/ws-x/git/push", {})).status).toBe(404)
+})
+
 test("get latest needs the chat's own base; resolve and abort refuse bad input", async () => {
   const { token } = await setup()
   expect((await post(token, "/sessions/s-1/git/latest", {})).status).toBe(409)   // no base known here: no guess
