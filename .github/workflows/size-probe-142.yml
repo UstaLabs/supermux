@@ -1,4 +1,4 @@
-# Scratch, NOT for merge (#142). Round 4: (1) stageForBroker gzip total for each of the 4 cut cars and 142-all,
+# Scratch, NOT for merge (#142). Round 4b (smoke only): (1) stageForBroker gzip total for each of the 4 cut cars and 142-all,
 # (2) the bundle smoke WITH editor highlighting on 142-all (grammars from the rc.9 release run's artifact).
 # Runs only on pushes to this scratch branch.
 name: size-probe-142
@@ -9,43 +9,6 @@ permissions:
   contents: read
   actions: read
 jobs:
-  measure:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { name: compose-lean, sha: 1f67ab97e5c3118ade39205d2289f0a2b2d1d5f4 }
-          - { name: wasm-opt, sha: d2176d59375d0323f8c60f070985a27487c7dcde }
-          - { name: mono-once, sha: bc9545137207bb46ffb9d927be242e4e924ddb6e }
-          - { name: brotli, sha: 1dc4d84cb1ea55cdd2347c1d0b3ab37901bc78b4 }
-          - { name: all, sha: b13dfe8192089ea47dbc100fb4fd691f2de5df78 }
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ matrix.sha }}
-          fetch-depth: 0
-      - uses: oven-sh/setup-bun@v2
-      - run: bun install --frozen-lockfile
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-      - uses: gradle/actions/setup-gradle@v4
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.local/zig
-            apps/terminal-core/build
-          key: terminal-wasm-${{ runner.os }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json') }}
-          restore-keys: terminal-wasm-${{ runner.os }}-
-      - run: bash apps/terminal-core/wasm/build.sh
-        env:
-          ST_ZIG_JOBS: "4"
-      - working-directory: apps
-        run: ./gradlew :web:stageForBroker --console=plain 2>&1 | tee ../stageForBroker.log
-      - run: echo "RESULT ${{ matrix.name }} $(git rev-parse --short HEAD) $(grep -oE 'gzip total [0-9]+ KB' stageForBroker.log | head -1)"
   smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -54,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: b13dfe8192089ea47dbc100fb4fd691f2de5df78
+          ref: b329040b4e6537bfa8dca924886d8bb164a90c83
           fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
