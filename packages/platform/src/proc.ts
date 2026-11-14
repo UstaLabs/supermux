@@ -5,7 +5,7 @@ import {
   spawn as nodeSpawn, spawnSync as nodeSpawnSync, type ChildProcess, type SpawnOptions, type SpawnSyncOptions,
   type SpawnSyncReturns,
 } from "node:child_process"
-import { accessSync, constants, statSync } from "node:fs"
+import { accessSync, constants, readdirSync, readlinkSync, statSync } from "node:fs"
 import { posix, win32 } from "node:path"
 
 /** Whether a process with [pid] exists. `EPERM` (it exists but is someone else's) is alive; only `ESRCH` is gone. */
@@ -355,4 +355,25 @@ export function posixShell(env: CommandEnvironment = process.env, options: Resol
     if (base) candidates.push(win32.join(base, "Git", "bin", "bash.exe"))
   }
   return candidates.find((path) => !path.toLowerCase().startsWith(system) && fileExists(path)) ?? null
+}
+
+/**
+ * The pids that have [path] open, read from /proc/<pid>/fd: Linux only (another OS answers []), and only processes this
+ * user may look into. For a log line naming who holds a locked file, never for a decision.
+ */
+export function holders(path: string, options: { platform?: NodeJS.Platform } = {}): number[] {
+  if ((options.platform ?? process.platform) !== "linux") return []
+  const found: number[] = []
+  let pids: string[]
+  try { pids = readdirSync("/proc").filter((name) => /^\d+$/.test(name)) } catch { return [] }
+  for (const pid of pids) {
+    let fds: string[]
+    try { fds = readdirSync(`/proc/${pid}/fd`) } catch { continue }
+    for (const fd of fds) {
+      let target: string
+      try { target = readlinkSync(`/proc/${pid}/fd/${fd}`) } catch { continue }
+      if (target === path) { found.push(Number(pid)); break }
+    }
+  }
+  return found
 }

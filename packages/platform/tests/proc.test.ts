@@ -240,3 +240,19 @@ test.skipIf(process.platform !== "win32")("windowsLaunch: a .cmd shim in a folde
   expect(result.status).toBe(0)
   expect(JSON.parse(readFileSync(out, "utf8"))).toEqual(args)
 })
+
+// Storage init names who holds db.sqlite3 when it is locked.
+test("holders lists the processes with a file open; off Linux it knows none", () => {
+  const dir = mkdtempSync(join(tmpdir(), "holders-"))
+  const path = join(dir, "held")
+  writeFileSync(path, "x")
+  const { openSync, closeSync } = require("node:fs") as typeof import("node:fs")
+  const fd = openSync(path, "r")
+  try {
+    if (process.platform === "linux") expect(proc.holders(path)).toContain(process.pid)
+    expect(proc.holders(path, { platform: "darwin" })).toEqual([])
+    expect(proc.holders(join(dir, "nobody-has-this"))).toEqual([])
+  } finally {
+    closeSync(fd)
+  }
+})
