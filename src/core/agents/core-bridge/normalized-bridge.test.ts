@@ -323,3 +323,15 @@ test("OpenCode waiting out its free limit: a recoverable error the user sees, an
   expect(events[0]).toMatchObject({ kind: "error", recoverable: true, errorType: "free_limit" })
   expect((events[0] as { error: Error }).error.message).toContain("free models")
 })
+
+test("a usage event's context reaches onContext; rate limits still reach onUsage (#144)", () => {
+  const contexts: unknown[] = []
+  const limits: unknown[] = []
+  const b = createNormalizedBridge({ agent: "claude", emit: () => {}, onContext: (c) => contexts.push(c), onUsage: (r) => limits.push(r) })
+  b.handle(env({ kind: "usage", context: { used: 26955, size: 1000000 } }))
+  b.handle(env({ kind: "usage", rateLimits: { five_hour: 1 } }))
+  // A subagent's usage is never the chat's.
+  b.handle(env({ kind: "usage", context: { used: 5, size: 10 }, subagentId: "sub" }))
+  expect(contexts).toEqual([{ used: 26955, size: 1000000 }])
+  expect(limits).toEqual([{ five_hour: 1 }])
+})

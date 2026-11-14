@@ -61,6 +61,8 @@ data class SessionInfo(
     val accountLabel: String? = null,
     /** #92: every account of its agent is out and it waits for the first reset; null = no wait. */
     val limitWait: LimitWaitDto? = null,
+    /** How full the agent's context window is (#144), when the agent reports it; null until it does. */
+    val context: ContextUsageDto? = null,
 )
 
 /** #92: when a session resumes by itself after a usage limit, and on which account. ISO times. */
@@ -849,6 +851,14 @@ sealed interface ServerFrame {
     @Serializable @SerialName("council_update")
     data class CouncilUpdate(val session: String, val council: CouncilView) : ServerFrame
 
+    /** How full a session's context window is (#144): pushed as the agent reports it. */
+    @Serializable @SerialName("context_usage")
+    data class ContextUsage(
+        val session: String,
+        val used: Long,
+        val size: Long,
+    ) : ServerFrame
+
     @Serializable @SerialName("commands_changed")
     data class CommandsChanged(
         val session: String,
@@ -1133,3 +1143,7 @@ sealed interface ClientFrame {
 /** One `client_logs` entry: [ts] is the app's own clock (ms since launch for "perf"). */
 @Serializable
 data class ClientLogEntry(val category: String, val event: String, val ts: Long, val data: JsonObject? = null)
+
+/** How full an agent's context window is (#144): tokens in use of the model's window. */
+@Serializable
+data class ContextUsageDto(val used: Long, val size: Long)

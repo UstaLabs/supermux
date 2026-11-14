@@ -14,6 +14,8 @@ export type NormalizedBridgeOpts = {
   agent: string
   emit: (event: AgentEvent) => void
   onUsage?: (rateLimits: unknown) => void
+  /** How full the agent's context window is (#144), as the agent last reported it. */
+  onContext?: (context: { used: number; size: number }) => void
   onCommands?: (commands: AgentCommandEntry[]) => void
   /** The models the agent offers (a session start's ACP options, #102). */
   onModels?: (models: AgentModelEntry[]) => void
@@ -278,6 +280,7 @@ export function createNormalizedBridge(opts: NormalizedBridgeOpts) {
     if (kind === "usage" && event.rateLimits != null) {
       opts.onUsage?.(event.rateLimits)
     }
+    if (kind === "usage" && event.context != null && !child) opts.onContext?.(event.context)
   }
 
   function flush(): void {
