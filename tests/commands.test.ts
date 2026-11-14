@@ -435,3 +435,28 @@ test("/fast shows the state, switches on/off, and refuses a model without it", a
   supported = false
   expect((await handleSlash({ command: "fast", rest: "" }, fastCtx)).text).toBe("zoom: fast mode is not available on this model")
 })
+
+// #123: a command's reply is worded in the language of the user who sent it (Telegram's language_code).
+test("a Turkish user gets a Turkish reply; names stay as they are", async () => {
+  const none = await handleSlash({ command: "archive", rest: "" }, { ...ctx, lang: "tr" })
+  expect(none.text).toBe("Arşivlenmiş oturum yok.")
+  const missing = await handleSlash({ command: "switch", rest: "nope" }, { ...ctx, lang: "tr-TR" })
+  expect(missing.text).toBe("Böyle bir oturum yok: nope")
+  const usage = await handleSlash({ command: "resume", rest: "" }, { ...ctx, lang: "tr" })
+  expect(usage.text).toBe("Kullanım: /resume <oturum-adı>")
+  const unknown = await handleSlash({ command: "frobnicate", rest: "" }, { ...ctx, lang: "tr" })
+  expect(unknown.text).toBe("Bilinmeyen komut: /frobnicate")
+})
+
+test("an unknown language gets English, as does a caller that names none", async () => {
+  expect((await handleSlash({ command: "archive", rest: "" }, { ...ctx, lang: "de" })).text).toBe("No archived sessions.")
+  expect((await handleSlash({ command: "archive", rest: "" }, ctx)).text).toBe("No archived sessions.")
+  expect((await handleSlash({ command: "resume", rest: "" }, { ...ctx, lang: "de" })).text).toBe("Usage: /resume <session-name>")
+})
+
+test("a Turkish user's archive list keeps session names and agents, with a Turkish header", async () => {
+  await ctx.killSession(zoomId)
+  const archive = await handleSlash({ command: "archive", rest: "" }, { ...ctx, lang: "tr" })
+  expect(archive.text.startsWith("Arşivlenmiş oturumlar:\n")).toBe(true)
+  expect(archive.text).toContain("zoom")
+})

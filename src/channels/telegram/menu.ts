@@ -1,5 +1,6 @@
 import { makeLogger } from "../../shared/log"
 import { AGENT_KINDS, AgentKind, agentDisplayName, spawnCommandForAgent } from "../../shared/agents"
+import { t, type BrokerLang } from "../../core/i18n/messages"
 
 const log = makeLogger("telegram/menu")
 
@@ -17,36 +18,37 @@ const TELEGRAM_COMMAND_RE = /^[a-z0-9_]{1,32}$/
 // can never be forgotten here. Claude is the default agent and keeps the
 // bare /spawn command. All current kind names pass the format check; the
 // filter only protects the rest of the menu from a future invalid name.
-const SPAWN_ENTRIES: MenuEntry[] = AGENT_KINDS
+const spawnEntries = (lang: BrokerLang): MenuEntry[] => AGENT_KINDS
   .map((kind): MenuEntry => {
     const command = spawnCommandForAgent(kind)
     const description = kind === AgentKind.Claude
-      ? "Spawn a new session (workdir [as name])"
-      : `Spawn a ${agentDisplayName(kind)} session: /${command} <workdir>`
+      ? t(lang, "menu.spawn")
+      : t(lang, "menu.spawn_agent", { agent: agentDisplayName(kind), command })
     return { command, description }
   })
   .filter(e => TELEGRAM_COMMAND_RE.test(e.command))
 
-const BASE: MenuEntry[] = [
-  { command: "sessions",          description: "List all sessions" },
-  { command: "active",            description: "Show active session" },
-  ...SPAWN_ENTRIES,
-  { command: "agent",             description: "Create an agent" },
-  { command: "agents",            description: "List agents" },
-  { command: "default",           description: "Make an agent the default" },
-  { command: "kill",              description: "Kill a session (append 'yes' to confirm)" },
-  { command: "rename",            description: "Rename a session: old new" },
-  { command: "mute",              description: "Silence a session's notifications" },
-  { command: "unmute",            description: "Restore a session's notifications" },
-  { command: "show",              description: "Show recent activity from a session" },
-  { command: "grant_orchestrate", description: "Allow a session to orchestrate others" },
-  { command: "model",             description: "List or switch model: /model [name]" },
-  { command: "effort",            description: "List or switch reasoning effort: /effort [level]" },
-  { command: "fast",              description: "Show or switch fast mode: /fast [on|off]" },
-  { command: "permissions",       description: "Set permission mode: /permissions [id] [session]" },
-  { command: "usage",             description: "Show usage across Claude, Codex, Cursor" },
-  { command: "archive",           description: "List archived (killed) sessions" },
-  { command: "resume",            description: "Resume an archived session: /resume <name>" },
+/** The fixed commands, described in [lang] (#123: Telegram shows the list matching the user's language). */
+const base = (lang: BrokerLang): MenuEntry[] => [
+  { command: "sessions",          description: t(lang, "menu.sessions") },
+  { command: "active",            description: t(lang, "menu.active") },
+  ...spawnEntries(lang),
+  { command: "agent",             description: t(lang, "menu.agent") },
+  { command: "agents",            description: t(lang, "menu.agents") },
+  { command: "default",           description: t(lang, "menu.default") },
+  { command: "kill",              description: t(lang, "menu.kill") },
+  { command: "rename",            description: t(lang, "menu.rename") },
+  { command: "mute",              description: t(lang, "menu.mute") },
+  { command: "unmute",            description: t(lang, "menu.unmute") },
+  { command: "show",              description: t(lang, "menu.show") },
+  { command: "grant_orchestrate", description: t(lang, "menu.grant_orchestrate") },
+  { command: "model",             description: t(lang, "menu.model") },
+  { command: "effort",            description: t(lang, "menu.effort") },
+  { command: "fast",              description: t(lang, "menu.fast") },
+  { command: "permissions",       description: t(lang, "menu.permissions") },
+  { command: "usage",             description: t(lang, "menu.usage") },
+  { command: "archive",           description: t(lang, "menu.archive") },
+  { command: "resume",            description: t(lang, "menu.resume") },
 ]
 
 /** Telegram accepts bot commands matching this; one bad entry 400s the WHOLE setMyCommands call. */
@@ -80,7 +82,7 @@ function dedupeCommand(base: string, taken: Set<string>): string {
   }
 }
 
-export function buildMenuEntries(registry: SessionLister): MenuEntry[] {
+export function buildMenuEntries(registry: SessionLister, lang: BrokerLang = "en"): MenuEntry[] {
   const out: MenuEntry[] = []
   const taken = new Set<string>()
   const push = (command: string, description: string) => {
@@ -88,9 +90,9 @@ export function buildMenuEntries(registry: SessionLister): MenuEntry[] {
     taken.add(cmd)
     out.push({ command: cmd, description })
   }
-  // BASE is static and already valid, but every emitted command goes through
+  // The fixed commands are already valid, but every emitted command goes through
   // the sanitizer anyway so a future edit cannot reintroduce BOT_COMMAND_INVALID.
-  for (const e of BASE) push(sanitizeCommand(e.command), e.description)
+  for (const e of base(lang)) push(sanitizeCommand(e.command), e.description)
   for (const s of registry.listVisible()) {
     const safeName = sanitizeCommand(s.name)
     if (safeName === "") {
@@ -106,8 +108,15 @@ export function buildMenuEntries(registry: SessionLister): MenuEntry[] {
   return out.filter(e => TG_COMMAND_RE.test(e.command))
 }
 
-export async function setMenu(api: any, entries: MenuEntry[]): Promise<void> {
+/**
+ * Pushes the default list (English), then each [localized] list under its language: Telegram shows a user the list
+ * for their app's language_code and the default to everyone else (#123).
+ */
+export async function setMenu(api: any, entries: MenuEntry[], localized: Partial<Record<BrokerLang, MenuEntry[]>> = {}): Promise<void> {
   await api.setMyCommands(entries, { scope: { type: "all_private_chats" } })
+  for (const [lang, list] of Object.entries(localized)) {
+    if (list) await api.setMyCommands(list, { scope: { type: "all_private_chats" }, language_code: lang })
+  }
 }
 
 /**

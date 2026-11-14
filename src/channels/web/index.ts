@@ -3043,11 +3043,14 @@ export class WebChannel implements Channel {
       if (typeof endpoint !== "string" || typeof p256dh !== "string" || typeof authKey !== "string") {
         return new Response("endpoint + keys.p256dh + keys.auth required", { status: 400 })
       }
+      // #123: the app's language, so this device's previews and notices are worded in it. A short tag or nothing.
+      const lang: unknown = body?.lang
       this.pushStore.upsert({
         device: auth.device.name,
         endpoint,
         keys: { p256dh, auth: authKey },
         userAgent: req.headers.get("user-agent") ?? undefined,
+        ...(typeof lang === "string" && /^[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{1,8})?$/.test(lang) ? { lang } : {}),
       })
       return this.json({ ok: true })
     }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { buildMenuEntries, menuRefresher, sanitizeCommand, type SessionLister } from "./menu"
+import { buildMenuEntries, menuRefresher, sanitizeCommand, setMenu, type SessionLister } from "./menu"
 
 const TG_COMMAND_RE = /^[a-z0-9_]{1,32}$/
 
@@ -137,5 +137,29 @@ describe("menuRefresher (card #75)", () => {
     fail = "400: BOT_COMMANDS_TOO_MUCH"
     await menu.refresh()
     expect(warned).toEqual(["400: BOT_COMMANDS_TOO_MUCH", "400: BOT_COMMANDS_TOO_MUCH"])
+  })
+})
+
+// #123: Telegram shows a bot's command list in the user's language when one is set for it (language_code).
+describe("the menu in the user's language", () => {
+  test("a Turkish menu has the same commands, worded in Turkish; session shortcuts keep their names", () => {
+    const en = buildMenuEntries(registryWith("zoom"))
+    const tr = buildMenuEntries(registryWith("zoom"), "tr")
+    expect(tr.map(e => e.command)).toEqual(en.map(e => e.command))
+    expect(tr.find(e => e.command === "sessions")?.description).toBe("Tüm oturumları listele")
+    expect(en.find(e => e.command === "sessions")?.description).toBe("List all sessions")
+    expect(tr.find(e => e.command === "switch_to_zoom")?.description).toBe("→ zoom")
+  })
+
+  test("setMenu pushes the default (English) list as before and each localized list under its language_code", async () => {
+    const calls: { commands: unknown; opts: unknown }[] = []
+    const api = { setMyCommands: async (commands: unknown, opts: unknown) => { calls.push({ commands, opts }) } }
+    const en = [{ command: "sessions", description: "List all sessions" }]
+    const tr = [{ command: "sessions", description: "Tüm oturumları listele" }]
+    await setMenu(api, en, { tr })
+    expect(calls).toEqual([
+      { commands: en, opts: { scope: { type: "all_private_chats" } } },
+      { commands: tr, opts: { scope: { type: "all_private_chats" }, language_code: "tr" } },
+    ])
   })
 })

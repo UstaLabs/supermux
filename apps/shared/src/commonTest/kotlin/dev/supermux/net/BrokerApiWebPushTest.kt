@@ -87,6 +87,17 @@ class BrokerApiWebPushTest {
         )
     }
 
+    /** #123: the app's language rides along after the keys, so the broker words this device's notifications in it. */
+    @Test fun subscribe_sends_the_app_language_when_given() = runTest {
+        val reqs = mutableListOf<HttpRequestData>()
+        val api = captured(body = """{"ok":true}""", sink = reqs)
+        assertEquals(true, api.pushSubscribe("https://fcm.googleapis.com/x", "p256", "auth1", "tr"))
+        assertEquals(
+            """{"endpoint":"https://fcm.googleapis.com/x","keys":{"p256dh":"p256","auth":"auth1"},"lang":"tr"}""",
+            reqs[0].bodyText(),
+        )
+    }
+
     /** The broker ANSWERED and refused — a definite "I will not push to this". */
     @Test fun subscribe_returns_false_on_non_2xx() = runTest {
         val reqs = mutableListOf<HttpRequestData>()

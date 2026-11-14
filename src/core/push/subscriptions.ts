@@ -5,6 +5,8 @@ export interface PushSubscriptionRecord {
   endpoint: string
   keys: { p256dh: string; auth: string }
   userAgent?: string
+  /** #123: the device's language tag as the web app sent it ("tr", "en-US"); absent = English. */
+  lang?: string
   createdAt: string
   lastUsedAt?: string
 }
@@ -12,17 +14,19 @@ export interface PushSubscriptionRecord {
 export class PushSubscriptionStore {
   constructor(private readonly db: Db) {}
 
-  upsert(rec: { device: string; endpoint: string; keys: { p256dh: string; auth: string }; userAgent?: string }): void {
+  /** A subscribe that names no language keeps the one recorded before (an older app says nothing). */
+  upsert(rec: { device: string; endpoint: string; keys: { p256dh: string; auth: string }; userAgent?: string; lang?: string }): void {
     this.db.prepare(`
-      INSERT INTO push_subscriptions (device, endpoint, p256dh, auth, user_agent, created_at, last_used_at)
-      VALUES (?, ?, ?, ?, ?, datetime('now'), NULL)
+      INSERT INTO push_subscriptions (device, endpoint, p256dh, auth, user_agent, lang, created_at, last_used_at)
+      VALUES (?, ?, ?, ?, ?, ?, datetime('now'), NULL)
       ON CONFLICT(device) DO UPDATE SET
         endpoint = excluded.endpoint,
         p256dh = excluded.p256dh,
         auth = excluded.auth,
         user_agent = excluded.user_agent,
+        lang = COALESCE(excluded.lang, push_subscriptions.lang),
         last_used_at = NULL
-    `).run(rec.device, rec.endpoint, rec.keys.p256dh, rec.keys.auth, rec.userAgent ?? null)
+    `).run(rec.device, rec.endpoint, rec.keys.p256dh, rec.keys.auth, rec.userAgent ?? null, rec.lang ?? null)
   }
 
   remove(device: string): boolean {
@@ -40,7 +44,7 @@ export class PushSubscriptionStore {
 
   get(device: string): PushSubscriptionRecord | null {
     const row = this.db.prepare(`
-      SELECT device, endpoint, p256dh, auth, user_agent, created_at, last_used_at
+      SELECT device, endpoint, p256dh, auth, user_agent, lang, created_at, last_used_at
       FROM push_subscriptions WHERE device = ?
     `).get(device) as any
     if (!row) return null
@@ -49,6 +53,7 @@ export class PushSubscriptionStore {
       endpoint: row.endpoint,
       keys: { p256dh: row.p256dh, auth: row.auth },
       userAgent: row.user_agent ?? undefined,
+      lang: row.lang ?? undefined,
       createdAt: row.created_at,
       lastUsedAt: row.last_used_at ?? undefined,
     }
@@ -70,7 +75,7 @@ export class PushSubscriptionStore {
   /** Every subscription — used to fan a web notification out to all devices. */
   all(): PushSubscriptionRecord[] {
     const rows = this.db.prepare(`
-      SELECT device, endpoint, p256dh, auth, user_agent, created_at, last_used_at
+      SELECT device, endpoint, p256dh, auth, user_agent, lang, created_at, last_used_at
       FROM push_subscriptions
     `).all() as any[]
     return rows.map((row) => ({
@@ -78,6 +83,7 @@ export class PushSubscriptionStore {
       endpoint: row.endpoint,
       keys: { p256dh: row.p256dh, auth: row.auth },
       userAgent: row.user_agent ?? undefined,
+      lang: row.lang ?? undefined,
       createdAt: row.created_at,
       lastUsedAt: row.last_used_at ?? undefined,
     }))

@@ -1914,7 +1914,12 @@ private data class WebPushKeys(val p256dh: String, val auth: String)
 /** POST /push/subscribe body. Field ORDER is the wire shape the broker validates by name;
  *  keep `endpoint` first and `keys` nested, never flattened. */
 @Serializable
-private data class WebPushSubscribeBody(val endpoint: String, val keys: WebPushKeys)
+private data class WebPushSubscribeBody(
+    val endpoint: String,
+    val keys: WebPushKeys,
+    /** #123: the app's language, so the broker words this device's notifications in it. Omitted when null. */
+    val lang: String? = null,
+)
 
 /** POST /usage/refresh body. [force] is always encoded (the Kotlin default is true; the
  *  broker treats an omitted force as false). [providers] is omitted when null. */
@@ -4005,11 +4010,11 @@ class BrokerApi(
      * That third case is exactly what the browser registrar needs, and it is why this method does
      * not follow the `Boolean` shape of its neighbours.
      */
-    suspend fun pushSubscribe(endpoint: String, p256dh: String, auth: String): Boolean? = try {
+    suspend fun pushSubscribe(endpoint: String, p256dh: String, auth: String, lang: String? = null): Boolean? = try {
         http.post("$httpBase/push/subscribe") {
             authHeader()
             contentType(ContentType.Application.Json)
-            setBody(json.encodeToString(WebPushSubscribeBody(endpoint, WebPushKeys(p256dh, auth))))
+            setBody(json.encodeToString(WebPushSubscribeBody(endpoint, WebPushKeys(p256dh, auth), lang)))
         }.status.isSuccess()
     } catch (c: CancellationException) {
         throw c
