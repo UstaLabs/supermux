@@ -28,3 +28,28 @@ class HostReducerContextUsageTest {
         assertEquals(ContextUsageDto(21851, 258400), row.context)
     }
 }
+
+/** #144: a compaction's start and end, the "Compacted" line on a log entry, and the Compact flags on a session. */
+class HostReducerCompactionTest {
+    private val session = dev.supermux.proto.SessionInfo(id = "s1", name = "fix", workdir = "/w", agent = "claude")
+    private val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true; classDiscriminator = "type" }
+
+    @Test fun a_compaction_runs_from_its_start_to_its_end() {
+        var state = reduceHostFrame(HostState(), ServerFrame.SessionAdded(session))
+        state = reduceHostFrame(state, ServerFrame.Compaction(session = "s1", id = "c1", status = "in_progress"))
+        assertEquals(mapOf("s1" to "c1"), state.compacting)
+        state = reduceHostFrame(state, ServerFrame.Compaction(session = "s1", id = "c1", status = "completed"))
+        assertEquals(emptyMap(), state.compacting)
+    }
+
+    @Test fun the_compacted_line_and_the_flags_decode() {
+        val entry = json.decodeFromString<dev.supermux.proto.LogEntry>(
+            """{"id":"m","ts":"t","direction":"outbound","op":"compaction","text":"","compaction":{"status":"completed","before":262000,"after":20113,"trigger":"manual","note":"keep it","summary":"S"}}""",
+        )
+        assertEquals(dev.supermux.proto.CompactionDto("completed", 262000, 20113, "manual", "keep it", "S"), entry.compaction)
+        val row = json.decodeFromString<dev.supermux.proto.SessionInfo>(
+            """{"id":"s1","name":"n","workdir":"/w","agent":"cursor","capabilities":{"hasAgentTerminal":false,"supportsLiveConfigChange":true,"compact":false,"compactNote":false}}""",
+        )
+        assertEquals(dev.supermux.proto.SessionCapabilitiesDto(compact = false, compactNote = false), row.capabilities)
+    }
+}

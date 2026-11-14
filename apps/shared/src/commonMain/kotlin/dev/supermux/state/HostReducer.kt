@@ -321,6 +321,9 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
     is ServerFrame.AgentError -> state.copy(
         agentErrors = state.agentErrors + (frame.session to frame),
     )
+    is ServerFrame.Compaction -> state.copy(
+        compacting = if (frame.status == "in_progress") state.compacting + (frame.session to frame.id) else state.compacting - frame.session,
+    )
     is ServerFrame.ContextUsage -> state.copy(
         sessions = state.sessions.map { s -> if (s.id != frame.session) s else s.copy(context = ContextUsageDto(frame.used, frame.size)) },
     )

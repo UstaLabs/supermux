@@ -18,7 +18,7 @@ class ContractTest {
         val names = listOf(
             "snapshot", "session_added", "session_removed", "session_renamed", "session_state",
             "agent_state", "agent_error", "message_append", "activity_append", "bg_tasks",
-            "commands_changed", "context_usage", "finish_job", "session_git", "session_git_remote",
+            "commands_changed", "context_usage", "compaction", "finish_job", "session_git", "session_git_remote",
             "sessions_reordered", "session_read",
             "walkthrough_updated", "review_comment", "browser_comment",
             "request_open", "request_closed", "error",
@@ -65,6 +65,7 @@ class ContractTest {
                 }
                 is ServerFrame.CommandsChanged -> {}
                 is ServerFrame.ContextUsage -> {}
+                is ServerFrame.Compaction -> {}
                 is ServerFrame.FsChanged -> {}
                 is ServerFrame.WalkthroughUpdated -> {}
                 is ServerFrame.ReviewCommentFrame -> {}

@@ -346,3 +346,16 @@ test("each tool the main thread starts is counted by name; a Skill call by its s
   b.handle(env({ kind: "tool-call", callId: "c4", tool: "Read", phase: "started", input: {}, replay: true }))
   expect(used).toEqual(["mcp__mux-shim__message_session", "Skill:superpowers:brainstorming"])
 })
+
+test("the main thread's compactions reach onCompaction; a subagent's or a replayed one does not (#144)", () => {
+  const seen: unknown[] = []
+  const b = createNormalizedBridge({ agent: "claude", emit: () => {}, onCompaction: (c) => seen.push(c) })
+  b.handle(env({ kind: "compaction", compactionId: "c1", status: "in_progress" }))
+  b.handle(env({ kind: "compaction", compactionId: "c1", status: "completed", before: 262000, after: 20113, trigger: "manual", summary: "S" }))
+  b.handle(env({ kind: "compaction", compactionId: "c2", status: "completed", subagentId: "sub" }))
+  b.handle(env({ kind: "compaction", compactionId: "c3", status: "completed", replay: true }))
+  expect(seen).toEqual([
+    { compactionId: "c1", status: "in_progress" },
+    { compactionId: "c1", status: "completed", before: 262000, after: 20113, trigger: "manual", summary: "S" },
+  ])
+})

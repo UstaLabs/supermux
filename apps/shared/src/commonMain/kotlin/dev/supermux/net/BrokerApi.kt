@@ -1728,6 +1728,9 @@ private data class ReasoningLevelBody(val reasoningLevel: String)
 private data class FastModeBody(val fastMode: Boolean)
 
 @Serializable
+private data class CompactBody(val note: String? = null)
+
+@Serializable
 private data class RenameBody(val name: String)
 
 @Serializable
@@ -2267,6 +2270,10 @@ class BrokerApi(
     /** POST /sessions/<id>/reasoning-level {"reasoningLevel": ...} */
     suspend fun switchReasoning(id: String, level: String) =
         postJson("$httpBase/sessions/$id/reasoning-level", ReasoningLevelBody(level))
+
+    /** #144 POST /sessions/<id>/compact {"note"?}: queued like a message (202). */
+    suspend fun compact(id: String, note: String? = null) =
+        postJson("$httpBase/sessions/${urlEncode(id)}/compact", CompactBody(note?.takeIf { it.isNotBlank() }))
 
     /** POST /sessions/<id>/fast-mode {"fastMode": ...} */
     suspend fun switchFastMode(id: String, fastMode: Boolean) =

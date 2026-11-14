@@ -18,6 +18,11 @@ export type NormalizedBridgeOpts = {
   onContext?: (context: { used: number; size: number }) => void
   /** A tool the main thread started (#144: "used in this chat"); a Skill call as `Skill:<skill>`. */
   onToolUsed?: (name: string) => void
+  /** #144: a compaction of the main conversation, as it starts and as it ends (with its sizes, where known). */
+  onCompaction?: (compaction: {
+    compactionId: string; status: "in_progress" | "completed" | "failed" | "cancelled"
+    before?: number; after?: number; trigger?: "manual" | "auto"; summary?: string; error?: string
+  }) => void
   onCommands?: (commands: AgentCommandEntry[]) => void
   /** The models the agent offers (a session start's ACP options, #102). */
   onModels?: (models: AgentModelEntry[]) => void
@@ -287,6 +292,15 @@ export function createNormalizedBridge(opts: NormalizedBridgeOpts) {
       opts.onUsage?.(event.rateLimits)
     }
     if (kind === "usage" && event.context != null && !child) opts.onContext?.(event.context)
+    if (kind === "compaction" && !child) {
+      const { compactionId, status, before, after, trigger, summary, error } = event
+      opts.onCompaction?.({
+        compactionId, status,
+        ...(before != null ? { before } : {}), ...(after != null ? { after } : {}), ...(trigger ? { trigger } : {}),
+        ...(summary ? { summary } : {}), ...(error ? { error } : {}),
+      })
+      return
+    }
   }
 
   function flush(): void {
