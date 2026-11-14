@@ -82,6 +82,10 @@
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
             </intent-filter>
         </service>
+        <!-- #143: a permission prompt's Allow / Deny from its notification (push/PromptAnswerReceiver.kt). -->
+        <receiver
+            android:name=".push.PromptAnswerReceiver"
+            android:exported="false" />
         <!-- The assistant overlay's windows (overlay/AssistantOverlayService.kt). specialUse: a chat
              head the user turned on; microphone: hold-to-talk while another app is in front;
              mediaProjection: your screen with hold-to-talk, once Android has asked. -->
