@@ -1,0 +1,28 @@
+# Scratch, NOT for merge (#144): ContextColumnsTest screenshots at 6f6e560c403d4dcaf58669e5bcb67c7acaacfc2d. Runs only on pushes to this branch.
+name: shots-144
+on:
+  push:
+    branches: [shots-144]
+jobs:
+  shots:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 6f6e560c403d4dcaf58669e5bcb67c7acaacfc2d
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - working-directory: apps
+        env:
+          CONTEXT_SHOTS_DIR: ${{ github.workspace }}/context-shots
+        run: ./gradlew :ui:jvmTest --tests '*ContextColumnsTest*' --console=plain
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: context-shots-144
+          path: context-shots
+          if-no-files-found: warn
