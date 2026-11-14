@@ -107,4 +107,83 @@ class ClientUpdateDownloadTest {
             assertContentEquals(payload, got)
         }
     }
+
+    /** A file-backed sink, as the Android updater writes the APK (#140); records each write's size. */
+    private class FileSink(val file: java.io.File) : DownloadSink {
+        private val raf = java.io.RandomAccessFile(file, "rw").apply { setLength(0) }
+        val writes = mutableListOf<Int>()
+        override val size: Long get() = raf.length()
+        override fun write(bytes: ByteArray, offset: Int, length: Int) {
+            writes += length
+            raf.write(bytes, offset, length)
+        }
+        override fun clear() {
+            raf.setLength(0)
+            raf.seek(0)
+        }
+        fun close() = raf.close()
+    }
+
+    @Test
+    fun downloadToStreamsIntoTheSinkAndResumesFromWhatIsOnDisk() = runBlocking {
+        val big = ByteArray(1024 * 1024) { i -> (i % 253).toByte() }
+        val cut = big.size / 3
+        val ranges = Collections.synchronizedList(mutableListOf<String?>())
+        val ss = server { s, headers ->
+            val range = headers["range"]
+            ranges += range
+            if (range == null) {
+                s.head("200 OK", "Content-Length: ${big.size}")
+                s.getOutputStream().write(big, 0, cut)
+            } else {
+                val from = range.removePrefix("bytes=").removeSuffix("-").toInt()
+                s.head(
+                    "206 Partial Content",
+                    "Content-Length: ${big.size - from}",
+                    "Content-Range: bytes $from-${big.size - 1}/${big.size}",
+                )
+                s.getOutputStream().write(big, from, big.size - from)
+            }
+            s.getOutputStream().flush()
+        }
+        val file = java.io.File.createTempFile("update", ".apk.part")
+        val sink = FileSink(file)
+        try {
+            ss.use {
+                val size = ClientUpdateChecker(client()).downloadTo("http://127.0.0.1:${ss.localPort}/a.apk", sink)
+                assertEquals(big.size.toLong(), size)
+            }
+            sink.close()
+            assertContentEquals(big, file.readBytes())
+            assertEquals(listOf(null, "bytes=$cut-"), ranges.toList())
+            // Streamed: written a buffer at a time, never gathered into one whole-file write.
+            assertTrue(sink.writes.size > 1)
+            assertTrue(sink.writes.all { it <= 64 * 1024 })
+        } finally {
+            sink.close()
+            file.delete()
+        }
+    }
+
+    @Test
+    fun downloadToStartsTheFileOverWhenTheServerIgnoresRange() = runBlocking {
+        var calls = 0
+        val ss = server { s, _ ->
+            calls++
+            s.head("200 OK", "Content-Length: ${payload.size}")
+            s.getOutputStream().write(payload, 0, if (calls == 1) payload.size / 2 else payload.size)
+            s.getOutputStream().flush()
+        }
+        val file = java.io.File.createTempFile("update", ".apk.part")
+        val sink = FileSink(file)
+        try {
+            ss.use { ClientUpdateChecker(client()).downloadTo("http://127.0.0.1:${ss.localPort}/a.apk", sink) }
+            sink.close()
+            // The half from the first try is gone, not left in front of the second, whole body.
+            assertContentEquals(payload, file.readBytes())
+        } finally {
+            sink.close()
+            file.delete()
+        }
+    }
 }
