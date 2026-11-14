@@ -9,6 +9,7 @@ import dev.supermux.ui.platform.AppUpdater
 import dev.supermux.ui.platform.Caps
 import dev.supermux.ui.platform.ClipboardAccess
 import dev.supermux.ui.platform.FileAccess
+import dev.supermux.ui.platform.FileManager
 import dev.supermux.ui.platform.MicCapture
 import dev.supermux.ui.platform.PickKind
 import dev.supermux.ui.platform.TtsEngine
@@ -108,6 +109,15 @@ class DesktopPlatform : Platform {
         DesktopOs.WINDOWS -> ReleasePlatform.Windows
         DesktopOs.LINUX -> ReleasePlatform.Linux
     }
+
+    override val fileManager: FileManager = when (DesktopOs.current) {
+        DesktopOs.MACOS -> FileManager.Finder
+        DesktopOs.WINDOWS -> FileManager.Explorer
+        DesktopOs.LINUX -> FileManager.Files
+    }
+
+    // A folder opens in the OS file manager: Desktop.open, then open / ShellExecute / xdg-open (#149).
+    override fun openFolder(path: String): Boolean = File(path).let { it.isDirectory && openLocalFile(it) }
 
     init {
         dev.supermux.ui.browser.AppWebViews.liveBudget = dev.supermux.ui.browser.BrowserTabKeeper.MAX_LIVE_TABS + 8

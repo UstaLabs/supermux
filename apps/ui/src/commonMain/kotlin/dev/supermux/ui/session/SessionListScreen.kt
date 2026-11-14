@@ -731,6 +731,14 @@ fun SessionListScreen(
         val isActive =
             if (openWorkspaceByWorkspaceId) w.id == activeId else openSid != null && openSid == activeId
         val rowInteraction = remember { MutableInteractionSource() }
+        // #149: the workspace's folder, in Finder / Explorer, when its host is this computer.
+        val openFolder = dev.supermux.ui.platform.rememberOpenFolder(model.primarySessionId ?: openSid, w.workdir)
+        val fileManager = dev.supermux.ui.platform.LocalPlatform.current.fileManager
+        val folderEntry = if (openFolder != null && fileManager != null) {
+            RowContextMenuEntry(dev.supermux.ui.platform.openFolderLabel(fileManager), openFolder)
+        } else {
+            null
+        }
         val body: @Composable (Boolean, Modifier) -> Unit = { isDragging, dragModifier ->
             Column(Modifier.fillMaxWidth()) {
                 WorkspaceRow(
@@ -775,6 +783,7 @@ fun SessionListScreen(
                     selecting = selecting,
                     selected = w.id in selectedWorkspaceIds,
                     highlight = highlight,
+                    folder = folderEntry,
                     onRename = { renameWorkspaceTarget = w; renameText = w.name },
                     onNewChat = { onNewChatInWorkspace(w) },
                     onKill = { archiveWorkspaceTarget = w },
