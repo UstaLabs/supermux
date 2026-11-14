@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: a333fd1fa283d6b741797955210b53acecb01d47
+          ref: ed04227b62106e343c9356c23a884f8c816c5255
           fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
