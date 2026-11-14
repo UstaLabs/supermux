@@ -232,6 +232,7 @@ if [[ $DO_WEB -eq 1 ]]; then
   command -v java >/dev/null || die "web build needs a JDK 17+ on PATH for :web:stageForBroker"
   ( cd "$workdir/apps" && ./gradlew :web:stageForBroker --console=plain ) \
     || die "web build failed"
+  ( cd "$workdir" && bun scripts/precompress-static.ts ) || die "brotli precompress failed"
   if [[ "$BACKEND" == "none" ]]; then
     log "web static built in worktree — for LIVE serve, also build in $MAIN_ROOT or use --backend shadow/swap"
   fi
