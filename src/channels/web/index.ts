@@ -50,7 +50,8 @@ import { worktreesRoot } from "../../core/worktree/manager"
 
 import { getRepoInfo } from "../../core/git/repo-info"
 import { remoteStatus, fetchRemote, publishBranch, pushBranch, pullBranch } from "../../core/git/remote"
-import { listBranches, repoToplevel, switchBranch } from "../../core/git/branches"
+import { listBranches, liveBranch, repoToplevel, switchBranch } from "../../core/git/branches"
+import { readPr, type PrRead } from "../../core/git/forge"
 import type { AgentKind } from "../../core/agents/types"
 import { AGENT_KINDS, isAgentKind } from "../../shared/agents"
 import { isPermissionMode, permissionCatalog } from "../../core/agents/permission-modes"
@@ -185,6 +186,8 @@ function hostOrigin(req: Request): string | undefined {
 /** Largest body PUT /fs/write accepts (the editor reads at most 1 MB). */
 const FS_WRITE_MAX_BYTES = 8 * 1024 * 1024
 
+/** How long a read PR/MR is reused (#72): the pane polls while open; gh / glab calls take a second or two. */
+const PR_CACHE_MS = 15_000
 const API_PREFIXES = ["/api", "/ports", "/sessions", "/archived-sessions", "/archived-workspaces", "/projects", "/project-catalog", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/accounts", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views", "/worktrees", "/search", "/html"]
 const MAX_CLIENT_LOG_RING = 800
 // randomUUID() shape: version 4, RFC 4122 variant. A client-minted view id must
@@ -2370,6 +2373,9 @@ export class WebChannel implements Channel {
    * resolve {path, side: mine|theirs|both} settles one conflicted file; abort cancels the merge;
    * revert {sha} adds a commit that undoes one; branch|tag {sha, name} names one, moving nothing.
    */
+  /** #72: a branch's PR/MR as last read, per checkout and branch (GET …/git/pr). */
+  private readonly prCache = new Map<string, { at: number; r: PrRead }>()
+
   private async gitWrite(workdir: string, op: string, req: Request): Promise<Response> {
     let body: { repo?: unknown; paths?: unknown; staged?: unknown; message?: unknown; all?: unknown; amend?: unknown; path?: unknown; side?: unknown; sha?: unknown; name?: unknown }
     try { body = (await req.json()) as typeof body } catch { return this.json({ error: "bad json" }, 400) }
@@ -4129,6 +4135,22 @@ export class WebChannel implements Channel {
       })
       if (result && typeof result === "object" && "error" in result) return this.json(result, 400)
       return this.json(result)
+    }
+    // #72: the pull request (GitHub) / merge request (GitLab) of the branch the chat is on, read with the user's own
+    // gh / glab sign-in. Cached for a few seconds per checkout, so a pane polling it costs little; ?fresh=1 skips that.
+    const prOp = path.match(/^\/(sessions|workspaces)\/([^/]+)\/git\/pr$/)
+    if (method === "GET" && prOp) {
+      const [, scope, rawId] = prOp
+      const id = decodeURIComponent(rawId!)
+      const workdir = scope === "sessions" ? this.opts.getSessionWorkdir?.(id) : this.opts.getWorkspaceWorkdir?.(id)
+      if (!workdir) return this.json({ error: `${scope === "sessions" ? "session" : "workspace"} not found` }, 404)
+      const branch = liveBranch(workdir)
+      const key = `${workdir}\0${branch}`
+      const hit = this.prCache.get(key)
+      if (hit && url.searchParams.get("fresh") !== "1" && Date.now() - hit.at < PR_CACHE_MS) return this.json(hit.r)
+      const r: PrRead = branch ? await readPr(workdir, branch) : { status: "unavailable", reason: "no_branch" }
+      this.prCache.set(key, { at: Date.now(), r })
+      return this.json(r)
     }
     // A branch's sync with origin, for a chat with its own copy (sessions) and a chat in a folder (workspaces) alike.
     const syncOp = path.match(/^\/(sessions|workspaces)\/([^/]+)\/git\/(status|fetch|publish|push|pull)$/)

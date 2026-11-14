@@ -283,6 +283,14 @@ test("a chat in a folder (workspace) has status, publish, push, fetch and pull l
   expect((await post(token, "/workspaces/ws-x/git/push", {})).status).toBe(404)
 })
 
+test("the branch's pull request: no origin says so; off a branch says so", async () => {
+  const { dir, token } = await setup()
+  expect(await (await get(token, "/workspaces/ws-1/git/pr")).json()).toEqual({ status: "unavailable", reason: "no_remote" })
+  git(dir, "checkout", "-q", "--detach")
+  expect(await (await get(token, "/sessions/s-1/git/pr")).json()).toEqual({ status: "unavailable", reason: "no_branch" })
+  expect((await get(token, "/workspaces/ws-x/git/pr")).status).toBe(404)
+})
+
 test("get latest needs the chat's own base; resolve and abort refuse bad input", async () => {
   const { token } = await setup()
   expect((await post(token, "/sessions/s-1/git/latest", {})).status).toBe(409)   // no base known here: no guess
