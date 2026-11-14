@@ -93,7 +93,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
-import androidx.compose.runtime.ReadOnlyComposable
 import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
 
@@ -427,7 +426,7 @@ class DictationController(
             !rawFallback.isNullOrBlank() -> appendToDraft(rawFallback)
             else -> {
                 failedAudio = audio
-                fail(DICTATION_FAILED)
+                fail(localized(Str.composer_dictation_failed))
             }
         }
     }
@@ -727,7 +726,7 @@ class DictationController(
                 if (fin != null) {
                     when {
                         fin.text.isNotBlank() || s.lastShown.isNotBlank() -> writeStreamText(s, fin.text)
-                        else -> fail(DICTATION_NOT_CAUGHT)
+                        else -> fail(localized(Str.composer_dictation_not_caught))
                     }
                     liveTranscript = null
                     if (fin.pendingEdit) {
@@ -744,7 +743,7 @@ class DictationController(
                 liveTranscript = null
                 closeStream(s)
                 if (audio == null) {
-                    fail(DICTATION_NOT_CAUGHT)
+                    fail(localized(Str.composer_dictation_not_caught))
                     return@launch
                 }
                 // What the stream already showed stays if the upload fails too.
@@ -1012,7 +1011,7 @@ class DictationController(
                 try {
                     val draft = try { live?.stop().orEmpty() } finally { liveSessionOpen = false }
                     if (draft.isBlank()) {
-                        fail(DICTATION_NOT_CAUGHT)
+                        fail(localized(Str.composer_dictation_not_caught))
                         return@launch
                     }
                     transcribeAndAppend(rawFallback = draft) { transcribeDraft(draft) }
@@ -1049,7 +1048,7 @@ class DictationController(
                     liveTranscript = null
                     if (upToDate != null) return@launch
                     if (audio == null) {
-                        fail(DICTATION_NOT_CAUGHT)
+                        fail(localized(Str.composer_dictation_not_caught))
                         return@launch
                     }
                     // The words since the last pass, merged into the text so far.
@@ -1283,19 +1282,6 @@ fun MicButton(
     }
 }
 
-/** The controller's failure words, kept English for its tests; [localizedDictationMessage] shows them translated. */
-internal const val DICTATION_FAILED = "Transcription failed" // i18n-ok: test twin
-internal const val DICTATION_NOT_CAUGHT = "Didn't catch that" // i18n-ok: test twin
-
-/** A [DictationController] banner / error in the app's language (anything else is shown as given). */
-@Composable
-@ReadOnlyComposable
-internal fun localizedDictationMessage(message: String): String = when (message) {
-    DICTATION_FAILED -> localized(Str.composer_dictation_failed)
-    DICTATION_NOT_CAUGHT -> localized(Str.composer_dictation_not_caught)
-    else -> message
-}
-
 /** "Transcribing…" indicator (parity with iOS transcribingBar). */
 @Composable
 fun TranscribingIndicator(modifier: Modifier = Modifier) {
@@ -1417,7 +1403,7 @@ fun DictationFailureBar(
             .testTag("composer_dictation_failed"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(localizedDictationMessage(message), color = cs.error, fontSize = 12.sp, modifier = Modifier.weight(1f))
+        Text(message, color = cs.error, fontSize = 12.sp, modifier = Modifier.weight(1f))
         TextButton(onClick = onRetry, modifier = Modifier.testTag("dictation_retry")) {
             Text(localized(Str.composer_dictation_retry), fontSize = 12.sp)
         }

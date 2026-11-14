@@ -272,7 +272,7 @@ private fun LspServerItem(
     Column(Modifier.fillMaxWidth().testTag("lsp_server_row_${server.id}")) {
         KitItem(
             server.label,
-            subtitle = if (ready && server.extensions.isNotEmpty()) extSummary(server.extensions) else localizedStateLabel(server, machine),
+            subtitle = if (ready && server.extensions.isNotEmpty()) extSummary(server.extensions) else stateLabel(server, machine),
             mark = KitMark.Letters(lspMark(server.label)),
         ) {
             if (server.enabled && server.installable && !ready) {
@@ -433,14 +433,6 @@ private fun LspField(
 
 /** "Ready" / "Ready · ‹command›" (yours) / "Needs ‹what› on ‹machine›" / "Not installed" / "Not found on ‹machine›" (yours). */
 internal fun stateLabel(server: LspServer, machine: String): String = when (server.state) {
-    "ready" -> if (server.custom && server.command != null) "Ready · ${server.command}" else "Ready" // i18n-ok: English for tests; the item shows localizedStateLabel
-    "prereq-missing" -> "Needs ${server.requires ?: "its toolchain"} on $machine" // i18n-ok: as above
-    else -> if (server.custom) "Not found on $machine" else "Not installed" // i18n-ok: as above
-}
-
-/** [stateLabel] in the app's language, for the server's item. */
-@Composable
-private fun localizedStateLabel(server: LspServer, machine: String): String = when (server.state) {
     "ready" -> if (server.custom && server.command != null) {
         localized(Str.lsp_state_ready_command, server.command!!)
     } else {

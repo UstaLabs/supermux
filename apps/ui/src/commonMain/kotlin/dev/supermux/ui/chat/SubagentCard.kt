@@ -163,16 +163,8 @@ internal fun compactCount(n: Long): String = when {
     else -> "${(n / 100_000) / 10.0}M".replace(".0M", "M")
 }
 
-/** "14 tool calls · 23k tokens" — only the counters the agent actually reported. English: the card shows [localizedSubagentStatsLine]. */
+/** "14 tool calls · 23k tokens" — only the counters the agent actually reported. */
 internal fun subagentStatsLine(s: Subagent): String? = listOfNotNull(
-    s.stats.toolCalls?.takeIf { it > 0 }?.let { if (it == 1) "1 tool call" else "$it tool calls" }, // i18n-ok: test twin
-    s.stats.tokens?.takeIf { it > 0 }?.let { "${compactCount(it)} tokens" }, // i18n-ok: test twin
-    s.stats.turns?.takeIf { it > 1 }?.let { "$it turns" }, // i18n-ok: test twin
-).joinToString(" · ").ifEmpty { null }
-
-/** [subagentStatsLine] in the app's language. */
-@Composable
-private fun localizedSubagentStatsLine(s: Subagent): String? = listOfNotNull(
     s.stats.toolCalls?.takeIf { it > 0 }?.let { localizedPlural(Plurals.chatcard_subagent_tool_calls, it, it) },
     s.stats.tokens?.takeIf { it > 0 }?.let { localized(Str.chatcard_subagent_tokens, compactCount(it)) },
     s.stats.turns?.takeIf { it > 1 }?.let { localizedPlural(Plurals.chatcard_subagent_turns, it, it) },
@@ -222,8 +214,6 @@ internal data class RunningItem(
 internal fun runningItems(
     subagents: List<Subagent>,
     bgTasks: List<ServerFrame.BgTask>,
-    /** What a background shell's row says it is doing (the strip passes it in the app's language). */
-    shellLabel: String = "background shell", // i18n-ok: test twin
 ): List<RunningItem> {
     val running = subagents.filter { it.running }.sortedBy { it.startedAt }
     val calls = subagents.mapNotNull { it.parentCallId }.toSet()
@@ -232,7 +222,7 @@ internal fun runningItems(
         t.status == "running" && t.id !in ids && (t.callId == null || t.callId !in calls)
     }
     return running.map { RunningItem("s:${it.id}", it.displayName, it.activity?.takeIf { a -> a.isNotBlank() }, it.startedAt, it.id) } +
-        tasks.map { RunningItem("t:${it.id}", it.label.ifBlank { it.kind }, if (it.kind == "shell") shellLabel else it.kind, it.startedAt, null) }
+        tasks.map { RunningItem("t:${it.id}", it.label.ifBlank { it.kind }, if (it.kind == "shell") localized(Str.chatcard_subagent_strip_background_shell) else it.kind, it.startedAt, null) }
 }
 
 /** One bar on a strip lane: a tool call, or a run of the same tool back to back (epoch millis). */
@@ -375,19 +365,8 @@ internal val Subagent.typeTag: String?
 internal val Subagent.displayName: String
     get() = realName ?: description?.takeIf { it.isNotBlank() } ?: id.take(8)
 
-/** How it ended, in words (null while running): who ended it matters more than the phase. English: the card shows [localizedEndedLabel]. */
+/** How it ended, in words (null while running): who ended it matters more than the phase. */
 internal fun endedLabel(s: Subagent): String? = when {
-    s.running -> null
-    s.status == "failed" -> "failed" // i18n-ok: test twin
-    s.endedBy == "parent" -> "closed by the main agent" // i18n-ok: test twin
-    s.endedBy == "client" -> "stopped by you" // i18n-ok: test twin
-    s.status == "cancelled" -> "stopped" // i18n-ok: test twin
-    else -> "done" // i18n-ok: test twin
-}
-
-/** [endedLabel] in the app's language. */
-@Composable
-private fun localizedEndedLabel(s: Subagent): String? = when {
     s.running -> null
     s.status == "failed" -> localized(Str.chatcard_subagent_ended_failed)
     s.endedBy == "parent" -> localized(Str.chatcard_subagent_ended_by_parent)
@@ -591,7 +570,7 @@ fun SubagentCard(
                     )
                 }
                 // New replies, then who + how: the agent type as a mono tag, "background", counters.
-                val stats = localizedSubagentStatsLine(s)
+                val stats = subagentStatsLine(s)
                 val type = s.typeTag
                 val badge = unread.takeIf { it > 0 && !expanded }
                 if (badge != null || type != null || s.background == true || stats != null) {
@@ -709,8 +688,8 @@ private fun StatusBlock(s: Subagent, now: Long) {
     val cs = MaterialTheme.colorScheme
     val sem = LocalSemantics.current
     val elapsed = subagentElapsedMs(s, now)?.let(::compactElapsed)
-    // A plain finish, decided on the English twin (logic only, never shown).
-    val done = endedLabel(s) == "done"
+    // A plain finish: none of the other endings.
+    val done = endedLabel(s) == localized(Str.chatcard_subagent_ended_done)
     // The clock is mono (it ticks), and so is a bare done / failed; a sentence of who-ended-it is not.
     val (text, color) = when (s.status) {
         "running" -> (elapsed ?: localized(Str.chatcard_subagent_running)) to cs.primary
@@ -718,7 +697,7 @@ private fun StatusBlock(s: Subagent, now: Long) {
         else -> {
             // Who ended it reads first ("closed by the main agent", "stopped by you"); a plain
             // finish keeps its time.
-            val ended = localizedEndedLabel(s) ?: s.status
+            val ended = endedLabel(s) ?: s.status
             (if (done && elapsed != null) localized(Str.chatcard_subagent_done_elapsed, elapsed) else ended) to cs.onSurfaceVariant
         }
     }
@@ -1157,8 +1136,8 @@ fun RunningStrip(
     /** The session's agent kind ("claude", "codex", …): its subagents wear its logo. */
     agent: String? = null,
 ) {
-    val shellLabel = localized(Str.chatcard_subagent_strip_background_shell)
-    val items = remember(subagents, bgTasks, shellLabel) { runningItems(subagents, bgTasks, shellLabel) }
+    // The language is a key: a change re-words the shell rows.
+    val items = remember(subagents, bgTasks, localized(Str.chatcard_subagent_strip_background_shell)) { runningItems(subagents, bgTasks) }
     Box(modifier.fillMaxWidth().animateContentSize()) {
         if (items.isEmpty()) return@Box
         val cs = MaterialTheme.colorScheme

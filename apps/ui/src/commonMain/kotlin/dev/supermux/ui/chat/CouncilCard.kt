@@ -105,7 +105,6 @@ internal fun councilHeadline(c: CouncilView): Pair<String, Boolean> {
 internal const val COUNCIL_THINKING = "Thinking" // i18n-ok: a marker, shown translated by councilActivityText
 
 /** A member's live line as shown: [COUNCIL_THINKING] in the app's language, a tool's own words as they are. */
-@Composable
 internal fun councilActivityText(line: String): String =
     if (line == COUNCIL_THINKING) localized(Str.chatcard_council_thinking) else line
 

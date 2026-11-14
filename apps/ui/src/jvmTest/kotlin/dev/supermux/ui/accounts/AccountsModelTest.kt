@@ -30,14 +30,6 @@ class AccountsModelTest {
         assertTrue(addOptionHint("codex", AddAccountOption.Login).contains("token account"))
     }
 
-    @Test fun identity_lines() {
-        assertEquals("Signed in as me@x.dev · this machine's login", accountIdentityLine(system))
-        assertEquals("This machine's login", accountIdentityLine(codexSystem))
-        assertEquals("me@acme.dev", accountIdentityLine(work))
-        // A label that already is the email is not repeated.
-        assertNull(accountIdentityLine(work.copy(label = "me@acme.dev")))
-    }
-
     @Test fun usage_windows_read_short() {
         assertEquals("5h", usageWindowName("five_hour"))
         assertEquals("weekly", usageWindowName("seven_day"))

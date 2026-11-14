@@ -1419,7 +1419,6 @@ internal fun ImageLightbox(
     val platform = LocalPlatform.current
     val pointer = LocalPointerAvailable.current
     val scope = rememberCoroutineScope()
-    val savedWords = rememberSavedWords()
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -1486,7 +1485,7 @@ internal fun ImageLightbox(
                         onClick = {
                             scope.launch {
                                 saveAttachment(platform, pointer, name, mime, bytes)
-                                    ?.let { savedNotice(it, pointer, savedWords) }
+                                    ?.let { savedNotice(it, pointer) }
                                     ?.let(platform.notices::show)
                             }
                         },
@@ -2219,13 +2218,12 @@ private fun AttachmentFileCard(
     val badge = remember(att.name, label) { fileBadgeLabel(att.name ?: label) }
     val family = remember(att.name, att.mime, label) { fileFamily(fileExtension(att.name ?: label), att.mime) }
     val meta = remember(att.name, att.mime, att.size, label) { fileMetaLine(att.name ?: label, att.mime, att.size) }
-    val savedWords = rememberSavedWords()
     val cantOpen = localized(Str.chatline_media_cant_open)
     val downloadFailed = localized(Str.chatline_media_download_failed)
     val paused = localized(Str.chatline_media_paused)
     // What the phone says after a save; true when something was saved.
     fun saved(file: SavedFile?): Boolean {
-        file?.let { savedNotice(it, pointer, savedWords) }?.let(platform.notices::show)
+        file?.let { savedNotice(it, pointer) }?.let(platform.notices::show)
         return file != null
     }
     val canAct = !busy && !waiting && running == null
@@ -2466,28 +2464,13 @@ internal suspend fun saveAttachment(platform: Platform, pointer: Boolean, name: 
     return saved
 }
 
-/** What a phone says after a save, in the app's language: resolved in composition, used after the save returns. */
-internal class SavedWords(val photos: String, val gallery: String, val downloads: String, val chosen: (String) -> String)
-
-/** The phone's word for where [saved] went; null on a pointer host, which opens the file instead. */
-internal fun savedNotice(saved: SavedFile, pointer: Boolean, words: SavedWords): String? = when {
+/** The phone's word for where [saved] went, in the app's language; null on a pointer host, which opens the file instead. */
+internal fun savedNotice(saved: SavedFile, pointer: Boolean): String? = when {
     pointer -> null
-    saved.place == SavedPlace.Photos -> words.photos
-    saved.place == SavedPlace.Gallery -> words.gallery
-    saved.place == SavedPlace.Downloads -> words.downloads
-    else -> words.chosen(saved.name)
-}
-
-/** [SavedWords] in the app's language. */
-@Composable
-internal fun rememberSavedWords(): SavedWords {
-    val photos = localized(Str.saved_to_photos)
-    val gallery = localized(Str.saved_to_gallery)
-    val downloads = localized(Str.saved_to_downloads)
-    val chosen = localized(Str.saved_file, "%1\$s")
-    return remember(photos, gallery, downloads, chosen) {
-        SavedWords(photos, gallery, downloads) { name -> chosen.replace("%1\$s", name) }
-    }
+    saved.place == SavedPlace.Photos -> localized(Str.saved_to_photos)
+    saved.place == SavedPlace.Gallery -> localized(Str.saved_to_gallery)
+    saved.place == SavedPlace.Downloads -> localized(Str.saved_to_downloads)
+    else -> localized(Str.saved_file, saved.name)
 }
 
 /**

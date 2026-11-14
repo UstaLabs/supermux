@@ -85,9 +85,9 @@ fun ProviderLogins(
         added.forEach { account ->
             val expired = signInExpired(account)
             KitItem(
-                title = localizedAccountDisplayName(account),
+                title = accountDisplayName(account),
                 modifier = Modifier.testTag("provider_login_${account.id}"),
-                subtitle = if (expired) localized(Str.accounts_sign_in_expired) else localizedAccountUnavailableText(account) ?: loginDetail(account),
+                subtitle = if (expired) localized(Str.accounts_sign_in_expired) else accountUnavailableText(account) ?: loginDetail(account),
                 subtitleWarn = account.unavailable != null,
                 mark = KitMark.Letters(initials(account)),
                 onClick = { opened = account },
@@ -124,7 +124,7 @@ fun ProviderLogins(
     }
     opened?.let { account ->
         KitSheet(
-            title = localizedAccountDisplayName(account),
+            title = accountDisplayName(account),
             onDismiss = { opened = null },
             description = if (signInExpired(account)) localized(Str.accounts_expired_description) else loginDetail(account),
             tag = "provider_login_sheet",
@@ -151,9 +151,9 @@ fun RemoveLoginSheet(account: AccountDto, actions: AccountsActions, onDone: () -
     LaunchedEffect(account.id) { plan = actions.removalPlan(account.id) }
     val removeFailed = localized(Str.accounts_remove_failed)
     KitSheet(
-        title = localized(Str.accounts_remove_title, localizedAccountDisplayName(account)),
+        title = localized(Str.accounts_remove_title, accountDisplayName(account)),
         onDismiss = { if (!busy) onDone() },
-        description = listOfNotNull(localized(Str.accounts_remove_forgets), localizedRemovalSentence(plan)).joinToString(" "),
+        description = listOfNotNull(localized(Str.accounts_remove_forgets), removalSentence(plan)).joinToString(" "),
         tag = "provider_login_remove_sheet",
         dismissOnOutside = false,
         buttons = {
@@ -196,7 +196,7 @@ class OwnLogin(val subtitle: String, val warn: Boolean, val trailing: @Composabl
 @Composable
 private fun loginDetail(account: AccountDto): String? {
     val email = account.identity?.email?.takeIf { it.isNotBlank() }
-    return listOfNotNull(localizedMethodLabel(account.method), email?.takeIf { it != accountDisplayName(account) }).joinToString(" · ").ifBlank { null }
+    return listOfNotNull(methodLabel(account.method), email?.takeIf { it != accountDisplayName(account) }).joinToString(" · ").ifBlank { null }
 }
 
 private fun initials(account: AccountDto): String =

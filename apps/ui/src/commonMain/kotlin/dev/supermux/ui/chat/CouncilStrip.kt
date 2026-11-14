@@ -83,14 +83,10 @@ internal fun isRunningCouncil(c: CouncilView): Boolean = c.status == "open" && c
 internal fun councilStripLines(
     c: CouncilView,
     live: Map<String, String>,
-    /** A working member with no live line says this (the strip passes it in the app's language). */
-    working: String = "Working", // i18n-ok: test twin
-    /** What [COUNCIL_THINKING] is shown as. */
-    thinking: String = COUNCIL_THINKING,
 ): List<String> {
     val doing = c.members.filter { it.status == "working" }.mapNotNull { m ->
         val now = live[m.session]
-        if (now == "") null else "${councilMemberWho(m).first}: ${now?.let { if (it == COUNCIL_THINKING) thinking else it } ?: working}" // i18n-ok: joins a name and translated words
+        if (now == "") null else "${councilMemberWho(m).first}: ${now?.let { councilActivityText(it) } ?: localized(Str.chatcard_council_working)}" // i18n-ok: joins a name and translated words
     }
     if (doing.isNotEmpty()) return doing
     val said = c.rounds.firstOrNull { it.round == c.round }?.reports?.maxByOrNull { it.seq } ?: return emptyList()
@@ -147,7 +143,7 @@ private fun CouncilStrip(item: TimelineItem.CouncilCard, onOpenFile: (FilePathRe
 private fun Head(c: CouncilView, open: Boolean, onToggle: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val live = LocalCouncilActivity.current
-    val lines = councilStripLines(c, live, localized(Str.chatcard_council_working), localized(Str.chatcard_council_thinking))
+    val lines = councilStripLines(c, live)
     // The members take turns: one line at a time, every few seconds, like a conversation.
     var turn by rememberSaveable(c.id) { mutableIntStateOf(0) }
     LaunchedEffect(c.id, lines.size) {

@@ -12,7 +12,6 @@ import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import dev.supermux.chat.TimelineItem
@@ -22,7 +21,6 @@ import dev.supermux.fs.pathLeaf
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.ActivityToolBody
 import dev.supermux.ui.i18n.Str
-import dev.supermux.ui.i18n.formatCatalogText
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.theme.Space
 
@@ -30,91 +28,18 @@ import dev.supermux.ui.theme.Space
 // row "Tool: summary" and carries the agent's own "why" in [ActivityEvent.description] when there
 // is one (Claude fills it for most Bash calls), so that wins as the title.
 
-/**
- * The adapter's wording, as catalog templates (`%1$s` / `%1$d`): [English] for a caller outside a composition (the
- * tests), [rememberToolWords] in the app's language for the UI.
- */
-@Immutable
-internal class ToolWords(
-    val read: String, val reading: String,
-    val edited: String, val editing: String,
-    val wrote: String, val writing: String,
-    val searchedFor: String, val searchingFor: String,
-    val listed: String, val listing: String,
-    val fetched: String, val fetching: String,
-    val searchedWeb: String, val searchingWeb: String,
-    val loaded: String, val loadingTools: String,
-    val searchedTools: String, val searchingTools: String,
-    val usedSkill: String, val loadingSkill: String,
-    val lines: String, val exit: String,
-    val markTerminal: String, val markRead: String, val markEdit: String, val markSearch: String,
-    val markWeb: String, val markAgent: String, val markSkill: String, val markSchedule: String,
-) {
-    companion object {
-        val English = ToolWords(
-            read = "Read %1\$s", reading = "Reading %1\$s", // i18n-ok: test twin
-            edited = "Edited %1\$s", editing = "Editing %1\$s", // i18n-ok: test twin
-            wrote = "Wrote %1\$s", writing = "Writing %1\$s", // i18n-ok: test twin
-            searchedFor = "Searched for %1\$s", searchingFor = "Searching for %1\$s", // i18n-ok: test twin
-            listed = "Listed %1\$s", listing = "Listing %1\$s", // i18n-ok: test twin
-            fetched = "Fetched %1\$s", fetching = "Fetching %1\$s", // i18n-ok: test twin
-            searchedWeb = "Searched the web for %1\$s", searchingWeb = "Searching the web for %1\$s", // i18n-ok: test twin
-            loaded = "Loaded %1\$s", loadingTools = "Loading tools", // i18n-ok: test twin
-            searchedTools = "Searched tools for %1\$s", searchingTools = "Searching tools", // i18n-ok: test twin
-            usedSkill = "Used skill %1\$s", loadingSkill = "Loading skill %1\$s", // i18n-ok: test twin
-            lines = "%1\$d lines", exit = "exit %1\$d", // i18n-ok: test twin
-            markTerminal = "Terminal", markRead = "Read", markEdit = "Edit", markSearch = "Search", // i18n-ok: test twin
-            markWeb = "Web", markAgent = "Agent", markSkill = "Skill", markSchedule = "Schedule", // i18n-ok: test twin
-        )
-    }
-}
-
-/** [ToolWords] in the app's language. */
-@Composable
-internal fun rememberToolWords(): ToolWords {
-    val w = listOf(
-        localized(Str.chatline_tool_read), localized(Str.chatline_tool_reading),
-        localized(Str.chatline_tool_edited_file), localized(Str.chatline_tool_editing_file),
-        localized(Str.chatline_tool_wrote), localized(Str.chatline_tool_writing),
-        localized(Str.chatline_tool_searched_for), localized(Str.chatline_tool_searching_for),
-        localized(Str.chatline_tool_listed), localized(Str.chatline_tool_listing),
-        localized(Str.chatline_tool_fetched), localized(Str.chatline_tool_fetching),
-        localized(Str.chatline_tool_searched_web), localized(Str.chatline_tool_searching_web),
-        localized(Str.chatline_tool_loaded), localized(Str.chatline_tool_loading_tools),
-        localized(Str.chatline_tool_searched_tools), localized(Str.chatline_tool_searching_tools),
-        localized(Str.chatline_tool_used_skill), localized(Str.chatline_tool_loading_skill),
-        localized(Str.chatline_tool_lines), localized(Str.chatline_tool_exit),
-        localized(Str.chatline_tool_mark_terminal), localized(Str.chatline_tool_mark_read),
-        localized(Str.chatline_tool_mark_edit), localized(Str.chatline_tool_mark_search),
-        localized(Str.chatline_tool_mark_web), localized(Str.chatline_tool_mark_agent),
-        localized(Str.chatline_tool_mark_skill), localized(Str.chatline_tool_mark_schedule),
-    )
-    return remember(w) {
-        ToolWords(
-            read = w[0], reading = w[1], edited = w[2], editing = w[3], wrote = w[4], writing = w[5],
-            searchedFor = w[6], searchingFor = w[7], listed = w[8], listing = w[9], fetched = w[10], fetching = w[11],
-            searchedWeb = w[12], searchingWeb = w[13], loaded = w[14], loadingTools = w[15],
-            searchedTools = w[16], searchingTools = w[17], usedSkill = w[18], loadingSkill = w[19],
-            lines = w[20], exit = w[21],
-            markTerminal = w[22], markRead = w[23], markEdit = w[24], markSearch = w[25],
-            markWeb = w[26], markAgent = w[27], markSkill = w[28], markSchedule = w[29],
-        )
-    }
-}
-
-private fun fill(template: String, arg: Any): String = formatCatalogText(template, arrayOf(arg))
 
 // Monochrome glyphs in the text colour, as on uiarc; only the mcp server name varies.
-private fun toolMark(tool: String, w: ToolWords): ToolMark = when {
+private fun toolMark(tool: String): ToolMark = when {
     tool.startsWith("mcp__") -> ToolMark(tool.removePrefix("mcp__").substringBefore("__"), Icons.Outlined.Extension)
-    tool == "Bash" || tool == "BashOutput" || tool == "KillShell" -> ToolMark(w.markTerminal, Icons.Outlined.Terminal)
-    tool == "Read" -> ToolMark(w.markRead, Icons.Outlined.Description)
-    tool == "Edit" || tool == "Write" || tool == "MultiEdit" || tool == "NotebookEdit" -> ToolMark(w.markEdit, Icons.Outlined.Edit)
-    tool == "Grep" || tool == "Glob" || tool == "ToolSearch" -> ToolMark(w.markSearch, Icons.Outlined.Search)
-    tool == "WebFetch" || tool == "WebSearch" -> ToolMark(w.markWeb, Icons.Outlined.Public)
-    tool == "Agent" || tool == "Task" || tool == "SendMessage" -> ToolMark(w.markAgent, Icons.Outlined.SmartToy)
-    tool == "Skill" -> ToolMark(w.markSkill, Icons.Outlined.AutoAwesome)
-    tool.startsWith("Cron") || tool == "ScheduleWakeup" -> ToolMark(w.markSchedule, Icons.Outlined.Schedule)
+    tool == "Bash" || tool == "BashOutput" || tool == "KillShell" -> ToolMark(localized(Str.chatline_tool_mark_terminal), Icons.Outlined.Terminal)
+    tool == "Read" -> ToolMark(localized(Str.chatline_tool_mark_read), Icons.Outlined.Description)
+    tool == "Edit" || tool == "Write" || tool == "MultiEdit" || tool == "NotebookEdit" -> ToolMark(localized(Str.chatline_tool_mark_edit), Icons.Outlined.Edit)
+    tool == "Grep" || tool == "Glob" || tool == "ToolSearch" -> ToolMark(localized(Str.chatline_tool_mark_search), Icons.Outlined.Search)
+    tool == "WebFetch" || tool == "WebSearch" -> ToolMark(localized(Str.chatline_tool_mark_web), Icons.Outlined.Public)
+    tool == "Agent" || tool == "Task" || tool == "SendMessage" -> ToolMark(localized(Str.chatline_tool_mark_agent), Icons.Outlined.SmartToy)
+    tool == "Skill" -> ToolMark(localized(Str.chatline_tool_mark_skill), Icons.Outlined.AutoAwesome)
+    tool.startsWith("Cron") || tool == "ScheduleWakeup" -> ToolMark(localized(Str.chatline_tool_mark_schedule), Icons.Outlined.Schedule)
     else -> ToolMark(tool)
 }
 
@@ -134,39 +59,37 @@ internal fun stripCd(command: String): String {
 private fun host(url: String) = url.substringAfter("://").substringBefore('/')
 
 /** Settled and running phrasing for a tool whose agent gave no description. */
-private fun phrases(tool: String, arg: String, w: ToolWords): Pair<String, String> {
+private fun phrases(tool: String, arg: String): Pair<String, String> {
     val a = arg.lineSequence().firstOrNull()?.trim().orEmpty()
     return when {
         tool.startsWith("mcp__") -> humanize(tool.substringAfterLast("__")).let { it to it }
         a.isEmpty() -> tool to tool
         else -> when (tool) {
             "Bash" -> stripCd(a).let { it to it }
-            "Read" -> fill(w.read, baseName(a)) to fill(w.reading, baseName(a))
-            "Edit", "MultiEdit" -> fill(w.edited, baseName(a)) to fill(w.editing, baseName(a))
-            "Write" -> fill(w.wrote, baseName(a)) to fill(w.writing, baseName(a))
-            "Grep" -> fill(w.searchedFor, a) to fill(w.searchingFor, a)
-            "Glob" -> fill(w.listed, a) to fill(w.listing, a)
-            "WebFetch" -> fill(w.fetched, host(a)) to fill(w.fetching, host(a))
-            "WebSearch" -> fill(w.searchedWeb, a) to fill(w.searchingWeb, a)
+            "Read" -> localized(Str.chatline_tool_read, baseName(a)) to localized(Str.chatline_tool_reading, baseName(a))
+            "Edit", "MultiEdit" -> localized(Str.chatline_tool_edited_file, baseName(a)) to localized(Str.chatline_tool_editing_file, baseName(a))
+            "Write" -> localized(Str.chatline_tool_wrote, baseName(a)) to localized(Str.chatline_tool_writing, baseName(a))
+            "Grep" -> localized(Str.chatline_tool_searched_for, a) to localized(Str.chatline_tool_searching_for, a)
+            "Glob" -> localized(Str.chatline_tool_listed, a) to localized(Str.chatline_tool_listing, a)
+            "WebFetch" -> localized(Str.chatline_tool_fetched, host(a)) to localized(Str.chatline_tool_fetching, host(a))
+            "WebSearch" -> localized(Str.chatline_tool_searched_web, a) to localized(Str.chatline_tool_searching_web, a)
             "ToolSearch" -> if (a.startsWith("select:")) {
-                fill(w.loaded, a.removePrefix("select:").split(",").joinToString(", ") { it.substringAfterLast("__") }) to w.loadingTools
-            } else fill(w.searchedTools, a) to w.searchingTools
-            "Skill" -> fill(w.usedSkill, a) to fill(w.loadingSkill, a)
+                localized(Str.chatline_tool_loaded, a.removePrefix("select:").split(",").joinToString(", ") { it.substringAfterLast("__") }) to localized(Str.chatline_tool_loading_tools)
+            } else localized(Str.chatline_tool_searched_tools, a) to localized(Str.chatline_tool_searching_tools)
+            "Skill" -> localized(Str.chatline_tool_used_skill, a) to localized(Str.chatline_tool_loading_skill, a)
             else -> "$tool $a" to "$tool $a"
         }
     }
 }
 
 /**
- * Converts one broker tool row. [durationMs] is optional: the timeline does not carry it today. [words] is the
- * wording: English unless the UI passes [rememberToolWords].
+ * Converts one broker tool row, in the app's language. [durationMs] is optional: the timeline does not carry it today.
  */
 internal fun ActivityEvent.toToolCallData(
     status: ToolStatus,
     output: String? = null,
     resultBody: ActivityToolBody? = null,
     durationMs: Long? = null,
-    words: ToolWords = ToolWords.English,
 ): ToolCallData {
     val tool = this.tool ?: "tool"
     val bodyIn = body ?: resultBody
@@ -175,7 +98,7 @@ internal fun ActivityEvent.toToolCallData(
     val arg = bodyIn?.command?.takeIf { it.isNotBlank() }
         ?: detail?.takeIf { it.isNotBlank() }
         ?: title?.removePrefix("$tool: ")?.takeIf { it != tool }.orEmpty()
-    val (settled, running) = description?.takeIf { it.isNotBlank() }?.let { it to it } ?: phrases(tool, arg, words)
+    val (settled, running) = description?.takeIf { it.isNotBlank() }?.let { it to it } ?: phrases(tool, arg)
     val input = buildList {
         when {
             bodyIn?.command != null -> add("command" to bodyIn.command!!)
@@ -191,7 +114,7 @@ internal fun ActivityEvent.toToolCallData(
     val failed = status == ToolStatus.ERROR
     return ToolCallData(
         id = callId ?: "${ts}#${seq ?: 0}",
-        tool = toolMark(tool, words),
+        tool = toolMark(tool),
         title = settled,
         status = when (status) {
             ToolStatus.RUNNING -> ToolCallStatus.Running
@@ -203,8 +126,8 @@ internal fun ActivityEvent.toToolCallData(
         output = out,
         summary = when {
             failed -> null
-            resultBody?.exitCode?.let { it != 0 } == true -> fill(words.exit, resultBody.exitCode ?: 0)
-            lines > 1 -> fill(words.lines, lines)
+            resultBody?.exitCode?.let { it != 0 } == true -> localized(Str.chatline_tool_exit, resultBody.exitCode ?: 0)
+            lines > 1 -> localized(Str.chatline_tool_lines, lines)
             else -> null
         },
         message = if (failed) outText?.lineSequence()?.firstOrNull { it.isNotBlank() }?.take(200) else null,
@@ -268,7 +191,7 @@ internal fun shownTail(size: Int, runs: Map<Int, ToolRun>): Pair<Int, Int> {
 /** One run of tool rows as a group; [active] while the agent is still in it (the run ends the timeline). */
 @Composable
 internal fun ToolRunGroup(tools: List<TimelineItem.Tool>, active: Boolean) {
-    val words = rememberToolWords()
-    val calls = remember(tools, words) { tools.map { it.event.toToolCallData(it.status, it.output, it.resultBody, words = words) } }
+    // The language is a key: a change re-words the rows.
+    val calls = remember(tools, localized(Str.chatline_tool_read)) { tools.map { it.event.toToolCallData(it.status, it.output, it.resultBody) } }
     ToolCallGroup(calls, active = active, modifier = Modifier.padding(vertical = Space.xs))
 }

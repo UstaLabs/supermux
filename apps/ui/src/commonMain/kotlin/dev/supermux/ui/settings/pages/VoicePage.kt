@@ -96,60 +96,43 @@ internal fun sttEngineLabel(id: String): String = STT_ENGINES.firstOrNull { it.i
 
 // Dictation languages (ISO-639-1) — the broker's `voiceLanguages`. Several at once is the point:
 // codex-realtime turns them into a "mixes Turkish and English" prompt rather than a pin.
-/** A dictation language: its code, its English name (the plain helpers below) and its name in the app's language. */
-private data class VoiceLanguage(val code: String, val english: String, val name: StringKey)
+/** A dictation language: its code and its name in the app's language. */
+private data class VoiceLanguage(val code: String, val name: StringKey)
 
 private val VOICE_LANGUAGES = listOf(
-    VoiceLanguage("tr", "Turkish", Str.settings_voice_lang_tr),
-    VoiceLanguage("en", "English", Str.settings_voice_lang_en),
-    VoiceLanguage("de", "German", Str.settings_voice_lang_de),
-    VoiceLanguage("fr", "French", Str.settings_voice_lang_fr),
-    VoiceLanguage("es", "Spanish", Str.settings_voice_lang_es),
-    VoiceLanguage("it", "Italian", Str.settings_voice_lang_it),
-    VoiceLanguage("pt", "Portuguese", Str.settings_voice_lang_pt),
-    VoiceLanguage("nl", "Dutch", Str.settings_voice_lang_nl),
-    VoiceLanguage("ru", "Russian", Str.settings_voice_lang_ru),
-    VoiceLanguage("uk", "Ukrainian", Str.settings_voice_lang_uk),
-    VoiceLanguage("ar", "Arabic", Str.settings_voice_lang_ar),
-    VoiceLanguage("fa", "Persian", Str.settings_voice_lang_fa),
-    VoiceLanguage("bs", "Bosnian", Str.settings_voice_lang_bs),
-    VoiceLanguage("sq", "Albanian", Str.settings_voice_lang_sq),
-    VoiceLanguage("zh", "Chinese", Str.settings_voice_lang_zh),
-    VoiceLanguage("ja", "Japanese", Str.settings_voice_lang_ja),
+    VoiceLanguage("tr", Str.settings_voice_lang_tr),
+    VoiceLanguage("en", Str.settings_voice_lang_en),
+    VoiceLanguage("de", Str.settings_voice_lang_de),
+    VoiceLanguage("fr", Str.settings_voice_lang_fr),
+    VoiceLanguage("es", Str.settings_voice_lang_es),
+    VoiceLanguage("it", Str.settings_voice_lang_it),
+    VoiceLanguage("pt", Str.settings_voice_lang_pt),
+    VoiceLanguage("nl", Str.settings_voice_lang_nl),
+    VoiceLanguage("ru", Str.settings_voice_lang_ru),
+    VoiceLanguage("uk", Str.settings_voice_lang_uk),
+    VoiceLanguage("ar", Str.settings_voice_lang_ar),
+    VoiceLanguage("fa", Str.settings_voice_lang_fa),
+    VoiceLanguage("bs", Str.settings_voice_lang_bs),
+    VoiceLanguage("sq", Str.settings_voice_lang_sq),
+    VoiceLanguage("zh", Str.settings_voice_lang_zh),
+    VoiceLanguage("ja", Str.settings_voice_lang_ja),
 )
 
-internal fun voiceLanguageLabel(code: String): String =
-    VOICE_LANGUAGES.firstOrNull { it.code == code }?.english ?: code
-
-/** "English, Turkish" in the order they were picked; "Detect automatically" for none. English: the UI reads [localizedLanguagesSummary]. */
+/** "English, Turkish" in the order they were picked, in the app's language; "Detect automatically" for none. */
 internal fun voiceLanguagesSummary(codes: List<String>): String =
-    if (codes.isEmpty()) "Detect automatically" else codes.joinToString(", ") { voiceLanguageLabel(it) } // i18n-ok: the English twin of localizedLanguagesSummary
-
-/** A language's name in the app's language; a code outside the list shows as itself. */
-@Composable
-private fun localizedLanguageName(code: String): String =
-    VOICE_LANGUAGES.firstOrNull { it.code == code }?.let { localized(it.name) } ?: code
-
-/** [voiceLanguagesSummary] in the app's language. */
-@Composable
-private fun localizedLanguagesSummary(codes: List<String>): String {
-    if (codes.isEmpty()) return localized(Str.settings_voice_detect_automatically)
-    return codes.map { localizedLanguageName(it) }.joinToString(", ")
-}
+    if (codes.isEmpty()) localized(Str.settings_voice_detect_automatically)
+    else codes.joinToString(", ") { c -> VOICE_LANGUAGES.firstOrNull { it.code == c }?.let { localized(it.name) } ?: c }
 
 // Read-aloud engines — MessageTts uses platform (say/espeak/Android TTS) or codex (the machine's /speak).
-private val TTS_ENGINES = listOf(
-    Choice("platform", "Device's own voice"), // i18n-ok: the English twin; the UI reads localizedTtsEngineLabel
-    Choice("codex", "ChatGPT"),
-)
+private val TTS_ENGINES = listOf("platform", "codex")
 private const val DEFAULT_TTS_ENGINE = "platform"
 
-internal fun ttsEngineLabel(id: String): String = TTS_ENGINES.firstOrNull { it.id == id }?.label ?: id
-
-/** [ttsEngineLabel] in the app's language: the device's voice is described, ChatGPT is a name. */
-@Composable
-private fun localizedTtsEngineLabel(id: String): String =
-    if (id == "platform") localized(Str.settings_voice_tts_device) else ttsEngineLabel(id)
+/** The device's voice is described, in the app's language; ChatGPT is a name. */
+internal fun ttsEngineLabel(id: String): String = when (id) {
+    "platform" -> localized(Str.settings_voice_tts_device)
+    "codex" -> "ChatGPT"
+    else -> id
+}
 
 // Tidy-up engines — a curated mirror of ENGINES in src/core/agent-api/index.ts. `family` is the
 // AgentKind whose models GET /models?agent= returns for that engine.
@@ -167,8 +150,8 @@ internal fun voiceEngineFamily(id: String): String =
 internal fun voiceEngineLabel(id: String): String =
     VOICE_ENGINES.firstOrNull { it.id == id }?.label ?: id
 
-/** "3 words", "1 word" — English; the UI reads the settings_voice_words plural. */
-internal fun wordCount(n: Int): String = if (n == 1) "1 word" else "$n words" // i18n-ok: the English twin of settings_voice_words
+/** "3 words", "1 word", in the app's language. */
+internal fun wordCount(n: Int): String = localizedPlural(Plurals.settings_voice_words, n, n)
 
 internal const val ERROR_AUTO_RETRY_MS = 3_000L
 private const val PREVIEW_TTS_SAMPLE = "Hello from Supermux."
@@ -333,7 +316,7 @@ fun VoicePage(
     val modelFailed = localized(Str.settings_voice_tidy_up_model_failed)
     val languagesFailed = localized(Str.settings_voice_languages_failed)
     val defaultLabel = localized(Str.settings_pages_default)
-    val ttsLabels = TTS_ENGINES.associate { it.id to localizedTtsEngineLabel(it.id) }
+    val ttsLabels = TTS_ENGINES.associateWith { ttsEngineLabel(it) }
     val onThisDevice = localized(
         if (phone) Str.settings_voice_dictation_on_this_phone else Str.settings_voice_dictation_on_this_device,
     )
@@ -396,7 +379,7 @@ fun VoicePage(
 
                 KitValueRow(
                     label = localized(Str.settings_voice_languages),
-                    value = localizedLanguagesSummary(languages),
+                    value = voiceLanguagesSummary(languages),
                     modifier = Modifier.kitAnchor("languages").testTag("voice_languages_chip"),
                     description = localized(Str.settings_voice_languages_description),
                     onClick = { languagesOpen = true },
@@ -406,7 +389,7 @@ fun VoicePage(
                 KitValueRow(
                     label = localized(Str.settings_voice_glossary),
                     value = when {
-                        words != null -> localizedPlural(Plurals.settings_voice_words, words!!, words!!)
+                        words != null -> wordCount(words!!)
                         wordsFailed -> localized(Str.settings_voice_glossary_failed)
                         else -> ""
                     },
@@ -422,7 +405,7 @@ fun VoicePage(
                     val previewTts = LocalPlatform.current.tts
                     MenuValue(
                         value = ttsLabels[ttsEngine] ?: ttsEngine,
-                        options = TTS_ENGINES.map { it.id to ttsLabels.getValue(it.id) },
+                        options = TTS_ENGINES.map { it to ttsLabels.getValue(it) },
                         onPick = { picked ->
                             if (picked == ttsEngine) return@MenuValue
                             val previous = ttsEngine

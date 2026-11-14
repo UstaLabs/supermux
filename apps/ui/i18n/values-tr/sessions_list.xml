@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #123: the sidebar's session list — workspace and session rows, the Agents block, project headers, the status
+     rail, unread pills, search, the list's dialogs and footer. Turkish; the same keys as values/sessions_list.xml
+     (tests/i18n-strings.test.ts). -->
+<resources>
+    <string name="sessions_list_no_workspaces">Henüz çalışma alanı yok</string>
+    <string name="sessions_list_drafts">Taslaklar</string>
+    <string name="sessions_list_in_progress">Sürüyor</string>
+    <string name="sessions_list_active">Etkin</string>
+    <string name="sessions_list_everything_else">Diğerleri</string>
+    <string name="sessions_list_workspaces">Çalışma alanları</string>
+    <string name="sessions_list_sessions">Oturumlar</string>
+    <string name="sessions_list_in_chat_history">Sohbet geçmişinde</string>
+    <string name="sessions_list_no_matches">Eşleşme yok</string>
+    <string name="sessions_list_history_failed">Sohbet geçmişi aranamadı</string>
+    <string name="sessions_list_history_searching">Sohbet geçmişi aranıyor…</string>
+    <string name="sessions_list_history_none">Başka sohbette geçmiyor</string>
+    <string name="sessions_list_logo">Supermux logosu</string>
+    <plurals name="sessions_list_archive_workspaces_title">
+        <item quantity="one">%1$d çalışma alanı arşivlensin mi?</item>
+        <item quantity="other">%1$d çalışma alanı arşivlensin mi?</item>
+    </plurals>
+    <string name="sessions_list_archive_selected_text">Seçili çalışma alanları arşivlenir ve oturumları durdurulur. Worktree'ler korunur. Bu işlem geri alınamaz.</string>
+    <string name="sessions_list_archive_agents_skipped">Ajanlar atlanır.</string>
+    <string name="sessions_list_rename_workspace">Çalışma alanını yeniden adlandır</string>
+    <string name="sessions_list_archive_workspace_title">Çalışma alanı arşivlensin mi?</string>
+    <string name="sessions_list_archive_workspace_text">"%1$s" arşivlenir ve oturumları durdurulur. Bu işlem geri alınamaz.</string>
+    <string name="sessions_list_archive_and_delete">Arşivle ve sil</string>
+    <string name="sessions_list_discard_draft_title">Taslak silinsin mi?</string>
+    <string name="sessions_list_settle_title">Oturum tamamlansın mı?</string>
+    <string name="sessions_list_discard_draft_text">"%1$s" kalıcı olarak silinir. Bu işlem geri alınamaz.</string>
+    <string name="sessions_list_settle_and_delete">Tamamla ve sil</string>
+    <string name="sessions_list_group_by_project">Projeye göre grupla</string>
+    <string name="sessions_list_group_by_status">Duruma göre grupla</string>
+    <string name="sessions_list_flat_list">Düz liste</string>
+    <string name="sessions_list_on">Açık</string>
+    <string name="sessions_list_off">Kapalı</string>
+    <string name="sessions_list_show_settled">Tamamlanan %1$d oturumu göster</string>
+    <string name="sessions_list_hide_settled">Tamamlanan %1$d oturumu gizle</string>
+    <string name="sessions_list_awake_hint">Bilgisayar uyanık ve oturum açık mı?</string>
+    <string name="sessions_list_offline">· çevrimdışı</string>
+    <string name="sessions_list_offline_seen">· çevrimdışı · son görülme: %1$s</string>
+    <string name="sessions_list_cant_reach">Ulaşılamıyor: %1$s</string>
+    <string name="sessions_list_cant_reach_seen">Ulaşılamıyor: %1$s · son görülme: %2$s</string>
+    <string name="sessions_list_search">Ara</string>
+    <string name="sessions_list_select_workspaces">Çalışma alanlarını seçin</string>
+    <string name="sessions_list_cancel_selection">Seçimi iptal et</string>
+    <string name="sessions_list_selected">%1$d seçili</string>
+    <string name="sessions_list_select_all">Tümü</string>
+    <string name="sessions_list_select_none">Hiçbiri</string>
+    <string name="sessions_list_actions">İşlemler</string>
+    <string name="sessions_list_new_project">Yeni proje</string>
+    <string name="sessions_list_organize_projects">Projeleri düzenle</string>
+    <string name="sessions_list_switch_light">Açık temaya geç</string>
+    <string name="sessions_list_switch_dark">Koyu temaya geç</string>
+    <string name="sessions_list_search_placeholder">Çalışma alanlarında ve sohbetlerde ara</string>
+    <string name="sessions_list_search_close">Aramayı kapat</string>
+    <string name="sessions_list_project_options">%1$s seçenekleri</string>
+    <string name="sessions_list_project_settings">Proje ayarları…</string>
+    <string name="sessions_list_project_no_workspaces">Çalışma alanı yok</string>
+    <string name="sessions_list_project_new_workspace">Yeni çalışma alanı</string>
+    <plurals name="sessions_list_unread_count">
+        <item quantity="one">%1$d okunmamış</item>
+        <item quantity="other">%1$d okunmamış</item>
+    </plurals>
+    <plurals name="sessions_list_unread_above">
+        <item quantity="one">Yukarıda %1$d okunmamış, oraya kaydır</item>
+        <item quantity="other">Yukarıda %1$d okunmamış, oraya kaydır</item>
+    </plurals>
+    <plurals name="sessions_list_unread_below">
+        <item quantity="one">Aşağıda %1$d okunmamış, oraya kaydır</item>
+        <item quantity="other">Aşağıda %1$d okunmamış, oraya kaydır</item>
+    </plurals>
+    <string name="sessions_list_unread_dismiss">Kapat</string>
+
+    <string name="sessions_row_another_session">Başka bir oturum</string>
+    <string name="sessions_row_expand">Genişlet</string>
+    <string name="sessions_row_collapse">Daralt</string>
+    <string name="sessions_row_expand_named">%1$s: genişlet</string>
+    <string name="sessions_row_collapse_named">%1$s: daralt</string>
+    <string name="sessions_row_expanded">Genişletildi</string>
+    <string name="sessions_row_collapsed">Daraltıldı</string>
+    <string name="sessions_row_start_new">Yeni oturum başlat</string>
+    <string name="sessions_row_start_new_hint">Bir proje seçin ve ilk mesajınızı gönderin</string>
+    <string name="sessions_row_resume">Sürdür</string>
+    <string name="sessions_row_open_draft">Taslağı aç</string>
+    <string name="sessions_row_discard">Sil</string>
+    <string name="sessions_row_move_up">Yukarı taşı</string>
+    <string name="sessions_row_move_down">Aşağı taşı</string>
+    <string name="sessions_row_settle">Tamamla</string>
+    <string name="sessions_row_status_starting">başlatılıyor</string>
+    <string name="sessions_row_status_suspended">askıda</string>
+    <string name="sessions_row_mark_read">Okundu olarak işaretle</string>
+    <string name="sessions_row_select">Seç</string>
+    <string name="sessions_row_archive">Arşivle</string>
+    <string name="sessions_row_new_chat_here">Burada yeni sohbet</string>
+    <string name="sessions_row_selected">Seçili</string>
+    <string name="sessions_row_not_selected">Seçili değil</string>
+    <string name="sessions_row_archived">Arşivlenenler</string>
+    <string name="sessions_row_hide_archived">Arşivlenenleri gizle</string>
+    <string name="sessions_row_restore">Geri yükle</string>
+
+    <string name="sessions_agents_title">Ajanlar</string>
+    <plurals name="sessions_agents_waiting">
+        <item quantity="one">%1$d bekliyor</item>
+        <item quantity="other">%1$d bekliyor</item>
+    </plurals>
+    <string name="sessions_agents_new">Yeni ajan</string>
+    <string name="sessions_agents_rename">Yeniden adlandır…</string>
+    <string name="sessions_agents_change_character">Karakteri değiştir…</string>
+    <string name="sessions_agents_make_default">Varsayılan yap</string>
+    <string name="sessions_agents_archive">Arşivle…</string>
+    <string name="sessions_agents_restore_failed">Geri yüklenemedi</string>
+    <string name="sessions_agents_archived_just_now">Az önce arşivlendi</string>
+    <string name="sessions_agents_archived_ago">%1$s önce arşivlendi</string>
+    <string name="sessions_agents_restoring">Geri yükleniyor…</string>
+
+    <string name="sessions_rail_working">çalışıyor</string>
+    <string name="sessions_rail_idle">boşta</string>
+    <string name="sessions_rail_unread">okunmamış</string>
+    <plurals name="sessions_rail_agents">
+        <item quantity="one">%1$d ajan</item>
+        <item quantity="other">%1$d ajan</item>
+    </plurals>
+</resources>

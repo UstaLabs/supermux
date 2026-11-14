@@ -36,6 +36,8 @@ import androidx.compose.ui.unit.sp
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.chat.DecodedImage
 import dev.supermux.ui.chat.rememberDecodedImage
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
 import dev.supermux.workspace.ProjectRef
@@ -200,27 +202,27 @@ internal fun ProjectHeaderMenu(
         ) {
             Icon(
                 Icons.Filled.MoreVert,
-                contentDescription = "$label options",
+                contentDescription = localized(Str.sessions_list_project_options, label),
                 tint = cs.onSurfaceVariant.copy(alpha = 0.6f),
                 modifier = Modifier.size(14.dp),
             )
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             DropdownMenuItem(
-                text = { Text("Project settings…") },
+                text = { Text(localized(Str.sessions_list_project_settings)) },
                 onClick = { open = false; onSettings() },
                 modifier = Modifier.testTag(ProjectTestIds.SETTINGS),
             )
             if (onMoveUp != null) {
                 DropdownMenuItem(
-                    text = { Text("Move up") },
+                    text = { Text(localized(Str.sessions_row_move_up)) },
                     onClick = { open = false; onMoveUp() },
                     modifier = Modifier.testTag(ProjectTestIds.MOVE_UP),
                 )
             }
             if (onMoveDown != null) {
                 DropdownMenuItem(
-                    text = { Text("Move down") },
+                    text = { Text(localized(Str.sessions_row_move_down)) },
                     onClick = { open = false; onMoveDown() },
                     modifier = Modifier.testTag(ProjectTestIds.MOVE_DOWN),
                 )
@@ -242,7 +244,7 @@ internal fun EmptyProjectRow(groupKey: String, onNew: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            "No workspaces",
+            localized(Str.sessions_list_project_no_workspaces),
             color = cs.onSurfaceVariant.copy(alpha = 0.6f),
             fontSize = 12.sp,
             modifier = Modifier.weight(1f),
@@ -253,7 +255,7 @@ internal fun EmptyProjectRow(groupKey: String, onNew: () -> Unit) {
         ) {
             Icon(
                 Icons.Filled.Add,
-                contentDescription = "New workspace",
+                contentDescription = localized(Str.sessions_list_project_new_workspace),
                 tint = cs.onSurfaceVariant,
                 modifier = Modifier.size(14.dp),
             )

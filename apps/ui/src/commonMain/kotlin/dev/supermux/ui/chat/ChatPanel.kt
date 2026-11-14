@@ -165,7 +165,6 @@ import kotlin.time.Clock
 import dev.supermux.ui.accounts.LimitWaitStrip
 import dev.supermux.ui.i18n.Plurals
 import dev.supermux.ui.i18n.localizedPlural
-import androidx.compose.runtime.ReadOnlyComposable
 import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
 
@@ -1684,13 +1683,9 @@ private fun WaitingIndicator(bgOpen: Int) {
     )
 }
 
-@Composable
-@ReadOnlyComposable
 private fun agentsWorkingLabel(n: Int): String = localizedPlural(Plurals.composer_status_agents_working, n, n)
 
 /** The shared module's working word (`workingBaseLabel`), in the app's language. */
-@Composable
-@ReadOnlyComposable
 private fun localizedWorkingBase(detail: String?): String = when (detail) {
     "starting" -> localized(Str.composer_status_starting)
     "running" -> localized(Str.composer_status_working)
@@ -1698,8 +1693,6 @@ private fun localizedWorkingBase(detail: String?): String = when (detail) {
 }
 
 /** `formatLowWorkingStatus` in the app's language: base + tool + tool count + duration, joined with " · ". */
-@Composable
-@ReadOnlyComposable
 private fun localizedLowWorkingStatus(
     baseLabel: String,
     detail: String?,
@@ -1715,8 +1708,6 @@ private fun localizedLowWorkingStatus(
 }
 
 /** `formatDuration` in the app's language: the two largest units ("1 minute 4 seconds"). */
-@Composable
-@ReadOnlyComposable
 private fun localizedDuration(totalSeconds: Long): String {
     val s = maxOf(0L, totalSeconds)
     val days = (s / 86400).toInt()

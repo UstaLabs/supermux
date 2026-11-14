@@ -85,7 +85,6 @@ internal fun PhoneFileActions(
     val cs = MaterialTheme.colorScheme
     val notices = LocalPlatform.current.notices
     val haptics = rememberHaptics()
-    val couldNotSave = localizedTemplate(Str.shell_could_not_save)
 
     if (isMarkdownPath(path)) {
         val preview = previewModes[viewId] == true
@@ -109,7 +108,7 @@ internal fun PhoneFileActions(
                 val doc = documents.get(path) ?: return@FilledTonalButton
                 haptics.perform(HapticKind.Confirm)
                 documents.save(doc) { written ->
-                    if (!written) notices.show(couldNotSave(pathLeaf(path)))
+                    if (!written) notices.show(localized(Str.shell_could_not_save, pathLeaf(path)))
                 }
             },
             enabled = !saving,

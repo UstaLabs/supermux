@@ -61,6 +61,9 @@ import dev.supermux.host.HostView
 import dev.supermux.proto.LogEntry
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.host.HostBadge
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.uppercaseInAppLanguage
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.widgets.DropdownMenu
@@ -145,7 +148,7 @@ fun WorkspaceRow(
     val unread = !active && !working && model.unread
     val interaction = interactionSource ?: remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
-    val elevation by animateDpAsState(if (isDragging) 6.dp else 0.dp, label = "workspace-drag-elevation")
+    val elevation by animateDpAsState(if (isDragging) 6.dp else 0.dp, label = "workspace-drag-elevation") // i18n-ok: animation label
     // A suspended session whose agent is working is being woken (card #75): "starting", and not dimmed.
     val waking = sessionStatus == "suspended" && working
     val suspended = !waking && sessionStatus != null && sessionStatus != "active"
@@ -165,36 +168,40 @@ fun WorkspaceRow(
         else -> cs.onSurfaceVariant
     }
     val trailing = when {
-        waking -> "starting"
-        suspended -> sessionStatus.orEmpty()
+        waking -> localized(Str.sessions_row_status_starting)
+        suspended -> if (sessionStatus == "suspended") localized(Str.sessions_row_status_suspended) else sessionStatus.orEmpty()
         projectTag != null -> projectTag
         working -> ""
         else -> archivedRelTime(preview?.ts)
     }
 
+    // The menu's English labels are its action ids (workspaceRowContextLabels); each is shown in the app's language.
+    val words = mapOf(
+        "Rename" to localized(Str.shell_rename),
+        "Mute" to localized(Str.shell_mute),
+        "Unmute" to localized(Str.shell_unmute),
+        "Mark as read" to localized(Str.sessions_row_mark_read),
+        "Select" to localized(Str.sessions_row_select),
+        "Archive" to localized(Str.sessions_row_archive),
+    )
+    val newChatWord = localized(Str.sessions_row_new_chat_here)
+    val labels = workspaceRowContextLabels(
+        mute = mute,
+        canMarkRead = onMarkRead != null && model.unread,
+        selectable = onSelect != null,
+    )
+    fun entry(label: String) = RowContextMenuEntry(words[label] ?: label) {
+        when (label) {
+            "Rename" -> onRename()
+            "Mute", "Unmute" -> onToggleMute()
+            "Mark as read" -> onMarkRead?.invoke()
+            "Select" -> onSelect?.invoke()
+            "Archive" -> onKill()
+        }
+    }
     Box(modifier.then(dragModifier).fillMaxWidth()) {
         RowContextMenu(
-            items = {
-                if (selecting) {
-                    emptyList()
-                } else {
-                    workspaceRowContextLabels(
-                        mute = mute,
-                        canMarkRead = onMarkRead != null && model.unread,
-                        selectable = onSelect != null,
-                    ).map { label ->
-                        RowContextMenuEntry(label) {
-                            when (label) {
-                                "Rename" -> onRename()
-                                "Mute", "Unmute" -> onToggleMute()
-                                "Mark as read" -> onMarkRead?.invoke()
-                                "Select" -> onSelect?.invoke()
-                                "Archive" -> onKill()
-                            }
-                        }
-                    }
-                }
-            },
+            items = { if (selecting) emptyList() else labels.map(::entry) },
         ) {
             Surface(
                 tonalElevation = elevation,
@@ -231,7 +238,7 @@ fun WorkspaceRow(
                         if (selecting) {
                             Icon(
                                 imageVector = if (selected) Icons.Filled.CheckBox else Icons.Filled.CheckBoxOutlineBlank,
-                                contentDescription = if (selected) "Selected" else "Not selected",
+                                contentDescription = localized(if (selected) Str.sessions_row_selected else Str.sessions_row_not_selected),
                                 tint = if (selected) cs.primary else cs.onSurfaceVariant,
                                 modifier = markModifier.size(14.dp).testTag(WorkspaceListTestIds.selectBox(w.id)),
                             )
@@ -268,14 +275,8 @@ fun WorkspaceRow(
                                 if (!LocalContextMenuAvailable.current && !selecting) {
                                     Spacer(Modifier.width(Space.xs))
                                     RowOverflowMenu(
-                                        entries = buildList {
-                                            add(RowContextMenuEntry("Rename", onRename))
-                                            add(RowContextMenuEntry("New chat here", onNewChat))
-                                            add(RowContextMenuEntry(if (mute) "Unmute" else "Mute", onToggleMute))
-                                            if (onMarkRead != null && model.unread) add(RowContextMenuEntry("Mark as read", onMarkRead))
-                                            if (onSelect != null) add(RowContextMenuEntry("Select", onSelect))
-                                            add(RowContextMenuEntry("Archive", onKill))
-                                        },
+                                        // The context menu's entries with "New chat here" second.
+                                        entries = listOf(entry(labels[0]), RowContextMenuEntry(newChatWord, onNewChat)) + labels.drop(1).map(::entry),
                                         newChatTag = WorkspaceListTestIds.ROW_NEW_CHAT,
                                     )
                                 }
@@ -315,13 +316,14 @@ fun WorkspaceRow(
 @Composable
 internal fun WorkspaceStatusMark(working: Boolean, unread: Boolean, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
+    val description = localized(if (working) Str.sessions_rail_working else Str.sessions_rail_unread)
     Box(modifier.size(14.dp), contentAlignment = Alignment.Center) {
         when {
             working -> CircularProgressIndicator(
                 modifier = Modifier
                     .size(11.dp)
                     .testTag("session_rail_working")
-                    .semantics { contentDescription = "working" },
+                    .semantics { contentDescription = description },
                 strokeWidth = 1.75.dp,
                 color = cs.primary,
                 trackColor = cs.primary.copy(alpha = 0.18f),
@@ -331,7 +333,7 @@ internal fun WorkspaceStatusMark(working: Boolean, unread: Boolean, modifier: Mo
                     .size(10.dp)
                     .border(1.25.dp, cs.onSurface.copy(alpha = 0.55f), CircleShape)
                     .testTag("session_rail_unread")
-                    .semantics { contentDescription = "unread" },
+                    .semantics { contentDescription = description },
                 contentAlignment = Alignment.Center,
             ) { Box(Modifier.size(4.dp).clip(CircleShape).background(cs.onSurface)) }
             else -> Box(
@@ -384,7 +386,7 @@ internal fun StatusSectionLabel(title: String, count: Int?, accent: Boolean = fa
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            title.uppercase(),
+            title.uppercaseInAppLanguage(),
             color = color,
             fontSize = 10.5.sp,
             fontWeight = FontWeight.SemiBold,
@@ -422,7 +424,7 @@ fun ArchivedFoldButton(
         Icon(Icons.Outlined.Archive, contentDescription = null, tint = muted, modifier = Modifier.size(14.dp))
         Spacer(Modifier.width(9.dp))
         Text(
-            if (expanded) "Hide archived" else "Archived",
+            localized(if (expanded) Str.sessions_row_hide_archived else Str.sessions_row_archived),
             color = muted,
             fontSize = 12.5.sp,
             modifier = Modifier.weight(1f),
@@ -447,13 +449,8 @@ fun ArchivedWorkspaceRow(
     val cs = MaterialTheme.colorScheme
     val w = model.workspace
     val rowBg = if (active) cs.onSurface.copy(alpha = 0.075f) else Color.Transparent
-    RowContextMenu(
-        items = {
-            archivedWorkspaceRowContextLabels().map { label ->
-                RowContextMenuEntry(label) { if (label == "Restore") onRestore() }
-            }
-        },
-    ) {
+    val restore = listOf(RowContextMenuEntry(localized(Str.sessions_row_restore), onRestore))
+    RowContextMenu(items = { restore }) {
         Row(
             Modifier
                 .fillMaxWidth()
@@ -476,7 +473,7 @@ fun ArchivedWorkspaceRow(
             )
             if (!LocalContextMenuAvailable.current) {
                 Spacer(Modifier.width(Space.xs))
-                RowOverflowMenu(entries = listOf(RowContextMenuEntry("Restore", onRestore)))
+                RowOverflowMenu(entries = restore)
             }
         }
     }
@@ -492,11 +489,12 @@ internal fun RowOverflowMenu(
     newChatTag: String? = null,
 ) {
     val cs = MaterialTheme.colorScheme
+    val newChatWord = localized(Str.sessions_row_new_chat_here)
     Box {
         var menu by remember { mutableStateOf(false) }
         Icon(
             imageVector = Icons.Filled.MoreVert,
-            contentDescription = "More",
+            contentDescription = localized(Str.shell_more),
             tint = cs.onSurfaceVariant,
             modifier = Modifier.size(20.dp).clickable { menu = true },
         )
@@ -504,7 +502,7 @@ internal fun RowOverflowMenu(
             for (entry in entries) {
                 DropdownMenuItem(
                     text = { Text(entry.label) },
-                    modifier = if (newChatTag != null && entry.label == "New chat here") {
+                    modifier = if (newChatTag != null && entry.label == newChatWord) {
                         Modifier.testTag(newChatTag)
                     } else {
                         Modifier

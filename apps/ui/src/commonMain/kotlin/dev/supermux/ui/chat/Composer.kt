@@ -171,7 +171,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.roundToInt
-import androidx.compose.runtime.ReadOnlyComposable
 import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
 
@@ -462,8 +461,6 @@ interface ComposerToolbarScope {
 }
 
 /** The composer's default hint line (a pointer host shows it; touch hosts name the session). */
-@Composable
-@ReadOnlyComposable
 fun defaultComposerPlaceholder(): String = localized(Str.composer_placeholder)
 
 /** Kind guess from a MIME: audio → "voice", else null (broker infers). Mirrors the launcher. */
@@ -539,7 +536,7 @@ internal fun canSendComposer(
  * the raw id when it isn't in the catalog, or "Default" when the session has no explicit model.
  */
 internal fun composerModelLabel(current: String?, models: List<ModelInfo>): String {
-    val id = current?.takeIf { it.isNotBlank() } ?: return "Default" // i18n-ok: test twin
+    val id = current?.takeIf { it.isNotBlank() } ?: return localized(Str.composer_run_default_model)
     return models.firstOrNull { it.id == id }?.displayName ?: id
 }
 
@@ -558,7 +555,7 @@ internal fun composerReasoningLabel(
 ): String {
     val current = sessionCurrent?.takeIf { it.isNotBlank() }
         ?: reasoning.current?.takeIf { it.isNotBlank() }
-        ?: return "effort" // i18n-ok: test twin
+        ?: return localized(Str.composer_pill_effort)
     // Prefer catalog id when present (canonical casing); else the raw current value.
     return reasoning.levels.firstOrNull { it.id == current }?.id ?: current
 }
@@ -1722,7 +1719,7 @@ fun Composer(
                     }
                     if (!pointer && dictation.failedAudio == null) dictation.banner?.let { msg ->
                         Spacer(Modifier.height(Space.xs))
-                        Text(localizedDictationMessage(msg), color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.testTag(tags.banner))
+                        Text(msg, color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.testTag(tags.banner))
                     }
                 }
             }
@@ -1759,7 +1756,7 @@ fun Composer(
             // card, a pointer host the quieter inline line under it (both carry the same text).
             if (!pointer && dictation.failedAudio == null) dictation.banner?.let { msg ->
                 Text(
-                    localizedDictationMessage(msg),
+                    msg,
                     color = cs.onSurfaceVariant,
                     fontSize = 12.sp,
                     modifier = Modifier
@@ -1816,7 +1813,7 @@ fun Composer(
         }
         if (pointer && onMicError == null && dictation.failedAudio == null) dictation.errorMessage?.let { msg ->
             Text(
-                localizedDictationMessage(msg),
+                msg,
                 color = MaterialTheme.colorScheme.error,
                 fontSize = 11.sp,
                 modifier = Modifier.padding(top = 4.dp).testTag(tags.micError),
@@ -1826,7 +1823,7 @@ fun Composer(
     if (dictation.micDenied) MicDeniedDialog(onDismiss = { dictation.micDenied = false })
     // A screen that places the error itself is told about every change, clears included.
     if (onMicError != null) {
-        val micError = dictation.errorMessage?.let { localizedDictationMessage(it) }
+        val micError = dictation.errorMessage
         LaunchedEffect(micError, dictation.failedAudio, pointer) {
             onMicError(micError?.takeIf { pointer && dictation.failedAudio == null })
         }
@@ -1957,8 +1954,6 @@ private fun PastePendingChip() {
 }
 
 /** A chip's words: the name, plus the upload % or "Retry". A media tile speaks the same line. */
-@Composable
-@ReadOnlyComposable
 private fun chipLabel(att: ComposerAttachment): String = when (val state = att.state) {
     is UploadState.Uploading -> localized(Str.composer_chip_uploading, att.name, (state.pct * 100).roundToInt())
     is UploadState.Failed -> localized(Str.composer_chip_retry, att.name)

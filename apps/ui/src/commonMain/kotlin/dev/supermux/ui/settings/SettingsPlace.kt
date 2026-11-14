@@ -1,7 +1,6 @@
 // Where inside Settings a page is (#97): the section, an optional second-level page, an optional row to land on.
 package dev.supermux.ui.settings
 
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import dev.supermux.ui.accounts.agentDisplayName
 import dev.supermux.ui.accounts.ACCOUNT_AGENTS
@@ -104,7 +103,6 @@ fun SettingsSection.titleRes(): StringKey = when (this) {
 }
 
 /** [settingsTitle] in the app's language (#123): what a page's bar, the rail and the index show. */
-@Composable
 fun localizedSettingsTitle(place: SettingsPlace, machineName: String? = null, labs: Boolean = true): String {
     val sub = place.sub
     return when (place.section) {

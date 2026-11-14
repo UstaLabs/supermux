@@ -284,7 +284,7 @@ private fun AddForgeSheet(
         onDone()
     }
 
-    val hostUrlError = localizedForgeHostUrlError(hostUrl)
+    val hostUrlError = forgeHostUrlError(hostUrl)
     val canConnect = token.trim().isNotEmpty() && hostUrlError == null
     val connectFailed = localized(Str.git_connect_failed)
     val importFailed = listOf("github", "gitlab").associateWith { localized(Str.git_import_failed, forgeName(it), machine) }
@@ -468,15 +468,6 @@ internal fun scopesHint(kind: String, hostUrl: String): String {
  * Returns an error message, or null when valid.
  */
 internal fun forgeHostUrlError(raw: String): String? = when (forgeHostUrlProblem(raw)) {
-    null -> null
-    HostUrlProblem.Spaces -> "URL can't contain spaces" // i18n-ok: English for tests; the sheet shows localizedForgeHostUrlError
-    HostUrlProblem.Scheme -> "URL must start with http:// or https://" // i18n-ok: as above
-    HostUrlProblem.NotHost -> "Enter a host like github.example.com" // i18n-ok: as above
-}
-
-/** [forgeHostUrlError] in the app's language, for the add sheet. */
-@Composable
-private fun localizedForgeHostUrlError(raw: String): String? = when (forgeHostUrlProblem(raw)) {
     null -> null
     HostUrlProblem.Spaces -> localized(Str.git_url_spaces)
     HostUrlProblem.Scheme -> localized(Str.git_url_scheme)

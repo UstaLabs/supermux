@@ -132,106 +132,103 @@ class ThisComputerHosting(
     val retryTurnOn: () -> Unit = {},
 )
 
-/**
- * The prototype's copy, in the app's language (resources `machine_*`). [stopText] keeps the English the tests assert;
- * the page shows [stopLines].
- */
+/** The prototype's copy, in the app's language (resources `machine_*`); English in tests. */
 object MachineCopy {
-    val THIS_COMPUTER: String @Composable get() = localized(Str.machine_this_computer)
-    val PAIRED_SERVER: String @Composable get() = localized(Str.machine_paired_server)
-    val RESTART: String @Composable get() = localized(Str.machine_restart)
-    val RESTARTING: String @Composable get() = localized(Str.machine_restarting)
-    val RESTARTING_STATUS: String @Composable get() = localized(Str.machine_restarting)
-    val RECONNECT: String @Composable get() = localized(Str.machine_reconnect)
-    val CHECK: String @Composable get() = localized(Str.machine_check_updates)
-    val CHECKING: String @Composable get() = localized(Str.machine_checking)
-    val MANAGED: String @Composable get() = localized(Str.machine_managed)
-    val NOT_HOSTING: String @Composable get() = localized(Str.machine_not_hosting)
-    val NOT_RUNNING_HERE: String @Composable get() = localized(Str.machine_not_running_here)
-    val STARTING_STATUS: String @Composable get() = localized(Str.machine_starting_status)
-    val DIDNT_START: String @Composable get() = localized(Str.machine_didnt_start)
-    val AWAY: String @Composable get() = localized(Str.machine_away)
-    val HOST_ON: String @Composable get() = localized(Str.machine_host_on)
-    val HOST_ON_HELP: String @Composable get() = localized(Str.machine_host_on_help)
-    val STARTING_LINE: String @Composable get() = localized(Str.machine_starting_line)
-    val BACKGROUND: String @Composable get() = localized(Str.machine_background)
-    val BACKGROUND_HELP: String @Composable get() = localized(Str.machine_background_help)
-    val AWAKE: String @Composable get() = localized(Str.machine_awake)
-    val AWAKE_HELP: String @Composable get() = localized(Str.machine_awake_help)
-    val BATTERY: String @Composable get() = localized(Str.machine_battery)
-    val LID: String @Composable get() = localized(Str.machine_lid)
-    val LID_HELP: String @Composable get() = localized(Str.machine_lid_help)
-    val RELAY: String @Composable get() = localized(Str.machine_relay)
-    val RELAY_HELP: String @Composable get() = localized(Str.machine_relay_help)
-    val ON_NETWORK: String @Composable get() = localized(Str.machine_on_network)
-    val FROM_ANYWHERE: String @Composable get() = localized(Str.machine_from_anywhere)
-    val OFF: String @Composable get() = localized(Str.machine_off)
-    val RECENT_LOG: String @Composable get() = localized(Str.machine_recent_log)
-    val SHOW_LOG: String @Composable get() = localized(Str.machine_show_log)
-    val STOP: String @Composable get() = localized(Str.machine_stop_hosting)
+    val THIS_COMPUTER: String get() = localized(Str.machine_this_computer)
+    val PAIRED_SERVER: String get() = localized(Str.machine_paired_server)
+    val RESTART: String get() = localized(Str.machine_restart)
+    val RESTARTING: String get() = localized(Str.machine_restarting)
+    val RESTARTING_STATUS: String get() = localized(Str.machine_restarting)
+    val RECONNECT: String get() = localized(Str.machine_reconnect)
+    val CHECK: String get() = localized(Str.machine_check_updates)
+    val CHECKING: String get() = localized(Str.machine_checking)
+    val MANAGED: String get() = localized(Str.machine_managed)
+    val NOT_HOSTING: String get() = localized(Str.machine_not_hosting)
+    val NOT_RUNNING_HERE: String get() = localized(Str.machine_not_running_here)
+    val STARTING_STATUS: String get() = localized(Str.machine_starting_status)
+    val DIDNT_START: String get() = localized(Str.machine_didnt_start)
+    val AWAY: String get() = localized(Str.machine_away)
+    val HOST_ON: String get() = localized(Str.machine_host_on)
+    val HOST_ON_HELP: String get() = localized(Str.machine_host_on_help)
+    val STARTING_LINE: String get() = localized(Str.machine_starting_line)
+    val BACKGROUND: String get() = localized(Str.machine_background)
+    val BACKGROUND_HELP: String get() = localized(Str.machine_background_help)
+    val AWAKE: String get() = localized(Str.machine_awake)
+    val AWAKE_HELP: String get() = localized(Str.machine_awake_help)
+    val BATTERY: String get() = localized(Str.machine_battery)
+    val LID: String get() = localized(Str.machine_lid)
+    val LID_HELP: String get() = localized(Str.machine_lid_help)
+    val RELAY: String get() = localized(Str.machine_relay)
+    val RELAY_HELP: String get() = localized(Str.machine_relay_help)
+    val ON_NETWORK: String get() = localized(Str.machine_on_network)
+    val FROM_ANYWHERE: String get() = localized(Str.machine_from_anywhere)
+    val OFF: String get() = localized(Str.machine_off)
+    val RECENT_LOG: String get() = localized(Str.machine_recent_log)
+    val SHOW_LOG: String get() = localized(Str.machine_show_log)
+    val STOP: String get() = localized(Str.machine_stop_hosting)
     /** "Run by your system’s service." and what that means for the switches, as one sentence pair. */
-    val SERVICE: String @Composable get() = localized(Str.machine_service)
-    val MANAGE: String @Composable get() = localized(Str.machine_manage)
-    val MANAGE_TITLE: String @Composable get() = localized(Str.machine_manage_title)
-    val MANAGE_TEXT: String @Composable get() = localized(Str.machine_manage_text)
-    val MANAGE_GO: String @Composable get() = localized(Str.machine_manage_go)
-    val GIT_MISSING: String @Composable get() = localized(Str.machine_git_missing)
-    val INSTALL_GIT: String @Composable get() = localized(Str.machine_install_git)
-    val INSTALLING: String @Composable get() = localized(Str.machine_installing)
-    val INSTALL_FAILED: String @Composable get() = localized(Str.machine_install_failed)
-    val TRY_AGAIN: String @Composable get() = localized(Str.machine_try_again)
-    val TURN_ON_TEXT: String @Composable get() = localized(Str.machine_turn_on_text)
-    val TURN_ON_BACKGROUND_HELP: String @Composable get() = localized(Str.machine_turn_on_background_help)
-    val TURN_ON_AWAKE_HELP: String @Composable get() = localized(Str.machine_turn_on_awake_help)
-    val TURN_ON_RELAY_HELP: String @Composable get() = localized(Str.machine_turn_on_relay_help)
-    val START_HOSTING: String @Composable get() = localized(Str.machine_start_hosting)
-    val CANCEL: String @Composable get() = localized(Str.machine_cancel)
-    val LOG_TITLE: String @Composable get() = localized(Str.machine_log_title)
-    val LOG_TEXT: String @Composable get() = localized(Str.machine_log_text)
-    val COPY_ALL: String @Composable get() = localized(Str.machine_copy_all)
-    val COPIED: String @Composable get() = localized(Str.machine_copied)
-    val COPY: String @Composable get() = localized(Str.machine_copy)
-    val DONE: String @Composable get() = localized(Str.machine_done)
-    val OK: String @Composable get() = localized(Str.machine_ok)
-    val WHATS_NEW: String @Composable get() = localized(Str.machine_whats_new)
+    val SERVICE: String get() = localized(Str.machine_service)
+    val MANAGE: String get() = localized(Str.machine_manage)
+    val MANAGE_TITLE: String get() = localized(Str.machine_manage_title)
+    val MANAGE_TEXT: String get() = localized(Str.machine_manage_text)
+    val MANAGE_GO: String get() = localized(Str.machine_manage_go)
+    val GIT_MISSING: String get() = localized(Str.machine_git_missing)
+    val INSTALL_GIT: String get() = localized(Str.machine_install_git)
+    val INSTALLING: String get() = localized(Str.machine_installing)
+    val INSTALL_FAILED: String get() = localized(Str.machine_install_failed)
+    val TRY_AGAIN: String get() = localized(Str.machine_try_again)
+    val TURN_ON_TEXT: String get() = localized(Str.machine_turn_on_text)
+    val TURN_ON_BACKGROUND_HELP: String get() = localized(Str.machine_turn_on_background_help)
+    val TURN_ON_AWAKE_HELP: String get() = localized(Str.machine_turn_on_awake_help)
+    val TURN_ON_RELAY_HELP: String get() = localized(Str.machine_turn_on_relay_help)
+    val START_HOSTING: String get() = localized(Str.machine_start_hosting)
+    val CANCEL: String get() = localized(Str.machine_cancel)
+    val LOG_TITLE: String get() = localized(Str.machine_log_title)
+    val LOG_TEXT: String get() = localized(Str.machine_log_text)
+    val COPY_ALL: String get() = localized(Str.machine_copy_all)
+    val COPIED: String get() = localized(Str.machine_copied)
+    val COPY: String get() = localized(Str.machine_copy)
+    val DONE: String get() = localized(Str.machine_done)
+    val OK: String get() = localized(Str.machine_ok)
+    val WHATS_NEW: String get() = localized(Str.machine_whats_new)
 
-    @Composable fun scope(local: Boolean) = if (local) THIS_COMPUTER else PAIRED_SERVER
-    @Composable fun managedOn(name: String) = localized(Str.machine_managed_on, name)
-    @Composable fun cantRestart(name: String) = localized(Str.machine_cant_restart, name)
-    @Composable fun restartFailed(name: String) = localized(Str.machine_restart_failed, name)
-    @Composable fun elsewhere(name: String) = localized(Str.machine_elsewhere, name)
-    @Composable fun updateTitle(name: String) = localized(Str.machine_update_title, name)
-    @Composable fun upToDate(version: String) =
+    fun scope(local: Boolean) = if (local) THIS_COMPUTER else PAIRED_SERVER
+    fun managedOn(name: String) = localized(Str.machine_managed_on, name)
+    fun cantRestart(name: String) = localized(Str.machine_cant_restart, name)
+    fun restartFailed(name: String) = localized(Str.machine_restart_failed, name)
+    fun elsewhere(name: String) = localized(Str.machine_elsewhere, name)
+    fun updateTitle(name: String) = localized(Str.machine_update_title, name)
+    fun upToDate(version: String) =
         if (version.isBlank()) localized(Str.machine_up_to_date) else localized(Str.machine_up_to_date_version, version)
-    @Composable fun ready(latest: String?, current: String) = listOfNotNull(
+    fun ready(latest: String?, current: String) = listOfNotNull(
         latest?.let { localized(Str.machine_update_ready_version, it) } ?: localized(Str.machine_update_ready),
         current.takeIf { it.isNotBlank() }?.let { localized(Str.machine_update_you_have, it) },
     ).joinToString(" · ")
-    @Composable fun installed(latest: String?) =
+    fun installed(latest: String?) =
         latest?.let { localized(Str.machine_update_installed_version, it) } ?: localized(Str.machine_update_installed)
-    @Composable fun updateFailed(latest: String?, name: String, why: String?): String {
+    fun updateFailed(latest: String?, name: String, why: String?): String {
         val reason = why?.trimEnd('.') ?: localized(Str.machine_update_no_reason, name)
         return if (latest != null) localized(Str.machine_update_failed_to, latest, reason)
         else localized(Str.machine_update_failed, reason)
     }
-    @Composable fun didntStart(reason: String?) =
+    fun didntStart(reason: String?) =
         if (reason.isNullOrBlank()) localized(Str.machine_didnt_start_here) else localized(Str.machine_didnt_start_reason, reason)
-    @Composable fun chats(n: Int) = localizedPlural(Plurals.machine_chats, n, n)
-    @Composable fun running(version: String?, chats: MachineChats) = listOfNotNull(
+    fun chats(n: Int) = localizedPlural(Plurals.machine_chats, n, n)
+    fun running(version: String?, chats: MachineChats) = listOfNotNull(
         version?.takeIf { it.isNotBlank() }?.let { "supermux $it" }, // i18n-ok: the brand and its version
         localized(Str.machine_running_counts, chats(chats.total), chats.working.size),
     ).joinToString(" · ")
-    @Composable fun offline(lastSeen: String) = if (lastSeen.isBlank()) "" else localized(Str.machine_last_seen, lastSeen)
+    fun offline(lastSeen: String) = if (lastSeen.isBlank()) "" else localized(Str.machine_last_seen, lastSeen)
 
     /** "“a”, “b” and “c”", in the app's language. */
-    @Composable fun namesText(names: List<String>): String {
+    fun namesText(names: List<String>): String {
         val q = names.map { "“$it”" }
         return if (q.size > 1) localized(Str.machine_names_and, q.dropLast(1).joinToString(", "), q.last())
         else q.firstOrNull().orEmpty()
     }
 
     /** The Stop hosting sheet's two lines, in the app's language. */
-    @Composable fun stopLines(chats: MachineChats): Pair<String, String> {
+    fun stopLines(chats: MachineChats): Pair<String, String> {
         val w = chats.working
         val first = when (w.size) {
             0 -> localized(Str.machine_stop_none)
@@ -247,37 +244,12 @@ object MachineCopy {
         val kept = localized(Str.machine_stop_kept)
         return first to if (wait.isEmpty()) kept else "$wait $kept"
     }
-
-    /** "“a”, “b” and “c”" in English, for [stopText]. */
-    fun names(names: List<String>): String {
-        val q = names.map { "“$it”" }
-        return if (q.size > 1) q.dropLast(1).joinToString(", ") + " and " + q.last() else q.firstOrNull().orEmpty() // i18n-ok: English twin for the tests
-    }
-
-    /** The Stop hosting sheet's two lines in English: the tests' copy of [stopLines]. */
-    fun stopText(chats: MachineChats): Pair<String, String> {
-        val w = chats.working
-        val first = when (w.size) {
-            0 -> "This stops supermux on this computer. No chat is working right now." // i18n-ok: English twin for the tests
-            1 -> "This stops supermux and the chat working right now: ${names(w)}. It stops mid-reply." // i18n-ok: English twin for the tests
-            else -> "This stops supermux and the ${w.size} chats working right now: ${names(w)}. They stop mid-reply." // i18n-ok: English twin for the tests
-        }
-        val others = (chats.total - w.size).coerceAtLeast(0)
-        val n = if (others == 1) "1 chat" else "$others chats" // i18n-ok: English twin for the tests
-        val wait = when {
-            others == 0 -> ""
-            w.isEmpty() -> "Your $n wait until you host again. " // i18n-ok: English twin for the tests
-            else -> "The other $n wait until you host again. " // i18n-ok: English twin for the tests
-        }
-        return first to "${wait}Nothing is deleted, and supermux no longer starts with this computer." // i18n-ok: English twin for the tests
-    }
 }
 
 /**
  * The one line a machine's parts show instead of their rows while supermux isn't there to ask: this computer not
  * hosting (or still starting, or failed), another machine offline; null while it is running.
  */
-@Composable
 internal fun machineQuiet(hosting: ThisComputerHosting?, up: Boolean, name: String, lastSeen: String): String? = when {
     hosting != null -> when (hosting.state.phase) {
         HostingPhase.Off -> MachinePartsCopy.NOT_HOSTING

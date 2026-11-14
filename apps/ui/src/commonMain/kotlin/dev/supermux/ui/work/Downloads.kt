@@ -1,6 +1,5 @@
 package dev.supermux.ui.work
 
-import dev.supermux.ui.chat.rememberSavedWords
 import dev.supermux.ui.chat.savedNotice
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -175,7 +174,6 @@ private fun DownloadsPanel(
     val platform = LocalPlatform.current
     val search = LocalChatSearch.current
     val pointer = LocalPointerAvailable.current
-    val savedWords = rememberSavedWords()
     // A popover with a pointer, as the Usage card is; a wide touch-only host (a tablet, an unfolded Fold) gets the sheet.
     val popover = LocalWindowWidthClass.current != WindowWidthClass.Compact && LocalPointerAvailable.current
     val list: @Composable (Modifier) -> Unit = { modifier ->
@@ -186,7 +184,7 @@ private fun DownloadsPanel(
             onRetry = { downloads.retry(it.key) },
             onAction = { item, action ->
                 scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                    handOver(platform, downloads, item, action) { saved -> savedNotice(saved, pointer, savedWords)?.let(platform.notices::show) }
+                    handOver(platform, downloads, item, action) { saved -> savedNotice(saved, pointer)?.let(platform.notices::show) }
                 }
             },
             onInstall = { item -> scope.launch(start = CoroutineStart.UNDISPATCHED) { install(platform, item) } },

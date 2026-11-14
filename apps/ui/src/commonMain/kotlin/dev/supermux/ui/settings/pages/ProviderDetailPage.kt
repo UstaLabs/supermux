@@ -64,7 +64,6 @@ import dev.supermux.ui.settings.normalizeInstallState
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.settings.SettingsPlace
-import dev.supermux.ui.settings.localizedInstallFailureMessage
 import dev.supermux.ui.settings.localizedSettingsTitle
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -464,7 +463,7 @@ private fun InstallSection(p: ProviderState, kind: String) {
                 when {
                     p.installRequestFailed -> localized(Str.providers_install_start_failed)
                     p.installTimedOut -> localized(Str.providers_install_timed_out_machine, machine)
-                    else -> localizedInstallFailureMessage(p.install)
+                    else -> installFailureMessage(p.install)
                 },
                 "agent_install_error_$kind",
             )

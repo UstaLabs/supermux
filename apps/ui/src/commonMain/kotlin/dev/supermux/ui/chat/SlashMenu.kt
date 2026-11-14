@@ -58,7 +58,6 @@ import dev.supermux.ui.session.AgentLogo
 import dev.supermux.ui.session.hasAgentLogo
 import dev.supermux.ui.theme.MonoFontFamily
 import org.jetbrains.compose.resources.painterResource
-import androidx.compose.runtime.ReadOnlyComposable
 import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.i18n.uppercaseInAppLanguage
@@ -547,8 +546,6 @@ internal fun firstClause(desc: String): String {
 }
 
 /** A short source label for the highlighted row of the narrow list. */
-@Composable
-@ReadOnlyComposable
 private fun sourceLabel(cmd: SlashCommand): String? = when (cmd.source) {
     SlashCommand.SOURCE_BUILTIN -> localized(Str.composer_slash_source_builtin)
     SlashCommand.SOURCE_PLUGIN -> cmd.plugin
@@ -558,8 +555,6 @@ private fun sourceLabel(cmd: SlashCommand): String? = when (cmd.source) {
 }
 
 /** The detail's source line. */
-@Composable
-@ReadOnlyComposable
 private fun sourceLong(cmd: SlashCommand, agentLabel: String): String? = when {
     cmd.action != null -> localized(Str.composer_slash_long_runs_now)
     cmd.source == SlashCommand.SOURCE_BUILTIN -> localized(Str.composer_slash_long_builtin, agentLabel)
@@ -570,7 +565,5 @@ private fun sourceLong(cmd: SlashCommand, agentLabel: String): String? = when {
 }
 
 /** "Claude", "Codex", … for the session's agent; "Agent" when there is none. */
-@Composable
-@ReadOnlyComposable
 fun agentLabelOf(agent: String?): String =
     agent?.lowercase()?.let { dev.supermux.ui.accounts.agentDisplayName(it) } ?: localized(Str.composer_slash_agent)

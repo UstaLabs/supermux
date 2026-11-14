@@ -103,43 +103,43 @@ import kotlin.time.Clock
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-/**
- * The English the tests pin for the pure copy helpers ([diskSummary], [deleteText], [ago]). The page itself shows the
- * same sentences from the `worktrees_*` resources in the app's language (the composable twins below), so these stay
- * plain functions a test can call without a composition.
- */
+/** The pure copy helpers, in the app's language (English in tests). */
 object WorktreesCopy {
-    const val NONE = "No chat worktrees" // i18n-ok: the English the tests pin; the page reads worktrees_none
+    fun folders(n: Int) = localizedPlural(Plurals.worktrees_folders, n, n)
 
-    fun folders(n: Int) = if (n == 1) "1 folder" else "$n folders" // i18n-ok: the tests' English (worktrees_folders)
+    private fun clean(clean: Int): String =
+        if (clean == 0) localized(Str.worktrees_clean_none) else localizedPlural(Plurals.worktrees_clean_count, clean, clean)
 
     /** The machine page's Disk row: "18.4 GB in 212 folders · 140 have no changes". */
-    fun diskSummary(bytes: Long, folders: Int, clean: Int) =
-        if (folders == 0) NONE
-        else "${formatBytes(bytes)} in ${folders(folders)} · " + when (clean) { // i18n-ok: the tests' English
-            0 -> "all have changes" // i18n-ok: the tests' English
-            1 -> "1 has no changes" // i18n-ok: the tests' English
-            else -> "$clean have no changes" // i18n-ok: the tests' English
-        }
+    fun diskSummary(bytes: Long, folders: Int, clean: Int): String =
+        if (folders == 0) localized(Str.worktrees_none)
+        else localized(Str.worktrees_disk_summary, formatBytes(bytes), folders(folders), clean(clean))
+
+    /** The page's own totals: the clean count only when there is one. */
+    internal fun pageSummary(bytes: Long, folders: Int, clean: Int): String =
+        if (clean == 0) localized(Str.worktrees_size_in, formatBytes(bytes), folders(folders))
+        else diskSummary(bytes, folders, clean)
 
     /** [gone] of the [n] are folders whose repository is gone (picked one at a time); the rest have no changes. */
-    fun deleteText(n: Int, bytes: Long, gone: Int = 0) =
-        "Deletes ${if (n == 1) "the folder and its branch" else "the folders and their branches"} · ${formatBytes(bytes)}. " + // i18n-ok: the tests' English
-            when {
-                gone == 0 -> "None of them has changes." // i18n-ok: the tests' English
-                gone == n -> (if (n == 1) "It has" else "They have") + " no repository left, so nothing there can be checked." // i18n-ok: the tests' English
-                else -> "${folders(gone)} of them ${if (gone == 1) "has" else "have"} no repository left, so nothing there can be checked." // i18n-ok: the tests' English
-            } + " This can’t be undone." // i18n-ok: the tests' English
+    fun deleteText(n: Int, bytes: Long, gone: Int = 0): String {
+        val head = localizedPlural(Plurals.worktrees_delete_head, n, formatBytes(bytes))
+        val mid = when {
+            gone == 0 -> localized(Str.worktrees_delete_none_changed)
+            gone == n -> localizedPlural(Plurals.worktrees_delete_all_gone, n)
+            else -> localizedPlural(Plurals.worktrees_delete_some_gone, gone, folders(gone))
+        }
+        return "$head $mid ${localized(Str.worktrees_cant_undo)}"
+    }
 
     /** "today", "yesterday", "3 days ago", "3 weeks ago", "2 months ago". */
     fun ago(nowMs: Long, thenMs: Long): String {
         val d = daysAgo(nowMs, thenMs)
         return when {
-            d == 0 -> "today" // i18n-ok: the tests' English
-            d == 1 -> "yesterday" // i18n-ok: the tests' English
-            d < 14 -> "$d days ago" // i18n-ok: the tests' English
-            d < 60 -> "${(d / 7.0).roundToInt()} weeks ago" // i18n-ok: the tests' English
-            else -> "${(d / 30.0).roundToInt()} months ago" // i18n-ok: the tests' English
+            d == 0 -> localized(Str.worktrees_ago_today)
+            d == 1 -> localized(Str.worktrees_ago_yesterday)
+            d < 14 -> localizedPlural(Plurals.worktrees_ago_days, d, d)
+            d < 60 -> (d / 7.0).roundToInt().let { localizedPlural(Plurals.worktrees_ago_weeks, it, it) }
+            else -> (d / 30.0).roundToInt().let { localizedPlural(Plurals.worktrees_ago_months, it, it) }
         }
     }
 
@@ -175,53 +175,8 @@ private sealed class RowError {
 
 // ─── The copy in the app's language ──────────────────────────────────────────────────────────────
 
-@Composable
-private fun foldersText(n: Int): String = localizedPlural(Plurals.worktrees_folders, n, n)
-
-@Composable
-private fun cleanText(clean: Int): String =
-    if (clean == 0) localized(Str.worktrees_clean_none) else localizedPlural(Plurals.worktrees_clean_count, clean, clean)
-
-/** The machine page's Disk row: "18.4 GB in 212 folders · 140 have no changes". */
-@Composable
-private fun diskSummaryText(bytes: Long, folders: Int, clean: Int): String =
-    if (folders == 0) localized(Str.worktrees_none)
-    else localized(Str.worktrees_disk_summary, formatBytes(bytes), foldersText(folders), cleanText(clean))
-
-/** The page's own totals: the clean count only when there is one. */
-@Composable
-private fun pageSummaryText(bytes: Long, folders: Int, clean: Int): String =
-    if (clean == 0) localized(Str.worktrees_size_in, formatBytes(bytes), foldersText(folders))
-    else localized(Str.worktrees_disk_summary, formatBytes(bytes), foldersText(folders), cleanText(clean))
-
-@Composable
 private fun selectCleanText(n: Int): String = localized(Str.worktrees_select_clean, n)
 
-@Composable
-private fun deleteTextLocalized(n: Int, bytes: Long, gone: Int): String {
-    val head = localizedPlural(Plurals.worktrees_delete_head, n, formatBytes(bytes))
-    val mid = when {
-        gone == 0 -> localized(Str.worktrees_delete_none_changed)
-        gone == n -> localizedPlural(Plurals.worktrees_delete_all_gone, n)
-        else -> localizedPlural(Plurals.worktrees_delete_some_gone, gone, foldersText(gone))
-    }
-    return "$head $mid ${localized(Str.worktrees_cant_undo)}"
-}
-
-/** "today", "yesterday", "3 days ago", "3 weeks ago", "2 months ago". */
-@Composable
-private fun agoText(nowMs: Long, thenMs: Long): String {
-    val d = WorktreesCopy.daysAgo(nowMs, thenMs)
-    return when {
-        d == 0 -> localized(Str.worktrees_ago_today)
-        d == 1 -> localized(Str.worktrees_ago_yesterday)
-        d < 14 -> localizedPlural(Plurals.worktrees_ago_days, d, d)
-        d < 60 -> (d / 7.0).roundToInt().let { localizedPlural(Plurals.worktrees_ago_weeks, it, it) }
-        else -> (d / 30.0).roundToInt().let { localizedPlural(Plurals.worktrees_ago_months, it, it) }
-    }
-}
-
-@Composable
 private fun lockText(reason: LockReason): String = when (reason) {
     LockReason.InUse -> localized(Str.worktrees_in_use)
     LockReason.CantLook -> localized(Str.worktrees_cant_look)
@@ -233,7 +188,6 @@ private fun lockText(reason: LockReason): String = when (reason) {
     }
 }
 
-@Composable
 private fun rowErrorText(error: RowError, machine: String): String = when (error) {
     RowError.Unreachable -> localized(Str.worktrees_cant_reach, machine)
     is RowError.InUse -> localized(Str.worktrees_in_use_by, error.by)
@@ -260,7 +214,7 @@ internal enum class WorktreeSort { Size, LastUsed }
  */
 internal fun worktreeGroups(
     rows: List<WorktreeSummaryDto>,
-    unknown: String = "unknown location", // i18n-ok: the tests' default; the page passes worktrees_unknown_location
+    unknown: String = localized(Str.worktrees_unknown_location),
 ): List<Pair<String, List<WorktreeSummaryDto>>> {
     val byRoot = rows.groupBy { it.repoRoot ?: "name:${it.repoName}" }
     val rootsPerName = byRoot.values.groupBy { it.first().repoName }.mapValues { it.value.size }
@@ -321,7 +275,7 @@ internal fun DiskSection(actions: WorktreesSettingsActions, machine: String, qui
             subtitle = when {
                 state is Loaded.Failed -> localized(Str.worktrees_disk_failed, machine)
                 list == null || (list.scanning && folders == 0) -> localized(Str.worktrees_counting)
-                else -> diskSummaryText(bytes, folders, clean)
+                else -> WorktreesCopy.diskSummary(bytes, folders, clean)
             },
             subtitleWarn = state is Loaded.Failed,
             mark = KitMark.Glyph(KitGlyphs.Tree),
@@ -508,7 +462,7 @@ private fun WorktreesList(actions: WorktreesSettingsActions, form: WorktreesForm
     // ── Totals and Refresh ──
     Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(
-            if (folders == 0) localized(Str.worktrees_nothing_on_disk) else pageSummaryText(bytes, folders, v.clean.size),
+            if (folders == 0) localized(Str.worktrees_nothing_on_disk) else WorktreesCopy.pageSummary(bytes, folders, v.clean.size),
             fontSize = 13.sp,
             color = if (folders == 0) c.dim else c.text,
             modifier = Modifier.weight(1f).testTag("wt_summary"),
@@ -602,7 +556,7 @@ private fun WorktreesList(actions: WorktreesSettingsActions, form: WorktreesForm
                 color = c.faint,
             )
             Text(
-                " · ${foldersText(o.count)} · ${formatBytes(o.bytes)}",
+                " · ${WorktreesCopy.folders(o.count)} · ${formatBytes(o.bytes)}",
                 fontSize = 11.5.sp,
                 color = c.faint,
             )
@@ -666,7 +620,7 @@ private fun WorktreesList(actions: WorktreesSettingsActions, form: WorktreesForm
             },
         ) {
             Text(
-                localized(Str.worktrees_gone_detail, formatBytes(v.sizeOf(w)), agoText(now, w.mtime)),
+                localized(Str.worktrees_gone_detail, formatBytes(v.sizeOf(w)), WorktreesCopy.ago(now, w.mtime)),
                 fontSize = 12.5.sp,
                 lineHeight = 19.sp,
                 color = c.dim,
@@ -818,7 +772,7 @@ private fun WorktreeRow(
             )
             val chat = w.owners.firstOrNull()?.name
             val noChat = localized(Str.worktrees_no_chat)
-            val lastUsed = localized(Str.worktrees_row_last_used, agoText(now, w.mtime))
+            val lastUsed = localized(Str.worktrees_row_last_used, WorktreesCopy.ago(now, w.mtime))
             val lockedText = if (locked != null) lockText(locked) else null
             val cantCheck = localized(Str.worktrees_cant_check)
             val noChanges = localized(Str.worktrees_no_changes)
@@ -909,7 +863,7 @@ private fun DeleteBar(actions: WorktreesSettingsActions, form: WorktreesForm, ma
     val words = when {
         progress != null -> localized(Str.worktrees_deleting, progress.first, progress.second)
         form.updating -> localized(Str.worktrees_updating)
-        else -> form.done?.let { (n, freed) -> localized(Str.worktrees_deleted, foldersText(n), formatBytes(freed)) }
+        else -> form.done?.let { (n, freed) -> localized(Str.worktrees_deleted, WorktreesCopy.folders(n), formatBytes(freed)) }
     }
     val picked = v.selectedRows
     if (words == null && picked.isEmpty()) return
@@ -942,7 +896,7 @@ private fun DeleteBar(actions: WorktreesSettingsActions, form: WorktreesForm, ma
                 DimAction(localized(Str.common_clear), "wt_bar_clear") { form.selected = emptySet() }
                 Spacer(Modifier.weight(1f))
                 KitGhostButton(
-                    localized(Str.worktrees_delete_n, foldersText(picked.size), formatBytes(v.selectedBytes)),
+                    localized(Str.worktrees_delete_n, WorktreesCopy.folders(picked.size), formatBytes(v.selectedBytes)),
                     { form.confirming = true },
                     Modifier.testTag("wt_delete"),
                     destructive = true,
@@ -953,9 +907,9 @@ private fun DeleteBar(actions: WorktreesSettingsActions, form: WorktreesForm, ma
 
     if (form.confirming && picked.isNotEmpty()) {
         KitSheet(
-            localized(Str.worktrees_delete_title, foldersText(picked.size)),
+            localized(Str.worktrees_delete_title, WorktreesCopy.folders(picked.size)),
             onDismiss = { form.confirming = false },
-            description = deleteTextLocalized(picked.size, v.selectedBytes, v.selectedGone),
+            description = WorktreesCopy.deleteText(picked.size, v.selectedBytes, v.selectedGone),
             tag = "wt_delete_dialog",
             buttons = {
                 KitGhostButton(localized(Str.worktrees_cancel), { form.confirming = false }, Modifier.testTag("wt_delete_cancel"))

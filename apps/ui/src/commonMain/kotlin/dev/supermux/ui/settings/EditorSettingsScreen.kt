@@ -80,7 +80,7 @@ fun EditorSection(modifier: Modifier = Modifier) {
             },
             range = TERMINAL_FONT_MIN..TERMINAL_FONT_MAX,
             modifier = Modifier.kitAnchor("terminal-font").testTag("coding_terminal-font"),
-            description = if (pointer) terminalZoomHintText(currentKeyOs) else localized(Str.editor_settings_terminal_pinch),
+            description = if (pointer) terminalZoomHint(currentKeyOs) else localized(Str.editor_settings_terminal_pinch),
             tag = "terminal_font",
         )
         // The Changes pane's per-file diff: inline (default) or side by side. The pane's own toggle writes the same value.
@@ -104,11 +104,6 @@ fun EditorSection(modifier: Modifier = Modifier) {
     }
 }
 
-/** The terminal's zoom keys as [os] writes them (the terminal's own rule: ⌘ on Apple, Ctrl elsewhere), in English for the tests. */
+/** The terminal's zoom keys as [os] writes them (the terminal's own rule: ⌘ on Apple, Ctrl elsewhere), in the app's language. */
 internal fun terminalZoomHint(os: KeyOs): String =
-    if (os == KeyOs.Apple) "Also ⌘+ and ⌘− in a terminal." else "Also Ctrl+Plus and Ctrl+Minus in a terminal." // i18n-ok: tests' English twin of terminalZoomHintText
-
-/** [terminalZoomHint] in the app's language: what the row shows. */
-@Composable
-internal fun terminalZoomHintText(os: KeyOs): String =
     localized(if (os == KeyOs.Apple) Str.editor_settings_zoom_apple else Str.editor_settings_zoom_other)

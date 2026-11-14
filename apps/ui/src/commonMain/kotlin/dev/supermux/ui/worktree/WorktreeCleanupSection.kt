@@ -22,6 +22,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.net.WorktreeDeleteResultDto
 import dev.supermux.net.WorktreeForWorkdirDto
+import dev.supermux.ui.i18n.Plurals
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.StringKey
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.localizedPlural
 import dev.supermux.ui.platform.NoticeChannel
 import kotlinx.coroutines.launch
 
@@ -74,17 +79,19 @@ fun WorktreeCleanupSection(
         }
     }
     fun bytesOf(w: WorktreeForWorkdirDto): Long? = w.bytes ?: fetched[w.id]
+    val sizeUnknown = localized(Str.worktree_size_unknown)
+    val sizeCalculating = localized(Str.worktree_size_calculating)
     fun sizeLabel(w: WorktreeForWorkdirDto): String = when {
         bytesOf(w) != null -> formatBytes(bytesOf(w))
-        w.id in fetched -> "size unknown"
-        else -> "calculating size…"
+        w.id in fetched -> sizeUnknown
+        else -> sizeCalculating
     }
     if (!loading && found.isEmpty()) return
     Column(modifier.padding(top = 12.dp)) {
         if (loading) {
             Row {
                 CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-                Text("  Checking worktree…", fontSize = 12.sp, color = cs.onSurfaceVariant)
+                Text("  " + localized(Str.worktree_checking), fontSize = 12.sp, color = cs.onSurfaceVariant)
             }
             return@Column
         }
@@ -95,7 +102,7 @@ fun WorktreeCleanupSection(
             val by = keptBy[w.id].orEmpty()
             if (by.isNotEmpty()) {
                 Text(
-                    "Worktree kept — also used by ${by.joinToString()}", fontSize = 12.sp, color = cs.onSurfaceVariant,
+                    localized(Str.worktree_kept, by.joinToString()), fontSize = 12.sp, color = cs.onSurfaceVariant,
                     modifier = Modifier.testTag("wt_cleanup_kept"),
                 )
             }
@@ -110,10 +117,10 @@ fun WorktreeCleanupSection(
             )
             val label = if (deletable.size == 1) {
                 val w = deletable.single()
-                "Also delete worktree · ${w.branch ?: w.id} · ${sizeLabel(w)}"
+                localized(Str.worktree_delete_one, w.branch ?: w.id, sizeLabel(w))
             } else {
                 val known = deletable.mapNotNull { bytesOf(it) }
-                "Also delete ${deletable.size} worktrees" + if (known.size == deletable.size) " · ${formatBytes(known.sum())}" else ""
+                localizedPlural(Plurals.worktree_delete_many, deletable.size, deletable.size) + if (known.size == deletable.size) " · ${formatBytes(known.sum())}" else ""
             }
             Text(label, fontSize = 13.sp)
         }
@@ -132,9 +139,9 @@ class WorktreeCleanupTick {
 }
 
 /** Which dialog ran the archive-and-delete, for the notice's wording. */
-enum class WorktreeDeleteAction(val verb: String, val done: String) {
-    Archive("archive", "Archived"),
-    Close("close", "Closed"),
+enum class WorktreeDeleteAction(val failed: StringKey, val partial: StringKey) {
+    Archive(Str.worktree_archive_failed, Str.worktree_archived_not_deleted),
+    Close(Str.worktree_close_failed, Str.worktree_closed_not_deleted),
 }
 
 /** Snackbar/toast after "Archive & delete" (or Settle/Close & delete): silent on success, one
@@ -147,9 +154,9 @@ fun reportWorktreeDelete(
     action: WorktreeDeleteAction = WorktreeDeleteAction.Archive,
 ) {
     if (results == null) {
-        notices.show("Couldn't ${action.verb}: broker unreachable or the request was refused")
+        notices.show(localized(action.failed))
         return
     }
     val failure = results.firstOrNull { !it.ok && it.error != "in_use" } ?: return
-    notices.show("${action.done}, but couldn't delete worktree: ${failure.error ?: "unknown error"}")
+    notices.show(localized(action.partial, failure.error ?: localized(Str.worktree_unknown_error)))
 }

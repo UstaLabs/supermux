@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #123: the Archived screen, the sidebar's Agent dialogs, the "Choose an agent" install panel, and the worktree
+     cleanup in the archive dialogs. English, the source; values-tr/sessions_more.xml has the same keys
+     (tests/i18n-strings.test.ts). -->
+<resources>
+    <!-- Archived screen -->
+    <string name="archived_time_now">now</string>
+    <string name="archived_time_minutes">%1$dm</string>
+    <string name="archived_time_hours">%1$dh</string>
+    <string name="archived_time_days">%1$dd</string>
+    <string name="archived_title">Archived</string>
+    <string name="archived_label">archived</string>
+    <string name="archived_all_projects">All projects</string>
+    <string name="archived_filter">Filter by project</string>
+    <string name="archived_search">Search archived…</string>
+    <string name="archived_no_workspaces">No archived workspaces.</string>
+    <string name="archived_no_sessions">No archived sessions.</string>
+    <string name="archived_no_matches">No matches.</string>
+    <string name="archived_no_messages">No messages.</string>
+    <string name="archived_back">Back</string>
+    <string name="archived_resume">Resume</string>
+    <string name="archived_resumed">Resumed</string>
+    <string name="archived_restore">Restore</string>
+    <string name="archived_restored">Restored</string>
+    <string name="archived_ended">Archived %1$s</string>
+
+    <!-- Agent dialogs: New Agent, Change character, Rename, Archive -->
+    <string name="agentdlg_state_idle">Idle</string>
+    <string name="agentdlg_state_working">Working</string>
+    <string name="agentdlg_state_waiting">Has a reply</string>
+    <string name="agentdlg_state_listening">Listening</string>
+    <string name="agentdlg_state_speaking">Speaking</string>
+    <string name="agentdlg_state_asleep">Asleep</string>
+    <string name="agentdlg_new_title">New Agent</string>
+    <string name="agentdlg_new_subtitle">An always-on assistant with its own memory. Pick its character.</string>
+    <string name="agentdlg_creating">Creating…</string>
+    <string name="agentdlg_create">Create %1$s</string>
+    <string name="agentdlg_agent">Agent</string>
+    <string name="agentdlg_close">Close</string>
+    <string name="agentdlg_cancel">Cancel</string>
+    <string name="agentdlg_name">Name</string>
+    <string name="agentdlg_provider">Provider</string>
+    <string name="agentdlg_providers_failed">Couldn't load providers.</string>
+    <string name="agentdlg_retry">Retry</string>
+    <string name="agentdlg_no_provider">No provider is installed. Install one in Settings ▸ Providers &amp; accounts.</string>
+    <string name="agentdlg_model">Model</string>
+    <string name="agentdlg_choose_model">Choose a model</string>
+    <string name="agentdlg_effort">Effort</string>
+    <string name="agentdlg_effort_low">Low</string>
+    <string name="agentdlg_effort_medium">Medium</string>
+    <string name="agentdlg_effort_high">High</string>
+    <string name="agentdlg_effort_xhigh">Extra high</string>
+    <string name="agentdlg_effort_max">Max</string>
+    <string name="agentdlg_hint">↵ to create · esc to cancel</string>
+    <string name="agentdlg_character_title">Change %1$s's character</string>
+    <string name="agentdlg_character_subtitle">Its name, memory and history stay the same.</string>
+    <string name="agentdlg_saving">Saving…</string>
+    <string name="agentdlg_use">Use %1$s</string>
+    <string name="agentdlg_use_character">Use character</string>
+    <string name="agentdlg_current">Current</string>
+    <string name="agentdlg_rename_title">Rename %1$s</string>
+    <string name="agentdlg_rename_subtitle">Its memory and history stay with it.</string>
+    <string name="agentdlg_rename">Rename</string>
+    <string name="agentdlg_archive_title">Archive %1$s?</string>
+    <string name="agentdlg_archive_subtitle">It stops running and leaves the sidebar. Its memory is kept, and you can restore it from the archive.</string>
+    <string name="agentdlg_archiving">Archiving…</string>
+    <string name="agentdlg_archive">Archive</string>
+    <string name="agentdlg_name_invalid">That name can't be used.</string>
+    <string name="agentdlg_name_taken">An agent with that name already exists.</string>
+    <string name="agentdlg_not_installed">That provider isn't installed. Install it in Settings ▸ Providers &amp; accounts.</string>
+    <string name="agentdlg_create_failed">Couldn't create the agent — check the connection and try again.</string>
+    <string name="agentdlg_character_failed">Couldn't change %1$s's character — check the connection and try again.</string>
+    <string name="agentdlg_rename_failed">Couldn't rename %1$s — check the connection and try again.</string>
+    <string name="agentdlg_archive_failed">Couldn't archive %1$s — check the connection and try again.</string>
+
+    <!-- "Choose an agent": the launcher's install panel -->
+    <string name="install_title">Choose an agent</string>
+    <string name="install_intro">Supermux runs your chats on a coding agent. Pick one to install — it takes about a minute.</string>
+    <string name="install_later">You can add or sign in to providers later in Settings ▸ Providers &amp; accounts.</string>
+    <string name="install_tagline_claude">Anthropic's coding agent</string>
+    <string name="install_tagline_codex">OpenAI's coding agent</string>
+    <string name="install_tagline_opencode">Open source, works with many models</string>
+    <string name="install_tagline_cursor">Cursor's agent for the terminal</string>
+    <string name="install_tagline_grok">xAI's coding agent</string>
+    <string name="install_tagline_antigravity">Google's coding agent</string>
+    <string name="install_tagline_other">Coding agent</string>
+    <string name="install_installing">Installing %1$s…</string>
+    <string name="install_installed">Installed</string>
+    <string name="install_install">Install</string>
+    <string name="install_try_again">Try again</string>
+    <string name="install_timeout">This is taking longer than expected. Check Settings ▸ Providers &amp; accounts for progress.</string>
+    <string name="install_lost_host">Lost touch with the host. Check the connection and try again.</string>
+    <string name="install_couldnt_start">Couldn't start the install. Check the connection and try again.</string>
+
+    <!-- Worktree cleanup in the archive / settle / close dialogs -->
+    <string name="worktree_couldnt_inspect">Couldn't inspect: %1$s</string>
+    <string name="worktree_no_changes">No changes</string>
+    <plurals name="worktree_files_changed">
+        <item quantity="one">%1$d file changed</item>
+        <item quantity="other">%1$d files changed</item>
+    </plurals>
+    <plurals name="worktree_unmerged_commits">
+        <item quantity="one">%1$d unmerged commit</item>
+        <item quantity="other">%1$d unmerged commits</item>
+    </plurals>
+    <string name="worktree_unmerged_unknown">Unmerged commits: unknown (base branch not found)</string>
+    <string name="worktree_ignored">Ignored: %1$s</string>
+    <string name="worktree_more">+%1$d more</string>
+    <string name="worktree_checking">Checking worktree…</string>
+    <string name="worktree_size_unknown">size unknown</string>
+    <string name="worktree_size_calculating">calculating size…</string>
+    <string name="worktree_kept">Worktree kept — also used by %1$s</string>
+    <string name="worktree_delete_one">Also delete worktree · %1$s · %2$s</string>
+    <plurals name="worktree_delete_many">
+        <item quantity="one">Also delete %1$d worktree</item>
+        <item quantity="other">Also delete %1$d worktrees</item>
+    </plurals>
+    <string name="worktree_archive_failed">Couldn't archive: broker unreachable or the request was refused</string>
+    <string name="worktree_close_failed">Couldn't close: broker unreachable or the request was refused</string>
+    <string name="worktree_archived_not_deleted">Archived, but couldn't delete worktree: %1$s</string>
+    <string name="worktree_closed_not_deleted">Closed, but couldn't delete worktree: %1$s</string>
+    <string name="worktree_unknown_error">unknown error</string>
+</resources>

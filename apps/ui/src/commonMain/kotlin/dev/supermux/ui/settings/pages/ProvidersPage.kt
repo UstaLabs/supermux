@@ -55,9 +55,7 @@ import dev.supermux.ui.settings.settingsTitle
 import dev.supermux.ui.settings.statusLabel
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.i18n.localizedPlural
-import dev.supermux.ui.settings.localizedInstallFailureMessage
 import dev.supermux.ui.settings.localizedSettingsTitle
-import dev.supermux.ui.settings.localizedStatusLabel
 import kotlinx.coroutines.launch
 
 /**
@@ -150,10 +148,10 @@ private fun ProviderItem(status: AgentInstallStatus, p: ProviderState, all: List
         installFailed -> when {
             p.installRequestFailed -> localized(Str.providers_install_start_failed)
             p.installTimedOut -> localized(Str.providers_install_timed_out)
-            else -> localizedInstallFailureMessage(p.install)
+            else -> installFailureMessage(p.install)
         }
         status.authed && email != null -> localized(Str.providers_your_login_email, email)
-        else -> localizedStatusLabel(status)
+        else -> statusLabel(status)
     }
     val line = if (added > 0 && status.installed) localizedPlural(Plurals.providers_line_more, added, base, added) else base
     // `agent_row_‹kind›` is the tag the shell's tests have always found a provider by.

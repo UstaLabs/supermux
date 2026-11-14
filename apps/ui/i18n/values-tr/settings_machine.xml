@@ -28,10 +28,17 @@
     <string name="machine_kit_collapsed">Daraltıldı</string>
     <string name="machine_kit_offline">%1$s çevrimdışı.</string>
     <string name="machine_kit_offline_seen">%1$s çevrimdışı · son görülme %2$s.</string>
-    <!-- This computer's hosting (HostingCopy) -->
+    <!-- This computer's hosting -->
     <string name="machine_hosting_lid_waiting">Parolanız bekleniyor…</string>
     <string name="machine_hosting_lid_uninstall">Kapak yardımcısını kaldır</string>
     <string name="machine_hosting_auto_login">Klavye başında kimse yokken de başlaması için Sistem Ayarları ▸ Kullanıcılar ve Gruplar'da Otomatik Giriş'i açın.</string>
+    <string name="machine_hosting_paused_on_battery">Pildeyken duraklatıldı</string>
+    <string name="machine_hosting_app_held">supermux uygulaması açıkken bilgisayarı uyanık tutuyor.</string>
+    <string name="machine_hosting_waiting_for_login">Giriş yapmanız bekleniyor… Masaüstü oturumunuz başlayınca supermux bu bilgisayarı uyanık tutar.</string>
+    <string name="machine_hosting_lid_install">macOS parolanızı bir kez soracak.</string>
+    <string name="machine_hosting_lid_not_installed">Kapak yardımcısı yüklü değil. Yüklemek için işaretleyin; macOS parolanızı bir kez soracak.</string>
+    <string name="machine_hosting_lid_other_user">Kapak yardımcısı başka bir kullanıcı için yüklü. Sizin için yeniden yüklemek üzere işaretleyin.</string>
+    <string name="machine_hosting_lid_home_unsupported">Bu hesabın ana klasörü için kullanılamıyor.</string>
     <!-- Editor &amp; terminal -->
     <string name="editor_settings_wrap">Uzun satırları kaydır</string>
     <string name="editor_settings_wrap_description">Yana kaydırmak yerine satırı alta geçirir.</string>

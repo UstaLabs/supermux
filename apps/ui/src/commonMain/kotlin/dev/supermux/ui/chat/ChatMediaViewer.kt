@@ -288,7 +288,6 @@ internal fun ChatMediaViewerContent(
         scope.launch { pager.animateScrollToPage(index) }
     }
 
-    val savedWords = rememberSavedWords()
     val cantDownload = localized(Str.chatline_media_cant_download, "%1\$s")
 
     // Save SAVES, on a phone too (#95): a picture or a video into its gallery, any other file into its files, and it
@@ -298,7 +297,7 @@ internal fun ChatMediaViewerContent(
         val handle = resolve(item)
         scope.launch {
             val couldNot = { platform.notices.show(formatCatalogText(cantDownload, arrayOf(item.name))) }
-            val said: (SavedFile?) -> Unit = { saved -> saved?.let { savedNotice(it, pointer, savedWords) }?.let(platform.notices::show) }
+            val said: (SavedFile?) -> Unit = { saved -> saved?.let { savedNotice(it, pointer) }?.let(platform.notices::show) }
             // The FILE, through the fleet's downloads: closing the viewer lets go of it, and it waits in the bar.
             if (startDownload(downloads, handle.media, handle.att, platform, pointer, onFailed = couldNot, then = { said(saveDownload(platform, pointer, downloads, it)) })) return@launch
             // No download here (a host file, a preview): the bytes.

@@ -96,4 +96,15 @@ the catalog (İ, not I): Kotlin's uppercase() has no Turkish "i".
 | isolated (worktree mode) | ayrık | |
 | fast mode | hızlı mod | |
 | star / unstar | yıldızla / yıldızı kaldır | |
+| project / folder / location | proje / klasör / konum | |
+| repository | depo | |
+| clone | klonla | |
+| archive / archived | arşivle / arşiv | the screen is "Arşiv" |
+| resume / restore | sürdür / geri yükle | |
+| settle / settled | tamamla / tamamlananlar | |
+| draft | taslak | |
+| suspended / idle | askıda / boşta | |
+| unread | okunmamış | |
+| short times | şimdi, %d dk, %d sa, %d g | |
+| effort levels | Düşük, Orta, Yüksek, Çok yüksek, En yüksek | |
 | supermux | supermux | the brand, never translated or capitalised |

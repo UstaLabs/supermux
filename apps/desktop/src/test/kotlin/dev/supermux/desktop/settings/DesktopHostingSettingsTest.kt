@@ -4,7 +4,6 @@ import dev.supermux.desktop.host.HostingPrefs
 import dev.supermux.desktop.host.HostingStatus
 import dev.supermux.desktop.host.LidSleepHelper
 import dev.supermux.desktop.host.LidStatus
-import dev.supermux.ui.settings.HostingCopy
 import dev.supermux.ui.settings.HostingPhase
 import dev.supermux.ui.settings.LidClosedUi
 import dev.supermux.net.GitRequirement
@@ -168,7 +167,7 @@ class DesktopHostingSettingsTest {
         val missing = lidClosedUi(true, true, LidStatus(pref = true, state = LidSleepHelper.InstallState.NOT_INSTALLED))!!
         assertFalse(missing.on)
         assertFalse(missing.installed)
-        assertEquals(HostingCopy.LID_NOT_INSTALLED, missing.note)
+        assertEquals("The lid helper isn't installed. Tick to install it; macOS will ask for your password once.", missing.note)
         val other = lidClosedUi(true, true, LidStatus(pref = true, state = LidSleepHelper.InstallState.OTHER_USER))!!
         assertFalse(other.on)
         assertFalse(other.installed)

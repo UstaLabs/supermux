@@ -108,15 +108,13 @@ import dev.supermux.net.SessionAccountResult
 import dev.supermux.state.AccountResult
 import dev.supermux.ui.accounts.AccountTag
 import dev.supermux.ui.accounts.accountShortLabel
-import dev.supermux.ui.accounts.localizedAccountPickerDetail
-import dev.supermux.ui.accounts.localizedAccountShortLabel
-import dev.supermux.ui.accounts.localizedAccountUnavailableText
-import dev.supermux.ui.accounts.localizedSessionSwitchFailureText
+import dev.supermux.ui.accounts.accountPickerDetail
+import dev.supermux.ui.accounts.accountUnavailableText
+import dev.supermux.ui.accounts.sessionSwitchFailureText
 import dev.supermux.ui.accounts.accountsFor
 import dev.supermux.ui.accounts.agentDisplayName
 import dev.supermux.ui.accounts.hasAccountChoice
 import dev.supermux.ui.accounts.isSystemAccountId
-import dev.supermux.ui.accounts.sessionSwitchFailureText
 import dev.supermux.ui.accounts.signInExpired
 import dev.supermux.ui.session.AgentLogo
 import dev.supermux.ui.session.hasAgentLogo
@@ -189,21 +187,12 @@ class RunSettingsAccount(
     val onAdded: Boolean = current?.let { !it.system } ?: (!offersAuto && !isSystemAccountId(selectedId))
     /** The current account is marked unavailable (its API refused it). Picking it again is the retry. */
     val unavailable: Boolean = current?.unavailable != null
-    /** The row's value: the current account, or Auto and what it would pick now. The UI shows [localizedLabel]. */
-    val label: String = when {
+    /** The row's value, in the app's language: the current account, or Auto and what it would pick now. */
+    val label: String get() = when {
         current != null -> accountShortLabel(current)
         !offersAuto -> fallbackLabel?.takeIf { it.isNotBlank() }
-            ?: if (isSystemAccountId(selectedId)) "System login" else selectedId.orEmpty() // i18n-ok: test twin
-        else -> autoPick?.let { "Auto · ${accountShortLabel(it)}" } ?: "Auto" // i18n-ok: test twin
-    }
-
-    /** [label] in the app's language. */
-    @Composable
-    fun localizedLabel(): String = when {
-        current != null -> localizedAccountShortLabel(current)
-        !offersAuto -> fallbackLabel?.takeIf { it.isNotBlank() }
             ?: if (isSystemAccountId(selectedId)) localized(Str.accounts_system_login) else selectedId.orEmpty()
-        else -> autoPick?.let { localized(Str.composer_run_auto_now, localizedAccountShortLabel(it)) }
+        else -> autoPick?.let { localized(Str.composer_run_auto_now, accountShortLabel(it)) }
             ?: localized(Str.composer_run_auto)
     }
 
@@ -541,7 +530,7 @@ internal fun RunSettingsPanel(
                             ) {
                                 if (account.pendingId != null) Spinner()
                                 Text(
-                                    account.localizedLabel(),
+                                    account.label,
                                     color = ink ?: cs.onSurface.copy(alpha = 0.8f),
                                     fontSize = 13.sp,
                                     maxLines = 1,
@@ -709,7 +698,7 @@ private fun AccountOptions(sheet: Boolean, account: RunSettingsAccount, onBack: 
             selected = current == null,
             icon = { Icon(Icons.Outlined.AccountCircle, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp)) },
             title = localized(Str.composer_run_auto),
-            detail = account.autoPick?.let { localized(Str.composer_run_auto_detail_now, localizedAccountShortLabel(it)) }
+            detail = account.autoPick?.let { localized(Str.composer_run_auto_detail_now, accountShortLabel(it)) }
                 ?: localized(Str.composer_run_auto_detail),
             tag = "account-picker-item:auto",
         ) { pick(null) }
@@ -728,17 +717,17 @@ private fun AccountOptions(sheet: Boolean, account: RunSettingsAccount, onBack: 
             selected = a.id == current?.id,
             busy = a.id == account.pendingId,
             icon = { Icon(Icons.Outlined.AccountCircle, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp)) },
-            title = localizedAccountShortLabel(a),
+            title = accountShortLabel(a),
             badges = {
                 if (a.isolated) AccountTag(localized(Str.composer_run_isolated), sem.warning)
                 // A tag, not a block: picking it is how the user retries it.
                 if (a.unavailable != null) AccountTag(localized(Str.composer_run_unavailable), sem.danger, Modifier.testTag("account-unavailable-tag:${a.id}"))
             },
-            detail = localizedAccountPickerDetail(a).takeIf { it.isNotBlank() },
+            detail = accountPickerDetail(a).takeIf { it.isNotBlank() },
             tag = "account-picker-item:${a.id}",
         ) { pick(a.id) }
     }
-    (account.refusalReason?.let { (code, message) -> localizedSessionSwitchFailureText(code, message) } ?: account.refusal)
+    (account.refusalReason?.let { (code, message) -> sessionSwitchFailureText(code, message) } ?: account.refusal)
         ?.let { RefusalLine(it) }
 }
 
@@ -757,7 +746,7 @@ private fun UnavailableNotice(account: AccountDto, onOpenAccounts: (() -> Unit)?
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Icon(Icons.Outlined.WarningAmber, null, tint = danger, modifier = Modifier.size(16.dp))
             Text(
-                localized(Str.composer_run_account_unavailable, localizedAccountShortLabel(account)),
+                localized(Str.composer_run_account_unavailable, accountShortLabel(account)),
                 color = cs.onSurface,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
@@ -766,7 +755,7 @@ private fun UnavailableNotice(account: AccountDto, onOpenAccounts: (() -> Unit)?
             )
         }
         Column(Modifier.padding(start = 26.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            localizedAccountUnavailableText(account)?.let {
+            accountUnavailableText(account)?.let {
                 Text(it, color = cs.onSurfaceVariant, fontSize = 11.5.sp, lineHeight = 15.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
             }
             if (onOpenAccounts != null) NoticeLink(localized(Str.composer_run_open_accounts), onOpenAccounts, "run_settings_open_accounts")
