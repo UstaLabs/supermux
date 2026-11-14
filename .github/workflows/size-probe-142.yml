@@ -14,11 +14,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: compose-lean, sha: 1f67ab97e }
-          - { name: wasm-opt, sha: d2176d593 }
-          - { name: mono-once, sha: bc9545137 }
-          - { name: brotli, sha: 1dc4d84cb }
-          - { name: all, sha: b13dfe819 }
+          - { name: compose-lean, sha: 1f67ab97e5c3118ade39205d2289f0a2b2d1d5f4 }
+          - { name: wasm-opt, sha: d2176d59375d0323f8c60f070985a27487c7dcde }
+          - { name: mono-once, sha: bc9545137207bb46ffb9d927be242e4e924ddb6e }
+          - { name: brotli, sha: 1dc4d84cb1ea55cdd2347c1d0b3ab37901bc78b4 }
+          - { name: all, sha: b13dfe8192089ea47dbc100fb4fd691f2de5df78 }
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -54,7 +54,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: b13dfe819
+          ref: b13dfe8192089ea47dbc100fb4fd691f2de5df78
           fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
