@@ -2,6 +2,7 @@ package dev.supermux.ui.browser
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import dev.supermux.net.PatchViewBody
 import dev.supermux.net.PreviewCookieDto
@@ -23,8 +24,8 @@ class BrowserActions(
     val proxies: suspend () -> List<ProxyDto> = { emptyList() },
     /** The host's by-port preview template (`https://…/p/{port}/`), or null from a broker without one. */
     val byPort: suspend () -> String? = { null },
-    /** This device's preview-only cookie for the host, asked for once a run; null when the host gives none. */
-    val previewCookie: suspend () -> PreviewCookieDto? = { null },
+    /** The host's preview key in the Browser tabs' cookie store (#155): one for the process, renewed before pages use it. */
+    val preview: PreviewKeeper<PreviewCookieDto> = PreviewKeeper(mint = { null }),
     /** Whether this app runs on the host, so a `localhost` address is the host's own. */
     val onHost: Boolean = false,
     /** #122 phase 4: the name of the session whose process listens on [port] on the host, or null. */
@@ -33,52 +34,21 @@ class BrowserActions(
 
 /** [BrowserActions] against one paired host. */
 @Composable
-fun rememberBrowserActions(app: HostStore): BrowserActions = remember(app) {
-    // One token a run: the broker mints a new one each time it's asked. A failed ask isn't remembered (a broker fixed
-    // or reachable again later must help without restarting the app); the web client, always refused (bearer only), asks
-    // at most once a minute, and its iframe tab needs none.
-    val cookies = PreviewCookieCache(fetch = { app.api.previewToken().cookie })
-    BrowserActions(
+fun rememberBrowserActions(app: HostStore): BrowserActions {
+    val preview = remember(app) { PreviewKeeper.of(app) }
+    // The key renews on start, reconnect and a timer while any screen holding these actions is up; one driver at a time.
+    LaunchedEffect(preview) { while (true) preview.drive(this, app.resynced).join() }
+    return remember(app) { BrowserActions(
         saveView = { workspaceId, viewId, state, title ->
             runCatching { app.api.patchView(workspaceId, viewId, PatchViewBody(title = title, state = state)) }.isSuccess
         },
-        proxies = { app.proxies() },
+        // Both from one kept answer, asked at the same time (#155): a tab's open no longer waits on two round trips.
+        proxies = { app.previewRoutes().proxies.orEmpty() },
         // By-port pages take the normal login (Ahmet accepted path mode's same-origin risk, 2026-11-08).
-        byPort = { app.api.byPortTemplate() },
-        previewCookie = { cookies.get() },
+        byPort = { app.previewRoutes().byPort },
+        preview = preview,
         // A broker reached over loopback runs on this machine: a desktop that is the host reaches its own that way.
         onHost = TransportPolicy.isLoopback(app.baseUrl),
         portOwner = { port -> runCatching { app.api.portOwner(port)?.sessionName }.getOrNull() },
-    )
-}
-
-/** The preview cookie, asked for once a run when the host gives one; a failed ask is tried again after [retryMs], a cancelled one at once. */
-internal class PreviewCookieCache<T : Any>(
-    private val fetch: suspend () -> T?,
-    private val now: () -> Long = { START.elapsedNow().inWholeMilliseconds },
-    private val retryMs: Long = 60_000,
-) {
-    private var value: T? = null
-    private var failedAt: Long? = null
-
-    suspend fun get(): T? {
-        value?.let { return it }
-        failedAt?.let { if (now() - it < retryMs) return null }
-        // A cancelled ask (the pane's effect restarting while the request is in flight, which over a relay it often is) is
-        // no answer: rethrown, never remembered, so the effect's next run asks again. Any other error is a failure.
-        val got = try {
-            fetch()
-        } catch (c: kotlinx.coroutines.CancellationException) {
-            throw c
-        } catch (e: Exception) {
-            println("[BrowserActions] preview cookie request failed: ${e::class.simpleName}: ${e.message?.take(160)}")
-            null
-        }
-        if (got != null) value = got else failedAt = now()
-        return got
-    }
-
-    private companion object {
-        val START = kotlin.time.TimeSource.Monotonic.markNow()
-    }
+    ) }
 }

@@ -753,6 +753,16 @@ sealed interface ServerFrame {
     @Serializable @SerialName("agents_changed")
     data object AgentsChanged : ServerFrame
 
+    /** A port preview was made, changed or removed (#155): a client holding the previews (a Browser tab's routes) reloads them. */
+    @Serializable @SerialName("proxy_created")
+    data class ProxyCreated(val proxy: kotlinx.serialization.json.JsonObject? = null) : ServerFrame
+
+    @Serializable @SerialName("proxy_updated")
+    data class ProxyUpdated(val proxy: kotlinx.serialization.json.JsonObject? = null) : ServerFrame
+
+    @Serializable @SerialName("proxy_removed")
+    data class ProxyRemoved(val domain: String? = null) : ServerFrame
+
     /** An Agent's avatar changed (set_avatar or an edit on disk); [avatar] is the new hash, null = none. */
     @Serializable @SerialName("agent_avatar_changed")
     data class AgentAvatarChanged(val id: String = "", val avatar: String? = null) : ServerFrame

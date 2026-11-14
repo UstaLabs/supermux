@@ -134,6 +134,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
@@ -847,6 +849,7 @@ class HostStore(
                 if (frame.archivedLazy) refreshArchivedWorkspaces()
                 fileSystem.onReconnect()
                 flushOutbox()
+                refreshPreviewRoutes()
                 _resynced.tryEmit(Unit)
             }
             is ServerFrame.FsDir, is ServerFrame.FsGone, is ServerFrame.FsErr -> fileSystem.onFrame(frame)
@@ -876,6 +879,7 @@ class HostStore(
             is ServerFrame.UsageUpdated -> holdUsage(frame.usage)
             ServerFrame.AccountsChanged -> if (accountsWanted) refreshAccounts()
             ServerFrame.AgentsChanged -> _agentsChanged.tryEmit(Unit)
+            is ServerFrame.ProxyCreated, is ServerFrame.ProxyUpdated, is ServerFrame.ProxyRemoved -> refreshPreviewRoutes()
             is ServerFrame.AccountLoginState -> _accountLogins.tryEmit(frame.toDto())
             is ServerFrame.AccountsSettings -> {
                 _accountsAutoSwitch.value = frame.autoSwitch
@@ -1370,6 +1374,39 @@ class HostStore(
     suspend fun proxies(): List<ProxyDto> =
         runApi("proxies") { api.proxies() } ?: emptyList()
 
+    // ── A Browser tab's routes (#155) ───────────────────────────────────────────────────────────
+    // Every tab used to ask for both, one after the other, before its first page: two broker round trips (~90 ms each
+    // over the relay). Now they are asked at the same time, once, and kept until a preview changes or the socket
+    // reconnects, when they are asked again behind the kept answer.
+
+    @Volatile private var previewRoutesKept: PreviewRoutes? = null
+    @Volatile private var previewRoutesLoad: Deferred<PreviewRoutes>? = null
+    @Volatile private var previewRoutesGeneration = 0
+
+    /** The host's by-port template and previews: the kept answer at once, else both asked at the same time. */
+    suspend fun previewRoutes(): PreviewRoutes = previewRoutesKept ?: loadPreviewRoutes().await()
+
+    /** A preview changed, or the socket reconnected: ask again, if a Browser tab has asked before, keeping the old answer meanwhile. */
+    private fun refreshPreviewRoutes() {
+        previewRoutesGeneration++
+        if (previewRoutesKept != null || previewRoutesLoad?.isActive == true) loadPreviewRoutes(force = true)
+    }
+
+    private fun loadPreviewRoutes(force: Boolean = false): Deferred<PreviewRoutes> {
+        previewRoutesLoad?.takeIf { it.isActive && !force }?.let { return it }
+        val generation = previewRoutesGeneration
+        return stateScope.async {
+            val routes = coroutineScope {
+                val byPort = async { runApi("byPortTemplate") { api.byPortTemplate() } }
+                val proxies = async { runApi("proxies") { api.proxies() } }
+                PreviewRoutes(byPort.await(), proxies.await())
+            }
+            // Kept only when both answered, and nothing changed while they were asked; a failed ask is asked again next time.
+            if (routes.proxies != null && generation == previewRoutesGeneration) previewRoutesKept = routes
+            routes
+        }.also { previewRoutesLoad = it }
+    }
+
     // ── Proxies management (desktop-parity Task 5) ─────────────────────────────────────────────
     // Session-links menu only *reads* proxies; the Settings Proxies section creates/toggles/removes.
     // [proxiesForSettings] returns null on failure so the UI can distinguish Error from Empty
@@ -1384,15 +1421,15 @@ class HostStore(
 
     /** POST /proxies {sessionName, port, domain?} — null on failure. */
     suspend fun createProxy(sessionName: String, port: Int, domain: String? = null): CreateProxyResponse? =
-        runApi("createProxy") { api.createProxy(sessionName, port, domain) }
+        runApi("createProxy") { api.createProxy(sessionName, port, domain) }?.also { refreshPreviewRoutes() }
 
     /** PATCH /proxies/<domain> {isPublic}. False on failure. */
     suspend fun setProxyPublic(domain: String, isPublic: Boolean): Boolean =
-        runApi("setProxyPublic") { api.setProxyPublic(domain, isPublic); true } ?: false
+        (runApi("setProxyPublic") { api.setProxyPublic(domain, isPublic); true } ?: false).also { if (it) refreshPreviewRoutes() }
 
     /** DELETE /proxies/<domain>. False on failure. */
     suspend fun removeProxy(domain: String): Boolean =
-        runApi("removeProxy") { api.removeProxy(domain); true } ?: false
+        (runApi("removeProxy") { api.removeProxy(domain); true } ?: false).also { if (it) refreshPreviewRoutes() }
 
     // ── Persistent project catalog ─────────────────────────────────────────────────────────────
     // Each mutation upserts the returned project at once; the broker's `projects_changed`
@@ -3193,3 +3230,6 @@ internal fun subscribeFrameJson(fullLogs: Collection<String>, trace: String? = n
     // Card #76: replies while they are written (reply_stream frames), for the chats on screen.
     if (streams) put("streams", 1)
 }.toString()
+
+/** A Browser tab's routes (#155): the host's by-port template (null from a broker without one) and its previews (null: unknown). */
+data class PreviewRoutes(val byPort: String?, val proxies: List<ProxyDto>?)
