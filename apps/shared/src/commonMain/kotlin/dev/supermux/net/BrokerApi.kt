@@ -1355,25 +1355,44 @@ data class LatestResult(
     val message: String? = null,
 )
 
-/** GET /sessions/<id>/git/branches: where each local branch is open (this chat, another chat, your folder). */
+/** GET /sessions/<id>/git/branches: each branch's default flag, upstream with ↑↓, and where it is open. */
 @Serializable
 data class GitBranches(
     val current: String? = null,
     val detachedSha: String? = null,
     val local: List<GitLocalBranch> = emptyList(),
-    val remote: List<String> = emptyList(),
+    val remote: List<GitRemoteBranch> = emptyList(),
 )
 
 @Serializable
-data class GitLocalBranch(val name: String, val openIn: GitOpenIn? = null)
+data class GitLocalBranch(
+    val name: String,
+    val isDefault: Boolean = false,
+    val upstream: String? = null,
+    val ahead: Int = 0,
+    val behind: Int = 0,
+    val openIn: GitOpenIn? = null,
+)
 
-/** kind: this | chat (with [id], [name]) | folder */
 @Serializable
-data class GitOpenIn(val kind: String = "", val id: String? = null, val name: String? = null)
+data class GitRemoteBranch(val name: String, val isDefault: Boolean = false)
 
-/** POST /sessions/<id>/git/switch: switched | clobber ([files]) | checked_out_elsewhere | merge_in_progress | invalid_name | error */
+/** kind: this | folder (the main folder) | session (with [id], [name]) | external (a worktree no session owns, at [path]) */
 @Serializable
-data class GitSwitchResult(val status: String = "error", val branch: String? = null, val files: List<String> = emptyList(), val path: String? = null, val message: String? = null)
+data class GitOpenIn(val kind: String = "", val id: String? = null, val name: String? = null, val path: String? = null)
+
+/** POST /sessions/<id>/git/switch: switched | dirty ([changed], with requireClean) | clobber ([files]) |
+ *  checked_out_elsewhere ([path], [openIn] when a session has it) | merge_in_progress | invalid_name | error */
+@Serializable
+data class GitSwitchResult(
+    val status: String = "error",
+    val branch: String? = null,
+    val files: List<String> = emptyList(),
+    val changed: Int = 0,
+    val path: String? = null,
+    val openIn: GitOpenIn? = null,
+    val message: String? = null,
+)
 
 /** GET …/git/pr: the branch's pull request (GitHub) / merge request (GitLab). status: found | none | unavailable ([reason]). */
 @Serializable

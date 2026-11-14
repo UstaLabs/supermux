@@ -52,16 +52,21 @@ class BrokerApiSourceControlTest {
     }
 
     @Test fun branches_say_where_each_is_open() = runTest {
-        val b = api("""{"inPlace":true,"repoRoot":"/r","current":"mux/one","detachedSha":null,
-            "local":[{"name":"mux/one","checkedOutAt":"/w1","openIn":{"kind":"this"}},
-                     {"name":"mux/two","checkedOutAt":"/w2","openIn":{"kind":"chat","id":"s-2","name":"Two"}},
-                     {"name":"feature/x","checkedOutAt":null,"openIn":null}],
-            "remote":["origin/dev"]}""").gitBranches("s1")
+        val b = api("""{"current":"mux/one","detachedSha":null,
+            "local":[{"name":"mux/one","isDefault":false,"upstream":"origin/mux/one","ahead":1,"behind":2,"openIn":{"kind":"this"}},
+                     {"name":"mux/two","isDefault":false,"upstream":null,"ahead":0,"behind":0,"openIn":{"kind":"session","id":"s-2","name":"Two"}},
+                     {"name":"dev","isDefault":true,"upstream":null,"ahead":0,"behind":0,"openIn":{"kind":"folder"}},
+                     {"name":"feature/x","isDefault":false,"upstream":null,"ahead":0,"behind":0,"openIn":null}],
+            "remote":[{"name":"origin/dev","isDefault":true}]}""").gitBranches("s1")
         assertEquals("mux/one", b.current)
-        assertEquals(GitOpenIn("chat", "s-2", "Two"), b.local[1].openIn)
-        assertEquals(null, b.local[2].openIn)
-        val sw = api("""{"status":"checked_out_elsewhere","path":"/w2"}""").gitSwitch("s1", "mux/two", create = false)
+        assertEquals(1 to 2, b.local[0].ahead to b.local[0].behind)
+        assertEquals(GitOpenIn("session", "s-2", "Two"), b.local[1].openIn)
+        assertEquals(true, b.local[2].isDefault)
+        assertEquals(null, b.local[3].openIn)
+        assertEquals(GitRemoteBranch("origin/dev", isDefault = true), b.remote.single())
+        val sw = api("""{"status":"checked_out_elsewhere","path":"/w2","openIn":{"kind":"session","id":"s-2","name":"Two"}}""").gitSwitch("s1", "mux/two", create = false)
         assertEquals("checked_out_elsewhere", sw.status)
+        assertEquals("s-2", sw.openIn?.id)
         assertEquals("""{"name":"mux/two","create":false}""", seen.last().third)
     }
 
