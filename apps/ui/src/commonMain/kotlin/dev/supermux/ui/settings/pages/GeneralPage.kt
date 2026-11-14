@@ -193,7 +193,7 @@ private fun LookRows(defaultAppearance: AppearanceMode) {
         optionLabel = { detailNames.getValue(it) },
         modifier = Modifier.kitAnchor("chat-detail").testTag("general_chat-detail"),
         description = localized(Str.general_chat_detail_description),
-        optionTag = { optionTag("chat-detail")(it.label) },
+        optionTag = { optionTag("chat-detail")(it.name.lowercase().replaceFirstChar(Char::uppercaseChar)) },
     )
     val terminalNames = localizedLabels(TerminalAppearance.entries, ::terminalRes)
     KitOptionsRow(
