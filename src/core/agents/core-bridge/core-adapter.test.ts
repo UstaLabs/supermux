@@ -11,7 +11,7 @@ import { createAcpNormalizer } from "../../../../packages/supermux-core/src/acp/
 import { createCodexNormalizer } from "../../../../packages/supermux-core/src/codex/normalize.js"
 import { createClaudeNormalizer } from "../../../../packages/supermux-core/src/claude/normalize.js"
 
-import { agentFailure, CoreAdapter, CORE_ADAPTER_PROFILES, missingConversation } from "./core-adapter"
+import { agentFailure, CoreAdapter, CORE_ADAPTER_PROFILES, missingConversation, INBOX_INTERRUPT_NOTE } from "./core-adapter"
 import { createGrokCoreHost } from "../grok/core-host"
 import { createCodexCoreHost } from "../codex/core-host"
 import { createCursorCoreHost } from "../cursor/core-host"
@@ -1819,6 +1819,9 @@ test("codex: an inbox message with busy=queue waits for the running turn instead
   expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "from inbox"])
 })
 
+/** A message that ended a running turn, as the agent gets it (#143). */
+const noted = (text: string) => `${INBOX_INTERRUPT_NOTE}\n\n${text}`
+
 /** What the logger wrote to stderr (info level and up) while `fn` ran. */
 async function stderrDuring(fn: () => Promise<void>): Promise<string> {
   const level = process.env.MUX_LOG_LEVEL
@@ -1850,7 +1853,27 @@ for (const kind of [...QUEUE_KINDS, "codex"] as const) {
     fake.completePrompt()
     await Promise.all([first, queued, urgent])
     expect(fake.interruptCalls).toBe(1)
-    expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "queued", "urgent"])
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "queued", noted("urgent")])
+  })
+
+  // #143: an agent cut off mid tool call reads "The user doesn't want to proceed… [Request interrupted by user for
+  // tool use]" from its own CLI; the message that did it must say it was this message, not the user.
+  test(`${kind}: a message that ended a running turn says so, so the cut-off tool call is not read as the user's refusal`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    await adapter.start()
+    fake.holdNextPrompt()
+    const first = adapter.send("one")
+    await waitUntil(() => fake.promptTexts.length === 1)
+    const urgent = adapter.send("Message from [a:b] (m1):\nstop", { busy: "interrupt" })
+    await waitUntil(() => fake.interruptCalls === 1)
+    fake.completePrompt()
+    await Promise.all([first, urgent])
+    const delivered = fake.promptTexts[1]![0]!
+    expect(delivered.startsWith(INBOX_INTERRUPT_NOTE)).toBe(true)
+    expect(delivered).toContain("not the user")
+    expect(delivered.endsWith("Message from [a:b] (m1):\nstop")).toBe(true)
   })
 
   test(`${kind}: busy=interrupt on an idle session just runs`, async () => {
@@ -1883,7 +1906,7 @@ for (const kind of [...QUEUE_KINDS, "codex"] as const) {
       await first
       await urgent
     })
-    expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "urgent"])
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", noted("urgent")])
     const warning = logged.split("\n").find((line) => line.includes("[WARN]") && line.includes("inbox_interrupt_unconfirmed"))
     expect(warning).toContain('"session_id":"sess-1"')
     expect(warning).toContain('"outcome":"unconfirmed"')
@@ -1908,7 +1931,7 @@ for (const kind of [...QUEUE_KINDS, "codex"] as const) {
       fake.completePrompt()
       await Promise.all([first, queued, urgent])
     })
-    expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "queued", "urgent"])
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "queued", noted("urgent")])
     expect(events.filter((e) => e.kind === "error")).toEqual([])
     const warning = logged.split("\n").find((line) => line.includes("[WARN]") && line.includes("inbox_interrupt_unconfirmed"))
     expect(warning).toContain('"outcome":"failed"')
@@ -1978,7 +2001,7 @@ for (const kind of [...QUEUE_KINDS, "codex"] as const) {
     fake.completePrompt() // the fake's hold outlives the interrupt: release "STOP"
     await Promise.all([long, stop])
     expect(fake.interruptCalls).toBe(1)
-    expect(fake.promptTexts.map((p) => p[0])).toEqual(["long task", "STOP"])
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["long task", noted("STOP")])
   })
 
   test(`${kind}: busy=interrupt leaves a turn that started after its hand-over alone, and queues behind it`, async () => {
@@ -2024,7 +2047,7 @@ for (const kind of [...QUEUE_KINDS, "codex"] as const) {
     fake.completePrompt()
     await Promise.all([first, u1, u2])
     expect(fake.interruptCalls).toBe(1)
-    expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "u1", "u2"])
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", noted("u1"), "u2"])
   })
 
   test(`${kind}: pendingInput counts input queued behind the running turn, and is 0 once it has all run`, async () => {
@@ -2059,7 +2082,7 @@ for (const kind of [...QUEUE_KINDS, "codex"] as const) {
     await waitUntil(() => fake.interruptCalls === 1)
     fake.completePrompt()
     await urgent
-    expect(fake.promptTexts.map((p) => p[0])).toEqual(["native", "urgent"])
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["native", noted("urgent")])
   })
 
   test(`${kind}: busy=interrupt handed over the moment the next turn starts ends that turn, not the one before`, async () => {
@@ -2087,7 +2110,7 @@ for (const kind of [...QUEUE_KINDS, "codex"] as const) {
     expect(startsSeenAtHandOver).toBe(1) // "first"'s turn end and "second"'s turn start were both still on their way
     fake.completePrompt()
     await Promise.all([first, second, urgent!])
-    expect(fake.promptTexts.map((p) => p[0])).toEqual(["first", "second", "urgent"])
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["first", "second", noted("urgent")])
   })
 }
 
@@ -2111,7 +2134,7 @@ test("claude: busy=interrupt: a model change that needs a restart is refused whi
   await urgent
   expect(fake.opens).toHaveLength(1)
   expect(adapter.model).toBe("old/model")
-  expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "urgent"])
+  expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", noted("urgent")])
   expect(events.filter((e) => e.kind === "error")).toEqual([])
 })
 
@@ -2245,7 +2268,7 @@ for (const interrupt of ["confirmed", "unconfirmed"] as const) {
     fake.completePrompt() // ends the unconfirmed turn; releases the fake's hold for the input after it
     await Promise.all([first, queued, urgent, reload])
     expect(fake.opens).toHaveLength(2)
-    expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "queued", "urgent"])
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "queued", noted("urgent")])
     expect(host.core.sessions.live("s1")?.snapshot().paused).toBe(false)
     expect(errors).toEqual([])
     // "urgent" was accepted by the old Session before it closed (3), or by the new one after (2).

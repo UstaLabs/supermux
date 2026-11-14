@@ -246,6 +246,21 @@ function guessImageMime(path: string, mime?: string): string {
 }
 
 /** One broker-facing adapter for every Core-backed agent. Differences live in CoreAdapterProfile. */
+/**
+ * #143: put before a message that ended a running turn (message_session interrupt=true). Claude Code reports a tool call
+ * cut off that way as "The user doesn't want to proceed with this tool use… STOP" + "[Request interrupted by user for
+ * tool use]", and the command itself may run on, so without this the agent stops and waits for a refusal nobody made.
+ */
+export const INBOX_INTERRUPT_NOTE =
+  "[supermux] The message below interrupted your turn. If a tool call came back as rejected (\"The user doesn't want to proceed…\" or \"[Request interrupted by user for tool use]\"), that was this interruption, not the user: nobody refused it. The command may still be running or already done, so check its state before you run it again."
+
+function withInterruptNote(content: ContentBlock[]): ContentBlock[] {
+  const i = content.findIndex((block) => block.type === "text")
+  if (i < 0) return [{ type: "text", text: INBOX_INTERRUPT_NOTE }, ...content]
+  const block = content[i] as ContentBlock & { type: "text"; text: string }
+  return content.map((b, j) => (j === i ? { ...block, text: `${INBOX_INTERRUPT_NOTE}\n\n${block.text}` } : b))
+}
+
 export class CoreAdapter extends EventEmitter implements AgentAdapter {
   readonly kind: AgentKind
   readonly sessionName: string
@@ -799,11 +814,11 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       }
       await this.settleReopen()
       this.assertLive(epoch)
-      const content = await this.buildContent(text, meta, epoch)
+      let content = await this.buildContent(text, meta, epoch)
       this.assertLive(epoch)
       let session = this.requireSession()
       if (meta?.busy === "interrupt") {
-        await this.interruptKeepingQueue(session, handedOverDuring)
+        if (await this.interruptKeepingQueue(session, handedOverDuring)) content = withInterruptNote(content)
         // The idle it waited for also wakes a core-side reopen that was waiting for the turn to end:
         // a context or tool reload takes the queue (still paused) to a new Session; an account switch
         // closes the old Session and cancels it. Either way, follow the new Session. No await from
@@ -913,8 +928,8 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
    * failed) interrupt only makes that wait last until the turn ends on its own; it is logged. No
    * restart meanwhile (setConfiguration): it would close the session under the waiting input.
    */
-  private async interruptKeepingQueue(session: Session, handedOverDuring: RunningTurn | undefined): Promise<void> {
-    if (!handedOverDuring || handedOverDuring.session !== session || session.snapshot().turnId !== handedOverDuring.turnId) return
+  private async interruptKeepingQueue(session: Session, handedOverDuring: RunningTurn | undefined): Promise<boolean> {
+    if (!handedOverDuring || handedOverDuring.session !== session || session.snapshot().turnId !== handedOverDuring.turnId) return false
     const generation = this.startEpoch
     this.inboxInterruptWaits++
     this.inboxInterruptEpoch = this.inputEpoch
@@ -944,6 +959,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     } finally {
       this.inboxInterruptWaits--
     }
+    return true
   }
 
   private async restartNative(next: ConfigurationPatch & { permissionMode?: string }): Promise<void> {
