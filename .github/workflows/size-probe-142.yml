@@ -1,22 +1,31 @@
-# Scratch, NOT for merge (#142 web-size research). Round 3: composeLean pre-opt wasm, one wasm-opt
-# variant per job, at c0557d201. Runs only on pushes to this scratch branch.
+# Scratch, NOT for merge (#142). Round 4: (1) stageForBroker gzip total for each of the 4 cut cars and 142-all,
+# (2) the bundle smoke WITH editor highlighting on 142-all (grammars from the rc.9 release run's artifact).
+# Runs only on pushes to this scratch branch.
 name: size-probe-142
 on:
   push:
     branches: [size-probe-142]
+permissions:
+  contents: read
+  actions: read
 jobs:
-  lean-sweep:
+  measure:
     strategy:
       fail-fast: false
       matrix:
-        variant: [kgp, kgp+gfx, kgp+gfx+minrec, shrink-Os]
+        include:
+          - { name: compose-lean, sha: 1f67ab97e }
+          - { name: wasm-opt, sha: d2176d593 }
+          - { name: mono-once, sha: bc9545137 }
+          - { name: brotli, sha: 1dc4d84cb }
+          - { name: all, sha: b13dfe819 }
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: c0557d2013f4250700f69086d77025e1fbeb41cc
-      - run: sudo apt-get install -y brotli
+          ref: ${{ matrix.sha }}
+          fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - uses: actions/setup-java@v4
@@ -35,12 +44,61 @@ jobs:
         env:
           ST_ZIG_JOBS: "4"
       - working-directory: apps
-        run: ./gradlew :web:stageForBroker -Psupermux.composeLean=true --console=plain 2>&1 | tee ../stageForBroker.log
-      - run: bash tools/size-probe-142/sweep.sh apps/web/build/compileSync/wasmJs/main/productionExecutable/kotlin/supermux-apps-web.wasm sweep-out "${{ matrix.variant }}"
-      - if: always()
-        run: mkdir -p sweep-out && cp stageForBroker.log sweep-out/
+        run: ./gradlew :web:stageForBroker --console=plain 2>&1 | tee ../stageForBroker.log
+      - run: echo "RESULT ${{ matrix.name }} $(git rev-parse --short HEAD) $(grep -oE 'gzip total [0-9]+ KB' stageForBroker.log | head -1)"
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      SUPERMUX_REQUIRE_EDITOR_SYNTAX: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: b13dfe819
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: editor-syntax-natives
+          path: apps/editor-syntax/build
+          run-id: 43564717749
+          github-token: ${{ github.token }}
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/zig
+            apps/terminal-core/build
+          key: terminal-wasm-${{ runner.os }}-${{ hashFiles('apps/terminal-core/native/upstream.lock.json') }}
+          restore-keys: terminal-wasm-${{ runner.os }}-
+      - run: bash apps/terminal-core/wasm/build.sh
+        env:
+          ST_ZIG_JOBS: "4"
+      - working-directory: apps
+        run: ./gradlew :web:stageForBroker --console=plain 2>&1 | tee ../stageForBroker.log
+      - run: bun scripts/precompress-static.ts
+      - run: command -v google-chrome >/dev/null 2>&1 || bunx playwright install --with-deps chromium
+      - run: MUX_SMOKE_REQUIRE_SYNTAX=1 MUX_SMOKE_SHOTS=$PWD/smoke-shots scripts/test-broker.sh bun tests/ui/bundle-smoke.spec.ts
       - if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: lean-sweep-${{ matrix.variant }}
-          path: sweep-out
+          name: smoke-shots
+          path: smoke-shots
+          if-no-files-found: warn
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-static-142-all
+          path: src/channels/web/static
+          include-hidden-files: true
+          if-no-files-found: warn
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stageForBroker-142-all-log
+          path: stageForBroker.log
