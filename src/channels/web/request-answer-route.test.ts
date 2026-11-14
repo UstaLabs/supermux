@@ -36,7 +36,8 @@ test("a paired device answers a prompt; the answer goes to respondRequest as giv
   const res = await post(token, "/sessions/s1/requests/r%2F1", { answer: { optionId: "allow_once" } })
   expect(res.status).toBe(200)
   expect(await res.json()).toEqual({ ok: true })
-  expect(calls).toEqual([["s1", "r/1", { optionId: "allow_once" }]])
+  // #143 team rule: who answered travels with the answer (the device now, a user later).
+  expect(calls).toEqual([["s1", "r/1", { optionId: "allow_once" }, { by: "phone" }]])
 })
 
 test("without a paired device's token nothing is answered", async () => {
