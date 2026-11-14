@@ -44,7 +44,7 @@ test("a native app gets a preview token as a cookie to set in the Browser tab's 
   expect(body.token.length).toBeGreaterThan(30)
   expect(body.cookie).toEqual({
     name: "cmux_preview", value: body.token, url: "https://app.example.test/p/", path: "/p/",
-    httpOnly: true, secure: true, sameSite: "Lax", maxAge: 31536000,
+    httpOnly: true, secure: true, sameSite: "Lax", maxAge: 86400,
   })
 })
 
@@ -116,4 +116,41 @@ test("with neither a public URL nor a relay, the cookie and the links are for th
   expect(cookie.url).toBe(`${base}/p/`)
   const byPort = await (await fetch(`${base}/proxies/by-port`, { headers: { authorization: `Bearer ${device}` } })).json() as { url: string }
   expect(byPort.url).toBe(`${base}/p/{port}/`)
+})
+
+// #155: a preview token lives 24 hours on the broker; the apps renew theirs long before (every 12 hours, and on start and
+// reconnect), so only a copied-off token ever reaches its end.
+test("a preview token stops opening previews 24 hours after its mint, and a new mint works at once", () => {
+  let now = Date.parse("2026-11-14T12:00:00Z")
+  const devices = new DeviceStore(join(mkdtempSync(join(tmpdir(), "mux-preview-ttl-")), "devices.json"), { clock: () => now })
+  const device = devices.mint("phone").token
+  const first = devices.mintPreview(device)!
+  expect(devices.verifyPreview(first)?.name).toBe("phone")
+  now += 24 * 60 * 60_000 - 1
+  expect(devices.verifyPreview(first)?.name).toBe("phone")
+  now += 1
+  expect(devices.verifyPreview(first)).toBeUndefined()
+  const second = devices.mintPreview(device)!
+  expect(devices.verifyPreview(second)?.name).toBe("phone")
+  expect(devices.verifyPreview(first)).toBeUndefined()
+})
+
+test("a preview token minted before tokens had a deadline no longer opens previews", () => {
+  const file = join(mkdtempSync(join(tmpdir(), "mux-preview-legacy-")), "devices.json")
+  const devices = new DeviceStore(file)
+  const device = devices.mint("phone").token
+  const token = devices.mintPreview(device)!
+  const records = JSON.parse(require("fs").readFileSync(file, "utf8"))
+  delete records[0].preview_expires_at
+  require("fs").writeFileSync(file, JSON.stringify(records))
+  expect(new DeviceStore(file).verifyPreview(token)).toBeUndefined()
+})
+
+test("the refusal page says the preview link expired, never 'pair this device'", async () => {
+  const { base } = await boot()
+  const res = await fetch(`${base}/p/px/page`, { headers: { cookie: "cmux_preview=not-a-token" } })
+  expect(res.status).toBe(401)
+  const html = await res.text()
+  expect(html).toContain("This preview link has expired")
+  expect(html.toLowerCase()).not.toContain("pair")
 })

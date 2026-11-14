@@ -67,6 +67,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import dev.supermux.webview.WebCookie
+import dev.supermux.webview.engine.cdpCookieSet
+import dev.supermux.webview.engine.cdpSetCookieParams
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -1038,6 +1041,17 @@ internal class WindowsWebEngine(
             if (emulation.touch) put("configuration", JsonPrimitive(if (emulation.mobile) "mobile" else "desktop"))
         }.toString())
         return true
+    }
+
+    /**
+     * Puts [cookie] in the page's profile through the DevTools protocol's `Network.setCookie` (#155): the profile's store,
+     * shared by every page of it, so a Browser tab's preview key goes in through any of its engines.
+     */
+    override suspend fun setCookie(cookie: WebCookie): Boolean {
+        if (released || crashed) return false
+        val params = cdpSetCookieParams(cookie, System.currentTimeMillis() / 1000) ?: return false
+        val result = call(EVAL_MILLIS) { page.devtools(it, "Network.setCookie", params) } ?: return false
+        return result.ok && cdpCookieSet(result.json)
     }
 
     /** The app's shortcuts while the page has the keyboard: offered to Compose first (D15). */

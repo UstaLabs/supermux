@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.keys.LocalShortcutDispatcher
@@ -191,18 +192,23 @@ fun BrowserPane(
         sync.toFollow(stored, showing)?.let(::go)
     }
 
-    // Load the page: a preview after its cookie, which goes in through a live engine (the blank page brings one up).
+    // Load the page: a preview after its key, which goes in through a live engine (the blank page brings one up).
     val page = (body as? BrowserBody.Page)?.url
     val live = state.phase == WebViewPhase.Live
+    // While live, this engine is one the host's preview keeper renews the key through (#155): the Browser profile's store
+    // is shared, so a key put in through any engine is every tab's.
+    val previewSink = remember(state) { PreviewKeeper.Sink<PreviewCookieDto> { state.navigator.setCookie(it.toWebCookie()) } }
+    DisposableEffect(live, actions.preview) {
+        val detach = if (live) actions.preview.attach(previewSink) else null
+        onDispose { detach?.invoke() }
+    }
     LaunchedEffect(page, live) {
         val url = page ?: return@LaunchedEffect
         if (url == requested) return@LaunchedEffect
         if (displayAddress(url, previews.orEmpty(), byPort) is DisplayAddress.Preview) {
-            val cookie = actions.previewCookie()
-            if (cookie != null && webViews.needsPreviewCookie(cookie)) {
-                if (!live) return@LaunchedEffect
-                if (state.navigator.setCookie(cookie.toWebCookie())) webViews.previewCookieSet(cookie)
-            }
+            // Asked only when live: the keeper mints only when the key can go into the store at once.
+            if (!live) return@LaunchedEffect
+            actions.preview.ready(previewSink)
         }
         requested = url
         state.load(WebContent.Url(url))

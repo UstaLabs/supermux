@@ -23,6 +23,7 @@ internal sealed interface WpeEvent {
     data class ImeCursor(val x: Int, val y: Int, val width: Int, val height: Int) : WpeEvent
     data class Cursor(val name: String?) : WpeEvent
     data class DataCleared(val request: Long, val ok: Boolean) : WpeEvent
+    data class CookieSet(val request: Long, val ok: Boolean) : WpeEvent
 
     /** A script dialog WebKit waits on; [type] is a `WpeNative.DIALOG_*`. */
     data class Dialog(val request: Long, val type: Int, val message: String?, val defaultText: String?) : WpeEvent
@@ -79,6 +80,7 @@ internal sealed interface WpeEvent {
             WpeNative.IME_CURSOR -> ImeCursor((a shr 32).toInt(), (a and 0xffffffffL).toInt(), (b shr 32).toInt(), (b and 0xffffffffL).toInt())
             WpeNative.CURSOR -> Cursor(s1)
             WpeNative.DATA_CLEARED -> DataCleared(a, b == 1L)
+            WpeNative.COOKIE_SET -> CookieSet(a, b == 1L)
             WpeNative.DIALOG -> Dialog(a, b.toInt(), s1, s2)
             WpeNative.PERMISSION -> Permission(a, b, s1)
             WpeNative.FILE_CHOOSER -> FileChooser(a, b == 1L, lines(s1))

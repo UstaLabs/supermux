@@ -35,6 +35,7 @@ internal object WpeNative {
     const val CLIPBOARD = 23
     const val OPTION_MENU = 24
     const val OPTION_MENU_CLOSED = 25
+    const val COOKIE_SET = 26
 
     // WV_OPTION_*.
     const val OPTION_ENABLED = 1
@@ -158,6 +159,7 @@ internal object WpeNative {
     @JvmStatic external fun setenv(name: String, value: String?)
     @JvmStatic external fun frameSeq(view: Long): Long
     @JvmStatic external fun clearData(view: Long, request: Long)
+    @JvmStatic external fun setCookie(view: Long, request: Long, url: String, header: String)
     @JvmStatic external fun answer(view: Long, request: Long, allow: Boolean, text: String?, files: Array<String>?)
 
     /** What the system's clipboard holds, for the pages' pastes ([WpeClipboard]): its text, or null for none. */

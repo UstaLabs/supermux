@@ -46,6 +46,7 @@ enum {
     WV_EV_OPTION_MENU = 24,  /* a <select>'s menu: a request, s1 its items, one per line, "<WV_OPTION_* bits>\t<label>",
                                 s2 the element's area "x,y,width,height" in view coordinates */
     WV_EV_OPTION_MENU_CLOSED = 25, /* a: the request of a menu WebKit closed itself */
+    WV_EV_COOKIE_SET = 26,   /* a: request, b: 1 the cookie is in the view's network session / 0 refused or failed */
 };
 enum { WV_OPTION_ENABLED = 1, WV_OPTION_SELECTED = 2, WV_OPTION_GROUP_LABEL = 4, WV_OPTION_GROUP_CHILD = 8 };
 enum { WV_PERM_CAMERA = 1, WV_PERM_MICROPHONE = 2, WV_PERM_GEOLOCATION = 4, WV_PERM_NOTIFICATIONS = 8, WV_PERM_OTHER = 16 };
@@ -103,7 +104,7 @@ enum {
     WV_OP_CREATE = 1, WV_OP_DESTROY, WV_OP_REGISTER_SCHEME, WV_OP_CONFIGURE, WV_OP_SET_DARK, WV_OP_LOAD, WV_OP_NAVIGATE,
     WV_OP_EVALUATE, WV_OP_CALL_ASYNC, WV_OP_DECIDE, WV_OP_SAVE_STATE, WV_OP_RESTORE_STATE, WV_OP_SET_SIZE,
     WV_OP_SET_VISIBLE, WV_OP_SET_FOCUS, WV_OP_POINTER, WV_OP_SCROLL, WV_OP_KEY, WV_OP_IME, WV_OP_FINISH_SCHEME,
-    WV_OP_TERMINATE, WV_OP_CLEAR_DATA, WV_OP_ANSWER, WV_OP_CLIPBOARD,
+    WV_OP_TERMINATE, WV_OP_CLEAR_DATA, WV_OP_ANSWER, WV_OP_CLIPBOARD, WV_OP_SET_COOKIE,
 };
 typedef struct _WvSync WvSync;
 typedef struct {

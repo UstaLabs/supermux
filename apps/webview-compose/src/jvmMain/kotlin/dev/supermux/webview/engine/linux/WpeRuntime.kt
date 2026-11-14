@@ -31,7 +31,7 @@ import org.jetbrains.skiko.OS
  */
 internal object WpeRuntime {
     /** The glue's natives as this library calls them; the runtime's manifest says which it was built with. */
-    const val ABI: String = "2"
+    const val ABI: String = "3"
     const val VERSION_PREFIX: String = "2.54."
     const val PROPERTY: String = "dev.supermux.webview.wpe.runtime"
     const val ENV: String = "WEBVIEW_WPE_RUNTIME"
