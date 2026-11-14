@@ -145,12 +145,7 @@ private fun collectBlock(node: ASTNode, src: String, out: MutableList<MdBlock>) 
         }
         MarkdownElementTypes.SETEXT_1 -> out.add(MdBlock.Heading(1, setextText(node, src)))
         MarkdownElementTypes.SETEXT_2 -> out.add(MdBlock.Heading(2, setextText(node, src)))
-        MarkdownElementTypes.CODE_FENCE -> {
-            val lang = node.findChildOfType(MarkdownTokenTypes.FENCE_LANG)?.getTextInNode(src)?.toString()?.trim()?.ifEmpty { null }
-            val code = node.children.filter { it.type == MarkdownTokenTypes.CODE_FENCE_CONTENT }
-                .joinToString("\n") { it.getTextInNode(src).toString() }
-            out.add(MdBlock.Code(lang, code))
-        }
+        MarkdownElementTypes.CODE_FENCE -> out.add(fencedCode(node, src))
         MarkdownElementTypes.CODE_BLOCK -> {
             val code = node.getTextInNode(src).toString().trimEnd('\n').lines().joinToString("\n") { it.removePrefix("    ") }
             out.add(MdBlock.Code(null, code))
@@ -204,9 +199,43 @@ private fun listItem(item: ASTNode, src: String, out: MutableList<MdBlock>, orde
         out.add(MdBlock.Bullet(text, task, depth))
     }
 
-    // Nested lists stay flat blocks, one level deeper; the renderer indents by [depth].
-    item.children.filter { it.type == MarkdownElementTypes.UNORDERED_LIST || it.type == MarkdownElementTypes.ORDERED_LIST }
-        .forEach { listBlock(it, src, out, depth + 1) }
+    // Everything else in the item follows its line, in order (#148: CommonMark list-item continuation — a fenced
+    // block indented under "2. Paste this:" used to vanish). Nested lists stay flat blocks, one level deeper; the
+    // renderer indents by [depth]. Its first paragraph is the item's own line, above.
+    for (child in item.children) {
+        when (child.type) {
+            MarkdownElementTypes.UNORDERED_LIST, MarkdownElementTypes.ORDERED_LIST -> listBlock(child, src, out, depth + 1)
+            MarkdownElementTypes.PARAGRAPH -> if (child !== para) collectBlock(child, src, out)
+            MarkdownElementTypes.CODE_FENCE -> out.add(fencedCode(child, src))
+            else -> collectBlock(child, src, out)
+        }
+    }
+}
+
+/**
+ * A fenced block: its language and its lines. The parser already takes a list item's indentation off them, but not
+ * the fence's own (the spaces before its ``` that the node keeps): as much of that comes off each line, as CommonMark
+ * says (a tab counts as up to 4 columns).
+ */
+private fun fencedCode(node: ASTNode, src: String): MdBlock.Code {
+    val lang = node.findChildOfType(MarkdownTokenTypes.FENCE_LANG)?.getTextInNode(src)?.toString()?.trim()?.ifEmpty { null }
+    val indent = columns(node.getTextInNode(src).takeWhile { it == ' ' || it == '\t' }.toString())
+    val code = node.children.filter { it.type == MarkdownTokenTypes.CODE_FENCE_CONTENT }
+        .joinToString("\n") { dedent(it.getTextInNode(src).toString(), indent) }
+    return MdBlock.Code(lang, code)
+}
+
+private fun columns(ws: String): Int = ws.fold(0) { col, c -> if (c == '\t') col + 4 - col % 4 else col + 1 }
+
+/** [line] without up to [width] columns of leading whitespace. */
+private fun dedent(line: String, width: Int): String {
+    var col = 0
+    var i = 0
+    while (i < line.length && col < width && (line[i] == ' ' || line[i] == '\t')) {
+        col = if (line[i] == '\t') col + 4 - col % 4 else col + 1
+        i++
+    }
+    return line.substring(i)
 }
 
 private fun directInlineText(item: ASTNode, src: String): String {
