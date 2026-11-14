@@ -1020,6 +1020,8 @@ sealed interface ServerFrame {
         val outcome: String,
         /** What was actually chosen ("Allow always", "Reject — too risky"); absent on an older broker. */
         val answerLabel: String? = null,
+        /** #143: who answered (a device name now, a user once supermux has users); absent when not known. */
+        val answeredBy: String? = null,
     ) : ServerFrame
 
     /** Broker `{type:"error", reason}` — switch/respond failures surface here. */
@@ -1057,6 +1059,11 @@ data class PromptRequest(
     val subagentId: String? = null,
     val subagentName: String? = null,
     val subagentDescription: String? = null,
+    /**
+     * #143: the agent's own reason for asking, in its words (Claude Code's decision_reason, e.g. a safety check that
+     * asks even in bypassPermissions). Absent when the agent gave none, and on older brokers.
+     */
+    val reason: String? = null,
 )
 
 /** One question inside a `kind=question` request. Broker JSON-stringifies the list into [PromptRequest.body]. */

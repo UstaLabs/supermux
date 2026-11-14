@@ -11,6 +11,7 @@
       { "id": "reject_once", "label": "Reject", "kind": "reject_once" }
     ],
     "allowFreeText": false,
-    "blocking": true
+    "blocking": true,
+    "reason": "Dangerous rm operation on possibly-empty variable path"
   }
 }

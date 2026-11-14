@@ -667,3 +667,23 @@ test('rules with spaces inside their parentheses (exact Bash commands) survive t
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+// #143: a prompt the host closed with a reason (an interrupt) reaches Claude Code as that reason, not "Permission denied".
+test('a cancelled host permission with a message denies with that message', async () => {
+  const reason = 'Not answered: a message from X interrupted the turn. Nobody refused it.'
+  const r = await hostDriver({EXPECT_PERM: 'deny-message', EXPECT_DENY_MESSAGE: reason}).open(ctx({
+    requestPermission: async () => ({outcome: {outcome: 'cancelled'}, message: reason}),
+  }))
+  try { expect(await r.prompt(input('permission'), signal())).toEqual({stopReason: 'end_turn'}) }
+  finally { await r.close({ mode: "shutdown" }) }
+})
+
+// #143: Claude Code's own reason for asking (decision_reason, e.g. a safety check in bypassPermissions) reaches the host.
+test('a permission request passes Claude Code\'s decision_reason to the host as detail.reason', async () => {
+  let reason: string | undefined
+  const r = await hostDriver({PERM_REASON: 'Dangerous rm operation'}).open(ctx({
+    requestPermission: async (request) => { reason = request.detail?.reason; return {outcome: {outcome: 'selected', optionId: 'reject_once'}} },
+  }))
+  try { await r.prompt(input('permission'), signal()) } finally { await r.close({ mode: "shutdown" }) }
+  expect(reason).toBe('Dangerous rm operation')
+})

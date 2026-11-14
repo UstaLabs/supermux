@@ -154,6 +154,10 @@
     <string name="host_app_android_push_document">Bir belge gönderdi</string>
     <string name="host_app_android_channel_sessions">Oturumlar</string>
     <string name="host_app_android_channel_sessions_description">Ajan oturumu güncellemeleri</string>
+    <!-- #143: a permission prompt answered from its notification -->
+    <string name="host_app_android_prompt_answered">Yanıtlandı: %1$s</string>
+    <string name="host_app_android_prompt_not_paired">Yanıtlanamadı: bu makine eşleştirilmemiş. Supermux'ı açın.</string>
+    <string name="host_app_android_prompt_failed">Yanıtlanamadı (zaten yanıtlanmış ya da makineye ulaşılamıyor). Supermux'ı açın.</string>
 
     <!-- Android: app update notifications -->
     <string name="host_app_android_update_channel_progress">Uygulama güncellemesi indirme</string>

@@ -24,6 +24,7 @@ import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
+import io.ktor.http.encodeURLPathPart
 import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readAvailable
 import io.ktor.utils.io.readUTF8Line
@@ -1862,6 +1863,13 @@ private data class RenameBody(val name: String)
 @Serializable
 private data class MuteBody(val muted: Boolean)
 
+/** #143: a prompt's answer as `POST /sessions/<id>/requests/<requestId>` takes it. */
+@Serializable
+private data class OptionAnswer(val optionId: String)
+
+@Serializable
+private data class RequestAnswerBody(val answer: OptionAnswer)
+
 @Serializable
 private data class CreateProxyBody(val sessionName: String, val port: Int, val domain: String? = null)
 
@@ -2414,6 +2422,13 @@ class BrokerApi(
     /** POST /sessions/<id>/mute {"muted": ...} */
     suspend fun setMute(id: String, muted: Boolean) =
         postJson("$httpBase/sessions/$id/mute", MuteBody(muted))
+
+    /**
+     * #143: POST /sessions/<id>/requests/<requestId> — answer an agent's prompt with one of its options, without the
+     * WebSocket (a notification's Allow / Deny with the app closed). Non-2xx throws: 409 means the prompt is gone.
+     */
+    suspend fun answerRequest(sessionId: String, requestId: String, optionId: String) =
+        postJson("$httpBase/sessions/${sessionId.encodeURLPathPart()}/requests/${requestId.encodeURLPathPart()}", RequestAnswerBody(OptionAnswer(optionId)))
 
     /** POST /sessions/<id>/read — advance last_read_at to now (broadcasts `session_read`). */
     suspend fun markSessionRead(id: String) {

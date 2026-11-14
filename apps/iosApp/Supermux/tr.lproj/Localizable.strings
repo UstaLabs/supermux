@@ -5,3 +5,10 @@
 "QR scanning is unavailable. Paste the pairing link instead." = "Karekod tarama kullanılamıyor. Bunun yerine eşleştirme bağlantısını yapıştırın.";
 "Camera access is off. Enable it in Settings, or close the scanner and paste the pairing link." = "Kamera erişimi kapalı. Ayarlar'dan açın ya da tarayıcıyı kapatıp eşleştirme bağlantısını yapıştırın.";
 "Scan pairing code" = "Eşleştirme kodunu tara";
+
+/* #143: a permission prompt answered from its notification */
+"Deny" = "Reddet";
+"Allow" = "İzin ver";
+"Allowed." = "İzin verildi.";
+"Denied." = "Reddedildi.";
+"Couldn't answer (already answered, or the host is unreachable). Open Supermux." = "Yanıtlanamadı (zaten yanıtlanmış ya da makineye ulaşılamıyor). Supermux'ı açın.";

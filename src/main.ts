@@ -131,6 +131,7 @@ import { buildMenuEntries, menuRefresher } from "./channels/telegram/menu"
 import { MessageStore } from "./core/session-manager/messages"
 import { openDb, runMigrations } from "./core/storage/db"
 import { MIGRATIONS } from "./core/storage/migrations"
+import { AnsweredBy } from "./core/agents/answered-by"
 import { initStorage } from "./core/storage/open"
 import { checkSchemaStamp, writeSchemaStamp } from "./core/storage/schema-stamp"
 import { sweepRuntimeAssets } from "./core/runtime-assets-gc"
@@ -160,7 +161,7 @@ import { FileStore } from "./core/files/store"
 import { loadOrGenerateVapid } from "./core/push/vapid"
 import { PushSubscriptionStore } from "./core/push/subscriptions"
 import { createPushSender } from "./core/push/sender"
-import { firePushForReply, firePushToAll } from "./core/push/hook"
+import { firePushForReply, firePushForRequest, firePushToAll } from "./core/push/hook"
 import { brokerLang, t as brokerText, type MessageKey } from "./core/i18n/messages"
 import { DevicePushTokenStore } from "./core/push/device-tokens"
 import { createRelayClient } from "./core/push/relay-adapter"
@@ -1052,6 +1053,7 @@ function stopClaudeTailer(sessionUuid: string): void {
   subagentStore.clear(sessionUuid)
 }
 
+const answeredBy = new AnsweredBy()
 const modelCache = new ModelCache()
 /** Model lists an agent reported at a session start (#102: Cursor's ACP options), kept across restarts. */
 const learnedModels = new LearnedModels(join(STATE_DIR, "learned-models"))
@@ -2207,12 +2209,24 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
       options: ev.options,
       allowFreeText: ev.allowFreeText,
       blocking: ev.blocking,
+      ...(ev.reason ? { reason: ev.reason } : {}),
       ...(ev.subagentId ? { subagentId: ev.subagentId } : {}),
       ...(ev.subagentName ? { subagentName: ev.subagentName } : {}),
       ...(ev.subagentDescription ? { subagentDescription: ev.subagentDescription } : {}),
     }
     webChannel?.broadcastToAll({ type: "request_open", session: sessionId, request })
     const session = registry.get(sessionId)
+    // #143: a prompt blocks the agent until someone answers; a notification makes sure someone knows.
+    firePushForRequest({
+      sender: pushSender, sessionName: session?.name ?? sessionId, sessionId,
+      request: { requestId: ev.requestId, kind: ev.requestKind, title: ev.title, body: ev.body, options: ev.options, ...(ev.reason ? { reason: ev.reason } : {}) },
+      isInternal: () => !!registry.get(sessionId)?.internal,
+      devices: () => pushStore.all().map((s) => s.device),
+      presentOn: (sid) => viewingTracker.presentDevicesFor(sid),
+      nativeSender,
+      nativeDevices,
+      hostId: hostIdentity.hostId,
+    }).catch((err) => log.warn("push_hook_failed", { err: err?.message ?? String(err) }))
     const destination = resolveReplyTarget(sessionId)
     const addressed = parseAddress(destination)
     if (addressed?.channel === "telegram" && telegram) {
@@ -2230,12 +2244,16 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   })
   adapter.on("request-closed", (ev: { requestId: string; outcome: "answered" | "expired" | "cancelled"; answerLabel?: string }) => {
     childSettle.changed(sessionId)
+    // #143 (team rule): who answered, recorded with the close and logged.
+    const by = answeredBy.take(sessionId, ev.requestId)
+    log.info("request_closed", { session: sessionId, requestId: ev.requestId, outcome: ev.outcome, ...(ev.answerLabel ? { answer: ev.answerLabel } : {}), ...(by ? { answered_by: by } : {}) })
     webChannel?.broadcastToAll({
       type: "request_closed",
       session: sessionId,
       requestId: ev.requestId,
       outcome: ev.outcome,
       ...(ev.answerLabel ? { answerLabel: ev.answerLabel } : {}),
+      ...(by ? { answeredBy: by } : {}),
     })
     const destination = resolveReplyTarget(sessionId)
     const addressed = parseAddress(destination)
@@ -3145,11 +3163,12 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       const adapter = s ? sessionManager.adapterFor(s.id) : undefined
       return adapter?.openRequests?.() ?? []
     },
-    respondRequest: async (sessionId, requestId, answer) => {
+    respondRequest: async (sessionId, requestId, answer, who) => {
       const s = registry.get(sessionId)
       if (!s) return { ok: false, error: "session not found" }
       const adapter = sessionManager.adapterFor(s.id)
       if (!adapter?.respondRequest) return { ok: false, error: "session cannot answer requests" }
+      if (who?.by) answeredBy.note(s.id, requestId, who.by)
       try {
         await adapter.respondRequest(requestId, answer as import("./core/agents/types").RequestAnswerInput)
         return { ok: true }

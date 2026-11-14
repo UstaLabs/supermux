@@ -415,7 +415,8 @@ export interface WebChannelOpts {
   switchFastMode?: (id: string, fastMode: boolean) => Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }>
   switchPermissionMode?: (id: string, mode: string) => Promise<{ ok: true; status: "applied"; applied?: "now" | "next-turn" } | { ok: false; error: string }>
   getSessionRequests?: (id: string) => unknown[]
-  respondRequest?: (sessionId: string, requestId: string, answer: unknown) => Promise<{ ok: true } | { ok: false; error: string }>
+  /** [who].by: the answering device's name (#143: request_closed says who answered; a user, once there are users). */
+  respondRequest?: (sessionId: string, requestId: string, answer: unknown, who?: { by: string }) => Promise<{ ok: true } | { ok: false; error: string }>
   getSessionAgent?: (name: string) => { agent: AgentKind; model?: string; reasoningLevel?: string } | undefined
   interruptSession?: (id: string) => Promise<{ ok: boolean; reason?: string }>
   finishSession?: (id: string, req: { action: "merge"|"pr"|"keep"|"discard"; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prTitle?: string; prBody?: string; keep?: boolean }) => Promise<import("../../core/worktree/finish-job").FinishJob | { error: string }>
@@ -2184,7 +2185,7 @@ export class WebChannel implements Channel {
         ws.send(JSON.stringify({ type: "error", reason: "requests not available" }))
         return
       }
-      const result = await this.opts.respondRequest(frame.session, frame.requestId, frame.answer)
+      const result = await this.opts.respondRequest(frame.session, frame.requestId, frame.answer, { by: ws.data.deviceName })
       if (!result.ok) ws.send(JSON.stringify({ type: "error", reason: result.error }))
       return
     }
@@ -4100,6 +4101,20 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       this.opts.markRead?.(id)   // advances last_read_at + broadcasts session_read (main.ts:1121)
       return this.json({ ok: true })
+    }
+    {
+      // #143: answer an agent's prompt over HTTP, e.g. from a notification's Allow / Deny with the app closed. Same
+      // answer as the WebSocket's request_respond; like every API route, only a paired device's token gets here.
+      const ask = method === "POST" ? path.match(/^\/sessions\/([^/]+)\/requests\/([^/]+)$/) : null
+      if (ask) {
+        if (!this.opts.respondRequest) return this.json({ ok: false, error: "requests not available" }, 503)
+        const body = await req.json().catch(() => ({})) as Record<string, unknown>
+        if (!body.answer || typeof body.answer !== "object") return this.json({ ok: false, error: "answer is required" }, 400)
+        const auth = this.authenticate(req)
+        const who = auth.ok ? { by: auth.device.name } : undefined
+        const result = await this.opts.respondRequest(decodeURIComponent(ask[1]!), decodeURIComponent(ask[2]!), body.answer, who)
+        return result.ok ? this.json({ ok: true }) : this.json({ ok: false, error: result.error }, 409)
+      }
     }
     {
       const sub = method === "POST" ? path.match(/^\/sessions\/([^/]+)\/subagents\/([^/]+)\/(message|stop)$/) : null

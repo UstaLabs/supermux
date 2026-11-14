@@ -32,6 +32,7 @@ export function mapPermissionRequest(body: Extract<NormalizedBody, { kind: "perm
     options: body.options.map((o) => ({ id: o.id, label: o.label, kind: o.kind })),
     allowFreeText: false,
     blocking: true,
+    ...(body.detail?.reason ? { reason: body.detail.reason } : {}),
     ...(body.subagentId ? { subagentId: body.subagentId } : {}),
   }
 }

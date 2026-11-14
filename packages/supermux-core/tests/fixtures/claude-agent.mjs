@@ -316,6 +316,7 @@ if (process.env.MODE === 'setup-hang') {
       hanging = {session, uuid}
       const request = {subtype: 'can_use_tool', tool_name: 'Bash', input: {command: 'pwd'}}
       if (text === 'permission-tool-use-id') request.tool_use_id = 'tool-99'
+      if (process.env.PERM_REASON) { request.decision_reason = process.env.PERM_REASON; request.decision_reason_type = 'safetyCheck' }
       if (text === 'permission-always') {
         request.permission_suggestions = [{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'pwd' }], behavior: 'allow', destination: 'session' }]
         request.blocked_path = '/tmp/x'
