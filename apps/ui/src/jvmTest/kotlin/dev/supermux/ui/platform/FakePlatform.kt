@@ -97,6 +97,9 @@ internal open class FakePlatform(
 
     override var updates: AppUpdater = FakeAppUpdater()
     override var releasePlatform: dev.supermux.ui.whatsnew.ReleasePlatform? = null
+    override var fileManager: FileManager? = null
+    val openedFolders = mutableListOf<String>()
+    override fun openFolder(path: String): Boolean { openedFolders += path; return true }
     override var notifications: NotificationManager = FakeNotifications()
     override var windows: WindowHostController? = null
     override var push: PushRegistrar? = null

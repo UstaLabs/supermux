@@ -8,6 +8,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
@@ -86,6 +88,7 @@ class WorkspaceRowTest {
         onToggleMute: () -> Unit = {},
         onNewChat: () -> Unit = {},
         onRename: () -> Unit = {},
+        folder: RowContextMenuEntry? = null,
     ) {
         CompositionLocalProvider(
             LocalInputMode provides mode,
@@ -100,6 +103,7 @@ class WorkspaceRowTest {
                         mute = mute,
                         interactionSource = interactionSource,
                         onClick = {},
+                        folder = folder,
                         onRename = onRename,
                         onKill = onKill,
                         onToggleMute = onToggleMute,
@@ -249,6 +253,29 @@ class WorkspaceRowTest {
         assertEquals(listOf("Rename", "Mute", "Archive"), workspaceRowContextLabels(mute = false))
         assertEquals(listOf("Rename", "Unmute", "Archive"), workspaceRowContextLabels(mute = true))
         assertEquals(listOf("Restore"), archivedWorkspaceRowContextLabels())
+    }
+
+    // #149: the workspace's folder in the OS file manager, only where the shell hands the row an entry for it.
+    @Test fun aLocalWorkspacesMenuShowsItsFolder_beforeArchive() {
+        assertEquals(
+            listOf("Rename", "Mute", "Show in Finder", "Archive"),
+            workspaceRowContextLabels(folderLabel = "Show in Finder"),
+        )
+    }
+
+    @Test fun touchRow_overflowOpensTheFolder_andOmitsItWithoutOne() = runComposeUiTest {
+        var opened = 0
+        var entry by androidx.compose.runtime.mutableStateOf<RowContextMenuEntry?>(RowContextMenuEntry("Open folder") { opened++ })
+        setContent { Row(InputMode.Touch, contextMenu = false, folder = entry) }
+        onNodeWithContentDescription("More").performClick()
+        onNodeWithText("Open folder").assertIsDisplayed().performClick()
+        waitForIdle()
+        assertEquals(1, opened)
+        entry = null
+        waitForIdle()
+        onNodeWithContentDescription("More").performClick()
+        onNodeWithText("Archive").assertIsDisplayed()
+        onNodeWithText("Open folder").assertDoesNotExist()
     }
 
     // ── Archived row ─────────────────────────────────────────────────────────────────────────

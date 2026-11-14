@@ -1009,6 +1009,11 @@ class FleetStore(
     /** The active host's app (host-global ops), falling back to the first connected host. */
     fun activeApp(): HostStore? = conns[_activeHost.value]?.app ?: conns.values.firstOrNull()?.app
 
+    /** The broker identity (`GET /host` hostId) of the host [sessionId] lives on, when its record knows it. */
+    fun hostIdOfSession(sessionId: String): String? = synchronized(lock) {
+        _sessionHost.value[sessionId]?.let { id -> store.list().firstOrNull { it.recordId == id }?.hostId }
+    }
+
     /** The broker identity (`GET /host` hostId) of the active host, when its record knows it. */
     fun activeHostId(): String? = synchronized(lock) {
         activeRecordId()?.let { id -> store.list().firstOrNull { it.recordId == id }?.hostId }

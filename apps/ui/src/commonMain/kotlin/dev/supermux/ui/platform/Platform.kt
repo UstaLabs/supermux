@@ -192,6 +192,15 @@ interface Platform {
 
     /** Which build this is, as a What's new edition names it (#90); null where none says. */
     val releasePlatform: dev.supermux.ui.whatsnew.ReleasePlatform? get() = null
+
+    /** The system file manager a folder on this machine opens in (#149); null where there is none (phone, web). */
+    val fileManager: FileManager? get() = null
+
+    /**
+     * Opens [path], a folder on THIS machine, in [fileManager]; false when nothing took it. Offer it only when the
+     * host it belongs to is this computer.
+     */
+    fun openFolder(path: String): Boolean = false
 }
 
 /** Default [Platform.pickFiles] requester for screens that only ever have one picker in play. */

@@ -79,11 +79,14 @@ fun workspaceRowContextLabels(
     canMarkRead: Boolean = false,
     /** The list supports multi-select (batch actions). */
     selectable: Boolean = false,
+    /** "Show in Finder" and its kin, when the workspace's folder is on this computer (#149). */
+    folderLabel: String? = null,
 ): List<String> = buildList {
     add("Rename")
     add(if (mute) "Unmute" else "Mute")
     if (canMarkRead) add("Mark as read")
     if (selectable) add("Select")
+    folderLabel?.let(::add)
     add("Archive")
 }
 
@@ -131,6 +134,8 @@ fun WorkspaceRow(
     onMarkRead: (() -> Unit)? = null,
     /** Start a multi-select with this row; null hides the entry. */
     onSelect: (() -> Unit)? = null,
+    /** "Show in Finder" / "Show in Explorer" / "Open folder" (#149); null hides it (a remote host, a phone). */
+    folder: RowContextMenuEntry? = null,
     /** Multi-select is on: a checkbox replaces the status mark and [onClick] toggles the row. */
     selecting: Boolean = false,
     selected: Boolean = false,
@@ -182,6 +187,7 @@ fun WorkspaceRow(
                         mute = mute,
                         canMarkRead = onMarkRead != null && model.unread,
                         selectable = onSelect != null,
+                        folderLabel = folder?.label,
                     ).map { label ->
                         RowContextMenuEntry(label) {
                             when (label) {
@@ -190,6 +196,7 @@ fun WorkspaceRow(
                                 "Mark as read" -> onMarkRead?.invoke()
                                 "Select" -> onSelect?.invoke()
                                 "Archive" -> onKill()
+                                folder?.label -> folder?.onClick?.invoke()
                             }
                         }
                     }
@@ -274,6 +281,7 @@ fun WorkspaceRow(
                                             add(RowContextMenuEntry(if (mute) "Unmute" else "Mute", onToggleMute))
                                             if (onMarkRead != null && model.unread) add(RowContextMenuEntry("Mark as read", onMarkRead))
                                             if (onSelect != null) add(RowContextMenuEntry("Select", onSelect))
+                                            folder?.let(::add)
                                             add(RowContextMenuEntry("Archive", onKill))
                                         },
                                         newChatTag = WorkspaceListTestIds.ROW_NEW_CHAT,
