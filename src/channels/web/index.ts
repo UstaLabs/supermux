@@ -50,7 +50,7 @@ import { worktreesRoot } from "../../core/worktree/manager"
 
 import { getRepoInfo } from "../../core/git/repo-info"
 import { remoteStatus, fetchRemote, publishBranch, pushBranch, pullBranch } from "../../core/git/remote"
-import { listBranches, liveBranch, repoToplevel, switchBranch } from "../../core/git/branches"
+import { branchList, liveBranch, realPath, samePath, switchBranch, type BranchOwner } from "../../core/git/branches"
 import { checkLog, createPr, markReady, readPr, type PrRead } from "../../core/git/forge"
 import { prInput, writePrText, type PrTextWriter } from "../../core/git/pr-text"
 import type { AgentKind } from "../../core/agents/types"
@@ -2394,6 +2394,11 @@ export class WebChannel implements Channel {
    * resolve {path, side: mine|theirs|both} settles one conflicted file; abort cancels the merge;
    * revert {sha} adds a commit that undoes one; branch|tag {sha, name} names one, moving nothing.
    */
+  /** #72: the other sessions, as owners of the copies their branches are open in. */
+  private branchOwners(except: string): BranchOwner[] {
+    return this.opts.getSessionsSnapshot().flatMap((s) => (s.id && s.id !== except && s.workdir ? [{ id: s.id, name: s.name, workdir: s.workdir }] : []))
+  }
+
   /** #72: a branch's PR/MR as last read, per checkout and branch (GET …/git/pr). */
   private readonly prCache = new Map<string, { at: number; r: PrRead }>()
 
@@ -4249,27 +4254,14 @@ export class WebChannel implements Channel {
       if (op === "push") return this.json(pushBranch(workdir))
       return this.json(pullBranch(workdir))
     }
-    // #72: every chat can switch branch, a chat with its own copy too; the copy follows. Each local branch says
-    // where it is open (this chat, another chat, your folder): git refuses to check one out twice.
+    // #72: every chat can switch branch, a chat with its own copy too; the copy follows. Each branch says where it is
+    // open (this chat, the main folder, another session, a worktree no session owns): git refuses one checked out twice.
+    // The same service (core/git/branches.ts) serves the main folder for #152's launcher.
     if (method === "GET" && path.match(/^\/sessions\/[^/]+\/git\/branches$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
-      const list = listBranches(workdir)
-      // git prints worktree paths its own way (on Windows "D:/a/…", maybe an 8.3 short name), a session row holds
-      // the OS's ("D:\\a\\…"): both go through the native realpath, then compare on the host's rules (case, separators).
-      const real = (p: string) => { try { return realpathSync.native(p) } catch { return p } }
-      const same = (a: string, b: string) => paths.isInside(a, b) && paths.isInside(b, a)
-      const here = real(repoToplevel(workdir) ?? workdir)
-      const chats = this.opts.getSessionsSnapshot().map((s) => ({ id: s.id, name: s.name, at: real(s.workdir) }))
-      const local = list.local.map((b) => {
-        if (!b.checkedOutAt) return { ...b, openIn: null }
-        const at = real(b.checkedOutAt)
-        if (same(at, here)) return { ...b, openIn: { kind: "this" } }
-        const chat = chats.find((c) => c.id !== id && same(c.at, at))
-        return { ...b, openIn: chat ? { kind: "chat", id: chat.id, name: chat.name } : { kind: "folder" } }
-      })
-      return this.json({ inPlace: true, ...list, local })
+      return this.json(branchList(workdir, this.branchOwners(id)))
     }
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/switch$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
@@ -4278,7 +4270,10 @@ export class WebChannel implements Channel {
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
       const name = String(body.name ?? "").trim()
       if (!name) return this.json({ error: "name required" }, 400)
-      return this.json(switchBranch(workdir, name, { create: body.create === true }))
+      const r = switchBranch(workdir, name, { create: body.create === true, requireClean: body.requireClean === true })
+      if (r.status !== "checked_out_elsewhere") return this.json(r)
+      const at = realPath(r.path), owner = this.branchOwners(id).find((o) => samePath(realPath(o.workdir), at))
+      return this.json(owner ? { ...r, openIn: { kind: "session", id: owner.id, name: owner.name } } : r)
     }
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/message$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
