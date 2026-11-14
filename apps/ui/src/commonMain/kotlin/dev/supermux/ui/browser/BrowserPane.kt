@@ -131,6 +131,10 @@ fun BrowserPane(
 ) {
     val platform = LocalPlatform.current
     val provided = LocalAppWebViews.current
+    // #155: the open's timings; whether this pane is the one that makes the app's web views (the cold start) is the first.
+    val opening = remember(view.id) {
+        TabOpenTrace(view.id).apply { mark("open", "runtime" to if (provided != null || AppWebViews.appIfMade != null) "warm" else "cold") }
+    }
     // The app's runtime is made on first use: a tab with no page makes no engine, nor loads one.
     val webViews by remember(provided) { derivedStateOf { provided ?: AppWebViews.app } }
     val links by rememberUpdatedState(LocalLinkOpener.current)
@@ -162,11 +166,17 @@ fun BrowserPane(
     // A port resolves through the by-port route or the previews, so the first page waits for them: three seconds at
     // most, then none.
     LaunchedEffect(Unit) {
+        var byPortMs: Long? = null
+        var proxiesMs: Long? = null
         withTimeoutOrNull(3_000) {
+            val asked = opening.elapsed()
             byPort = runCatching { actions.byPort() }.getOrNull()
+            byPortMs = opening.elapsed() - asked
             previews = runCatching { actions.proxies() }.getOrNull()
+            proxiesMs = opening.elapsed() - asked - byPortMs!!
         }
         if (previews == null) previews = emptyList()
+        opening.mark("routes", "byPortMs" to byPortMs, "proxiesMs" to proxiesMs)
     }
 
     fun go(url: String) {
@@ -195,6 +205,13 @@ fun BrowserPane(
     // Load the page: a preview after its key, which goes in through a live engine (the blank page brings one up).
     val page = (body as? BrowserBody.Page)?.url
     val live = state.phase == WebViewPhase.Live
+    LaunchedEffect(state.phase) {
+        when (state.phase) {
+            WebViewPhase.Activating -> opening.mark("activating")
+            WebViewPhase.Live -> opening.mark("live")
+            else -> Unit
+        }
+    }
     // While live, this engine is one the host's preview keeper renews the key through (#155): the Browser profile's store
     // is shared, so a key put in through any engine is every tab's.
     val previewSink = remember(state) { PreviewKeeper.Sink<PreviewCookieDto> { state.navigator.setCookie(it.toWebCookie()) } }
@@ -208,10 +225,22 @@ fun BrowserPane(
         if (displayAddress(url, previews.orEmpty(), byPort) is DisplayAddress.Preview) {
             // Asked only when live: the keeper mints only when the key can go into the store at once.
             if (!live) return@LaunchedEffect
+            val asked = opening.elapsed()
             actions.preview.ready(previewSink)
+            opening.mark("key", "keyMs" to opening.elapsed() - asked)
         }
         requested = url
+        opening.mark("load", "preview" to (displayAddress(url, previews.orEmpty(), byPort) is DisplayAddress.Preview))
         state.load(WebContent.Url(url))
+    }
+    // #155: the page's commit and its load's end, after the load the pane asked for.
+    LaunchedEffect(view.id) {
+        snapshotFlow { Triple(opening.has("load"), state.url, state.loading) }.collect { (loaded, url, loading) ->
+            if (!loaded) return@collect
+            if (loading is LoadingState.Loading) opening.mark("loading")
+            if (url != null && opening.has("loading")) opening.mark("commit")
+            if (loading == LoadingState.Idle && opening.has("loading")) opening.mark("done")
+        }
     }
     // A zoom outlives the engine: a new lease gets it again.
     // Device mode's fit (#122 2b) zooms the page by the stage's scale on top of the user's zoom; leaving it zooms back.
