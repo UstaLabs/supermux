@@ -227,6 +227,8 @@ targets:
     platform: iOS
     sources:
       - path: SupermuxPushNSE/NotificationService.swift
+      # #123: the notification bodies it words ("Sent a photo"), in English and Turkish.
+      - path: SupermuxPushNSE/Resources
       # Shared sources — compiled into BOTH the app and this extension. The NSE loads
       # the keypair from the shared Keychain group and opens the blob with the same code.
       - path: Supermux/Push/PushCrypto.swift

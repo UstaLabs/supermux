@@ -104,7 +104,7 @@ private struct AttachmentThumb: View {
                     ProgressView().frame(maxWidth: .infinity, minHeight: 44)
                 }
             } else {
-                Label(att.name ?? att.kind ?? "Attachment", systemImage: "paperclip")
+                Label(att.name ?? att.kind ?? String(localized: "Attachment"), systemImage: "paperclip")
                     .font(.caption2).foregroundStyle(.secondary)
             }
         }

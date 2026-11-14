@@ -77,6 +77,29 @@ test("paths use / on every OS, as the baseline's keys do (Bun's Glob answers wit
   expect(kotlinSources().every(f => !f.includes("\\"))).toBe(true)
 })
 
+test("iOS .strings files: every language has the English keys, with the same placeholders (#123)", () => {
+  const read = (f: string) => new Map(
+    [...lf(readFileSync(f, "utf8")).matchAll(/^"((?:[^"\\]|\\.)*)"\s*=\s*"((?:[^"\\]|\\.)*)";/gm)].map(m => [m[1]!, m[2]!]),
+  )
+  const ph = (v: string) => [...v.matchAll(/%(?:\d+\$)?[@dsf]/g)].map(m => m[0]).sort().join(",")
+  const english = [...new Bun.Glob("apps/iosApp/**/en.lproj/*.strings").scanSync({ cwd: "." })].map(repoPath)
+  expect(english.length).toBeGreaterThan(0)
+  const problems = english.flatMap(en => {
+    const base = read(en)
+    return [...new Bun.Glob(en.replace("/en.lproj/", "/*.lproj/")).scanSync({ cwd: "." })].map(repoPath)
+      .filter(f => f !== en)
+      .flatMap(f => {
+        const other = read(f)
+        return [
+          ...[...base.keys()].filter(k => !other.has(k)).map(k => `${f}: missing "${k}"`),
+          ...[...other.keys()].filter(k => !base.has(k)).map(k => `${f}: not in English "${k}"`),
+          ...[...base].filter(([k, v]) => other.has(k) && ph(v) !== ph(other.get(k)!)).map(([k]) => `${f}: placeholders differ "${k}"`),
+        ]
+      })
+  })
+  expect(problems).toEqual([])
+})
+
 test("the ui module ships Turkish", () => {
   expect(catalogs().find(c => c.dir === "apps/ui/i18n")?.translations.tr).toBeDefined()
 })
