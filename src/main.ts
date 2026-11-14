@@ -3383,6 +3383,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     startDisplay: (args) => displayManager.start({ sessionDisplayName: args.sessionName, provider: args.provider as any, device: args.device, width: args.width, height: args.height }),
     stopDisplay: (id) => displayManager.stop(id),
     getSessionWorkdir: (id) => registry.get(id)?.workdir,
+    // #72: a PR's title and description, by a one-shot agent worker (agent-rpc), like voice clean-up.
+    writePrText: (input) => agentRpc.callAgent({ key: "pr-text", taskType: "pr_text", payload: input, timeoutMs: 45_000 }),
     getSessionGitBase: (id) => {
       const s = registry.get(id)
       return s?.repo_root && s.base_branch && s.base_branch !== "HEAD" ? { repoRoot: s.repo_root, base: s.base_branch } : undefined

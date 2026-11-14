@@ -52,6 +52,7 @@ import { getRepoInfo } from "../../core/git/repo-info"
 import { remoteStatus, fetchRemote, publishBranch, pushBranch, pullBranch } from "../../core/git/remote"
 import { listBranches, liveBranch, repoToplevel, switchBranch } from "../../core/git/branches"
 import { checkLog, createPr, markReady, readPr, type PrRead } from "../../core/git/forge"
+import { prInput, writePrText, type PrTextWriter } from "../../core/git/pr-text"
 import type { AgentKind } from "../../core/agents/types"
 import { AGENT_KINDS, isAgentKind } from "../../shared/agents"
 import { isPermissionMode, permissionCatalog } from "../../core/agents/permission-modes"
@@ -348,6 +349,8 @@ export interface WebChannelOpts {
   staticDir?: string
   staticEmbedded?: Record<string, string>
   getSessionsSnapshot: () => SessionSnapshot[]
+  /** #72: the agent writing a PR's title and description (agent-rpc "pr_text"); without it, the commits' subjects. */
+  writePrText?: PrTextWriter
   /** Newest `limit` entries (the store's default when omitted), oldest first. */
   getSessionLog: (name: string, limit?: number) => unknown[]
   /**
@@ -4154,7 +4157,7 @@ export class WebChannel implements Channel {
     }
     // #72: open a PR/MR from the branch the chat is on (published first when it isn't yet), mark one ready,
     // and read a failing check's log for "Ask the agent to fix".
-    const prWrite = path.match(/^\/(sessions|workspaces)\/([^/]+)\/git\/pr(\/ready|\/check-log)?$/)
+    const prWrite = path.match(/^\/(sessions|workspaces)\/([^/]+)\/git\/pr(\/ready|\/check-log|\/text)?$/)
     if (prWrite && (method === "POST" || (method === "GET" && prWrite[3] === "/check-log"))) {
       const [, scope, rawId, sub] = prWrite
       const id = decodeURIComponent(rawId!)
@@ -4166,6 +4169,16 @@ export class WebChannel implements Channel {
         return this.json(await checkLog(workdir, checkUrl))
       }
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      if (sub === "/text") {
+        // The Create form's title and description: by the agent from the branch's commits, else the commits' subjects.
+        const own = scope === "sessions" ? this.opts.getSessionGitBase?.(id)?.base : undefined
+        const target = typeof body.target === "string" && body.target.trim() ? body.target.trim() : own
+        if (!target) return this.json({ error: "bad request" }, 400)
+        if (!workdir) return this.json({ error: `${scope === "sessions" ? "session" : "workspace"} not found` }, 404)
+        const branch = liveBranch(workdir)
+        if (!branch) return this.json({ status: "unavailable", reason: "no_branch" }, 409)
+        return this.json(await writePrText(await prInput(workdir, target, branch), this.opts.writePrText))
+      }
       if (sub === "/ready") {
         if (typeof body.number !== "number" || !Number.isInteger(body.number) || body.number <= 0) return this.json({ error: "bad request" }, 400)
         if (!workdir) return this.json({ error: `${scope === "sessions" ? "session" : "workspace"} not found` }, 404)

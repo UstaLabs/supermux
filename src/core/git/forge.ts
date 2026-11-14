@@ -3,17 +3,24 @@
 // Source Control pane (#72): state, draft, target, review/approvals, checks and comments. The CLIs hold the
 // user's own sign-in; nothing here stores a token. Parsing is pure so it is tested without either CLI.
 
-import { execFile } from "child_process"
-import { proc } from "@supermux/platform"
+import { spawnCommand } from "../process/launcher"
 
 export type Forge = "github" | "gitlab"
 export type Exec = (cmd: string, args: string[], cwd: string) => Promise<{ ok: boolean; out: string }>
 
-/** Runs a CLI with stdout kept apart from stderr (JSON must not be mixed with warnings). */
+/** The most a CLI answer is read: a PR's JSON with its comments, or a job log's tail. */
+const MAX_OUT = 16 * 1024 * 1024
+
+/** Runs a CLI (Windows .cmd shims included) with stdout kept apart from stderr: JSON must not be mixed with warnings. */
 export const execCli: Exec = (cmd, args, cwd) => new Promise((resolve) => {
-  execFile(cmd, args, { ...proc.spawnDefaults(), cwd, maxBuffer: 16 * 1024 * 1024, timeout: 30_000 }, (err, stdout, stderr) => {
-    resolve(err ? { ok: false, out: String(stderr || err.message).trim() } : { ok: true, out: String(stdout).trim() })
-  })
+  let out = "", err = "", done = false
+  const finish = (r: { ok: boolean; out: string }) => { if (!done) { done = true; clearTimeout(timer); resolve(r) } }
+  const child = spawnCommand(cmd, args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
+  const timer = setTimeout(() => { child.kill(); finish({ ok: false, out: `${cmd} timed out` }) }, 30_000)
+  child.stdout?.on("data", (b: Buffer) => { if (out.length < MAX_OUT) out += b.toString("utf-8") })
+  child.stderr?.on("data", (b: Buffer) => { if (err.length < 64 * 1024) err += b.toString("utf-8") })
+  child.on("error", (e) => finish({ ok: false, out: e.message }))
+  child.on("close", (code) => finish(code === 0 ? { ok: true, out: out.trim() } : { ok: false, out: (err || out).trim() }))
 })
 
 /** GitLab when origin's host says so (gitlab.com, gitlab.acme.io); any other host is taken as GitHub. */

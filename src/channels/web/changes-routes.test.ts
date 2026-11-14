@@ -304,6 +304,15 @@ test("creating a pull request needs a title and a target; ready needs a number; 
   expect(await (await get(token, "/sessions/s-1/git/pr/check-log?url=https%3A%2F%2Fx.example%2F1")).json()).toEqual({ ok: false, reason: "unknown_check" })
 })
 
+test("a PR's title and description: from the commits when no agent writes them; a folder chat names its target", async () => {
+  const { dir, token } = await setup()
+  git(dir, "checkout", "-qb", "feature/search"); git(dir, "commit", "-qam", "Add a search box")
+  expect((await post(token, "/workspaces/ws-1/git/pr/text", {})).status).toBe(400)
+  const r = await post(token, "/workspaces/ws-1/git/pr/text", { target: "main" })
+  expect(r.status).toBe(200)
+  expect(await r.json()).toEqual({ title: "Add a search box", body: "- Add a search box", by: "commits" })
+})
+
 test("get latest needs the chat's own base; resolve and abort refuse bad input", async () => {
   const { token } = await setup()
   expect((await post(token, "/sessions/s-1/git/latest", {})).status).toBe(409)   // no base known here: no guess
