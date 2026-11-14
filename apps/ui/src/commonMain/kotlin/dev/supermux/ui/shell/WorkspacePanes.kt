@@ -169,6 +169,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
+import dev.supermux.ui.i18n.formatCatalogText
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.i18n.localizedLabels
 
@@ -374,6 +375,8 @@ private fun WorkspacePanesBody(
     var walkthroughSessionId by kept::walkthroughSessionId
     val windowsSeam = LocalPlatform.current.windows
     val notices = LocalPlatform.current.notices
+    // #151: read while composing; a refused close's notice is shown later, outside composition.
+    val closeFailed = localized(Str.shell_close_failed)
     TrackFocusedFileView(ws)
     val bulkLabels = localizedLabels(BulkClose.entries) { it.labelRes }
     val newTabWord = localized(Str.shell_new_tab)
@@ -572,7 +575,7 @@ private fun WorkspacePanesBody(
     closeCandidate?.let { v ->
         if (!v.closeNeedsConfirmation()) {
             LaunchedEffect(v.id) {
-                closeTabNow(ws, app, v) { notices.show(localized(Str.shell_close_failed, liveViewTitle(it, sessionNames::get))) }
+                closeTabNow(ws, app, v) { notices.show(formatCatalogText(closeFailed, arrayOf(liveViewTitle(it, sessionNames::get)))) }
                 onCloseCandidate(null)
             }
         } else {
@@ -581,7 +584,7 @@ private fun WorkspacePanesBody(
                 sessionNames = sessionNames,
                 onDismiss = { onCloseCandidate(null) },
                 onConfirm = {
-                    closeTabNow(ws, app, v) { notices.show(localized(Str.shell_close_failed, liveViewTitle(it, sessionNames::get))) }
+                    closeTabNow(ws, app, v) { notices.show(formatCatalogText(closeFailed, arrayOf(liveViewTitle(it, sessionNames::get)))) }
                     onCloseCandidate(null)
                 },
                 chatWorkdir = v.chatSessionId()?.let { sid -> app.sessions.value.firstOrNull { it.id == sid }?.workdir },
@@ -634,6 +637,8 @@ fun PhoneWorkspacePanes(
     // extra window, must not show those views twice.
     val windowsSeam = LocalPlatform.current.windows
     val notices = LocalPlatform.current.notices
+    // #151: read while composing; a refused close's notice is shown later, outside composition.
+    val closeFailed = localized(Str.shell_close_failed)
     val scope = rememberCoroutineScope()
     val layout = withoutClosing(
         ui.windows.layoutFor(ui.windows.mainHostId, current.layout.toDomainOrNull() ?: ws.layoutSync.tree),
@@ -653,7 +658,7 @@ fun PhoneWorkspacePanes(
 
     fun closeOrConfirm(view: ViewDto) {
         if (view.closeNeedsConfirmation()) kept.askToClose(view)
-        else closeTabNow(ws, app, view) { notices.show(localized(Str.shell_close_failed, liveViewTitle(it, sessionNames::get))) }
+        else closeTabNow(ws, app, view) { notices.show(formatCatalogText(closeFailed, arrayOf(liveViewTitle(it, sessionNames::get)))) }
     }
 
     // Same as the wide strip: a bulk close feeds each tab to its own close, one at a time.
@@ -1083,7 +1088,7 @@ fun PhoneWorkspacePanes(
             sessionNames = sessionNames,
             onDismiss = { kept.askToClose(null) },
             onConfirm = {
-                closeTabNow(ws, app, v) { notices.show(localized(Str.shell_close_failed, liveViewTitle(it, sessionNames::get))) }
+                closeTabNow(ws, app, v) { notices.show(formatCatalogText(closeFailed, arrayOf(liveViewTitle(it, sessionNames::get)))) }
                 kept.askToClose(null)
             },
             chatWorkdir = v.chatSessionId()?.let { sid -> app.sessions.value.firstOrNull { it.id == sid }?.workdir },
