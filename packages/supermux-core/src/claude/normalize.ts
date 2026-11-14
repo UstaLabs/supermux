@@ -233,6 +233,15 @@ function statsOf(usage: unknown): SubagentStats | undefined {
   return Object.keys(stats).length ? stats : undefined
 }
 
+/** The window of the model the conversation runs on, from a result's modelUsage (the largest one if it isn't listed). */
+function contextWindow(modelUsage: Record<string, unknown> | undefined, model: string | undefined): number | undefined {
+  if (!modelUsage) return undefined
+  const own = model ? num(rec(modelUsage[model])?.contextWindow) : undefined
+  if (own != null) return own
+  const all = Object.values(modelUsage).map(v => num(rec(v)?.contextWindow)).filter((v): v is number => v != null)
+  return all.length ? Math.max(...all) : undefined
+}
+
 export function createClaudeNormalizer(): ClaudeNormalizer {
   let streamMessageId = "message"
   /** Index of the stream block currently open (content_block_start), per streamed message. */
@@ -257,6 +266,24 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
    * in · Please run /login"): its result repeats the text as the turn's error, so it is held, not a reply (#110).
    */
   let apiError: { code?: string; bodies: NormalizedBody[] } | undefined
+  /**
+   * How full the context window is (#144): the main thread's latest request (its input, cache reads and cache writes),
+   * and the window, which only the result's modelUsage carries. `reported` is the last size sent, so the several
+   * frames of one request report once.
+   */
+  const context: { used?: number; size?: number; model?: string; reported?: number } = {}
+
+  function requestSize(message: Record<string, unknown>): number | undefined {
+    const usage = rec(message.usage)
+    if (!usage || message.model === "<synthetic>") return undefined
+    const used = (num(usage.input_tokens) ?? 0) + (num(usage.cache_read_input_tokens) ?? 0) + (num(usage.cache_creation_input_tokens) ?? 0)
+    return used > 0 ? used : undefined
+  }
+  function contextUpdate(): NormalizedBody[] {
+    if (context.used == null || context.size == null || context.used === context.reported) return []
+    context.reported = context.used
+    return [{ kind: "usage", context: { used: context.used, size: context.size } }]
+  }
 
   function take(kind: "assistant" | "reasoning"): NormalizedBody[] {
     const map = kind === "assistant" ? assistant : reasoning
@@ -779,7 +806,12 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
         apiError = { code: str(frame.error), bodies: [...(apiError?.bodies ?? []), ...bodies.filter(b => b.kind === "assistant-message")] }
         return bodies.filter(b => b.kind !== "assistant-message")
       }
-      return mapAssistantContent(message)
+      const used = requestSize(message)
+      if (used != null) {
+        context.used = used
+        if (typeof message.model === "string") context.model = message.model
+      }
+      return [...mapAssistantContent(message), ...contextUpdate()]
     }
     if (type === "user") {
       const message = rec(frame.message)
@@ -802,10 +834,15 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
       const cost = typeof frame.total_cost_usd === "number"
         ? { amount: frame.total_cost_usd, currency: "USD" }
         : undefined
+      const window = contextWindow(rec(frame.modelUsage), context.model)
+      if (window != null) context.size = window
+      const ctx = context.used != null && context.size != null ? { used: context.used, size: context.size } : undefined
+      if (ctx) context.reported = ctx.used
       const out: NormalizedBody[] = [...take("reasoning"), ...take("assistant"), {
         kind: "usage",
         ...(tokens ? { tokens } : {}),
         ...(cost ? { cost } : {}),
+        ...(ctx ? { context: ctx } : {}),
       }]
       // An interrupted turn (Claude's abort signal fired) ends as error_during_execution with only Claude's own
       // "[ede_diagnostic] ..." line: no failure. The driver settles the turn as cancelled.

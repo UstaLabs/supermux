@@ -220,6 +220,35 @@ describe("claude normalizer", () => {
     expect(err[1]).not.toHaveProperty("errorType")
   })
 
+  test("context: the main thread's last request is how full the window is; the result gives the window (#144)", () => {
+    // Real 2.1.308 shapes: per-request usage on each assistant frame, the window in result.modelUsage.
+    const n = createClaudeNormalizer()
+    const assistant = (usage: Record<string, number>, extra: Record<string, unknown> = {}) => native({
+      type: "assistant", ...extra,
+      message: { id: "m1", model: "claude-haiku-5-5", role: "assistant", content: [{ type: "text", text: "hi" }], usage },
+    })
+    // Before the window is known, a request's size is held, not reported.
+    expect(n(assistant({ input_tokens: 2, cache_read_input_tokens: 23472, cache_creation_input_tokens: 3481, output_tokens: 4 }))
+      .filter(b => b.kind === "usage")).toEqual([])
+    const result = n(native({
+      type: "result", subtype: "success", is_error: false, result: "hi",
+      usage: { input_tokens: 4, cache_read_input_tokens: 36879, cache_creation_input_tokens: 3481, output_tokens: 9 },
+      modelUsage: { "claude-haiku-5-5": { contextWindow: 1000000, maxOutputTokens: 128000 } },
+    }))
+    expect(result.find(b => b.kind === "usage")).toMatchObject({ context: { used: 26955, size: 1000000 } })
+    // Once the window is known, each new request reports at once (the ring moves during a long turn) …
+    expect(n(assistant({ input_tokens: 1, cache_read_input_tokens: 26955, cache_creation_input_tokens: 900, output_tokens: 3 }))
+      .filter(b => b.kind === "usage")).toEqual([{ kind: "usage", context: { used: 27856, size: 1000000 } }])
+    // … but the same request's next block (same usage) says nothing new,
+    expect(n(assistant({ input_tokens: 1, cache_read_input_tokens: 26955, cache_creation_input_tokens: 900, output_tokens: 3 }))
+      .filter(b => b.kind === "usage")).toEqual([])
+    // and a subagent's or a synthetic message's usage is never the main conversation's.
+    expect(n(assistant({ input_tokens: 5, cache_read_input_tokens: 90000, output_tokens: 1 }, { parent_tool_use_id: "toolu_1" }))
+      .filter(b => b.kind === "usage")).toEqual([])
+    expect(n(native({ type: "assistant", message: { id: "s", model: "<synthetic>", role: "assistant", content: [{ type: "text", text: "x" }], usage: { input_tokens: 0, output_tokens: 0 } } }))
+      .filter(b => b.kind === "usage")).toEqual([])
+  })
+
   test("result: a turn Claude ended because it was interrupted is not an error (real 2.1.308 frames)", () => {
     // After an interrupt control request: error_during_execution with Claude's own diagnostic, and terminal_reason
     // aborted_streaming (stopped while the model answered) or aborted_tools (stopped while a tool ran).

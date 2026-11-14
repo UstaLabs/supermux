@@ -172,3 +172,43 @@ test("OpenCode stderr log lines: the session.processor error becomes an error ev
   ])
   expect(n.flush().some(b => b.kind === "warning")).toBe(false)
 })
+
+describe("context usage (#144)", () => {
+  test("OpenCode: a usage_update with nothing in use (after a failed turn) keeps the last good size", () => {
+    const n = createAcpNormalizer({ vendor: "opencode" })
+    expect(n(acp("usage_update", { used: 11465, size: 200000 }))[0]).toMatchObject({ context: { used: 11465, size: 200000 } })
+    // Real 1.18.34 after a refused turn: used 0 and the failed model's window.
+    const after = n(acp("usage_update", { used: 0, size: 1000000, cost: { amount: 0, currency: "USD" } }))
+    expect(after).toEqual([{ kind: "usage", cost: { amount: 0, currency: "USD" } }])
+  })
+
+  test("Grok: each model call's input is how full the window is, against the current model's window", () => {
+    const n = createAcpNormalizer({ vendor: "grok" })
+    const call = (usage: Record<string, number>): AgentUpdate => ({
+      protocol: "native",
+      value: { method: "_x.ai/session_notification", params: { sessionId: "s", update: { sessionUpdate: "response_completed", usage } } },
+    })
+    // Real 1.0.46 response_completed: input_tokens excludes the cached part (18794 + 1152 = turn inputTokens 19946).
+    const usage = { input_tokens: 18794, output_tokens: 24, cache_read_input_tokens: 1152, cache_creation_input_tokens: 0, reasoning_tokens: 23 }
+    // No window known yet: nothing to report.
+    expect(n(call(usage))).toEqual([])
+    // The driver forwards the agent's model list with each model's window (initialize/session result _meta.modelState).
+    expect(n({ protocol: "native", value: { method: "model_windows", params: { current: "grok-4.7", windows: { "grok-4.7": 256000, "grok-4.7-build-fast": 500000 } } } })).toEqual([])
+    expect(n(call(usage))).toEqual([{ kind: "usage", context: { used: 19946, size: 256000 } }])
+    // A model switch changes the window.
+    n(acp("config_option_update", { configOptions: [{ id: "model", value: "grok-4.7-build-fast" }] }))
+    expect(n(call({ ...usage, input_tokens: 20000 }))).toEqual([{ kind: "usage", context: { used: 21152, size: 500000 } }])
+  })
+})
+
+test("readModelWindows: Grok's _meta.modelState and ACP's models give each model's window (#144)", async () => {
+  const { readModelWindows } = await import("../src/acp/index.js")
+  // Real Grok 1.0.46 initialize result (trimmed).
+  const grok = { _meta: { modelState: { currentModelId: "grok-4.7", availableModels: [
+    { modelId: "grok-4.7", name: "Grok 4.7", _meta: { totalContextTokens: 256000, contextWindows: [256000, 500000] } },
+    { modelId: "grok-4.7-build-fast", name: "Grok 4.7 Build Fast", _meta: { totalContextTokens: 500000 } },
+  ] } } }
+  expect(readModelWindows(grok)).toEqual({ current: "grok-4.7", windows: { "grok-4.7": 256000, "grok-4.7-build-fast": 500000 } })
+  expect(readModelWindows({ models: { availableModels: [{ modelId: "m" }] } })).toBeUndefined()
+  expect(readModelWindows(null)).toBeUndefined()
+})
