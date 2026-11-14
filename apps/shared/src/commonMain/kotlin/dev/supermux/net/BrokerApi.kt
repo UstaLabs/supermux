@@ -939,10 +939,10 @@ data class GitOpResult(
 )
 
 /**
- * Flat result for a finish outcome — `status` discriminates the 15 variants
+ * Flat result for a finish outcome — `status` discriminates the 13 variants
  * (integrated | pr_opened | branch_published | push_rejected | kept | discarded |
- *  push_auth_failed | nothing_to_do | sync_conflict | tests_failed | dirty_overlap |
- *  non_ff | no_verify | uncommitted | error).
+ *  push_auth_failed | nothing_to_do | sync_conflict | dirty_overlap | non_ff |
+ *  uncommitted | error).
  *
  * NOTE: `POST /sessions/<id>/finish` no longer returns this directly — it kicks off
  * an async finish *job* and returns a [dev.supermux.proto.FinishJobDto] (initially
@@ -1198,6 +1198,8 @@ data class RepoDiff(
     val truncated: Boolean = false,
     val total: Int? = null,
     val error: String? = null,
+    /** #72: a merge is in progress here (conflicts, or settled and waiting for "Continue"). */
+    val merging: Boolean = false,
 )
 
 @Serializable
@@ -1218,6 +1220,8 @@ data class DiffFile(
     val lazy: Boolean = false,
     /** #72: how much of it is in the next commit (all | partial | none); null: nothing uncommitted. */
     val staged: String? = null,
+    /** #72: the staged version's blob when part or all of it is staged ("(Index)" / "(Working Tree)" diffs). */
+    val indexBlob: String? = null,
 )
 
 /** GET …/changes — the Changes pane's list (spec 2026-09-29 §2.1): no file text. */
@@ -1235,6 +1239,8 @@ data class RepoChanges(
     val truncated: Boolean = false,
     val total: Int = 0,
     val error: String? = null,
+    /** #72: a merge is in progress here. */
+    val merging: Boolean = false,
 )
 
 @Serializable
@@ -1248,11 +1254,140 @@ data class ChangedFile(
     val baseBlob: String? = null,
     val size: Long? = null,
     val staged: String? = null,
+    val indexBlob: String? = null,
 )
+
+@Serializable
+internal data class UndoLatestBody(val before: String, val after: String)
+@Serializable
+internal data class SwitchBody(val name: String, val create: Boolean)
+@Serializable
+internal data class PrNumberBody(val number: Int)
+@Serializable
+internal data class PrTextBody(val target: String? = null)
 
 /** POST …/git/stage (#72): whole files into the next commit, or out of it. */
 @Serializable
 data class StageRequest(val repo: String, val paths: List<String>, val staged: Boolean)
+
+/** POST …/git/discard (#72): the files' unstaged changes, or the whole Changes group ([all]). One of the two. */
+@Serializable
+data class DiscardRequest(val repo: String, val paths: List<String>? = null, val all: Boolean? = null)
+
+/** POST …/git/{commit,uncommit,resolve,abort} (#72): {repo} plus what the op needs. */
+@Serializable
+data class CommitRequest(
+    val repo: String,
+    val message: String? = null,
+    val all: Boolean = false,
+    val amend: Boolean = false,
+    /** resolve: the conflicted file and the side kept (mine | theirs | both). */
+    val path: String? = null,
+    val side: String? = null,
+)
+
+/** What a git write did: ok (a commit's sha/subject, the files discarded), or why not. */
+@Serializable
+data class GitWriteResult(
+    val ok: Boolean = false,
+    val sha: String? = null,
+    val subject: String? = null,
+    val discarded: List<String> = emptyList(),
+    /** nothing | failed | none | merge | pushed | conflict (discard: [paths] are in a conflict) | moved (undo latest) */
+    val reason: String? = null,
+    val paths: List<String> = emptyList(),
+    val message: String? = null,
+    val error: String? = null,
+)
+
+/** GET …/git/history: the chat's commits (its branch minus its base) and the base's recent ones. */
+@Serializable
+data class GitHistory(
+    val branch: String? = null,
+    val base: String? = null,
+    val chat: List<LogCommit> = emptyList(),
+    val baseCommits: List<LogCommit> = emptyList(),
+)
+
+@Serializable
+data class LogCommit(val sha: String, val subject: String = "", val author: String = "", val at: Long = 0, val pushed: Boolean? = null)
+
+/** POST /sessions/<id>/git/latest: the base merged in (clean, with [before]/[after] for its undo), up_to_date, conflict, or failed. */
+@Serializable
+data class LatestResult(
+    val status: String = "failed",
+    val from: String? = null,
+    val commits: Int = 0,
+    val before: String? = null,
+    val after: String? = null,
+    val files: List<String> = emptyList(),
+    val message: String? = null,
+)
+
+/** GET /sessions/<id>/git/branches: where each local branch is open (this chat, another chat, your folder). */
+@Serializable
+data class GitBranches(
+    val current: String? = null,
+    val detachedSha: String? = null,
+    val local: List<GitLocalBranch> = emptyList(),
+    val remote: List<String> = emptyList(),
+)
+
+@Serializable
+data class GitLocalBranch(val name: String, val openIn: GitOpenIn? = null)
+
+/** kind: this | chat (with [id], [name]) | folder */
+@Serializable
+data class GitOpenIn(val kind: String = "", val id: String? = null, val name: String? = null)
+
+/** POST /sessions/<id>/git/switch: switched | clobber ([files]) | checked_out_elsewhere | merge_in_progress | invalid_name | error */
+@Serializable
+data class GitSwitchResult(val status: String = "error", val branch: String? = null, val files: List<String> = emptyList(), val path: String? = null, val message: String? = null)
+
+/** GET …/git/pr: the branch's pull request (GitHub) / merge request (GitLab). status: found | none | unavailable ([reason]). */
+@Serializable
+data class PrRead(val status: String = "unavailable", val forge: String? = null, val reason: String? = null, val message: String? = null, val pr: PrInfo? = null)
+
+@Serializable
+data class PrInfo(
+    val forge: String = "github",
+    val number: Int = 0,
+    val url: String = "",
+    val title: String = "",
+    /** open | merged | closed */
+    val state: String = "open",
+    val draft: Boolean = false,
+    val target: String = "",
+    val head: String = "",
+    val review: PrReview = PrReview(),
+    val checks: List<PrCheck> = emptyList(),
+    val comments: List<PrComment> = emptyList(),
+)
+
+/** state: approved | changes | required | none; GitLab adds [got] of [need] approvals. */
+@Serializable
+data class PrReview(val state: String = "none", val by: List<String> = emptyList(), val got: Int? = null, val need: Int? = null)
+
+/** state: ok | bad | run | skip */
+@Serializable
+data class PrCheck(val name: String, val state: String = "run", val url: String? = null)
+
+@Serializable
+data class PrComment(val who: String = "", val body: String = "", val file: String? = null, val line: Int? = null, val url: String? = null)
+
+@Serializable
+data class PrCreateRequest(val title: String, val body: String, val target: String, val draft: Boolean)
+
+/** opened | exists | publish_failed | unavailable ([reason]) */
+@Serializable
+data class PrCreateResult(val status: String = "unavailable", val url: String? = null, val number: Int? = null, val reason: String? = null, val message: String? = null)
+
+/** The Create form's start: by: agent | commits */
+@Serializable
+data class PrText(val title: String = "", val body: String = "", val by: String = "commits")
+
+@Serializable
+data class PrCheckLog(val ok: Boolean = false, val log: String? = null, val reason: String? = null, val message: String? = null)
 
 /** The list in the shape the pane already renders: every file [DiffFile.lazy], no patch. */
 fun ChangesResult.toFsDiffResult(): FsDiffResult = FsDiffResult(
@@ -1263,10 +1398,10 @@ fun ChangesResult.toFsDiffResult(): FsDiffResult = FsDiffResult(
                 DiffFile(
                     path = f.path, status = f.status, binary = f.binary,
                     added = f.added, removed = f.removed, oldPath = f.oldPath,
-                    baseBlob = f.baseBlob, size = f.size, lazy = true, staged = f.staged,
+                    baseBlob = f.baseBlob, size = f.size, lazy = true, staged = f.staged, indexBlob = f.indexBlob,
                 )
             },
-            baseSha = r.baseSha, truncated = r.truncated, total = r.total, error = r.error,
+            baseSha = r.baseSha, truncated = r.truncated, total = r.total, error = r.error, merging = r.merging,
         )
     },
     comments = comments,
@@ -3027,17 +3162,81 @@ class BrokerApi(
     }
 
     /** GET /sessions/<id>/git/status */
-    suspend fun gitStatus(id: String): GitRemoteStatus =
-        getJson("$httpBase/sessions/$id/git/status")
+    suspend fun gitStatus(id: String): GitRemoteStatus = gitStatus("sessions", id)
 
-    private suspend fun gitOp(id: String, op: String): GitOpResult =
-        decode(http.post("$httpBase/sessions/$id/git/$op") {
+    /** GET /<sessions|workspaces>/<id>/git/status (#72: a chat in a folder has it too). */
+    suspend fun gitStatus(scope: String, id: String): GitRemoteStatus =
+        getJson("$httpBase/$scope/$id/git/status")
+
+    /** POST /<sessions|workspaces>/<id>/git/<fetch|publish|push|pull> */
+    suspend fun gitOp(scope: String, id: String, op: String): GitOpResult =
+        decode(http.post("$httpBase/$scope/$id/git/$op") {
             authHeader()
         })
-    suspend fun gitFetch(id: String): GitOpResult = gitOp(id, "fetch")
-    suspend fun gitPublish(id: String): GitOpResult = gitOp(id, "publish")
-    suspend fun gitPush(id: String): GitOpResult = gitOp(id, "push")
-    suspend fun gitPull(id: String): GitOpResult = gitOp(id, "pull")
+    suspend fun gitFetch(id: String): GitOpResult = gitOp("sessions", id, "fetch")
+    suspend fun gitPublish(id: String): GitOpResult = gitOp("sessions", id, "publish")
+    suspend fun gitPush(id: String): GitOpResult = gitOp("sessions", id, "push")
+    suspend fun gitPull(id: String): GitOpResult = gitOp("sessions", id, "pull")
+
+    // ── #72 Source Control: every write answers, a refusal (4xx) included, so the pane can say why ──
+
+    private suspend inline fun <reified R> answer(url: String, body: String, fallback: (String) -> R): R {
+        val resp = http.post(url) {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(body)
+        }
+        val text = resp.bodyAsText()
+        return runCatching { json.decodeFromString<R>(text) }.getOrElse { fallback(text.take(200)) }
+    }
+
+    /** POST /<sessions|workspaces>/<id>/git/<commit|uncommit|resolve|abort> */
+    suspend fun gitWrite(scope: String, id: String, op: String, body: CommitRequest): GitWriteResult =
+        answer("$httpBase/$scope/$id/git/$op", json.encodeToString(body)) { GitWriteResult(reason = "failed", message = it) }
+
+    /** POST /<sessions|workspaces>/<id>/git/discard */
+    suspend fun gitDiscard(scope: String, id: String, body: DiscardRequest): GitWriteResult =
+        answer("$httpBase/$scope/$id/git/discard", json.encodeToString(body)) { GitWriteResult(reason = "failed", message = it) }
+
+    /** GET /<sessions|workspaces>/<id>/git/history?repo= */
+    suspend fun gitHistory(scope: String, id: String, repo: String): GitHistory =
+        getJson("$httpBase/$scope/$id/git/history?repo=${urlEncode(repo)}")
+
+    /** POST /sessions/<id>/git/latest: the chat's base merged in. */
+    suspend fun gitLatest(sessionId: String): LatestResult =
+        answer("$httpBase/sessions/$sessionId/git/latest", "{}") { LatestResult(message = it) }
+
+    /** POST /sessions/<id>/git/latest/undo: back to [before], only while the branch is still at [after]. */
+    suspend fun gitLatestUndo(sessionId: String, before: String, after: String): GitWriteResult =
+        answer("$httpBase/sessions/$sessionId/git/latest/undo", json.encodeToString(UndoLatestBody(before, after))) { GitWriteResult(reason = "failed", message = it) }
+
+    /** GET /sessions/<id>/git/branches */
+    suspend fun gitBranches(sessionId: String): GitBranches =
+        getJson("$httpBase/sessions/$sessionId/git/branches")
+
+    /** POST /sessions/<id>/git/switch: to a branch, or a new one ([create]). */
+    suspend fun gitSwitch(sessionId: String, name: String, create: Boolean): GitSwitchResult =
+        answer("$httpBase/sessions/$sessionId/git/switch", json.encodeToString(SwitchBody(name, create))) { GitSwitchResult(message = it) }
+
+    /** GET /<sessions|workspaces>/<id>/git/pr[?fresh=1] */
+    suspend fun gitPr(scope: String, id: String, fresh: Boolean = false): PrRead =
+        getJson("$httpBase/$scope/$id/git/pr" + if (fresh) "?fresh=1" else "")
+
+    /** POST /<sessions|workspaces>/<id>/git/pr: opens it (the branch is published first when it must be). */
+    suspend fun gitPrCreate(scope: String, id: String, body: PrCreateRequest): PrCreateResult =
+        answer("$httpBase/$scope/$id/git/pr", json.encodeToString(body)) { PrCreateResult(message = it) }
+
+    /** POST /<sessions|workspaces>/<id>/git/pr/ready */
+    suspend fun gitPrReady(scope: String, id: String, number: Int): GitWriteResult =
+        answer("$httpBase/$scope/$id/git/pr/ready", json.encodeToString(PrNumberBody(number))) { GitWriteResult(reason = "failed", message = it) }
+
+    /** POST /<sessions|workspaces>/<id>/git/pr/text: the title and description for the Create form. */
+    suspend fun gitPrText(scope: String, id: String, target: String?): PrText =
+        answer("$httpBase/$scope/$id/git/pr/text", json.encodeToString(PrTextBody(target))) { PrText() }
+
+    /** GET /<sessions|workspaces>/<id>/git/pr/check-log?url=: a failing check's log tail. */
+    suspend fun gitPrCheckLog(scope: String, id: String, checkUrl: String): PrCheckLog =
+        getJson("$httpBase/$scope/$id/git/pr/check-log?url=${urlEncode(checkUrl)}")
 
     /**
      * POST /sessions/<id>/finish — kick off the finish job for the session branch.
