@@ -253,6 +253,18 @@ describe("codex normalizer", () => {
     expect(n(native("account/rateLimits/updated", { rateLimits: { primary: 1 } }))[0]).toMatchObject({ kind: "usage", rateLimits: { primary: 1 } })
   })
 
+  test("context used is the last request, not the thread total, and drops after a compaction", () => {
+    const n = createCodexNormalizer()
+    const row = (totalTokens: number, inputTokens: number, outputTokens: number) =>
+      ({ totalTokens, inputTokens, outputTokens, cachedInputTokens: 0, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 })
+    const tick = (total: ReturnType<typeof row>, last: ReturnType<typeof row>) =>
+      n(native("thread/tokenUsage/updated", { tokenUsage: { total, last, modelContextWindow: 258400 } }))[0]
+    expect(tick(row(16_339_055, 16_000_000, 339_055), row(241_900, 241_475, 425))).toMatchObject({ context: { used: 241_900, size: 258400 } })
+    // Compaction: Codex sends an all-zero `last`, then the next request starts from the summary.
+    expect(tick(row(16_339_055, 16_000_000, 339_055), row(0, 0, 0))).toMatchObject({ context: { used: 0, size: 258400 } })
+    expect(tick(row(16_360_906, 16_021_711, 339_195), row(21_851, 21_711, 140))).toMatchObject({ context: { used: 21_851, size: 258400 } })
+  })
+
   test("thread/name/updated and model/rerouted", () => {
     const n = createCodexNormalizer()
     expect(n(native("thread/name/updated", { threadName: "T" }))[0]).toMatchObject({ kind: "session-info", title: "T" })
