@@ -253,18 +253,18 @@ private fun ContextPanel(
     }
 }
 
-private val CATEGORY_NAMES: Map<String, () -> String> = mapOf(
-    "messages" to { localized(Str.context_cat_messages) },
-    "system_prompt" to { localized(Str.context_cat_system_prompt) },
-    "system_tools" to { localized(Str.context_cat_system_tools) },
-    "mcp_tools" to { localized(Str.context_cat_mcp_tools) },
-    "mcp_instructions" to { localized(Str.context_cat_mcp_instructions) },
-    "memory_files" to { localized(Str.context_cat_memory_files) },
-    "skills" to { localized(Str.context_cat_skills) },
-    "custom_agents" to { localized(Str.context_cat_custom_agents) },
-    "autocompact_buffer" to { localized(Str.context_cat_autocompact_buffer) },
-    "tool_definitions" to { localized(Str.context_cat_tool_definitions) },
-    "workflows" to { localized(Str.context_cat_workflows) },
+private val CATEGORY_NAMES: Map<String, dev.supermux.ui.i18n.StringKey> = mapOf(
+    "messages" to Str.context_cat_messages,
+    "system_prompt" to Str.context_cat_system_prompt,
+    "system_tools" to Str.context_cat_system_tools,
+    "mcp_tools" to Str.context_cat_mcp_tools,
+    "mcp_instructions" to Str.context_cat_mcp_instructions,
+    "memory_files" to Str.context_cat_memory_files,
+    "skills" to Str.context_cat_skills,
+    "custom_agents" to Str.context_cat_custom_agents,
+    "autocompact_buffer" to Str.context_cat_autocompact_buffer,
+    "tool_definitions" to Str.context_cat_tool_definitions,
+    "workflows" to Str.context_cat_workflows,
 )
 
 /** The category rows' dots, in the order the agent lists its used categories. */
@@ -364,10 +364,10 @@ private fun ColumnScope.MainView(
         Column(Modifier.padding(horizontal = listPad)) {
             breakdown.categories.filter { it.kind == "used" }.forEachIndexed { i, c ->
                 val to = drillFor(c.id, report)
-                CategoryRow(sheet, colors[i % colors.size], CATEGORY_NAMES[c.id]?.invoke() ?: c.name, c.tokens, live.size, onClick = to?.let { { go(it) } })
+                CategoryRow(sheet, colors[i % colors.size], CATEGORY_NAMES[c.id]?.let { localized(it) } ?: c.name, c.tokens, live.size, onClick = to?.let { { go(it) } })
             }
             breakdown.categories.filter { it.kind == "buffer" }.forEach { c ->
-                CategoryRow(sheet, cs.onSurface.copy(alpha = 0.14f), CATEGORY_NAMES[c.id]?.invoke() ?: c.name, c.tokens, live.size, dim = true)
+                CategoryRow(sheet, cs.onSurface.copy(alpha = 0.14f), CATEGORY_NAMES[c.id]?.let { localized(it) } ?: c.name, c.tokens, live.size, dim = true)
             }
             val free = ((breakdown.threshold ?: live.size) - live.used).coerceAtLeast(0)
             CategoryRow(sheet, Color.Transparent, localized(Str.context_free), free, live.size, dim = true, outlined = true)
