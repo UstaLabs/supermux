@@ -358,3 +358,58 @@ describe("claude normalizer", () => {
     expect(replayed[0]?.kind).toBe("session-info")
   })
 })
+
+describe("claudeContextBreakdown (#144)", () => {
+  test("maps get_context_usage's reply (real 2.1.308, trimmed) to the breakdown", async () => {
+    const { claudeContextBreakdown } = await import("../src/claude/normalize.js")
+    const reply = {
+      categories: [
+        { id: "system_prompt", name: "System prompt", tokens: 2517, color: "promptBorder", kind: "used" },
+        { id: "system_tools", name: "System tools", tokens: 9196, color: "inactive", kind: "used" },
+        { id: "mcp_tools_deferred", name: "MCP tools (deferred)", tokens: 19819, isDeferred: true, kind: "deferred" },
+        { id: "memory_files", name: "Memory files", tokens: 76, kind: "used" },
+        { id: "skills", name: "Skills", tokens: 6366, kind: "used" },
+        { id: "messages", name: "Messages", tokens: 1160, kind: "used" },
+        { id: "autocompact_buffer", name: "Autocompact buffer", tokens: 33000, kind: "buffer" },
+        { id: "free_space", name: "Free space", tokens: 947685, kind: "free" },
+      ],
+      totalTokens: 19315, maxTokens: 1000000, autoCompactThreshold: 967000, isAutoCompactEnabled: true,
+      memoryFiles: [{ path: "/h/CLAUDE.md", type: "User", tokens: 76 }],
+      mcpTools: [
+        { name: "mcp__claude_ai_Claude_Data__certify_query", serverName: "claude_ai_Claude_Data", tokens: 1415, isLoaded: false },
+        { name: "mcp__mux-shim__message_session", serverName: "mux-shim", tokens: 1150, isLoaded: true },
+      ],
+      mcpInstructions: [{ serverName: "claude.ai Claude Data", tokens: 351 }],
+      skills: { totalSkills: 47, tokens: 6366, skillFrontmatter: [{ name: "anatomy", source: "userSettings", path: "/s/anatomy/SKILL.md", tokens: 327 }] },
+      gridRows: [[]],
+    }
+    expect(claudeContextBreakdown(reply)).toEqual({
+      used: 19315, size: 1000000, threshold: 967000,
+      categories: [
+        { id: "system_prompt", name: "System prompt", tokens: 2517, kind: "used" },
+        { id: "system_tools", name: "System tools", tokens: 9196, kind: "used" },
+        { id: "mcp_tools_deferred", name: "MCP tools (deferred)", tokens: 19819, kind: "deferred" },
+        { id: "memory_files", name: "Memory files", tokens: 76, kind: "used" },
+        { id: "skills", name: "Skills", tokens: 6366, kind: "used" },
+        { id: "messages", name: "Messages", tokens: 1160, kind: "used" },
+        { id: "autocompact_buffer", name: "Autocompact buffer", tokens: 33000, kind: "buffer" },
+        { id: "free_space", name: "Free space", tokens: 947685, kind: "free" },
+      ],
+      mcpTools: [
+        { server: "claude_ai_Claude_Data", name: "certify_query", tokens: 1415, loaded: false },
+        { server: "mux-shim", name: "message_session", tokens: 1150, loaded: true },
+      ],
+      mcpInstructions: [{ server: "claude.ai Claude Data", tokens: 351 }],
+      skills: [{ name: "anatomy", tokens: 327, source: "userSettings" }],
+      memoryFiles: [{ path: "/h/CLAUDE.md", type: "User", tokens: 76 }],
+    })
+  })
+
+  test("auto-compact off: no threshold; a reply without totals is no breakdown", async () => {
+    const { claudeContextBreakdown } = await import("../src/claude/normalize.js")
+    expect(claudeContextBreakdown({ categories: [], totalTokens: 5, maxTokens: 10, autoCompactThreshold: 8, isAutoCompactEnabled: false }))
+      .toEqual({ used: 5, size: 10, categories: [] })
+    expect(claudeContextBreakdown({ categories: [] })).toBeUndefined()
+    expect(claudeContextBreakdown(null)).toBeUndefined()
+  })
+})

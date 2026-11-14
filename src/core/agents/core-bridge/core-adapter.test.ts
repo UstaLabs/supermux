@@ -2844,3 +2844,13 @@ acrossGrok("a usage update's context becomes contextUsage and one context-update
   expect(adapter.contextUsage).toEqual({ used: 12000, size: 200000 })
   expect(events.filter((e) => e.kind === "context-update").map((e) => (e as { used?: number }).used)).toEqual([11465, 12000])
 })
+
+acrossGrok("tools the chat started are counted for 'used in this chat' (#144)", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  await adapter.start()
+  for (const id of ["t1", "t2"]) fake.emit({ protocol: "acp", value: { sessionUpdate: "tool_call", toolCallId: id, title: "Read", kind: "read", status: "pending" } })
+  await flush()
+  expect([...adapter.toolUses.values()].reduce((a, b) => a + b, 0)).toBe(2)
+})

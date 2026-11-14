@@ -16,6 +16,8 @@ export type NormalizedBridgeOpts = {
   onUsage?: (rateLimits: unknown) => void
   /** How full the agent's context window is (#144), as the agent last reported it. */
   onContext?: (context: { used: number; size: number }) => void
+  /** A tool the main thread started (#144: "used in this chat"); a Skill call as `Skill:<skill>`. */
+  onToolUsed?: (name: string) => void
   onCommands?: (commands: AgentCommandEntry[]) => void
   /** The models the agent offers (a session start's ACP options, #102). */
   onModels?: (models: AgentModelEntry[]) => void
@@ -201,6 +203,10 @@ export function createNormalizedBridge(opts: NormalizedBridgeOpts) {
     }
     if (kind === "tool-call") {
       if (event.phase === "updated") return
+      if (event.phase === "started" && event.tool) {
+        const skill = event.tool === "Skill" ? (event.input as { skill?: unknown } | undefined)?.skill : undefined
+        opts.onToolUsed?.(typeof skill === "string" && skill ? `Skill:${skill}` : event.tool)
+      }
       if (opts.agent === "codex") {
         const item = extractCodexNativeItem(event.native.payload)
         if (event.phase === "started") {

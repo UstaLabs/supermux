@@ -1,5 +1,5 @@
 /** ACP SessionUpdate mapper. Schema pin: @agentclientprotocol/sdk 1.4.0 types.gen.d.ts. */
-import type { AgentUpdate } from "../types.js"
+import type { AgentUpdate, ContextBreakdown } from "../types.js"
 import type { NormalizedBody, PlanEntryPriority, PlanEntryStatus, SubagentEndedBy, SubagentMessaging, SubagentPhase, SubagentStats, ToolCallPhase, ToolCategory } from "../events/normalized.js"
 import type { SubagentSnapshot } from "../types.js"
 import { REASON, SUBAGENT_STATE_METHOD, actionFields, actionsKey, endedReason, type SubagentActions } from "../subagent-actions.js"
@@ -188,6 +188,32 @@ function terminalOf(status: unknown): "completed" | "failed" | "cancelled" | und
 function taskResult(text: string): string {
   const m = /<task_result>([\s\S]*?)<\/task_result>/.exec(text)
   return (m ? m[1]! : text).trim()
+}
+
+/**
+ * Grok's `_x.ai/session/info` reply → the breakdown (#144). Its own `used` counts only the system prompt (1.0.46),
+ * so the total is what its categories add up to; the ring's live number comes from each call's usage instead.
+ */
+export function grokContextBreakdown(reply: unknown): ContextBreakdown | undefined {
+  const outer = rec(reply)
+  const context = rec(rec(outer?.result)?.context) ?? rec(outer?.context)
+  const size = num(context?.total)
+  if (!context || size == null) return undefined
+  const categories: ContextBreakdown["categories"] = []
+  const add = (id: string, name: string, tokens: number | undefined) => { if (tokens != null && tokens > 0) categories.push({ id, name, tokens, kind: "used" }) }
+  add("messages", "Messages", num(context.messageTokens))
+  add("tool_definitions", "Tool definitions", num(context.toolDefinitionsTokens))
+  add("system_prompt", "System prompt", num(context.systemPromptTokens))
+  for (const row of Array.isArray(context.usageCategories) ? context.usageCategories : []) {
+    const label = str(rec(row)?.label)
+    if (label) add(label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, ""), label, num(rec(row)?.tokens))
+  }
+  const pct = num(context.autoCompactThresholdPercent)
+  return {
+    used: categories.reduce((sum, c) => sum + c.tokens, 0), size,
+    ...(pct != null ? { threshold: Math.round(size * pct / 100) } : {}),
+    categories,
+  }
 }
 
 export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNormalizer {
