@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -64,6 +65,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -460,8 +462,14 @@ private fun SectionLabel(text: String, listPad: androidx.compose.ui.unit.Dp, she
     }
 }
 
+/** Digits of equal width, so columns of numbers line up (Ahmet: the columns zig-zagged). */
+private val Tabular = TextStyle(fontFeatureSettings = "tnum")
+/** The number columns: tokens, then % of the window, right-aligned at fixed widths; then the chevron's slot. */
+private val TokensColumn = 52.dp
+private val PercentColumn = 48.dp
+
 @Composable
-private fun CategoryRow(
+internal fun CategoryRow(
     sheet: Boolean,
     dot: Color,
     name: String,
@@ -487,9 +495,18 @@ private fun CategoryRow(
                 .then(if (outlined) Modifier.border1(cs.outline) else Modifier),
         )
         Text(name, color = if (dim) cs.onSurfaceVariant else cs.onSurface, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        Text(tokensLabel(tokens), color = if (dim) cs.onSurfaceVariant else cs.onSurface, fontSize = 13.sp)
-        Text(size?.let { percentLabel(tokens, it) } ?: "—", color = cs.onSurfaceVariant, fontSize = 11.5.sp, modifier = Modifier.width(44.dp), maxLines = 1)
-        if (onClick != null) Icon(Icons.Filled.ChevronRight, null, tint = cs.onSurfaceVariant.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
+        Text(
+            tokensLabel(tokens), color = if (dim) cs.onSurfaceVariant else cs.onSurface, fontSize = 13.sp, style = LocalTextStyle.current.merge(Tabular),
+            textAlign = TextAlign.End, maxLines = 1, modifier = Modifier.width(TokensColumn).testTag("context_row_tokens"),
+        )
+        Text(
+            size?.let { percentLabel(tokens, it) } ?: "—", color = cs.onSurfaceVariant, fontSize = 11.5.sp, style = LocalTextStyle.current.merge(Tabular),
+            textAlign = TextAlign.End, maxLines = 1, modifier = Modifier.width(PercentColumn).testTag("context_row_pct"),
+        )
+        // Every row keeps the chevron's slot, so a row that opens more doesn't push its numbers left.
+        Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
+            if (onClick != null) Icon(Icons.Filled.ChevronRight, null, tint = cs.onSurfaceVariant.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
+        }
     }
 }
 
@@ -589,7 +606,12 @@ private fun ListRow(sheet: Boolean, item: ListItem) {
             item.detail?.let { Text(it, color = cs.onSurfaceVariant, fontSize = 11.5.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         }
         item.count?.let { UsedBadge(it) }
-        item.tokens?.let { Text(tokensLabel(it), color = if (dim) cs.onSurfaceVariant else cs.onSurface, fontSize = 13.sp, maxLines = 1) }
+        item.tokens?.let {
+            Text(
+                tokensLabel(it), color = if (dim) cs.onSurfaceVariant else cs.onSurface, fontSize = 13.sp, style = LocalTextStyle.current.merge(Tabular),
+                textAlign = TextAlign.End, maxLines = 1, modifier = Modifier.width(TokensColumn),
+            )
+        }
         if (item.onClick != null) Icon(Icons.Filled.ChevronRight, null, tint = cs.onSurfaceVariant.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
     }
 }
