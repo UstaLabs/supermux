@@ -21,6 +21,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.net.WorktreeChangesDto
+import dev.supermux.ui.i18n.Plurals
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.localizedPlural
 
 /** What would be lost with a worktree: uncommitted files and unmerged commits. Gitignored
  *  entries are listed too, as ignored — they never count as changes.
@@ -31,15 +35,16 @@ import dev.supermux.net.WorktreeChangesDto
 fun WorktreeChangesList(changes: WorktreeChangesDto, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
     changes.error?.let { err ->
-        Text("Couldn't inspect: $err", color = cs.error, fontSize = 13.sp, modifier = modifier.testTag("wt_changes_error"))
+        Text(localized(Str.worktree_couldnt_inspect, err), color = cs.error, fontSize = 13.sp, modifier = modifier.testTag("wt_changes_error"))
         return
     }
     Column(modifier) {
         if (changes.unmergedKnown && changes.files.isEmpty() && changes.commits.isEmpty()) {
-            Text("No changes", color = cs.onSurfaceVariant, fontSize = 13.sp)
+            Text(localized(Str.worktree_no_changes), color = cs.onSurfaceVariant, fontSize = 13.sp)
         }
         if (changes.files.isNotEmpty()) {
-            ExpandRow(plural(changes.files.size + changes.truncated.files, "file changed", "files changed"), "wt_files_summary") {
+            val n = changes.files.size + changes.truncated.files
+            ExpandRow(localizedPlural(Plurals.worktree_files_changed, n, n), "wt_files_summary") {
                 changes.files.forEach { f ->
                     Row {
                         Mono(f.status, Modifier.padding(end = 8.dp))
@@ -50,20 +55,21 @@ fun WorktreeChangesList(changes: WorktreeChangesDto, modifier: Modifier = Modifi
             }
         }
         if (changes.commits.isNotEmpty()) {
-            ExpandRow(plural(changes.commits.size + changes.truncated.commits, "unmerged commit", "unmerged commits"), "wt_commits_summary") {
+            val n = changes.commits.size + changes.truncated.commits
+            ExpandRow(localizedPlural(Plurals.worktree_unmerged_commits, n, n), "wt_commits_summary") {
                 changes.commits.forEach { Mono("${it.sha}  ${it.subject}") }
                 More(changes.truncated.commits)
             }
         }
         if (!changes.unmergedKnown) {
             Text(
-                "Unmerged commits: unknown (base branch not found)",
+                localized(Str.worktree_unmerged_unknown),
                 fontSize = 13.sp,
                 modifier = Modifier.padding(vertical = 4.dp).testTag("wt_commits_unknown"),
             )
         }
         if (changes.ignored.isNotEmpty()) {
-            val label = "Ignored: " + changes.ignored.joinToString(" · ") { "${it.name}/" }
+            val label = localized(Str.worktree_ignored, changes.ignored.joinToString(" · ") { "${it.name}/" })
             ExpandRow(label, "wt_ignored_summary") {
                 changes.ignored.forEach { e ->
                     Text(
@@ -96,5 +102,5 @@ private fun ExpandRow(label: String, tag: String, content: @Composable () -> Uni
     Text(text, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = modifier)
 
 @Composable private fun More(n: Int) {
-    if (n > 0) Text("+$n more", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+    if (n > 0) Text(localized(Str.worktree_more, n), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
 }

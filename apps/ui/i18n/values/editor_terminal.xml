@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #123: the editor and terminal — file tree and tabs, the Changes (diff) pane and its review comments, walkthroughs,
+     terminal tabs, keys, find and link dialog. English, the source; values-tr/editor_terminal.xml has the same keys
+     (tests/i18n-strings.test.ts). -->
+<resources>
+    <string name="editor_host_offline">Host offline</string>
+    <string name="editor_no_lsp">No agent in this workspace — code intelligence is off.</string>
+    <string name="editor_changed_on_disk">File changed on disk</string>
+    <string name="editor_reload">Reload</string>
+    <string name="editor_file_unavailable">File unavailable</string>
+    <string name="editor_file_not_found">File not found</string>
+    <string name="editor_load_failed">Couldn't load the file</string>
+    <string name="editor_image_decode_failed">Couldn't decode this image</string>
+    <string name="editor_binary_no_text">Binary file — no text to show</string>
+    <string name="editor_downloading">Downloading…</string>
+    <string name="editor_save_and_open">Save and open…</string>
+    <string name="editor_search_files">Search files…</string>
+    <string name="editor_hide_tree">Hide file tree</string>
+    <string name="editor_show_tree">Show file tree</string>
+    <string name="editor_edit">Edit</string>
+    <string name="editor_preview">Preview</string>
+    <string name="editor_view_changes">View changes</string>
+    <string name="editor_empty">Open a file from the tree or search</string>
+    <string name="editor_open_failed">Could not open file</string>
+    <string name="editor_reload_failed">Could not reload file</string>
+    <string name="diff_show_inline">Show inline</string>
+    <string name="diff_show_side_by_side">Show side by side</string>
+    <string name="diff_show_list">Show as list</string>
+    <string name="diff_show_tree">Show as tree</string>
+    <string name="diff_wrap_off">Turn wrapping off</string>
+    <string name="diff_wrap_on">Turn wrapping on</string>
+    <string name="diff_wrap">Wrap</string>
+    <string name="diff_close">Close diff</string>
+    <string name="diff_no_changes">No changes found</string>
+    <string name="diff_submit_review">Submit review</string>
+    <string name="diff_base_session_start">Session start</string>
+    <string name="diff_base_uncommitted">Uncommitted</string>
+    <string name="diff_base_uncommitted_head">Uncommitted (HEAD)</string>
+    <string name="diff_base_label">Base:</string>
+    <string name="diff_base_title">Diff base</string>
+    <string name="diff_base_previous_commit">Previous commit</string>
+    <string name="diff_base_another_branch">Another branch</string>
+    <string name="diff_base_none">None</string>
+    <string name="diff_tag_binary">Binary</string>
+    <string name="diff_tag_mode">Mode</string>
+    <string name="diff_binary_no_text">Binary file — no text diff</string>
+    <string name="diff_mode_changed">File mode changed</string>
+    <string name="diff_open_to_see">Open this file to see its changes</string>
+    <string name="diff_close_composer">Close comment composer on line %1$d</string>
+    <string name="diff_add_comment_on">Add comment on line %1$d</string>
+    <string name="diff_comment_placeholder">Leave a comment…</string>
+    <string name="diff_you">You</string>
+    <string name="diff_resolve">Resolve</string>
+    <string name="diff_status_outdated">outdated</string>
+    <string name="diff_status_submitted">submitted</string>
+    <string name="diff_status_resolved">resolved</string>
+    <string name="diff_status_open">open</string>
+    <string name="diff_list_failed">Couldn't list changes: %1$s</string>
+    <string name="diff_truncated">Showing %1$d of %2$d files</string>
+    <string name="diff_added">Added</string>
+    <string name="diff_deleted">Deleted</string>
+    <string name="diff_renamed">Renamed</string>
+    <string name="diff_modified">Modified</string>
+    <string name="diff_large_file_kb">Large file (%1$d KB)</string>
+    <string name="diff_load_anyway">Load anyway</string>
+    <string name="diff_binary_changed">Binary file changed</string>
+    <string name="diff_base_failed">Couldn't load the base: %1$s</string>
+    <string name="diff_retry">Retry</string>
+    <string name="diff_large_file">Large file</string>
+    <string name="diff_read_failed">Couldn't read the file</string>
+    <string name="diff_base_unavailable">Base text unavailable</string>
+    <string name="diff_revert_failed">Couldn't revert that change: %1$s changed since the diff was loaded</string>
+    <string name="diff_unsaved_in_tab">This file has unsaved changes in a tab: save them to revert hunks here.</string>
+    <string name="walkthrough_showing">Showing walkthrough</string>
+    <string name="walkthrough_loading">Loading walkthrough…</string>
+    <string name="walkthrough_none">No walkthrough</string>
+    <string name="walkthrough_show_steps">Show steps</string>
+    <string name="walkthrough_back_to_diff">Back to diff</string>
+    <string name="walkthrough_steps">Walkthrough steps</string>
+    <string name="walkthrough_large_file">Large file — changes not shown</string>
+    <string name="walkthrough_binary_file">Binary file — changes not shown</string>
+    <string name="walkthrough_base_failed">Couldn't load the previous version — changes not shown</string>
+    <string name="walkthrough_step_updated">Step %1$d updated</string>
+    <string name="walkthrough_open_file">Open file</string>
+    <string name="walkthrough_outdated">Code changed since authoring — showing the nearest available region.</string>
+    <string name="walkthrough_not_in_diff">Code is outside the current diff — showing file context.</string>
+    <string name="walkthrough_load_failed">Could not load file</string>
+    <string name="walkthrough_loading_code">Loading code…</string>
+    <string name="terminal_hide_keyboard">Hide keyboard</string>
+    <string name="terminal_new">New terminal</string>
+    <string name="terminal_tab_label">Terminal %1$d</string>
+    <string name="terminal_close_tab">Close %1$s</string>
+    <string name="terminal_unavailable">This client has no terminal</string>
+    <string name="terminal_engine_failed">The terminal engine didn't load</string>
+    <string name="terminal_reload_hint">Reloading the app picks up the current build.</string>
+    <string name="terminal_previous_match">Previous match</string>
+    <string name="terminal_next_match">Next match</string>
+    <string name="terminal_close_find">Close find</string>
+    <string name="terminal_no_results">No results</string>
+    <string name="terminal_open_link">Open link?</string>
+    <string name="terminal_link">Link</string>
+    <string name="terminal_failed">terminal failed</string>
+    <plurals name="walkthrough_toggle">
+        <item quantity="one">📖 Walkthrough · %1$d step</item>
+        <item quantity="other">📖 Walkthrough · %1$d steps</item>
+    </plurals>
+    <plurals name="diff_changed_files">
+        <item quantity="one">%1$d changed file</item>
+        <item quantity="other">%1$d changed files</item>
+    </plurals>
+    <plurals name="diff_open_comments">
+        <item quantity="one">%1$d open comment</item>
+        <item quantity="other">%1$d open comments</item>
+    </plurals>
+    <plurals name="diff_repo_files">
+        <item quantity="one">%1$d file</item>
+        <item quantity="other">%1$d files</item>
+    </plurals>
+    <plurals name="diff_messages">
+        <item quantity="one">%1$d message</item>
+        <item quantity="other">%1$d messages</item>
+    </plurals>
+</resources>

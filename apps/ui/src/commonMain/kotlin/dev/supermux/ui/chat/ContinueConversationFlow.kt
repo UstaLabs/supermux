@@ -73,6 +73,8 @@ import dev.supermux.ui.widgets.AlertDialog
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
 import kotlinx.coroutines.launch
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 
 /**
  * Test tags for the continue flow — the two apps already agreed on these strings.
@@ -103,7 +105,7 @@ private val CONTINUE_AGENT_FALLBACK = listOf("claude", "codex", "cursor", "openc
 @Composable
 fun ContinueMenuItem(onClick: () -> Unit) {
     DropdownMenuItem(
-        text = { Text("Continue in new conversation") },
+        text = { Text(localized(Str.composer_continue_title)) },
         modifier = Modifier.testTag(ContinueTestIds.CONTINUE),
         onClick = onClick,
     )
@@ -193,6 +195,7 @@ fun ContinueConversationFlow(
         reasoning = if (reasoningVisible) resolveReasoningLevel(levels, reasoning) else null
     }
 
+    val startFailed = localized(Str.composer_continue_start_failed)
     val start: () -> Unit = {
         scope.launch {
             busy = true
@@ -211,7 +214,7 @@ fun ContinueConversationFlow(
             if (id != null) {
                 form.created = id
             } else if (error == null) {
-                error = "Couldn't start — check the agent is installed and signed in."
+                error = startFailed
             }
         }
         Unit
@@ -273,10 +276,10 @@ fun ContinueConversationFlow(
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp, vertical = 8.dp),
             ) {
-                Text("Continue in new conversation", style = MaterialTheme.typography.titleMedium)
+                Text(localized(Str.composer_continue_title), style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "Same working directory as ${session.name}. The new agent is told to read this session first.",
+                    localized(Str.composer_continue_body, session.name),
                     color = cs.onSurfaceVariant,
                     fontSize = 13.sp,
                 )
@@ -290,12 +293,12 @@ fun ContinueConversationFlow(
                         onClick = close,
                         enabled = !busy,
                         modifier = Modifier.testTag(ContinueTestIds.CONTINUE_CANCEL),
-                    ) { Text("Cancel") }
+                    ) { Text(localized(Str.composer_cancel)) }
                     TextButton(
                         onClick = start,
                         enabled = canStart,
                         modifier = Modifier.testTag(ContinueTestIds.CONTINUE_CONFIRM),
-                    ) { Text(if (busy) "Starting…" else "Continue") }
+                    ) { Text(if (busy) localized(Str.composer_continue_starting) else localized(Str.composer_continue_confirm)) }
                 }
                 Spacer(Modifier.height(16.dp))
             }
@@ -303,11 +306,11 @@ fun ContinueConversationFlow(
     } else {
         AlertDialog(
             onDismissRequest = { if (!busy) close() },
-            title = { Text("Continue in new conversation") },
+            title = { Text(localized(Str.composer_continue_title)) },
             text = {
                 Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
                     Text(
-                        "Same working directory as ${session.name}. The new agent is told to read this session first. Edit freely before start.",
+                        localized(Str.composer_continue_body_edit, session.name),
                         color = cs.onSurfaceVariant,
                         fontSize = 13.sp,
                         modifier = Modifier.padding(bottom = Space.sm),
@@ -323,14 +326,14 @@ fun ContinueConversationFlow(
                     onClick = start,
                     enabled = canStart,
                     modifier = Modifier.testTag(ContinueTestIds.CONTINUE_CONFIRM),
-                ) { Text(if (busy) "Starting…" else "Start") }
+                ) { Text(if (busy) localized(Str.composer_continue_starting) else localized(Str.composer_continue_start)) }
             },
             dismissButton = {
                 TextButton(
                     onClick = close,
                     enabled = !busy,
                     modifier = Modifier.testTag(ContinueTestIds.CONTINUE_CANCEL),
-                ) { Text("Cancel") }
+                ) { Text(localized(Str.composer_cancel)) }
             },
         )
     }
@@ -381,8 +384,9 @@ private fun ContinuePickers(
     val cs = MaterialTheme.colorScheme
     val pointer = LocalPointerAvailable.current
     val agentLabel = agent.replaceFirstChar { it.uppercase() }
-    val modelLabel = model?.let { id -> models.firstOrNull { it.id == id }?.displayName ?: id } ?: "Default"
-    val reasoningLabel = reasoning?.replaceFirstChar { it.uppercase() } ?: "Default"
+    val defaultLabel = localized(Str.composer_continue_default)
+    val modelLabel = model?.let { id -> models.firstOrNull { it.id == id }?.displayName ?: id } ?: defaultLabel
+    val reasoningLabel = reasoning?.replaceFirstChar { it.uppercase() } ?: defaultLabel
 
     var agentMenu by remember { mutableStateOf(false) }
     var modelMenu by remember { mutableStateOf(false) }
@@ -423,7 +427,7 @@ private fun ContinuePickers(
                     testTag = ContinueTestIds.CONTINUE_MODEL,
                 )
                 DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
-                    val opts = listOf(DEFAULT_MODEL_ID to "Default") + models.map { it.id to it.displayName }
+                    val opts = listOf(DEFAULT_MODEL_ID to defaultLabel) + models.map { it.id to it.displayName }
                     opts.forEach { (id, label) ->
                         val selected = (model ?: DEFAULT_MODEL_ID) == id
                         DropdownMenuItem(
@@ -477,7 +481,7 @@ private fun ContinuePickers(
     // Touch: the same three choices as Material3 bottom sheets (Android's original shape).
     if (!pointer && agentMenu) {
         PickerSheet(
-            title = "Select Agent",
+            title = localized(Str.composer_continue_select_agent),
             options = agents.map { it to it.replaceFirstChar { c -> c.uppercase() } },
             current = agent,
             onPick = onPickAgent,
@@ -485,9 +489,9 @@ private fun ContinuePickers(
         )
     }
     if (!pointer && modelMenu) {
-        val opts = listOf(DEFAULT_MODEL_ID to "Default") + models.map { it.id to it.displayName }
+        val opts = listOf(DEFAULT_MODEL_ID to defaultLabel) + models.map { it.id to it.displayName }
         PickerSheet(
-            title = "Select Model",
+            title = localized(Str.composer_continue_select_model),
             options = opts,
             current = model ?: DEFAULT_MODEL_ID,
             onPick = { picked -> onPickModel(if (picked == DEFAULT_MODEL_ID) null else picked) },
@@ -496,7 +500,7 @@ private fun ContinuePickers(
     }
     if (!pointer && reasoningMenu) {
         PickerSheet(
-            title = "Thinking level",
+            title = localized(Str.composer_continue_thinking_level),
             options = reasoningLevels.map { it.id to (it.description ?: it.id) },
             current = reasoning,
             onPick = onPickReasoning,

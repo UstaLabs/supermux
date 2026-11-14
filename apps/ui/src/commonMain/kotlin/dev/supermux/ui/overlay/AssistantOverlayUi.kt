@@ -129,6 +129,8 @@ import dev.supermux.ui.chat.rememberChatState
 import dev.supermux.ui.chat.rememberDictation
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.MicTrouble
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.session.AGENT_DOZE_AFTER_MS
 import dev.supermux.ui.session.AgentAvatar
 import dev.supermux.ui.session.AvatarRig
@@ -411,7 +413,7 @@ fun OverlayVoice(fleet: FleetStore, agentId: String, ui: OverlayUiState) {
         ui.finishing = false
         asking.launch {
             val trouble = if (denied) MicTrouble.NOT_ALLOWED else mic.trouble()
-            ui.micNote = micTroubleNote(trouble, fleet.sessions.value.firstOrNull { it.id == agentId }?.name ?: "your Agent")
+            ui.micNote = micTroubleNote(trouble, fleet.sessions.value.firstOrNull { it.id == agentId }?.name ?: localized(Str.overlay_your_agent))
         }
     }
     fun listen() {
@@ -544,7 +546,7 @@ fun OverlayHead(agent: OverlayAgent?, rig: AvatarRig?, ui: OverlayUiState, size:
         else -> 24
     }
     val clock = rememberAvatarClock(fps)
-    val lift by animateFloatAsState(if (ui.pressed || ui.listening) 1.08f else 1f, label = "lift")
+    val lift by animateFloatAsState(if (ui.pressed || ui.listening) 1.08f else 1f, label = "lift") // i18n-ok: animation debug label
     val worn = remember(rig) { rig?.wearingGlasses() }
     // Just after a picture of the screen is taken, a glint sweeps across it.
     val glint = remember { Animatable(1f) }
@@ -564,8 +566,8 @@ fun OverlayHead(agent: OverlayAgent?, rig: AvatarRig?, ui: OverlayUiState, size:
                 ),
         )
         if (ui.listening) {
-            val pulse = rememberInfiniteTransition(label = "overlay-listen")
-            val ring by pulse.animateFloat(0.92f, 1.06f, infiniteRepeatable(tween(550), RepeatMode.Reverse), label = "ring")
+            val pulse = rememberInfiniteTransition(label = "overlay-listen") // i18n-ok: animation debug label
+            val ring by pulse.animateFloat(0.92f, 1.06f, infiniteRepeatable(tween(550), RepeatMode.Reverse), label = "ring") // i18n-ok: animation debug label
             Box(
                 Modifier.size(size).scale(ring)
                     .border(3.dp, (if (ui.cancelArmed) cs.error else cs.primary).copy(alpha = 0.7f), CircleShape),
@@ -693,7 +695,7 @@ fun OverlayBubble(
             ui.listening -> {
                 BubbleBox(shape, cs.primaryContainer) {
                     Text(
-                        ui.heard.ifBlank { if (ui.micWaiting) "One moment…" else "Listening…" },
+                        ui.heard.ifBlank { localized(if (ui.micWaiting) Str.overlay_one_moment else Str.overlay_listening) },
                         color = cs.onPrimaryContainer,
                         style = MaterialTheme.typography.bodyMedium,
                         maxLines = 4,
@@ -702,8 +704,8 @@ fun OverlayBubble(
                     // Waiting, the picture on show may still be the last talk's.
                     val shot = ui.shot.takeUnless { ui.micWaiting }
                     val note = when {
-                        shot != null && !shot.dropped -> "Your screen goes with this."
-                        shot != null -> "Screen dropped: only your words go."
+                        shot != null && !shot.dropped -> localized(Str.overlay_screen_goes)
+                        shot != null -> localized(Str.overlay_screen_dropped)
                         else -> null
                     }
                     if (note != null) {
@@ -721,8 +723,8 @@ fun OverlayBubble(
                 if (ui.locked) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         // Filled, not outlined: an outline vanishes over whatever app is behind it.
-                        FilledTonalButton(onClick = onCancelLocked, modifier = Modifier.testTag("overlay_lock_cancel")) { Text("Cancel") }
-                        Button(onClick = onSendLocked, modifier = Modifier.testTag("overlay_lock_send")) { Text("Send") }
+                        FilledTonalButton(onClick = onCancelLocked, modifier = Modifier.testTag("overlay_lock_cancel")) { Text(localized(Str.overlay_cancel)) }
+                        Button(onClick = onSendLocked, modifier = Modifier.testTag("overlay_lock_send")) { Text(localized(Str.overlay_send)) }
                     }
                 } else {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -732,11 +734,13 @@ fun OverlayBubble(
                         }
                         Hint(if (ui.cancelArmed) cs.error else cs.surfaceContainerHigh, if (ui.cancelArmed) cs.onError else cs.onSurfaceVariant) {
                             Text(
-                                when {
-                                    ui.cancelArmed -> "Release to cancel"
-                                    right -> "‹ Slide to cancel"
-                                    else -> "Slide to cancel ›"
-                                },
+                                localized(
+                                    when {
+                                        ui.cancelArmed -> Str.overlay_release_cancel
+                                        right -> Str.overlay_slide_cancel_left
+                                        else -> Str.overlay_slide_cancel_right
+                                    },
+                                ),
                                 style = MaterialTheme.typography.labelMedium,
                             )
                         }
@@ -768,9 +772,9 @@ fun OverlayBubble(
                             )
                             Box(
                                 Modifier.padding(start = 8.dp).offset(x = 6.dp).size(28.dp).clip(CircleShape)
-                                    .clickable(onClickLabel = "Close", onClick = onClose).testTag("overlay_reply_close"),
+                                    .clickable(onClickLabel = localized(Str.overlay_close), onClick = onClose).testTag("overlay_reply_close"),
                                 contentAlignment = Alignment.Center,
-                            ) { Icon(Icons.Filled.Close, contentDescription = "Close", tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp)) }
+                            ) { Icon(Icons.Filled.Close, contentDescription = localized(Str.overlay_close), tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp)) }
                         }
                         if (ui.replyExpanded) {
                             ReplyInFull(words, ink, ui.bubbleRoom, onOpen)
@@ -789,7 +793,7 @@ fun OverlayBubble(
                             )
                             if (cut && !ui.speaking) {
                                 Text(
-                                    "Read it all",
+                                    localized(Str.overlay_read_all),
                                     color = cs.primary,
                                     style = MaterialTheme.typography.labelLarge,
                                     modifier = Modifier.padding(top = 4.dp).clip(RoundedCornerShape(6.dp))
@@ -877,7 +881,7 @@ private fun ReplyInFull(text: AnnotatedString, ink: InkBlock?, room: Dp, onOpen:
         }
     }
     Text(
-        "Open in chat",
+        localized(Str.overlay_open_in_chat),
         color = cs.primary,
         style = MaterialTheme.typography.labelLarge,
         modifier = Modifier.padding(top = 6.dp).clip(RoundedCornerShape(6.dp)).clickable(onClick = onOpen).testTag("overlay_reply_open"),
@@ -908,14 +912,14 @@ val OVERLAY_DROP_BOX = 96.dp
 @Composable
 fun OverlayDropTarget(hot: Boolean, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
-    val grow by animateFloatAsState(if (hot) 1.18f else 1f, label = "drop")
+    val grow by animateFloatAsState(if (hot) 1.18f else 1f, label = "drop") // i18n-ok: animation debug label
     Box(modifier.size(OVERLAY_DROP_BOX), contentAlignment = Alignment.Center) {
         Box(
             Modifier.size(DROP_CIRCLE).scale(grow).shadow(8.dp, CircleShape).clip(CircleShape)
                 .background(if (hot) cs.error else cs.inverseSurface.copy(alpha = 0.82f)),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(Icons.Filled.Close, contentDescription = "Hide", tint = if (hot) cs.onError else cs.inverseOnSurface)
+            Icon(Icons.Filled.Close, contentDescription = localized(Str.overlay_hide), tint = if (hot) cs.onError else cs.inverseOnSurface)
         }
     }
 }
@@ -930,9 +934,9 @@ fun OverlayUndo(name: String, onUndo: () -> Unit, modifier: Modifier = Modifier)
                 onClick = onUndo,
                 colors = ButtonDefaults.textButtonColors(contentColor = SnackbarDefaults.actionColor),
                 modifier = Modifier.testTag("overlay_undo_button"),
-            ) { Text("Undo") }
+            ) { Text(localized(Str.overlay_undo)) }
         },
-    ) { Text("$name is hidden", maxLines = 1, overflow = TextOverflow.Ellipsis) }
+    ) { Text(localized(Str.overlay_hidden, name), maxLines = 1, overflow = TextOverflow.Ellipsis) }
 }
 
 /**
@@ -951,12 +955,12 @@ fun OverlayShotThumb(shot: OverlayShot, onToggle: () -> Unit, modifier: Modifier
         Box(
             Modifier.size(width = 52.dp, height = 112.dp).shadow(6.dp, shape).clip(shape)
                 .border(2.dp, if (shot.dropped) cs.outline else cs.primary, shape)
-                .clickable(onClickLabel = if (shot.dropped) "Send your screen" else "Don't send your screen", onClick = onToggle),
+                .clickable(onClickLabel = localized(if (shot.dropped) Str.overlay_send_screen else Str.overlay_dont_send_screen), onClick = onToggle),
             contentAlignment = Alignment.Center,
         ) {
             Image(
                 shot.thumb,
-                contentDescription = "Your screen",
+                contentDescription = localized(Str.overlay_your_screen),
                 contentScale = ContentScale.Crop,
                 alpha = if (shot.dropped) 0.3f else 1f,
                 modifier = Modifier.fillMaxSize(),
@@ -970,7 +974,7 @@ fun OverlayShotThumb(shot: OverlayShot, onToggle: () -> Unit, modifier: Modifier
             shadowElevation = 2.dp,
         ) {
             Text(
-                if (shot.dropped) "Not sent" else "Screen",
+                localized(if (shot.dropped) Str.overlay_not_sent else Str.overlay_screen),
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
             )
@@ -995,7 +999,7 @@ fun OverlayGlassesChip(ui: OverlayUiState, name: String, onToggle: () -> Unit) {
     FilterChip(
         selected = ui.screenSharing,
         onClick = onToggle,
-        label = { Text(if (ui.screenSharing) "$name sees your screen" else "Let $name see your screen") },
+        label = { Text(localized(if (ui.screenSharing) Str.overlay_sees_screen else Str.overlay_let_see_screen, name)) },
         leadingIcon = { GlassesGlyph(LocalContentColor.current, Modifier.size(AssistChipDefaults.IconSize)) },
         modifier = Modifier.testTag("overlay_glasses"),
     )
@@ -1061,7 +1065,7 @@ fun OverlayChat(
                     // gestures are taken: tap chats, hold talks, drag moves).
                     Column(
                         Modifier.weight(1f).clip(RoundedCornerShape(12.dp))
-                            .clickable(enabled = canSwitch, onClickLabel = "Switch Agent") { switcherOpen = !switcherOpen }
+                            .clickable(enabled = canSwitch, onClickLabel = localized(Str.overlay_switch_agent)) { switcherOpen = !switcherOpen }
                             .padding(horizontal = 6.dp, vertical = 2.dp)
                             .testTag("overlay_agent_name"),
                     ) {
@@ -1083,20 +1087,22 @@ fun OverlayChat(
                             }
                         }
                         Text(
-                            when {
-                                agent.working -> "working…"
-                                !agent.online -> "asleep · wakes up when you write"
-                                else -> "Always on"
-                            },
+                            localized(
+                                when {
+                                    agent.working -> Str.overlay_working
+                                    !agent.online -> Str.overlay_asleep
+                                    else -> Str.overlay_always_on
+                                },
+                            ),
                             style = MaterialTheme.typography.bodySmall,
                             color = if (agent.working) cs.primary else cs.onSurfaceVariant,
                         )
                     }
                     IconButton(onClick = onOpenInApp, modifier = Modifier.testTag("overlay_open_in_app")) {
-                        Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = "Open in supermux", tint = cs.onSurfaceVariant)
+                        Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = localized(Str.overlay_open_in_supermux), tint = cs.onSurfaceVariant)
                     }
                     IconButton(onClick = onClose, modifier = Modifier.testTag("overlay_close")) {
-                        Icon(Icons.Filled.Close, contentDescription = "Close", tint = cs.onSurfaceVariant)
+                        Icon(Icons.Filled.Close, contentDescription = localized(Str.overlay_close), tint = cs.onSurfaceVariant)
                     }
                 }
                 // The overlay is a composition of its own, outside the shell's providers: the fleet's downloads
@@ -1168,7 +1174,7 @@ private fun OverlayAgentSwitcher(
     ) {
         Column(Modifier.heightIn(max = 340.dp).verticalScroll(rememberScrollState()).padding(vertical = 6.dp)) {
             Text(
-                "Show in the overlay",
+                localized(Str.overlay_show_in),
                 style = MaterialTheme.typography.labelMedium,
                 color = cs.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
@@ -1194,10 +1200,10 @@ private fun OverlayAgentSwitcher(
                     Column(Modifier.weight(1f)) {
                         Text(a.name, style = MaterialTheme.typography.bodyLarge, color = cs.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         if (a.isDefault == true) {
-                            Text("Default", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                            Text(localized(Str.overlay_default), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
                         }
                     }
-                    if (on) Icon(Icons.Filled.Check, contentDescription = "Shown now", tint = cs.primary)
+                    if (on) Icon(Icons.Filled.Check, contentDescription = localized(Str.overlay_shown_now), tint = cs.primary)
                 }
             }
         }

@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #123: the new-session launcher, in Turkish. Same keys and placeholders as values/sessions_launch.xml.
+     Terms: docs/i18n/glossary.md. -->
+<resources>
+    <!-- Launcher -->
+    <string name="launch_title">Hadi başlayalım</string>
+    <string name="launch_new_session">Yeni oturum</string>
+    <string name="launch_back">Geri</string>
+    <string name="launch_choose_project">Bir proje seçin</string>
+    <string name="launch_select_project">Proje seç</string>
+    <string name="launch_select_host">Makine seç</string>
+    <string name="launch_choose_folder_title">Bir proje klasörü seçin</string>
+    <string name="launch_choose_folder_for">Şu projeye eklenecek bir klasör seçin: %1$s</string>
+    <string name="launch_already_in_other">Zaten başka bir projede</string>
+    <string name="launch_add_folder_failed">Bu klasör şu projeye eklenemedi: %1$s</string>
+    <string name="launch_use_owner">Şunu kullan: %1$s</string>
+    <string name="launch_no_worktree">Worktree yok</string>
+    <string name="launch_save_draft">Taslağı kaydet</string>
+    <string name="launch_save_draft_failed">Taslak kaydedilemedi</string>
+    <string name="launch_placeholder">Ajan ne yapsın?</string>
+    <string name="launch_start_session">Oturumu başlat</string>
+    <string name="launch_create_session_failed">Oturum oluşturulamadı</string>
+    <!-- A failed host operation: "x oluşturulamadı — bağlantıyı kontrol edip tekrar deneyin." -->
+    <string name="launch_create_failed">%1$s oluşturulamadı</string>
+    <string name="launch_clone_failed">%1$s klonlanamadı</string>
+    <string name="launch_check_connection">bağlantıyı kontrol edip tekrar deneyin.</string>
+
+    <!-- Launcher › worktree picker -->
+    <string name="launch_worktree">Worktree</string>
+    <string name="launch_isolated">Ayrık worktree'de çalıştır</string>
+    <string name="launch_isolated_hint">Aşağıdaki temel daldan açılan yeni bir dalda çalışır; çalışma kopyanız olduğu gibi kalır.</string>
+    <string name="launch_base_branch">Temel dal</string>
+    <string name="launch_search_branches">Dallarda ara</string>
+    <string name="launch_fetching">Getiriliyor…</string>
+    <string name="launch_no_branches">Dal yok</string>
+    <string name="launch_no_match">Eşleşme yok</string>
+
+    <!-- First run: the project step -->
+    <string name="firstproject_title">Ajanlarınız nerede çalışsın?</string>
+    <string name="firstproject_subtitle">Ajanlar yalnızca seçtiğiniz klasördeki dosyaları okur ve değiştirir.</string>
+    <string name="firstproject_open_folder">Bir klasör açın</string>
+    <string name="firstproject_open_caption_local">Bu bilgisayarda bir klasör seçin</string>
+    <string name="firstproject_open_caption_remote">Var olan bir klasörü kullanın</string>
+    <string name="firstproject_create_title">Yeni bir proje oluşturun</string>
+    <string name="firstproject_create_caption">Boş bir klasörle başlayın</string>
+    <string name="firstproject_type_path">ya da bir klasör yolu yazın</string>
+    <string name="firstproject_folder_path">Klasör yolu</string>
+    <string name="firstproject_path_hint">Klasör makinede zaten var olmalı.</string>
+    <string name="firstproject_open_confirm">Klasörü aç</string>
+    <string name="firstproject_project_name">Proje adı</string>
+    <string name="firstproject_name_hint_empty">Supermux'ın projeler klasöründe boş bir klasör.</string>
+    <string name="firstproject_name_hint">Supermux'ın projeler klasöründe “%1$s” klasörünü oluşturur.</string>
+    <string name="firstproject_create_confirm">Proje oluştur</string>
+    <string name="firstproject_more_later">İstediğiniz zaman başka projeler ekleyebilirsiniz.</string>
+    <string name="firstproject_check_failed">Klasör denetlenemedi — bağlantıyı kontrol edip tekrar deneyin.</string>
+    <string name="firstproject_open_that_failed">Klasör açılamadı</string>
+    <string name="firstproject_open_failed">%1$s açılamadı</string>
+
+    <!-- Project picker -->
+    <string name="project_title">Proje</string>
+    <string name="project_search_placeholder">Proje, depo arayın ya da bir yol yazın</string>
+    <string name="project_choose_folder">Klasör seç</string>
+    <string name="project_invalid_path">Geçersiz yol</string>
+    <string name="project_search_failed">Depolar aranamadı — bağlantıyı kontrol edip tekrar deneyin.</string>
+    <string name="project_some_forges_failed">Bazı forge'lar yanıt vermedi: %1$s</string>
+    <string name="project_clone_continues">%1$s klonlaması makinede sürüyor…</string>
+    <string name="project_create_continues">%1$s oluşturma işlemi makinede sürüyor…</string>
+    <string name="project_op_continues">İşlem makinede sürüyor…</string>
+    <string name="project_ready">Hazır — %1$s</string>
+    <string name="project_use">Kullan</string>
+    <string name="project_no_match">"%1$s" ile eşleşen proje yok.</string>
+    <string name="project_empty_hint">Bir yol yazın ya da projelerinizde arayın.</string>
+    <string name="project_use_path">Bu yolu kullan</string>
+    <string name="project_recent">Kaldığınız yerden devam edin</string>
+    <string name="project_projects">Projeler</string>
+    <string name="project_everything_else">Diğerleri</string>
+    <string name="project_current">Geçerli proje</string>
+    <string name="project_clone_from">Klonlama kaynağı: %1$s · %2$s</string>
+    <string name="project_private">Özel</string>
+    <string name="project_clone">Klonla</string>
+    <string name="project_load_more">Daha fazla yükle (%1$d kaldı)</string>
+    <string name="project_searching">Depolar aranıyor…</string>
+    <string name="project_create_new">Yeni oluştur</string>
+    <string name="project_no_repos">"%1$s" ile eşleşen depo yok.</string>
+    <string name="project_cloning">%1$s klonlanıyor…</string>
+    <string name="project_creating">%1$s oluşturuluyor…</string>
+    <string name="project_working">Çalışıyor…</string>
+    <string name="project_hide_hint">Gizleseniz de makinede devam eder.</string>
+    <string name="project_hide">Gizle</string>
+
+    <!-- Project settings and "New project" -->
+    <string name="project_settings_title">Proje ayarları</string>
+    <string name="project_name">Ad</string>
+    <string name="project_save">Kaydet</string>
+    <string name="project_image">Görsel</string>
+    <string name="project_image_choose">Görsel seç…</string>
+    <string name="project_image_change">Değiştir…</string>
+    <string name="project_image_remove">Kaldır</string>
+    <string name="project_image_type">PNG, JPEG, WebP ya da GIF bir görsel seçin.</string>
+    <string name="project_image_too_big">Bu görsel 5 MB'tan büyük.</string>
+    <string name="project_image_upload_failed">Görsel yüklenemedi.</string>
+    <string name="project_image_remove_failed">Görsel kaldırılamadı.</string>
+    <string name="project_rename_failed">Projenin adı değiştirilemedi.</string>
+    <string name="project_locations">Konumlar</string>
+    <string name="project_no_locations">Henüz konum yok.</string>
+    <string name="project_add_location">Konum ekle</string>
+    <string name="project_already_in">Zaten şurada: %1$s</string>
+    <string name="project_move_here">Buraya taşı</string>
+    <string name="project_move_to">Taşı…</string>
+    <string name="project_location_other">Bu klasör zaten başka bir projeye ait.</string>
+    <string name="project_location_same">Bu klasör zaten bu projenin bir konumu.</string>
+    <string name="project_location_add_failed">Konum eklenemedi.</string>
+    <string name="project_location_not_found">Konum şu projede bulunamadı: %1$s.</string>
+    <string name="project_location_move_failed">Konum taşınamadı.</string>
+    <string name="project_done">Bitti</string>
+    <string name="project_cancel">İptal</string>
+    <string name="project_new">Yeni proje</string>
+    <string name="project_host">Makine</string>
+    <string name="project_host_offline">%1$s (çevrimdışı)</string>
+    <string name="project_create">Oluştur</string>
+    <string name="project_create_failed">Proje oluşturulamadı.</string>
+
+    <!-- Organize projects -->
+    <string name="organize_title">Projeleri düzenle</string>
+    <string name="organize_hint">Projelerin kenar çubuğundaki sırasını sürükleyerek değiştirin.</string>
+    <string name="organize_drag">Sıralamak için sürükleyin</string>
+</resources>

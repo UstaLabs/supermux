@@ -65,6 +65,10 @@ import dev.supermux.chat.parseChatTs
 import dev.supermux.proto.LimitWaitDto
 import dev.supermux.proto.LogEntry
 import dev.supermux.ui.accounts.limitWaitRowText
+import dev.supermux.ui.i18n.Plurals
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.localizedPlural
 import dev.supermux.ui.theme.LocalSemantics
 import kotlin.time.Clock
 import dev.supermux.ui.adaptive.LocalPointerAvailable
@@ -93,9 +97,9 @@ internal data class AgentEntry(
 
 /** The row's second line when it is not the last message: working, waiting for a limit reset (#92), asleep. */
 internal fun agentRowStatus(a: AgentEntry, nowMs: Long): String? = when {
-    a.working -> "working…"
+    a.working -> localized(Str.shell_agent_working)
     a.limitWait != null -> limitWaitRowText(a.limitWait, nowMs)
-    !a.online -> "asleep"
+    !a.online -> localized(Str.shell_agent_asleep)
     else -> null
 }
 
@@ -169,14 +173,14 @@ private fun AgentsHeader(waiting: Int, onNewAgent: (() -> Unit)?) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            "Agents",
+            localized(Str.sessions_agents_title),
             color = cs.onSurfaceVariant,
             fontSize = 11.sp,
             fontWeight = FontWeight.Medium,
             modifier = Modifier.weight(1f),
         )
         if (waiting > 0) {
-            Text("$waiting waiting", color = cs.primary, fontSize = 11.sp, fontFamily = MonoFontFamily)
+            Text(localizedPlural(Plurals.sessions_agents_waiting, waiting, waiting), color = cs.primary, fontSize = 11.sp, fontFamily = MonoFontFamily)
             Spacer(Modifier.width(4.dp))
         }
         if (onNewAgent != null) {
@@ -185,7 +189,7 @@ private fun AgentsHeader(waiting: Int, onNewAgent: (() -> Unit)?) {
             // Touch gets a thumb-sized target; it stays in one column with the Workspaces ⋮.
             val touch = !LocalPointerAvailable.current
             IconButton(onClick = onNewAgent, modifier = Modifier.size(if (touch) 34.dp else 28.dp).testTag("agents_new")) {
-                Icon(Icons.Filled.Add, contentDescription = "New Agent", tint = cs.onSurfaceVariant, modifier = Modifier.size(if (touch) 19.dp else 16.dp))
+                Icon(Icons.Filled.Add, contentDescription = localized(Str.sessions_agents_new), tint = cs.onSurfaceVariant, modifier = Modifier.size(if (touch) 19.dp else 16.dp))
             }
         }
     }
@@ -206,7 +210,7 @@ private fun AgentRow(
     val cs = MaterialTheme.colorScheme
     val interaction = interactionSource ?: remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
-    val elevation by animateDpAsState(if (isDragging) 6.dp else 0.dp, label = "agent-drag-elevation")
+    val elevation by animateDpAsState(if (isDragging) 6.dp else 0.dp, label = "agent-drag-elevation") // i18n-ok: animation label
     val bg = when {
         a.active -> cs.onSurface.copy(alpha = 0.08f)
         hovered -> cs.onSurface.copy(alpha = 0.045f)
@@ -277,7 +281,7 @@ private fun AgentRow(
                 }
                 Spacer(Modifier.height(1.dp))
                 Text(
-                    status ?: previewText ?: "Always on",
+                    status ?: previewText ?: localized(Str.shell_agent_always_on),
                     color = when {
                         a.working -> cs.primary
                         a.limitWait != null -> LocalSemantics.current.warning
@@ -346,7 +350,12 @@ private fun ArchivedAgentRow(a: ArchivedDto, rig: AvatarRig?, actions: AgentsAct
             Text(a.name, color = cs.onSurfaceVariant, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             val ago = archivedRelTime(a.killed_at)
             Text(
-                if (failed) "Couldn't restore" else if (ago.isEmpty()) "Archived" else "Archived $ago ago".replace("now ago", "just now"),
+                when {
+                    failed -> localized(Str.sessions_agents_restore_failed)
+                    ago.isEmpty() -> localized(Str.sessions_row_archived)
+                    ago == "now" -> localized(Str.sessions_agents_archived_just_now)
+                    else -> localized(Str.sessions_agents_archived_ago, ago)
+                },
                 color = if (failed) cs.error else cs.onSurfaceVariant.copy(alpha = 0.55f),
                 fontSize = 11.sp,
                 maxLines = 1,
@@ -371,7 +380,7 @@ private fun ArchivedAgentRow(a: ArchivedDto, rig: AvatarRig?, actions: AgentsAct
                 .testTag("agent_restore_${a.id}"),
             contentAlignment = Alignment.Center,
         ) {
-            Text(if (busy) "Restoring…" else "Restore", color = cs.onSurface, fontSize = 12.sp)
+            Text(localized(if (busy) Str.sessions_agents_restoring else Str.sessions_row_restore), color = cs.onSurface, fontSize = 12.sp)
         }
     }
 }

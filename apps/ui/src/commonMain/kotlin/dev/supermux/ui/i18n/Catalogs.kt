@@ -29,7 +29,8 @@ object Catalogs {
     /** Reads [language]'s one compact file once; a failed read leaves it null, so English fills in. */
     suspend fun load(language: String): Catalog {
         loaded[language]?.let { return it }
-        val text = runCatching { Res.readBytes("files/i18n/$language.txt").decodeToString() }.getOrNull()
+        val path = "files/i18n/$language.txt"
+        val text = runCatching { Res.readBytes(path).decodeToString() }.getOrNull() ?: readFromClasspath(path)
         val catalog = parseCatalog(text.orEmpty())
         if (text != null) loaded = loaded + (language to catalog)
         return catalog
@@ -55,6 +56,12 @@ object Catalogs {
         warming = emptyMap()
     }
 }
+
+/**
+ * A catalog read straight from the classpath, for where Compose resources can't read it: Android's local unit tests run
+ * on a plain JVM without the app's assets. Null where there is no classpath (iOS, the web).
+ */
+internal expect fun readFromClasspath(path: String): String?
 
 /** Runs [block] to completion on this thread where the platform allows it (JVM, Android, iOS); null on the web. */
 internal expect fun <T> readBlocking(block: suspend () -> T): T?

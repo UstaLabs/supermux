@@ -33,16 +33,8 @@ internal val LOGIN_KINDS = setOf("claude", "codex", "cursor", "grok", "antigravi
 internal fun isActiveLoginPhase(phase: String?): Boolean =
     phase == "starting" || phase == "awaiting_user"
 
-/** The failed-install headline: the exit code when there is one, then the broker's reason. English, for the tests and non-composable callers. */
+/** The failed-install headline, in the app's language: the exit code when there is one, then the broker's reason as it wrote it. */
 internal fun installFailureMessage(job: AgentInstallJob?): String {
-    val head = job?.exitCode?.let { "Installation failed (exit code $it)." } ?: "Installation failed." // i18n-ok: English twin of localizedInstallFailureMessage
-    val why = job?.error?.trim().orEmpty().replaceFirstChar { it.uppercase() }
-    return if (why.isEmpty()) head else "$head $why"
-}
-
-/** [installFailureMessage] in the app's language; the broker's reason stays as the broker wrote it. */
-@Composable
-internal fun localizedInstallFailureMessage(job: AgentInstallJob?): String {
     val code = job?.exitCode
     val head = if (code != null) localized(Str.agent_settings_install_failed_code, code) else localized(Str.agent_settings_install_failed)
     val why = job?.error?.trim().orEmpty().replaceFirstChar { it.uppercase() }
@@ -61,20 +53,10 @@ internal fun normalizeInstallState(state: String?): String = when (state?.lowerc
     else -> state.orEmpty()
 }
 
-/** A provider's status in English, for the tests and non-composable callers; the UI shows [localizedStatusLabel]. */
-internal fun statusLabel(status: AgentInstallStatus): String = when {
-    // The CLI still has its credential file, but the provider refused the login: sign in again.
-    status.signInExpired -> "Sign-in expired — sign in again" // i18n-ok: English twin of localizedStatusLabel
-    status.authed -> "Authenticated" // i18n-ok: English twin of localizedStatusLabel
-    !status.installed -> "Not installed" // i18n-ok: English twin of localizedStatusLabel
-    status.kind == "opencode" -> "Ready · free tier" // i18n-ok: English twin of localizedStatusLabel
-    else -> "Installed, not authenticated" // i18n-ok: English twin of localizedStatusLabel
-}
-
-/** [statusLabel] in the app's language. */
-@Composable
-internal fun localizedStatusLabel(status: AgentInstallStatus): String = localized(
+/** A provider's status in the app's language. */
+internal fun statusLabel(status: AgentInstallStatus): String = localized(
     when {
+        // The CLI still has its credential file, but the provider refused the login: sign in again.
         status.signInExpired -> Str.agent_settings_sign_in_expired
         status.authed -> Str.agent_settings_authenticated
         !status.installed -> Str.agent_settings_not_installed

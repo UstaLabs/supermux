@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #123: the sidebar's session list — workspace and session rows, the Agents block, project headers, the status
+     rail, unread pills, search, the list's dialogs and footer. English, the source; values-tr/sessions_list.xml has
+     the same keys (tests/i18n-strings.test.ts). -->
+<resources>
+    <string name="sessions_list_no_workspaces">No workspaces yet</string>
+    <string name="sessions_list_drafts">Drafts</string>
+    <string name="sessions_list_in_progress">In progress</string>
+    <string name="sessions_list_active">Active</string>
+    <string name="sessions_list_everything_else">Everything else</string>
+    <string name="sessions_list_workspaces">Workspaces</string>
+    <string name="sessions_list_sessions">Sessions</string>
+    <string name="sessions_list_in_chat_history">In chat history</string>
+    <string name="sessions_list_no_matches">No matches</string>
+    <string name="sessions_list_history_failed">Couldn't search chat history</string>
+    <string name="sessions_list_history_searching">Searching chat history…</string>
+    <string name="sessions_list_history_none">No other chats mention it</string>
+    <string name="sessions_list_logo">Supermux logo</string>
+    <plurals name="sessions_list_archive_workspaces_title">
+        <item quantity="one">Archive %1$d workspace?</item>
+        <item quantity="other">Archive %1$d workspaces?</item>
+    </plurals>
+    <string name="sessions_list_archive_selected_text">This archives the selected workspaces and stops their sessions. Worktrees are kept. This can't be undone.</string>
+    <string name="sessions_list_archive_agents_skipped">Agents are skipped.</string>
+    <string name="sessions_list_rename_workspace">Rename workspace</string>
+    <string name="sessions_list_archive_workspace_title">Archive workspace?</string>
+    <string name="sessions_list_archive_workspace_text">This archives "%1$s" and stops its sessions. This can't be undone.</string>
+    <string name="sessions_list_archive_and_delete">Archive &amp; delete</string>
+    <string name="sessions_list_discard_draft_title">Discard draft?</string>
+    <string name="sessions_list_settle_title">Settle session?</string>
+    <string name="sessions_list_discard_draft_text">This permanently discards "%1$s". This can't be undone.</string>
+    <string name="sessions_list_settle_and_delete">Settle &amp; delete</string>
+    <string name="sessions_list_group_by_project">Group by project</string>
+    <string name="sessions_list_group_by_status">Group by status</string>
+    <string name="sessions_list_flat_list">Flat list</string>
+    <string name="sessions_list_on">On</string>
+    <string name="sessions_list_off">Off</string>
+    <string name="sessions_list_show_settled">Show %1$d settled</string>
+    <string name="sessions_list_hide_settled">Hide %1$d settled</string>
+    <string name="sessions_list_awake_hint">Is the computer awake and logged in?</string>
+    <string name="sessions_list_offline">· offline</string>
+    <string name="sessions_list_offline_seen">· offline · seen %1$s</string>
+    <string name="sessions_list_cant_reach">Can't reach %1$s</string>
+    <string name="sessions_list_cant_reach_seen">Can't reach %1$s · seen %2$s</string>
+    <string name="sessions_list_search">Search</string>
+    <string name="sessions_list_select_workspaces">Select workspaces</string>
+    <string name="sessions_list_cancel_selection">Cancel selection</string>
+    <string name="sessions_list_selected">%1$d selected</string>
+    <string name="sessions_list_select_all">All</string>
+    <string name="sessions_list_select_none">None</string>
+    <string name="sessions_list_actions">Actions</string>
+    <string name="sessions_list_new_project">New project</string>
+    <string name="sessions_list_organize_projects">Organize projects</string>
+    <string name="sessions_list_switch_light">Switch to light theme</string>
+    <string name="sessions_list_switch_dark">Switch to dark theme</string>
+    <string name="sessions_list_search_placeholder">Search workspaces and chats</string>
+    <string name="sessions_list_search_close">Close search</string>
+    <string name="sessions_list_project_options">%1$s options</string>
+    <string name="sessions_list_project_settings">Project settings…</string>
+    <string name="sessions_list_project_no_workspaces">No workspaces</string>
+    <string name="sessions_list_project_new_workspace">New workspace</string>
+    <plurals name="sessions_list_unread_count">
+        <item quantity="one">%1$d unread</item>
+        <item quantity="other">%1$d unread</item>
+    </plurals>
+    <plurals name="sessions_list_unread_above">
+        <item quantity="one">%1$d unread above, scroll to it</item>
+        <item quantity="other">%1$d unread above, scroll to it</item>
+    </plurals>
+    <plurals name="sessions_list_unread_below">
+        <item quantity="one">%1$d unread below, scroll to it</item>
+        <item quantity="other">%1$d unread below, scroll to it</item>
+    </plurals>
+    <string name="sessions_list_unread_dismiss">Dismiss</string>
+
+    <string name="sessions_row_another_session">Another session</string>
+    <string name="sessions_row_expand">Expand</string>
+    <string name="sessions_row_collapse">Collapse</string>
+    <string name="sessions_row_expand_named">Expand %1$s</string>
+    <string name="sessions_row_collapse_named">Collapse %1$s</string>
+    <string name="sessions_row_expanded">Expanded</string>
+    <string name="sessions_row_collapsed">Collapsed</string>
+    <string name="sessions_row_start_new">Start a new session</string>
+    <string name="sessions_row_start_new_hint">Pick a project and send your first message</string>
+    <string name="sessions_row_resume">Resume</string>
+    <string name="sessions_row_open_draft">Open draft</string>
+    <string name="sessions_row_discard">Discard</string>
+    <string name="sessions_row_move_up">Move up</string>
+    <string name="sessions_row_move_down">Move down</string>
+    <string name="sessions_row_settle">Settle</string>
+    <string name="sessions_row_status_starting">starting</string>
+    <string name="sessions_row_status_suspended">suspended</string>
+    <string name="sessions_row_mark_read">Mark as read</string>
+    <string name="sessions_row_select">Select</string>
+    <string name="sessions_row_archive">Archive</string>
+    <string name="sessions_row_new_chat_here">New chat here</string>
+    <string name="sessions_row_selected">Selected</string>
+    <string name="sessions_row_not_selected">Not selected</string>
+    <string name="sessions_row_archived">Archived</string>
+    <string name="sessions_row_hide_archived">Hide archived</string>
+    <string name="sessions_row_restore">Restore</string>
+
+    <string name="sessions_agents_title">Agents</string>
+    <plurals name="sessions_agents_waiting">
+        <item quantity="one">%1$d waiting</item>
+        <item quantity="other">%1$d waiting</item>
+    </plurals>
+    <string name="sessions_agents_new">New Agent</string>
+    <string name="sessions_agents_rename">Rename…</string>
+    <string name="sessions_agents_change_character">Change character…</string>
+    <string name="sessions_agents_make_default">Make default</string>
+    <string name="sessions_agents_archive">Archive…</string>
+    <string name="sessions_agents_restore_failed">Couldn't restore</string>
+    <string name="sessions_agents_archived_just_now">Archived just now</string>
+    <string name="sessions_agents_archived_ago">Archived %1$s ago</string>
+    <string name="sessions_agents_restoring">Restoring…</string>
+
+    <string name="sessions_rail_working">working</string>
+    <string name="sessions_rail_idle">idle</string>
+    <string name="sessions_rail_unread">unread</string>
+    <plurals name="sessions_rail_agents">
+        <item quantity="one">%1$d agent</item>
+        <item quantity="other">%1$d agents</item>
+    </plurals>
+</resources>

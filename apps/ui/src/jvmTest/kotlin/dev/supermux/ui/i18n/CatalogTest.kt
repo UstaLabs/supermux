@@ -1,7 +1,6 @@
 package dev.supermux.ui.i18n
 
 import androidx.compose.material3.Text
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.runComposeUiTest
@@ -93,12 +92,40 @@ class CatalogTest {
 
     @Test fun localized_with_a_turkish_catalog_missing_a_key_shows_the_english() = runComposeUiTest {
         val partial = parseCatalog("s\t${Str.settings_title.id}\tAyarlar\n")
-        setContent {
-            CompositionLocalProvider(LocalCatalogs provides LoadedLanguage("tr", partial, Catalogs.now("en"))) {
-                Text(localized(Str.settings_title) + " / " + localized(Str.settings_back))
-            }
+        try {
+            showForTest(LoadedLanguage("tr", partial, Catalogs.now("en")))
+            setContent { Text(localized(Str.settings_title) + " / " + localized(Str.settings_back)) }
+            onNodeWithText("Ayarlar / Back").assertExists()
+        } finally {
+            showForTest(null)
         }
-        onNodeWithText("Ayarlar / Back").assertExists()
+    }
+
+    /** One implementation: a plain helper (no composable twin) reads the shown language, English when none is set. */
+    @Test fun a_plain_helper_follows_the_shown_language_and_is_english_by_default() {
+        fun title() = localized(Str.settings_title)
+        assertEquals("Settings", title())
+        try {
+            showForTest(LoadedLanguage("tr", Catalogs.now("tr"), Catalogs.now("en")))
+            assertEquals("Ayarlar", title())
+        } finally {
+            showForTest(null)
+        }
+        assertEquals("Settings", title())
+    }
+
+    /** The shown language is state: text already on screen, worded by a plain helper, follows a change. */
+    @Test fun text_on_screen_follows_a_language_change() = runComposeUiTest {
+        fun title() = localized(Str.settings_title)
+        try {
+            setContent { Text(title()) }
+            onNodeWithText("Settings").assertExists()
+            runOnIdle { showForTest(LoadedLanguage("tr", Catalogs.now("tr"), Catalogs.now("en"))) }
+            waitForIdle()
+            onNodeWithText("Ayarlar").assertExists()
+        } finally {
+            showForTest(null)
+        }
     }
 
 

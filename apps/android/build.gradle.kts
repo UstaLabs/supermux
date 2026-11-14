@@ -118,6 +118,13 @@ kotlin {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
+// #123: Android's local unit tests run on a plain JVM without the app's assets, so the generated string catalogs go on
+// their classpath (Catalogs reads them from there when Compose resources can't), as files/i18n/<lang>.txt.
+android.sourceSets.getByName("test").resources.srcDir(project(":ui").layout.projectDirectory.dir("src/commonMain/composeResources"))
+tasks.configureEach {
+    if (name.contains("UnitTest") && (name.contains("JavaRes") || name.contains("Resources"))) dependsOn(":ui:generateI18n")
+}
+
 dependencies {
     implementation(project(":shared"))
     implementation(project(":ui"))

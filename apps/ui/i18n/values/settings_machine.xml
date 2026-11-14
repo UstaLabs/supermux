@@ -30,10 +30,17 @@
     <string name="machine_kit_collapsed">Collapsed</string>
     <string name="machine_kit_offline">%1$s is offline.</string>
     <string name="machine_kit_offline_seen">%1$s is offline · last seen %2$s.</string>
-    <!-- This computer's hosting (HostingCopy) -->
+    <!-- This computer's hosting -->
     <string name="machine_hosting_lid_waiting">Waiting for your password…</string>
     <string name="machine_hosting_lid_uninstall">Uninstall lid helper</string>
     <string name="machine_hosting_auto_login">To start without anyone at the keyboard, turn on Automatic Login in System Settings ▸ Users &amp; Groups.</string>
+    <string name="machine_hosting_paused_on_battery">Paused while on battery</string>
+    <string name="machine_hosting_app_held">Kept awake by the supermux app while it's open.</string>
+    <string name="machine_hosting_waiting_for_login">Waiting for you to log in… supermux keeps this computer awake once your desktop session starts.</string>
+    <string name="machine_hosting_lid_install">macOS will ask for your password once.</string>
+    <string name="machine_hosting_lid_not_installed">The lid helper isn't installed. Tick to install it; macOS will ask for your password once.</string>
+    <string name="machine_hosting_lid_other_user">The lid helper is installed for another user. Tick to reinstall it for you.</string>
+    <string name="machine_hosting_lid_home_unsupported">Not available for this account's home folder.</string>
     <!-- Editor &amp; terminal -->
     <string name="editor_settings_wrap">Wrap long lines</string>
     <string name="editor_settings_wrap_description">Wrap instead of scrolling sideways.</string>

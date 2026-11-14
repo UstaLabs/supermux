@@ -41,6 +41,8 @@ import dev.supermux.ui.editor.FilePreviewKind
 import dev.supermux.ui.theme.Media
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import kotlin.math.roundToInt
 
 /**
@@ -139,7 +141,7 @@ private fun CollagePicture(item: ChatMediaItem.FromAttachment, media: Attachment
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
             )
-            AttachmentImage.Failed -> Icon(Icons.Filled.BrokenImage, contentDescription = "Couldn't load ${item.name}", tint = cs.onSurfaceVariant)
+            AttachmentImage.Failed -> Icon(Icons.Filled.BrokenImage, contentDescription = localized(Str.chatline_media_cant_load, item.name), tint = cs.onSurfaceVariant)
             AttachmentImage.Loading -> Unit
         }
     }
@@ -210,7 +212,7 @@ internal fun VideoPosterTile(modifier: Modifier = Modifier, glyph: Dp = 30.dp, b
                 .background(Color.Black.copy(alpha = VideoControls.DiscAlpha)),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(MediaIcons.Play, contentDescription = "Video", tint = VideoControls.Foreground, modifier = Modifier.size(glyph))
+            Icon(MediaIcons.Play, contentDescription = localized(Str.chatline_media_video_title), tint = VideoControls.Foreground, modifier = Modifier.size(glyph))
         }
     }
 }

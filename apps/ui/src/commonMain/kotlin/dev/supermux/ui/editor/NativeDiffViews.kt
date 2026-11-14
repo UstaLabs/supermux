@@ -3,6 +3,8 @@
 // Submit review); the diff itself, its threads and its composer are the plugin's.
 package dev.supermux.ui.editor
 
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.Str
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -271,25 +273,25 @@ internal fun NativeFileDiff(
         value = when {
             !file.lazy -> null
             sha == null -> BlobText.Text("")
-            fetch == null -> BlobText.Failed("Base text unavailable")
+            fetch == null -> BlobText.Failed(localized(Str.diff_base_unavailable))
             else -> support.baseCache.get(repo, sha, force, fetch)
         }
     }
     val working = loaded?.getOrNull()
     if (loaded == null || (file.lazy && lazyBase == null)) {
-        Text("Loading…", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(12.dp))
+        Text(localized(Str.machine_loading), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(12.dp))
         return
     }
     if (file.lazy) {
         val b = lazyBase
         val readError = loaded?.exceptionOrNull()
         when {
-            b is BlobText.TooLarge -> { LazyFileCard("Large file (${b.size / 1024} KB)", "Load anyway", testTagIndex) { force = true }; return }
-            b is BlobText.Binary -> { LazyFileCard("Binary file changed", null, testTagIndex) {}; return }
+            b is BlobText.TooLarge -> { LazyFileCard(localized(Str.diff_large_file_kb, b.size / 1024), localized(Str.diff_load_anyway), testTagIndex) { force = true }; return }
+            b is BlobText.Binary -> { LazyFileCard(localized(Str.diff_binary_changed), null, testTagIndex) {}; return }
             // No fetcher: a retry could never work.
-            b is BlobText.Failed -> { LazyFileCard("Couldn't load the base: ${b.message}", if (support.baseText != null) "Retry" else null, testTagIndex) { attempt++ }; return }
-            readError is FsException && readError.status == 413 -> { LazyFileCard("Large file", null, testTagIndex) {}; return }
-            readError != null -> { LazyFileCard(readError.message ?: "Couldn't read the file", "Retry", testTagIndex) { attempt++ }; return }
+            b is BlobText.Failed -> { LazyFileCard(localized(Str.diff_base_failed, b.message), if (support.baseText != null) localized(Str.diff_retry) else null, testTagIndex) { attempt++ }; return }
+            readError is FsException && readError.status == 413 -> { LazyFileCard(localized(Str.diff_large_file), null, testTagIndex) {}; return }
+            readError != null -> { LazyFileCard(readError.message ?: localized(Str.diff_read_failed), localized(Str.diff_retry), testTagIndex) { attempt++ }; return }
         }
         val baseText = LineEndings.load((b as BlobText.Text).text).text
         NativeFileDiffEditor(repo, file, patch = null, working!!, baseText, wrap, comments, support, deleted, onReload, testTagIndex)
@@ -368,7 +370,7 @@ private fun NativeFileDiffEditor(
                 if (reverted != null) scope.launch {
                     if (!applyRevert(support, repo, path, reverted, working.crlf, expected = working.text)) {
                         // platform-ok: a git path, always /
-                        notices.show("Couldn't revert that change: ${path.substringAfterLast('/')} changed since the diff was loaded")
+                        notices.show(localized(Str.diff_revert_failed, path.substringAfterLast('/')))
                     }
                     // Either way the views are rebuilt from disk: a refused revert must not leave the
                     // hunk looking reverted.
@@ -454,7 +456,7 @@ private fun NativeFileDiffEditor(
     Column(Modifier.fillMaxWidth().testTag("diff_native_$testTagIndex")) {
         if (openDirty && support.writeFile != null && !deleted) {
             Text(
-                "This file has unsaved changes in a tab: save them to revert hunks here.",
+                localized(Str.diff_unsaved_in_tab),
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainerHigh)

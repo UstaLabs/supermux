@@ -69,6 +69,10 @@ import dev.supermux.browser.DisplayAddress
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.i18n.Plurals
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.localizedPlural
 import dev.supermux.ui.keys.AppCommand
 import dev.supermux.ui.keys.AppCommands
 import dev.supermux.ui.keys.DefaultKeymap
@@ -149,7 +153,7 @@ internal fun BrowserToolbar(
     /** Pick mode is on (lit), off, or null where it isn't offered (#122 phase 3: no scripts, or a phone for now). */
     picking: Boolean? = null,
     onPick: () -> Unit = {},
-    /** A phone's "Desktop site" is on (checked), off, or null where it isn't offered (#122 2c). */
+    /** A phone's localized(Str.browser_desktop_site) is on (checked), off, or null where it isn't offered (#122 2c). */
     desktopSite: Boolean? = null,
     onDesktopSite: () -> Unit = {},
     modifier: Modifier = Modifier,
@@ -179,10 +183,10 @@ internal fun BrowserToolbar(
             horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             if (!phone) {
-                BarButton(KitGlyphs.Back, "Back", "browser-back", onBack, enabled = canGoBack)
-                BarButton(KitGlyphs.Forward, "Forward", "browser-forward", onForward, enabled = canGoForward)
+                BarButton(KitGlyphs.Back, localized(Str.browser_back), "browser-back", onBack, enabled = canGoBack)
+                BarButton(KitGlyphs.Forward, localized(Str.browser_forward), "browser-forward", onForward, enabled = canGoForward)
             }
-            BarButton(if (loading) KitGlyphs.Close else KitGlyphs.Restart, if (loading) "Stop" else "Reload", "browser-reload", onReload, size = button)
+            BarButton(if (loading) KitGlyphs.Close else KitGlyphs.Restart, localized(if (loading) Str.browser_stop else Str.browser_reload), "browser-reload", onReload, size = button)
             BasicTextField(
                 value = field,
                 onValueChange = { field = it },
@@ -216,7 +220,7 @@ internal fun BrowserToolbar(
                     ) {
                         if (preview && !editing) Box(Modifier.size(6.dp).clip(CircleShape).background(c.ok).testTag("browser-address-preview"))
                         Box(Modifier.weight(1f)) {
-                            if (field.text.isEmpty()) Text("Type a site, or a port such as 5173", color = c.faint, fontSize = textSize, maxLines = 1)
+                            if (field.text.isEmpty()) Text(localized(Str.browser_address_hint), color = c.faint, fontSize = textSize, maxLines = 1)
                             inner()
                         }
                         if (zoomPercent != 100 && !editing) {
@@ -228,21 +232,21 @@ internal fun BrowserToolbar(
                     }
                 },
             )
-            picking?.let { on -> BarButton(KitGlyphs.Target, "Comment on the page", "browser-pick", onPick, on = on) }
-            device?.let { on -> BarButton(KitGlyphs.Phone, "Device mode", "browser-device", onDevice, on = on) }
-            if (!phone) BarButton(KitGlyphs.External, "Open in your browser", "browser-external", onOpenExternally)
+            picking?.let { on -> BarButton(KitGlyphs.Target, localized(Str.browser_comment_on_page), "browser-pick", onPick, on = on) }
+            device?.let { on -> BarButton(KitGlyphs.Phone, localized(Str.browser_device_mode), "browser-device", onDevice, on = on) }
+            if (!phone) BarButton(KitGlyphs.External, localized(Str.browser_open_in_browser), "browser-external", onOpenExternally)
             Box {
-                BarButton(KitGlyphs.More, "More", "browser-menu", { menu = true }, size = button)
+                BarButton(KitGlyphs.More, localized(Str.browser_more), "browser-menu", { menu = true }, size = button)
                 if (!phone) {
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                        MenuRow(KitGlyphs.Search, "Find in page", AppCommands.Find, "browser-menu-find") { menu = false; onFind() }
+                        MenuRow(KitGlyphs.Search, localized(Str.browser_find_in_page), AppCommands.Find, "browser-menu-find") { menu = false; onFind() }
                         ZoomMenuRow(zoomPercent, onZoom)
                         MenuLine()
-                        onScreenshot?.let { send -> MenuRow(KitGlyphs.Camera, "Send screenshot to chat", AppCommands.BrowserScreenshot, "browser-menu-screenshot") { menu = false; send() } }
-                        picking?.let { MenuRow(KitGlyphs.Target, "Comment on the page", AppCommands.BrowserPick, "browser-menu-pick") { menu = false; onPick() } }
-                        device?.let { MenuRow(KitGlyphs.Phone, "Device mode", AppCommands.BrowserDeviceMode, "browser-menu-device") { menu = false; onDevice() } }
-                        MenuRow(KitGlyphs.Code, "Inspect", AppCommands.BrowserInspect, "browser-menu-inspect") { menu = false; onInspect() }
-                        MenuRow(KitGlyphs.External, "Open in your browser", AppCommands.BrowserOpenExternally, "browser-menu-external") { menu = false; onOpenExternally() }
+                        onScreenshot?.let { send -> MenuRow(KitGlyphs.Camera, localized(Str.browser_send_screenshot), AppCommands.BrowserScreenshot, "browser-menu-screenshot") { menu = false; send() } }
+                        picking?.let { MenuRow(KitGlyphs.Target, localized(Str.browser_comment_on_page), AppCommands.BrowserPick, "browser-menu-pick") { menu = false; onPick() } }
+                        device?.let { MenuRow(KitGlyphs.Phone, localized(Str.browser_device_mode), AppCommands.BrowserDeviceMode, "browser-menu-device") { menu = false; onDevice() } }
+                        MenuRow(KitGlyphs.Code, localized(Str.browser_inspect), AppCommands.BrowserInspect, "browser-menu-inspect") { menu = false; onInspect() }
+                        MenuRow(KitGlyphs.External, localized(Str.browser_open_in_browser), AppCommands.BrowserOpenExternally, "browser-menu-external") { menu = false; onOpenExternally() }
                     }
                 }
             }
@@ -251,13 +255,13 @@ internal fun BrowserToolbar(
     }
     if (phone && menu) {
         BrowserSheet(onDismiss = { menu = false }) {
-            SheetRow(KitGlyphs.Search, "Find in page", "browser-menu-find") { menu = false; onFind() }
+            SheetRow(KitGlyphs.Search, localized(Str.browser_find_in_page), "browser-menu-find") { menu = false; onFind() }
             SheetZoomRow(zoomPercent, onZoom)
-            onScreenshot?.let { send -> SheetRow(KitGlyphs.Camera, "Screenshot to chat", "browser-menu-screenshot") { menu = false; send() } }
-            desktopSite?.let { on -> SheetRow(KitGlyphs.Laptop, "Desktop site", "browser-menu-desktop-site", checked = on) { menu = false; onDesktopSite() } }
-            SheetRow(KitGlyphs.Back, "Back", "browser-menu-back", enabled = canGoBack) { menu = false; onBack() }
-            SheetRow(KitGlyphs.Forward, "Forward", "browser-menu-forward", enabled = canGoForward) { menu = false; onForward() }
-            SheetRow(KitGlyphs.External, "Open in your browser", "browser-menu-external") { menu = false; onOpenExternally() }
+            onScreenshot?.let { send -> SheetRow(KitGlyphs.Camera, localized(Str.browser_screenshot_to_chat), "browser-menu-screenshot") { menu = false; send() } }
+            desktopSite?.let { on -> SheetRow(KitGlyphs.Laptop, localized(Str.browser_desktop_site), "browser-menu-desktop-site", checked = on) { menu = false; onDesktopSite() } }
+            SheetRow(KitGlyphs.Back, localized(Str.browser_back), "browser-menu-back", enabled = canGoBack) { menu = false; onBack() }
+            SheetRow(KitGlyphs.Forward, localized(Str.browser_forward), "browser-menu-forward", enabled = canGoForward) { menu = false; onForward() }
+            SheetRow(KitGlyphs.External, localized(Str.browser_open_in_browser), "browser-menu-external") { menu = false; onOpenExternally() }
         }
     }
 }
@@ -281,7 +285,7 @@ private fun MenuRow(glyph: ImageVector, label: String, command: AppCommand?, tag
 @Composable
 private fun ZoomMenuRow(zoomPercent: Int, onZoom: (Int) -> Unit) {
     DropdownMenuItem(
-        text = { Text("Zoom") },
+        text = { Text(localized(Str.browser_zoom)) },
         onClick = {},
         modifier = Modifier.testTag("browser-menu-zoom"),
         leadingIcon = { Spacer(Modifier.width(15.dp)) },
@@ -340,7 +344,7 @@ private fun SheetRow(glyph: ImageVector, label: String, tag: String, enabled: Bo
     ) {
         Icon(glyph, contentDescription = null, tint = if (enabled) c.dim else c.faint, modifier = Modifier.size(18.dp))
         Text(label, fontSize = 15.sp, color = if (enabled) c.text else c.faint, modifier = Modifier.weight(1f))
-        if (checked == true) Icon(KitGlyphs.Check, contentDescription = "On", tint = c.accent, modifier = Modifier.size(18.dp))
+        if (checked == true) Icon(KitGlyphs.Check, contentDescription = localized(Str.browser_on), tint = c.accent, modifier = Modifier.size(18.dp))
     }
 }
 
@@ -353,21 +357,22 @@ private fun SheetZoomRow(zoomPercent: Int, onZoom: (Int) -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Spacer(Modifier.size(18.dp))
-        Text("Zoom", fontSize = 15.sp, color = c.text, modifier = Modifier.weight(1f))
-        BarButton(KitGlyphs.Minus, "Zoom out", "browser-zoom-out", { onZoom(-1) }, size = 36.dp)
+        Text(localized(Str.browser_zoom), fontSize = 15.sp, color = c.text, modifier = Modifier.weight(1f))
+        BarButton(KitGlyphs.Minus, localized(Str.browser_zoom_out), "browser-zoom-out", { onZoom(-1) }, size = 36.dp)
         Text("$zoomPercent%", fontSize = 14.sp, color = c.dim, modifier = Modifier.clickable { onZoom(0) }.testTag("browser-zoom-reset"))
-        BarButton(KitGlyphs.Plus, "Zoom in", "browser-zoom-in", { onZoom(+1) }, size = 36.dp)
+        BarButton(KitGlyphs.Plus, localized(Str.browser_zoom_in), "browser-zoom-in", { onZoom(+1) }, size = 36.dp)
     }
 }
 
 /** What the find bar says about an answer; a null answer is an engine that can't find yet (plans 2b–2d). */
 internal fun findText(query: String, result: FindResult?): String = when {
     query.isEmpty() -> ""
-    result == null -> "Find isn't available here yet"
-    !result.found -> "No matches"
-    result.current != null && result.count != null -> "${result.current} of ${result.count}"
-    result.count != null -> "${result.count} matches"
-    else -> "Found"
+    result == null -> localized(Str.browser_find_unavailable)
+    !result.found -> localized(Str.browser_find_none)
+    result.current != null && result.count != null -> localized(Str.browser_find_position, result.current.toString(), result.count.toString())
+    result.count != null -> result.count.let { n -> localizedPlural(Plurals.browser_find_matches, n ?: 0, n ?: 0) }
+
+    else -> localized(Str.browser_find_found)
 }
 
 /** Find in page: the query, what the engine found, previous, next and close. Enter is next, Shift+Enter previous. */
@@ -420,15 +425,16 @@ internal fun FindBar(find: FindState, onStep: (backwards: Boolean) -> Unit, onCl
             },
             decorationBox = { inner ->
                 Box {
-                    if (find.query.isEmpty()) Text("Find", color = c.faint, fontSize = 13.sp)
+                    if (find.query.isEmpty()) Text(localized(Str.browser_find), color = c.faint, fontSize = 13.sp)
                     inner()
                 }
             },
         )
         Text(find.said, color = c.dim, fontSize = 11.5.sp, maxLines = 1, modifier = Modifier.padding(horizontal = 4.dp).testTag("browser-find-count"))
-        BarButton(KitGlyphs.ChevronUp, "Previous", "browser-find-previous", { onStep(true) }, size = 24.dp)
-        BarButton(KitGlyphs.ChevronDown, "Next", "browser-find-next", { onStep(false) }, size = 24.dp)
-        BarButton(KitGlyphs.Close, "Close find", "browser-find-close", onClose, size = 24.dp)
+        BarButton(KitGlyphs.ChevronUp, localized(Str.browser_find_previous), "browser-find-previous", { onStep(true) }, size = 24.dp)
+        BarButton(KitGlyphs.ChevronDown, localized(Str.browser_find_next), "browser-find-next", { onStep(false) }, size = 24.dp)
+        BarButton(KitGlyphs.Close, localized(Str.browser_find_close)
+, "browser-find-close", onClose, size = 24.dp)
     }
 }
 

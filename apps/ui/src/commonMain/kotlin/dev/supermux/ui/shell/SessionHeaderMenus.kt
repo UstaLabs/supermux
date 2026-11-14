@@ -112,7 +112,6 @@ import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
 import kotlinx.coroutines.launch
 import dev.supermux.ui.i18n.localized
-import androidx.compose.runtime.rememberUpdatedState
 import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.StringKey
 
@@ -130,47 +129,17 @@ fun sessionProxies(proxies: List<ProxyDto>, session: SessionInfo): List<ProxyDto
  * to the badge; this one spells the failure modes out ("Push rejected — pull first") because a
  * toast is all the user gets.
  */
-fun gitOpResultText(r: GitOpResult?, words: GitOpWords = GitOpWords()): String = when (r?.status) {
-    null -> words.failed
-    "pushed" -> words.pushed
-    "up_to_date" -> words.upToDate
-    "clean" -> words.pulled
-    "rejected_non_ff" -> words.rejected
-    "conflict" -> words.conflict(r.files.size)
-    "dirty" -> words.dirty
-    "auth_failed" -> words.authFailed
-    "error" -> r.message ?: words.error
+fun gitOpResultText(r: GitOpResult?): String = when (r?.status) {
+    null -> localized(Str.shell_git_failed)
+    "pushed" -> localized(Str.shell_git_pushed)
+    "up_to_date" -> localized(Str.shell_git_up_to_date)
+    "clean" -> localized(Str.shell_git_pulled)
+    "rejected_non_ff" -> localized(Str.shell_git_rejected)
+    "conflict" -> localized(Str.shell_git_conflict, r.files.size.toString())
+    "dirty" -> localized(Str.shell_git_dirty)
+    "auth_failed" -> localized(Str.shell_git_auth_failed)
+    "error" -> r.message ?: localized(Str.shell_git_error)
     else -> r.status
-}
-
-/** [gitOpResultText]'s words: English by default (the tests'), [localizedGitOpWords] in the app's language. */
-data class GitOpWords(
-    val failed: String = "Failed", // i18n-ok: English default (tests); the UI passes localizedGitOpWords()
-    val pushed: String = "Pushed", // i18n-ok: English default (tests)
-    val upToDate: String = "Up to date", // i18n-ok: English default (tests)
-    val pulled: String = "Pulled", // i18n-ok: English default (tests)
-    val rejected: String = "Push rejected — pull first", // i18n-ok: English default (tests)
-    val conflict: (Int) -> String = { "Conflict in $it file(s)" }, // i18n-ok: English default (tests)
-    val dirty: String = "Uncommitted changes block the pull", // i18n-ok: English default (tests)
-    val authFailed: String = "Auth failed", // i18n-ok: English default (tests)
-    val error: String = "Error", // i18n-ok: English default (tests)
-)
-
-/** [GitOpWords] in the app's language, looked up here so a coroutine can word its notice. */
-@Composable
-fun localizedGitOpWords(): GitOpWords {
-    val conflict = localizedTemplate(Str.shell_git_conflict)
-    return GitOpWords(
-        failed = localized(Str.shell_git_failed),
-        pushed = localized(Str.shell_git_pushed),
-        upToDate = localized(Str.shell_git_up_to_date),
-        pulled = localized(Str.shell_git_pulled),
-        rejected = localized(Str.shell_git_rejected),
-        conflict = { n -> conflict(n.toString()) },
-        dirty = localized(Str.shell_git_dirty),
-        authFailed = localized(Str.shell_git_auth_failed),
-        error = localized(Str.shell_git_error),
-    )
 }
 
 /**
@@ -190,7 +159,6 @@ enum class GitMenuForceOp { OPEN, FETCH, PULL }
 fun rememberGitOpRunner(sessionId: String, actions: ShellActions): (String) -> Unit {
     val notices = LocalPlatform.current.notices
     val scope = rememberCoroutineScope()
-    val words by rememberUpdatedState(localizedGitOpWords())
     return remember(sessionId, actions, notices, scope) {
         { op: String ->
             scope.launch {
@@ -201,7 +169,7 @@ fun rememberGitOpRunner(sessionId: String, actions: ShellActions): (String) -> U
                     "publish" -> actions.gitPublish(sessionId)
                     else -> null
                 }
-                notices.show(gitOpResultText(result, words))
+                notices.show(gitOpResultText(result))
             }
             Unit
         }

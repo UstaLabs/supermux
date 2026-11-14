@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #123: the chat's cards — subagent cards and the running strip, council cards and strip, permission and
+     question cards, messages from other sessions, html cards. Turkish; same keys and placeholders as
+     values/chat_cards.xml (tests/i18n-strings.test.ts). -->
+<resources>
+    <string name="chatcard_show_more">Daha fazla göster</string>
+    <string name="chatcard_show_less">Daha az göster</string>
+
+    <plurals name="chatcard_subagent_tool_calls">
+        <item quantity="one">%1$d araç çağrısı</item>
+        <item quantity="other">%1$d araç çağrısı</item>
+    </plurals>
+    <string name="chatcard_subagent_tokens">%1$s token</string>
+    <plurals name="chatcard_subagent_turns">
+        <item quantity="one">%1$d tur</item>
+        <item quantity="other">%1$d tur</item>
+    </plurals>
+    <string name="chatcard_subagent_ended_failed">başarısız</string>
+    <string name="chatcard_subagent_ended_by_parent">ana ajan kapattı</string>
+    <string name="chatcard_subagent_ended_by_you">siz durdurdunuz</string>
+    <string name="chatcard_subagent_ended_stopped">durduruldu</string>
+    <string name="chatcard_subagent_ended_done">bitti</string>
+    <string name="chatcard_subagent_running">çalışıyor</string>
+    <string name="chatcard_subagent_failed_elapsed">başarısız · %1$s</string>
+    <string name="chatcard_subagent_done_elapsed">bitti · %1$s</string>
+    <string name="chatcard_subagent_collapse">Daralt</string>
+    <string name="chatcard_subagent_expand">Genişlet</string>
+    <string name="chatcard_subagent_tag_background">arka plan</string>
+    <string name="chatcard_subagent_icon">Alt ajan</string>
+    <plurals name="chatcard_subagent_new_replies">
+        <item quantity="one">%1$d yeni yanıt</item>
+        <item quantity="other">%1$d yeni yanıt</item>
+    </plurals>
+    <string name="chatcard_subagent_marker_to">Alıcı: %1$s</string>
+    <string name="chatcard_subagent_marker_someone">bir alt ajan</string>
+    <string name="chatcard_subagent_sent_via_main">Ana ajan üzerinden gönderildi</string>
+    <string name="chatcard_subagent_send_failed">Mesaj gönderilemedi</string>
+    <string name="chatcard_subagent_stop_failed">Bu ajan durdurulamadı</string>
+    <string name="chatcard_subagent_getting_started">Başlıyor…</string>
+    <string name="chatcard_subagent_stop">Durdur</string>
+    <string name="chatcard_subagent_task_from_main">Ana ajandan görev</string>
+    <string name="chatcard_subagent_you">Siz</string>
+    <plurals name="chatcard_subagent_earlier_steps">
+        <item quantity="one">Önceki %1$d adımı göster</item>
+        <item quantity="other">Önceki %1$d adımı göster</item>
+    </plurals>
+    <string name="chatcard_subagent_result">Sonuç</string>
+    <string name="chatcard_subagent_result_clipped">Sunucu bu sonucun yalnızca ilk 8k karakterini sakladı.</string>
+    <string name="chatcard_subagent_message_placeholder">%1$s için mesaj…</string>
+    <string name="chatcard_subagent_send">Gönder</string>
+    <string name="chatcard_subagent_relay_hint">Ana ajan üzerinden gönderilir; mesajınızı o iletir.</string>
+    <plurals name="chatcard_subagent_strip_agents">
+        <item quantity="one">%1$d ajan</item>
+        <item quantity="other">%1$d ajan</item>
+    </plurals>
+    <plurals name="chatcard_subagent_strip_tasks">
+        <item quantity="one">%1$d görev</item>
+        <item quantity="other">%1$d görev</item>
+    </plurals>
+    <string name="chatcard_subagent_strip_running">%1$s çalışıyor</string>
+    <string name="chatcard_subagent_strip_show">Göster</string>
+    <string name="chatcard_subagent_strip_background_task">Arka plan görevi</string>
+    <string name="chatcard_subagent_strip_background_shell">arka plan kabuğu</string>
+    <string name="chatcard_subagent_strip_show_timeline">Zaman çizelgesini göster</string>
+    <string name="chatcard_subagent_strip_last_seconds">Son %1$d sn</string>
+    <string name="chatcard_subagent_strip_now">şimdi</string>
+    <string name="chatcard_subagent_lane_failed">Başarısız</string>
+    <string name="chatcard_subagent_lane_done">Bitti</string>
+    <string name="chatcard_subagent_lane_stopped">Durduruldu</string>
+
+    <string name="chatcard_council_all_answered">hepsi yanıtladı</string>
+    <string name="chatcard_council_answered_of">%1$d/%2$d yanıtladı</string>
+    <string name="chatcard_council_thinking">Düşünüyor</string>
+    <string name="chatcard_council_round">Tur %1$d</string>
+    <string name="chatcard_council_round_focus">Tur %1$d · %2$s</string>
+    <string name="chatcard_council_focus">odak: %1$s</string>
+    <string name="chatcard_council_working">Çalışıyor</string>
+    <string name="chatcard_council_failed">Başarısız</string>
+    <string name="chatcard_council_crashed">Çöktü</string>
+    <string name="chatcard_council_stopped">Durduruldu</string>
+    <string name="chatcard_council_no_answer_in_round">%1$d. turda yanıt yok</string>
+    <string name="chatcard_council_fold_question">Soruyu daralt</string>
+    <string name="chatcard_council_show_question">Sorunun tamamını göster</string>
+    <string name="chatcard_council_idle">Boşta, yanıt vermedi</string>
+    <string name="chatcard_council_hide_answers">Yanıtları gizle</string>
+    <string name="chatcard_council_show_answers">Yanıtları göster</string>
+    <string name="chatcard_council_status_answered">yanıtladı</string>
+    <string name="chatcard_council_status_working">çalışıyor</string>
+    <string name="chatcard_council_status_failed">başarısız</string>
+    <string name="chatcard_council_status_crashed">çöktü</string>
+    <string name="chatcard_council_status_stopped">durduruldu</string>
+    <string name="chatcard_council_status_none">yanıt yok</string>
+    <string name="chatcard_council_no_answers_yet">Henüz yanıt yok.</string>
+    <string name="chatcard_council_verdict">Karar</string>
+    <string name="chatcard_council_ended_by_you">Siz durdurdunuz</string>
+    <string name="chatcard_council_ended_empty">Bitti: üye kalmadı</string>
+    <string name="chatcard_council_ended">Bitti</string>
+    <string name="chatcard_council_stop_council">Konseyi durdur</string>
+    <string name="chatcard_council_stop_title">%1$s durdurulsun mu?</string>
+    <string name="chatcard_council_stop_title_unnamed">Konsey durdurulsun mu?</string>
+    <string name="chatcard_council_stop_body">Bu işlem konseyi bitirir ve üyelerini durdurur. Yanıtları burada kalır.</string>
+    <string name="chatcard_council_stop">Durdur</string>
+    <string name="chatcard_council_cancel">İptal</string>
+    <string name="chatcard_council_hide_strip">Konseyi gizle</string>
+    <string name="chatcard_council_show_strip">Konseyi göster</string>
+
+    <string name="chatcard_request_from">kaynak: %1$s</string>
+    <string name="chatcard_request_background_turn">arka plan turu</string>
+    <string name="chatcard_request_permission_icon">İzin isteği</string>
+    <string name="chatcard_request_question_icon">Ajandan soru</string>
+    <string name="chatcard_request_allow_title">%1$s için izin verilsin mi?</string>
+    <string name="chatcard_request_sending">Gönderiliyor…</string>
+    <string name="chatcard_request_waiting">Sizi bekliyor</string>
+    <string name="chatcard_request_question">Soru</string>
+    <string name="chatcard_request_permission">İzin</string>
+    <string name="chatcard_request_note_placeholder">Ajana nedenini söyleyin (isteğe bağlı)</string>
+    <string name="chatcard_request_reject_again">Notlu ya da notsuz göndermek için yeniden %1$s düğmesine basın.</string>
+    <string name="chatcard_request_reject">Reddet</string>
+    <string name="chatcard_request_copied">Kopyalandı</string>
+    <string name="chatcard_request_copy">Panoya kopyala</string>
+    <plurals name="chatcard_request_questions">
+        <item quantity="one">%1$d soru</item>
+        <item quantity="other">%1$d soru</item>
+    </plurals>
+    <string name="chatcard_request_submit">Gönder</string>
+    <string name="chatcard_request_next">İleri</string>
+    <string name="chatcard_request_back">Geri</string>
+    <string name="chatcard_request_decline">Reddet</string>
+    <string name="chatcard_request_question_number">Soru %1$d</string>
+    <string name="chatcard_request_answered">Yanıtlandı</string>
+    <string name="chatcard_request_select_all">Uygun olanların hepsini seçin</string>
+    <string name="chatcard_request_type_answer">Yanıtınızı yazın</string>
+    <string name="chatcard_request_other_answer">Diğer — kendi yanıtınızı yazın</string>
+    <string name="chatcard_request_declined">Reddedildi</string>
+    <string name="chatcard_request_expired">Süresi doldu</string>
+    <string name="chatcard_request_cancelled">İptal edildi</string>
+    <string name="chatcard_request_closed_unanswered">İstek yanıtsız kapandı</string>
+    <string name="chatcard_request_question_declined">Soru reddedildi</string>
+    <string name="chatcard_request_request_answered">İstek yanıtlandı</string>
+
+    <string name="chatcard_inbox_open_subagent">Alt ajanı aç</string>
+    <string name="chatcard_inbox_open_chat">Sohbeti aç</string>
+    <string name="chatcard_inbox_another_session">Başka bir oturum</string>
+
+    <string name="chatcard_html_page_missing">Bu kartın sayfası kullanılamıyor.</string>
+</resources>

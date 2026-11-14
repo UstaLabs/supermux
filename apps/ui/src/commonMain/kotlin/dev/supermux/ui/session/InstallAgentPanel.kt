@@ -44,8 +44,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.supermux.net.AgentInstallJob
 import dev.supermux.net.AgentInstallStatus
-import dev.supermux.ui.settings.AgentSettingsActions
 import dev.supermux.ui.settings.installFailureMessage
+import dev.supermux.ui.settings.AgentSettingsActions
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.StringKey
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.settings.normalizeInstallState
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
@@ -55,12 +58,12 @@ import kotlinx.coroutines.launch
 
 /** How each agent introduces itself on its card; an agent the broker adds later still gets a card. */
 private val AGENT_CARDS = linkedMapOf(
-    "claude" to ("Claude Code" to "Anthropic's coding agent"),
-    "codex" to ("Codex" to "OpenAI's coding agent"),
-    "opencode" to ("OpenCode" to "Open source, works with many models"),
-    "cursor" to ("Cursor" to "Cursor's agent for the terminal"),
-    "grok" to ("Grok" to "xAI's coding agent"),
-    "antigravity" to ("Antigravity" to "Google's coding agent"),
+    "claude" to ("Claude Code" to Str.install_tagline_claude),
+    "codex" to ("Codex" to Str.install_tagline_codex),
+    "opencode" to ("OpenCode" to Str.install_tagline_opencode),
+    "cursor" to ("Cursor" to Str.install_tagline_cursor),
+    "grok" to ("Grok" to Str.install_tagline_grok),
+    "antigravity" to ("Antigravity" to Str.install_tagline_antigravity),
 )
 
 private const val INSTALL_POLL_MS = 1_000L
@@ -68,12 +71,12 @@ private const val INSTALL_POLL_MS = 1_000L
 private const val INSTALL_MAX_POLLS = 600
 private const val INSTALL_NULL_LIMIT = 8
 
-/** One card's install, as the card shows it. */
+/** One card's install, as the card shows it. A failure keeps the job (or its own [reason]) and is worded when shown. */
 private sealed interface CardInstall {
     data object Idle : CardInstall
     data object Running : CardInstall
     data object Done : CardInstall
-    data class Failed(val message: String) : CardInstall
+    data class Failed(val job: AgentInstallJob? = null, val reason: StringKey? = null) : CardInstall
 }
 
 /**
@@ -111,19 +114,19 @@ fun InstallAgentPanel(
                     return
                 }
                 "failed" -> {
-                    installs[kind] = CardInstall.Failed(installFailureMessage(job))
+                    installs[kind] = CardInstall.Failed(job)
                     return
                 }
             }
             if (polls++ >= INSTALL_MAX_POLLS) {
-                installs[kind] = CardInstall.Failed("This is taking longer than expected. Check Settings ▸ Providers & accounts for progress.")
+                installs[kind] = CardInstall.Failed(reason = Str.install_timeout)
                 return
             }
             delay(INSTALL_POLL_MS)
             val next = actions.agentPollInstall(kind)
             if (next == null) {
                 if (++nulls >= INSTALL_NULL_LIMIT) {
-                    installs[kind] = CardInstall.Failed("Lost touch with the host. Check the connection and try again.")
+                    installs[kind] = CardInstall.Failed(reason = Str.install_lost_host)
                     return
                 }
                 continue
@@ -138,7 +141,7 @@ fun InstallAgentPanel(
         installs[kind] = CardInstall.Running
         scope.launch {
             val started = actions.agentStartInstall(kind)
-            if (started == null) installs[kind] = CardInstall.Failed("Couldn't start the install. Check the connection and try again.")
+            if (started == null) installs[kind] = CardInstall.Failed(reason = Str.install_couldnt_start)
             else watch(kind, started)
         }
     }
@@ -165,14 +168,14 @@ fun InstallAgentPanel(
             verticalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
             Text(
-                "Choose an agent",
+                localized(Str.install_title),
                 color = cs.onSurface,
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.SemiBold,
                 textAlign = TextAlign.Center,
             )
             Text(
-                message ?: "Supermux runs your chats on a coding agent. Pick one to install — it takes about a minute.",
+                message ?: localized(Str.install_intro),
                 color = cs.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
@@ -206,7 +209,7 @@ fun InstallAgentPanel(
                 }
                 Spacer(Modifier.height(Space.sm))
                 Text(
-                    "You can add or sign in to providers later in Settings ▸ Providers & accounts.",
+                    localized(Str.install_later),
                     color = cs.onSurfaceVariant.copy(alpha = 0.8f),
                     style = MaterialTheme.typography.labelMedium,
                     textAlign = TextAlign.Center,
@@ -227,7 +230,7 @@ private fun AgentCard(
 ) {
     val cs = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(Radii.lg + 4.dp)
-    val (name, tagline) = AGENT_CARDS[kind] ?: (kind.replaceFirstChar { it.uppercase() } to "Coding agent")
+    val (name, tagline) = AGENT_CARDS[kind] ?: (kind.replaceFirstChar { it.uppercase() } to Str.install_tagline_other)
     val running = state == CardInstall.Running
     Column(
         modifier
@@ -250,8 +253,8 @@ private fun AgentCard(
                 Text(name, color = cs.onSurface, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                 Text(
                     when {
-                        running -> "Installing $name…"
-                        else -> tagline
+                        running -> localized(Str.install_installing, name)
+                        else -> localized(tagline)
                     },
                     color = if (running) cs.primary else cs.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
@@ -260,16 +263,16 @@ private fun AgentCard(
             when {
                 installed || state == CardInstall.Done -> Icon(
                     Icons.Filled.CheckCircle,
-                    contentDescription = "Installed",
+                    contentDescription = localized(Str.install_installed),
                     tint = cs.primary,
                     modifier = Modifier.size(24.dp),
                 )
                 running -> Unit
                 state is CardInstall.Failed -> TextButton(onClick = onInstall, modifier = Modifier.testTag(LauncherFirstRunTags.agentInstall(kind))) {
-                    Text("Try again")
+                    Text(localized(Str.install_try_again))
                 }
                 else -> FilledTonalButton(onClick = onInstall, modifier = Modifier.testTag(LauncherFirstRunTags.agentInstall(kind))) {
-                    Text("Install")
+                    Text(localized(Str.install_install))
                 }
             }
         }
@@ -282,7 +285,7 @@ private fun AgentCard(
         }
         if (state is CardInstall.Failed) {
             Box(Modifier.padding(start = Space.lg, end = Space.lg, bottom = Space.md)) {
-                ErrorLine(state.message, tag = LauncherFirstRunTags.agentError(kind))
+                ErrorLine(state.reason?.let { localized(it) } ?: installFailureMessage(state.job), tag = LauncherFirstRunTags.agentError(kind))
             }
         }
     }

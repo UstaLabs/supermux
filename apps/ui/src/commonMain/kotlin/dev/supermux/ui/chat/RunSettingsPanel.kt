@@ -107,14 +107,14 @@ import dev.supermux.net.AccountDto
 import dev.supermux.net.SessionAccountResult
 import dev.supermux.state.AccountResult
 import dev.supermux.ui.accounts.AccountTag
-import dev.supermux.ui.accounts.accountPickerDetail
 import dev.supermux.ui.accounts.accountShortLabel
+import dev.supermux.ui.accounts.accountPickerDetail
 import dev.supermux.ui.accounts.accountUnavailableText
+import dev.supermux.ui.accounts.sessionSwitchFailureText
 import dev.supermux.ui.accounts.accountsFor
 import dev.supermux.ui.accounts.agentDisplayName
 import dev.supermux.ui.accounts.hasAccountChoice
 import dev.supermux.ui.accounts.isSystemAccountId
-import dev.supermux.ui.accounts.sessionSwitchFailureText
 import dev.supermux.ui.accounts.signInExpired
 import dev.supermux.ui.session.AgentLogo
 import dev.supermux.ui.session.hasAgentLogo
@@ -127,6 +127,8 @@ import dev.supermux.ui.prefs.LocalUiPrefsOrNull
 import dev.supermux.ui.widgets.ModalHost
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 
 /** A starred model's stored key: `"<agent>/<modelId>"` (see [dev.supermux.ui.prefs.UiPrefs.starredModels]). */
 internal fun starKey(agent: String?, modelId: String): String = "${agent.orEmpty()}/$modelId"
@@ -170,6 +172,8 @@ class RunSettingsAccount(
     val pendingId: String? = null,
     /** Why the last pick was refused, shown under the list. */
     val refusal: String? = null,
+    /** The refusal's code and message, shown in the app's language over [refusal] when known. */
+    val refusalReason: Pair<String?, String?>? = null,
     /** Opens Settings ▸ Providers & accounts; offered when the current account is unavailable. */
     val onOpenAccounts: (() -> Unit)? = null,
     /** Opens the agent's own sign-in (Settings ▸ Providers & accounts); offered instead when the system login's sign-in expired. */
@@ -183,12 +187,13 @@ class RunSettingsAccount(
     val onAdded: Boolean = current?.let { !it.system } ?: (!offersAuto && !isSystemAccountId(selectedId))
     /** The current account is marked unavailable (its API refused it). Picking it again is the retry. */
     val unavailable: Boolean = current?.unavailable != null
-    /** The row's value: the current account, or Auto and what it would pick now. */
-    val label: String = when {
+    /** The row's value, in the app's language: the current account, or Auto and what it would pick now. */
+    val label: String get() = when {
         current != null -> accountShortLabel(current)
         !offersAuto -> fallbackLabel?.takeIf { it.isNotBlank() }
-            ?: if (isSystemAccountId(selectedId)) "System login" else selectedId.orEmpty()
-        else -> autoPick?.let { "Auto · ${accountShortLabel(it)}" } ?: "Auto"
+            ?: if (isSystemAccountId(selectedId)) localized(Str.accounts_system_login) else selectedId.orEmpty()
+        else -> autoPick?.let { localized(Str.composer_run_auto_now, accountShortLabel(it)) }
+            ?: localized(Str.composer_run_auto)
     }
 
     companion object {
@@ -221,6 +226,7 @@ class RunSettingsAccount(
                 fallbackLabel = accountLabel,
                 pendingId = switch.pendingId,
                 refusal = switch.refusal,
+                refusalReason = switch.refusalReason,
                 onOpenAccounts = onOpenAccounts,
                 onSignIn = onSignIn,
             )
@@ -242,15 +248,22 @@ class SessionAccountSwitch(
         private set
     var refusal: String? by mutableStateOf(null)
         private set
+    /** [refusal]'s code and message, for the panel to word in the app's language. */
+    var refusalReason: Pair<String?, String?>? by mutableStateOf(null)
+        private set
 
     fun start(accountId: String) {
         if (pendingId != null) return
         pendingId = accountId
         refusal = null
+        refusalReason = null
         scope.launch {
             try {
                 val result = switch(accountId)
-                if (result is AccountResult.Failed) refusal = sessionSwitchFailureText(result.code, result.message)
+                if (result is AccountResult.Failed) {
+                    refusal = sessionSwitchFailureText(result.code, result.message)
+                    refusalReason = result.code to result.message
+                }
             } finally {
                 pendingId = null
             }
@@ -260,6 +273,7 @@ class SessionAccountSwitch(
     /** Nothing stale to say: the panel opened again, or the chat's account changed (from anywhere). */
     fun clearRefusal() {
         refusal = null
+        refusalReason = null
     }
 }
 
@@ -267,8 +281,14 @@ class SessionAccountSwitch(
 private data class ModelRow(val id: String, val name: String, val secondary: String?)
 
 /** The rows to show for [query]: starred first (catalog order kept within each group), then the rest. */
-private fun modelRows(models: List<ModelInfo>, stars: Set<String>, query: String): List<ModelRow> {
-    val all = listOf(ModelRow(DEFAULT_MODEL_ID, "Default", "the agent's own choice")) +
+private fun modelRows(
+    models: List<ModelInfo>,
+    stars: Set<String>,
+    query: String,
+    defaultName: String,
+    defaultDetail: String,
+): List<ModelRow> {
+    val all = listOf(ModelRow(DEFAULT_MODEL_ID, defaultName, defaultDetail)) +
         models.map { m ->
             val name = shortModelName(m.displayName, models)
             val plainId = m.id.lowercase().filter { it.isLetterOrDigit() }
@@ -330,7 +350,9 @@ internal fun RunSettingsPanel(
         val prefix = starKey(agent, "")
         starKeys.filter { it.startsWith(prefix) }.map { it.removePrefix(prefix) }.toSet()
     }
-    val rows = models?.let { modelRows(it, stars, query) }.orEmpty()
+    val defaultName = localized(Str.composer_run_default_model)
+    val defaultDetail = localized(Str.composer_run_default_model_detail)
+    val rows = models?.let { modelRows(it, stars, query, defaultName, defaultDetail) }.orEmpty()
     val selectedId = composerModelSelectedId(modelCurrent)
     val padH = if (sheet) 16.dp else 10.dp
     val listPad = if (sheet) 8.dp else 6.dp
@@ -377,7 +399,7 @@ internal fun RunSettingsPanel(
                         if (hasAgentLogo(agent)) AgentLogo(agent, size = 16.dp)
                         Text(agentDisplayName(agent), color = cs.onSurface, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                         Spacer(Modifier.weight(1f))
-                        Text("this chat", color = cs.onSurfaceVariant, fontSize = 12.sp)
+                        Text(localized(Str.composer_run_this_chat), color = cs.onSurfaceVariant, fontSize = 12.sp)
                     }
                 }
 
@@ -396,7 +418,7 @@ internal fun RunSettingsPanel(
                     ) {
                         Icon(Icons.Filled.Search, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
                         Box(Modifier.weight(1f)) {
-                            if (query.isEmpty()) Text("Search models…", color = cs.onSurfaceVariant.copy(alpha = 0.8f), fontSize = 14.sp)
+                            if (query.isEmpty()) Text(localized(Str.composer_run_search_models), color = cs.onSurfaceVariant.copy(alpha = 0.8f), fontSize = 14.sp)
                             BasicTextField(
                                 value = query,
                                 onValueChange = { query = it; highlight = if (it.isBlank()) -1 else 0 },
@@ -438,7 +460,7 @@ internal fun RunSettingsPanel(
                     ) {
                         if (rows.isEmpty()) {
                             Text(
-                                "No model matches “${query.trim()}”",
+                                localized(Str.composer_run_no_model_matches, query.trim()),
                                 color = cs.onSurfaceVariant,
                                 fontSize = 13.sp,
                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
@@ -470,7 +492,7 @@ internal fun RunSettingsPanel(
                     HorizontalDivider(Modifier.padding(top = 4.dp), color = cs.onSurface.copy(alpha = 0.07f))
                     Column(Modifier.padding(horizontal = listPad, vertical = 6.dp)) {
                         if (reasoning != null) {
-                            SettingRow(sheet, icon = { EffortGlyph() }, label = "Effort") {
+                            SettingRow(sheet, icon = { EffortGlyph() }, label = localized(Str.composer_run_effort)) {
                                 EffortSegments(reasoning, reasoningCurrent, sheet) { level ->
                                     haptic.perform(HapticKind.Tick)
                                     onDismiss()
@@ -482,7 +504,7 @@ internal fun RunSettingsPanel(
                             SettingRow(
                                 sheet,
                                 icon = { Icon(Icons.Filled.Bolt, null, tint = if (fastMode) cs.tertiary else cs.onSurfaceVariant, modifier = Modifier.size(16.dp)) },
-                                label = "Fast mode",
+                                label = localized(Str.composer_run_fast_mode),
                                 onClick = { onToggleFast(!fastMode) },
                                 tag = "composer-fast-toggle",
                                 toggled = fastMode,
@@ -502,7 +524,7 @@ internal fun RunSettingsPanel(
                                         modifier = Modifier.size(16.dp),
                                     )
                                 },
-                                label = "Account",
+                                label = localized(Str.composer_run_account),
                                 onClick = { view = PanelView.Accounts },
                                 tag = "run_settings_account",
                             ) {
@@ -530,7 +552,7 @@ internal fun RunSettingsPanel(
                                         modifier = Modifier.size(16.dp),
                                     )
                                 },
-                                label = "Mode",
+                                label = localized(Str.composer_run_mode),
                                 onClick = { view = PanelView.Modes },
                                 tag = "run_settings_mode",
                             ) {
@@ -550,7 +572,11 @@ internal fun RunSettingsPanel(
 
             PanelView.Accounts -> DrillView(
                 sheet = sheet,
-                title = if (account?.offersAuto == false) "Run this chat on" else "Start this chat on",
+                title = if (account?.offersAuto == false) {
+                    localized(Str.composer_run_run_on)
+                } else {
+                    localized(Str.composer_run_start_on)
+                },
                 // Account is the second-to-last settings row: its Back takes the last row's place,
                 // and a spacer row keeps it level with where Account itself was.
                 rowsBelowBack = if (permission?.current != null) 1 else 0,
@@ -561,7 +587,7 @@ internal fun RunSettingsPanel(
 
             PanelView.Modes -> DrillView(
                 sheet = sheet,
-                title = "What can the agent do without asking?",
+                title = localized(Str.composer_run_modes_title),
                 rowsBelowBack = 0,
                 onBack = back,
             ) {
@@ -578,7 +604,7 @@ internal fun RunSettingsPanel(
                                 modifier = Modifier.size(16.dp),
                             )
                         },
-                        title = m.label + if (m.default) "  · default" else "",
+                        title = if (m.default) localized(Str.composer_run_mode_default, m.label) else m.label,
                         detail = m.description,
                         tag = "permissions-${m.id}",
                     ) {
@@ -627,7 +653,7 @@ private fun ColumnScope.DrillView(
         SettingRow(
             sheet,
             icon = { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp)) },
-            label = "Back",
+            label = localized(Str.composer_run_back),
             onClick = onBack,
             tag = "run_settings_back",
         ) {}
@@ -671,14 +697,15 @@ private fun AccountOptions(sheet: Boolean, account: RunSettingsAccount, onBack: 
             sheet = sheet,
             selected = current == null,
             icon = { Icon(Icons.Outlined.AccountCircle, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp)) },
-            title = "Auto",
-            detail = account.autoPick?.let { "Most room left · now ${accountShortLabel(it)}" } ?: "The account with the most room left",
+            title = localized(Str.composer_run_auto),
+            detail = account.autoPick?.let { localized(Str.composer_run_auto_detail_now, accountShortLabel(it)) }
+                ?: localized(Str.composer_run_auto_detail),
             tag = "account-picker-item:auto",
         ) { pick(null) }
     }
     if (account.accounts.isEmpty()) {
         Text(
-            "Loading accounts…",
+            localized(Str.composer_run_loading_accounts),
             color = cs.onSurfaceVariant,
             fontSize = 13.sp,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
@@ -692,15 +719,16 @@ private fun AccountOptions(sheet: Boolean, account: RunSettingsAccount, onBack: 
             icon = { Icon(Icons.Outlined.AccountCircle, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp)) },
             title = accountShortLabel(a),
             badges = {
-                if (a.isolated) AccountTag("Isolated", sem.warning)
+                if (a.isolated) AccountTag(localized(Str.composer_run_isolated), sem.warning)
                 // A tag, not a block: picking it is how the user retries it.
-                if (a.unavailable != null) AccountTag("Unavailable", sem.danger, Modifier.testTag("account-unavailable-tag:${a.id}"))
+                if (a.unavailable != null) AccountTag(localized(Str.composer_run_unavailable), sem.danger, Modifier.testTag("account-unavailable-tag:${a.id}"))
             },
             detail = accountPickerDetail(a).takeIf { it.isNotBlank() },
             tag = "account-picker-item:${a.id}",
         ) { pick(a.id) }
     }
-    account.refusal?.let { RefusalLine(it) }
+    (account.refusalReason?.let { (code, message) -> sessionSwitchFailureText(code, message) } ?: account.refusal)
+        ?.let { RefusalLine(it) }
 }
 
 /** Atop the Account list while the current account is unavailable: why, and where to log in again. */
@@ -718,7 +746,7 @@ private fun UnavailableNotice(account: AccountDto, onOpenAccounts: (() -> Unit)?
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Icon(Icons.Outlined.WarningAmber, null, tint = danger, modifier = Modifier.size(16.dp))
             Text(
-                "${accountShortLabel(account)} is unavailable",
+                localized(Str.composer_run_account_unavailable, accountShortLabel(account)),
                 color = cs.onSurface,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
@@ -730,8 +758,8 @@ private fun UnavailableNotice(account: AccountDto, onOpenAccounts: (() -> Unit)?
             accountUnavailableText(account)?.let {
                 Text(it, color = cs.onSurfaceVariant, fontSize = 11.5.sp, lineHeight = 15.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
             }
-            if (onOpenAccounts != null) NoticeLink("Open Accounts", onOpenAccounts, "run_settings_open_accounts")
-            if (onSignIn != null) NoticeLink("Sign in again", onSignIn, "run_settings_sign_in")
+            if (onOpenAccounts != null) NoticeLink(localized(Str.composer_run_open_accounts), onOpenAccounts, "run_settings_open_accounts")
+            if (onSignIn != null) NoticeLink(localized(Str.accounts_sign_in_again), onSignIn, "run_settings_sign_in")
         }
     }
     HorizontalDivider(Modifier.padding(bottom = 4.dp), color = cs.onSurface.copy(alpha = 0.07f))
@@ -917,7 +945,7 @@ private fun ModelRowItem(
             ) {
                 Icon(
                     if (starred) Icons.Filled.Star else Icons.Outlined.StarOutline,
-                    if (starred) "Unstar" else "Star",
+                    if (starred) localized(Str.composer_run_unstar) else localized(Str.composer_run_star),
                     tint = if (starred) cs.tertiary else cs.onSurfaceVariant.copy(alpha = 0.6f),
                     modifier = Modifier.size(15.dp),
                 )

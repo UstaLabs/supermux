@@ -21,6 +21,10 @@
 //     the user is not looking at.
 package dev.supermux.ui.editor
 
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.localizedPlural
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.Plurals
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -204,7 +208,7 @@ fun ExplorerPane(
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (fileSystem == null) {
                     Box(Modifier.fillMaxSize().testTag("editor_tree"), contentAlignment = Alignment.Center) {
-                        Text("Host offline", color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.testTag("editor_tree_offline"))
+                        Text(localized(Str.editor_host_offline), color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.testTag("editor_tree_offline"))
                     }
                 } else {
                     FileTreeWithActions(
@@ -323,7 +327,7 @@ fun FilePane(
       Column(Modifier.fillMaxSize().testTag("editor_file_pane")) {
         if (lspSessionId == null) {
             Text(
-                "No agent in this workspace — code intelligence is off.",
+                localized(Str.editor_no_lsp),
                 color = cs.onSurfaceVariant,
                 fontSize = 12.sp,
                 modifier = Modifier
@@ -348,7 +352,7 @@ fun FilePane(
             ) {
                 Icon(Icons.Filled.Warning, contentDescription = null, tint = cs.error, modifier = Modifier.size(16.dp))
                 Text(
-                    "File changed on disk",
+                    localized(Str.editor_changed_on_disk),
                     style = MaterialTheme.typography.bodySmall,
                     color = cs.onErrorContainer,
                     modifier = Modifier.weight(1f).padding(start = Space.sm),
@@ -357,7 +361,7 @@ fun FilePane(
                     onClick = { scope.launch { documents.reload(path, fsRead) } },
                     modifier = Modifier.heightIn(min = 32.dp).pointerHoverIcon(PointerIcon.Hand).testTag("editor_reload"),
                 ) {
-                    Text("Reload", style = MaterialTheme.typography.labelLarge)
+                    Text(localized(Str.editor_reload), style = MaterialTheme.typography.labelLarge)
                 }
             }
         }
@@ -456,7 +460,7 @@ fun DiffPane(
     getWalkthrough: suspend () -> dev.supermux.net.Walkthrough? = { null },
     getWalkthroughComments: suspend () -> List<ReviewComment> = { emptyList() },
     getReviewComments: suspend () -> List<ReviewComment> = { emptyList() },
-    readWalkthroughFile: suspend (repo: String, path: String) -> Result<String> = { _, _ -> Result.failure(IllegalStateException("File unavailable")) },
+    readWalkthroughFile: suspend (repo: String, path: String) -> Result<String> = { _, _ -> Result.failure(IllegalStateException(localized(Str.editor_file_unavailable))) },
     onOpenWalkthroughFile: (repo: String, path: String, line: Int?) -> Unit = { _, _, _ -> },
     modifier: Modifier = Modifier,
     onReviewAddComment: suspend (AddCommentBody) -> ReviewComment? = { null },
@@ -525,9 +529,9 @@ fun DiffPane(
                     },
                     modifier = Modifier.testTag("walkthrough_toggle"),
                 ) {
-                    Text("📖 Walkthrough · ${walkthrough.steps.size} steps")
+                    Text(localizedPlural(Plurals.walkthrough_toggle, walkthrough.steps.size, walkthrough.steps.size))
                 }
-                if (walkthrough.isOpen) Text("Showing walkthrough", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+                if (walkthrough.isOpen) Text(localized(Str.walkthrough_showing), fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
             }
         }
         if (walkthrough?.isOpen == true && hasWalkthrough) {

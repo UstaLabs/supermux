@@ -1,6 +1,5 @@
 package dev.supermux.ui.work
 
-import dev.supermux.ui.chat.rememberSavedWords
 import dev.supermux.ui.chat.savedNotice
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -53,6 +52,8 @@ import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.LocalChatSearch
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.platform.DownloadedInstaller
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.Platform
@@ -140,7 +141,7 @@ fun ActivityRailIcon(modifier: Modifier = Modifier) {
     // The air the rail keeps between its tiles, between the ring and the bottom sheet under it.
     Box(modifier.padding(bottom = PanelTokens.RailGap)) {
         Box {
-            RailTile(onClick = { open = true }, tag = "rail_downloads", label = "Downloads") {
+            RailTile(onClick = { open = true }, tag = "rail_downloads", label = localized(Str.work_downloads)) {
                 Box(
                     Modifier
                         .size(RingTokens.RailTile)
@@ -175,7 +176,6 @@ private fun DownloadsPanel(
     val platform = LocalPlatform.current
     val search = LocalChatSearch.current
     val pointer = LocalPointerAvailable.current
-    val savedWords = rememberSavedWords()
     // A popover with a pointer, as the Usage card is; a wide touch-only host (a tablet, an unfolded Fold) gets the sheet.
     val popover = LocalWindowWidthClass.current != WindowWidthClass.Compact && LocalPointerAvailable.current
     val list: @Composable (Modifier) -> Unit = { modifier ->
@@ -186,7 +186,7 @@ private fun DownloadsPanel(
             onRetry = { downloads.retry(it.key) },
             onAction = { item, action ->
                 scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                    handOver(platform, downloads, item, action) { saved -> savedNotice(saved, pointer, savedWords)?.let(platform.notices::show) }
+                    handOver(platform, downloads, item, action) { saved -> savedNotice(saved, pointer)?.let(platform.notices::show) }
                 }
             },
             onInstall = { item -> scope.launch(start = CoroutineStart.UNDISPATCHED) { install(platform, item) } },
@@ -198,7 +198,8 @@ private fun DownloadsPanel(
                 item.origin?.let { origin ->
                     onDismiss()
                     if (search?.reveal(origin.sessionId, origin.messageId) != true) {
-                        platform.notices.show("That chat is no longer available")
+                        platform.notices.show(localized(Str.work_chat_gone))
+
                     }
                 }
             },

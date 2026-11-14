@@ -169,7 +169,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.i18n.localizedLabels
 
 
 /**
@@ -374,7 +373,6 @@ private fun WorkspacePanesBody(
     val windowsSeam = LocalPlatform.current.windows
     val notices = LocalPlatform.current.notices
     TrackFocusedFileView(ws)
-    val bulkLabels = localizedLabels(BulkClose.entries) { it.labelRes }
     val newTabWord = localized(Str.shell_new_tab)
     val closeTabWord = localized(Str.shell_close_tab)
     val viewWord = localized(Str.shell_view)
@@ -396,7 +394,7 @@ private fun WorkspacePanesBody(
     }
 
     fun bulkEntries(itemId: String): List<RowContextMenuEntry> =
-        bulkCloseEntries(groupViewIdsOf(layout, itemId), itemId, bulkLabels) { which, ids -> bulkClose(itemId, which, ids) }
+        bulkCloseEntries(groupViewIdsOf(layout, itemId), itemId) { which, ids -> bulkClose(itemId, which, ids) }
 
     val tearOff = remember(windowsSeam, hostId, ws, current.id) { windowsSeam?.tabTearOff(hostId, ws, current.id) }
     // The "+" and the split buttons open New tabs (#91): views of kind "new" that ask what to show. The split
@@ -644,7 +642,6 @@ fun PhoneWorkspacePanes(
     // A Browser tab closed here or elsewhere lets its live page go (#105).
     dev.supermux.ui.browser.ReleaseClosedBrowserTabs(viewsById.values)
     val kept = rememberWorkspacePanesKept(current.id)
-    val bulkLabels = localizedLabels(BulkClose.entries) { it.labelRes }
     val viewWord = localized(Str.shell_view)
     var showAdd by kept::addViewOpen
     val closeCandidate = kept.closingViewId?.let { viewsById[it] }
@@ -663,7 +660,7 @@ fun PhoneWorkspacePanes(
     }
 
     fun bulkEntries(itemId: String): List<RowContextMenuEntry> =
-        bulkCloseEntries(tabs.viewIds, itemId, bulkLabels) { which, ids ->
+        bulkCloseEntries(tabs.viewIds, itemId) { which, ids ->
             if (which != BulkClose.ALL) app.setActiveView(current.id, itemId)
             bulkQueue.addAll(ids.filterNot { it in bulkQueue })
         }

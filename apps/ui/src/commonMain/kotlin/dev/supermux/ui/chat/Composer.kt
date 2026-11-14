@@ -171,6 +171,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.roundToInt
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 
 /** Identifies this screen to `Platform.pickFiles`/`captureImage`, so a pick that outlives an
  *  activity recreation comes back HERE and not to the new-session launcher. */
@@ -410,7 +412,8 @@ data class ComposerChrome(
      * text, not "  text"). Chat appends to the draft as typed, spaces and all.
      */
     val dictationTrimsDraft: Boolean = false,
-    val sendContentDescription: String = "Send",
+    /** Null: the composer's own "Send". */
+    val sendContentDescription: String? = null,
 )
 
 /** One file staged BEFORE any session exists — the launcher's pre-spawn attachment. It carries no
@@ -458,8 +461,7 @@ interface ComposerToolbarScope {
 }
 
 /** The composer's default hint line (a pointer host shows it; touch hosts name the session). */
-const val DEFAULT_COMPOSER_PLACEHOLDER =
-    "Ask anything · @ to add files · / for commands"
+fun defaultComposerPlaceholder(): String = localized(Str.composer_placeholder)
 
 /** Kind guess from a MIME: audio → "voice", else null (broker infers). Mirrors the launcher. */
 internal fun composerKind(mime: String): String? =
@@ -534,7 +536,7 @@ internal fun canSendComposer(
  * the raw id when it isn't in the catalog, or "Default" when the session has no explicit model.
  */
 internal fun composerModelLabel(current: String?, models: List<ModelInfo>): String {
-    val id = current?.takeIf { it.isNotBlank() } ?: return "Default"
+    val id = current?.takeIf { it.isNotBlank() } ?: return localized(Str.composer_run_default_model)
     return models.firstOrNull { it.id == id }?.displayName ?: id
 }
 
@@ -553,7 +555,7 @@ internal fun composerReasoningLabel(
 ): String {
     val current = sessionCurrent?.takeIf { it.isNotBlank() }
         ?: reasoning.current?.takeIf { it.isNotBlank() }
-        ?: return "effort"
+        ?: return localized(Str.composer_pill_effort)
     // Prefer catalog id when present (canonical casing); else the raw current value.
     return reasoning.levels.firstOrNull { it.id == current }?.id ?: current
 }
@@ -611,7 +613,7 @@ fun Composer(
      * composer that never wires [onControl] offers insert-only commands and nothing dead.
      */
     handledControlKinds: Set<String> = emptySet(),
-    placeholder: String = DEFAULT_COMPOSER_PLACEHOLDER,
+    placeholder: String = defaultComposerPlaceholder(),
     externalAttach: ComposerExternalAttach? = null,
     onExternalAttachConsumed: () -> Unit = {},
     /**
@@ -1095,8 +1097,9 @@ fun Composer(
     val slashQuery = activeSlashQuery(text)
     val slashTokenStart = activeSlashTokenStart(text)
     // Remembered: this ran on EVERY recomposition (every keystroke recomposes the whole card).
-    val slashModel = remember(text, commands, handledControlKinds, chrome.slashInsertOnly, slashRecents, sessionAgent) {
-        slashMenu(text, commands, slashRecents, agentLabelOf(sessionAgent)) { chrome.slashInsertOnly || it in handledControlKinds }
+    val slashAgentLabel = agentLabelOf(sessionAgent)
+    val slashModel = remember(text, commands, handledControlKinds, chrome.slashInsertOnly, slashRecents, slashAgentLabel) {
+        slashMenu(text, commands, slashRecents, slashAgentLabel) { chrome.slashInsertOnly || it in handledControlKinds }
     }
     val slashRows = slashModel?.rows.orEmpty()
     var selectedSlashIndex by remember { mutableIntStateOf(0) }
@@ -1262,7 +1265,7 @@ fun Composer(
         val animated by animateColorAsState(
             targetValue = if (inputFocused) cs.primary else cs.outlineVariant,
             animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
-            label = "composer_card_border",
+            label = "composer_card_border", // i18n-ok: an animation label
         )
         animated
     } else {
@@ -1358,7 +1361,7 @@ fun Composer(
                     ) {
                         Icon(
                             Icons.Filled.Stop,
-                            contentDescription = "Stop",
+                            contentDescription = localized(Str.composer_stop),
                             tint = cs.surface,
                             modifier = Modifier.size(if (pointer) 14.dp else 16.dp),
                         )
@@ -1370,7 +1373,7 @@ fun Composer(
                     progress = sendProgress,
                     large = largeSend,
                     touch = !pointer,
-                    contentDescription = chrome.sendContentDescription,
+                    contentDescription = chrome.sendContentDescription ?: localized(Str.composer_send),
                     testTag = tags.send,
                     onClick = doSend,
                 )
@@ -1736,7 +1739,7 @@ fun Composer(
             if (slashQuery != null && !commandsResolved) {
                 // A fresh session whose command set hasn't resolved yet.
                 Text(
-                    text = "Loading commands…",
+                    text = localized(Str.composer_slash_loading),
                     color = cs.onSurfaceVariant,
                     fontSize = 12.sp,
                     modifier = Modifier
@@ -1768,7 +1771,7 @@ fun Composer(
         // A failed transcription keeps its recording: offer Retry / Send as audio on every host.
         if (dictation.failedAudio != null) {
             DictationFailureBar(
-                message = dictation.errorMessage ?: "Transcription failed",
+                message = dictation.errorMessage ?: localized(Str.composer_dictation_failed),
                 onRetry = { dictation.retryTranscription() },
                 onAttach = if (attachBound) {
                     {
@@ -1820,8 +1823,9 @@ fun Composer(
     if (dictation.micDenied) MicDeniedDialog(onDismiss = { dictation.micDenied = false })
     // A screen that places the error itself is told about every change, clears included.
     if (onMicError != null) {
-        LaunchedEffect(dictation.errorMessage, dictation.failedAudio, pointer) {
-            onMicError(dictation.errorMessage?.takeIf { pointer && dictation.failedAudio == null })
+        val micError = dictation.errorMessage
+        LaunchedEffect(micError, dictation.failedAudio, pointer) {
+            onMicError(micError?.takeIf { pointer && dictation.failedAudio == null })
         }
     }
 }
@@ -1873,14 +1877,14 @@ private fun AttachControl(
             if (pointer) {
                 Icon(
                     Icons.Filled.Add,
-                    contentDescription = "Attach",
+                    contentDescription = localized(Str.composer_attach),
                     tint = cs.onSurfaceVariant,
                     modifier = Modifier.size(18.dp),
                 )
             } else {
                 Icon(
                     Icons.Filled.Add,
-                    contentDescription = "Attach",
+                    contentDescription = localized(Str.composer_attach),
                     tint = cs.onSurfaceVariant,
                     modifier = Modifier.size(22.dp),
                 )
@@ -1890,33 +1894,33 @@ private fun AttachControl(
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                 if (clipboardHasImage()) {
                     DropdownMenuItem(
-                        text = { Text("Paste") },
+                        text = { Text(localized(Str.composer_attach_paste)) },
                         leadingIcon = { Icon(Icons.Filled.ContentCopy, null, Modifier.size(18.dp)) },
                         modifier = Modifier.testTag("attach_menu_paste"),
                         onClick = { menu = false; onPasteImage() },
                     )
                 }
                 DropdownMenuItem(
-                    text = { Text("Photos") },
+                    text = { Text(localized(Str.composer_attach_photos)) },
                     leadingIcon = { Icon(Icons.Filled.Image, null, Modifier.size(18.dp)) },
                     modifier = Modifier.testTag("attach_menu_photos"),
                     onClick = { menu = false; onPickFiles(PickKind.Media) },
                 )
                 DropdownMenuItem(
-                    text = { Text("Files") },
+                    text = { Text(localized(Str.composer_attach_files)) },
                     leadingIcon = { Icon(Icons.Filled.InsertDriveFile, null, Modifier.size(18.dp)) },
                     modifier = Modifier.testTag("attach_menu_files"),
                     onClick = { menu = false; onPickFiles(PickKind.Any) },
                 )
                 if (camera) {
                     DropdownMenuItem(
-                        text = { Text("Camera") },
+                        text = { Text(localized(Str.composer_attach_camera)) },
                         leadingIcon = { Icon(Icons.Filled.PhotoCamera, null, Modifier.size(18.dp)) },
                         modifier = Modifier.testTag("attach_menu_camera"),
                         onClick = { menu = false; onCaptureImage() },
                     )
                     DropdownMenuItem(
-                        text = { Text("Record video") },
+                        text = { Text(localized(Str.composer_attach_record_video)) },
                         leadingIcon = { Icon(Icons.Filled.Videocam, null, Modifier.size(18.dp)) },
                         modifier = Modifier.testTag("attach_menu_record_video"),
                         onClick = { menu = false; onCaptureVideo() },
@@ -1945,14 +1949,14 @@ private fun PastePendingChip() {
             color = cs.primary,
             strokeWidth = 1.5.dp,
         )
-        Text(text = "Pasting image…", color = cs.onSurface, fontSize = 12.sp, maxLines = 1)
+        Text(text = localized(Str.composer_pasting_image), color = cs.onSurface, fontSize = 12.sp, maxLines = 1)
     }
 }
 
 /** A chip's words: the name, plus the upload % or "Retry". A media tile speaks the same line. */
 private fun chipLabel(att: ComposerAttachment): String = when (val state = att.state) {
-    is UploadState.Uploading -> "${att.name} · ${(state.pct * 100).roundToInt()}%"
-    is UploadState.Failed -> "${att.name} · Retry"
+    is UploadState.Uploading -> localized(Str.composer_chip_uploading, att.name, (state.pct * 100).roundToInt())
+    is UploadState.Failed -> localized(Str.composer_chip_retry, att.name)
     is UploadState.Done -> att.name
 }
 
@@ -2000,7 +2004,7 @@ private fun ComposerChip(
         if (!uploading) {
             Icon(
                 Icons.Filled.Close,
-                contentDescription = "Remove",
+                contentDescription = localized(Str.composer_remove),
                 tint = if (failed) cs.onErrorContainer else cs.onSurfaceVariant,
                 modifier = Modifier
                     .size(14.dp)
@@ -2028,7 +2032,7 @@ private fun StagedChip(name: String, testTag: String, onRemove: () -> Unit) {
         Text(name, color = cs.onSurface, fontSize = 12.sp, maxLines = 1)
         Icon(
             Icons.Filled.Close,
-            contentDescription = "Remove",
+            contentDescription = localized(Str.composer_remove),
             tint = cs.onSurfaceVariant,
             modifier = Modifier.size(14.dp).clickable { onRemove() },
         )
@@ -2060,7 +2064,7 @@ private fun ComposerSendButton(
         val animated by animateFloatAsState(
             targetValue = if (pressed) 0.88f else 1f,
             animationSpec = spring(stiffness = Spring.StiffnessMedium, dampingRatio = Spring.DampingRatioMediumBouncy),
-            label = "send_scale",
+            label = "send_scale", // i18n-ok: an animation label
         )
         animated
     } else {

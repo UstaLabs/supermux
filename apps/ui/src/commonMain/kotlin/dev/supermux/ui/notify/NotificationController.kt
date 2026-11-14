@@ -42,11 +42,10 @@ class NotificationController(
         selectedId: String?,
         windowFocused: Boolean,
         muted: Boolean,
-        words: NotifyWords = NotifyWords(),
     ) {
         if (!NotifyDecision.shouldNotify(entry, session, selectedId, windowFocused, muted)) return
         if (!dedup.shouldFire(session, clock())) return
-        val body = NotifyDecision.previewText(entry, words)
+        val body = NotifyDecision.previewText(entry)
         // Unconditional (not gated by any env var) — this is the load-bearing, always-on proof
         // point for headless live-verification (Task 4): the OS toast can't be screenshotted
         // reliably under Xvfb, but the DECISION + DISPATCH always logs here.

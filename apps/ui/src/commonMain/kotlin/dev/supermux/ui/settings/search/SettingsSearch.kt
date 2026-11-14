@@ -3,7 +3,6 @@
 // page task adds its rows here, in page order.
 package dev.supermux.ui.settings.search
 
-import androidx.compose.runtime.Composable
 import dev.supermux.ui.i18n.StringKey
 import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
@@ -66,7 +65,6 @@ fun searchKey(entry: SettingsSearchEntry): String =
  * extra keywords are its [SettingsSearchEntry.text]; a shortcut's is its command's title. An entry with no text (a
  * provider's name) keeps its English.
  */
-@Composable
 fun localizedSearchEntries(
     entries: List<SettingsSearchEntry>,
     pageTitles: Map<SettingsSection, String>,

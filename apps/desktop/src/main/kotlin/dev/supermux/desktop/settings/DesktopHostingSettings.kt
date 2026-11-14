@@ -39,7 +39,8 @@ import dev.supermux.net.GitRequirement
 import dev.supermux.net.KeepAwakeState
 import dev.supermux.state.FleetStore
 import dev.supermux.ui.settings.HostingActions
-import dev.supermux.ui.settings.HostingCopy
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.settings.HostingPhase
 import dev.supermux.ui.settings.HostingPowerUi
 import dev.supermux.ui.settings.KeepAwakeUi
@@ -144,10 +145,10 @@ internal fun keepAwakeUi(state: KeepAwakeState?, hasBattery: Boolean?, appHeld: 
     when {
         !state.supported -> note = reason
         !state.enabled -> Unit
-        appHeld -> note = HostingCopy.APP_HELD
+        appHeld -> note = localized(Str.machine_hosting_app_held)
         // Linux at boot: no desktop session yet, so the inhibitors are refused; the broker re-tries.
-        state.reasonCode == KeepAwakeState.REASON_DENIED && state.retrying -> note = HostingCopy.WAITING_FOR_LOGIN
-        state.reasonCode == KeepAwakeState.REASON_ON_BATTERY -> note = HostingCopy.PAUSED_ON_BATTERY
+        state.reasonCode == KeepAwakeState.REASON_DENIED && state.retrying -> note = localized(Str.machine_hosting_waiting_for_login)
+        state.reasonCode == KeepAwakeState.REASON_ON_BATTERY -> note = localized(Str.machine_hosting_paused_on_battery)
         !state.active && reason != null -> warning = reason
     }
     return KeepAwakeUi(
@@ -170,11 +171,11 @@ internal fun lidClosedUi(isMac: Boolean, hasBattery: Boolean?, lid: LidStatus): 
     if (!isMac || hasBattery != true) return null
     val installed = lid.state == LidSleepHelper.InstallState.INSTALLED
     val note = when {
-        !lid.homeSupported -> HostingCopy.LID_HOME_UNSUPPORTED
-        lid.state == LidSleepHelper.InstallState.OTHER_USER -> HostingCopy.LID_OTHER_USER
-        !installed && lid.pref -> HostingCopy.LID_NOT_INSTALLED
-        !installed -> HostingCopy.LID_INSTALL
-        lid.on && lid.pausedOnBattery -> HostingCopy.LID_PAUSED_ON_BATTERY
+        !lid.homeSupported -> localized(Str.machine_hosting_lid_home_unsupported)
+        lid.state == LidSleepHelper.InstallState.OTHER_USER -> localized(Str.machine_hosting_lid_other_user)
+        !installed && lid.pref -> localized(Str.machine_hosting_lid_not_installed)
+        !installed -> localized(Str.machine_hosting_lid_install)
+        lid.on && lid.pausedOnBattery -> localized(Str.machine_hosting_paused_on_battery)
         else -> null
     }
     return LidClosedUi(

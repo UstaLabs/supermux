@@ -103,6 +103,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.formatCatalogText
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.retain.rememberRetainedScope
 import androidx.compose.ui.Alignment
@@ -768,6 +771,13 @@ fun SessionLauncherScreen(
         }
     }
 
+    // What the coroutines below report, read here.
+    val alreadyIn = localized(Str.project_already_in, "%1\$s")
+    val alreadyInOther = localized(Str.launch_already_in_other)
+    val addFolderFailed = localized(Str.launch_add_folder_failed, "%1\$s")
+    val saveDraftFailed = localized(Str.launch_save_draft_failed)
+    val createSessionFailed = localized(Str.launch_create_session_failed)
+
     /** The omnibox picked [path] for a location-less project: register it, never silently move it. */
     fun registerLocation(project: ProjectDto, path: String) {
         val startedOn = currentHost
@@ -785,10 +795,10 @@ fun SessionLauncherScreen(
                 }
                 is ProjectLocationResult.Conflict -> {
                     val owner = currentCatalog.firstOrNull { it.id == r.projectId }
-                    projectError = "Already in ${owner?.name ?: "another project"}"
+                    projectError = owner?.let { formatCatalogText(alreadyIn, arrayOf(it.name)) } ?: alreadyInOther
                     projectConflict = owner?.let { it.id to path }
                 }
-                ProjectLocationResult.Failed -> projectError = "Couldn't add this folder to ${project.name}"
+                ProjectLocationResult.Failed -> projectError = formatCatalogText(addFolderFailed, arrayOf(project.name))
             }
         }
     }
@@ -828,7 +838,8 @@ fun SessionLauncherScreen(
     // ── The shared chat composer, wearing the launcher's clothes (cluster F7) ────────────────────
     // Solid fill, not chat's translucent one: the launcher sits ON surfaceContainerHigh, so a
     // translucent high fill would disappear; surfaceContainerLowest lifts the capsule off the page.
-    val composerChrome = remember(cs) {
+    val startSession = localized(Str.launch_start_session)
+    val composerChrome = remember(cs, startSession) {
         ComposerChrome(
             tags = ComposerTags(
                 card = "launcher_composer_card",
@@ -856,7 +867,7 @@ fun SessionLauncherScreen(
             transientLinesInsideCard = true,
             recordingTakeover = ComposerRecordingTakeover.FieldOnTouch,
             largeTouchSend = true,
-            sendContentDescription = "Start session",
+            sendContentDescription = startSession,
             // A trailing space typed before the mic must not double up, and dictating into a
             // whitespace-only draft yields just the cleaned text (the launcher's rule since F6).
             dictationTrimsDraft = true,
@@ -881,8 +892,9 @@ fun SessionLauncherScreen(
     // A project, but nothing to run it: no agent installed, or the spawn was refused for this one.
     val platform = LocalPlatform.current
     val hostIsThisComputer = remember(selectedHost) { actions.isThisComputer() }
+    val folderDialogTitle = localized(Str.launch_choose_folder_title)
     val nativeFolderPicker: (suspend () -> String?)? =
-        if (hostIsThisComputer) ({ platform.pickDirectory("Choose a project folder") }) else null
+        if (hostIsThisComputer) ({ platform.pickDirectory(folderDialogTitle) }) else null
     val needsAgentInstall = agentSetup != null && hasProject && (
         installedAgents?.isEmpty() == true ||
             (refusedAgent == agent && installedAgents?.contains(agent) != true)
@@ -903,10 +915,10 @@ fun SessionLauncherScreen(
                     draftCleared = true
                     onBack()
                 } else {
-                    error = "Couldn't save draft"
+                    error = saveDraftFailed
                 }
             } catch (e: Exception) {
-                error = e.message ?: "Couldn't save draft"
+                error = e.message ?: saveDraftFailed
             } finally {
                 submitting = false
             }
@@ -980,7 +992,7 @@ fun SessionLauncherScreen(
         val e = submission.failure ?: return@LaunchedEffect
         submission.failure = null
         draftCleared = false
-        error = e.message ?: "Failed to create session"
+        error = e.message ?: createSessionFailed
         // The chosen agent's CLI is not on the host: offer the install, not just the text.
         agentNotInstalled(e)?.let { kind ->
             if (agentSetup != null) {
@@ -1065,7 +1077,7 @@ fun SessionLauncherScreen(
                         }
                         // The install panel brings its own heading; the project name alone stays.
                         if (!needsAgentInstall) {
-                            Text("Let's build", color = cs.onSurface, fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
+                            Text(localized(Str.launch_title), color = cs.onSurface, fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
                             Spacer(Modifier.height(Space.xs))
                         }
                         // Project name IS the dropdown (iOS projectPicker / web heading-variant
@@ -1098,7 +1110,7 @@ fun SessionLauncherScreen(
                                     ProjectImage(ProjectRef(projectHostKey, owner), loadCatalogImage, size = 18.dp) {}
                                 }
                                 Text(
-                                    owner?.name ?: workdir?.let { formatWorkdir(it, home) } ?: "Choose a project",
+                                    owner?.name ?: workdir?.let { formatWorkdir(it, home) } ?: localized(Str.launch_choose_project),
                                     color = cs.onSurfaceVariant,
                                     fontSize = 17.sp,
                                     fontWeight = FontWeight.Medium,
@@ -1107,7 +1119,7 @@ fun SessionLauncherScreen(
                                 )
                                 Icon(
                                     Icons.Filled.KeyboardArrowDown,
-                                    contentDescription = "Select project",
+                                    contentDescription = localized(Str.launch_select_project),
                                     tint = cs.onSurfaceVariant,
                                     modifier = Modifier.size(16.dp),
                                 )
@@ -1147,7 +1159,7 @@ fun SessionLauncherScreen(
                         }
                         pendingLocationProject?.let { p ->
                             Text(
-                                "Choose a folder to add to ${p.name}",
+                                localized(Str.launch_choose_folder_for, p.name),
                                 color = cs.onSurfaceVariant,
                                 fontSize = 12.sp,
                                 modifier = Modifier.testTag("launcher_project_pending"),
@@ -1167,7 +1179,7 @@ fun SessionLauncherScreen(
                                 TextButton(
                                     onClick = { useConflictOwner() },
                                     modifier = Modifier.testTag("launcher_project_use_owner"),
-                                ) { Text("Use $ownerName", fontSize = 12.sp) }
+                                ) { Text(localized(Str.launch_use_owner, ownerName), fontSize = 12.sp) }
                             }
                         }
                         if (hosts.size > 1 && !pointer && workspaceWorkdir == null) {
@@ -1177,9 +1189,9 @@ fun SessionLauncherScreen(
                         if (repoInfo?.eligible == true && workspaceWorkdir == null) {
                             Spacer(Modifier.height(Space.sm))
                             val worktreeLabel = when {
-                                !useWorktree -> "No worktree"
+                                !useWorktree -> localized(Str.launch_no_worktree)
                                 baseBranch.isNotEmpty() -> baseBranch
-                                else -> repoInfo?.currentBranch ?: "HEAD"
+                                else -> repoInfo?.currentBranch ?: "HEAD" // i18n-ok: git's name
                             }
                             WorktreePill(
                                 label = worktreeLabel,
@@ -1289,7 +1301,7 @@ fun SessionLauncherScreen(
                             enabled = canSaveDraft && !submitting,
                             modifier = Modifier.testTag("launcher_save_draft"),
                         ) {
-                            Text("Save draft", fontSize = 12.sp, color = cs.onSurfaceVariant)
+                            Text(localized(Str.launch_save_draft), fontSize = 12.sp, color = cs.onSurfaceVariant)
                         }
                     }
 
@@ -1331,7 +1343,7 @@ fun SessionLauncherScreen(
                         onTranscribeAudio = actions.transcribeAudio,
                         actions = composerActions,
                         commands = launcherCommands,
-                        placeholder = "What should the agent do?",
+                        placeholder = localized(Str.launch_placeholder),
                         chrome = composerChrome,
                         staging = ComposerStaging(
                             files = staged,
@@ -1447,12 +1459,12 @@ fun SessionLauncherScreen(
         Scaffold(
             topBar = {
                 TopAppBar(
-                    title = { Text("New session", color = cs.onSurface) },
+                    title = { Text(localized(Str.launch_new_session), color = cs.onSurface) },
                     navigationIcon = {
                         IconButton(onClick = onBack, modifier = Modifier.testTag("launcher_back")) {
                             Icon(
                                 Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back",
+                                contentDescription = localized(Str.launch_back),
                                 tint = cs.onSurface,
                                 modifier = Modifier.size(18.dp),
                             )
@@ -1528,7 +1540,7 @@ private fun LauncherHostPill(
             Text(current.shortLabel, color = cs.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1)
             Icon(
                 Icons.Filled.KeyboardArrowDown,
-                contentDescription = "Select host",
+                contentDescription = localized(Str.launch_select_host),
                 tint = cs.onSurfaceVariant,
                 modifier = Modifier.size(if (pointer) 14.dp else 12.dp),
             )
@@ -1546,7 +1558,7 @@ private fun LauncherHostPill(
                 Box(Modifier.testTag("launcher_host_${h.recordId}")) {
                     DropdownMenuItem(
                         leadingIcon = { HostDot(h.colorIndex, size = if (pointer) 9.dp else 10.dp) },
-                        text = { Text(h.displayLabel + if (!h.online) " (offline)" else "") },
+                        text = { Text(if (h.online) h.displayLabel else localized(Str.project_host_offline, h.displayLabel)) },
                         onClick = { onSelect(h.recordId); expanded = false },
                         modifier = Modifier.fillMaxWidth().testTag("launcher_host_item_${h.recordId}"),
                     )
@@ -1606,7 +1618,7 @@ private fun WorktreePicker(
 
     val bodyContent: @Composable () -> Unit = {
         Text(
-            "Worktree",
+            localized(Str.launch_worktree),
             color = cs.onSurface,
             fontWeight = FontWeight.SemiBold,
             fontSize = 15.sp,
@@ -1622,9 +1634,9 @@ private fun WorktreePicker(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Column(Modifier.weight(1f)) {
-                Text("Run in isolated worktree", color = cs.onSurface, fontSize = 14.sp)
+                Text(localized(Str.launch_isolated), color = cs.onSurface, fontSize = 14.sp)
                 Text(
-                    "Runs on a fresh branch cut from the base below, so your working copy stays untouched.",
+                    localized(Str.launch_isolated_hint),
                     color = cs.onSurfaceVariant,
                     fontSize = 12.sp,
                 )
@@ -1643,7 +1655,7 @@ private fun WorktreePicker(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Text("Base branch", color = cs.onSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                Text(localized(Str.launch_base_branch), color = cs.onSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                 if (loading) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(14.dp),
@@ -1655,7 +1667,7 @@ private fun WorktreePicker(
             OutlinedTextField(
                 value = search,
                 onValueChange = { search = it },
-                placeholder = { Text("Search branches", color = cs.onSurfaceVariant) },
+                placeholder = { Text(localized(Str.launch_search_branches), color = cs.onSurfaceVariant) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp).testTag("launcher_branch_search"),
             )
@@ -1663,9 +1675,9 @@ private fun WorktreePicker(
             if (filtered.isEmpty()) {
                 Text(
                     when {
-                        loading && allBranches.isEmpty() -> "Fetching…"
-                        allBranches.isEmpty() -> "No branches"
-                        else -> "No match"
+                        loading && allBranches.isEmpty() -> localized(Str.launch_fetching)
+                        allBranches.isEmpty() -> localized(Str.launch_no_branches)
+                        else -> localized(Str.launch_no_match)
                     },
                     color = cs.onSurfaceVariant,
                     fontSize = 13.sp,

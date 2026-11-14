@@ -1,19 +1,11 @@
 package dev.supermux.ui.keys
 
-import androidx.compose.runtime.Composable
 import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.StringKey
 import dev.supermux.ui.i18n.localized
 
 /** Where a command sits in the shortcuts list. */
-enum class CommandGroup(val title: String) {
-    General("General"),  // i18n-ok: English title; UI shows titleRes
-    Sessions("Sessions"),  // i18n-ok: English title; UI shows titleRes
-    Workspace("Workspace"),  // i18n-ok: English title; UI shows titleRes
-    Chat("Chat"),  // i18n-ok: English title; UI shows titleRes
-    Files("Files"),  // i18n-ok: English title; UI shows titleRes
-    Browser("Browser"),  // i18n-ok: English title; UI shows titleRes
-}
+enum class CommandGroup { General, Sessions, Workspace, Chat, Files, Browser }
 
 /**
  * Something the keyboard can do: a stable [id] that keys and handlers refer to, and a [title] for menus and the
@@ -23,52 +15,52 @@ data class AppCommand(val id: String, val title: String, val group: CommandGroup
 
 /** Every app command. A handler is registered with [RegisterCommand] by whatever owns the state it acts on. */
 object AppCommands {
-    val NewSession = AppCommand("session.new", "New session", CommandGroup.Sessions)  // i18n-ok: English title, search matches it; UI shows titleRes
-    val MoveToNewWindow = AppCommand("window.moveToNew", "Move to a new window", CommandGroup.Workspace)  // i18n-ok: English title, search matches it; UI shows titleRes
-    val NewTerminal = AppCommand("workspace.newTerminal", "New terminal tab", CommandGroup.Workspace)  // i18n-ok: English title, search matches it; UI shows titleRes
-    val ToggleSidebar = AppCommand("sidebar.toggle", "Show or hide the sidebar", CommandGroup.General)  // i18n-ok: English title, search matches it; UI shows titleRes
-    val GoToFile = AppCommand("files.goTo", "Go to file", CommandGroup.Files)  // i18n-ok: English title, search matches it; UI shows titleRes
+    val NewSession = AppCommand("session.new", "New session", CommandGroup.Sessions)  // i18n-ok: English title, search matches it; UI shows localizedTitle
+    val MoveToNewWindow = AppCommand("window.moveToNew", "Move to a new window", CommandGroup.Workspace)  // i18n-ok: English title, search matches it; UI shows localizedTitle
+    val NewTerminal = AppCommand("workspace.newTerminal", "New terminal tab", CommandGroup.Workspace)  // i18n-ok: English title, search matches it; UI shows localizedTitle
+    val ToggleSidebar = AppCommand("sidebar.toggle", "Show or hide the sidebar", CommandGroup.General)  // i18n-ok: English title, search matches it; UI shows localizedTitle
+    val GoToFile = AppCommand("files.goTo", "Go to file", CommandGroup.Files)  // i18n-ok: English title, search matches it; UI shows localizedTitle
     /** Find in the focused thing: a chat registers its find bar, and any other view (a browser page) its own. */
-    val Find = AppCommand("find", "Find", CommandGroup.General)  // i18n-ok: English title, search matches it; UI shows titleRes
+    val Find = AppCommand("find", "Find", CommandGroup.General)  // i18n-ok: English title, search matches it; UI shows localizedTitle
     /** The next and previous match of the open find (#122): what owns the find registers them. */
-    val FindNext = AppCommand("find.next", "Find next", CommandGroup.General)  // i18n-ok: English title, search matches it; UI shows titleRes
-    val FindPrevious = AppCommand("find.previous", "Find previous", CommandGroup.General)  // i18n-ok: English title, search matches it; UI shows titleRes
-    val OpenSettings = AppCommand("settings.open", "Settings", CommandGroup.General)  // i18n-ok: English title, search matches it; UI shows titleRes
-    val ShowShortcuts = AppCommand("shortcuts.show", "Keyboard shortcuts", CommandGroup.General)  // i18n-ok: English title, search matches it; UI shows titleRes
-    val PasteImage = AppCommand("composer.pasteImage", "Paste an image into the message", CommandGroup.Chat)  // i18n-ok: English title, search matches it; UI shows titleRes
-    val SplitRight = AppCommand("workspace.splitRight", "Split right (a new column)", CommandGroup.Workspace)  // i18n-ok: English title, search matches it; UI shows titleRes
-    val SplitDown = AppCommand("workspace.splitDown", "Split down (a new row)", CommandGroup.Workspace)  // i18n-ok: English title, search matches it; UI shows titleRes
-    val CloseTab = AppCommand("tab.close", "Close tab", CommandGroup.Workspace)  // i18n-ok: English title, search matches it; UI shows titleRes
+    val FindNext = AppCommand("find.next", "Find next", CommandGroup.General)  // i18n-ok: English title, search matches it; UI shows localizedTitle
+    val FindPrevious = AppCommand("find.previous", "Find previous", CommandGroup.General)  // i18n-ok: English title, search matches it; UI shows localizedTitle
+    val OpenSettings = AppCommand("settings.open", "Settings", CommandGroup.General)  // i18n-ok: English title, search matches it; UI shows localizedTitle
+    val ShowShortcuts = AppCommand("shortcuts.show", "Keyboard shortcuts", CommandGroup.General)  // i18n-ok: English title, search matches it; UI shows localizedTitle
+    val PasteImage = AppCommand("composer.pasteImage", "Paste an image into the message", CommandGroup.Chat)  // i18n-ok: English title, search matches it; UI shows localizedTitle
+    val SplitRight = AppCommand("workspace.splitRight", "Split right (a new column)", CommandGroup.Workspace)  // i18n-ok: English title, search matches it; UI shows localizedTitle
+    val SplitDown = AppCommand("workspace.splitDown", "Split down (a new row)", CommandGroup.Workspace)  // i18n-ok: English title, search matches it; UI shows localizedTitle
+    val CloseTab = AppCommand("tab.close", "Close tab", CommandGroup.Workspace)  // i18n-ok: English title, search matches it; UI shows localizedTitle
     /** Chrome's tab keys (#122): the next or previous tab of the pane last worked in, and its tab 1–8 or last (9). */
     /** The last closed Browser tab back, as Chrome's ⌘⇧T (#122). Off Apple its key stays New terminal in a terminal. */
-    val ReopenClosedTab = AppCommand("tab.reopenClosed", "Reopen closed tab", CommandGroup.Workspace)  // i18n-ok: English title, search matches it; UI shows titleRes
-    val TabNext = AppCommand("tab.next", "Next tab", CommandGroup.Workspace)  // i18n-ok: English title, search matches it; UI shows titleRes
-    val TabPrevious = AppCommand("tab.previous", "Previous tab", CommandGroup.Workspace)  // i18n-ok: English title, search matches it; UI shows titleRes
+    val ReopenClosedTab = AppCommand("tab.reopenClosed", "Reopen closed tab", CommandGroup.Workspace)  // i18n-ok: English title, search matches it; UI shows localizedTitle
+    val TabNext = AppCommand("tab.next", "Next tab", CommandGroup.Workspace)  // i18n-ok: English title, search matches it; UI shows localizedTitle
+    val TabPrevious = AppCommand("tab.previous", "Previous tab", CommandGroup.Workspace)  // i18n-ok: English title, search matches it; UI shows localizedTitle
     private val tabNumbers = (1..9).map { n ->
         AppCommand("tab.goTo$n", if (n == 9) "Go to the last tab" else "Go to tab $n", CommandGroup.Workspace)  // i18n-ok: English title, search matches it; UI shows localizedTitle
     }
 
     /** Tab [n] (1–8) of the pane, or its last tab for 9. */
     fun tabNumber(n: Int): AppCommand = tabNumbers[n - 1]
-    val BrowserFocusAddress = AppCommand("browser.focusAddress", "Focus the address bar", CommandGroup.Browser)  // i18n-ok: English title, search matches it; UI shows titleRes
-    val BrowserReload = AppCommand("browser.reload", "Reload the page", CommandGroup.Browser)  // i18n-ok: English title, search matches it; UI shows titleRes
-    val BrowserBack = AppCommand("browser.back", "Back", CommandGroup.Browser)  // i18n-ok: English title, search matches it; UI shows titleRes
-    val BrowserForward = AppCommand("browser.forward", "Forward", CommandGroup.Browser)  // i18n-ok: English title, search matches it; UI shows titleRes
-    val BrowserZoomIn = AppCommand("browser.zoomIn", "Zoom in", CommandGroup.Browser)  // i18n-ok: English title, search matches it; UI shows titleRes
-    val BrowserZoomOut = AppCommand("browser.zoomOut", "Zoom out", CommandGroup.Browser)  // i18n-ok: English title, search matches it; UI shows titleRes
-    val BrowserZoomReset = AppCommand("browser.zoomReset", "Actual size", CommandGroup.Browser)  // i18n-ok: English title, search matches it; UI shows titleRes
-    val BrowserOpenExternally = AppCommand("browser.openExternally", "Open in your browser", CommandGroup.Browser)  // i18n-ok: English title, search matches it; UI shows titleRes
+    val BrowserFocusAddress = AppCommand("browser.focusAddress", "Focus the address bar", CommandGroup.Browser)  // i18n-ok: English title, search matches it; UI shows localizedTitle
+    val BrowserReload = AppCommand("browser.reload", "Reload the page", CommandGroup.Browser)  // i18n-ok: English title, search matches it; UI shows localizedTitle
+    val BrowserBack = AppCommand("browser.back", "Back", CommandGroup.Browser)  // i18n-ok: English title, search matches it; UI shows localizedTitle
+    val BrowserForward = AppCommand("browser.forward", "Forward", CommandGroup.Browser)  // i18n-ok: English title, search matches it; UI shows localizedTitle
+    val BrowserZoomIn = AppCommand("browser.zoomIn", "Zoom in", CommandGroup.Browser)  // i18n-ok: English title, search matches it; UI shows localizedTitle
+    val BrowserZoomOut = AppCommand("browser.zoomOut", "Zoom out", CommandGroup.Browser)  // i18n-ok: English title, search matches it; UI shows localizedTitle
+    val BrowserZoomReset = AppCommand("browser.zoomReset", "Actual size", CommandGroup.Browser)  // i18n-ok: English title, search matches it; UI shows localizedTitle
+    val BrowserOpenExternally = AppCommand("browser.openExternally", "Open in your browser", CommandGroup.Browser)  // i18n-ok: English title, search matches it; UI shows localizedTitle
     /** ⌘T in a Browser tab: a new Browser tab beside it, as in Chrome (#122, Q1). New terminal everywhere else. */
-    val BrowserNewTab = AppCommand("browser.newTab", "New Browser tab", CommandGroup.Browser)  // i18n-ok: English title, search matches it; UI shows titleRes
+    val BrowserNewTab = AppCommand("browser.newTab", "New Browser tab", CommandGroup.Browser)  // i18n-ok: English title, search matches it; UI shows localizedTitle
     /** A picture of the page into the chat's composer, unsent (#122): only where a chat can take it. */
-    val BrowserScreenshot = AppCommand("browser.screenshot", "Send a screenshot to the chat", CommandGroup.Browser)  // i18n-ok: English title, search matches it; UI shows titleRes
+    val BrowserScreenshot = AppCommand("browser.screenshot", "Send a screenshot to the chat", CommandGroup.Browser)  // i18n-ok: English title, search matches it; UI shows localizedTitle
     /** The page at a phone's or tablet's size (#122 phase 2), DevTools' device toolbar. */
-    val BrowserDeviceMode = AppCommand("browser.deviceMode", "Device mode", CommandGroup.Browser)  // i18n-ok: English title, search matches it; UI shows titleRes
+    val BrowserDeviceMode = AppCommand("browser.deviceMode", "Device mode", CommandGroup.Browser)  // i18n-ok: English title, search matches it; UI shows localizedTitle
     /** Pick an element on the page and comment on it for an agent (#122 phase 3), DevTools' inspect-element chord. */
-    val BrowserPick = AppCommand("browser.pick", "Comment on the page", CommandGroup.Browser)  // i18n-ok: English title, search matches it; UI shows titleRes
-    val BrowserInspect = AppCommand("browser.inspect", "Inspect the page", CommandGroup.Browser)  // i18n-ok: English title, search matches it; UI shows titleRes
+    val BrowserPick = AppCommand("browser.pick", "Comment on the page", CommandGroup.Browser)  // i18n-ok: English title, search matches it; UI shows localizedTitle
+    val BrowserInspect = AppCommand("browser.inspect", "Inspect the page", CommandGroup.Browser)  // i18n-ok: English title, search matches it; UI shows localizedTitle
     /** Stops a page while it loads; on a loaded page it declines, so Esc stays the page's. */
-    val BrowserStop = AppCommand("browser.stop", "Stop loading", CommandGroup.Browser)  // i18n-ok: English title, search matches it; UI shows titleRes
+    val BrowserStop = AppCommand("browser.stop", "Stop loading", CommandGroup.Browser)  // i18n-ok: English title, search matches it; UI shows localizedTitle
 
     val all: List<AppCommand> = listOf(
         NewSession, MoveToNewWindow, NewTerminal, ToggleSidebar, GoToFile, Find, FindNext, FindPrevious,
@@ -78,25 +70,23 @@ object AppCommands {
     ) + tabNumbers
 }
 
-/** [group]'s heading in the app's language; [CommandGroup.title] stays the English one. */
-val CommandGroup.titleRes: StringKey
-    get() = when (this) {
+/** [group]'s heading in the app's language. */
+fun localizedTitle(group: CommandGroup): String = localized(
+    when (group) {
         CommandGroup.General -> Str.keys_group_general
         CommandGroup.Sessions -> Str.keys_group_sessions
         CommandGroup.Workspace -> Str.keys_group_workspace
         CommandGroup.Chat -> Str.keys_group_chat
         CommandGroup.Files -> Str.keys_group_files
         CommandGroup.Browser -> Str.keys_group_browser
-    }
-
-@Composable
-fun localizedTitle(group: CommandGroup): String = localized(group.titleRes)
+    },
+)
 
 /**
  * [cmd]'s title in the app's language, for menus and the shortcuts list. Its [AppCommand.title] stays English: Settings
  * search matches it. Null for the numbered tab commands, which take their number ([localizedTitle] words them).
  */
-fun commandTitleRes(cmd: AppCommand): StringKey? = when (cmd.id) {
+private fun commandTitleRes(cmd: AppCommand): StringKey? = when (cmd.id) {
     AppCommands.NewSession.id -> Str.keys_cmd_new_session
     AppCommands.MoveToNewWindow.id -> Str.keys_cmd_move_to_new_window
     AppCommands.NewTerminal.id -> Str.keys_cmd_new_terminal
@@ -132,7 +122,6 @@ fun commandTitleRes(cmd: AppCommand): StringKey? = when (cmd.id) {
 }
 
 /** [cmd]'s title in the app's language: what a menu or the shortcuts list shows. */
-@Composable
 fun localizedTitle(cmd: AppCommand): String {
     commandTitleRes(cmd)?.let { return localized(it) }
     val n = cmd.id.removePrefix("tab.goTo").toIntOrNull()

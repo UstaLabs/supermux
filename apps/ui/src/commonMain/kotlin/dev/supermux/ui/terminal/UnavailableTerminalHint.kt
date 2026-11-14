@@ -1,5 +1,7 @@
 package dev.supermux.ui.terminal
 
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.Str
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,7 +25,7 @@ fun UnavailableTerminalHint(modifier: Modifier = Modifier) {
         modifier.fillMaxSize().background(cs.surfaceVariant.copy(alpha = 0.4f)).testTag("terminal_unavailable"),
         contentAlignment = Alignment.Center,
     ) {
-        Text("This client has no terminal", color = cs.onSurfaceVariant, fontSize = 13.sp)
+        Text(localized(Str.terminal_unavailable), color = cs.onSurfaceVariant, fontSize = 13.sp)
     }
 }
 
@@ -60,7 +62,7 @@ fun TerminalLoadFailedHint(reason: String?, modifier: Modifier = Modifier) {
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
-                "The terminal engine didn't load",
+                localized(Str.terminal_engine_failed),
                 color = cs.onSurfaceVariant,
                 fontSize = 13.sp,
                 textAlign = TextAlign.Center,
@@ -75,7 +77,7 @@ fun TerminalLoadFailedHint(reason: String?, modifier: Modifier = Modifier) {
                 )
             }
             Text(
-                "Reloading the app picks up the current build.",
+                localized(Str.terminal_reload_hint),
                 color = cs.onSurfaceVariant.copy(alpha = 0.7f),
                 fontSize = 11.sp,
                 textAlign = TextAlign.Center,

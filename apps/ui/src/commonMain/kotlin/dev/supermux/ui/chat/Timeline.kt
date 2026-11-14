@@ -137,6 +137,7 @@ import dev.supermux.ui.platform.Platform
 import dev.supermux.ui.work.handOverAsTapped
 import dev.supermux.ui.work.saveDownload
 import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.platform.SavedFile
 import dev.supermux.ui.platform.SavedPlace
 import dev.supermux.ui.work.DownloadItemRing
@@ -173,7 +174,6 @@ import io.github.kdroidfilter.composemediaplayer.VideoPlayerSurface
 import io.github.kdroidfilter.composemediaplayer.rememberVideoPlayerState
 import dev.supermux.chat.previewFilename
 import dev.supermux.fs.fileNameOf
-import dev.supermux.ui.i18n.Str
 
 // ---------------------------------------------------------------------------
 // Reading width
@@ -291,7 +291,7 @@ fun AgentErrorMessage(
         Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
             Icon(
                 Icons.Outlined.ErrorOutline,
-                contentDescription = "Error",
+                contentDescription = localized(Str.chatline_error),
                 tint = cs.error,
                 modifier = Modifier.padding(top = markTop).size(markSize),
             )
@@ -351,7 +351,7 @@ private fun MessageMetaRow(text: String, ts: String?) {
         ) {
             Icon(
                 imageVector = if (copied) Icons.Filled.Check else Icons.Filled.ContentCopy,
-                contentDescription = if (copied) "Copied" else "Copy response",
+                contentDescription = if (copied) localized(Str.chatline_copied) else localized(Str.chatline_copy_response),
                 tint = if (copied) cs.primary else cs.onSurfaceVariant.copy(alpha = 0.65f),
                 modifier = Modifier.size(14.dp),
             )
@@ -365,7 +365,7 @@ private fun MessageMetaRow(text: String, ts: String?) {
             ) {
                 Icon(
                     imageVector = if (speaking) Icons.Filled.Stop else Icons.AutoMirrored.Filled.VolumeUp,
-                    contentDescription = if (speaking) "Stop reading" else "Read aloud",
+                    contentDescription = if (speaking) localized(Str.chatline_stop_reading) else localized(Str.chatline_read_aloud),
                     tint = if (speaking) cs.primary else cs.onSurfaceVariant.copy(alpha = 0.65f),
                     modifier = Modifier.size(14.dp),
                 )
@@ -410,7 +410,7 @@ fun UserMessage(
             ) {
                 if (fromCard != null) {
                     Text(
-                        "from $fromCard",
+                        localized(Str.chatline_from_card, fromCard),
                         style = MaterialTheme.typography.labelSmall,
                         color = cs.onSurfaceVariant,
                         maxLines = 1,
@@ -483,7 +483,7 @@ fun ToolCard(
     }
 
     val hasContent = !input.isNullOrBlank() || !output.isNullOrBlank()
-    val verb = toolLabel(toolName)
+    val verb = event.tool?.let(::toolLabel) ?: localized(Str.chatline_tool)
     val primary = event.description
         ?: event.title?.let { t -> event.tool?.let { t.removePrefix("$it: ") } ?: t }
 
@@ -530,7 +530,7 @@ fun ToolCard(
             }
             if (status == ToolStatus.ERROR) {
                 Text(
-                    text = "failed",
+                    text = localized(Str.chatline_tool_failed),
                     color = cs.error.copy(alpha = 0.8f),
                     style = MaterialTheme.typography.labelSmall,
                 )
@@ -598,11 +598,11 @@ private fun ToolTerminalPane(
 ) {
     val cs = MaterialTheme.colorScheme
     val statusLabel = when {
-        status == ToolStatus.RUNNING -> "running"
-        status == ToolStatus.ERROR && exitCode != null -> "exit $exitCode"
-        status == ToolStatus.ERROR -> "error"
-        exitCode != null -> "exit $exitCode"
-        else -> "done"
+        status == ToolStatus.RUNNING -> localized(Str.chatline_tool_running)
+        status == ToolStatus.ERROR && exitCode != null -> localized(Str.chatline_tool_exit, exitCode)
+        status == ToolStatus.ERROR -> localized(Str.chatline_tool_error)
+        exitCode != null -> localized(Str.chatline_tool_exit, exitCode)
+        else -> localized(Str.chatline_tool_done)
     }
     val statusColor = when (status) {
         ToolStatus.RUNNING -> cs.tertiary
@@ -632,7 +632,7 @@ private fun ToolTerminalPane(
             Text(" ●", color = Color(0xFFFEBC2E).copy(alpha = 0.85f), fontSize = 8.sp)
             Text(" ●", color = Color(0xFF28C840).copy(alpha = 0.85f), fontSize = 8.sp)
             Spacer(Modifier.width(Space.sm))
-            Text("terminal", color = Color(0xFFA1A1AA), fontSize = 11.sp)
+            Text(localized(Str.chatline_tool_terminal), color = Color(0xFFA1A1AA), fontSize = 11.sp)
             if (!description.isNullOrBlank()) {
                 Text(
                     text = description,
@@ -663,7 +663,7 @@ private fun ToolTerminalPane(
                     ToolCodeEditor(
                         text = command,
                         language = bash,
-                        label = "Command",
+                        label = localized(Str.chatline_tool_command),
                         theme = terminal,
                         toggleColor = Color(0xFF71717A),
                         maxLines = TERMINAL_COMMAND_LINES,
@@ -676,14 +676,14 @@ private fun ToolTerminalPane(
                 ToolCodeEditor(
                     text = output,
                     language = null,
-                    label = "Output",
+                    label = localized(Str.chatline_tool_output),
                     theme = if (status == ToolStatus.ERROR) terminal.copy(foreground = Color(0xFFFCA5A5)) else terminal,
                     toggleColor = Color(0xFF71717A),
                     tag = "tool_terminal_output",
                 )
-                if (truncated) Text("… truncated", color = Color(0xFF71717A), fontSize = 11.sp)
+                if (truncated) Text(localized(Str.chatline_tool_truncated), color = Color(0xFF71717A), fontSize = 11.sp)
             } else if (status == ToolStatus.RUNNING && command.isNullOrBlank()) {
-                Text("Running…", color = Color(0xFF71717A), fontSize = 11.sp)
+                Text(localized(Str.chatline_tool_running_now), color = Color(0xFF71717A), fontSize = 11.sp)
             }
         }
     }
@@ -704,15 +704,15 @@ private fun ToolDiffPane(
 ) {
     val cs = MaterialTheme.colorScheme
     val modeLabel = when (mode?.lowercase()) {
-        "add", "added" -> "added"
-        "delete", "deleted" -> "deleted"
-        "move", "renamed" -> "moved"
-        else -> "edited"
+        "add", "added" -> localized(Str.chatline_tool_added)
+        "delete", "deleted" -> localized(Str.chatline_tool_deleted)
+        "move", "renamed" -> localized(Str.chatline_tool_moved)
+        else -> localized(Str.chatline_tool_edited)
     }
     val statusLabel = when (status) {
-        ToolStatus.RUNNING -> "applying"
-        ToolStatus.ERROR -> "error"
-        ToolStatus.DONE -> "done"
+        ToolStatus.RUNNING -> localized(Str.chatline_tool_applying)
+        ToolStatus.ERROR -> localized(Str.chatline_tool_error)
+        ToolStatus.DONE -> localized(Str.chatline_tool_done)
     }
     val statusColor = when (status) {
         ToolStatus.RUNNING -> cs.tertiary
@@ -775,12 +775,12 @@ private fun ToolDiffPane(
                     modifier = Modifier.padding(end = Space.sm),
                 )
                 if (truncated) {
-                    Text("… truncated", color = cs.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.padding(horizontal = Space.sm))
+                    Text(localized(Str.chatline_tool_truncated), color = cs.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.padding(horizontal = Space.sm))
                 }
             }
         } else {
             Text(
-                text = if (status == ToolStatus.RUNNING) "Preparing edit…" else "No diff content",
+                text = if (status == ToolStatus.RUNNING) localized(Str.chatline_tool_preparing_edit) else localized(Str.chatline_tool_no_diff),
                 color = cs.onSurfaceVariant,
                 fontSize = 11.sp,
                 modifier = Modifier.padding(Space.sm),
@@ -985,7 +985,7 @@ private fun ReasoningCard(event: ActivityEvent) {
             horizontalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
             CircularProgressIndicator(Modifier.size(12.dp), color = cs.onSurfaceVariant, strokeWidth = 1.5.dp)
-            Text("Thinking…", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+            Text(localized(Str.chatline_thinking), style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
         }
         return
     }
@@ -999,7 +999,7 @@ private fun ReasoningCard(event: ActivityEvent) {
             .padding(vertical = 2.dp),
     ) {
         Text(
-            "Thinking…",
+            localized(Str.chatline_thinking),
             style = MaterialTheme.typography.labelMedium,
             color = cs.onSurfaceVariant,
         )
@@ -1019,7 +1019,7 @@ private fun PlanCard(event: ActivityEvent) {
     val cs = MaterialTheme.colorScheme
     val lines = event.detail.orEmpty().lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
     Column(Modifier.fillMaxWidth().testTag("activity-plan").padding(vertical = 2.dp)) {
-        Text(event.title ?: "Plan", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+        Text(event.title ?: localized(Str.chatline_plan), style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
         lines.forEachIndexed { i, line ->
             val text = line.replace(Regex("^(pending|completed|in_progress|failed):\\s*"), "")
             Text("${i + 1}. $text", style = MaterialTheme.typography.bodySmall, color = cs.onSurface)
@@ -1047,14 +1047,18 @@ private fun TaskCard(event: ActivityEvent) {
     ) {
         // The title gives way (#141): it wraps, up to two lines, and the status keeps its own width on one line.
         Text(
-            event.title ?: event.taskKind ?: "task",
+            event.title ?: event.taskKind ?: localized(Str.chatline_task),
             style = MaterialTheme.typography.labelMedium,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f, fill = false),
         )
         Text(
-            status,
+            when (status) {
+                "failed" -> localized(Str.chatline_task_failed)
+                "started" -> localized(Str.chatline_task_started)
+                else -> localized(Str.chatline_task_completed)
+            },
             style = MaterialTheme.typography.labelSmall,
             color = pillColor,
             maxLines = 1,
@@ -1079,7 +1083,7 @@ private fun WalkthroughReadyCard(text: String, onOpen: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(Space.xs),
     ) {
         Text(text, style = MaterialTheme.typography.titleSmall, color = cs.onPrimaryContainer)
-        Text("Open walkthrough →", style = MaterialTheme.typography.labelMedium, color = cs.primary)
+        Text(localized(Str.chatline_open_walkthrough), style = MaterialTheme.typography.labelMedium, color = cs.primary)
     }
 }
 
@@ -1166,7 +1170,7 @@ private fun AttachmentItem(
     }
     val isAudio = att.kind == "voice" || att.kind == "audio" || (att.mime ?: "").startsWith("audio/")
     val label = when {
-        isAudio -> att.name ?: "voice message"
+        isAudio -> att.name ?: localized(Str.chatline_media_voice_message)
         else -> att.name ?: att.file_id
     }
     val icon = when {
@@ -1193,7 +1197,7 @@ private fun InlineImageAttachment(
     onOpen: () -> Unit,
 ) {
     when (val image = rememberAttachmentImage(att, media)) {
-        AttachmentImage.Failed -> AttachmentFileCard(Icons.Filled.Image, att.name ?: "image", att, media)
+        AttachmentImage.Failed -> AttachmentFileCard(Icons.Filled.Image, att.name ?: localized(Str.chatline_media_image), att, media)
         AttachmentImage.Loading -> {
             val width = att.width
             val height = att.height
@@ -1222,7 +1226,7 @@ private fun InlineImageAttachment(
         ) { modifier, scale, alignment ->
             Image(
                 painter = image.decoded.painter,
-                contentDescription = att.name ?: "image",
+                contentDescription = att.name ?: localized(Str.chatline_media_image),
                 contentScale = scale,
                 alignment = alignment,
                 modifier = modifier,
@@ -1415,7 +1419,6 @@ internal fun ImageLightbox(
     val platform = LocalPlatform.current
     val pointer = LocalPointerAvailable.current
     val scope = rememberCoroutineScope()
-    val savedWords = rememberSavedWords()
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -1463,26 +1466,26 @@ internal fun ImageLightbox(
             ) {
                 LightboxButton(
                     icon = MediaIcons.ZoomOut,
-                    label = "Zoom out",
+                    label = localized(Str.chatline_media_zoom_out),
                     tag = "image_lightbox_zoom_out",
                     onClick = { transform.zoomBy(1f / LightboxTransform.STEP) },
                 )
                 LightboxButton(
                     icon = MediaIcons.ZoomIn,
-                    label = "Zoom in",
+                    label = localized(Str.chatline_media_zoom_in),
                     tag = "image_lightbox_zoom_in",
                     onClick = { transform.zoomBy(LightboxTransform.STEP) },
                 )
                 if (bytes != null) {
                     LightboxButton(
                         icon = MediaIcons.Save,
-                        label = "Download",
+                        label = localized(Str.chatline_media_download),
                         tag = "image_lightbox_download",
                         // Save, as the viewer's does (#95): on a phone it ran "open with".
                         onClick = {
                             scope.launch {
                                 saveAttachment(platform, pointer, name, mime, bytes)
-                                    ?.let { savedNotice(it, pointer, savedWords) }
+                                    ?.let { savedNotice(it, pointer) }
                                     ?.let(platform.notices::show)
                             }
                         },
@@ -1490,7 +1493,7 @@ internal fun ImageLightbox(
                 }
                 LightboxButton(
                     icon = MediaIcons.Close,
-                    label = "Close",
+                    label = localized(Str.chatline_media_close),
                     tag = "image_lightbox_close",
                     onClick = onDismiss,
                 )
@@ -1555,6 +1558,7 @@ internal fun InlineVideo(
     val download = rememberListedDownload(downloads, media.downloadKey(att))
     // Already in the store (#95: after a restart): ▶ plays it from there, with no ring.
     val stored = rememberStoredFile(media, att, download)
+    val cantOpen = localized(Str.chatline_media_cant_open)
 
     LaunchedEffect(att.file_id, playing) {
         if (!playing || uri != null || failed) return@LaunchedEffect
@@ -1574,7 +1578,7 @@ internal fun InlineVideo(
         .fillMaxWidth(Media.inlineVideoWidthFraction)
         .heightIn(max = Media.inlineVideoMaxHeight)
     when {
-        failed -> AttachmentFileCard(Icons.Filled.Movie, att.name ?: "video", att, media)
+        failed -> AttachmentFileCard(Icons.Filled.Movie, att.name ?: localized(Str.chatline_media_video), att, media)
         !playing -> Box(
             modifier = surface
                 .height(Media.inlineVideoMaxHeight)
@@ -1595,7 +1599,7 @@ internal fun InlineVideo(
             }
             Icon(
                 imageVector = MediaIcons.Play,
-                contentDescription = att.name ?: "Play video",
+                contentDescription = att.name ?: localized(Str.chatline_media_play_video),
                 tint = if (att.poster_file_id != null) VideoControls.Foreground else cs.onSurface,
                 modifier = Modifier.size(Sizes.videoPlayGlyph),
             )
@@ -1629,7 +1633,7 @@ internal fun InlineVideo(
                             if (startDownload(downloads, media, att, platform, pointer, origin = origin)) return@launch
                             // No download here (a preview): the staged bytes, else read them now.
                             val body = staged ?: runCatching { media.bytes(att) }.getOrNull()
-                            if (body != null) saveOrOpenAttachment(platform, pointer, att.name ?: "video", att.mime, body)
+                            if (body != null) saveOrOpenAttachment(platform, pointer, att.name ?: "video", att.mime, body, cantOpen)
                         }
                     }
                 },
@@ -1988,7 +1992,7 @@ internal fun VideoPlayerFrame(
             ) {
                 Icon(
                     imageVector = MediaIcons.Play,
-                    contentDescription = "Play",
+                    contentDescription = localized(Str.chatline_media_play),
                     tint = VideoControls.Foreground,
                     modifier = Modifier.size(Sizes.videoPlayGlyph).testTag("attachment_video_center_play"),
                 )
@@ -2055,7 +2059,7 @@ private fun VideoTransportBar(
     ) {
         VideoControlButton(
             icon = if (transport.isPlaying) MediaIcons.Pause else MediaIcons.Play,
-            label = if (transport.isPlaying) "Pause" else "Play",
+            label = if (transport.isPlaying) localized(Str.chatline_media_pause) else localized(Str.chatline_media_play),
             tag = "attachment_video_playpause",
             onClick = transport::togglePlay,
         )
@@ -2081,26 +2085,26 @@ private fun VideoTransportBar(
         VideoTimeLabel(transport.durationText, "attachment_video_duration")
         VideoControlButton(
             icon = if (transport.muted) MediaIcons.Muted else MediaIcons.Volume,
-            label = if (transport.muted) "Unmute" else "Mute",
+            label = if (transport.muted) localized(Str.chatline_media_unmute) else localized(Str.chatline_media_mute),
             tag = "attachment_video_mute",
             onClick = transport::toggleMute,
         )
         when (trailing) {
             VideoTrailing.External -> VideoControlButton(
                 icon = MediaIcons.OpenExternal,
-                label = "Open in system player",
+                label = localized(Str.chatline_media_open_system_player),
                 tag = "attachment_video_external",
                 onClick = transport::openExternally,
             )
             VideoTrailing.OpenViewer -> VideoControlButton(
                 icon = MediaIcons.Fullscreen,
-                label = "Open in viewer",
+                label = localized(Str.chatline_media_open_in_viewer),
                 tag = "attachment_video_expand",
                 onClick = transport::openExternally,
             )
             VideoTrailing.Fullscreen -> VideoControlButton(
                 icon = MediaIcons.Fullscreen,
-                label = "Full screen",
+                label = localized(Str.chatline_media_full_screen),
                 tag = "chat_media_viewer_fullscreen",
                 onClick = transport::toggleFullscreen,
             )
@@ -2214,10 +2218,12 @@ private fun AttachmentFileCard(
     val badge = remember(att.name, label) { fileBadgeLabel(att.name ?: label) }
     val family = remember(att.name, att.mime, label) { fileFamily(fileExtension(att.name ?: label), att.mime) }
     val meta = remember(att.name, att.mime, att.size, label) { fileMetaLine(att.name ?: label, att.mime, att.size) }
-    val savedWords = rememberSavedWords()
+    val cantOpen = localized(Str.chatline_media_cant_open)
+    val downloadFailed = localized(Str.chatline_media_download_failed)
+    val paused = localized(Str.chatline_media_paused)
     // What the phone says after a save; true when something was saved.
     fun saved(file: SavedFile?): Boolean {
-        file?.let { savedNotice(it, pointer, savedWords) }?.let(platform.notices::show)
+        file?.let { savedNotice(it, pointer) }?.let(platform.notices::show)
         return file != null
     }
     val canAct = !busy && !waiting && running == null
@@ -2263,7 +2269,7 @@ private fun AttachmentFileCard(
                 return@launch
             }
             if (save) saved(saveAttachment(platform, pointer, att.name ?: att.file_id, att.mime, bytes))
-            else saveOrOpenAttachment(platform, pointer, att.name ?: att.file_id, att.mime, bytes)
+            else saveOrOpenAttachment(platform, pointer, att.name ?: att.file_id, att.mime, bytes, cantOpen)
         }
     }
     Row(
@@ -2298,8 +2304,8 @@ private fun AttachmentFileCard(
             val state = download?.state
             val retry = failed || state is DownloadState.Failed
             val second = when {
-                retry -> "Download failed — tap to retry"
-                state == DownloadState.Cancelled -> "Paused"
+                retry -> downloadFailed
+                state == DownloadState.Cancelled -> paused
                 else -> meta
             }
             if (second.isNotEmpty()) {
@@ -2323,7 +2329,7 @@ private fun AttachmentFileCard(
             DownloadItemRing(item = shown, tag = "attachment_ring", busy = busy) {
                 Icon(
                     imageVector = MediaIcons.Save,
-                    contentDescription = "Download",
+                    contentDescription = localized(Str.chatline_media_download),
                     tint = cs.onSurfaceVariant,
                     modifier = Modifier.size(20.dp),
                 )
@@ -2458,28 +2464,13 @@ internal suspend fun saveAttachment(platform: Platform, pointer: Boolean, name: 
     return saved
 }
 
-/** What a phone says after a save, in the app's language: resolved in composition, used after the save returns. */
-internal class SavedWords(val photos: String, val gallery: String, val downloads: String, val chosen: (String) -> String)
-
-/** The phone's word for where [saved] went; null on a pointer host, which opens the file instead. */
-internal fun savedNotice(saved: SavedFile, pointer: Boolean, words: SavedWords): String? = when {
+/** The phone's word for where [saved] went, in the app's language; null on a pointer host, which opens the file instead. */
+internal fun savedNotice(saved: SavedFile, pointer: Boolean): String? = when {
     pointer -> null
-    saved.place == SavedPlace.Photos -> words.photos
-    saved.place == SavedPlace.Gallery -> words.gallery
-    saved.place == SavedPlace.Downloads -> words.downloads
-    else -> words.chosen(saved.name)
-}
-
-/** [SavedWords] in the app's language. */
-@Composable
-internal fun rememberSavedWords(): SavedWords {
-    val photos = localized(Str.saved_to_photos)
-    val gallery = localized(Str.saved_to_gallery)
-    val downloads = localized(Str.saved_to_downloads)
-    val chosen = localized(Str.saved_file, "%1\$s")
-    return remember(photos, gallery, downloads, chosen) {
-        SavedWords(photos, gallery, downloads) { name -> chosen.replace("%1\$s", name) }
-    }
+    saved.place == SavedPlace.Photos -> localized(Str.saved_to_photos)
+    saved.place == SavedPlace.Gallery -> localized(Str.saved_to_gallery)
+    saved.place == SavedPlace.Downloads -> localized(Str.saved_to_downloads)
+    else -> localized(Str.saved_file, saved.name)
 }
 
 /**
@@ -2496,6 +2487,8 @@ internal suspend fun saveOrOpenAttachment(
     name: String,
     mime: String?,
     bytes: ByteArray,
+    /** The notice when nothing can open it, in the app's language (resolved in composition). */
+    cantOpen: String? = null,
 ) {
     // Give the saved file an extension the host's viewer can identify, or a PDF/log downloaded
     // under a bare `file_id` opens as an unrecognised blob.
@@ -2506,6 +2499,7 @@ internal suspend fun saveOrOpenAttachment(
         return
     }
     if (!platform.files.openExternally(safeName, type, bytes)) {
-        platform.notices.show("Couldn't open attachment")
+        // i18n-ok: fallback for a caller outside the chat that passes no cantOpen
+        platform.notices.show(cantOpen ?: "Couldn't open attachment")
     }
 }

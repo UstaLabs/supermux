@@ -50,6 +50,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import dev.supermux.ui.accounts.limitWaitRowText
+import dev.supermux.ui.i18n.Plurals
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.localizedPlural
 import kotlin.time.Clock
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.input.pointer.PointerIcon
@@ -106,30 +110,10 @@ internal fun sessionRowPreview(entry: LogEntry?): String? {
     val (sender, said) = if (entry.council_id != null) {
         councilHeadAndBody(raw)
     } else {
-        (inboxSenderName(entry) ?: "Another session") to raw
+        (inboxSenderName(entry) ?: localized(Str.sessions_row_another_session)) to raw
     }
     val plain = sessionPreviewPlainText(noticePlainText(said))
     return (if (plain.isBlank()) sender else "$sender: $plain").take(80)
-}
-
-/**
- * Labels a session row's right-click / overflow menu offers, by lifecycle section.
- * Extracted so chrome tests can assert them without driving a real context menu (F3 precedent).
- */
-fun sessionRowContextLabels(
-    s: SessionInfo,
-    canMoveUp: Boolean = false,
-    canMoveDown: Boolean = false,
-): List<String> = when (s.sectionKey()) {
-    SectionKey.SETTLED -> listOf("Resume")
-    SectionKey.DRAFT -> listOf("Open draft", "Discard")
-    SectionKey.IN_PROGRESS -> buildList {
-        add("Rename")
-        add(if (s.mute == true) "Unmute" else "Mute")
-        if (canMoveUp) add("Move up")
-        if (canMoveDown) add("Move down")
-        add("Settle")
-    }
 }
 
 /**
@@ -158,6 +142,10 @@ fun PathGroupHeader(
     val hovered by interaction.collectIsHoveredAsState()
     val pointer = LocalPointerAvailable.current
     val muted = cs.onSurfaceVariant.copy(alpha = 0.7f)
+    val toggleLabel = localized(if (collapsed) Str.sessions_row_expand else Str.sessions_row_collapse)
+    val toggleDescription = localized(if (collapsed) Str.sessions_row_expand_named else Str.sessions_row_collapse_named, leaf)
+    val toggleState = localized(if (collapsed) Str.sessions_row_collapsed else Str.sessions_row_expanded)
+    val unreadDescription = localizedPlural(Plurals.sessions_list_unread_count, unreadCount, unreadCount)
     val clickable = if (onToggle != null) {
         Modifier
             .pointerHoverIcon(PointerIcon.Hand)
@@ -165,11 +153,11 @@ fun PathGroupHeader(
                 interactionSource = interaction,
                 indication = null,
                 role = Role.Button,
-                onClickLabel = if (collapsed) "Expand" else "Collapse",
+                onClickLabel = toggleLabel,
             ) { onToggle() }
             .semantics {
-                contentDescription = if (collapsed) "Expand $leaf" else "Collapse $leaf"
-                stateDescription = if (collapsed) "Collapsed" else "Expanded"
+                contentDescription = toggleDescription
+                stateDescription = toggleState
             }
     } else {
         Modifier
@@ -217,13 +205,13 @@ fun PathGroupHeader(
         if (unreadCount > 0) {
             // Hue is reserved for "working": a quiet count in the text colour.
             Text(
-                "$unreadCount new",
+                localized(Str.shell_unread_new, unreadCount),
                 color = cs.onSurface.copy(alpha = 0.75f),
                 fontSize = 10.5.sp,
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier
                     .testTag("group_unread_count")
-                    .semantics { contentDescription = "$unreadCount unread" },
+                    .semantics { contentDescription = unreadDescription },
             )
         } else if (workspaceCount > 0) {
             Text("$workspaceCount", color = muted, fontSize = 10.5.sp, fontFamily = MonoFontFamily)
@@ -307,13 +295,13 @@ fun NewSessionListRow(onClick: () -> Unit, modifier: Modifier = Modifier) {
         }
         Column(Modifier.weight(1f)) {
             Text(
-                "Start a new session",
+                localized(Str.sessions_row_start_new),
                 color = cs.onSurface,
                 fontWeight = FontWeight.Medium,
                 fontSize = 14.sp,
             )
             Text(
-                "Pick a project and send your first message",
+                localized(Str.sessions_row_start_new_hint),
                 color = cs.onSurfaceVariant,
                 fontSize = 11.sp,
             )
@@ -431,18 +419,26 @@ private fun PointerSessionRow(
             .clickable(onClick = onClick)
     }
 
+    val resumeWord = localized(Str.sessions_row_resume)
+    val openDraftWord = localized(Str.sessions_row_open_draft)
+    val discardWord = localized(Str.sessions_row_discard)
+    val renameWord = localized(Str.shell_rename)
+    val muteWord = localized(if (s.mute == true) Str.shell_unmute else Str.shell_mute)
+    val moveUpWord = localized(Str.sessions_row_move_up)
+    val moveDownWord = localized(Str.sessions_row_move_down)
+    val settleWord = localized(Str.sessions_row_settle)
     fun entries(): List<RowContextMenuEntry> = when (s.sectionKey()) {
-        SectionKey.SETTLED -> listOf(RowContextMenuEntry("Resume", onResume))
+        SectionKey.SETTLED -> listOf(RowContextMenuEntry(resumeWord, onResume))
         SectionKey.DRAFT -> listOf(
-            RowContextMenuEntry("Open draft", onClick),
-            RowContextMenuEntry("Discard", onKill),
+            RowContextMenuEntry(openDraftWord, onClick),
+            RowContextMenuEntry(discardWord, onKill),
         )
         SectionKey.IN_PROGRESS -> buildList {
-            add(RowContextMenuEntry("Rename", onRename))
-            add(RowContextMenuEntry(if (s.mute == true) "Unmute" else "Mute", onToggleMute))
-            onMoveUp?.let { add(RowContextMenuEntry("Move up", it)) }
-            onMoveDown?.let { add(RowContextMenuEntry("Move down", it)) }
-            add(RowContextMenuEntry("Settle", onKill))
+            add(RowContextMenuEntry(renameWord, onRename))
+            add(RowContextMenuEntry(muteWord, onToggleMute))
+            onMoveUp?.let { add(RowContextMenuEntry(moveUpWord, it)) }
+            onMoveDown?.let { add(RowContextMenuEntry(moveDownWord, it)) }
+            add(RowContextMenuEntry(settleWord, onKill))
         }
     }
 
@@ -532,7 +528,7 @@ private fun PointerSessionRow(
                         val badgeColor = if (waking) cs.primary else if (status == "suspended") Color(c.warning)
                         else cs.onSurfaceVariant.copy(alpha = 0.6f)
                         Spacer(Modifier.height(2.dp))
-                        Text(if (waking) "starting" else status, color = badgeColor, fontFamily = MonoFontFamily, fontSize = 10.sp)
+                        Text(if (waking) localized(Str.sessions_row_status_starting) else if (status == "suspended") localized(Str.sessions_row_status_suspended) else status, color = badgeColor, fontFamily = MonoFontFamily, fontSize = 10.sp)
                     } else {
                         Spacer(Modifier.height(Space.xs))
                     }

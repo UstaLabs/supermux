@@ -96,6 +96,8 @@ import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.TimelineItemRow
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.widgets.DropdownMenu
@@ -137,10 +139,10 @@ internal fun archivedRelTime(ts: String?, now: Long = Clock.System.now().toEpoch
     val epochMs = parseChatTs(ts) ?: return ""
     val diffSec = (now - epochMs) / 1000L
     return when {
-        diffSec < 60L -> "now"
-        diffSec < 3600L -> "${diffSec / 60}m"
-        diffSec < 86400L -> "${diffSec / 3600}h"
-        else -> "${diffSec / 86400}d"
+        diffSec < 60L -> localized(Str.archived_time_now)
+        diffSec < 3600L -> localized(Str.archived_time_minutes, diffSec / 60)
+        diffSec < 86400L -> localized(Str.archived_time_hours, diffSec / 3600)
+        else -> localized(Str.archived_time_days, diffSec / 86400)
     }
 }
 
@@ -452,7 +454,7 @@ private fun ArchivedList(
     val filterMenu: @Composable () -> Unit = {
         DropdownMenu(expanded = filterOpen, onDismissRequest = { onFilterOpenChange(false) }) {
             DropdownMenuItem(
-                text = { Text("All projects") },
+                text = { Text(localized(Str.archived_all_projects)) },
                 onClick = { onSelectProject(null); onFilterOpenChange(false) },
                 trailingIcon = if (selectedProject == null) {
                     { Icon(Icons.Filled.Check, contentDescription = null) }
@@ -494,7 +496,7 @@ private fun ArchivedList(
                         .padding(horizontal = Space.lg, vertical = Space.md),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("Archived", color = cs.onSurface, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Text(localized(Str.archived_title), color = cs.onSurface, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.weight(1f))
                     if (filterReady) {
                         Box {
@@ -509,7 +511,7 @@ private fun ArchivedList(
                             ) {
                                 Icon(
                                     Icons.Filled.FilterList,
-                                    contentDescription = "Filter by project",
+                                    contentDescription = localized(Str.archived_filter),
                                     tint = if (selectedProject != null) cs.primary else cs.onSurfaceVariant,
                                     modifier = Modifier.size(16.dp),
                                 )
@@ -517,7 +519,7 @@ private fun ArchivedList(
                                     selectedProject?.let { key ->
                                         (if (useWorkspaces) groups.firstOrNull { it.key == key }?.label
                                         else projects.firstOrNull { it.key == key }?.label)
-                                    } ?: "All projects",
+                                    } ?: localized(Str.archived_all_projects),
                                     color = if (selectedProject != null) cs.primary else cs.onSurfaceVariant,
                                     fontSize = 13.sp,
                                     maxLines = 1,
@@ -541,7 +543,7 @@ private fun ArchivedList(
                     value = query,
                     onValueChange = onQueryChange,
                     singleLine = true,
-                    placeholder = { Text("Search archived…", color = cs.onSurfaceVariant) },
+                    placeholder = { Text(localized(Str.archived_search), color = cs.onSurfaceVariant) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = Space.lg)
@@ -554,7 +556,7 @@ private fun ArchivedList(
             Box(Modifier.fillMaxSize()) {
                 when {
                     useWorkspaces && groups.isEmpty() -> Text(
-                        "No archived workspaces.",
+                        localized(Str.archived_no_workspaces),
                         color = cs.onSurfaceVariant,
                         modifier = Modifier.align(Alignment.Center),
                     )
@@ -606,12 +608,12 @@ private fun ArchivedList(
                         modifier = Modifier.align(Alignment.Center),
                     )
                     archived.isEmpty() -> Text(
-                        "No archived sessions.",
+                        localized(Str.archived_no_sessions),
                         color = cs.onSurfaceVariant,
                         modifier = Modifier.align(Alignment.Center),
                     )
                     visible.isEmpty() -> Text(
-                        "No matches.",
+                        localized(Str.archived_no_matches),
                         color = cs.onSurfaceVariant,
                         modifier = Modifier.align(Alignment.Center),
                     )
@@ -636,12 +638,12 @@ private fun ArchivedList(
         Scaffold(
             topBar = {
                 TopAppBar(
-                    title = { Text("Archived", color = cs.onSurface) },
+                    title = { Text(localized(Str.archived_title), color = cs.onSurface) },
                     navigationIcon = {
                         IconButton(onClick = onBack, modifier = Modifier.testTag("archived_back")) {
                             Icon(
                                 Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back",
+                                contentDescription = localized(Str.archived_back),
                                 tint = cs.onSurface,
                             )
                         }
@@ -655,7 +657,7 @@ private fun ArchivedList(
                                 ) {
                                     Icon(
                                         Icons.Filled.FilterList,
-                                        contentDescription = "Filter by project",
+                                        contentDescription = localized(Str.archived_filter),
                                         tint = if (selectedProject != null) cs.primary else cs.onSurface,
                                     )
                                 }
@@ -716,7 +718,7 @@ private fun ArchivedRow(
                     .testTag("archived_row_resume_${session.id}"),
             ) {
                 Text(
-                    if (resumed) "Resumed" else "Resume",
+                    localized(if (resumed) Str.archived_resumed else Str.archived_resume),
                     color = if (resumed) cs.onSurfaceVariant else cs.primary,
                     fontSize = 13.sp,
                 )
@@ -752,7 +754,7 @@ private fun ArchivedWorkspaceRow(
             )
             val ended = archivedRelTime(workspace.archivedAt)
             if (ended.isNotEmpty()) {
-                Text("Archived $ended", color = cs.onSurfaceVariant, fontSize = 10.sp)
+                Text(localized(Str.archived_ended, ended), color = cs.onSurfaceVariant, fontSize = 10.sp)
             }
         }
         TextButton(
@@ -763,7 +765,7 @@ private fun ArchivedWorkspaceRow(
                 .testTag("archived_restore_${workspace.id}"),
         ) {
             Text(
-                if (restored) "Restored" else "Restore",
+                localized(if (restored) Str.archived_restored else Str.archived_restore),
                 color = if (restored) cs.onSurfaceVariant else cs.primary,
                 fontSize = 13.sp,
             )
@@ -802,7 +804,7 @@ internal fun ArchivedChatView(
     val resumeButton: @Composable () -> Unit = {
         TextButton(onClick = onResume, enabled = !resumed, modifier = Modifier.testTag("archived_resume")) {
             Text(
-                if (resumed) "Resumed" else "Resume",
+                localized(if (resumed) Str.archived_resumed else Str.archived_resume),
                 color = if (resumed) cs.onSurfaceVariant else cs.primary,
                 fontSize = 13.sp,
             )
@@ -817,7 +819,7 @@ internal fun ArchivedChatView(
                     modifier = Modifier.align(Alignment.Center),
                 )
                 messages.isEmpty() -> Text(
-                    "No messages.",
+                    localized(Str.archived_no_messages),
                     color = cs.onSurfaceVariant,
                     modifier = Modifier.align(Alignment.Center),
                 )
@@ -845,14 +847,14 @@ internal fun ArchivedChatView(
                     title = {
                         Column {
                             Text(name, color = cs.onSurface, fontSize = 16.sp, maxLines = 1)
-                            Text("archived", color = cs.onSurfaceVariant, fontSize = 11.sp)
+                            Text(localized(Str.archived_label), color = cs.onSurfaceVariant, fontSize = 11.sp)
                         }
                     },
                     navigationIcon = {
                         IconButton(onClick = onBack, modifier = Modifier.testTag("archived_chat_back")) {
                             Icon(
                                 Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back",
+                                contentDescription = localized(Str.archived_back),
                                 tint = cs.onSurface,
                             )
                         }
@@ -875,7 +877,7 @@ internal fun ArchivedChatView(
                 IconButton(onClick = onBack, modifier = Modifier.testTag("archived_chat_back")) {
                     Icon(
                         Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
+                        contentDescription = localized(Str.archived_back),
                         tint = cs.onSurface,
                         modifier = Modifier.size(18.dp),
                     )
@@ -883,7 +885,7 @@ internal fun ArchivedChatView(
                 Spacer(Modifier.width(Space.sm))
                 Column(Modifier.weight(1f)) {
                     Text(name, color = cs.onSurface, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                    Text("archived", color = cs.onSurfaceVariant, fontSize = 11.sp)
+                    Text(localized(Str.archived_label), color = cs.onSurfaceVariant, fontSize = 11.sp)
                 }
                 resumeButton()
             }

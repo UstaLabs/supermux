@@ -32,18 +32,17 @@ class SaveAttachmentTest {
         assertEquals(listOf(SavedFile("notes.txt", "/fake/notes.txt")), platform.files.openedSaved)
     }
 
-    private val words = SavedWords(photos = "Saved to Photos", gallery = "Saved to Gallery", downloads = "Saved to Downloads", chosen = { "Saved $it" })
 
     @Test fun aPhoneSaysWhereItWent() {
-        assertEquals("Saved to Photos", savedNotice(SavedFile("a.jpg", "x", SavedPlace.Photos), pointer = false, words))
-        assertEquals("Saved to Gallery", savedNotice(SavedFile("a.mp4", "x", SavedPlace.Gallery), pointer = false, words))
-        assertEquals("Saved to Downloads", savedNotice(SavedFile("a.pdf", "x", SavedPlace.Downloads), pointer = false, words))
-        assertEquals("Saved a.pdf", savedNotice(SavedFile("a.pdf", "x"), pointer = false, words))
+        assertEquals("Saved to Photos", savedNotice(SavedFile("a.jpg", "x", SavedPlace.Photos), pointer = false))
+        assertEquals("Saved to Gallery", savedNotice(SavedFile("a.mp4", "x", SavedPlace.Gallery), pointer = false))
+        assertEquals("Saved to Downloads", savedNotice(SavedFile("a.pdf", "x", SavedPlace.Downloads), pointer = false))
+        assertEquals("Saved a.pdf", savedNotice(SavedFile("a.pdf", "x"), pointer = false))
     }
 
     // A pointer host opens the saved file: that is its confirmation.
     @Test fun aPointerHostSaysNothing() {
-        assertNull(savedNotice(SavedFile("a.pdf", "x", SavedPlace.Downloads), pointer = true, words))
+        assertNull(savedNotice(SavedFile("a.pdf", "x", SavedPlace.Downloads), pointer = true))
     }
 
     // What goes to the gallery: pictures and videos it can show. SVG is a document there.

@@ -20,23 +20,26 @@ import dev.supermux.chat.isRedactedReasoning
 import dev.supermux.fs.pathLeaf
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.ActivityToolBody
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.theme.Space
 
 // Maps the broker's tool rows (ActivityEvent + its result) onto ToolCallData. The broker titles a
 // row "Tool: summary" and carries the agent's own "why" in [ActivityEvent.description] when there
 // is one (Claude fills it for most Bash calls), so that wins as the title.
 
+
 // Monochrome glyphs in the text colour, as on uiarc; only the mcp server name varies.
 private fun toolMark(tool: String): ToolMark = when {
     tool.startsWith("mcp__") -> ToolMark(tool.removePrefix("mcp__").substringBefore("__"), Icons.Outlined.Extension)
-    tool == "Bash" || tool == "BashOutput" || tool == "KillShell" -> ToolMark("Terminal", Icons.Outlined.Terminal)
-    tool == "Read" -> ToolMark("Read", Icons.Outlined.Description)
-    tool == "Edit" || tool == "Write" || tool == "MultiEdit" || tool == "NotebookEdit" -> ToolMark("Edit", Icons.Outlined.Edit)
-    tool == "Grep" || tool == "Glob" || tool == "ToolSearch" -> ToolMark("Search", Icons.Outlined.Search)
-    tool == "WebFetch" || tool == "WebSearch" -> ToolMark("Web", Icons.Outlined.Public)
-    tool == "Agent" || tool == "Task" || tool == "SendMessage" -> ToolMark("Agent", Icons.Outlined.SmartToy)
-    tool == "Skill" -> ToolMark("Skill", Icons.Outlined.AutoAwesome)
-    tool.startsWith("Cron") || tool == "ScheduleWakeup" -> ToolMark("Schedule", Icons.Outlined.Schedule)
+    tool == "Bash" || tool == "BashOutput" || tool == "KillShell" -> ToolMark(localized(Str.chatline_tool_mark_terminal), Icons.Outlined.Terminal)
+    tool == "Read" -> ToolMark(localized(Str.chatline_tool_mark_read), Icons.Outlined.Description)
+    tool == "Edit" || tool == "Write" || tool == "MultiEdit" || tool == "NotebookEdit" -> ToolMark(localized(Str.chatline_tool_mark_edit), Icons.Outlined.Edit)
+    tool == "Grep" || tool == "Glob" || tool == "ToolSearch" -> ToolMark(localized(Str.chatline_tool_mark_search), Icons.Outlined.Search)
+    tool == "WebFetch" || tool == "WebSearch" -> ToolMark(localized(Str.chatline_tool_mark_web), Icons.Outlined.Public)
+    tool == "Agent" || tool == "Task" || tool == "SendMessage" -> ToolMark(localized(Str.chatline_tool_mark_agent), Icons.Outlined.SmartToy)
+    tool == "Skill" -> ToolMark(localized(Str.chatline_tool_mark_skill), Icons.Outlined.AutoAwesome)
+    tool.startsWith("Cron") || tool == "ScheduleWakeup" -> ToolMark(localized(Str.chatline_tool_mark_schedule), Icons.Outlined.Schedule)
     else -> ToolMark(tool)
 }
 
@@ -63,24 +66,26 @@ private fun phrases(tool: String, arg: String): Pair<String, String> {
         a.isEmpty() -> tool to tool
         else -> when (tool) {
             "Bash" -> stripCd(a).let { it to it }
-            "Read" -> "Read ${baseName(a)}" to "Reading ${baseName(a)}"
-            "Edit", "MultiEdit" -> "Edited ${baseName(a)}" to "Editing ${baseName(a)}"
-            "Write" -> "Wrote ${baseName(a)}" to "Writing ${baseName(a)}"
-            "Grep" -> "Searched for $a" to "Searching for $a"
-            "Glob" -> "Listed $a" to "Listing $a"
-            "WebFetch" -> "Fetched ${host(a)}" to "Fetching ${host(a)}"
-            "WebSearch" -> "Searched the web for $a" to "Searching the web for $a"
+            "Read" -> localized(Str.chatline_tool_read, baseName(a)) to localized(Str.chatline_tool_reading, baseName(a))
+            "Edit", "MultiEdit" -> localized(Str.chatline_tool_edited_file, baseName(a)) to localized(Str.chatline_tool_editing_file, baseName(a))
+            "Write" -> localized(Str.chatline_tool_wrote, baseName(a)) to localized(Str.chatline_tool_writing, baseName(a))
+            "Grep" -> localized(Str.chatline_tool_searched_for, a) to localized(Str.chatline_tool_searching_for, a)
+            "Glob" -> localized(Str.chatline_tool_listed, a) to localized(Str.chatline_tool_listing, a)
+            "WebFetch" -> localized(Str.chatline_tool_fetched, host(a)) to localized(Str.chatline_tool_fetching, host(a))
+            "WebSearch" -> localized(Str.chatline_tool_searched_web, a) to localized(Str.chatline_tool_searching_web, a)
             "ToolSearch" -> if (a.startsWith("select:")) {
-                "Loaded " + a.removePrefix("select:").split(",").joinToString(", ") { it.substringAfterLast("__") } to "Loading tools"
-            } else "Searched tools for $a" to "Searching tools"
-            "Skill" -> "Used skill $a" to "Loading skill $a"
+                localized(Str.chatline_tool_loaded, a.removePrefix("select:").split(",").joinToString(", ") { it.substringAfterLast("__") }) to localized(Str.chatline_tool_loading_tools)
+            } else localized(Str.chatline_tool_searched_tools, a) to localized(Str.chatline_tool_searching_tools)
+            "Skill" -> localized(Str.chatline_tool_used_skill, a) to localized(Str.chatline_tool_loading_skill, a)
             else -> "$tool $a" to "$tool $a"
         }
     }
 }
 
-/** Converts one broker tool row. [durationMs] is optional: the timeline does not carry it today. */
-fun ActivityEvent.toToolCallData(
+/**
+ * Converts one broker tool row, in the app's language. [durationMs] is optional: the timeline does not carry it today.
+ */
+internal fun ActivityEvent.toToolCallData(
     status: ToolStatus,
     output: String? = null,
     resultBody: ActivityToolBody? = null,
@@ -121,8 +126,8 @@ fun ActivityEvent.toToolCallData(
         output = out,
         summary = when {
             failed -> null
-            resultBody?.exitCode?.let { it != 0 } == true -> "exit ${resultBody.exitCode}"
-            lines > 1 -> "$lines lines"
+            resultBody?.exitCode?.let { it != 0 } == true -> localized(Str.chatline_tool_exit, resultBody.exitCode ?: 0)
+            lines > 1 -> localized(Str.chatline_tool_lines, lines)
             else -> null
         },
         message = if (failed) outText?.lineSequence()?.firstOrNull { it.isNotBlank() }?.take(200) else null,
@@ -186,6 +191,7 @@ internal fun shownTail(size: Int, runs: Map<Int, ToolRun>): Pair<Int, Int> {
 /** One run of tool rows as a group; [active] while the agent is still in it (the run ends the timeline). */
 @Composable
 internal fun ToolRunGroup(tools: List<TimelineItem.Tool>, active: Boolean) {
-    val calls = remember(tools) { tools.map { it.event.toToolCallData(it.status, it.output, it.resultBody) } }
+    // The language is a key: a change re-words the rows.
+    val calls = remember(tools, localized(Str.chatline_tool_read)) { tools.map { it.event.toToolCallData(it.status, it.output, it.resultBody) } }
     ToolCallGroup(calls, active = active, modifier = Modifier.padding(vertical = Space.xs))
 }

@@ -4,6 +4,8 @@
 // sites gate it on `LocalInputMode == Touch` (a mouse-driven client has the real keys).
 package dev.supermux.ui.terminal
 
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.Str
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -167,18 +169,18 @@ fun TerminalKeyBar(
                 .background(cs.outlineVariant),
         )
         if (onPaste != null) {
-            KeyIconButton(icon = Icons.Filled.ContentPaste, contentDescription = "Paste", tag = "terminal_key_paste") {
+            KeyIconButton(icon = Icons.Filled.ContentPaste, contentDescription = localized(Str.composer_attach_paste), tag = "terminal_key_paste") {
                 haptic.perform(HapticKind.Tick)
                 onPaste()
             }
         }
         if (onFind != null) {
-            KeyIconButton(icon = Icons.Filled.Search, contentDescription = "Find", tag = "terminal_key_find") {
+            KeyIconButton(icon = Icons.Filled.Search, contentDescription = localized(Str.keys_cmd_find), tag = "terminal_key_find") {
                 haptic.perform(HapticKind.Tick)
                 onFind()
             }
         }
-        KeyIconButton(icon = Icons.Filled.KeyboardHide, contentDescription = "Hide keyboard") {
+        KeyIconButton(icon = Icons.Filled.KeyboardHide, contentDescription = localized(Str.terminal_hide_keyboard)) {
             haptic.perform(HapticKind.Tick)
             onHideKeyboard()
         }

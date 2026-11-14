@@ -106,99 +106,96 @@ import kotlinx.coroutines.launch
 @Immutable
 data class PairTimings(val ttlMs: Long = 10 * 60_000L, val pollMs: Long = 2_000L)
 
-/**
- * The prototype's copy for the machine's own parts, in the app's language (resources `machine_*`). [seen] keeps the
- * English the tests assert (the page shows [seenText]); [updated] stays plain for callers inside a `remember`.
- */
+/** The prototype's copy for the machine's own parts, in the app's language (resources `machine_*`); English in tests. */
 object MachinePartsCopy {
-    val DEVICES: String @Composable get() = localized(Str.machine_devices)
-    val THIS_DEVICE: String @Composable get() = localized(Str.machine_this_device)
-    val REVOKE: String @Composable get() = localized(Str.machine_revoke)
-    val RENAME: String @Composable get() = localized(Str.machine_rename)
-    val RENAME_SAVE: String @Composable get() = localized(Str.machine_rename_save)
-    val SAVING: String @Composable get() = localized(Str.machine_saving)
-    val RENAME_TITLE: String @Composable get() = localized(Str.machine_rename_title)
-    val NAME_TAKEN: String @Composable get() = localized(Str.machine_name_taken)
+    val DEVICES: String get() = localized(Str.machine_devices)
+    val THIS_DEVICE: String get() = localized(Str.machine_this_device)
+    val REVOKE: String get() = localized(Str.machine_revoke)
+    val RENAME: String get() = localized(Str.machine_rename)
+    val RENAME_SAVE: String get() = localized(Str.machine_rename_save)
+    val SAVING: String get() = localized(Str.machine_saving)
+    val RENAME_TITLE: String get() = localized(Str.machine_rename_title)
+    val NAME_TAKEN: String get() = localized(Str.machine_name_taken)
     /** The broker's limit on a device's name (#97). */
     const val DEVICE_NAME_MAX = 40
-    val NAME_TOO_LONG: String @Composable get() = localized(Str.machine_name_too_long, DEVICE_NAME_MAX)
-    val REVOKING: String @Composable get() = localized(Str.machine_revoking)
-    val PAIR: String @Composable get() = localized(Str.machine_pair)
-    val PAIR_HELP: String @Composable get() = localized(Str.machine_pair_help)
-    val PAIR_NOTE: String @Composable get() = localized(Str.machine_pair_note)
-    val NEW_CODE: String @Composable get() = localized(Str.machine_new_code)
-    val COPY_LINK: String @Composable get() = localized(Str.machine_copy_link)
-    val COPIED: String @Composable get() = localized(Str.machine_copied)
-    val DONE: String @Composable get() = localized(Str.machine_done)
-    val CANCEL: String @Composable get() = localized(Str.machine_cancel)
-    val TRY_AGAIN: String @Composable get() = localized(Str.machine_try_again)
-    val MAKING_CODE: String @Composable get() = localized(Str.machine_making_code)
-    val CODE_EXPIRED: String @Composable get() = localized(Str.machine_code_expired)
-    val LOADING: String @Composable get() = localized(Str.machine_loading)
-    val NO_DEVICES: String @Composable get() = localized(Str.machine_no_devices)
-    val DEVICES_FAILED: String @Composable get() = localized(Str.machine_devices_failed)
+    val NAME_TOO_LONG: String get() = localized(Str.machine_name_too_long, DEVICE_NAME_MAX)
+    val REVOKING: String get() = localized(Str.machine_revoking)
+    val PAIR: String get() = localized(Str.machine_pair)
+    val PAIR_HELP: String get() = localized(Str.machine_pair_help)
+    val PAIR_NOTE: String get() = localized(Str.machine_pair_note)
+    val NEW_CODE: String get() = localized(Str.machine_new_code)
+    val COPY_LINK: String get() = localized(Str.machine_copy_link)
+    val COPIED: String get() = localized(Str.machine_copied)
+    val DONE: String get() = localized(Str.machine_done)
+    val CANCEL: String get() = localized(Str.machine_cancel)
+    val TRY_AGAIN: String get() = localized(Str.machine_try_again)
+    val MAKING_CODE: String get() = localized(Str.machine_making_code)
+    val CODE_EXPIRED: String get() = localized(Str.machine_code_expired)
+    val LOADING: String get() = localized(Str.machine_loading)
+    val NO_DEVICES: String get() = localized(Str.machine_no_devices)
+    val DEVICES_FAILED: String get() = localized(Str.machine_devices_failed)
 
     /** The name a code's device carries until it is renamed: pairing asks for none (§13). Sent to the broker as is. */
     const val PAIR_DEVICE_NAME = "New device" // i18n-ok: a device's stored name, the broker's data
 
-    val LINKS: String @Composable get() = localized(Str.machine_links)
-    val SHARE: String @Composable get() = localized(Str.machine_share)
-    val SHARE_HELP: String @Composable get() = localized(Str.machine_share_help)
-    val LINKS_NOTE: String @Composable get() = localized(Str.machine_links_note)
-    val LINKS_FAILED: String @Composable get() = localized(Str.machine_links_failed)
-    val PRIVATE: String @Composable get() = localized(Str.machine_link_private)
-    val PUBLIC: String @Composable get() = localized(Str.machine_link_public)
-    val OPEN: String @Composable get() = localized(Str.machine_open)
-    val MORE: String @Composable get() = localized(Str.machine_more)
-    val MAKE_PUBLIC_MENU: String @Composable get() = localized(Str.machine_make_public_menu)
-    val MAKE_PRIVATE: String @Composable get() = localized(Str.machine_make_private)
-    val REMOVE_MENU: String @Composable get() = localized(Str.machine_remove_menu)
-    val MAKE_PUBLIC: String @Composable get() = localized(Str.machine_make_public)
-    val REMOVE: String @Composable get() = localized(Str.machine_remove)
-    val SHARE_TITLE: String @Composable get() = localized(Str.machine_share_title)
-    val CHAT: String @Composable get() = localized(Str.machine_chat)
-    val PORT: String @Composable get() = localized(Str.machine_port)
-    val NAME: String @Composable get() = localized(Str.machine_name)
-    val PORT_ERROR: String @Composable get() = localized(Str.machine_port_error)
-    val NAME_HINT: String @Composable get() = localized(Str.machine_name_hint)
-    val NAME_PLACEHOLDER: String @Composable get() = localized(Str.machine_name_placeholder)
-    val SHARE_GO: String @Composable get() = localized(Str.machine_share_go)
-    val SHARING: String @Composable get() = localized(Str.machine_sharing)
-    val NO_CHATS: String @Composable get() = localized(Str.machine_no_chats)
-    val WORKING: String @Composable get() = localized(Str.machine_working)
+    val LINKS: String get() = localized(Str.machine_links)
+    val SHARE: String get() = localized(Str.machine_share)
+    val SHARE_HELP: String get() = localized(Str.machine_share_help)
+    val LINKS_NOTE: String get() = localized(Str.machine_links_note)
+    val LINKS_FAILED: String get() = localized(Str.machine_links_failed)
+    val PRIVATE: String get() = localized(Str.machine_link_private)
+    val PUBLIC: String get() = localized(Str.machine_link_public)
+    val OPEN: String get() = localized(Str.machine_open)
+    val MORE: String get() = localized(Str.machine_more)
+    val MAKE_PUBLIC_MENU: String get() = localized(Str.machine_make_public_menu)
+    val MAKE_PRIVATE: String get() = localized(Str.machine_make_private)
+    val REMOVE_MENU: String get() = localized(Str.machine_remove_menu)
+    val MAKE_PUBLIC: String get() = localized(Str.machine_make_public)
+    val REMOVE: String get() = localized(Str.machine_remove)
+    val SHARE_TITLE: String get() = localized(Str.machine_share_title)
+    val CHAT: String get() = localized(Str.machine_chat)
+    val PORT: String get() = localized(Str.machine_port)
+    val NAME: String get() = localized(Str.machine_name)
+    val PORT_ERROR: String get() = localized(Str.machine_port_error)
+    val NAME_HINT: String get() = localized(Str.machine_name_hint)
+    val NAME_PLACEHOLDER: String get() = localized(Str.machine_name_placeholder)
+    val SHARE_GO: String get() = localized(Str.machine_share_go)
+    val SHARING: String get() = localized(Str.machine_sharing)
+    val NO_CHATS: String get() = localized(Str.machine_no_chats)
+    val WORKING: String get() = localized(Str.machine_working)
 
-    val LIMITS: String @Composable get() = localized(Str.machine_limits)
-    val REFRESH: String @Composable get() = localized(Str.machine_refresh)
-    val REFRESHING: String @Composable get() = localized(Str.machine_refreshing)
-    val OPEN_USAGE: String @Composable get() = localized(Str.machine_open_usage)
-    val NO_LIMITS: String @Composable get() = localized(Str.machine_no_limits)
-    val USAGE_UNREAD: String @Composable get() = localized(Str.machine_usage_unread)
-    val SIGN_IN_EXPIRED: String @Composable get() = localized(Str.machine_sign_in_expired)
+    val LIMITS: String get() = localized(Str.machine_limits)
+    val REFRESH: String get() = localized(Str.machine_refresh)
+    val REFRESHING: String get() = localized(Str.machine_refreshing)
+    val OPEN_USAGE: String get() = localized(Str.machine_open_usage)
+    val NO_LIMITS: String get() = localized(Str.machine_no_limits)
+    val USAGE_UNREAD: String get() = localized(Str.machine_usage_unread)
+    val SIGN_IN_EXPIRED: String get() = localized(Str.machine_sign_in_expired)
 
-    val NOT_HOSTING: String @Composable get() = localized(Str.machine_parts_not_hosting)
-    val STARTING: String @Composable get() = localized(Str.machine_parts_starting)
-    val NOT_RUNNING: String @Composable get() = localized(Str.machine_parts_not_running)
+    val NOT_HOSTING: String get() = localized(Str.machine_parts_not_hosting)
+    val STARTING: String get() = localized(Str.machine_parts_starting)
+    val NOT_RUNNING: String get() = localized(Str.machine_parts_not_running)
 
-    @Composable fun offline(machine: String, lastSeen: String) =
+    fun offline(machine: String, lastSeen: String) =
         if (lastSeen.isBlank()) localized(Str.machine_parts_offline, machine)
         else localized(Str.machine_parts_offline_seen, machine, lastSeen)
-    @Composable fun paired(n: Int) = localized(Str.machine_paired, n)
-    @Composable fun revokeTitle(device: String) = localized(Str.machine_revoke_title, device)
-    @Composable fun revokeText(machine: String) = localized(Str.machine_revoke_text, machine)
-    @Composable fun revokeFailed(device: String) = localized(Str.machine_revoke_failed, device)
-    @Composable fun renameFailed(device: String) = localized(Str.machine_rename_failed, device)
-    @Composable fun renameGone(device: String) = localized(Str.machine_rename_gone, device)
-    @Composable fun pairText(sameNetwork: Boolean) =
+    fun paired(n: Int) = localized(Str.machine_paired, n)
+    fun revokeTitle(device: String) = localized(Str.machine_revoke_title, device)
+    fun revokeText(machine: String) = localized(Str.machine_revoke_text, machine)
+    fun revokeFailed(device: String) = localized(Str.machine_revoke_failed, device)
+    fun renameFailed(device: String) = localized(Str.machine_rename_failed, device)
+    fun renameGone(device: String) = localized(Str.machine_rename_gone, device)
+    fun pairText(sameNetwork: Boolean) =
         localized(if (sameNetwork) Str.machine_pair_text_same_network else Str.machine_pair_text)
-    @Composable fun expires(leftMs: Long): String {
+    fun expires(leftMs: Long): String {
         val s = ((leftMs.coerceAtLeast(0) + 999) / 1000).toInt()
         return localized(Str.machine_pair_expires, "${s / 60}:${(s % 60).toString().padStart(2, '0')}")
     }
-    @Composable fun pairUsed(device: String) = localized(Str.machine_pair_used, device)
-    @Composable fun pairFailed(machine: String) = localized(Str.machine_pair_failed, machine)
+    fun pairUsed(device: String) = localized(Str.machine_pair_used, device)
+    fun pairFailed(machine: String) = localized(Str.machine_pair_failed, machine)
 
     /** "Last seen 2 min ago"; "Connected now" for the device asking; "Not used yet" before its first visit. */
-    @Composable fun seenText(d: DeviceDto, nowMs: Long): String {
+    fun seen(d: DeviceDto, nowMs: Long): String {
         if (d.current) return localized(Str.machine_seen_now)
         val then = parseChatTs(d.last_seen_at) ?: return localized(Str.machine_seen_never)
         val min = ((nowMs - then).coerceAtLeast(0)) / 60_000
@@ -211,36 +208,22 @@ object MachinePartsCopy {
         }
     }
 
-    /** [seenText] in English: the tests' copy. */
-    fun seen(d: DeviceDto, nowMs: Long): String {
-        if (d.current) return "Connected now" // i18n-ok: English twin for the tests
-        val then = parseChatTs(d.last_seen_at) ?: return "Not used yet" // i18n-ok: English twin for the tests
-        val min = ((nowMs - then).coerceAtLeast(0)) / 60_000
-        return "Last seen " + when { // i18n-ok: English twin for the tests
-            min < 1 -> "just now" // i18n-ok: English twin for the tests
-            min < 60 -> "$min min ago" // i18n-ok: English twin for the tests
-            min < 24 * 60 -> "${min / 60} h ago" // i18n-ok: English twin for the tests
-            min < 48 * 60 -> "yesterday" // i18n-ok: English twin for the tests
-            else -> "${min / (24 * 60)} days ago" // i18n-ok: English twin for the tests
-        }
-    }
-
-    @Composable fun linkTitle(p: ProxyDto) = if (p.port != 0) localized(Str.machine_link_title, p.domain, p.port) else p.domain
-    @Composable fun linkFrom(p: ProxyDto) = if (p.sessionName.isBlank()) "" else localized(Str.machine_link_from, p.sessionName) + " · "
-    @Composable fun publicTitle(name: String) = localized(Str.machine_public_title, name)
-    @Composable fun publicText(port: Int, machine: String) = localized(Str.machine_public_text, port, machine)
-    @Composable fun publicFailed() = localized(Str.machine_public_failed)
-    @Composable fun privateFailed(name: String) = localized(Str.machine_private_failed, name)
-    @Composable fun removeTitle(name: String) = localized(Str.machine_remove_title, name)
-    @Composable fun removeText(port: Int, chat: String) =
+    fun linkTitle(p: ProxyDto) = if (p.port != 0) localized(Str.machine_link_title, p.domain, p.port) else p.domain
+    fun linkFrom(p: ProxyDto) = if (p.sessionName.isBlank()) "" else localized(Str.machine_link_from, p.sessionName) + " · "
+    fun publicTitle(name: String) = localized(Str.machine_public_title, name)
+    fun publicText(port: Int, machine: String) = localized(Str.machine_public_text, port, machine)
+    fun publicFailed() = localized(Str.machine_public_failed)
+    fun privateFailed(name: String) = localized(Str.machine_private_failed, name)
+    fun removeTitle(name: String) = localized(Str.machine_remove_title, name)
+    fun removeText(port: Int, chat: String) =
         if (chat.isNotBlank()) localized(Str.machine_remove_text_port, port, chat) else localized(Str.machine_remove_text)
-    @Composable fun removeFailed() = localized(Str.machine_remove_failed)
-    @Composable fun shareText(machine: String) = localized(Str.machine_share_text, machine)
-    @Composable fun shareFailed(port: Int) = localized(Str.machine_share_failed, port)
+    fun removeFailed() = localized(Str.machine_remove_failed)
+    fun shareText(machine: String) = localized(Str.machine_share_text, machine)
+    fun shareFailed(port: Int) = localized(Str.machine_share_failed, port)
     fun portOk(text: String): Boolean = text.toIntOrNull()?.let { it in 1..65535 } == true
 
     /** "Updated 2 min ago", in the app's language. */
-    @Composable fun updatedText(nowMs: Long, thenMs: Long): String {
+    fun updatedText(nowMs: Long, thenMs: Long): String {
         val min = ((nowMs - thenMs).coerceAtLeast(0)) / 60_000
         return when {
             min < 1 -> localized(Str.machine_updated_just_now)
@@ -389,7 +372,7 @@ internal fun DevicesSection(
             KitItem(
                 d.name,
                 Modifier.testTag("device_row_${d.name}"),
-                subtitle = MachinePartsCopy.seenText(d, now),
+                subtitle = MachinePartsCopy.seen(d, now),
                 mark = KitMark.Glyph(KitGlyphs.Devices),
                 titleBadge = if (d.current) MachinePartsCopy.THIS_DEVICE else null,
             ) {
@@ -1113,7 +1096,6 @@ data class LimitLogin(
 enum class LimitNote { SignInExpired, UsageUnread }
 
 /** [LimitWindow.label] is an English id (it is in the row's tag); these are the ones the app words. */
-@Composable
 private fun limitLabel(label: String): String = when (label) {
     "5-hour" -> localized(Str.machine_limit_5_hour)
     "Weekly" -> localized(Str.machine_limit_weekly)

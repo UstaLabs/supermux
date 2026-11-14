@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #123: the chat's cards — subagent cards and the running strip, council cards and strip, permission and
+     question cards, messages from other sessions, html cards. English, the source; values-tr/chat_cards.xml has
+     the same keys (tests/i18n-strings.test.ts). -->
+<resources>
+    <string name="chatcard_show_more">Show more</string>
+    <string name="chatcard_show_less">Show less</string>
+
+    <plurals name="chatcard_subagent_tool_calls">
+        <item quantity="one">%1$d tool call</item>
+        <item quantity="other">%1$d tool calls</item>
+    </plurals>
+    <string name="chatcard_subagent_tokens">%1$s tokens</string>
+    <plurals name="chatcard_subagent_turns">
+        <item quantity="one">%1$d turn</item>
+        <item quantity="other">%1$d turns</item>
+    </plurals>
+    <string name="chatcard_subagent_ended_failed">failed</string>
+    <string name="chatcard_subagent_ended_by_parent">closed by the main agent</string>
+    <string name="chatcard_subagent_ended_by_you">stopped by you</string>
+    <string name="chatcard_subagent_ended_stopped">stopped</string>
+    <string name="chatcard_subagent_ended_done">done</string>
+    <string name="chatcard_subagent_running">running</string>
+    <string name="chatcard_subagent_failed_elapsed">failed · %1$s</string>
+    <string name="chatcard_subagent_done_elapsed">done · %1$s</string>
+    <string name="chatcard_subagent_collapse">Collapse</string>
+    <string name="chatcard_subagent_expand">Expand</string>
+    <string name="chatcard_subagent_tag_background">background</string>
+    <string name="chatcard_subagent_icon">Subagent</string>
+    <plurals name="chatcard_subagent_new_replies">
+        <item quantity="one">%1$d new reply</item>
+        <item quantity="other">%1$d new replies</item>
+    </plurals>
+    <string name="chatcard_subagent_marker_to">To %1$s</string>
+    <string name="chatcard_subagent_marker_someone">a subagent</string>
+    <string name="chatcard_subagent_sent_via_main">Sent via the main agent</string>
+    <string name="chatcard_subagent_send_failed">Couldn't send the message</string>
+    <string name="chatcard_subagent_stop_failed">Couldn't stop this agent</string>
+    <string name="chatcard_subagent_getting_started">Getting started…</string>
+    <string name="chatcard_subagent_stop">Stop</string>
+    <string name="chatcard_subagent_task_from_main">Task from the main agent</string>
+    <string name="chatcard_subagent_you">You</string>
+    <plurals name="chatcard_subagent_earlier_steps">
+        <item quantity="one">Show %1$d earlier step</item>
+        <item quantity="other">Show %1$d earlier steps</item>
+    </plurals>
+    <string name="chatcard_subagent_result">Result</string>
+    <string name="chatcard_subagent_result_clipped">The broker kept the first 8k characters of this result.</string>
+    <string name="chatcard_subagent_message_placeholder">Message %1$s…</string>
+    <string name="chatcard_subagent_send">Send</string>
+    <string name="chatcard_subagent_relay_hint">Sent via the main agent — it passes your message on.</string>
+    <plurals name="chatcard_subagent_strip_agents">
+        <item quantity="one">%1$d agent</item>
+        <item quantity="other">%1$d agents</item>
+    </plurals>
+    <plurals name="chatcard_subagent_strip_tasks">
+        <item quantity="one">%1$d task</item>
+        <item quantity="other">%1$d tasks</item>
+    </plurals>
+    <string name="chatcard_subagent_strip_running">%1$s running</string>
+    <string name="chatcard_subagent_strip_show">Show</string>
+    <string name="chatcard_subagent_strip_background_task">Background task</string>
+    <string name="chatcard_subagent_strip_background_shell">background shell</string>
+    <string name="chatcard_subagent_strip_show_timeline">Show timeline</string>
+    <string name="chatcard_subagent_strip_last_seconds">Last %1$ds</string>
+    <string name="chatcard_subagent_strip_now">now</string>
+    <string name="chatcard_subagent_lane_failed">Failed</string>
+    <string name="chatcard_subagent_lane_done">Done</string>
+    <string name="chatcard_subagent_lane_stopped">Stopped</string>
+
+    <string name="chatcard_council_all_answered">all answered</string>
+    <string name="chatcard_council_answered_of">%1$d of %2$d answered</string>
+    <string name="chatcard_council_thinking">Thinking</string>
+    <string name="chatcard_council_round">Round %1$d</string>
+    <string name="chatcard_council_round_focus">Round %1$d · %2$s</string>
+    <string name="chatcard_council_focus">focus: %1$s</string>
+    <string name="chatcard_council_working">Working</string>
+    <string name="chatcard_council_failed">Failed</string>
+    <string name="chatcard_council_crashed">Crashed</string>
+    <string name="chatcard_council_stopped">Stopped</string>
+    <string name="chatcard_council_no_answer_in_round">No answer in round %1$d</string>
+    <string name="chatcard_council_fold_question">Fold the question</string>
+    <string name="chatcard_council_show_question">Show the whole question</string>
+    <string name="chatcard_council_idle">Idle, hasn't answered</string>
+    <string name="chatcard_council_hide_answers">Hide answers</string>
+    <string name="chatcard_council_show_answers">Show answers</string>
+    <string name="chatcard_council_status_answered">answered</string>
+    <string name="chatcard_council_status_working">working</string>
+    <string name="chatcard_council_status_failed">failed</string>
+    <string name="chatcard_council_status_crashed">crashed</string>
+    <string name="chatcard_council_status_stopped">stopped</string>
+    <string name="chatcard_council_status_none">no answer</string>
+    <string name="chatcard_council_no_answers_yet">No answers yet.</string>
+    <string name="chatcard_council_verdict">Verdict</string>
+    <string name="chatcard_council_ended_by_you">Stopped by you</string>
+    <string name="chatcard_council_ended_empty">Ended: no members left</string>
+    <string name="chatcard_council_ended">Ended</string>
+    <string name="chatcard_council_stop_council">Stop council</string>
+    <string name="chatcard_council_stop_title">Stop %1$s?</string>
+    <string name="chatcard_council_stop_title_unnamed">Stop the council?</string>
+    <string name="chatcard_council_stop_body">This ends the council and stops its members. Their answers stay here.</string>
+    <string name="chatcard_council_stop">Stop</string>
+    <string name="chatcard_council_cancel">Cancel</string>
+    <string name="chatcard_council_hide_strip">Hide the council</string>
+    <string name="chatcard_council_show_strip">Show the council</string>
+
+    <string name="chatcard_request_from">from %1$s</string>
+    <string name="chatcard_request_background_turn">background turn</string>
+    <string name="chatcard_request_permission_icon">Permission request</string>
+    <string name="chatcard_request_question_icon">Question from the agent</string>
+    <string name="chatcard_request_allow_title">Allow %1$s?</string>
+    <string name="chatcard_request_sending">Sending…</string>
+    <string name="chatcard_request_waiting">Waiting for you</string>
+    <string name="chatcard_request_question">Question</string>
+    <string name="chatcard_request_permission">Permission</string>
+    <string name="chatcard_request_note_placeholder">Tell the agent why (optional)</string>
+    <string name="chatcard_request_reject_again">%1$s again sends it, with or without a note.</string>
+    <string name="chatcard_request_reject">Reject</string>
+    <string name="chatcard_request_copied">Copied</string>
+    <string name="chatcard_request_copy">Copy to clipboard</string>
+    <plurals name="chatcard_request_questions">
+        <item quantity="one">%1$d question</item>
+        <item quantity="other">%1$d questions</item>
+    </plurals>
+    <string name="chatcard_request_submit">Submit</string>
+    <string name="chatcard_request_next">Next</string>
+    <string name="chatcard_request_back">Back</string>
+    <string name="chatcard_request_decline">Decline</string>
+    <string name="chatcard_request_question_number">Question %1$d</string>
+    <string name="chatcard_request_answered">Answered</string>
+    <string name="chatcard_request_select_all">Select all that apply</string>
+    <string name="chatcard_request_type_answer">Type your answer</string>
+    <string name="chatcard_request_other_answer">Other — type your own answer</string>
+    <string name="chatcard_request_declined">Declined</string>
+    <string name="chatcard_request_expired">Expired</string>
+    <string name="chatcard_request_cancelled">Cancelled</string>
+    <string name="chatcard_request_closed_unanswered">Request closed unanswered</string>
+    <string name="chatcard_request_question_declined">Question declined</string>
+    <string name="chatcard_request_request_answered">Request answered</string>
+
+    <string name="chatcard_inbox_open_subagent">Open subagent</string>
+    <string name="chatcard_inbox_open_chat">Open chat</string>
+    <string name="chatcard_inbox_another_session">Another session</string>
+
+    <string name="chatcard_html_page_missing">This card's page isn't available.</string>
+</resources>

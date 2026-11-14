@@ -92,6 +92,10 @@ import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.ui.widgets.Dialog
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import dev.supermux.ui.i18n.Plurals
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.localizedPlural
 
 /** Header Finish button — a compact M3 [TextButton] with an unacked-result dot overlay.
  *  Red ([colorScheme.error]) when the background job ended `failed`, teal ([colorScheme.primary])
@@ -117,7 +121,7 @@ fun FinishButton(
             )
             Spacer(Modifier.width(4.dp))
             Text(
-                "Finish",
+                localized(Str.composer_finish_button),
                 color = cs.primary,
                 style = MaterialTheme.typography.labelLarge,
             )
@@ -272,8 +276,9 @@ internal fun FinishFlowContent(
     }
 
     // Kickoff callback shared by every onFinish(...) — surfaces a rejected kick-off in the menu.
+    val kickoffError = localized(Str.composer_finish_kickoff_failed)
     val kickoff: (Boolean) -> Unit = { ok ->
-        if (!ok) runError = "Couldn't start finish — check your connection and try again."
+        if (!ok) runError = kickoffError
     }
 
     // "Generate verify" and the draft's Save: started here, finished on [workScope], and cancelled
@@ -320,9 +325,9 @@ internal fun FinishFlowContent(
     ) {
         // ── Title ──────────────────────────────────────────────────────────────────
         val title = when (view) {
-            FinishView.Menu -> "Finish · ${readiness?.branch ?: session.session_branch ?: ""}"
-            FinishView.Running -> "Finishing"
-            FinishView.Outcome -> "Finish"
+            FinishView.Menu -> localized(Str.composer_finish_title_branch, readiness?.branch ?: session.session_branch ?: "")
+            FinishView.Running -> localized(Str.composer_finish_title_running)
+            FinishView.Outcome -> localized(Str.composer_finish_button)
         }
         Text(
             text = title,
@@ -415,7 +420,7 @@ private fun MenuBody(
             ) {
                 if (loadingReadiness) {
                     CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-                    Text("Checking branch…", color = cs.onSurfaceVariant, fontSize = 13.sp)
+                    Text(localized(Str.composer_finish_checking), color = cs.onSurfaceVariant, fontSize = 13.sp)
                 }
             }
         } else {
@@ -427,24 +432,24 @@ private fun MenuBody(
         // 3) Action rows
         if (readiness?.nothingToLand == true) {
             Text(
-                "No new commits to land",
+                localized(Str.composer_finish_nothing_to_land),
                 color = cs.onSurfaceVariant,
                 fontSize = 12.sp,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
             )
-            ActionRow("Keep", Icons.Filled.Archive) {
+            ActionRow(localized(Str.composer_finish_keep), Icons.Filled.Archive) {
                 onFinish("keep", null, null, null, kickoff); onDismiss()
             }
             DiscardRows(confirmingDiscard, onConfirmDiscardChange, onFinish, kickoff)
         } else {
             ActionRow(
-                "Merge locally",
+                localized(Str.composer_finish_merge_locally),
                 Icons.AutoMirrored.Filled.CallMerge,
                 color = if (readiness?.recommended == "merge") cs.primary else cs.onSurface,
             ) { onConfirmDiscardChange(false); pendingVerify = if (pendingVerify == "merge") null else "merge" }
             if (pendingVerify == "merge") {
                 VerifyChoiceRows(
-                    prompt = "Run tests before merging?",
+                    prompt = localized(Str.composer_finish_tests_before_merge),
                     showSkip = canSkipTests("merge", readiness?.prRequiresGreen ?: false),
                     onRun = { pendingVerify = null; onFinish("merge", false, null, null, kickoff) },
                     onSkip = { pendingVerify = null; onFinish("merge", true, null, null, kickoff) },
@@ -453,13 +458,13 @@ private fun MenuBody(
             PrRow(readiness) { onConfirmDiscardChange(false); pendingVerify = if (pendingVerify == "pr") null else "pr" }
             if (pendingVerify == "pr") {
                 VerifyChoiceRows(
-                    prompt = "Run tests before opening the PR?",
+                    prompt = localized(Str.composer_finish_tests_before_pr),
                     showSkip = canSkipTests("pr", readiness?.prRequiresGreen ?: false),
                     onRun = { pendingVerify = null; onFinish("pr", false, null, null, kickoff) },
                     onSkip = { pendingVerify = null; onFinish("pr", true, null, null, kickoff) },
                 )
             }
-            ActionRow("Keep", Icons.Filled.Archive) {
+            ActionRow(localized(Str.composer_finish_keep), Icons.Filled.Archive) {
                 pendingVerify = null; onFinish("keep", null, null, null, kickoff); onDismiss()
             }
             DiscardRows(
@@ -503,7 +508,7 @@ private fun ReadinessCard(r: FinishReadiness) {
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                "${r.filesChanged} files · +${r.insertions}/−${r.deletions}",
+                localizedPlural(Plurals.composer_finish_files_changed, r.filesChanged, r.filesChanged, r.insertions, r.deletions),
                 color = cs.onSurfaceVariant,
                 fontSize = 13.sp,
             )
@@ -517,11 +522,11 @@ private fun ReadinessCard(r: FinishReadiness) {
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 when (r.conflictPreflight) {
-                    "will_conflict" -> Chip(Icons.Filled.WarningAmber, "may conflict", cs.tertiary)
-                    "clean" -> Chip(Icons.Filled.Check, "no conflict", cs.primary)
+                    "will_conflict" -> Chip(Icons.Filled.WarningAmber, localized(Str.composer_finish_may_conflict), cs.tertiary)
+                    "clean" -> Chip(Icons.Filled.Check, localized(Str.composer_finish_no_conflict), cs.primary)
                 }
                 if (r.dirtyFiles.isNotEmpty()) {
-                    Chip(Icons.Filled.WarningAmber, "${r.dirtyFiles.size} uncommitted", cs.tertiary)
+                    Chip(Icons.Filled.WarningAmber, localizedPlural(Plurals.composer_finish_uncommitted, r.dirtyFiles.size, r.dirtyFiles.size), cs.tertiary)
                 }
             }
         }
@@ -551,7 +556,11 @@ private fun PrRow(
     onClick: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
-    val label = if (readiness?.hasRemote == true && !readiness.ghAvailable) "Push & open PR" else "Open PR"
+    val label = if (readiness?.hasRemote == true && !readiness.ghAvailable) {
+        localized(Str.composer_finish_push_open_pr)
+    } else {
+        localized(Str.composer_finish_open_pr)
+    }
     val noRemote = readiness != null && !readiness.hasRemote
     ActionRow(
         label = label,
@@ -559,7 +568,7 @@ private fun PrRow(
         color = if (readiness?.recommended == "pr") cs.primary else cs.onSurface,
         enabled = !noRemote,
         trailing = if (noRemote) {
-            { Text("no remote", color = cs.onSurfaceVariant, fontSize = 12.sp) }
+            { Text(localized(Str.composer_finish_no_remote), color = cs.onSurfaceVariant, fontSize = 12.sp) }
         } else null,
     ) { onClick() }
 }
@@ -572,14 +581,14 @@ private fun DiscardRows(
     kickoff: (Boolean) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
-    ActionRow("Discard", Icons.Filled.DeleteOutline, color = cs.error) { onConfirmDiscardChange(true) }
+    ActionRow(localized(Str.composer_finish_discard), Icons.Filled.DeleteOutline, color = cs.error) { onConfirmDiscardChange(true) }
     if (confirmingDiscard) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp, vertical = 4.dp),
         ) {
-            Text("Discard all work on this branch?", color = cs.onSurface, fontSize = 13.sp)
+            Text(localized(Str.composer_finish_discard_confirm), color = cs.onSurface, fontSize = 13.sp)
             Spacer(Modifier.size(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Button(
@@ -588,8 +597,8 @@ private fun DiscardRows(
                         containerColor = cs.error,
                         contentColor = cs.onError,
                     ),
-                ) { Text("Discard") }
-                OutlinedButton(onClick = { onConfirmDiscardChange(false) }) { Text("Cancel") }
+                ) { Text(localized(Str.composer_finish_discard)) }
+                OutlinedButton(onClick = { onConfirmDiscardChange(false) }) { Text(localized(Str.composer_cancel)) }
             }
         }
     }
@@ -612,13 +621,13 @@ private fun VerifyChoiceRows(
         Text(prompt, color = cs.onSurfaceVariant, fontSize = 12.sp)
         Spacer(Modifier.size(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(onClick = onRun, modifier = Modifier.testTag("finish_run_tests")) { Text("Run tests") }
+            Button(onClick = onRun, modifier = Modifier.testTag("finish_run_tests")) { Text(localized(Str.composer_finish_run_tests)) }
             if (showSkip) {
                 OutlinedButton(
                     onClick = onSkip,
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = cs.tertiary),
                     modifier = Modifier.testTag("finish_skip_tests"),
-                ) { Text("Skip tests") }
+                ) { Text(localized(Str.composer_finish_skip_tests)) }
             }
         }
     }
@@ -639,13 +648,13 @@ private fun RunningBody(stage: String?) {
     ) {
         CircularProgressIndicator()
         Text(
-            stage ?: "Finishing…",
+            stage ?: localized(Str.composer_finish_running),
             color = cs.onSurface,
             style = MaterialTheme.typography.titleMedium,
             textAlign = TextAlign.Center,
         )
         Text(
-            "You can close this — I'll notify you when it's done.",
+            localized(Str.composer_finish_running_hint),
             color = cs.onSurfaceVariant,
             style = MaterialTheme.typography.bodySmall,
             textAlign = TextAlign.Center,
@@ -686,57 +695,61 @@ private fun OutcomeBody(
     Column(Modifier.fillMaxWidth().testTag("finish_outcome")) {
         when (oStatus) {
             "integrated" -> {
-                OutcomeHeader("Merged into ${o?.base ?: "base"}", Icons.Filled.Check, cs.primary)
+                OutcomeHeader(localized(Str.composer_finish_merged_into, o?.base ?: localized(Str.composer_finish_base)), Icons.Filled.Check, cs.primary)
                 DoneRow(done)
             }
 
             "pr_opened" -> {
-                OutcomeHeader("Pull request opened", Icons.AutoMirrored.Filled.CallSplit, cs.onSurface)
+                OutcomeHeader(localized(Str.composer_finish_pr_opened), Icons.AutoMirrored.Filled.CallSplit, cs.onSurface)
                 o?.prUrl?.let { url ->
-                    ActionRow("View PR", Icons.AutoMirrored.Filled.OpenInNew) { platform.openUrl(url) }
+                    ActionRow(localized(Str.composer_finish_view_pr), Icons.AutoMirrored.Filled.OpenInNew) { platform.openUrl(url) }
                 }
                 DismissRow(done)
                 DoneRow(done)
             }
 
             "branch_published" -> {
-                OutcomeHeader("Branch pushed", Icons.AutoMirrored.Filled.CallSplit, cs.onSurface)
+                OutcomeHeader(localized(Str.composer_finish_branch_pushed), Icons.AutoMirrored.Filled.CallSplit, cs.onSurface)
                 o?.prError?.let { Caption(it) }
                 o?.compareUrl?.let { url ->
-                    ActionRow("Open a PR", Icons.AutoMirrored.Filled.OpenInNew) { platform.openUrl(url) }
+                    ActionRow(localized(Str.composer_finish_open_a_pr), Icons.AutoMirrored.Filled.OpenInNew) { platform.openUrl(url) }
                 }
                 DismissRow(done)
                 DoneRow(done)
             }
 
             "tests_failed" -> {
-                OutcomeHeader("Tests failed", Icons.Filled.Cancel, cs.error)
+                OutcomeHeader(localized(Str.composer_finish_tests_failed), Icons.Filled.Cancel, cs.error)
                 OutputBlock(o?.output)
                 DismissRow(done)
-                ActionRow("Merge anyway", Icons.Filled.WarningAmber, color = cs.tertiary) {
+                ActionRow(localized(Str.composer_finish_merge_anyway), Icons.Filled.WarningAmber, color = cs.tertiary) {
                     onFinish("merge", true, null, null, kickoff)
                 }
-                ActionRow("Let the agent fix it", Icons.AutoMirrored.Filled.Send, onClick = letAgentFix)
+                ActionRow(localized(Str.composer_finish_let_agent_fix), Icons.AutoMirrored.Filled.Send, onClick = letAgentFix)
             }
 
             "sync_conflict", "dirty_overlap" -> {
                 OutcomeHeader(
-                    if (oStatus == "sync_conflict") "Merge conflicts" else "Base has unsaved changes",
+                    if (oStatus == "sync_conflict") {
+                        localized(Str.composer_finish_merge_conflicts)
+                    } else {
+                        localized(Str.composer_finish_base_unsaved)
+                    },
                     Icons.Filled.WarningAmber,
                     cs.tertiary,
                 )
                 FileList(o?.files ?: emptyList())
                 DismissRow(done)
-                ActionRow("Let the agent fix it", Icons.AutoMirrored.Filled.Send, onClick = letAgentFix)
+                ActionRow(localized(Str.composer_finish_let_agent_fix), Icons.AutoMirrored.Filled.Send, onClick = letAgentFix)
             }
 
             "uncommitted" -> {
-                OutcomeHeader("These changes aren't committed yet", null, cs.onSurface)
+                OutcomeHeader(localized(Str.composer_finish_uncommitted_title), null, cs.onSurface)
                 FileList(o?.files ?: emptyList())
                 OutlinedTextField(
                     value = commitMessage,
                     onValueChange = onCommitMessageChange,
-                    label = { Text("Commit message") },
+                    label = { Text(localized(Str.composer_finish_commit_message)) },
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -746,7 +759,7 @@ private fun OutcomeBody(
                 DismissRow(done)
                 val isPr = finishJob?.action == "pr"
                 ActionRow(
-                    if (isPr) "Commit & open PR" else "Commit & merge",
+                    if (isPr) localized(Str.composer_finish_commit_open_pr) else localized(Str.composer_finish_commit_merge),
                     Icons.AutoMirrored.Filled.CallMerge,
                 ) {
                     onFinish(if (isPr) "pr" else "merge", null, true, commitMessage, kickoff)
@@ -755,14 +768,14 @@ private fun OutcomeBody(
 
             "no_verify" -> {
                 if (verifyDraft == null) {
-                    OutcomeHeader("No .mux/verify.sh configured", null, cs.onSurface)
+                    OutcomeHeader(localized(Str.composer_finish_no_verify), null, cs.onSurface)
                     DismissRow(done)
-                    ActionRow("Merge without verifying", Icons.Filled.WarningAmber, color = cs.tertiary) {
+                    ActionRow(localized(Str.composer_finish_merge_unverified), Icons.Filled.WarningAmber, color = cs.tertiary) {
                         onFinish("merge", true, null, null, kickoff)
                     }
-                    LoadingActionRow("Generate verify", Icons.Filled.AutoAwesome, busy = generating, onClick = onGenerate)
+                    LoadingActionRow(localized(Str.composer_finish_generate_verify), Icons.Filled.AutoAwesome, busy = generating, onClick = onGenerate)
                 } else {
-                    Caption("Draft · ${verifyDraft.source.uppercase()}")
+                    Caption(localized(Str.composer_finish_draft, verifyDraft.source.uppercase()))
                     OutlinedTextField(
                         value = verifyDraft.content,
                         onValueChange = { onVerifyDraftChange(verifyDraft.copy(content = it)) },
@@ -774,27 +787,27 @@ private fun OutcomeBody(
                             .testTag("finish_verify_draft"),
                     )
                     DismissRow(done)
-                    LoadingActionRow("Save", Icons.Filled.Check, busy = verifySaving, onClick = onSaveVerify)
+                    LoadingActionRow(localized(Str.composer_finish_save), Icons.Filled.Check, busy = verifySaving, onClick = onSaveVerify)
                 }
             }
 
             "push_auth_failed", "push_rejected" -> {
-                OutcomeHeader("Push failed", Icons.Filled.Cancel, cs.error)
+                OutcomeHeader(localized(Str.composer_finish_push_failed), Icons.Filled.Cancel, cs.error)
                 o?.message?.let { Caption(it) }
                 DismissRow(done)
-                ActionRow("Retry", Icons.AutoMirrored.Filled.CallSplit) {
+                ActionRow(localized(Str.composer_finish_retry), Icons.AutoMirrored.Filled.CallSplit) {
                     onFinish("pr", null, null, null, kickoff)
                 }
             }
 
             "nothing_to_do" -> {
-                OutcomeHeader("Nothing to land — no new commits.", null, cs.onSurface)
+                OutcomeHeader(localized(Str.composer_finish_nothing_to_do), null, cs.onSurface)
                 DismissRow(done)
             }
 
             "kept", "discarded" -> {
                 OutcomeHeader(
-                    if (oStatus == "kept") "Branch kept" else "Work discarded",
+                    if (oStatus == "kept") localized(Str.composer_finish_kept) else localized(Str.composer_finish_discarded),
                     Icons.Filled.Check,
                     cs.primary,
                 )
@@ -802,16 +815,16 @@ private fun OutcomeBody(
             }
 
             "non_ff" -> {
-                OutcomeHeader("Base branch moved", Icons.Filled.WarningAmber, cs.tertiary)
-                Caption("The base branch moved while finishing. Re-sync and merge again.")
+                OutcomeHeader(localized(Str.composer_finish_base_moved), Icons.Filled.WarningAmber, cs.tertiary)
+                Caption(localized(Str.composer_finish_base_moved_hint))
                 DismissRow(done)
-                ActionRow("Merge again", Icons.AutoMirrored.Filled.CallMerge) {
+                ActionRow(localized(Str.composer_finish_merge_again), Icons.AutoMirrored.Filled.CallMerge) {
                     onFinish("merge", null, null, null, kickoff)
                 }
             }
 
             else -> {
-                OutcomeHeader("Finish failed", Icons.Filled.Cancel, cs.error)
+                OutcomeHeader(localized(Str.composer_finish_failed), Icons.Filled.Cancel, cs.error)
                 Caption(o?.message ?: oStatus)
                 DismissRow(done)
             }
@@ -989,7 +1002,7 @@ private fun OutputBlock(text: String?) {
 private fun DoneRow(onClick: () -> Unit) {
     Box(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
         TextButton(onClick = onClick, modifier = Modifier.testTag("finish_done")) {
-            Text("Done", color = MaterialTheme.colorScheme.primary)
+            Text(localized(Str.composer_done), color = MaterialTheme.colorScheme.primary)
         }
     }
 }
@@ -998,7 +1011,7 @@ private fun DoneRow(onClick: () -> Unit) {
 private fun DismissRow(onClick: () -> Unit) {
     Box(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
         TextButton(onClick = onClick, modifier = Modifier.testTag("finish_dismiss")) {
-            Text("Dismiss", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(localized(Str.composer_dismiss), color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -1008,13 +1021,14 @@ private fun DismissRow(onClick: () -> Unit) {
  * `SessionChrome.issueMessage` (web `FinishSheet.vue` `issueMessage`). Pure + testable.
  */
 fun issueMessage(o: FinishResult): String = when (o.status) {
-    "sync_conflict" -> "The Finish step merged the base branch in and hit conflicts in:\n" +
+    // A prompt for the agent, kept English (FinishDialogTest asserts it).
+    "sync_conflict" -> "The Finish step merged the base branch in and hit conflicts in:\n" + // i18n-ok: agent prompt
         o.files.joinToString("\n") { "- $it" } +
         "\n\nThe worktree is in a conflicted merge state — please resolve the conflicts and commit, then I'll run Finish again."
-    "tests_failed" -> "The Finish step ran the tests (`${o.command ?: ""}`) and they failed:\n\n```\n${o.output ?: ""}\n```\n\nPlease fix them so the branch is green, then I'll run Finish again."
-    "dirty_overlap" -> "The base checkout has unsaved changes in: ${o.files.joinToString(", ")} — the same files my work touches. Please commit or stash them so Finish can fast-forward."
-    "push_rejected" -> "Pushing the branch for a PR was rejected because the remote has diverged: ${o.message ?: ""}. Please reconcile (pull/rebase) and I'll run Finish again."
-    else -> "Finish reported: ${o.message ?: o.status}"
+    "tests_failed" -> "The Finish step ran the tests (`${o.command ?: ""}`) and they failed:\n\n```\n${o.output ?: ""}\n```\n\nPlease fix them so the branch is green, then I'll run Finish again." // i18n-ok: agent prompt
+    "dirty_overlap" -> "The base checkout has unsaved changes in: ${o.files.joinToString(", ")} — the same files my work touches. Please commit or stash them so Finish can fast-forward." // i18n-ok: agent prompt
+    "push_rejected" -> "Pushing the branch for a PR was rejected because the remote has diverged: ${o.message ?: ""}. Please reconcile (pull/rebase) and I'll run Finish again." // i18n-ok: agent prompt
+    else -> "Finish reported: ${o.message ?: o.status}" // i18n-ok: agent prompt
 }
 
 /**
@@ -1083,7 +1097,7 @@ fun FinishHeaderButton(session: SessionInfo, bindings: FinishBindings) {
  */
 class FinishForm {
     var open by mutableStateOf(false)
-    var commitMessage by mutableStateOf("Session changes")
+    var commitMessage by mutableStateOf("Session changes") // i18n-ok: a git commit message default
     var verifyDraft by mutableStateOf<VerifyDraft?>(null)
     /** "Generate verify" in flight. */
     var generating by mutableStateOf(false)
@@ -1096,7 +1110,7 @@ class FinishForm {
         work?.cancel()
         work = null
         open = false
-        commitMessage = "Session changes"
+        commitMessage = "Session changes" // i18n-ok: a git commit message default
         verifyDraft = null
         generating = false
         verifySaving = false

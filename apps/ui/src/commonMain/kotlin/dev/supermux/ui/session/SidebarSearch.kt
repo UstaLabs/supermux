@@ -61,6 +61,8 @@ import androidx.compose.ui.unit.sp
 import dev.supermux.net.MessageSearchHit
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.WorkspaceDto
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 
 object SidebarSearchTestIds {
     const val OPEN = "sidebar_search"
@@ -202,7 +204,7 @@ internal fun SidebarSearchBar(
         Spacer(Modifier.width(6.dp))
         Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
             if (query.isEmpty()) {
-                Text("Search workspaces and chats", color = cs.onSurfaceVariant, fontSize = 13.sp, maxLines = 1)
+                Text(localized(Str.sessions_list_search_placeholder), color = cs.onSurfaceVariant, fontSize = 13.sp, maxLines = 1)
             }
             BasicTextField(
                 value = query,
@@ -236,7 +238,7 @@ internal fun SidebarSearchBar(
                 .testTag(SidebarSearchTestIds.CLOSE),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(Icons.Filled.Close, contentDescription = "Close search", tint = cs.onSurfaceVariant, modifier = Modifier.size(15.dp))
+            Icon(Icons.Filled.Close, contentDescription = localized(Str.sessions_list_search_close), tint = cs.onSurfaceVariant, modifier = Modifier.size(15.dp))
         }
     }
 }

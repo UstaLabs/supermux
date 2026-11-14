@@ -220,7 +220,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.notify.localizedNotifyWords
 
 /**
  * Which chats of one workspace are actually ON SCREEN (spec §11).
@@ -364,7 +363,6 @@ fun SupermuxApp(
     val offlineWord = localized(Str.shell_machine_offline)
     val notHostingWord = localized(Str.shell_machine_not_hosting)
     val thisComputerWord = localized(Str.shell_this_computer)
-    val offlineSeen = localizedTemplate(Str.shell_machine_offline_seen)
     val settingsMachines = remember(hostViews, activeHostId, localBrokerCap, settingsClock, runningWord, offlineWord, notHostingWord, thisComputerWord) {
         val now = settingsClock
         val paired = hostViews.map { h ->
@@ -377,7 +375,7 @@ fun SupermuxApp(
                 status = when {
                     h.online -> runningWord
                     seen.isEmpty() -> offlineWord
-                    else -> offlineSeen(seen)
+                    else -> localized(Str.shell_machine_offline_seen, seen)
                 },
                 lastSeen = seen,
             )
@@ -594,7 +592,6 @@ fun SupermuxApp(
 
     // Observe live agent replies and decide whether to raise an OS notification. Keyed on
     // [appForeground] so the collector relaunches with a freshly captured value.
-    val notifyWords by rememberUpdatedState(localizedNotifyWords())
     LaunchedEffect(fleet, appForeground) {
         fleet.agentReplies.collect { event ->
             val target = fleet.sessions.value.firstOrNull { it.id == event.session }
@@ -605,16 +602,14 @@ fun SupermuxApp(
                 selectedId = ui.selectedId,
                 windowFocused = appForeground,
                 muted = target?.mute ?: false,
-                words = notifyWords,
             )
         }
     }
 
     // A download that finished with nobody waiting for it (#95, decision 2a) opens nothing: it waits in the activity
     // bar, and a small notice says so.
-    val downloadedNotice by rememberUpdatedState(localizedTemplate(Str.shell_downloaded))
     LaunchedEffect(fleet) {
-        fleet.downloads.unclaimedCompletions.collect { notices.show(downloadedNotice(it.name)) }
+        fleet.downloads.unclaimedCompletions.collect { notices.show(localized(Str.shell_downloaded, it.name)) }
     }
 
     // Sessions changed: reconcile the selection against the live set (empty-guarded) and prune

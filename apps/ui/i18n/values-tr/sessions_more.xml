@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #123: the Archived screen, the Agent dialogs, the install panel and the worktree cleanup, in Turkish. Same keys
+     and placeholders as values/sessions_more.xml. Terms: docs/i18n/glossary.md. -->
+<resources>
+    <!-- Archived screen -->
+    <string name="archived_time_now">şimdi</string>
+    <string name="archived_time_minutes">%1$d dk</string>
+    <string name="archived_time_hours">%1$d sa</string>
+    <string name="archived_time_days">%1$d g</string>
+    <string name="archived_title">Arşiv</string>
+    <string name="archived_label">arşivlendi</string>
+    <string name="archived_all_projects">Tüm projeler</string>
+    <string name="archived_filter">Projeye göre filtrele</string>
+    <string name="archived_search">Arşivde ara…</string>
+    <string name="archived_no_workspaces">Arşivlenmiş çalışma alanı yok.</string>
+    <string name="archived_no_sessions">Arşivlenmiş oturum yok.</string>
+    <string name="archived_no_matches">Eşleşme yok.</string>
+    <string name="archived_no_messages">Mesaj yok.</string>
+    <string name="archived_back">Geri</string>
+    <string name="archived_resume">Sürdür</string>
+    <string name="archived_resumed">Sürdürüldü</string>
+    <string name="archived_restore">Geri yükle</string>
+    <string name="archived_restored">Geri yüklendi</string>
+    <string name="archived_ended">Arşivlendi: %1$s</string>
+
+    <!-- Agent dialogs: New Agent, Change character, Rename, Archive -->
+    <string name="agentdlg_state_idle">Boşta</string>
+    <string name="agentdlg_state_working">Çalışıyor</string>
+    <string name="agentdlg_state_waiting">Yanıtı var</string>
+    <string name="agentdlg_state_listening">Dinliyor</string>
+    <string name="agentdlg_state_speaking">Konuşuyor</string>
+    <string name="agentdlg_state_asleep">Uyuyor</string>
+    <string name="agentdlg_new_title">Yeni ajan</string>
+    <string name="agentdlg_new_subtitle">Kendi hafızası olan, hep açık bir yardımcı. Karakterini seçin.</string>
+    <string name="agentdlg_creating">Oluşturuluyor…</string>
+    <string name="agentdlg_create">Oluştur: %1$s</string>
+    <string name="agentdlg_agent">Ajan</string>
+    <string name="agentdlg_close">Kapat</string>
+    <string name="agentdlg_cancel">İptal</string>
+    <string name="agentdlg_name">Ad</string>
+    <string name="agentdlg_provider">Sağlayıcı</string>
+    <string name="agentdlg_providers_failed">Sağlayıcılar yüklenemedi.</string>
+    <string name="agentdlg_retry">Tekrar dene</string>
+    <string name="agentdlg_no_provider">Kurulu sağlayıcı yok. Ayarlar ▸ Sağlayıcılar ve hesaplar bölümünden birini kurun.</string>
+    <string name="agentdlg_model">Model</string>
+    <string name="agentdlg_choose_model">Bir model seçin</string>
+    <string name="agentdlg_effort">Çaba</string>
+    <string name="agentdlg_effort_low">Düşük</string>
+    <string name="agentdlg_effort_medium">Orta</string>
+    <string name="agentdlg_effort_high">Yüksek</string>
+    <string name="agentdlg_effort_xhigh">Çok yüksek</string>
+    <string name="agentdlg_effort_max">En yüksek</string>
+    <string name="agentdlg_hint">↵ oluşturur · esc iptal eder</string>
+    <string name="agentdlg_character_title">Karakteri değiştir: %1$s</string>
+    <string name="agentdlg_character_subtitle">Adı, hafızası ve geçmişi aynı kalır.</string>
+    <string name="agentdlg_saving">Kaydediliyor…</string>
+    <string name="agentdlg_use">%1$s karakterini kullan</string>
+    <string name="agentdlg_use_character">Karakteri kullan</string>
+    <string name="agentdlg_current">Şu anki</string>
+    <string name="agentdlg_rename_title">Yeniden adlandır: %1$s</string>
+    <string name="agentdlg_rename_subtitle">Hafızası ve geçmişi onunla kalır.</string>
+    <string name="agentdlg_rename">Yeniden adlandır</string>
+    <string name="agentdlg_archive_title">%1$s arşivlensin mi?</string>
+    <string name="agentdlg_archive_subtitle">Çalışmayı bırakır ve kenar çubuğundan kalkar. Hafızası saklanır; arşivden geri yükleyebilirsiniz.</string>
+    <string name="agentdlg_archiving">Arşivleniyor…</string>
+    <string name="agentdlg_archive">Arşivle</string>
+    <string name="agentdlg_name_invalid">Bu ad kullanılamaz.</string>
+    <string name="agentdlg_name_taken">Bu adda bir ajan zaten var.</string>
+    <string name="agentdlg_not_installed">Bu sağlayıcı kurulu değil. Ayarlar ▸ Sağlayıcılar ve hesaplar bölümünden kurun.</string>
+    <string name="agentdlg_create_failed">Ajan oluşturulamadı. Bağlantıyı kontrol edip tekrar deneyin.</string>
+    <string name="agentdlg_character_failed">Karakter değiştirilemedi (%1$s). Bağlantıyı kontrol edip tekrar deneyin.</string>
+    <string name="agentdlg_rename_failed">Yeniden adlandırılamadı (%1$s). Bağlantıyı kontrol edip tekrar deneyin.</string>
+    <string name="agentdlg_archive_failed">Arşivlenemedi (%1$s). Bağlantıyı kontrol edip tekrar deneyin.</string>
+
+    <!-- "Choose an agent": the launcher's install panel -->
+    <string name="install_title">Bir ajan seçin</string>
+    <string name="install_intro">supermux sohbetlerinizi bir kodlama ajanıyla yürütür. Kurmak için birini seçin; yaklaşık bir dakika sürer.</string>
+    <string name="install_later">Sağlayıcı eklemeyi veya giriş yapmayı sonra Ayarlar ▸ Sağlayıcılar ve hesaplar bölümünden yapabilirsiniz.</string>
+    <string name="install_tagline_claude">Anthropic'in kodlama ajanı</string>
+    <string name="install_tagline_codex">OpenAI'ın kodlama ajanı</string>
+    <string name="install_tagline_opencode">Açık kaynak, birçok modelle çalışır</string>
+    <string name="install_tagline_cursor">Cursor'ın terminal ajanı</string>
+    <string name="install_tagline_grok">xAI'ın kodlama ajanı</string>
+    <string name="install_tagline_antigravity">Google'ın kodlama ajanı</string>
+    <string name="install_tagline_other">Kodlama ajanı</string>
+    <string name="install_installing">Kuruluyor: %1$s…</string>
+    <string name="install_installed">Kurulu</string>
+    <string name="install_install">Kur</string>
+    <string name="install_try_again">Tekrar dene</string>
+    <string name="install_timeout">Beklenenden uzun sürüyor. İlerlemeyi Ayarlar ▸ Sağlayıcılar ve hesaplar bölümünden izleyin.</string>
+    <string name="install_lost_host">Makineyle bağlantı koptu. Bağlantıyı kontrol edip tekrar deneyin.</string>
+    <string name="install_couldnt_start">Kurulum başlatılamadı. Bağlantıyı kontrol edip tekrar deneyin.</string>
+
+    <!-- Worktree cleanup in the archive / settle / close dialogs -->
+    <string name="worktree_couldnt_inspect">İncelenemedi: %1$s</string>
+    <string name="worktree_no_changes">Değişiklik yok</string>
+    <plurals name="worktree_files_changed">
+        <item quantity="one">%1$d dosya değişti</item>
+        <item quantity="other">%1$d dosya değişti</item>
+    </plurals>
+    <plurals name="worktree_unmerged_commits">
+        <item quantity="one">%1$d birleştirilmemiş commit</item>
+        <item quantity="other">%1$d birleştirilmemiş commit</item>
+    </plurals>
+    <string name="worktree_unmerged_unknown">Birleştirilmemiş commit'ler: bilinmiyor (temel dal bulunamadı)</string>
+    <string name="worktree_ignored">Yok sayılanlar: %1$s</string>
+    <string name="worktree_more">+%1$d tane daha</string>
+    <string name="worktree_checking">Worktree kontrol ediliyor…</string>
+    <string name="worktree_size_unknown">boyut bilinmiyor</string>
+    <string name="worktree_size_calculating">boyut hesaplanıyor…</string>
+    <string name="worktree_kept">Worktree korundu; şunlar da kullanıyor: %1$s</string>
+    <string name="worktree_delete_one">Worktree'yi de sil · %1$s · %2$s</string>
+    <plurals name="worktree_delete_many">
+        <item quantity="one">%1$d worktree'yi de sil</item>
+        <item quantity="other">%1$d worktree'yi de sil</item>
+    </plurals>
+    <string name="worktree_archive_failed">Arşivlenemedi: sunucuya ulaşılamadı veya istek reddedildi</string>
+    <string name="worktree_close_failed">Kapatılamadı: sunucuya ulaşılamadı veya istek reddedildi</string>
+    <string name="worktree_archived_not_deleted">Arşivlendi, ancak worktree silinemedi: %1$s</string>
+    <string name="worktree_closed_not_deleted">Kapatıldı, ancak worktree silinemedi: %1$s</string>
+    <string name="worktree_unknown_error">bilinmeyen hata</string>
+</resources>

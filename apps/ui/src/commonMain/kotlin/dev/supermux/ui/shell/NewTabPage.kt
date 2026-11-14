@@ -249,7 +249,7 @@ private fun ChoiceRow(
         Icon(c.icon, contentDescription = null, tint = glyph, modifier = Modifier.size(17.dp))
         Spacer(Modifier.width(12.dp))
         Text(
-            localizedKindLabel(c.kind),
+            c.label,
             color = cs.onSurface,
             fontSize = if (touch) 15.sp else 13.5.sp,
             fontWeight = FontWeight.Medium,
@@ -257,7 +257,7 @@ private fun ChoiceRow(
             modifier = Modifier.width(if (touch) 96.dp else 84.dp),
         )
         Text(
-            localizedKindDetail(c.kind, c.folder),
+            c.detail,
             color = cs.onSurfaceVariant,
             fontSize = if (touch) 14.sp else 13.sp,
             maxLines = 1,
@@ -342,7 +342,6 @@ internal fun closedAgo(nowMs: Long, closedAtMs: Long): ClosedAgo {
     }
 }
 
-@Composable
 private fun agoText(ago: ClosedAgo): String = when (ago) {
     ClosedAgo.JustNow -> localized(Str.new_tab_closed_just_now)
     is ClosedAgo.Minutes -> localizedPlural(Plurals.new_tab_closed_minutes, ago.n, ago.n)

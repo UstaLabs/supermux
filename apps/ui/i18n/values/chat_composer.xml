@@ -1,0 +1,226 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #123: the chat composer — the card and its attach / dictation controls, the / menu, the run-settings panel,
+     Finish, Continue in a new conversation, and the chat panel's own status lines. English, the source;
+     values-tr/chat_composer.xml has the same keys (tests/i18n-strings.test.ts). -->
+<resources>
+    <!-- The composer card -->
+    <string name="composer_placeholder">Ask anything · @ to add files · / for commands</string>
+    <string name="composer_send">Send</string>
+    <string name="composer_stop">Stop</string>
+    <string name="composer_attach">Attach</string>
+    <string name="composer_attach_paste">Paste</string>
+    <string name="composer_attach_photos">Photos</string>
+    <string name="composer_attach_files">Files</string>
+    <string name="composer_attach_camera">Camera</string>
+    <string name="composer_attach_record_video">Record video</string>
+    <string name="composer_paste_image">Paste image</string>
+    <string name="composer_pasting_image">Pasting image…</string>
+    <string name="composer_chip_uploading">%1$s · %2$d%</string>
+    <string name="composer_chip_retry">%1$s · Retry</string>
+    <string name="composer_remove">Remove</string>
+    <string name="composer_remove_named">Remove %1$s</string>
+    <string name="composer_mention_open_folder">Open %1$s</string>
+    <string name="composer_pill_model">model</string>
+    <string name="composer_pill_effort">effort</string>
+    <string name="composer_cancel">Cancel</string>
+    <string name="composer_ok">OK</string>
+    <string name="composer_done">Done</string>
+    <string name="composer_dismiss">Dismiss</string>
+
+    <!-- The detail chip under the card -->
+    <string name="composer_detail_chip">Detail: %1$s</string>
+    <string name="composer_detail_title">Detail</string>
+    <string name="composer_detail_low_hint">Messages only · tools on status line</string>
+    <string name="composer_detail_medium_hint">Messages + tool summaries</string>
+    <string name="composer_detail_high_hint">Everything, tool args and all</string>
+
+    <!-- The chat around the composer: header status, empty state, live rows -->
+    <string name="composer_search_chats">Search chats</string>
+    <string name="composer_not_responding">Not responding</string>
+    <string name="composer_reveal_gone">That message is no longer in the chat</string>
+    <string name="composer_start_conversation">Start the conversation</string>
+    <string name="composer_starter_state">What's the current state?</string>
+    <string name="composer_starter_tests">Run the tests</string>
+    <string name="composer_starter_summarize">Summarize recent changes</string>
+    <string name="composer_scroll_to_bottom">Scroll to bottom</string>
+    <string name="composer_status_running">running</string>
+    <string name="composer_status_starting">starting</string>
+    <string name="composer_status_thinking">thinking</string>
+    <string name="composer_status_working">working</string>
+    <string name="composer_status_running_tool">running %1$s…</string>
+    <string name="composer_status_tool">tool</string>
+    <string name="composer_status_starting_now">starting…</string>
+    <string name="composer_status_thinking_now">thinking…</string>
+    <string name="composer_status_sending_now">sending…</string>
+    <string name="composer_status_sending">sending</string>
+    <string name="composer_status_waiting_background">waiting (%1$d background)</string>
+    <string name="composer_status_ellipsis">%1$s…</string>
+    <string name="composer_status_stop">stop</string>
+
+    <!-- The / menu -->
+    <string name="composer_slash_loading">Loading commands…</string>
+    <string name="composer_slash_count_of">%1$d of %2$d</string>
+    <string name="composer_slash_key_move">move</string>
+    <string name="composer_slash_key_run">run</string>
+    <string name="composer_slash_key_run_now">run now</string>
+    <string name="composer_slash_key_insert">insert</string>
+    <string name="composer_slash_key_close">close</string>
+    <string name="composer_slash_runs">runs</string>
+    <string name="composer_slash_also">Also</string>
+    <string name="composer_slash_agent">Agent</string>
+    <string name="composer_slash_source_builtin">built-in</string>
+    <string name="composer_slash_source_project">this project</string>
+    <string name="composer_slash_source_user">your skill</string>
+    <string name="composer_slash_long_runs_now">supermux · runs now</string>
+    <string name="composer_slash_long_builtin">%1$s built-in</string>
+    <string name="composer_slash_long_plugin">%1$s plugin</string>
+    <string name="composer_slash_long_project">This project</string>
+    <string name="composer_slash_long_user">Your skill</string>
+
+    <!-- Dictation -->
+    <string name="composer_dictation_failed">Transcription failed</string>
+    <string name="composer_dictation_not_caught">Didn't catch that</string>
+    <string name="composer_dictation_mic_unavailable">Microphone unavailable</string>
+    <string name="composer_dictation_stop">Stop and transcribe</string>
+    <string name="composer_dictation_record">Record voice</string>
+    <string name="composer_dictation_transcribing">Transcribing…</string>
+    <string name="composer_dictation_mic_denied_title">Microphone access needed</string>
+    <string name="composer_dictation_mic_denied_body">Enable microphone access in Settings to dictate messages.</string>
+    <string name="composer_dictation_discard">Discard recording</string>
+    <string name="composer_dictation_retry">Retry</string>
+    <string name="composer_dictation_send_audio">Send as audio</string>
+
+    <!-- Finish (land a worktree's branch) -->
+    <string name="composer_finish_button">Finish</string>
+    <string name="composer_finish_kickoff_failed">Couldn't start finish — check your connection and try again.</string>
+    <string name="composer_finish_title_branch">Finish · %1$s</string>
+    <string name="composer_finish_title_running">Finishing</string>
+    <string name="composer_finish_checking">Checking branch…</string>
+    <string name="composer_finish_nothing_to_land">No new commits to land</string>
+    <string name="composer_finish_keep">Keep</string>
+    <string name="composer_finish_merge_locally">Merge locally</string>
+    <string name="composer_finish_tests_before_merge">Run tests before merging?</string>
+    <string name="composer_finish_tests_before_pr">Run tests before opening the PR?</string>
+    <string name="composer_finish_may_conflict">may conflict</string>
+    <string name="composer_finish_no_conflict">no conflict</string>
+    <string name="composer_finish_push_open_pr">Push &amp; open PR</string>
+    <string name="composer_finish_open_pr">Open PR</string>
+    <string name="composer_finish_no_remote">no remote</string>
+    <string name="composer_finish_discard">Discard</string>
+    <string name="composer_finish_discard_confirm">Discard all work on this branch?</string>
+    <string name="composer_finish_run_tests">Run tests</string>
+    <string name="composer_finish_skip_tests">Skip tests</string>
+    <string name="composer_finish_running">Finishing…</string>
+    <string name="composer_finish_running_hint">You can close this — I'll notify you when it's done.</string>
+    <string name="composer_finish_merged_into">Merged into %1$s</string>
+    <string name="composer_finish_base">base</string>
+    <string name="composer_finish_pr_opened">Pull request opened</string>
+    <string name="composer_finish_view_pr">View PR</string>
+    <string name="composer_finish_branch_pushed">Branch pushed</string>
+    <string name="composer_finish_open_a_pr">Open a PR</string>
+    <string name="composer_finish_tests_failed">Tests failed</string>
+    <string name="composer_finish_merge_anyway">Merge anyway</string>
+    <string name="composer_finish_let_agent_fix">Let the agent fix it</string>
+    <string name="composer_finish_merge_conflicts">Merge conflicts</string>
+    <string name="composer_finish_base_unsaved">Base has unsaved changes</string>
+    <string name="composer_finish_uncommitted_title">These changes aren't committed yet</string>
+    <string name="composer_finish_commit_message">Commit message</string>
+    <string name="composer_finish_commit_open_pr">Commit &amp; open PR</string>
+    <string name="composer_finish_commit_merge">Commit &amp; merge</string>
+    <string name="composer_finish_no_verify">No .mux/verify.sh configured</string>
+    <string name="composer_finish_merge_unverified">Merge without verifying</string>
+    <string name="composer_finish_generate_verify">Generate verify</string>
+    <string name="composer_finish_draft">Draft · %1$s</string>
+    <string name="composer_finish_save">Save</string>
+    <string name="composer_finish_push_failed">Push failed</string>
+    <string name="composer_finish_retry">Retry</string>
+    <string name="composer_finish_nothing_to_do">Nothing to land — no new commits.</string>
+    <string name="composer_finish_kept">Branch kept</string>
+    <string name="composer_finish_discarded">Work discarded</string>
+    <string name="composer_finish_base_moved">Base branch moved</string>
+    <string name="composer_finish_base_moved_hint">The base branch moved while finishing. Re-sync and merge again.</string>
+    <string name="composer_finish_merge_again">Merge again</string>
+    <string name="composer_finish_failed">Finish failed</string>
+
+    <!-- Continue in a new conversation -->
+    <string name="composer_continue_title">Continue in new conversation</string>
+    <string name="composer_continue_start_failed">Couldn't start — check the agent is installed and signed in.</string>
+    <string name="composer_continue_body">Same working directory as %1$s. The new agent is told to read this session first.</string>
+    <string name="composer_continue_body_edit">Same working directory as %1$s. The new agent is told to read this session first. Edit freely before start.</string>
+    <string name="composer_continue_starting">Starting…</string>
+    <string name="composer_continue_confirm">Continue</string>
+    <string name="composer_continue_start">Start</string>
+    <string name="composer_continue_default">Default</string>
+    <string name="composer_continue_select_agent">Select Agent</string>
+    <string name="composer_continue_select_model">Select Model</string>
+    <string name="composer_continue_thinking_level">Thinking level</string>
+
+    <!-- The run-settings panel (model · effort · fast · account · mode) -->
+    <string name="composer_run_this_chat">this chat</string>
+    <string name="composer_run_search_models">Search models…</string>
+    <string name="composer_run_no_model_matches">No model matches “%1$s”</string>
+    <string name="composer_run_default_model">Default</string>
+    <string name="composer_run_default_model_detail">the agent's own choice</string>
+    <string name="composer_run_effort">Effort</string>
+    <string name="composer_run_fast_mode">Fast mode</string>
+    <string name="composer_run_account">Account</string>
+    <string name="composer_run_mode">Mode</string>
+    <string name="composer_run_run_on">Run this chat on</string>
+    <string name="composer_run_start_on">Start this chat on</string>
+    <string name="composer_run_modes_title">What can the agent do without asking?</string>
+    <string name="composer_run_mode_default">%1$s  · default</string>
+    <string name="composer_run_back">Back</string>
+    <string name="composer_run_auto">Auto</string>
+    <string name="composer_run_auto_now">Auto · %1$s</string>
+    <string name="composer_run_auto_detail_now">Most room left · now %1$s</string>
+    <string name="composer_run_auto_detail">The account with the most room left</string>
+    <string name="composer_run_loading_accounts">Loading accounts…</string>
+    <string name="composer_run_isolated">Isolated</string>
+    <string name="composer_run_unavailable">Unavailable</string>
+    <string name="composer_run_account_unavailable">%1$s is unavailable</string>
+    <string name="composer_run_open_accounts">Open Accounts</string>
+    <string name="composer_run_star">Star</string>
+    <string name="composer_run_unstar">Unstar</string>
+
+    <!-- Counts -->
+    <plurals name="composer_walkthrough_unread">
+        <item quantity="one">💬 %1$d new walkthrough reply</item>
+        <item quantity="other">💬 %1$d new walkthrough replies</item>
+    </plurals>
+    <plurals name="composer_status_waiting_tasks">
+        <item quantity="one">waiting · %1$d background task</item>
+        <item quantity="other">waiting · %1$d background tasks</item>
+    </plurals>
+    <plurals name="composer_status_agents_working">
+        <item quantity="one">%1$d agent working</item>
+        <item quantity="other">%1$d agents working</item>
+    </plurals>
+    <plurals name="composer_status_tools">
+        <item quantity="one">%1$d tool</item>
+        <item quantity="other">%1$d tools</item>
+    </plurals>
+    <plurals name="composer_duration_days">
+        <item quantity="one">%1$d day</item>
+        <item quantity="other">%1$d days</item>
+    </plurals>
+    <plurals name="composer_duration_hours">
+        <item quantity="one">%1$d hour</item>
+        <item quantity="other">%1$d hours</item>
+    </plurals>
+    <plurals name="composer_duration_minutes">
+        <item quantity="one">%1$d minute</item>
+        <item quantity="other">%1$d minutes</item>
+    </plurals>
+    <plurals name="composer_duration_seconds">
+        <item quantity="one">%1$d second</item>
+        <item quantity="other">%1$d seconds</item>
+    </plurals>
+    <plurals name="composer_finish_files_changed">
+        <item quantity="one">%1$d file · +%2$d/−%3$d</item>
+        <item quantity="other">%1$d files · +%2$d/−%3$d</item>
+    </plurals>
+    <plurals name="composer_finish_uncommitted">
+        <item quantity="one">%1$d uncommitted</item>
+        <item quantity="other">%1$d uncommitted</item>
+    </plurals>
+</resources>

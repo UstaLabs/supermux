@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #123: the new-session launcher — its first run, the project picker, project settings, "New project" and
+     "Organize projects". English, the source; values-tr/sessions_launch.xml has the same keys (tests/i18n-strings.test.ts). -->
+<resources>
+    <!-- Launcher -->
+    <string name="launch_title">Let's build</string>
+    <string name="launch_new_session">New session</string>
+    <string name="launch_back">Back</string>
+    <string name="launch_choose_project">Choose a project</string>
+    <string name="launch_select_project">Select project</string>
+    <string name="launch_select_host">Select host</string>
+    <string name="launch_choose_folder_title">Choose a project folder</string>
+    <string name="launch_choose_folder_for">Choose a folder to add to %1$s</string>
+    <string name="launch_already_in_other">Already in another project</string>
+    <string name="launch_add_folder_failed">Couldn't add this folder to %1$s</string>
+    <string name="launch_use_owner">Use %1$s</string>
+    <string name="launch_no_worktree">No worktree</string>
+    <string name="launch_save_draft">Save draft</string>
+    <string name="launch_save_draft_failed">Couldn't save draft</string>
+    <string name="launch_placeholder">What should the agent do?</string>
+    <string name="launch_start_session">Start session</string>
+    <string name="launch_create_session_failed">Failed to create session</string>
+    <!-- A failed host operation: "Couldn't create x — check the connection and try again." -->
+    <string name="launch_create_failed">Couldn't create %1$s</string>
+    <string name="launch_clone_failed">Couldn't clone %1$s</string>
+    <string name="launch_check_connection">check the connection and try again.</string>
+
+    <!-- Launcher › worktree picker -->
+    <string name="launch_worktree">Worktree</string>
+    <string name="launch_isolated">Run in isolated worktree</string>
+    <string name="launch_isolated_hint">Runs on a fresh branch cut from the base below, so your working copy stays untouched.</string>
+    <string name="launch_base_branch">Base branch</string>
+    <string name="launch_search_branches">Search branches</string>
+    <string name="launch_fetching">Fetching…</string>
+    <string name="launch_no_branches">No branches</string>
+    <string name="launch_no_match">No match</string>
+
+    <!-- First run: the project step -->
+    <string name="firstproject_title">Where should your agents work?</string>
+    <string name="firstproject_subtitle">Agents read and change files only inside the folder you choose.</string>
+    <string name="firstproject_open_folder">Open a folder</string>
+    <string name="firstproject_open_caption_local">Choose a folder on this computer</string>
+    <string name="firstproject_open_caption_remote">Use a folder you already have</string>
+    <string name="firstproject_create_title">Create a new project</string>
+    <string name="firstproject_create_caption">Start from an empty folder</string>
+    <string name="firstproject_type_path">or type a folder path</string>
+    <string name="firstproject_folder_path">Folder path</string>
+    <string name="firstproject_path_hint">The folder must already exist on the host.</string>
+    <string name="firstproject_open_confirm">Open folder</string>
+    <string name="firstproject_project_name">Project name</string>
+    <string name="firstproject_name_hint_empty">An empty folder in Supermux's projects folder.</string>
+    <string name="firstproject_name_hint">Creates “%1$s” in Supermux's projects folder.</string>
+    <string name="firstproject_create_confirm">Create project</string>
+    <string name="firstproject_more_later">You can add more projects any time.</string>
+    <string name="firstproject_check_failed">Couldn't check that folder — check the connection and try again.</string>
+    <string name="firstproject_open_that_failed">Couldn't open that folder</string>
+    <string name="firstproject_open_failed">Couldn't open %1$s</string>
+
+    <!-- Project picker -->
+    <string name="project_title">Project</string>
+    <string name="project_search_placeholder">Search projects, repos, or type a path</string>
+    <string name="project_choose_folder">Choose a folder</string>
+    <string name="project_invalid_path">Invalid path</string>
+    <string name="project_search_failed">Couldn't search repositories — check the connection and try again.</string>
+    <string name="project_some_forges_failed">Some forges failed: %1$s</string>
+    <string name="project_clone_continues">Clone %1$s continues on the host…</string>
+    <string name="project_create_continues">Create %1$s continues on the host…</string>
+    <string name="project_op_continues">Operation continues on the host…</string>
+    <string name="project_ready">Ready — %1$s</string>
+    <string name="project_use">Use</string>
+    <string name="project_no_match">No projects match "%1$s".</string>
+    <string name="project_empty_hint">Type a path or search your projects.</string>
+    <string name="project_use_path">Use this path</string>
+    <string name="project_recent">Jump back in</string>
+    <string name="project_projects">Projects</string>
+    <string name="project_everything_else">Everything else</string>
+    <string name="project_current">Current project</string>
+    <string name="project_clone_from">Clone from %1$s · %2$s</string>
+    <string name="project_private">Private</string>
+    <string name="project_clone">Clone</string>
+    <string name="project_load_more">Load more (%1$d remaining)</string>
+    <string name="project_searching">Searching repos…</string>
+    <string name="project_create_new">Create new</string>
+    <string name="project_no_repos">No repos match "%1$s".</string>
+    <string name="project_cloning">Cloning %1$s…</string>
+    <string name="project_creating">Creating %1$s…</string>
+    <string name="project_working">Working…</string>
+    <string name="project_hide_hint">Continues on the host if you hide.</string>
+    <string name="project_hide">Hide</string>
+
+    <!-- Project settings and "New project" -->
+    <string name="project_settings_title">Project settings</string>
+    <string name="project_name">Name</string>
+    <string name="project_save">Save</string>
+    <string name="project_image">Image</string>
+    <string name="project_image_choose">Choose image…</string>
+    <string name="project_image_change">Change…</string>
+    <string name="project_image_remove">Remove</string>
+    <string name="project_image_type">Pick a PNG, JPEG, WebP or GIF image.</string>
+    <string name="project_image_too_big">That image is over 5 MB.</string>
+    <string name="project_image_upload_failed">Couldn't upload the image.</string>
+    <string name="project_image_remove_failed">Couldn't remove the image.</string>
+    <string name="project_rename_failed">Couldn't rename the project.</string>
+    <string name="project_locations">Locations</string>
+    <string name="project_no_locations">No locations yet.</string>
+    <string name="project_add_location">Add location</string>
+    <string name="project_already_in">Already in %1$s</string>
+    <string name="project_move_here">Move here</string>
+    <string name="project_move_to">Move to…</string>
+    <string name="project_location_other">That folder already belongs to another project.</string>
+    <string name="project_location_same">That folder is already a location of this project.</string>
+    <string name="project_location_add_failed">Couldn't add the location.</string>
+    <string name="project_location_not_found">Couldn't find that location in %1$s.</string>
+    <string name="project_location_move_failed">Couldn't move the location.</string>
+    <string name="project_done">Done</string>
+    <string name="project_cancel">Cancel</string>
+    <string name="project_new">New project</string>
+    <string name="project_host">Host</string>
+    <string name="project_host_offline">%1$s (offline)</string>
+    <string name="project_create">Create</string>
+    <string name="project_create_failed">Couldn't create the project.</string>
+
+    <!-- Organize projects -->
+    <string name="organize_title">Organize projects</string>
+    <string name="organize_hint">Drag to change the order projects appear in the sidebar.</string>
+    <string name="organize_drag">Drag to reorder</string>
+</resources>

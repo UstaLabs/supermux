@@ -137,35 +137,3 @@ interface HostingActions {
     /** "Uninstall lid helper" (an admin prompt). */
     fun uninstallLidHelper() = Unit
 }
-
-/** The copy the page shows, as constants so the tests assert the exact strings. */
-object HostingCopy {
-    const val TITLE = "Host on this computer"
-    const val SUBTITLE = "Your agents run here. Your phone and other devices connect to it."
-    const val OFF = "This app connects to brokers elsewhere."
-    const val RELAY = "Remote access through relay"
-    const val BACKGROUND = "Keep running in the background"
-    const val BACKGROUND_HELP = "Your agents stay reachable after you quit, sign out or restart."
-    const val BACKGROUND_READ_ONLY = "Managed by its own service"
-    const val MANAGE = "Let the app manage it"
-
-    const val KEEP_AWAKE = "Keep this computer awake"
-    const val KEEP_AWAKE_HELP = "Stops this computer from sleeping while supermux runs. The screen can still turn off."
-    const val ON_BATTERY = "Also on battery"
-    const val PAUSED_ON_BATTERY = "Paused while on battery"
-    const val APP_HELD = "Kept awake by the supermux app while it's open."
-    const val WAITING_FOR_LOGIN = "Waiting for you to log in… supermux keeps this computer awake once your desktop session starts."
-    const val LID_CLOSED = "Even with the lid closed"
-    const val LID_CLOSED_HELP =
-        "Your Mac stays awake with the lid closed. It can get hot: don't put it in a bag while this is on."
-    const val LID_INSTALL = "macOS will ask for your password once."
-    const val LID_NOT_INSTALLED = "The lid helper isn't installed. Tick to install it; macOS will ask for your password once."
-    const val LID_OTHER_USER = "The lid helper is installed for another user. Tick to reinstall it for you."
-    const val LID_HOME_UNSUPPORTED = "Not available for this account's home folder."
-    const val LID_PAUSED_ON_BATTERY = "Paused while on battery"
-    const val LID_WAITING = "Waiting for your password…" // shown as machine_hosting_lid_waiting
-    const val LID_UNINSTALL = "Uninstall lid helper" // shown as machine_hosting_lid_uninstall
-    const val REBOOT = "After a restart, supermux starts when you log in."
-    const val AUTO_LOGIN = // shown as machine_hosting_auto_login
-        "To start without anyone at the keyboard, turn on Automatic Login in System Settings ▸ Users & Groups."
-}

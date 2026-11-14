@@ -30,6 +30,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.ui.i18n.Plurals
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.localizedPlural
 import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.proto.GitLiteStatusDto
@@ -68,11 +72,12 @@ fun SessionStatusRail(
         }
         when (sessionListRailIndicator(working = working, unread = unread)) {
             SessionListRailIndicator.Working -> {
+                val workingWord = localized(Str.sessions_rail_working)
                 CircularProgressIndicator(
                     modifier = Modifier
                         .size(14.dp)
                         .testTag("session_rail_working")
-                        .semantics { contentDescription = "working" },
+                        .semantics { contentDescription = workingWord },
                     strokeWidth = 2.dp,
                     color = MaterialTheme.colorScheme.primary,
                 )
@@ -108,7 +113,7 @@ fun SessionStatusRail(
 fun RunningAgentsTag(count: Int, modifier: Modifier = Modifier) {
     if (count <= 0) return
     Text(
-        if (count == 1) "1 agent" else "$count agents",
+        localizedPlural(Plurals.sessions_rail_agents, count, count),
         color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
         fontFamily = MonoFontFamily,
         fontSize = 10.sp,
@@ -124,13 +129,14 @@ fun RunningAgentsTag(count: Int, modifier: Modifier = Modifier) {
 
 /** Quiet idle mark — intentionally smaller/dimmer than [UnreadDot]. */
 @Composable private fun NeutralDot() {
+    val idleWord = localized(Str.sessions_rail_idle)
     Box(
         Modifier
             .size(6.dp)
             .clip(CircleShape)
             .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f))
             .testTag("session_rail_neutral")
-            .semantics { contentDescription = "idle" },
+            .semantics { contentDescription = idleWord },
     )
 }
 
@@ -139,11 +145,12 @@ fun RunningAgentsTag(count: Int, modifier: Modifier = Modifier) {
  * green with a soft outer ring so it reads clearly against dark and light list surfaces.
  */
 @Composable private fun UnreadDot(color: Color, testTag: String?) {
+    val unreadWord = localized(Str.sessions_rail_unread)
     Box(
         modifier = Modifier
             .size(10.dp)
             .then(if (testTag != null) Modifier.testTag(testTag) else Modifier)
-            .semantics { contentDescription = "unread" }
+            .semantics { contentDescription = unreadWord }
             .border(width = 1.5.dp, color = color.copy(alpha = 0.35f), shape = CircleShape),
         contentAlignment = Alignment.Center,
     ) {
