@@ -134,6 +134,40 @@ class SupermuxMessagingService : FirebaseMessagingService() {
             // on its own.
             .setGroup(GROUP_KEY)
 
+        // #143: a permission prompt is answered from here. Its own id, so a later reply in the session doesn't
+        // replace it; Allow only after the device unlock, Deny at once.
+        val prompt = note.prompt
+        val id = if (prompt != null) ("prompt:" + prompt.requestId).hashCode().absoluteValue
+            else (note.sessionId ?: note.session).hashCode().absoluteValue
+        if (prompt != null && note.sessionId != null) {
+            fun answer(option: PushRouter.Answer): PendingIntent = PendingIntent.getBroadcast(
+                this,
+                ("answer:" + prompt.requestId + ":" + option.id).hashCode(),
+                Intent(this, PromptAnswerReceiver::class.java).apply {
+                    action = PromptAnswerReceiver.ACTION_ANSWER
+                    putExtra(PromptAnswerReceiver.EXTRA_SESSION_ID, note.sessionId)
+                    putExtra(PromptAnswerReceiver.EXTRA_REQUEST_ID, prompt.requestId)
+                    putExtra(PromptAnswerReceiver.EXTRA_OPTION_ID, option.id)
+                    putExtra(PromptAnswerReceiver.EXTRA_HOST_ID, note.hostId)
+                    putExtra(PromptAnswerReceiver.EXTRA_NOTIFICATION_ID, id)
+                    putExtra(PromptAnswerReceiver.EXTRA_TITLE, note.session)
+                    putExtra(PromptAnswerReceiver.EXTRA_LABEL, option.label)
+                },
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            prompt.reject?.let { reject ->
+                builder.addAction(NotificationCompat.Action.Builder(0, reject.label, answer(reject)).build())
+            }
+            prompt.allow?.let { allow ->
+                builder.addAction(
+                    NotificationCompat.Action.Builder(0, allow.label, answer(allow))
+                        .setAuthenticationRequired(true)
+                        .build(),
+                )
+            }
+            builder.setAutoCancel(false)
+        }
+
         if (!hasPostPermission(this)) {
             // API 33+ without the runtime grant: posting is a silent no-op. The runtime
             // request belongs to the UI (see PushPermission); we just skip here.
@@ -141,8 +175,7 @@ class SupermuxMessagingService : FirebaseMessagingService() {
             return
         }
         val nm = NotificationManagerCompat.from(this)
-        // Distinct id per session so concurrent sessions don't overwrite each other.
-        val id = (note.sessionId ?: note.session).hashCode().absoluteValue
+        // Distinct id per session (and per prompt) so concurrent ones don't overwrite each other.
         nm.notify(id, builder.build())
         // The summary carrier for the group. Cleared with the last child by
         // `cancelForSession` (Android usually auto-removes it, but not on every OEM).
