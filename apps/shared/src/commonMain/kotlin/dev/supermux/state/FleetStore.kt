@@ -1421,9 +1421,9 @@ class FleetStore(
         }
     }
 
-    fun mergeIntoBase(id: String, skipVerify: Boolean, onKickoff: (Boolean) -> Unit = {}) {
+    fun mergeIntoBase(id: String, onKickoff: (Boolean) -> Unit = {}) {
         val app = appFor(id) ?: return onKickoff(false)
-        app.mergeIntoBase(id, skipVerify, onKickoff)
+        app.mergeIntoBase(id, onKickoff)
     }
 
     suspend fun finishReadiness(id: String): FinishReadiness? = appFor(id)?.finishReadiness(id)

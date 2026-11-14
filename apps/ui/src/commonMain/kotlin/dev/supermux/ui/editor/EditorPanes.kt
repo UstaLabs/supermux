@@ -485,7 +485,7 @@ fun DiffPane(
     askAgent: ((String) -> Unit)? = null,
     aheadOfBase: Int = 0,
     mergeReadiness: (suspend () -> dev.supermux.net.FinishReadiness?)? = null,
-    mergeIntoBase: ((runChecks: Boolean) -> Unit)? = null,
+    mergeIntoBase: (() -> Unit)? = null,
     mergeJob: dev.supermux.proto.FinishJobDto? = null,
     history: (suspend () -> dev.supermux.net.GitHistory?)? = null,
 ) {

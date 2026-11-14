@@ -1599,9 +1599,10 @@ class HostStore(
             api.finish(id, action, skipVerify, commitFirst, commitMessage, prTitle, prBody, draft, prRequiresGreen, keep)
         }.isSuccess
 
-    /** #72: "Merge into <base>" — the merge job, never archiving the chat; [onKickoff] says if it started. */
-    fun mergeIntoBase(id: String, skipVerify: Boolean, onKickoff: (Boolean) -> Unit = {}) {
-        stateScope.launch { onKickoff(finish(id, "merge", skipVerify = skipVerify, keep = true)) }
+    /** #72: "Merge into <base>" — the merge job, never archiving the chat and with no checks gate
+     *  (deprecated by Ahmet); [onKickoff] says if it started. */
+    fun mergeIntoBase(id: String, onKickoff: (Boolean) -> Unit = {}) {
+        stateScope.launch { onKickoff(finish(id, "merge", skipVerify = true, keep = true)) }
     }
 
     /**

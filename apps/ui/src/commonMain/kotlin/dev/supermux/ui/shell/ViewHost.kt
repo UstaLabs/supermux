@@ -846,7 +846,7 @@ private fun DiffPaneForWorkspace(
         askAgent = reviewSessionId?.let { id -> { text: String -> actions.sendMessage(id, text) } },
         aheadOfBase = reviewGit?.takeIf { it.mode == "base" }?.ahead ?: 0,
         mergeReadiness = reviewSessionId?.let { id -> { actions.finishReadiness(id) } },
-        mergeIntoBase = reviewSessionId?.let { id -> actions.mergeIntoBase?.let { f -> { checks: Boolean -> f(id, !checks) {} } } },
+        mergeIntoBase = reviewSessionId?.let { id -> actions.mergeIntoBase?.let { f -> { f(id) {} } } },
         mergeJob = reviewSessionId?.let { finishJobs[it] },
         history = actions.gitHistory?.let { f -> { f(workspaceId, reviewSessionId, "") } },
         modifier = modifier.fillMaxSize(),

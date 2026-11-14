@@ -79,7 +79,7 @@ class DiffViewTest {
         askAgent: ((String) -> Unit)? = null,
         aheadOfBase: Int = 0,
         mergeReadiness: (suspend () -> dev.supermux.net.FinishReadiness?)? = null,
-        mergeIntoBase: ((Boolean) -> Unit)? = null,
+        mergeIntoBase: (() -> Unit)? = null,
         mergeJob: dev.supermux.proto.FinishJobDto? = null,
         history: (suspend () -> dev.supermux.net.GitHistory?)? = null,
     ): @androidx.compose.runtime.Composable () -> Unit = {
@@ -258,27 +258,27 @@ class DiffViewTest {
     private fun committedOnly() = listOf(RepoDiff(repo = "", files = listOf(DiffFile(path = "src/App.jsx", status = "modified"))))
 
     @Test
-    fun merge_into_the_base_names_it_and_runs_the_checks_only_when_asked() = runComposeUiTest {
-        val merged = mutableListOf<Boolean>()
+    fun merge_into_the_base_names_it_and_merges_on_confirm() = runComposeUiTest {
+        var merged = 0
         setContent(host(committedOnly(), stage = { _, _, _ -> true }, gitWrite = { _, _ -> null }, baseName = "dev", aheadOfBase = 2,
-            mergeReadiness = { dev.supermux.net.FinishReadiness(base = "dev", ahead = 2) }, mergeIntoBase = { merged += it }))
+            mergeReadiness = { dev.supermux.net.FinishReadiness(base = "dev", ahead = 2) }, mergeIntoBase = { merged++ }))
         waitForIdle()
         onNodeWithTag("commit_more").performClick()
         waitForIdle()
         onNodeWithText("Merge into dev…").performClick()
         waitForIdle()
         onNodeWithText("Merge 2 commits into dev").assertExists()
-        onNodeWithTag("merge_run_checks").performClick()
+        onNodeWithTag("merge_run_checks").assertDoesNotExist()   // the checks gate is gone (Ahmet)
         onNodeWithTag("merge_confirm").performClick()
         waitForIdle()
-        assertEquals(listOf(true), merged)
+        assertEquals(1, merged)
     }
 
     @Test
     fun a_chat_with_uncommitted_changes_is_asked_to_commit_before_merging() = runComposeUiTest {
-        val merged = mutableListOf<Boolean>()
+        var merged = 0
         setContent(host(committedOnly(), stage = { _, _, _ -> true }, gitWrite = { _, _ -> null }, baseName = "dev", aheadOfBase = 1,
-            mergeReadiness = { dev.supermux.net.FinishReadiness(base = "dev", ahead = 1, dirtyFiles = listOf("x.txt")) }, mergeIntoBase = { merged += it }))
+            mergeReadiness = { dev.supermux.net.FinishReadiness(base = "dev", ahead = 1, dirtyFiles = listOf("x.txt")) }, mergeIntoBase = { merged++ }))
         waitForIdle()
         onNodeWithTag("commit_more").performClick()
         waitForIdle()
@@ -287,7 +287,7 @@ class DiffViewTest {
         onNodeWithText("This chat has changes that aren't committed. Commit or undo them first.").assertExists()
         onNodeWithTag("merge_confirm").performClick()
         waitForIdle()
-        assertEquals(emptyList(), merged)
+        assertEquals(0, merged)
     }
 
     @Test

@@ -197,7 +197,7 @@ fun DiffView(
     /** #72: "Merge into <base>": the chat's commits not in it, the preflight, the kickoff, and the job. */
     aheadOfBase: Int = 0,
     mergeReadiness: (suspend () -> FinishReadiness?)? = null,
-    mergeIntoBase: ((runChecks: Boolean) -> Unit)? = null,
+    mergeIntoBase: (() -> Unit)? = null,
     mergeJob: FinishJobDto? = null,
     /** #72: the History tab's commits; null: no History tab. */
     history: (suspend () -> GitHistory?)? = null,
@@ -276,10 +276,10 @@ fun DiffView(
     var readiness by remember { mutableStateOf<FinishReadiness?>(null) }
     if (mergeOpen && baseName != null && mergeIntoBase != null) {
         LaunchedEffect(Unit) { readiness = mergeReadiness?.invoke() }
-        MergeDialog(baseName, aheadOfBase, readiness, onMerge = { checks ->
+        MergeDialog(baseName, aheadOfBase, readiness, onMerge = {
             mergeOpen = false
             watchingMerge = true; lastGitWrite = null; lastLatest = null; cancelled = false
-            mergeIntoBase(checks)
+            mergeIntoBase()
         }, onDismiss = { mergeOpen = false })
     }
     // #72: the History tab — which tab is showing, its commits, a naming dialog, and the last action's line.
