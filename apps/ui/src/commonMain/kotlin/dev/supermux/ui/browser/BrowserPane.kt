@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.keys.LocalShortcutDispatcher
@@ -69,6 +68,8 @@ import dev.supermux.webview.WebViewPhase
 import dev.supermux.webview.WebViewState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import dev.supermux.webview.webViewOverlay
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
@@ -165,15 +166,22 @@ fun BrowserPane(
 
     // A port resolves through the by-port route or the previews, so the first page waits for them: three seconds at
     // most, then none.
+    // Both at the same time (#155), and the app keeps them, so a tab after the first finds them at once.
     LaunchedEffect(Unit) {
+        val asked = opening.elapsed()
         var byPortMs: Long? = null
         var proxiesMs: Long? = null
         withTimeoutOrNull(3_000) {
-            val asked = opening.elapsed()
-            byPort = runCatching { actions.byPort() }.getOrNull()
-            byPortMs = opening.elapsed() - asked
-            previews = runCatching { actions.proxies() }.getOrNull()
-            proxiesMs = opening.elapsed() - asked - byPortMs!!
+            coroutineScope {
+                launch {
+                    byPort = runCatching { actions.byPort() }.getOrNull()
+                    byPortMs = opening.elapsed() - asked
+                }
+                launch {
+                    previews = runCatching { actions.proxies() }.getOrNull()
+                    proxiesMs = opening.elapsed() - asked
+                }
+            }
         }
         if (previews == null) previews = emptyList()
         opening.mark("routes", "byPortMs" to byPortMs, "proxiesMs" to proxiesMs)
@@ -215,9 +223,17 @@ fun BrowserPane(
     // While live, this engine is one the host's preview keeper renews the key through (#155): the Browser profile's store
     // is shared, so a key put in through any engine is every tab's.
     val previewSink = remember(state) { PreviewKeeper.Sink<PreviewCookieDto> { state.navigator.setCookie(it.toWebCookie()) } }
-    DisposableEffect(live, actions.preview) {
-        val detach = if (live) actions.preview.attach(previewSink) else null
-        onDispose { detach?.invoke() }
+    // The key is renewed the moment an engine is up (#155), while the routes are still being asked for, not when the first
+    // preview loads: a page waits on the renewal under way instead of starting its own.
+    LaunchedEffect(live, actions.preview) {
+        if (!live) return@LaunchedEffect
+        val detach = actions.preview.attach(previewSink)
+        try {
+            actions.preview.renewIfDue()
+            awaitCancellation()
+        } finally {
+            detach()
+        }
     }
     LaunchedEffect(page, live) {
         val url = page ?: return@LaunchedEffect

@@ -42,9 +42,10 @@ fun rememberBrowserActions(app: HostStore): BrowserActions {
         saveView = { workspaceId, viewId, state, title ->
             runCatching { app.api.patchView(workspaceId, viewId, PatchViewBody(title = title, state = state)) }.isSuccess
         },
-        proxies = { app.proxies() },
+        // Both from one kept answer, asked at the same time (#155): a tab's open no longer waits on two round trips.
+        proxies = { app.previewRoutes().proxies.orEmpty() },
         // By-port pages take the normal login (Ahmet accepted path mode's same-origin risk, 2026-11-08).
-        byPort = { app.api.byPortTemplate() },
+        byPort = { app.previewRoutes().byPort },
         preview = preview,
         // A broker reached over loopback runs on this machine: a desktop that is the host reaches its own that way.
         onHost = TransportPolicy.isLoopback(app.baseUrl),

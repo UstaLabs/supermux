@@ -28,6 +28,7 @@ class ContractTest {
             "fs_dir", "fs_gone", "fs_err",
             "accounts_changed", "account_login_state", "agents_changed", "accounts_settings", "session_state_account", "limit_wait",
             "reply_stream", "reply_stream_thinking", "reply_stream_end", "message_append_live", "activity_append_live", "snapshot_live",
+            "proxy_created", "proxy_updated", "proxy_removed",
         )
         for (n in names) {
             val frame = json.decodeFromString<ServerFrame>(load(n))
@@ -84,6 +85,9 @@ class ContractTest {
                 ServerFrame.AgentModelsChanged -> {}
                 ServerFrame.AccountsChanged -> {}
                 ServerFrame.AgentsChanged -> {}
+                is ServerFrame.ProxyCreated -> {}
+                is ServerFrame.ProxyUpdated -> {}
+                is ServerFrame.ProxyRemoved -> assertEquals("p-5173", frame.domain)
                 is ServerFrame.AgentAvatarChanged -> {}
                 is ServerFrame.AccountLoginState -> {}
                 is ServerFrame.AccountsSettings -> assertEquals(true, frame.autoResume)
