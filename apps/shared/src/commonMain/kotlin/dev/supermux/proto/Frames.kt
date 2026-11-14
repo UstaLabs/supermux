@@ -1010,6 +1010,8 @@ sealed interface ServerFrame {
         val outcome: String,
         /** What was actually chosen ("Allow always", "Reject — too risky"); absent on an older broker. */
         val answerLabel: String? = null,
+        /** #143: who answered (a device name now, a user once supermux has users); absent when not known. */
+        val answeredBy: String? = null,
     ) : ServerFrame
 
     /** Broker `{type:"error", reason}` — switch/respond failures surface here. */
