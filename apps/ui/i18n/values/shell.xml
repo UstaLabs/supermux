@@ -188,4 +188,7 @@
         <item quantity="one">yesterday</item>
         <item quantity="other">%1$d days ago</item>
     </plurals>
+    <string name="open_folder_finder">Show in Finder</string>
+    <string name="open_folder_explorer">Show in Explorer</string>
+    <string name="open_folder_files">Open folder</string>
 </resources>

@@ -187,4 +187,7 @@
         <item quantity="one">dün</item>
         <item quantity="other">%1$d gün önce</item>
     </plurals>
+    <string name="open_folder_finder">Finder'da göster</string>
+    <string name="open_folder_explorer">Dosya Gezgini'nde göster</string>
+    <string name="open_folder_files">Klasörü aç</string>
 </resources>

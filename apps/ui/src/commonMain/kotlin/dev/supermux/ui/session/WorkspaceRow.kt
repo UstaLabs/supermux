@@ -82,11 +82,14 @@ fun workspaceRowContextLabels(
     canMarkRead: Boolean = false,
     /** The list supports multi-select (batch actions). */
     selectable: Boolean = false,
+    /** The workspace's folder is on this computer: "Show folder", shown as "Show in Finder" and its kin (#149). */
+    showFolder: Boolean = false,
 ): List<String> = buildList {
     add("Rename")
     add(if (mute) "Unmute" else "Mute")
     if (canMarkRead) add("Mark as read")
     if (selectable) add("Select")
+    if (showFolder) add("Show folder")
     add("Archive")
 }
 
@@ -134,6 +137,8 @@ fun WorkspaceRow(
     onMarkRead: (() -> Unit)? = null,
     /** Start a multi-select with this row; null hides the entry. */
     onSelect: (() -> Unit)? = null,
+    /** "Show in Finder" / "Show in Explorer" / "Open folder" (#149); null hides it (a remote host, a phone). */
+    folder: RowContextMenuEntry? = null,
     /** Multi-select is on: a checkbox replaces the status mark and [onClick] toggles the row. */
     selecting: Boolean = false,
     selected: Boolean = false,
@@ -183,12 +188,13 @@ fun WorkspaceRow(
         "Mark as read" to localized(Str.sessions_row_mark_read),
         "Select" to localized(Str.sessions_row_select),
         "Archive" to localized(Str.sessions_row_archive),
-    )
+    ) + listOfNotNull(folder?.let { "Show folder" to it.label })
     val newChatWord = localized(Str.sessions_row_new_chat_here)
     val labels = workspaceRowContextLabels(
         mute = mute,
         canMarkRead = onMarkRead != null && model.unread,
         selectable = onSelect != null,
+        showFolder = folder != null,
     )
     fun entry(label: String) = RowContextMenuEntry(words[label] ?: label) {
         when (label) {
@@ -197,6 +203,7 @@ fun WorkspaceRow(
             "Mark as read" -> onMarkRead?.invoke()
             "Select" -> onSelect?.invoke()
             "Archive" -> onKill()
+            "Show folder" -> folder?.onClick?.invoke()
         }
     }
     Box(modifier.then(dragModifier).fillMaxWidth()) {
