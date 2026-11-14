@@ -100,7 +100,8 @@ fun main() {
     // stageForBroker puts the Compose resource tree under assets/ so it inherits the broker's
     // immutable cache rule; the runtime must look for it there. The two MUST agree.
     // The string catalogs (#123) carry their content version: one release's strings never come from another's cache.
-    configureWebResources { resourcePathMapping { path -> "assets/" + versionedResourcePath(path) } }
+    // JetBrains Mono ships once: the editor's faces are fetched from the terminal's copy (SharedResourcePath.kt).
+    configureWebResources { resourcePathMapping { path -> "assets/" + versionedResourcePath(sharedResourcePath(path)) } }
     WebAppState.install()
 
     val settings = LocalStorageSettingsStore()

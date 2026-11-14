@@ -417,6 +417,20 @@ val stageForBroker by tasks.registering {
             if (f.name == "index.html") dst.writeText(rewrite(f.readText(), "")) else f.copyTo(dst, overwrite = true)
         }
 
+        // JetBrains Mono ships once (#142): the app fetches the editor's faces from the terminal's copy
+        // (SharedResourcePath.kt, whose SHARED_MONO_FACES must name these same files), so the editor's
+        // copy is dropped here, but only while the two are still byte-identical.
+        val sharedMonoFaces = listOf("jetbrains_mono_regular.ttf", "jetbrains_mono_bold.ttf", "jetbrains_mono_italic.ttf")
+        for (face in sharedMonoFaces) {
+            val editorCopy = staging.resolve("assets/composeResources/dev.supermux.editor.compose.resources/font/$face")
+            val terminalCopy = staging.resolve("assets/composeResources/dev.supermux.terminal.compose.resources/font/$face")
+            check(terminalCopy.isFile && editorCopy.isFile && editorCopy.readBytes().contentEquals(terminalCopy.readBytes())) {
+                "$face: the editor's and the terminal's JetBrains Mono differ or are missing; " +
+                    "SharedResourcePath.kt would serve the editor the terminal's bytes — update both copies together"
+            }
+            check(editorCopy.delete()) { "could not drop the editor's copy of $face" }
+        }
+
         // The PWA shell, copied verbatim into the staged root: `sw.js` must be served from `/`
         // (its registration scope), the manifest and favicon are linked by bare name from
         // index.html, and `icons/` is referenced absolutely (`/icons/icon-192.png`) by both the
