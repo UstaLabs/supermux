@@ -174,7 +174,6 @@ import io.github.kdroidfilter.composemediaplayer.VideoPlayerSurface
 import io.github.kdroidfilter.composemediaplayer.rememberVideoPlayerState
 import dev.supermux.chat.previewFilename
 import dev.supermux.fs.fileNameOf
-import dev.supermux.ui.i18n.Str
 
 // ---------------------------------------------------------------------------
 // Reading width
