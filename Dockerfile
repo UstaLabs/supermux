@@ -210,6 +210,9 @@ COPY . .
 # comes from the JDK stage above. Nothing but this COPY puts a web UI in the
 # image; without it the broker boots and serves 404 for the shell.
 COPY --from=webbuild /src/src/channels/web/static ./src/channels/web/static
+# Brotli siblings for the assets (#142). The release context already carries them (its web-client job
+# made them), so there this only checks mtimes; a from-source build compresses here, natively.
+RUN bun scripts/precompress-static.ts src/channels/web/static
 
 # ── 5b. Workspace-terminal backend ────────────────────────────────────────────
 # The verified bundle from stage 0b, at a fixed path the broker is TOLD about

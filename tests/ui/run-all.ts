@@ -23,6 +23,7 @@ import { main as composerAttachment } from "./composer-attachment.spec"
 import { main as voiceRecorder } from "./voice-recorder.spec"
 import { main as dictationStream } from "./dictation-stream.spec"
 import { main as pushBanner } from "./push-banner.spec"
+import { main as bundleSmoke } from "./bundle-smoke.spec"
 
 const JOURNEYS: Array<[string, () => Promise<void>]> = [
   ["core-journey", coreJourney],
@@ -30,6 +31,8 @@ const JOURNEYS: Array<[string, () => Promise<void>]> = [
   ["voice-recorder", voiceRecorder],
   ["dictation-stream", dictationStream],
   ["push-banner", pushBanner],
+  // Last: it opens a Terminal tab in the shared workspace, which no journey above expects.
+  ["bundle-smoke", bundleSmoke],
 ]
 
 async function run(): Promise<void> {

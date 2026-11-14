@@ -130,6 +130,7 @@ import { buildMenuEntries, menuRefresher } from "./channels/telegram/menu"
 import { MessageStore } from "./core/session-manager/messages"
 import { openDb, runMigrations } from "./core/storage/db"
 import { MIGRATIONS } from "./core/storage/migrations"
+import { initStorage } from "./core/storage/open"
 import { checkSchemaStamp, writeSchemaStamp } from "./core/storage/schema-stamp"
 import { sweepRuntimeAssets } from "./core/runtime-assets-gc"
 import { BUILD_VERSION, BUILD_COMMIT, IS_COMPILED, versionString } from "./shared/build-info"
@@ -440,11 +441,23 @@ startTraces.setLog(perfLog)
 setPerfMarkSink((sessionId, event, fields) => startTraces.markSession(sessionId, event, fields, true))
 let db: ReturnType<typeof openDb>
 try {
-  db = openDb(dbPath)
-  runMigrations(db, MIGRATIONS)
+  // A lock still held after a crash (a credential helper, `supermux connect`, WAL recovery) is waited out, not fatal:
+  // under systemd or launchd an exit here would be a restart loop.
+  db = initStorage(() => {
+    const opened = openDb(dbPath)
+    try {
+      runMigrations(opened, MIGRATIONS)
+    } catch (err) {
+      opened.close()
+      throw err
+    }
+    return opened
+  }, {
+    onRetry: (attempt, waitMs, err) => log.warn("storage_locked_retry", { dbPath, attempt, wait_ms: waitMs, holders: proc.holders(dbPath), err: String((err as Error)?.message ?? err) }),
+  })
   writeSchemaStamp(STATE_DIR, MIGRATIONS.length)
 } catch (err: any) {
-  log.error("storage_init_failed", { dbPath, err: err?.message ?? String(err) })
+  log.error("storage_init_failed", { dbPath, err: err?.message ?? String(err), holders: proc.holders(dbPath) })
   process.exit(1)
 }
 

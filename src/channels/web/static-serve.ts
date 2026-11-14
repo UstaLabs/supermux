@@ -67,6 +67,31 @@ function maybeGzip(candidate: string, body: Buffer, acceptEncoding: string | und
   return { body }
 }
 
+// #142: a client that accepts br gets the staged brotli sibling (`x.wasm.br`, written once at stage time
+// by scripts/precompress-static.ts: q11 on the app wasm is ~1.5 min of CPU, far too slow per request).
+// Without a sibling, or for a gzip-only client, nothing changes. `br;q=0` is a refusal.
+function acceptsBrotli(acceptEncoding: string | undefined): boolean {
+  if (!acceptEncoding) return false
+  return acceptEncoding.split(",").some((part) => {
+    const [name, ...params] = part.trim().split(";").map((x) => x.trim())
+    if (name !== "br") return false
+    const q = params.find((p) => p.startsWith("q="))
+    return q === undefined || Number(q.slice(2)) > 0
+  })
+}
+
+// The sibling's bytes, or null. On disk it must be at least as new as its original: a file restaged in
+// place under the same name with a leftover .br would otherwise serve the previous build's bytes.
+function brotliSibling(opts: { filePath?: string; mtimeMs?: number; embeddedBr?: string }): Buffer | null {
+  if (opts.filePath) {
+    const br = opts.filePath + ".br"
+    const stat = existsSync(br) ? statSync(br) : undefined
+    if (!stat?.isFile() || (opts.mtimeMs !== undefined && stat.mtimeMs < opts.mtimeMs)) return null
+    return readFileSync(br)
+  }
+  return opts.embeddedBr ? readFileSync(opts.embeddedBr) : null
+}
+
 function cacheControlFor(candidate: string): string {
   // Vite emits hashed filenames under /assets/ — those are content-addressed
   // (changing the bundle changes the URL) and safe to cache forever.
@@ -96,20 +121,24 @@ export function serveStatic(opts: { staticDir: string | undefined; embedded: Rec
     const filePath = join(opts.staticDir, candidate)
     const stat = existsSync(filePath) ? statSync(filePath) : undefined
     if (stat?.isFile()) {
+      const headers: Record<string, string> = { ...SECURITY_HEADERS, "content-type": guessMime(filePath), "cache-control": cacheControlFor(candidate) }
+      const br = acceptsBrotli(opts.acceptEncoding) ? brotliSibling({ filePath, mtimeMs: stat.mtimeMs }) : null
+      if (br) return new Response(br, { headers: { ...headers, "content-encoding": "br", vary: "Accept-Encoding" } })
       const raw = readFileSync(filePath)
       const { body, encoding } = maybeGzip(candidate, raw, opts.acceptEncoding, stat.mtimeMs)
-      const headers: Record<string, string> = { ...SECURITY_HEADERS, "content-type": guessMime(filePath), "cache-control": cacheControlFor(candidate) }
-      if (encoding) headers["content-encoding"] = encoding
+      if (encoding) Object.assign(headers, { "content-encoding": encoding, vary: "Accept-Encoding" })
       return new Response(body, { headers })
     }
   }
 
   const embeddedPath = opts.embedded[candidate]
   if (embeddedPath) {
+    const headers: Record<string, string> = { ...SECURITY_HEADERS, "content-type": guessMime(candidate), "cache-control": cacheControlFor(candidate) }
+    const br = acceptsBrotli(opts.acceptEncoding) ? brotliSibling({ embeddedBr: opts.embedded[candidate + ".br"] }) : null
+    if (br) return new Response(br, { headers: { ...headers, "content-encoding": "br", vary: "Accept-Encoding" } })
     const raw = readFileSync(embeddedPath)
     const { body, encoding } = maybeGzip(candidate, raw, opts.acceptEncoding)
-    const headers: Record<string, string> = { ...SECURITY_HEADERS, "content-type": guessMime(candidate), "cache-control": cacheControlFor(candidate) }
-    if (encoding) headers["content-encoding"] = encoding
+    if (encoding) Object.assign(headers, { "content-encoding": encoding, vary: "Accept-Encoding" })
     return new Response(body, { headers })
   }
 
