@@ -1,0 +1,7 @@
+/* #123: Turkish. Keys are the English text, as SwiftUI looks them up. */
+
+"Allow camera access to scan the pairing QR code." = "Eşleştirme karekodunu taramak için kameraya erişim izni verin.";
+"Camera unavailable. Paste the pairing link instead." = "Kamera kullanılamıyor. Bunun yerine eşleştirme bağlantısını yapıştırın.";
+"QR scanning is unavailable. Paste the pairing link instead." = "Karekod tarama kullanılamıyor. Bunun yerine eşleştirme bağlantısını yapıştırın.";
+"Camera access is off. Enable it in Settings, or close the scanner and paste the pairing link." = "Kamera erişimi kapalı. Ayarlar'dan açın ya da tarayıcıyı kapatıp eşleştirme bağlantısını yapıştırın.";
+"Scan pairing code" = "Eşleştirme kodunu tara";

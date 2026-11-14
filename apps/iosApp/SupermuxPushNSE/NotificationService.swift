@@ -166,12 +166,12 @@ class NotificationService: UNNotificationServiceExtension {
 
     private static func mediaLabel(_ kind: String?) -> String {
         switch kind {
-        case "photo": return "Sent a photo"
-        case "voice": return "Sent a voice message"
-        case "audio": return "Sent audio"
-        case "video_note": return "Sent a video note"
-        case "document": return "Sent a document"
-        default: return "New message"
+        case "photo": return String(localized: "Sent a photo")
+        case "voice": return String(localized: "Sent a voice message")
+        case "audio": return String(localized: "Sent audio")
+        case "video_note": return String(localized: "Sent a video note")
+        case "document": return String(localized: "Sent a document")
+        default: return String(localized: "New message")
         }
     }
 }

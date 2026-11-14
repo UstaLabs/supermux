@@ -85,7 +85,7 @@ struct QRScannerView: UIViewControllerRepresentable {
             case .authorized:
                 configureAndStart()
             case .notDetermined:
-                showStatus("Allow camera access to scan the pairing QR code.")
+                showStatus(String(localized: "Allow camera access to scan the pairing QR code."))
                 AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
                     DispatchQueue.main.async {
                         guard let self else { return }
@@ -114,7 +114,7 @@ struct QRScannerView: UIViewControllerRepresentable {
             guard let device = AVCaptureDevice.default(for: .video),
                   let input = try? AVCaptureDeviceInput(device: device),
                   session.canAddInput(input) else {
-                DispatchQueue.main.async { [weak self] in self?.showStatus("Camera unavailable. Paste the pairing link instead.") }
+                DispatchQueue.main.async { [weak self] in self?.showStatus(String(localized: "Camera unavailable. Paste the pairing link instead.")) }
                 return
             }
             session.beginConfiguration()
@@ -122,7 +122,7 @@ struct QRScannerView: UIViewControllerRepresentable {
             let output = AVCaptureMetadataOutput()
             guard session.canAddOutput(output) else {
                 session.commitConfiguration()
-                DispatchQueue.main.async { [weak self] in self?.showStatus("QR scanning is unavailable. Paste the pairing link instead.") }
+                DispatchQueue.main.async { [weak self] in self?.showStatus(String(localized: "QR scanning is unavailable. Paste the pairing link instead.")) }
                 return
             }
             session.addOutput(output)
@@ -133,7 +133,7 @@ struct QRScannerView: UIViewControllerRepresentable {
         }
 
         private func showDenied() {
-            showStatus("Camera access is off. Enable it in Settings, or close the scanner and paste the pairing link.")
+            showStatus(String(localized: "Camera access is off. Enable it in Settings, or close the scanner and paste the pairing link."))
         }
 
         private func showStatus(_ text: String?) {

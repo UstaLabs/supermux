@@ -258,7 +258,7 @@ final class SwiftBridge: NSObject, IosBridge {
         let scanner = QRScannerView.ScannerController(
             coordinator: QRScannerView.Coordinator { code in delegate.finish(code) }
         )
-        scanner.title = "Scan pairing code"
+        scanner.title = String(localized: "Scan pairing code")
         let nav = UINavigationController(rootViewController: scanner)
         scanner.navigationItem.leftBarButtonItem = UIBarButtonItem(
             systemItem: .cancel,
