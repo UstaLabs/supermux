@@ -415,6 +415,13 @@ class HostStore(
     private var viewingOnList: Boolean = false
     private var viewingVisible: Boolean = false
     private var lastSentViewing: List<ClientFrame.Viewing>? = null
+    private val _chatsOnScreen = MutableStateFlow<Set<String>>(emptySet())
+
+    /**
+     * Card #154: the chats on screen with this app in front, as its viewing presence reports them (a desktop window
+     * counts only while focused). The assistant overlay stays quiet about a reply in one of these.
+     */
+    val chatsOnScreen: StateFlow<Set<String>> = _chatsOnScreen.asStateFlow()
     /** Card #62: chats whose live text this app wants without their being on screen ([pinLive]). */
     @Volatile private var livePinned: List<String> = emptyList()
     /** The optional frames the broker said it takes (its last snapshot's `accepts`): nothing until it says. */
@@ -931,6 +938,7 @@ class HostStore(
         viewingSessionIds = if (visible && session != null) listOf(session) else emptyList()
         viewingOnList = visible && session == null
         viewingVisible = visible
+        _chatsOnScreen.value = viewingSessionIds.toSet()
         // Optimistic clear (web useUnread.markRead / Android parity). Server confirms via
         // session_read after the viewing frame advances the read pointer.
         if (visible && session != null) markRead(session)
@@ -949,6 +957,7 @@ class HostStore(
         viewingSessionIds = if (visible) sessionIds.distinct() else emptyList()
         viewingOnList = visible && viewingSessionIds.isEmpty()
         viewingVisible = visible
+        _chatsOnScreen.value = viewingSessionIds.toSet()
         if (visible) {
             for (id in viewingSessionIds) markRead(id)
         }
