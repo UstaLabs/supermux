@@ -2137,7 +2137,7 @@ private fun WorkspacePanel(
                 val hostedLayout = ui.windows.layoutFor(ui.windows.mainHostId, localLayout)
                 WorkspacePanes(
                     hostId = ui.windows.mainHostId,
-                    layout = hostedLayout,
+                    layout = withoutClosing(hostedLayout, ws.closing.keys),
                     current = current,
                     session = workspaceSession,
                     ws = ws,
