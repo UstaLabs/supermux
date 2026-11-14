@@ -1183,7 +1183,13 @@ data class CompactionDto(
     /** The summary the agent kept (Claude). */
     val summary: String? = null,
     val error: String? = null,
+    /** Who started it: a paired device (by name), supermux (#146's automatic Compact) or the agent itself. */
+    val actor: CompactionActorDto? = null,
 )
+
+/** [kind]: device | supermux | agent; [name] for a device. */
+@Serializable
+data class CompactionActorDto(val kind: String, val name: String? = null)
 
 /** #146: the 5-hour window is [usedPct] full and resets at [resetsAt] (epoch ms); [auto]: at 95%+, where the opt-in mode acts. */
 @Serializable

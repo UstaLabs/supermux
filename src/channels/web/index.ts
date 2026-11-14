@@ -369,7 +369,7 @@ export interface WebChannelOpts {
    */
   getSessionContext?: (id: string) => Promise<SessionContextReport | undefined>
   /** #144 Compact: queued like a message; the note is kept only where the agent takes one. */
-  compactSession?: (id: string, note?: string) => Promise<{ ok: true } | { ok: false; status: number; error: string }>
+  compactSession?: (id: string, note: string | undefined, actor: import("../../core/session-manager/messages").CompactionActor) => Promise<{ ok: true } | { ok: false; status: number; error: string }>
   getSessionBgTasks?: (name: string) => unknown[]
   /** Latest view of each subagent of a session (snapshot `subagents`; live `subagent_update`). */
   getSessionSubagents?: (id: string) => unknown[]
@@ -4380,7 +4380,10 @@ export class WebChannel implements Channel {
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
       if (body.note !== undefined && typeof body.note !== "string") return this.json({ error: "note must be a string" }, 400)
       if (!this.opts.compactSession) return this.json({ error: "not configured" }, 503)
-      const result = await this.opts.compactSession(id, body.note as string | undefined)
+      // Who asked: the paired device (the team rule: the actor goes with what it changed).
+      const auth = this.authenticate(req)
+      const actor = auth.ok ? { kind: "device" as const, name: auth.device.name } : { kind: "supermux" as const }
+      const result = await this.opts.compactSession(id, body.note as string | undefined, actor)
       return result.ok ? this.json({ ok: true }, 202) : this.json({ error: result.error }, result.status)
     }
     if (method === "GET" && path.match(/^\/sessions\/[^/]+\/context$/)) {
