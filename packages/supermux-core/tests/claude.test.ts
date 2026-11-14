@@ -667,3 +667,13 @@ test('rules with spaces inside their parentheses (exact Bash commands) survive t
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+// #143: a prompt the host closed with a reason (an interrupt) reaches Claude Code as that reason, not "Permission denied".
+test('a cancelled host permission with a message denies with that message', async () => {
+  const reason = 'Not answered: a message from X interrupted the turn. Nobody refused it.'
+  const r = await hostDriver({EXPECT_PERM: 'deny-message', EXPECT_DENY_MESSAGE: reason}).open(ctx({
+    requestPermission: async () => ({outcome: {outcome: 'cancelled'}, message: reason}),
+  }))
+  try { expect(await r.prompt(input('permission'), signal())).toEqual({stopReason: 'end_turn'}) }
+  finally { await r.close({ mode: "shutdown" }) }
+})

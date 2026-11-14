@@ -260,3 +260,63 @@ test("user-question event, respond answers, decline, invalid_input, interrupt", 
   expect(eventsI.some(e => e.type === "session.event" && e.event.kind === "request-resolved" && e.event.outcome === "cancelled")).toBe(true)
 })
 
+
+// #143: an interrupt with a reason answers the open prompt with it, BEFORE the driver is told to interrupt, so the
+// agent reads "not answered: …" and not its own "the user doesn't want to proceed".
+test("interrupt with a reason answers an open permission prompt with it, before the driver's interrupt", async () => {
+  const order: string[] = []
+  const driver: AgentDriver = {
+    id: "test",
+    async open(ctx) {
+      return {
+        agentSessionId: "native-1",
+        capabilities: { resume: true, steer: false, fork: false, detach: false },
+        async prompt(_content, signal) {
+          const answer = await ctx.requestPermission({
+            sessionId: "native-1", coreSessionId: ctx.sessionId,
+            toolCall: { toolCallId: "c1", title: "Bash", kind: "execute", rawInput: { command: "ls" } },
+            options: [{ optionId: "allow_once", name: "Allow once", kind: "allow_once" }],
+          }, signal)
+          order.push(`answered:${answer.outcome.outcome}:${(answer as { message?: string }).message ?? ""}`)
+          return { stopReason: "cancelled" }
+        },
+        async interrupt() { order.push("interrupt") },
+        async close() {},
+      } satisfies AgentRuntime
+    },
+  }
+  const core = await setup(driver)
+  const session = await core.sessions.create({ agent: "test", cwd: process.cwd(), id: nextId() })
+  await session.send({ content: [{ type: "text", text: "go" }], whenBusy: "queue" })
+  const t = Date.now()
+  while (session.requests.list().length === 0 && Date.now() - t < 1000) await new Promise(r => setTimeout(r, 5))
+  await session.interrupt({ pending: "keep", reason: "Not answered: X interrupted." })
+  expect(order).toEqual(["answered:cancelled:Not answered: X interrupted.", "interrupt"])
+})
+
+test("pending.notice goes before the next input the queue runs, once", async () => {
+  const prompts: string[][] = []
+  const driver: AgentDriver = {
+    id: "test",
+    async open() {
+      return {
+        agentSessionId: "native-1",
+        capabilities: { resume: true, steer: false, fork: false, detach: false },
+        async prompt(content) {
+          prompts.push(content.map((b) => (b as { text?: string }).text ?? ""))
+          return { stopReason: "end_turn" }
+        },
+        async interrupt() {},
+        async close() {},
+      } satisfies AgentRuntime
+    },
+  }
+  const core = await setup(driver)
+  const session = await core.sessions.create({ agent: "test", cwd: process.cwd(), id: nextId() })
+  session.pending.notice("NOTE")
+  const a = await session.send({ content: [{ type: "text", text: "a" }], whenBusy: "queue" })
+  const b = await session.send({ content: [{ type: "text", text: "b" }], whenBusy: "queue" })
+  await a.completed
+  await b.completed
+  expect(prompts).toEqual([["NOTE", "a"], ["b"]])
+})
