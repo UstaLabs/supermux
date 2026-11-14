@@ -646,6 +646,8 @@ fun Composer(
     permissionModes: List<PermissionModeInfo> = emptyList(),
     sessionPermissionMode: String? = null,
     onSetPermissionMode: (String) -> Unit = {},
+    /** #144: the context ring, drawn before the mic in the default toolbar; null = none. */
+    contextControl: (@Composable () -> Unit)? = null,
     onPickModel: (String) -> Unit = {},
     onPickReasoning: (String) -> Unit = {},
     /** Fast mode on/off for a model that offers it; null hides the toggle. */
@@ -1706,6 +1708,7 @@ fun Composer(
                                     )
                                 }
                             }
+                            contextControl?.invoke()
                             toolbarScope.Mic()
                             toolbarScope.Send()
                         }

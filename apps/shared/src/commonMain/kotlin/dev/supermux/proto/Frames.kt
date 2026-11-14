@@ -61,6 +61,12 @@ data class SessionInfo(
     val accountLabel: String? = null,
     /** #92: every account of its agent is out and it waits for the first reset; null = no wait. */
     val limitWait: LimitWaitDto? = null,
+    /** How full the agent's context window is (#144), when the agent reports it; null until it does. */
+    val context: ContextUsageDto? = null,
+    /** Broker-derived behaviour flags; only #144's Compact flags are read here. Null on an older broker. */
+    val capabilities: SessionCapabilitiesDto? = null,
+    /** #146: compact now, before the usage limit's wait (the agent's 5-hour window is close to its wall). */
+    val compactAdvice: CompactAdviceDto? = null,
 )
 
 /** #92: when a session resumes by itself after a usage limit, and on which account. ISO times. */
@@ -133,6 +139,8 @@ data class LogEntry(
     val card: HtmlCardDto? = null,
     /** #104: on the user's message a click in an html card sent. */
     @SerialName("from_card") val fromCard: FromCardDto? = null,
+    /** #144: the "Compacted" line (op "compaction"): how it went, the context before → after, Claude's summary. */
+    val compaction: CompactionDto? = null,
 )
 
 /**
@@ -765,7 +773,7 @@ sealed interface ServerFrame {
 
     /** The accounts settings changed (PUT /settings/accounts). */
     @Serializable @SerialName("accounts_settings")
-    data class AccountsSettings(val autoSwitch: Boolean = false, val autoResume: Boolean = true) : ServerFrame
+    data class AccountsSettings(val autoSwitch: Boolean = false, val autoResume: Boolean = true, val compactBeforeWait: Boolean = false) : ServerFrame
 
     /** #92: a session's wait for a usage-limit reset was made, replaced or dropped ([wait] null). */
     @Serializable @SerialName("limit_wait")
@@ -848,6 +856,26 @@ sealed interface ServerFrame {
     /** One of [session]'s councils changed; [council] is its full latest view (upsert by id). */
     @Serializable @SerialName("council_update")
     data class CouncilUpdate(val session: String, val council: CouncilView) : ServerFrame
+
+    /** #146: a session's "compact before the limit" advice changed (null: none now). */
+    @Serializable @SerialName("compact_advice")
+    data class CompactAdvice(val session: String, val advice: CompactAdviceDto? = null) : ServerFrame
+
+    /** #144: a session's compaction started ("in_progress") or ended (its line follows as a message_append). */
+    @Serializable @SerialName("compaction")
+    data class Compaction(
+        val session: String,
+        val id: String,
+        val status: String,
+    ) : ServerFrame
+
+    /** How full a session's context window is (#144): pushed as the agent reports it. */
+    @Serializable @SerialName("context_usage")
+    data class ContextUsage(
+        val session: String,
+        val used: Long,
+        val size: Long,
+    ) : ServerFrame
 
     @Serializable @SerialName("commands_changed")
     data class CommandsChanged(
@@ -1133,3 +1161,30 @@ sealed interface ClientFrame {
 /** One `client_logs` entry: [ts] is the app's own clock (ms since launch for "perf"). */
 @Serializable
 data class ClientLogEntry(val category: String, val event: String, val ts: Long, val data: JsonObject? = null)
+
+/** How full an agent's context window is (#144): tokens in use of the model's window. */
+@Serializable
+data class ContextUsageDto(val used: Long, val size: Long)
+
+/** #144: whether the agent can Compact on request, and whether its Compact takes a note on what to keep. */
+@Serializable
+data class SessionCapabilitiesDto(val compact: Boolean = false, val compactNote: Boolean = false)
+
+/** #144: a "Compacted" line. [status]: completed | failed | cancelled. Sizes in tokens, where the agent says. */
+@Serializable
+data class CompactionDto(
+    val status: String,
+    val before: Long? = null,
+    val after: Long? = null,
+    /** manual (the user's Compact) or auto (the agent's own). */
+    val trigger: String? = null,
+    /** What the user asked to keep. */
+    val note: String? = null,
+    /** The summary the agent kept (Claude). */
+    val summary: String? = null,
+    val error: String? = null,
+)
+
+/** #146: the 5-hour window is [usedPct] full and resets at [resetsAt] (epoch ms); [auto]: at 95%+, where the opt-in mode acts. */
+@Serializable
+data class CompactAdviceDto(val usedPct: Int, val resetsAt: Long, val auto: Boolean = false)

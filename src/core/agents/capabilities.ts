@@ -19,6 +19,10 @@ export interface SessionCapabilities {
    *  the "Change now (ends current turn)" button (non-claude today; claude
    *  applies config changes live without a restart). */
   supportsLiveConfigChange: boolean
+  /** #144: the agent can Compact on request (all but Cursor, whose ACP has no way to). */
+  compact: boolean
+  /** #144: its Compact takes a note on what to keep (Claude, Antigravity; verified live). */
+  compactNote: boolean
 }
 
 export interface AgentAuthCapabilities {
@@ -37,6 +41,8 @@ export function sessionCapabilities(agent: AgentKind): SessionCapabilities {
   return {
     hasAgentTerminal: persistent,
     supportsLiveConfigChange: !persistent,
+    compact: agent !== AgentKind.Cursor,
+    compactNote: agent === AgentKind.Claude || agent === AgentKind.Antigravity,
   }
 }
 

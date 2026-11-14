@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto'
-import type { AgentDriver, CloseOptions, ContentBlock, PermissionHandler, PermissionsSpec } from '../types.js'
+import type { AgentDriver, AgentRuntime, CloseOptions, ContentBlock, PermissionHandler, PermissionsSpec } from '../types.js'
 import { requireCloseMode } from '../types.js'
 import { launchArgs, launchEnv } from '../launch.js'
 import { appliedFor, launchPermissions, validatePermissionsSpec } from '../permissions.js'
 import type { RequestPermissionResponse } from '@agentclientprotocol/sdk'
 import { transport } from './transport.js'
-import { createClaudeNormalizer, initializeReplyForHost } from './normalize.js'
+import { claudeContextBreakdown, createClaudeNormalizer, initializeReplyForHost } from './normalize.js'
 import { CoreError } from '../errors.js'
 import { CLAUDE_CONTEXT, appliedContext, claudeContextArgs, editPluginFolder } from '../context/agents.js'
 import { EMPTY_CONTEXT_FINGERPRINT } from '../context/index.js'
@@ -699,6 +699,12 @@ export function claude(options: ClaudeOptions): AgentDriver {
         if (fatal || closed) throw fatal ?? new CoreError('runtime_closed', 'Claude runtime closed')
         return { via: 'relay' as const, relay: claudeRelayPrompt(normalizer.subagent(subagentId)?.taskId ?? subagentId, content) }
       },
+      async contextBreakdown() {
+        if (fatal || closed) throw fatal ?? new CoreError('runtime_closed', 'Claude runtime closed')
+        // "summary" answers from the last request's usage and local counts: no extra API call (verified on 2.1.308).
+        const reply = await rpc.request({ subtype: 'get_context_usage', detail: 'summary' }, { optional: true })
+        return claudeContextBreakdown(reply?.response)
+      },
       async stopSubagent(subagentId) {
         if (fatal || closed) throw fatal ?? new CoreError('runtime_closed', 'Claude runtime closed')
         const known = normalizer.subagent(subagentId)
@@ -707,6 +713,11 @@ export function claude(options: ClaudeOptions): AgentDriver {
         normalizer.markClientStop(known.id)
         try { await rpc.request({ subtype: 'stop_task', task_id: known.taskId }) }
         catch (error) { normalizer.clearClientStop(known.id); throw error }
+      },
+      // #144 Compact: Claude's own /compact, which takes what to keep ("/compact <instructions>", verified on 2.1.308).
+      compactTakesNote: true,
+      async compact(note, signal) {
+        return (this as AgentRuntime).prompt([{ type: 'text', text: note?.trim() ? `/compact ${note.trim()}` : '/compact' }], signal)
       },
       async prompt(content, signal) {
         if (fatal || closed) throw fatal ?? new Error('Claude runtime closed')

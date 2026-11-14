@@ -87,6 +87,26 @@ type OpenTool = {
 export function createAntigravityNormalizer(options: { epoch?: string } = {}): AntigravityNormalizer {
   let epoch = options.epoch ?? "0"
   let aliases: Record<string, string> = {}
+  /** #144: the last step's prompt size, and the window the driver read (0 = not known: tokens, no %). */
+  let contextUsed: number | undefined
+  let windowSize: number | undefined
+  let reportedUsed: number | undefined
+  function contextUpdate(force = false): NormalizedBody[] {
+    if (contextUsed == null || (!force && contextUsed === reportedUsed)) return []
+    reportedUsed = contextUsed
+    return [{ kind: "usage", context: { used: contextUsed, size: windowSize ?? 0 } }]
+  }
+  /** A finished step's prompt (its input plus cache reads) is how full the window is now. */
+  function stepContext(step: Record<string, unknown>): NormalizedBody[] {
+    const usage = rec(step.usage)
+    if (step.state !== "DONE" || !usage) return []
+    const used = (num(usage.input_tokens) ?? 0) + (num(usage.cache_read_tokens) ?? 0)
+    if (used <= 0) return []
+    contextUsed = used
+    return contextUpdate()
+  }
+  /** Checkpoint steps (agy's compaction, #144) whose start was already told. */
+  const checkpoints = new Set<string>()
   let text = new Map<string, string>()
   let tools = new Map<string, OpenTool>()
   let turn = { input: 0, output: 0, total: 0, seen: false }
@@ -223,6 +243,13 @@ export function createAntigravityNormalizer(options: { epoch?: string } = {}): A
       const res = rec(frame.result)
       return res ? result(res) : []
     }
+    if (frame.event === "context_window") {
+      // The driver read the window from agy's conversation DB (#144).
+      const size = num(frame.size)
+      if (size == null || size <= 0 || size === windowSize) return []
+      windowSize = size
+      return contextUpdate(true)
+    }
     if (frame.event !== "step_update") return []
     const step = rec(frame.step_update)
     const index = num(step?.step_index)
@@ -230,8 +257,20 @@ export function createAntigravityNormalizer(options: { epoch?: string } = {}): A
     const id = `${epoch}:${index}`
     switch (step.step_type) {
       case "user_input": return finals()
-      case "agent_response": return agentResponse(id, step)
-      case "tool": return toolStep(id, step)
+      case "agent_response": return [...agentResponse(id, step), ...stepContext(step)]
+      case "tool": return [...toolStep(id, step), ...stepContext(step)]
+      case "checkpoint": {
+        // agy's compaction (#144: /compact, or its own): it reads the whole context once, so its input is the "before".
+        if (step.state !== "DONE") {
+          if (checkpoints.has(id)) return []
+          checkpoints.add(id)
+          return [{ kind: "compaction", compactionId: id, status: "in_progress" }]
+        }
+        const usage = rec(step.usage)
+        const before = usage ? (num(usage.input_tokens) ?? 0) + (num(usage.cache_read_tokens) ?? 0) : 0
+        checkpoints.delete(id)
+        return [{ kind: "compaction", compactionId: id, status: "completed", ...(before > 0 ? { before } : {}) }]
+      }
       default: return []
     }
   }) as AntigravityNormalizer

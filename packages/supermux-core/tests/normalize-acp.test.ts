@@ -172,3 +172,99 @@ test("OpenCode stderr log lines: the session.processor error becomes an error ev
   ])
   expect(n.flush().some(b => b.kind === "warning")).toBe(false)
 })
+
+describe("context usage (#144)", () => {
+  test("OpenCode: a usage_update with nothing in use (after a failed turn) keeps the last good size", () => {
+    const n = createAcpNormalizer({ vendor: "opencode" })
+    expect(n(acp("usage_update", { used: 11465, size: 200000 }))[0]).toMatchObject({ context: { used: 11465, size: 200000 } })
+    // Real 1.18.34 after a refused turn: used 0 and the failed model's window.
+    const after = n(acp("usage_update", { used: 0, size: 1000000, cost: { amount: 0, currency: "USD" } }))
+    expect(after).toEqual([{ kind: "usage", cost: { amount: 0, currency: "USD" } }])
+  })
+
+  test("Grok: each model call's input is how full the window is, against the current model's window", () => {
+    const n = createAcpNormalizer({ vendor: "grok" })
+    const call = (usage: Record<string, number>): AgentUpdate => ({
+      protocol: "native",
+      value: { method: "_x.ai/session_notification", params: { sessionId: "s", update: { sessionUpdate: "response_completed", usage } } },
+    })
+    // Real 1.0.46 response_completed: input_tokens excludes the cached part (18794 + 1152 = turn inputTokens 19946).
+    const usage = { input_tokens: 18794, output_tokens: 24, cache_read_input_tokens: 1152, cache_creation_input_tokens: 0, reasoning_tokens: 23 }
+    // No window known yet: nothing to report.
+    expect(n(call(usage))).toEqual([])
+    // The driver forwards the agent's model list with each model's window (initialize/session result _meta.modelState).
+    expect(n({ protocol: "native", value: { method: "model_windows", params: { current: "grok-4.7", windows: { "grok-4.7": 256000, "grok-4.7-build-fast": 500000 } } } })).toEqual([])
+    expect(n(call(usage))).toEqual([{ kind: "usage", context: { used: 19946, size: 256000 } }])
+    // A model switch changes the window.
+    n(acp("config_option_update", { configOptions: [{ id: "model", value: "grok-4.7-build-fast" }] }))
+    expect(n(call({ ...usage, input_tokens: 20000 }))).toEqual([{ kind: "usage", context: { used: 21152, size: 500000 } }])
+  })
+})
+
+test("readModelWindows: Grok's _meta.modelState and ACP's models give each model's window (#144)", async () => {
+  const { readModelWindows } = await import("../src/acp/index.js")
+  // Real Grok 1.0.46 initialize result (trimmed).
+  const grok = { _meta: { modelState: { currentModelId: "grok-4.7", availableModels: [
+    { modelId: "grok-4.7", name: "Grok 4.7", _meta: { totalContextTokens: 256000, contextWindows: [256000, 500000] } },
+    { modelId: "grok-4.7-build-fast", name: "Grok 4.7 Build Fast", _meta: { totalContextTokens: 500000 } },
+  ] } } }
+  expect(readModelWindows(grok)).toEqual({ current: "grok-4.7", windows: { "grok-4.7": 256000, "grok-4.7-build-fast": 500000 } })
+  expect(readModelWindows({ models: { availableModels: [{ modelId: "m" }] } })).toBeUndefined()
+  expect(readModelWindows(null)).toBeUndefined()
+})
+
+test("grokContextBreakdown: _x.ai/session/info's categories (its own `used` counts only the system prompt) (#144)", async () => {
+  const { grokContextBreakdown } = await import("../src/acp/normalize.js")
+  // Real 1.0.46 reply (the result is nested once more).
+  const reply = { result: { sessionId: "s", model: "grok-4.7", context: {
+    used: 1359, total: 256000, systemPromptTokens: 1359, toolDefinitionsCount: 26, toolDefinitionsTokens: 9282,
+    compactionCount: 0, messageCount: 2, messageTokens: 5353, freeTokens: 254641, usagePct: 1, autoCompactThresholdPercent: 80,
+    usageCategories: [{ label: "Skills", tokens: 5162, detail: "52 skills" }, { label: "Workflows", tokens: 181, detail: "2 workflows" }, { label: "AGENTS.md", tokens: 157, detail: "1 file" }],
+  } } }
+  expect(grokContextBreakdown(reply)).toEqual({
+    used: 21494, size: 256000, threshold: 204800,
+    categories: [
+      { id: "messages", name: "Messages", tokens: 5353, kind: "used" },
+      { id: "tool_definitions", name: "Tool definitions", tokens: 9282, kind: "used" },
+      { id: "system_prompt", name: "System prompt", tokens: 1359, kind: "used" },
+      { id: "skills", name: "Skills", tokens: 5162, kind: "used" },
+      { id: "workflows", name: "Workflows", tokens: 181, kind: "used" },
+      { id: "agents_md", name: "AGENTS.md", tokens: 157, kind: "used" },
+    ],
+  })
+  expect(grokContextBreakdown({ result: {} })).toBeUndefined()
+})
+
+test("Grok's own compaction notices become compaction events; its tokens_after is not trusted (#144)", () => {
+  const n = createAcpNormalizer({ vendor: "grok" })
+  const notice = (update: Record<string, unknown>): AgentUpdate => ({ protocol: "native", value: { method: "_x.ai/session_notification", params: { sessionId: "s", update } } })
+  expect(n(notice({ sessionUpdate: "auto_compact_started", tokens_used: 210000, context_window: 256000, percentage: 82 })))
+    .toEqual([{ kind: "compaction", compactionId: "grok-compact-1", status: "in_progress" }])
+  // Real 1.0.46: tokens_after equals tokens_before on a first compaction, so only "before" is kept.
+  expect(n(notice({ sessionUpdate: "auto_compact_completed", tokens_before: 28200, tokens_after: 28200, summary_preview: null })))
+    .toEqual([{ kind: "compaction", compactionId: "grok-compact-1", status: "completed", before: 28200 }])
+  expect(n(notice({ sessionUpdate: "auto_compact_failed", error: "boom" })))
+    .toEqual([{ kind: "compaction", compactionId: "grok-compact-2", status: "failed", error: "boom" }])
+})
+
+test("OpenCode: the driver's compaction marks become compaction events, from the last size it reported (#144)", () => {
+  const n = createAcpNormalizer({ vendor: "opencode" })
+  n(acp("usage_update", { used: 171000, size: 200000 }))
+  const mark = (status: string) => ({ protocol: "native" as const, value: { method: "compaction", params: { status } } })
+  expect(n(mark("in_progress"))).toEqual([{ kind: "compaction", compactionId: "compact-1", status: "in_progress" }])
+  // Right after /compact OpenCode reports the summarizing call itself (real 1.18.34: 469): not the window's size.
+  expect(n(acp("usage_update", { used: 469, size: 200000 }))).toEqual([{ kind: "usage" }])
+  expect(n(mark("completed"))).toEqual([{ kind: "compaction", compactionId: "compact-1", status: "completed", before: 171000 }])
+  expect(n(acp("usage_update", { used: 18000, size: 200000 }))[0]).toMatchObject({ context: { used: 18000, size: 200000 } })
+})
+
+test("OpenCode: what streams during the driver's compaction is its summary, not a reply (#144)", () => {
+  const n = createAcpNormalizer({ vendor: "opencode" })
+  const mark = (status: string) => ({ protocol: "native" as const, value: { method: "compaction", params: { status } } })
+  n(mark("in_progress"))
+  expect(n(acp("agent_message_chunk", { content: { type: "text", text: "Summary: the user " } }))).toEqual([])
+  expect(n(acp("agent_message_chunk", { content: { type: "text", text: "asked for X." } }))).toEqual([])
+  expect(n(mark("completed"))).toEqual([{ kind: "compaction", compactionId: "compact-1", status: "completed", summary: "Summary: the user asked for X." }])
+  // The turn produced a compaction: no "nothing happened" warning at its end.
+  expect(n.flush().some(b => b.kind === "warning")).toBe(false)
+})

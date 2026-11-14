@@ -14,6 +14,15 @@ export type NormalizedBridgeOpts = {
   agent: string
   emit: (event: AgentEvent) => void
   onUsage?: (rateLimits: unknown) => void
+  /** How full the agent's context window is (#144), as the agent last reported it. */
+  onContext?: (context: { used: number; size: number }) => void
+  /** A tool the main thread started (#144: "used in this chat"); a Skill call as `Skill:<skill>`. */
+  onToolUsed?: (name: string) => void
+  /** #144: a compaction of the main conversation, as it starts and as it ends (with its sizes, where known). */
+  onCompaction?: (compaction: {
+    compactionId: string; status: "in_progress" | "completed" | "failed" | "cancelled"
+    before?: number; after?: number; trigger?: "manual" | "auto"; summary?: string; error?: string
+  }) => void
   onCommands?: (commands: AgentCommandEntry[]) => void
   /** The models the agent offers (a session start's ACP options, #102). */
   onModels?: (models: AgentModelEntry[]) => void
@@ -199,6 +208,10 @@ export function createNormalizedBridge(opts: NormalizedBridgeOpts) {
     }
     if (kind === "tool-call") {
       if (event.phase === "updated") return
+      if (event.phase === "started" && event.tool) {
+        const skill = event.tool === "Skill" ? (event.input as { skill?: unknown } | undefined)?.skill : undefined
+        opts.onToolUsed?.(typeof skill === "string" && skill ? `Skill:${skill}` : event.tool)
+      }
       if (opts.agent === "codex") {
         const item = extractCodexNativeItem(event.native.payload)
         if (event.phase === "started") {
@@ -277,6 +290,16 @@ export function createNormalizedBridge(opts: NormalizedBridgeOpts) {
     }
     if (kind === "usage" && event.rateLimits != null) {
       opts.onUsage?.(event.rateLimits)
+    }
+    if (kind === "usage" && event.context != null && !child) opts.onContext?.(event.context)
+    if (kind === "compaction" && !child) {
+      const { compactionId, status, before, after, trigger, summary, error } = event
+      opts.onCompaction?.({
+        compactionId, status,
+        ...(before != null ? { before } : {}), ...(after != null ? { after } : {}), ...(trigger ? { trigger } : {}),
+        ...(summary ? { summary } : {}), ...(error ? { error } : {}),
+      })
+      return
     }
   }
 

@@ -169,3 +169,16 @@ test("codexUsageFromRateLimits returns null without a usable primary window", ()
   expect(codexUsageFromRateLimits(null)).toBeNull()
   expect(codexUsageFromRateLimits({ primary: null, planType: "plus" })).toBeNull()
 })
+
+test("#146: Codex's frame at the wall (primary null, only credits) marks the last known windows as reached, not nothing", () => {
+  const prev: CodexUsage = {
+    plan: "plus", windows: [{ id: "primary", label: "5-hour window", used: 97, resetsAt: 1791651000, windowSeconds: 18000 }],
+    models: [], credits: null, limitReached: false, resetCredits: 0,
+  }
+  // Real 0.164 frame sent with the failed turn (keeper journal 40680807-…).
+  const wall = codexUsageFromRateLimits({ rateLimits: { primary: null, credits: { hasCredits: false, balance: "0" }, planType: "plus" } }, prev)
+  expect(wall).toMatchObject({ plan: "plus", limitReached: true, credits: { hasCredits: false, balance: "0" } })
+  expect(wall?.windows[0]).toMatchObject({ id: "primary", used: 100, resetsAt: 1791651000 })
+  // With nothing known before, still nothing to show.
+  expect(codexUsageFromRateLimits({ rateLimits: { primary: null, credits: { hasCredits: false } } }, null)).toBeNull()
+})

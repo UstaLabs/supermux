@@ -483,6 +483,9 @@ class HostStore(
     /** Per-session resolution state of the slash-command set (true = fully resolved). */
     val commandsResolved: StateFlow<Map<String, Boolean>> =
         _state.map { it.commandsResolved }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
+    /** #144: sessions whose compaction is running (session id → compaction id). */
+    val compacting: StateFlow<Map<String, String>> =
+        _state.map { it.compacting }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     /** Per-session walkthrough holders. Created and updated by [walkthroughSeam] on first frame. */
     private val walkthroughs = mutableMapOf<String, Any>()
 
@@ -635,6 +638,9 @@ class HostStore(
     private val _accountsAutoResume = MutableStateFlow<Boolean?>(null)
     /** #92: GET/PUT /settings/accounts `autoResume`, kept current by `accounts_settings`. */
     val accountsAutoResume: StateFlow<Boolean?> = _accountsAutoResume.asStateFlow()
+    private val _accountsCompactBeforeWait = MutableStateFlow<Boolean?>(null)
+    /** #146: GET/PUT /settings/accounts `compactBeforeWait`, kept current by `accounts_settings`. */
+    val accountsCompactBeforeWait: StateFlow<Boolean?> = _accountsCompactBeforeWait.asStateFlow()
 
     private val _accountLogins = MutableSharedFlow<AccountLoginStateDto>(extraBufferCapacity = 32)
     /** Every `account_login_state` frame (all logins; filter by `loginId`). */
@@ -879,6 +885,7 @@ class HostStore(
             is ServerFrame.AccountsSettings -> {
                 _accountsAutoSwitch.value = frame.autoSwitch
                 _accountsAutoResume.value = frame.autoResume
+                _accountsCompactBeforeWait.value = frame.compactBeforeWait
             }
             is ServerFrame.HostRequirementsChanged -> _hostRequirements.value = frame.requirements
             is ServerFrame.KeepAwakeChanged -> _keepAwake.value = frame.keepAwake
@@ -2476,7 +2483,7 @@ class HostStore(
         accountCall { api.setSessionAccount(sessionId, account) }
 
     suspend fun loadAccountsAutoSwitch(): Boolean? =
-        runApi("accountsSettings") { api.accountsSettings() }?.also { _accountsAutoResume.value = it.autoResume }?.autoSwitch
+        runApi("accountsSettings") { api.accountsSettings() }?.also { _accountsAutoResume.value = it.autoResume; _accountsCompactBeforeWait.value = it.compactBeforeWait }?.autoSwitch
             ?.also { _accountsAutoSwitch.value = it }
 
     suspend fun setAccountsAutoSwitch(enabled: Boolean): AccountResult<Boolean> =
@@ -2487,6 +2494,11 @@ class HostStore(
     suspend fun setAccountsAutoResume(enabled: Boolean): AccountResult<Boolean> =
         accountCall { api.setAccountsAutoResume(enabled).autoResume }.also {
             if (it is AccountResult.Ok) _accountsAutoResume.value = it.value
+        }
+
+    suspend fun setAccountsCompactBeforeWait(enabled: Boolean): AccountResult<Boolean> =
+        accountCall { api.setAccountsCompactBeforeWait(enabled).compactBeforeWait }.also {
+            if (it is AccountResult.Ok) _accountsCompactBeforeWait.value = it.value
         }
 
     /** #92: the session no longer resumes by itself after its usage limit. */
@@ -2798,6 +2810,14 @@ class HostStore(
     }
 
     /** POST /sessions/<id>/fast-mode — Claude relaunches and Codex reconfigures, at the end of a running turn. */
+    /** #144: what fills [id]'s context window and what it used; null when the broker can't say. */
+    suspend fun sessionContext(id: String): dev.supermux.net.SessionContextDto? =
+        runApi("sessionContext") { api.sessionContext(id) }
+
+    /** #144 Compact, queued like a message. False when the broker refused (it says why in the log). */
+    suspend fun compact(id: String, note: String?): Boolean =
+        runApi("compact") { api.compact(id, note); true } ?: false
+
     suspend fun switchFastMode(id: String, fastMode: Boolean): Boolean {
         val ok = runApi("switchFastMode") { api.switchFastMode(id, fastMode); true } ?: false
         if (ok) patchSession(id) { it.copy(fastMode = fastMode) }

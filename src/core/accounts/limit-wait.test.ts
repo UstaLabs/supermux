@@ -233,10 +233,12 @@ test("resumeAfterLimit: a session that is gone, or already working again, is lef
   }
 })
 
-test("the setting: auto-resume is on unless turned off; auto-switch stays off unless turned on", () => {
-  expect(parseAccountsSettings(undefined)).toEqual({ autoSwitch: false, autoResume: true })
-  expect(parseAccountsSettings({ autoResume: false, autoSwitch: true })).toEqual({ autoSwitch: true, autoResume: false })
-  expect(parseAccountsSettings({ autoResume: "no" })).toEqual({ autoSwitch: false, autoResume: true })
+test("the setting: auto-resume is on unless turned off; auto-switch and compact-before-wait stay off unless turned on", () => {
+  expect(parseAccountsSettings(undefined)).toEqual({ autoSwitch: false, autoResume: true, compactBeforeWait: false })
+  expect(parseAccountsSettings({ autoResume: false, autoSwitch: true })).toEqual({ autoSwitch: true, autoResume: false, compactBeforeWait: false })
+  expect(parseAccountsSettings({ autoResume: "no" })).toEqual({ autoSwitch: false, autoResume: true, compactBeforeWait: false })
+  // #146: opt-in.
+  expect(parseAccountsSettings({ compactBeforeWait: true }).compactBeforeWait).toBe(true)
 })
 
 test("resumeAfterLimit: Resume now does not claim the limit reset", async () => {
