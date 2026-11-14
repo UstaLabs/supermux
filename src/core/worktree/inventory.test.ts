@@ -178,6 +178,17 @@ test("force-deletes a dirty worktree with ignored files, and its mux branch", as
   expect(git(f.repo, "branch", "--list", "mux/a")).toBe("")
 })
 
+// #72: a chat can switch its copy to another branch; deleting the copy deletes only the branch it was made with.
+test("keeps a mux branch the chat switched to but did not make", async () => {
+  const f = fixture()
+  const a = f.add("u1", "mux/a")
+  git(f.repo, "branch", "mux/b")
+  git(a, "switch", "-q", "mux/b")
+  const r = await deleteWorktrees(f.root, ["repo-abc/u1"], () => [row({ id: "s", workdir: a, status: "archived", session_branch: "mux/a" })])
+  expect(r).toEqual([{ id: "repo-abc/u1", ok: true }])
+  expect(git(f.repo, "branch", "--list", "mux/b")).toContain("mux/b")
+})
+
 test("keeps a non-mux branch", async () => {
   const f = fixture()
   const a = f.add("u1", "feature/x")

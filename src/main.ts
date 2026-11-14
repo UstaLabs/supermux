@@ -137,6 +137,7 @@ import { BUILD_VERSION, BUILD_COMMIT, IS_COMPILED, versionString } from "./share
 import { createCheckoutWatch } from "./core/checkout-watch"
 import { gitAsync } from "./core/git/exec"
 import { runSyncOrThrow } from "./core/git/exec-sync"
+import { liveBranch } from "./core/git/branches"
 import { agentsCloseMode, captureWindowsTaskFlag, expectRestart, restartService } from "./core/update/apply"
 import { installMinGit, realMinGitDeps } from "./core/git/mingit"
 import { loadOrCreateHostKey } from "./core/host-identity"
@@ -1794,7 +1795,11 @@ async function finishSessionById(sessionId: string, req: FinishRequest): Promise
   if (prev && prev.status !== "running") clearFinishJob(sessionId)
   // discard must stop the live agent BEFORE its worktree is force-removed
   if (req.action === "discard") await killSession(sessionId).catch(() => {})
-  const session = { id: sessionId, repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: s.session_branch, baseBranch: s.base_branch }
+  // #72: a chat follows its copy's branch (it can switch), so merge and PR use the branch checked out now. Discard
+  // removes the copy and only ever deletes the branch supermux made for it (session_branch), never one switched to.
+  const branch = req.action === "discard" ? s.session_branch : liveBranch(s.workdir)
+  if (!branch) return { error: "this chat isn't on a branch" }
+  const session = { id: sessionId, repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: branch, baseBranch: s.base_branch }
   const opts: FinishJobOpts = { ...req, cleanup: false }  // worktree removal handled by the archive path below
   const sessionName = s.name
   return startFinishJob(session, opts, {
@@ -1852,7 +1857,7 @@ function finishReadinessById(sessionId: string): FinishReadiness | { error: stri
   if (!s) return { error: "no such session" }
   if (!s.repo_root || !s.session_branch || !s.base_branch) return { error: "session is not worktree-backed" }
   const cfg = loadFinishConfig(s.repo_root)
-  return computeReadiness({ repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: s.session_branch, baseBranch: s.base_branch, defaultAction: cfg.defaultAction })
+  return computeReadiness({ repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: liveBranch(s.workdir) ?? s.session_branch, baseBranch: s.base_branch, defaultAction: cfg.defaultAction })
 }
 
 const TASK_KIND: Record<TaskEvent["taskKind"], BgTaskKind> = {

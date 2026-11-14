@@ -9,7 +9,7 @@ import { makeLogger } from "../../shared/log"
 import { FrameStats, LoopLag, lapTimer, perfPath, type PerfLog } from "../../core/perf/perf-log"
 import { home } from "../../shared/home"
 import { MUX_HOME, isMuxInternalPath } from "../../shared/paths"
-import { existsSync, writeFileSync, mkdirSync, rmSync } from "fs"
+import { existsSync, writeFileSync, mkdirSync, rmSync, realpathSync } from "fs"
 import { tmpdir } from "os"
 import { join, resolve, sep } from "path"
 import { CardSendGuard } from "../../core/show-html/card-send"
@@ -50,7 +50,7 @@ import { worktreesRoot } from "../../core/worktree/manager"
 
 import { getRepoInfo } from "../../core/git/repo-info"
 import { remoteStatus, fetchRemote, publishBranch, pushBranch, pullBranch } from "../../core/git/remote"
-import { listBranches, switchBranch } from "../../core/git/branches"
+import { listBranches, repoToplevel, switchBranch } from "../../core/git/branches"
 import type { AgentKind } from "../../core/agents/types"
 import { AGENT_KINDS, isAgentKind } from "../../shared/agents"
 import { isPermissionMode, permissionCatalog } from "../../core/agents/permission-modes"
@@ -4143,27 +4143,28 @@ export class WebChannel implements Channel {
       if (op === "push") return this.json(pushBranch(workdir))
       return this.json(pullBranch(workdir))
     }
+    // #72: every chat can switch branch, a chat with its own copy too; the copy follows. Each local branch says
+    // where it is open (this chat, another chat, your folder): git refuses to check one out twice.
     if (method === "GET" && path.match(/^\/sessions\/[^/]+\/git\/branches$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
-      const snap = this.opts.getSessionsSnapshot().find((s) => s.id === id || s.name === id)
-      if (snap?.session_branch) {
-        // Worktree sessions are pinned — no list, and no git calls needed.
-        return this.json({ inPlace: false, repoRoot: null, current: null, detachedSha: null, local: [], remote: [] })
-      }
-      return this.json({ inPlace: true, ...listBranches(workdir) })
+      const list = listBranches(workdir)
+      const real = (p: string) => { try { return realpathSync(p) } catch { return p } }
+      const here = repoToplevel(workdir)
+      const chats = this.opts.getSessionsSnapshot().map((s) => ({ id: s.id, name: s.name, at: real(s.workdir) }))
+      const local = list.local.map((b) => {
+        if (!b.checkedOutAt) return { ...b, openIn: null }
+        if (b.checkedOutAt === here) return { ...b, openIn: { kind: "this" } }
+        const chat = chats.find((c) => c.id !== id && c.at === b.checkedOutAt)
+        return { ...b, openIn: chat ? { kind: "chat", id: chat.id, name: chat.name } : { kind: "folder" } }
+      })
+      return this.json({ inPlace: true, ...list, local })
     }
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/switch$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
-      // getSessionWorkdir is UUID-only, so name-addressed requests 404 above;
-      // the name arm of this find keeps the 409 guard intact if that changes.
-      const snap = this.opts.getSessionsSnapshot().find((s) => s.id === id || s.name === id)
-      if (snap?.session_branch) {
-        return this.json({ error: "worktree sessions are pinned to their session branch" }, 409)
-      }
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
       const name = String(body.name ?? "").trim()
       if (!name) return this.json({ error: "name required" }, 400)
