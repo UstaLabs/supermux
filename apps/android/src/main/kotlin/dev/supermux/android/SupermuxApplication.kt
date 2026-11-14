@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.Application
 import android.os.Bundle
 import dev.supermux.android.update.AndroidAppUpdater
+import dev.supermux.ui.i18n.Catalogs
 import dev.supermux.android.platform.AndroidTts
 
 /**
@@ -24,6 +25,8 @@ class SupermuxApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // #123: the string catalogs are read here, off the main thread, so the first frame never parses one on it.
+        Catalogs.warm()
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityCreated(activity: Activity, state: Bundle?) { activities++ }
             override fun onActivityDestroyed(activity: Activity) {
