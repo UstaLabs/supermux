@@ -126,13 +126,11 @@ val windowsJvmArgs = if (windowsBuildHost) {
     emptyList()
 }
 
-// #133: G1 at its defaults keeps up to 70% of the heap free and never shrinks while idle. These hand it back after
-// a GC and run one when idle (committed heap at rest 90 -> 37 MB on an M1 Air). No -Xmx: a cap saved nothing at rest
-// (1g and 2g left the same heap), and heavy sessions (big diffs, many tabs, long terminals) must not hit an OOM.
-// Packaged app only.
-val memoryJvmArgs = listOf(
-    "-XX:MinHeapFreeRatio=10", "-XX:MaxHeapFreeRatio=20", "-XX:G1PeriodicGCInterval=30000",
-)
+// #133: G1 at its defaults keeps up to 70% of the heap free. These let it shrink after any GC that happens anyway.
+// No G1PeriodicGCInterval: a GC every 30 s while idle tripled idle energy in ADEMark A6 (rc.7). No -Xmx: a cap
+// saved nothing at rest (1g and 2g left the same heap), and heavy sessions (big diffs, many tabs, long terminals)
+// must not hit an OOM. Packaged app only.
+val memoryJvmArgs = listOf("-XX:MinHeapFreeRatio=10", "-XX:MaxHeapFreeRatio=20")
 
 // #133: an AppCDS archive of the app's own classes, trained in CI by trainAppCds (createDistributable, macOS,
 // -PsmAppCdsTrain=true) and shipped as Contents/app/app.jsa: about 90 MB less metaspace and a third off the time
