@@ -51,7 +51,7 @@ import { worktreesRoot } from "../../core/worktree/manager"
 import { getRepoInfo } from "../../core/git/repo-info"
 import { remoteStatus, fetchRemote, publishBranch, pushBranch, pullBranch } from "../../core/git/remote"
 import { listBranches, liveBranch, repoToplevel, switchBranch } from "../../core/git/branches"
-import { readPr, type PrRead } from "../../core/git/forge"
+import { checkLog, createPr, markReady, readPr, type PrRead } from "../../core/git/forge"
 import type { AgentKind } from "../../core/agents/types"
 import { AGENT_KINDS, isAgentKind } from "../../shared/agents"
 import { isPermissionMode, permissionCatalog } from "../../core/agents/permission-modes"
@@ -4151,6 +4151,43 @@ export class WebChannel implements Channel {
       const r: PrRead = branch ? await readPr(workdir, branch) : { status: "unavailable", reason: "no_branch" }
       this.prCache.set(key, { at: Date.now(), r })
       return this.json(r)
+    }
+    // #72: open a PR/MR from the branch the chat is on (published first when it isn't yet), mark one ready,
+    // and read a failing check's log for "Ask the agent to fix".
+    const prWrite = path.match(/^\/(sessions|workspaces)\/([^/]+)\/git\/pr(\/ready|\/check-log)?$/)
+    if (prWrite && (method === "POST" || (method === "GET" && prWrite[3] === "/check-log"))) {
+      const [, scope, rawId, sub] = prWrite
+      const id = decodeURIComponent(rawId!)
+      const workdir = scope === "sessions" ? this.opts.getSessionWorkdir?.(id) : this.opts.getWorkspaceWorkdir?.(id)
+      if (sub === "/check-log") {
+        const checkUrl = url.searchParams.get("url") ?? ""
+        if (!/^https?:\/\/\S+$/.test(checkUrl)) return this.json({ error: "bad request" }, 400)
+        if (!workdir) return this.json({ error: `${scope === "sessions" ? "session" : "workspace"} not found` }, 404)
+        return this.json(await checkLog(workdir, checkUrl))
+      }
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      if (sub === "/ready") {
+        if (typeof body.number !== "number" || !Number.isInteger(body.number) || body.number <= 0) return this.json({ error: "bad request" }, 400)
+        if (!workdir) return this.json({ error: `${scope === "sessions" ? "session" : "workspace"} not found` }, 404)
+        const r = await markReady(workdir, body.number)
+        this.prCache.clear()
+        return this.json(r, r.ok ? 200 : 409)
+      }
+      const title = typeof body.title === "string" ? body.title.trim() : ""
+      const target = typeof body.target === "string" ? body.target.trim() : ""
+      if (!title || !target || (body.body !== undefined && typeof body.body !== "string")) return this.json({ error: "bad request" }, 400)
+      if (!workdir) return this.json({ error: `${scope === "sessions" ? "session" : "workspace"} not found` }, 404)
+      const branch = liveBranch(workdir)
+      if (!branch) return this.json({ status: "unavailable", reason: "no_branch" }, 409)
+      const remote = remoteStatus(workdir)
+      if (!remote.hasRemote) return this.json({ status: "unavailable", reason: "no_remote" }, 409)
+      if (!remote.upstream) {
+        const pub = publishBranch(workdir)
+        if (pub.status !== "pushed" && pub.status !== "up_to_date") return this.json({ status: "publish_failed", publish: pub }, 409)
+      }
+      const r = await createPr(workdir, branch, { title, body: (body.body as string | undefined) ?? "", target, draft: body.draft === true })
+      this.prCache.clear()
+      return this.json(r, r.status === "opened" || r.status === "exists" ? 200 : 409)
     }
     // A branch's sync with origin, for a chat with its own copy (sessions) and a chat in a folder (workspaces) alike.
     const syncOp = path.match(/^\/(sessions|workspaces)\/([^/]+)\/git\/(status|fetch|publish|push|pull)$/)

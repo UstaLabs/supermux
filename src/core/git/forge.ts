@@ -148,3 +148,49 @@ export async function readPr(cwd: string, branch: string, exec: Exec = execCli):
   ])
   return { status: "found", pr: parseGlabMr(mr, ap.ok ? json(ap.out) : null, jobs.ok ? json(jobs.out) ?? [] : [], disc.ok ? json(disc.out) ?? [] : []) }
 }
+
+// ---- writes ----
+
+async function forgeAt(cwd: string, exec: Exec): Promise<Forge | null> {
+  const origin = await exec("git", ["-C", cwd, "remote", "get-url", "origin"], cwd)
+  return origin.ok ? forgeOf(origin.out) : null
+}
+const firstUrl = (s: string) => (s.match(/https?:\/\/\S+/) ?? [])[0] ?? ""
+const numberIn = (url: string) => Number((url.match(/\/(?:pull|merge_requests)\/(\d+)/) ?? [])[1] ?? 0)
+
+export type CreatePrResult =
+  | { status: "opened"; url: string; number: number }
+  | { status: "exists"; url: string }
+  | { status: "unavailable"; forge?: Forge; reason: "no_remote" | "no_branch" | "no_cli" | "not_authed" | "error"; message?: string }
+
+/** Opens a PR (GitHub) / MR (GitLab) from `branch` into `target`. The branch must already be on origin. */
+export async function createPr(cwd: string, branch: string, o: { title: string; body: string; target: string; draft: boolean }, exec: Exec = execCli): Promise<CreatePrResult> {
+  const forge = await forgeAt(cwd, exec)
+  if (!forge) return { status: "unavailable", reason: "no_remote" }
+  const r = forge === "github"
+    ? await exec("gh", ["pr", "create", "--head", branch, "--base", o.target, "--title", o.title, "--body", o.body, ...(o.draft ? ["--draft"] : [])], cwd)
+    : await exec("glab", ["mr", "create", "--source-branch", branch, "--target-branch", o.target, "--title", o.title, "--description", o.body, ...(o.draft ? ["--draft"] : []), "--yes"], cwd)
+  if (r.ok) { const url = firstUrl(r.out); return { status: "opened", url, number: numberIn(url) } }
+  if (/already exists/i.test(r.out)) return { status: "exists", url: firstUrl(r.out) }
+  const f = failure(forge, r.out)
+  return f.status === "unavailable" ? f : { status: "unavailable", forge, reason: "error", message: r.out.slice(0, 500) }
+}
+
+/** Draft → ready for review. */
+export async function markReady(cwd: string, number: number, exec: Exec = execCli): Promise<{ ok: true } | { ok: false; message: string }> {
+  const forge = await forgeAt(cwd, exec)
+  if (!forge) return { ok: false, message: "no origin" }
+  const r = forge === "github" ? await exec("gh", ["pr", "ready", String(number)], cwd) : await exec("glab", ["mr", "update", String(number), "--ready"], cwd)
+  return r.ok ? { ok: true } : { ok: false, message: r.out.slice(0, 500) }
+}
+
+/** The most a failing log gives the agent: its tail, where the error is. */
+const LOG_TAIL = 20_000
+
+/** A failing check's log, from the check's own URL (GET …/git/pr gives it): GitHub Actions job or GitLab CI job. */
+export async function checkLog(cwd: string, checkUrl: string, exec: Exec = execCli): Promise<{ ok: true; log: string } | { ok: false; reason: "unknown_check" | "failed"; message?: string }> {
+  const gh = checkUrl.match(/\/actions\/runs\/\d+\/job\/(\d+)/), gl = checkUrl.match(/\/-\/jobs\/(\d+)/)
+  if (!gh && !gl) return { ok: false, reason: "unknown_check" }
+  const r = gh ? await exec("gh", ["run", "view", "--job", gh[1]!, "--log-failed"], cwd) : await exec("glab", ["api", `projects/:id/jobs/${gl![1]}/trace`], cwd)
+  return r.ok ? { ok: true, log: r.out.length > LOG_TAIL ? r.out.slice(-LOG_TAIL) : r.out } : { ok: false, reason: "failed", message: r.out.slice(0, 500) }
+}

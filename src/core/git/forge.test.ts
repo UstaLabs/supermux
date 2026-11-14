@@ -144,3 +144,39 @@ test("readPr on GitLab reads the MR, its approvals, its pipeline's jobs and its 
   expect(r.status).toBe("found")
   if (r.status === "found") expect(r.pr).toMatchObject({ forge: "gitlab", number: 7, review: { got: 1, need: 2 } })
 })
+
+// ---- writes: create, ready, a failing check's log ----
+import { checkLog, createPr, markReady } from "./forge"
+
+test("create: gh with base, title, body and draft; glab with source, target and --yes", async () => {
+  const gh = fake([[/remote get-url/, { ok: true, out: "git@github.com:acme/shop.git" }], [/^gh pr create/, { ok: true, out: "https://github.com/acme/shop/pull/13\n" }]])
+  expect(await createPr("/r", "mux/search", { title: "T", body: "B", target: "dev", draft: true }, gh)).toEqual({ status: "opened", url: "https://github.com/acme/shop/pull/13", number: 13 })
+  expect(gh.calls[1]).toBe("gh pr create --head mux/search --base dev --title T --body B --draft")
+  const gl = fake([[/remote get-url/, { ok: true, out: "git@gitlab.com:acme/shop.git" }], [/^glab mr create/, { ok: true, out: "!8 T (mux/search)\n https://gitlab.com/acme/shop/-/merge_requests/8\n" }]])
+  expect(await createPr("/r", "mux/search", { title: "T", body: "", target: "dev", draft: false }, gl)).toEqual({ status: "opened", url: "https://gitlab.com/acme/shop/-/merge_requests/8", number: 8 })
+  expect(gl.calls[1]).toBe("glab mr create --source-branch mux/search --target-branch dev --title T --description  --yes")
+})
+
+test("create: one that already exists, and no CLI, are said plainly", async () => {
+  const dup = fake([[/remote get-url/, { ok: true, out: "git@github.com:a/b.git" }], [/^gh pr create/, { ok: false, out: 'a pull request for branch "x" into branch "dev" already exists:\nhttps://github.com/a/b/pull/5' }]])
+  expect(await createPr("/r", "x", { title: "T", body: "", target: "dev", draft: false }, dup)).toEqual({ status: "exists", url: "https://github.com/a/b/pull/5" })
+  const nocli = fake([[/remote get-url/, { ok: true, out: "git@github.com:a/b.git" }], [/^gh pr create/, { ok: false, out: "spawn gh ENOENT" }]])
+  expect(await createPr("/r", "x", { title: "T", body: "", target: "dev", draft: false }, nocli)).toMatchObject({ status: "unavailable", reason: "no_cli" })
+})
+
+test("ready: gh pr ready N / glab mr update N --ready", async () => {
+  const gh = fake([[/remote get-url/, { ok: true, out: "git@github.com:a/b.git" }], [/^gh pr ready 12$/, { ok: true, out: "" }]])
+  expect(await markReady("/r", 12, gh)).toEqual({ ok: true })
+  const gl = fake([[/remote get-url/, { ok: true, out: "git@gitlab.com:a/b.git" }], [/^glab mr update 7 --ready$/, { ok: true, out: "" }]])
+  expect(await markReady("/r", 7, gl)).toEqual({ ok: true })
+})
+
+test("a failing check's log: GitHub job from its URL, GitLab job trace; the tail only", async () => {
+  const big = "x".repeat(50_000) + "\nERROR: expected 3, got 2"
+  const gh = fake([[/remote get-url/, { ok: true, out: "git@github.com:a/b.git" }], [/^gh run view --job 132519958502 --log-failed$/, { ok: true, out: big }]])
+  const r = await checkLog("/r", "https://github.com/a/b/actions/runs/43618918392/job/132519958502", gh)
+  expect(r.ok && r.log.endsWith("ERROR: expected 3, got 2") && r.log.length <= 20_000).toBe(true)
+  const gl = fake([[/remote get-url/, { ok: true, out: "git@gitlab.com:a/b.git" }], [/^glab api projects\/:id\/jobs\/555\/trace$/, { ok: true, out: "boom" }]])
+  expect(await checkLog("/r", "https://gitlab.com/a/b/-/jobs/555", gl)).toEqual({ ok: true, log: "boom" })
+  expect(await checkLog("/r", "https://elsewhere.example/ci/1", gh)).toEqual({ ok: false, reason: "unknown_check" })
+})

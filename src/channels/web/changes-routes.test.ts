@@ -291,6 +291,19 @@ test("the branch's pull request: no origin says so; off a branch says so", async
   expect((await get(token, "/workspaces/ws-x/git/pr")).status).toBe(404)
 })
 
+test("creating a pull request needs a title and a target; ready needs a number; a log needs a check's URL", async () => {
+  const { token } = await setup()
+  expect((await post(token, "/workspaces/ws-1/git/pr", { title: "", target: "dev" })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/pr", { title: "T" })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-x/git/pr", { title: "T", target: "dev" })).status).toBe(404)
+  const noRemote = await post(token, "/workspaces/ws-1/git/pr", { title: "T", target: "dev" })
+  expect(noRemote.status).toBe(409)
+  expect(await noRemote.json()).toMatchObject({ status: "unavailable", reason: "no_remote" })
+  expect((await post(token, "/sessions/s-1/git/pr/ready", { number: "x" })).status).toBe(400)
+  expect((await get(token, "/sessions/s-1/git/pr/check-log")).status).toBe(400)
+  expect(await (await get(token, "/sessions/s-1/git/pr/check-log?url=https%3A%2F%2Fx.example%2F1")).json()).toEqual({ ok: false, reason: "unknown_check" })
+})
+
 test("get latest needs the chat's own base; resolve and abort refuse bad input", async () => {
   const { token } = await setup()
   expect((await post(token, "/sessions/s-1/git/latest", {})).status).toBe(409)   // no base known here: no guess
