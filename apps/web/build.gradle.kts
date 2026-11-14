@@ -302,7 +302,10 @@ val distDir = layout.buildDirectory.dir("dist/wasmJs/productionExecutable")
 // 2026-11-13 (v0.18.0, Tally): the seven release cars together crossed by <1 KiB; #123's numbered-key catalog (the next
 // car after the release) wins back the per-key accessor cost and must bring the bundle to 9376 KiB or less.
 // 2026-11-13 (#135, Tally/Ahmet): Recently closed ~7–8 KiB of code; web shrink is card #142.
-val maxGzipBytes = 9392L * 1024
+// 2026-11-14 (#142/#123/#144, Tally/Ahmet): LOWERED. #142's cuts (Compose source info + trace markers off, wasm-opt
+// --generate-global-effects --minimize-rec-groups) took dev 9389 → 9052 KiB; #123 cars 4–6 → 9030; #144 + #146 → 9064
+// (train4 43624150506). Ceiling = 9064 + 8 KiB. From here a feature that grows the bundle raises it by its measured size.
+val maxGzipBytes = 9072L * 1024
 
 // THE NATIVE EDITOR'S SYNTAX MODULE IS OUTSIDE THAT CEILING, with a ceiling of its own (M5).
 // `supermux-syntax.wasm` is 7.45 MB raw / 2.69 MB gzipped (editor-syntax/native/README.md): counted
