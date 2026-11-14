@@ -25,7 +25,7 @@ test("job runs to terminal state and persists with NO subscriber", async () => {
   const persisted: any[] = []
   let notified = 0
   const session = { id: "sess1", repoRoot: repo, worktreeDir: h.worktreeDir, sessionBranch: h.sessionBranch, baseBranch: "main" }
-  const job = startFinishJob(session, { action: "merge", skipVerify: true, cleanup: false }, { onUpdate: () => {}, persist: (j) => persisted.push({ ...j }), notify: () => { notified++ } })
+  const job = startFinishJob(session, { action: "merge", cleanup: false }, { onUpdate: () => {}, persist: (j) => persisted.push({ ...j }), notify: () => { notified++ } })
   expect(job.status).toBe("running")
   await waitFor(() => getFinishJob("sess1")?.status !== "running")
   const done = getFinishJob("sess1")!
@@ -42,7 +42,7 @@ test("a failing outcome marks the job failed", async () => {
   writeFileSync(join(h.worktreeDir, "a.txt"), "x")
   clearFinishJob("sess2")
   const session = { id: "sess2", repoRoot: repo, worktreeDir: h.worktreeDir, sessionBranch: h.sessionBranch, baseBranch: "main" }
-  startFinishJob(session, { action: "merge", skipVerify: true, cleanup: false }, noopHooks())
+  startFinishJob(session, { action: "merge", cleanup: false }, noopHooks())
   await waitFor(() => getFinishJob("sess2")?.status !== "running")
   expect(getFinishJob("sess2")!.status).toBe("failed")
   expect(getFinishJob("sess2")!.outcome?.status).toBe("uncommitted")
@@ -54,8 +54,8 @@ test("second start while running returns the same job (one per session)", async 
   writeFileSync(join(h.worktreeDir, "a.txt"), "x"); g(h.worktreeDir, "add", "."); g(h.worktreeDir, "commit", "-m", "w")
   clearFinishJob("sess3")
   const session = { id: "sess3", repoRoot: repo, worktreeDir: h.worktreeDir, sessionBranch: h.sessionBranch, baseBranch: "main" }
-  const j1 = startFinishJob(session, { action: "merge", skipVerify: true, cleanup: false }, noopHooks())
-  const j2 = startFinishJob(session, { action: "merge", skipVerify: true, cleanup: false }, noopHooks())
+  const j1 = startFinishJob(session, { action: "merge", cleanup: false }, noopHooks())
+  const j2 = startFinishJob(session, { action: "merge", cleanup: false }, noopHooks())
   expect(j2.startedAt).toBe(j1.startedAt)   // same job object, not a new run
   await waitFor(() => getFinishJob("sess3")?.status !== "running")
 })
