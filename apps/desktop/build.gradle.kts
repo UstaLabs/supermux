@@ -9,6 +9,7 @@ import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.PosixFilePermissions
 import java.security.MessageDigest
 import java.util.Collections
+import java.util.concurrent.TimeUnit
 import java.util.zip.CRC32
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
@@ -121,6 +122,24 @@ val linuxJvmArgs = if (linuxBuildHost) {
 val windowsBuildHost = hostOs.startsWith("windows")
 val windowsJvmArgs = if (windowsBuildHost) {
     listOf("-Djdk.lang.Process.allowAmbiguousCommands=false")
+} else {
+    emptyList()
+}
+
+// #133: G1 at its defaults keeps up to 70% of the heap free. These let it shrink after any GC that happens anyway.
+// No G1PeriodicGCInterval: a GC every 30 s while idle tripled idle energy in ADEMark A6 (rc.7). No -Xmx: a cap
+// saved nothing at rest (1g and 2g left the same heap), and heavy sessions (big diffs, many tabs, long terminals)
+// must not hit an OOM. Packaged app only.
+val memoryJvmArgs = listOf("-XX:MinHeapFreeRatio=10", "-XX:MaxHeapFreeRatio=20")
+
+// #133: an AppCDS archive of the app's own classes, trained in CI by trainAppCds (createDistributable, macOS,
+// -PsmAppCdsTrain=true) and shipped as Contents/app/app.jsa: about 90 MB less metaspace and a third off the time
+// to the first window. The JVM checks the archive against this exact runtime and every jar's size and mtime, so a
+// missing or stale archive (a moved jar, a local build without training) just means no CDS; the log tags are off
+// so that fallback is silent. macOS only for now: Linux and Windows would need a GUI training run in their jobs.
+val appCdsArchiveName = "app.jsa"
+val cdsJvmArgs = if (macBuildHost) {
+    listOf("-XX:SharedArchiveFile=\$APPDIR/$appCdsArchiveName", "-Xlog:cds=off,cds+dynamic=off")
 } else {
     emptyList()
 }
@@ -279,7 +298,7 @@ tasks.register<JavaExec>("renderSidebarStyles") {
 compose.desktop {
     application {
         mainClass = "dev.supermux.desktop.MainKt"
-        jvmArgs += macJvmArgs + linuxJvmArgs + windowsJvmArgs
+        jvmArgs += macJvmArgs + linuxJvmArgs + windowsJvmArgs + memoryJvmArgs + cdsJvmArgs
         nativeDistributions {
             // Host-scoped: jpackage can only ever build the formats of the OS it runs on, AND on
             // macOS Compose eagerly creates a `notarize<Format>` task per declared format —
@@ -425,6 +444,129 @@ compose.desktop {
  * refuses its own libraries (the terminal cannot open; the editor falls back to plain text).
  */
 val PACKAGED_NATIVE_ROOTS = listOf("dev/supermux/terminal/native/", "dev/supermux/editor/syntax/natives/")
+
+/**
+ * #133: the AppCDS training run. Starts the packaged app the way its jpackage launcher would (the image's own
+ * runtime, the .cfg's classpath and java-options with $APPDIR expanded) plus -XX:ArchiveClassesAtExit, lets it
+ * compose its main window and settle, then stops it with SIGTERM: the JVM writes the archive while it exits. The archive is
+ * then checked with -Xshare:on (which refuses to start on any mismatch) before it goes into [appLibDir].
+ * Never fails the build: on any problem it logs a warning and the app ships without CDS, as before.
+ */
+fun trainAppCds(
+    appRoot: File,
+    appLibDir: File,
+    trainingSeconds: Long,
+    settleSeconds: Long,
+    log: org.gradle.api.logging.Logger,
+): Boolean {
+    val cfg = appLibDir.listFiles { f -> f.name.endsWith(".cfg") }?.singleOrNull()
+    val javaBin = appRoot.resolve("Contents/runtime/Contents/Home/bin/java")
+    if (cfg == null || !javaBin.canExecute()) {
+        log.warn("AppCDS: no launcher .cfg or runtime in $appRoot; shipping without CDS")
+        return false
+    }
+    val appDir = appLibDir.absolutePath
+    val lines = cfg.readLines()
+    fun values(key: String) = lines.filter { it.startsWith("$key=") }.map { it.substringAfter('=').replace("\$APPDIR", appDir) }
+    val classpath = values("app.classpath").joinToString(File.pathSeparator)
+    val mainClass = values("app.mainclass").singleOrNull()
+    // The archive's own flags stay out of the training run: SharedArchiveFile would be taken as the base archive.
+    val options = values("java-options").filterNot { it.startsWith("-XX:SharedArchiveFile=") || it.startsWith("-Xlog:cds") } +
+        "-Djpackage.app-path=${appRoot.resolve("Contents/MacOS").listFiles()?.firstOrNull()?.absolutePath}"
+    if (mainClass == null || classpath.isEmpty()) {
+        log.warn("AppCDS: ${cfg.name} names no main class or classpath; shipping without CDS")
+        return false
+    }
+    val work = Files.createTempDirectory("appcds").toFile()
+    val archive = work.resolve(appCdsArchiveName)
+    val logFile = work.resolve("training.log")
+    val app = ProcessBuilder(listOf(javaBin.absolutePath) + options + listOf(
+        "-XX:ArchiveClassesAtExit=${archive.absolutePath}", "-cp", classpath, mainClass,
+    )).redirectErrorStream(true).redirectOutput(logFile).start()
+    // rc.6's archive came from a run that never composed the main window, so the window chrome's JBR API classes
+    // were missing and the real launch read them from the jar. Wait for the chrome's own breadcrumb (MacWindowChrome
+    // prints "[MacWindowChrome] …" once the main window composes), then let the app settle before dumping.
+    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(trainingSeconds)
+    var composed = false
+    while (!composed && app.isAlive && System.nanoTime() < deadline) {
+        Thread.sleep(500)
+        composed = logFile.isFile && logFile.readLines().any { it.startsWith("[MacWindowChrome]") }
+    }
+    if (composed) Thread.sleep(TimeUnit.SECONDS.toMillis(settleSeconds))
+    val exitedEarly = !app.isAlive
+    log.lifecycle("AppCDS: training run composed the main window: $composed")
+    val children = app.toHandle().descendants().toList()
+    if (!exitedEarly) app.destroy() // SIGTERM: a normal JVM exit, which writes the archive
+    val exited = app.waitFor(120, TimeUnit.SECONDS)
+    if (!exited) app.destroyForcibly()
+    children.forEach { it.destroy() } // the host helpers the app may have started (broker, zmx)
+    val tail = logFile.takeIf { it.exists() }?.readLines()?.takeLast(15)?.joinToString("\n").orEmpty()
+    if (exitedEarly || !exited || !archive.isFile || archive.length() < 1_000_000) {
+        log.warn("AppCDS: training run did not produce an archive (exited early: $exitedEarly, exited: $exited, " +
+            "archive: ${archive.length()} bytes); shipping without CDS. Last output:\n$tail")
+        return false
+    }
+    val verify = ProcessBuilder(listOf(javaBin.absolutePath, "-XX:SharedArchiveFile=${archive.absolutePath}", "-Xshare:on", "-cp", classpath, "-version"))
+        .redirectErrorStream(true).start()
+    val verifyOut = verify.inputStream.bufferedReader().readText()
+    if (verify.waitFor() != 0) {
+        log.warn("AppCDS: the trained archive does not map (-Xshare:on failed); shipping without CDS:\n$verifyOut")
+        return false
+    }
+    if (!composed) {
+        log.warn("AppCDS: the training run never composed the main window, so the archive covers startup only. Last output:\n$tail")
+    }
+    archive.copyTo(appLibDir.resolve(appCdsArchiveName), overwrite = true)
+    log.lifecycle("AppCDS: trained $appCdsArchiveName (${archive.length() / 1_048_576} MB), main window composed: $composed")
+    work.deleteRecursively()
+    return true
+}
+
+/**
+ * #133: drops `Sealed: true` from every packaged jar's manifest before the AppCDS training run. With the archive,
+ * rc.6 died at launch on Ahmet's Mac with "sealing violation: can't seal package com.jetbrains: already defined":
+ * jbr-api (the only sealed jar on the classpath) had its package defined unsealed through the archive, and the next
+ * com.jetbrains class read from the jar then claimed the seal. Sealing only guards against split packages, and
+ * nothing else on the classpath defines com.jetbrains, so the app loses nothing by it.
+ */
+fun unsealPackagedJars(appDir: File): List<File> {
+    if (!appDir.isDirectory) return emptyList()
+    val sealed = Regex("(?im)^Sealed:[ \\t]*true[ \\t]*\\r?\\n")
+    val changed = mutableListOf<File>()
+    for (jar in appDir.listFiles().orEmpty().filter { it.isFile && it.name.endsWith(".jar") }.sorted()) {
+        val tmp = File(jar.parentFile, "${jar.name}.unseal-tmp")
+        val rewritten = ZipFile(jar).use { zip ->
+            val manifest = zip.getEntry("META-INF/MANIFEST.MF") ?: return@use false
+            val text = zip.getInputStream(manifest).use { it.readBytes() }.toString(Charsets.UTF_8)
+            if (!sealed.containsMatchIn(text)) return@use false
+            val unsealed = text.replace(sealed, "").toByteArray()
+            ZipOutputStream(tmp.outputStream().buffered()).use { out ->
+                for (entry in Collections.list(zip.entries())) {
+                    val body = if (entry.name == manifest.name) unsealed else zip.getInputStream(entry).use { it.readBytes() }
+                    val copy = ZipEntry(entry.name).apply {
+                        time = entry.time
+                        if (entry.method == ZipEntry.STORED) {
+                            method = ZipEntry.STORED
+                            size = body.size.toLong()
+                            compressedSize = body.size.toLong()
+                            crc = CRC32().apply { update(body) }.value
+                        }
+                    }
+                    out.putNextEntry(copy)
+                    out.write(body)
+                    out.closeEntry()
+                }
+            }
+            true
+        }
+        if (rewritten) {
+            Files.move(tmp.toPath(), jar.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            logger.lifecycle("AppCDS: unsealed ${jar.name}")
+            changed += jar
+        }
+    }
+    return changed
+}
 
 fun rewritePackagedNativeDigests(appDir: File): List<File> {
     if (!appDir.isDirectory) return emptyList()
@@ -580,10 +722,19 @@ afterEvaluate {
                 hostOs.contains("win") -> appRoot.resolve("app")
                 else -> appRoot.resolve("lib/app")
             }
-            val rewritten = rewritePackagedNativeDigests(appLibDir.toFile())
-            if (rewritten.isNotEmpty() && macBuildHost) {
-                // jpackage already sealed the bundle; a rewritten jar under Contents/app invalidates
-                // that seal, so re-sign with the same identity and options Compose signs with
+            val trainCds = macBuildHost && project.findProperty("smAppCdsTrain") == "true"
+            val rewritten = rewritePackagedNativeDigests(appLibDir.toFile()) +
+                if (trainCds) unsealPackagedJars(appLibDir.toFile()) else emptyList()
+            // After the jar rewrites: the archive records every jar's size and mtime.
+            val trained = trainCds &&
+                trainAppCds(
+                    appRoot.toFile(), appLibDir.toFile(),
+                    (project.findProperty("smAppCdsTrainSeconds") as String?)?.toLongOrNull() ?: 120L,
+                    (project.findProperty("smAppCdsSettleSeconds") as String?)?.toLongOrNull() ?: 20L, logger,
+                )
+            if ((rewritten.isNotEmpty() || trained) && macBuildHost) {
+                // jpackage already sealed the bundle; a rewritten jar or the new archive under Contents/app
+                // invalidates that seal, so re-sign with the same identity and options Compose signs with
                 // (ad-hoc for an unsigned local build — jpackage's own default on arm64).
                 val identity = (project.findProperty("smMacSignIdentity") as String?)?.takeIf { it.isNotBlank() } ?: "-"
                 val argv = mutableListOf(
@@ -597,8 +748,8 @@ afterEvaluate {
                 argv += appRoot.toFile().absolutePath
                 val proc = ProcessBuilder(argv).redirectErrorStream(true).start()
                 val out = proc.inputStream.bufferedReader().readText()
-                check(proc.waitFor() == 0) { "re-sealing the app after rewriting ${rewritten.size} jar(s) failed: $out" }
-                logger.lifecycle("terminal-core: re-sealed ${appRoot.fileName} after rewriting ${rewritten.joinToString { it.name }}")
+                check(proc.waitFor() == 0) { "re-sealing the app failed (${rewritten.size} rewritten jar(s), CDS archive: $trained): $out" }
+                logger.lifecycle("re-sealed ${appRoot.fileName}: rewritten ${rewritten.joinToString { it.name }}, CDS archive: $trained")
             }
         }
     }
