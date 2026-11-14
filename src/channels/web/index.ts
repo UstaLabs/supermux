@@ -29,7 +29,7 @@ import { listChanges, readBaseBlob, discoverReposCached } from "../../core/edito
 import { safeRepoPath, setStaged } from "../../core/git/stage"
 import { discard } from "../../core/git/discard"
 import { commit as gitCommit, uncommit as gitUncommit } from "../../core/git/commit"
-import { abortMerge, getLatest, resolveConflict } from "../../core/git/latest"
+import { abortMerge, getLatest, resolveConflict, undoLatest } from "../../core/git/latest"
 import { createRef, history, revert } from "../../core/git/history"
 import { reanchor } from "../../core/review/anchor"
 import { formatInstantComment, matchingStep, toWalkthroughDto } from "../../core/walkthrough/author"
@@ -3801,6 +3801,19 @@ export class WebChannel implements Channel {
       if (!g) return this.json({ status: "failed", message: "this chat has no base branch" }, 409)
       const r = await getLatest(workdir, g.repoRoot, g.base)
       return this.json(r, r.status === "failed" ? 409 : 200)
+    }
+    // #72: undo a clean Get latest ({before, after} from its answer); refused once the branch moved on.
+    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/latest\/undo$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getSessionWorkdir?.(id)
+      if (!workdir) return this.json({ error: "session not found" }, 404)
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      const sha = /^[0-9a-f]{7,64}$/i
+      if (typeof body.before !== "string" || typeof body.after !== "string" || !sha.test(body.before) || !sha.test(body.after)) {
+        return this.json({ error: "bad request" }, 400)
+      }
+      const r = await undoLatest(workdir, body.before, body.after)
+      return this.json(r, r.ok ? 200 : 409)
     }
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/(stage|discard|commit|uncommit|resolve|abort|revert|branch|tag)$/)) {
       const workdir = this.opts.getSessionWorkdir?.(decodeURIComponent(path.split("/")[2]!))

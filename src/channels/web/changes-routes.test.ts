@@ -251,6 +251,18 @@ test("discard refuses paths outside the repo, no paths, and both at once", async
   expect((await post(token, "/workspaces/ws-1/git/discard", { repo: "nope", all: true })).status).toBe(404)
 })
 
+test("undo get latest moves the branch back only while it is still where get latest left it", async () => {
+  const { dir, base, token } = await setup()
+  git(dir, "commit", "-qam", "came in")
+  const after = git(dir, "rev-parse", "HEAD")
+  expect((await post(token, "/sessions/s-1/git/latest/undo", { before: "nope", after })).status).toBe(400)
+  expect((await post(token, "/sessions/s-x/git/latest/undo", { before: base, after })).status).toBe(404)
+  expect((await post(token, "/sessions/s-1/git/latest/undo", { before: base, after: base })).status).toBe(409)
+  const r = await post(token, "/sessions/s-1/git/latest/undo", { before: base, after })
+  expect(r.status).toBe(200)
+  expect(git(dir, "rev-parse", "HEAD")).toBe(base)
+})
+
 test("get latest needs the chat's own base; resolve and abort refuse bad input", async () => {
   const { token } = await setup()
   expect((await post(token, "/sessions/s-1/git/latest", {})).status).toBe(409)   // no base known here: no guess
