@@ -469,3 +469,15 @@ test("a tag stays off TestFlight when the repo variable TESTFLIGHT_ON_TAG is off
   expect(workflow).toContain('if [ "${{ vars.TESTFLIGHT_ON_TAG }}" = "off" ]; then')
   expect(workflow).toContain('{ [ "$tag_upload" = 1 ] || [ "${{ inputs.ios_testflight_upload }}" = "true" ]; }')
 })
+
+// #138: a fresh Windows install showed every file as plain text. The packaged image's own runtime must highlight.
+test("Windows release highlights a file with the packaged editor before signing and packaging", () => {
+  const image = position(":desktop:createDistributable")
+  const selfCheck = position("dev.supermux.editor.syntax.SyntaxSelfCheck")
+  const sign = position("bun ../scripts/certum-sign/sign.ts @files")
+  const msi = position(":desktop:packageMsi -x :desktop:createDistributable")
+  expect(image).toBeLessThan(selfCheck)
+  expect(selfCheck).toBeLessThan(sign)
+  expect(selfCheck).toBeLessThan(msi)
+  expect(windowsJob).toContain('if ($LASTEXITCODE -ne 0) { throw "the packaged editor cannot highlight on Windows')
+})
