@@ -82,6 +82,7 @@ import {
 import { setSessionAccount as moveSessionAccount } from "./core/accounts/session-account"
 import { LimitWaits, clockTime, resumeAfterLimit, type LimitWait } from "./core/accounts/limit-wait"
 import { CompactAdvisor } from "./core/usage/compact-advisor"
+import type { CompactionActor } from "./core/session-manager/messages"
 import { getSessionBackend } from "./core/runtime"
 import { createAgentRpc } from "./core/agent-rpc"
 import { buildRpcPrompt } from "./core/agent-rpc/prompts"
@@ -1274,18 +1275,18 @@ const compactAdvisor = new CompactAdvisor({
   autoEnabled: () => accountsSettings().compactBeforeWait,
   onAdvice: (id, advice) => webChannel?.broadcastToAll({ type: "compact_advice", session: id, advice }),
   compact: (id) => {
-    void compactSession(id).then((r) => {
+    void compactSession(id, undefined, { kind: "supermux" }).then((r) => {
       if (!r.ok) log.warn("auto_compact_refused", { session: id, err: r.error })
       else log.info("auto_compact_before_wait", { session: id })
     })
   },
 })
 
-/** #144: the note a Compact was asked with, until its compaction ends (it goes on the "Compacted" line). */
-const compactNotes = new Map<string, string>()
+/** #144: a Compact's note and who asked, until its compaction ends (both go on the "Compacted" line). */
+const pendingCompacts = new Map<string, { note?: string; actor: CompactionActor }>()
 
 /** #144 Compact: queued like a message; refused for an agent that can't, or a session that isn't running. */
-async function compactSession(id: string, note?: string): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+async function compactSession(id: string, note: string | undefined, actor: CompactionActor): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
   const s = registry.get(id)
   if (!s) return { ok: false, status: 404, error: "unknown session" }
   const caps = sessionCapabilities(s.agent)
@@ -1293,13 +1294,12 @@ async function compactSession(id: string, note?: string): Promise<{ ok: true } |
   const adapter = sessionManager.adapterFor(s.id) as unknown as { compact?: (note?: string) => Promise<void> } | undefined
   if (!adapter?.compact) return { ok: false, status: 409, error: "the agent isn't running" }
   const kept = caps.compactNote ? note?.trim() || undefined : undefined
-  if (kept) compactNotes.set(s.id, kept)
-  else compactNotes.delete(s.id)
+  pendingCompacts.set(s.id, { ...(kept ? { note: kept } : {}), actor })
   try {
     await adapter.compact(kept)
     return { ok: true }
   } catch (err) {
-    compactNotes.delete(s.id)
+    pendingCompacts.delete(s.id)
     return { ok: false, status: 409, error: err instanceof Error ? err.message : String(err) }
   }
 }
@@ -2285,8 +2285,11 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     webChannel?.broadcastToAll({ type: "compaction", session: sessionId, id: c.compactionId, status: c.status })
     if (c.status === "in_progress") return
     if (c.status === "completed") compactAdvisor.compacted(sessionId)
-    const note = compactNotes.get(sessionId)
-    compactNotes.delete(sessionId)
+    const pending = pendingCompacts.get(sessionId)
+    pendingCompacts.delete(sessionId)
+    const note = pending?.note
+    // Who started it: whoever asked through the Compact route (or #146's automatic mode); the agent on its own.
+    const actor: CompactionActor | undefined = pending?.actor ?? (c.trigger === "auto" ? { kind: "agent" } : undefined)
     if (c.status === "completed" && c.after != null) {
       // The window holds what the compaction left: the ring drops now, not at the next request.
       const size = contextUsage.get(sessionId)?.size
@@ -2302,7 +2305,7 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
       compaction: {
         status: c.status,
         ...(c.before != null ? { before: c.before } : {}), ...(c.after != null ? { after: c.after } : {}),
-        ...(c.trigger ? { trigger: c.trigger } : {}), ...(note ? { note } : {}),
+        ...(c.trigger ? { trigger: c.trigger } : {}), ...(note ? { note } : {}), ...(actor ? { actor } : {}),
         ...(c.summary ? { summary: c.summary } : {}), ...(c.error ? { error: c.error } : {}),
       },
     }
@@ -3048,7 +3051,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       const s = registry.get(id)
       return s ? activityStore.get(s.id) : []
     },
-    compactSession: (id, note) => compactSession(id, note),
+    compactSession: (id, note, actor) => compactSession(id, note, actor),
     getSessionContext: async (id) => {
       const s = registry.get(id)
       if (!s) return undefined

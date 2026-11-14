@@ -44,9 +44,12 @@ class HostReducerCompactionTest {
 
     @Test fun the_compacted_line_and_the_flags_decode() {
         val entry = json.decodeFromString<dev.supermux.proto.LogEntry>(
-            """{"id":"m","ts":"t","direction":"outbound","op":"compaction","text":"","compaction":{"status":"completed","before":262000,"after":20113,"trigger":"manual","note":"keep it","summary":"S"}}""",
+            """{"id":"m","ts":"t","direction":"outbound","op":"compaction","text":"","compaction":{"status":"completed","before":262000,"after":20113,"trigger":"manual","note":"keep it","summary":"S","actor":{"kind":"device","name":"Mac"}}}""",
         )
-        assertEquals(dev.supermux.proto.CompactionDto("completed", 262000, 20113, "manual", "keep it", "S"), entry.compaction)
+        assertEquals(
+            dev.supermux.proto.CompactionDto("completed", 262000, 20113, "manual", "keep it", "S", actor = dev.supermux.proto.CompactionActorDto("device", "Mac")),
+            entry.compaction,
+        )
         val row = json.decodeFromString<dev.supermux.proto.SessionInfo>(
             """{"id":"s1","name":"n","workdir":"/w","agent":"cursor","capabilities":{"hasAgentTerminal":false,"supportsLiveConfigChange":true,"compact":false,"compactNote":false}}""",
         )

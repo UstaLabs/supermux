@@ -39,9 +39,9 @@ test("an unknown session is a 404; a broker without the wiring a 503", async () 
 })
 
 test("POST /sessions/:id/compact queues a Compact with its note; refusals keep their status (#144)", async () => {
-  const calls: Array<[string, string | undefined]> = []
+  const calls: Array<[string, string | undefined, unknown]> = []
   let refuse: { status: number; error: string } | undefined
-  await start({ compactSession: async (id, note) => { calls.push([id, note]); return refuse ? { ok: false, ...refuse } : { ok: true } } })
+  await start({ compactSession: async (id, note, actor) => { calls.push([id, note, actor]); return refuse ? { ok: false, ...refuse } : { ok: true } } })
   const token = new DeviceStore((channel as any).opts.devicesFile).mint("t2").token
   const post = (body: unknown) => fetch(`http://127.0.0.1:${channel!.boundPort}/sessions/s%201/compact`, {
     method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body),
@@ -53,5 +53,7 @@ test("POST /sessions/:id/compact queues a Compact with its note; refusals keep t
   const no = await post({})
   expect(no.status).toBe(400)
   expect(await no.json()).toEqual({ error: "Cursor can't be asked to compact" })
-  expect(calls).toEqual([["s 1", "keep the decisions"], ["s 1", undefined], ["s 1", undefined]])
+  // The paired device that asked is the Compact's actor.
+  const t2 = { kind: "device", name: "t2" }
+  expect(calls).toEqual([["s 1", "keep the decisions", t2], ["s 1", undefined, t2], ["s 1", undefined, t2]])
 })

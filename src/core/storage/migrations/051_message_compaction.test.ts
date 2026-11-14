@@ -11,7 +11,7 @@ test("051: a chat's compacted line keeps its sizes, trigger, note and summary", 
   expect(cols).toContain("compaction")
   new SessionStore(db).register({ id: "s1", name: "s1", workdir: "/wt", pid: 1, agent: "claude" })
   const log = new MessageStore(db)
-  const compaction = { status: "completed" as const, before: 262000, after: 20113, trigger: "manual" as const, note: "keep the #144 decisions", summary: "Summary: …" }
+  const compaction = { status: "completed" as const, before: 262000, after: 20113, trigger: "manual" as const, note: "keep the #144 decisions", summary: "Summary: …", actor: { kind: "device" as const, name: "Ahmet's Mac" } }
   log.append("s1", { id: "m1", ts: "2026-11-14T00:00:00Z", direction: "outbound", channel: "web", chat_id: "web", op: "compaction", text: "", compaction })
   log.append("s1", { id: "m2", ts: "2026-11-14T00:00:01Z", direction: "outbound", channel: "web", chat_id: "web", text: "plain" })
   const [m1, m2] = log.get("s1")

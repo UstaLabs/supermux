@@ -33,11 +33,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Compress
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -64,6 +66,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -138,6 +141,8 @@ internal fun ContextRingControl(
     onStartOnCompactConsumed: () -> Unit = {},
     /** The threshold the panel last learned (Claude's, Grok's): drives the ring's colour between openings. */
     threshold: Long?,
+    /** A prompt to compact is showing (#146's limit advice too): the ring is amber whatever its own level. */
+    alert: Boolean = false,
     onThreshold: (Long?) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -150,7 +155,7 @@ internal fun ContextRingControl(
     val fill = when {
         compacting -> cs.primary
         level == ContextLevel.Over -> cs.error
-        level == ContextLevel.Near -> MaterialTheme.colorScheme.tertiary
+        level == ContextLevel.Near || alert -> MaterialTheme.colorScheme.tertiary
         else -> cs.primary
     }
     val description = if (context == null) localized(Str.context_ring_none_cd, agentName) else localized(Str.context_ring_cd, pct)
@@ -181,7 +186,7 @@ internal fun ContextRingControl(
         if (pointer && context != null) {
             Text(
                 pct,
-                color = if (level == ContextLevel.Normal) cs.onSurfaceVariant else fill,
+                color = if (level == ContextLevel.Normal && !alert) cs.onSurfaceVariant else fill,
                 fontSize = 12.sp,
                 maxLines = 1,
             )
@@ -460,8 +465,14 @@ private fun SectionLabel(text: String, listPad: androidx.compose.ui.unit.Dp, she
     }
 }
 
+/** Digits of equal width, so columns of numbers line up (Ahmet: the columns zig-zagged). */
+private val Tabular = TextStyle(fontFeatureSettings = "tnum")
+/** The number columns: tokens, then % of the window, right-aligned at fixed widths; then the chevron's slot. */
+private val TokensColumn = 52.dp
+private val PercentColumn = 48.dp
+
 @Composable
-private fun CategoryRow(
+internal fun CategoryRow(
     sheet: Boolean,
     dot: Color,
     name: String,
@@ -487,9 +498,18 @@ private fun CategoryRow(
                 .then(if (outlined) Modifier.border1(cs.outline) else Modifier),
         )
         Text(name, color = if (dim) cs.onSurfaceVariant else cs.onSurface, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        Text(tokensLabel(tokens), color = if (dim) cs.onSurfaceVariant else cs.onSurface, fontSize = 13.sp)
-        Text(size?.let { percentLabel(tokens, it) } ?: "—", color = cs.onSurfaceVariant, fontSize = 11.5.sp, modifier = Modifier.width(44.dp), maxLines = 1)
-        if (onClick != null) Icon(Icons.Filled.ChevronRight, null, tint = cs.onSurfaceVariant.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
+        Text(
+            tokensLabel(tokens), color = if (dim) cs.onSurfaceVariant else cs.onSurface, fontSize = 13.sp, style = LocalTextStyle.current.merge(Tabular),
+            textAlign = TextAlign.End, maxLines = 1, modifier = Modifier.width(TokensColumn).testTag("context_row_tokens"),
+        )
+        Text(
+            size?.let { percentLabel(tokens, it) } ?: "—", color = cs.onSurfaceVariant, fontSize = 11.5.sp, style = LocalTextStyle.current.merge(Tabular),
+            textAlign = TextAlign.End, maxLines = 1, modifier = Modifier.width(PercentColumn).testTag("context_row_pct"),
+        )
+        // Every row keeps the chevron's slot, so a row that opens more doesn't push its numbers left.
+        Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
+            if (onClick != null) Icon(Icons.Filled.ChevronRight, null, tint = cs.onSurfaceVariant.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
+        }
     }
 }
 
@@ -589,7 +609,12 @@ private fun ListRow(sheet: Boolean, item: ListItem) {
             item.detail?.let { Text(it, color = cs.onSurfaceVariant, fontSize = 11.5.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         }
         item.count?.let { UsedBadge(it) }
-        item.tokens?.let { Text(tokensLabel(it), color = if (dim) cs.onSurfaceVariant else cs.onSurface, fontSize = 13.sp, maxLines = 1) }
+        item.tokens?.let {
+            Text(
+                tokensLabel(it), color = if (dim) cs.onSurfaceVariant else cs.onSurface, fontSize = 13.sp, style = LocalTextStyle.current.merge(Tabular),
+                textAlign = TextAlign.End, maxLines = 1, modifier = Modifier.width(TokensColumn),
+            )
+        }
         if (item.onClick != null) Icon(Icons.Filled.ChevronRight, null, tint = cs.onSurfaceVariant.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
     }
 }
@@ -821,64 +846,99 @@ private fun PillButton(text: String, filled: Boolean, sheet: Boolean, tag: Strin
 }
 
 /**
- * The line above the composer when the window is close to where the agent compacts (ConnectionStrip's in-chat
- * look, a warning dot): "Context 87% full · Claude compacts by itself at 267k" · Compact now.
+ * #144/#146: one prompt to compact. The usage-limit advice (#146: the 5-hour window is near its wall and the wait would
+ * find the cache cold) wins over the near-autocompact one (#144: close to where the agent compacts by itself).
+ */
+internal sealed interface NearLimitPrompt {
+    data class Context(val pct: Int, val threshold: Long?) : NearLimitPrompt
+    data class Limit(val usedPct: Int, val resetsAt: Long) : NearLimitPrompt
+}
+
+/** The prompt to show now, or null. "Not now" hides the near-autocompact one for the chat, the limit one for its window. */
+internal fun nearLimitPrompt(
+    context: ContextUsageDto?,
+    threshold: Long?,
+    advice: dev.supermux.proto.CompactAdviceDto?,
+    compacting: Boolean,
+    canCompact: Boolean,
+    contextDismissed: Boolean,
+    limitDismissedFor: Long?,
+): NearLimitPrompt? {
+    if (compacting || !canCompact) return null
+    if (advice != null && advice.resetsAt != limitDismissedFor) return NearLimitPrompt.Limit(advice.usedPct, advice.resetsAt)
+    if (context == null || context.size <= 0 || contextDismissed) return null
+    if (contextLevel(context.used, context.size, threshold) == ContextLevel.Normal) return null
+    return NearLimitPrompt.Context(((context.used * 100 + context.size / 2) / context.size).toInt(), threshold)
+}
+
+private val CloseGlyph: @Composable (Color, androidx.compose.ui.unit.Dp) -> Unit = { tint, size ->
+    Icon(androidx.compose.material.icons.Icons.Filled.Close, localized(Str.context_not_now), tint = tint, modifier = Modifier.size(size))
+}
+
+/**
+ * Pointer (Ahmet's pick C): no line, the ring turns amber and this chip sits beside it in the toolbar row:
+ * "Compact ✕". The ✕ is "Not now". Its hover text says why (the line's words).
  */
 @Composable
-internal fun ContextHint(agentName: String, context: ContextUsageDto, threshold: Long?, onCompactNow: () -> Unit, onDismiss: () -> Unit) {
+internal fun NearLimitChip(prompt: NearLimitPrompt, agentName: String, onCompact: () -> Unit, onDismiss: () -> Unit) {
     val cs = MaterialTheme.colorScheme
-    val pct = "${(context.used * 100 + context.size / 2) / context.size.coerceAtLeast(1)}%"
+    val why = nearLimitText(prompt, agentName)
     Row(
-        Modifier.fillMaxWidth().padding(start = 14.dp, end = 10.dp, bottom = 6.dp).testTag("context_hint"),
+        Modifier
+            .height(26.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(cs.tertiary.copy(alpha = 0.16f))
+            .semantics { contentDescription = why }
+            .testTag("near_limit_chip"),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Box(Modifier.size(7.dp).clip(CircleShape).background(cs.tertiary))
         Text(
-            if (threshold != null) localized(Str.context_hint_threshold, pct, agentName, tokensLabel(threshold)) else localized(Str.context_hint_full, pct),
-            color = cs.onSurfaceVariant, fontSize = 12.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
+            localized(Str.context_compact), color = cs.tertiary, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+            modifier = Modifier.clickable(onClick = onCompact).padding(start = 10.dp, end = 4.dp).testTag("near_limit_compact"),
         )
-        Text(
-            localized(Str.context_not_now), color = cs.onSurfaceVariant, fontSize = 12.5.sp,
-            modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onDismiss).padding(horizontal = 4.dp, vertical = 2.dp),
-        )
-        Text(
-            localized(Str.context_compact_now), color = cs.primary, fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
-            modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onCompactNow).padding(horizontal = 4.dp, vertical = 2.dp)
-                .testTag("context_hint_compact"),
-        )
+        Box(
+            Modifier.size(20.dp).clip(CircleShape).clickable(onClick = onDismiss).testTag("near_limit_dismiss"),
+            contentAlignment = Alignment.Center,
+        ) { CloseGlyph(cs.tertiary.copy(alpha = 0.8f), 14.dp) }
+        Spacer(Modifier.width(3.dp))
     }
 }
 
 /**
- * #146: the agent's usage limit is close and a long wait would find the cache cold: "5-hour limit 88% used · compact
- * now so the restart after the reset is cheap" · Not now · Compact now. Same look as [ContextHint].
+ * Touch (Ahmet's pick B): the composer's first line, inside its card above the field, a hairline under it:
+ * "● Context 86% full · Claude compacts by itself at 267k" · [Compact now] · ✕.
  */
 @Composable
-internal fun LimitCompactHint(usedPct: Int, onCompactNow: () -> Unit, onDismiss: () -> Unit) {
+internal fun NearLimitLine(prompt: NearLimitPrompt, agentName: String, onCompact: () -> Unit, onDismiss: () -> Unit) {
     val cs = MaterialTheme.colorScheme
-    Row(
-        Modifier.fillMaxWidth().padding(start = 14.dp, end = 10.dp, bottom = 6.dp).testTag("limit_compact_hint"),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Box(Modifier.size(7.dp).clip(CircleShape).background(cs.tertiary))
-        Text(
-            localized(Str.context_limit_hint, "$usedPct%"),
-            color = cs.onSurfaceVariant, fontSize = 12.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        Text(
-            localized(Str.context_not_now), color = cs.onSurfaceVariant, fontSize = 12.5.sp,
-            modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onDismiss).padding(horizontal = 4.dp, vertical = 2.dp),
-        )
-        Text(
-            localized(Str.context_compact_now), color = cs.primary, fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
-            modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onCompactNow).padding(horizontal = 4.dp, vertical = 2.dp)
-                .testTag("limit_compact_hint_compact"),
-        )
+    Column(Modifier.fillMaxWidth().padding(bottom = 8.dp).testTag("near_limit_line")) {
+        Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 2.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(6.dp).clip(CircleShape).background(cs.tertiary))
+            Spacer(Modifier.width(8.dp))
+            Text(
+                nearLimitText(prompt, agentName), color = cs.onSurfaceVariant, fontSize = 12.sp, lineHeight = 16.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                localized(Str.context_compact_now), color = cs.primary, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+                modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(cs.primary.copy(alpha = 0.16f)).clickable(onClick = onCompact)
+                    .padding(horizontal = 10.dp, vertical = 4.dp).testTag("near_limit_compact"),
+            )
+            Box(
+                Modifier.size(28.dp).clip(CircleShape).clickable(onClick = onDismiss).testTag("near_limit_dismiss"),
+                contentAlignment = Alignment.Center,
+            ) { CloseGlyph(cs.onSurfaceVariant, 14.dp) }
+        }
+        HorizontalDivider(color = cs.onSurface.copy(alpha = 0.07f))
     }
+}
+
+@Composable
+private fun nearLimitText(prompt: NearLimitPrompt, agentName: String): String = when (prompt) {
+    is NearLimitPrompt.Limit -> localized(Str.context_limit_hint, "${prompt.usedPct}%")
+    is NearLimitPrompt.Context -> prompt.threshold?.let { localized(Str.context_hint_threshold, "${prompt.pct}%", agentName, tokensLabel(it)) }
+        ?: localized(Str.context_hint_full, "${prompt.pct}%")
 }
 
 /**

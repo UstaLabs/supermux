@@ -287,6 +287,8 @@ function referencedFiles(atts: readonly AttachmentRef[]): string[] {
   return atts.flatMap((a) => [a?.file_id, a?.poster_file_id].filter((id): id is string => typeof id === "string" && id.length > 0))
 }
 
+export type CompactionActor = { kind: "device"; name: string } | { kind: "supermux" } | { kind: "agent" }
+
 export interface MessageCompaction {
   status: "completed" | "failed" | "cancelled"
   before?: number
@@ -294,6 +296,11 @@ export interface MessageCompaction {
   trigger?: "manual" | "auto"
   /** What the user asked to keep (Compact's note), when the agent takes one. */
   note?: string
+  /**
+   * Who started it (the team rule: record the actor, not just that it happened). A device's name until devices have
+   * stable ids; "supermux" for #146's automatic Compact; "agent" for the agent's own. Absent when unknown.
+   */
+  actor?: CompactionActor
   summary?: string
   error?: string
 }

@@ -1179,12 +1179,29 @@ fun ChatPanel(
         var limitHintDismissedFor by remember(session.id) { mutableStateOf<Long?>(null) }
         val agentName = dev.supermux.ui.accounts.agentDisplayName(session.agent)
         val lastCompaction = remember(state.messages) { state.messages.lastOrNull { it.compaction != null }?.compaction }
+        // #144/#146: one prompt to compact: a chip by the ring under a pointer, the composer's first line on touch.
+        val pointerHost = dev.supermux.ui.adaptive.LocalPointerAvailable.current
+        val nearPrompt = nearLimitPrompt(
+            session.context, contextThreshold, session.compactAdvice, state.compacting,
+            session.capabilities?.compact == true, contextHintDismissed, limitHintDismissedFor,
+        )
+        val openCompact: () -> Unit = { contextOnCompact = true; contextOpen = true }
+        val dismissPrompt: (NearLimitPrompt) -> Unit = { prompt ->
+            if (prompt is NearLimitPrompt.Limit) limitHintDismissedFor = prompt.resetsAt else contextHintDismissed = true
+        }
         val composer: @Composable () -> Unit = {
             Composer(
                 draft = draft,
                 onDraftChange = onDraftChange,
+                cardTopLine = if (!pointerHost && nearPrompt != null) {
+                    { NearLimitLine(nearPrompt, agentName, onCompact = openCompact, onDismiss = { dismissPrompt(nearPrompt) }) }
+                } else null,
                 contextControl = {
+                    if (pointerHost) nearPrompt?.let { prompt ->
+                        NearLimitChip(prompt, agentName, onCompact = openCompact, onDismiss = { dismissPrompt(prompt) })
+                    }
                     ContextRingControl(
+                        alert = nearPrompt != null,
                         agentName = agentName,
                         context = session.context,
                         canCompact = session.capabilities?.compact == true,
@@ -1192,7 +1209,7 @@ fun ChatPanel(
                         compacting = state.compacting,
                         lastCompaction = lastCompaction,
                         actions = actions,
-                        pointer = dev.supermux.ui.adaptive.LocalPointerAvailable.current,
+                        pointer = pointerHost,
                         open = contextOpen,
                         onOpenChange = { contextOpen = it; if (!it) contextOnCompact = false },
                         startOnCompact = contextOnCompact,
@@ -1479,30 +1496,6 @@ fun ChatPanel(
                     WalkthroughUnreadChip(state, onOpenWalkthrough, Modifier.align(Alignment.CenterHorizontally))
                     // Card #121: offline or reconnecting, just above the composer.
                     dev.supermux.ui.shell.ConnectionStrip(inChat = true)
-                    // #146: close to the usage limit, with a long wait ahead: compact first (it wins over #144's line).
-                    val limitAdvice = session.compactAdvice?.takeIf {
-                        !state.compacting && session.capabilities?.compact == true && limitHintDismissedFor != it.resetsAt
-                    }
-                    if (limitAdvice != null) {
-                        LimitCompactHint(
-                            usedPct = limitAdvice.usedPct,
-                            onCompactNow = { contextOnCompact = true; contextOpen = true },
-                            onDismiss = { limitHintDismissedFor = limitAdvice.resetsAt },
-                        )
-                    }
-                    // #144: close to where the agent compacts by itself: offer to compact now.
-                    if (limitAdvice == null) session.context?.let { ctx ->
-                        val near = ctx.size > 0 && contextLevel(ctx.used, ctx.size, contextThreshold) != ContextLevel.Normal
-                        if (near && !state.compacting && !contextHintDismissed && session.capabilities?.compact == true) {
-                            ContextHint(
-                                agentName = agentName,
-                                context = ctx,
-                                threshold = contextThreshold,
-                                onCompactNow = { contextOnCompact = true; contextOpen = true },
-                                onDismiss = { contextHintDismissed = true },
-                            )
-                        }
-                    }
                     // A pointer host can still raise a soft keyboard (a tablet with a mouse, DeX
                     // with the phone as touchpad), so the composer clears it here too; the inset
                     // is zero on a desktop, where this is the layout it always was.
