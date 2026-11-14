@@ -56,11 +56,11 @@ final class PushManager: NSObject {
     /// happened. A prompt already answered elsewhere, or another host's, comes back as an error: say so and point to
     /// the app.
     func answerPrompt(sessionId: String, requestId: String, optionId: String, title: String) async {
-        var text = "Couldn't answer (already answered, or the host is unreachable). Open Supermux."
+        var text = String(localized: "Couldn't answer (already answered, or the host is unreachable). Open Supermux.")
         if let api = makeApi() {
             do {
                 try await api.answerRequest(sessionId: sessionId, requestId: requestId, optionId: optionId)
-                text = optionId.hasPrefix("allow") ? "Allowed." : "Denied."
+                text = optionId.hasPrefix("allow") ? String(localized: "Allowed.") : String(localized: "Denied.")
             } catch {
                 NSLog("[supermux push] answer failed: %@", error.localizedDescription)
             }
@@ -253,8 +253,8 @@ final class PushAppDelegate: NSObject, UIApplicationDelegate {
                                    intentIdentifiers: [], options: []),
             // #143: a permission prompt. Allow only after the device unlock; Deny at once.
             UNNotificationCategory(identifier: PushGroupState.promptCategory, actions: [
-                UNNotificationAction(identifier: PushGroupState.rejectAction, title: "Deny", options: [.destructive]),
-                UNNotificationAction(identifier: PushGroupState.allowAction, title: "Allow", options: [.authenticationRequired]),
+                UNNotificationAction(identifier: PushGroupState.rejectAction, title: String(localized: "Deny"), options: [.destructive]),
+                UNNotificationAction(identifier: PushGroupState.allowAction, title: String(localized: "Allow"), options: [.authenticationRequired]),
             ], intentIdentifiers: [], options: []),
         ])
         // Warm the push keypair on launch so its public key is generated + persisted in

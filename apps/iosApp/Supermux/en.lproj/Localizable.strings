@@ -5,3 +5,10 @@
 "QR scanning is unavailable. Paste the pairing link instead." = "QR scanning is unavailable. Paste the pairing link instead.";
 "Camera access is off. Enable it in Settings, or close the scanner and paste the pairing link." = "Camera access is off. Enable it in Settings, or close the scanner and paste the pairing link.";
 "Scan pairing code" = "Scan pairing code";
+
+/* #143: a permission prompt answered from its notification */
+"Deny" = "Deny";
+"Allow" = "Allow";
+"Allowed." = "Allowed.";
+"Denied." = "Denied.";
+"Couldn't answer (already answered, or the host is unreachable). Open Supermux." = "Couldn't answer (already answered, or the host is unreachable). Open Supermux.";
