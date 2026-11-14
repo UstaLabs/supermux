@@ -2,7 +2,7 @@
  * #142 bundle smoke: the web client still works after the size cuts (Compose built without source
  * info, extra wasm-opt passes, JetBrains Mono shipped once, brotli on the wire).
  *
- *   1. an unpaired browser lands on the pair gate (onboarding_screen);
+ *   1. an unpaired browser lands on the pair gate (WebPairScreen, `web_pair_screen`);
  *   2. a paired one opens the seeded session, and a fenced Kotlin block in the reply renders in the
  *      chat's code editor: its font comes from the TERMINAL's JetBrains Mono path and never the
  *      editor's (the editor's copy is no longer shipped), and with the real syntax module staged
@@ -78,7 +78,7 @@ export async function main(): Promise<void> {
     const gate = await gateContext.newPage()
     gate.on("pageerror", (e) => errors.push(`[gate] ${e.message}`))
     await gate.goto(fixture.baseUrl, { waitUntil: "domcontentloaded" })
-    await byTag(gate, "onboarding_screen").waitFor({ state: "attached", timeout: 60_000 })
+    await byTag(gate, "web_pair_screen").waitFor({ state: "attached", timeout: 60_000 })
     await gate.screenshot({ path: join(shots, "1-pair-gate.png") })
     await gateContext.close()
 
