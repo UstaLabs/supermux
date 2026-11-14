@@ -4222,13 +4222,17 @@ export class WebChannel implements Channel {
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
       const list = listBranches(workdir)
-      const real = (p: string) => { try { return realpathSync(p) } catch { return p } }
-      const here = repoToplevel(workdir)
+      // git prints worktree paths its own way (on Windows "D:/a/…", maybe an 8.3 short name), a session row holds
+      // the OS's ("D:\\a\\…"): both go through the native realpath, then compare on the host's rules (case, separators).
+      const real = (p: string) => { try { return realpathSync.native(p) } catch { return p } }
+      const same = (a: string, b: string) => paths.isInside(a, b) && paths.isInside(b, a)
+      const here = real(repoToplevel(workdir) ?? workdir)
       const chats = this.opts.getSessionsSnapshot().map((s) => ({ id: s.id, name: s.name, at: real(s.workdir) }))
       const local = list.local.map((b) => {
         if (!b.checkedOutAt) return { ...b, openIn: null }
-        if (b.checkedOutAt === here) return { ...b, openIn: { kind: "this" } }
-        const chat = chats.find((c) => c.id !== id && c.at === b.checkedOutAt)
+        const at = real(b.checkedOutAt)
+        if (same(at, here)) return { ...b, openIn: { kind: "this" } }
+        const chat = chats.find((c) => c.id !== id && same(c.at, at))
         return { ...b, openIn: chat ? { kind: "chat", id: chat.id, name: chat.name } : { kind: "folder" } }
       })
       return this.json({ inPlace: true, ...list, local })
