@@ -24,7 +24,6 @@
     <string name="composer_pill_effort">effort</string>
     <string name="composer_cancel">Cancel</string>
     <string name="composer_ok">OK</string>
-    <string name="composer_done">Done</string>
     <string name="composer_dismiss">Dismiss</string>
 
     <!-- The detail chip under the card -->
@@ -91,56 +90,6 @@
     <string name="composer_dictation_send_audio">Send as audio</string>
 
     <!-- Finish (land a worktree's branch) -->
-    <string name="composer_finish_button">Finish</string>
-    <string name="composer_finish_kickoff_failed">Couldn't start finish — check your connection and try again.</string>
-    <string name="composer_finish_title_branch">Finish · %1$s</string>
-    <string name="composer_finish_title_running">Finishing</string>
-    <string name="composer_finish_checking">Checking branch…</string>
-    <string name="composer_finish_nothing_to_land">No new commits to land</string>
-    <string name="composer_finish_keep">Keep</string>
-    <string name="composer_finish_merge_locally">Merge locally</string>
-    <string name="composer_finish_tests_before_merge">Run tests before merging?</string>
-    <string name="composer_finish_tests_before_pr">Run tests before opening the PR?</string>
-    <string name="composer_finish_may_conflict">may conflict</string>
-    <string name="composer_finish_no_conflict">no conflict</string>
-    <string name="composer_finish_push_open_pr">Push &amp; open PR</string>
-    <string name="composer_finish_open_pr">Open PR</string>
-    <string name="composer_finish_no_remote">no remote</string>
-    <string name="composer_finish_discard">Discard</string>
-    <string name="composer_finish_discard_confirm">Discard all work on this branch?</string>
-    <string name="composer_finish_run_tests">Run tests</string>
-    <string name="composer_finish_skip_tests">Skip tests</string>
-    <string name="composer_finish_running">Finishing…</string>
-    <string name="composer_finish_running_hint">You can close this — I'll notify you when it's done.</string>
-    <string name="composer_finish_merged_into">Merged into %1$s</string>
-    <string name="composer_finish_base">base</string>
-    <string name="composer_finish_pr_opened">Pull request opened</string>
-    <string name="composer_finish_view_pr">View PR</string>
-    <string name="composer_finish_branch_pushed">Branch pushed</string>
-    <string name="composer_finish_open_a_pr">Open a PR</string>
-    <string name="composer_finish_tests_failed">Tests failed</string>
-    <string name="composer_finish_merge_anyway">Merge anyway</string>
-    <string name="composer_finish_let_agent_fix">Let the agent fix it</string>
-    <string name="composer_finish_merge_conflicts">Merge conflicts</string>
-    <string name="composer_finish_base_unsaved">Base has unsaved changes</string>
-    <string name="composer_finish_uncommitted_title">These changes aren't committed yet</string>
-    <string name="composer_finish_commit_message">Commit message</string>
-    <string name="composer_finish_commit_open_pr">Commit &amp; open PR</string>
-    <string name="composer_finish_commit_merge">Commit &amp; merge</string>
-    <string name="composer_finish_no_verify">No .mux/verify.sh configured</string>
-    <string name="composer_finish_merge_unverified">Merge without verifying</string>
-    <string name="composer_finish_generate_verify">Generate verify</string>
-    <string name="composer_finish_draft">Draft · %1$s</string>
-    <string name="composer_finish_save">Save</string>
-    <string name="composer_finish_push_failed">Push failed</string>
-    <string name="composer_finish_retry">Retry</string>
-    <string name="composer_finish_nothing_to_do">Nothing to land — no new commits.</string>
-    <string name="composer_finish_kept">Branch kept</string>
-    <string name="composer_finish_discarded">Work discarded</string>
-    <string name="composer_finish_base_moved">Base branch moved</string>
-    <string name="composer_finish_base_moved_hint">The base branch moved while finishing. Re-sync and merge again.</string>
-    <string name="composer_finish_merge_again">Merge again</string>
-    <string name="composer_finish_failed">Finish failed</string>
 
     <!-- Continue in a new conversation -->
     <string name="composer_continue_title">Continue in new conversation</string>
@@ -214,13 +163,5 @@
     <plurals name="composer_duration_seconds">
         <item quantity="one">%1$d second</item>
         <item quantity="other">%1$d seconds</item>
-    </plurals>
-    <plurals name="composer_finish_files_changed">
-        <item quantity="one">%1$d file · +%2$d/−%3$d</item>
-        <item quantity="other">%1$d files · +%2$d/−%3$d</item>
-    </plurals>
-    <plurals name="composer_finish_uncommitted">
-        <item quantity="one">%1$d uncommitted</item>
-        <item quantity="other">%1$d uncommitted</item>
     </plurals>
 </resources>

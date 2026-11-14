@@ -87,6 +87,18 @@ function repo(): { dir: string; base: string } {
 }
 
 describe("listChanges", () => {
+  // #72: Source Control shows a staged file's "(Index)" diff (HEAD → index) and its "(Working Tree)" diff (index → file).
+  test("a staged file carries its index blob; one with nothing staged has none", async () => {
+    const { dir } = repo()
+    writeFileSync(join(dir, "a.txt"), "one\nTWO\n"); git(dir, "add", "a.txt"); writeFileSync(join(dir, "a.txt"), "one\nTWO\nthree\n")
+    writeFileSync(join(dir, "gone.txt"), "changed\n")
+    const files = (await listChanges(dir, {}, undefined, "head")).repos[0]!.files
+    const a = files.find((f) => f.path === "a.txt")!, g = files.find((f) => f.path === "gone.txt")!
+    expect(a.staged).toBe("partial")
+    expect(a.indexBlob).toBe(git(dir, "rev-parse", ":a.txt"))
+    expect(g.indexBlob).toBeUndefined()
+  })
+
   test("tracked edits, deletes and untracked text/binary files, with base blobs and counts", async () => {
     const { dir, base } = repo()
     const aBlob = git(dir, "rev-parse", `${base}:a.txt`)

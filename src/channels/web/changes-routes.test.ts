@@ -230,6 +230,89 @@ test("commit refuses a bad message and an unknown repo", async () => {
   expect((await post(token, "/workspaces/ws-1/git/nope", { repo: "" })).status).not.toBe(200)
 })
 
+test("discard throws a file's unstaged edit away, or every one with all; staged edits stay", async () => {
+  const { dir, token } = await setup()
+  writeFileSync(join(dir, "n.txt"), "new\n")
+  expect((await post(token, "/workspaces/ws-1/git/discard", { repo: "", paths: ["a.txt"] })).status).toBe(200)
+  expect(git(dir, "status", "--porcelain")).toBe("?? n.txt")
+  writeFileSync(join(dir, "a.txt"), "staged\n"); git(dir, "add", "a.txt"); writeFileSync(join(dir, "a.txt"), "staged\nmore\n")
+  const all = await post(token, "/sessions/s-1/git/discard", { repo: "", all: true })
+  expect(all.status).toBe(200)
+  expect(((await all.json()) as any).discarded.sort()).toEqual(["a.txt", "n.txt"])
+  expect(git(dir, "status", "--porcelain")).toBe("M  a.txt")
+})
+
+test("discard refuses paths outside the repo, no paths, and both at once", async () => {
+  const { token } = await setup()
+  expect((await post(token, "/workspaces/ws-1/git/discard", { repo: "", paths: ["../x"] })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/discard", { repo: "", paths: [] })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/discard", { repo: "" })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/discard", { repo: "", paths: ["a.txt"], all: true })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/discard", { repo: "nope", all: true })).status).toBe(404)
+})
+
+test("undo get latest moves the branch back only while it is still where get latest left it", async () => {
+  const { dir, base, token } = await setup()
+  git(dir, "commit", "-qam", "came in")
+  const after = git(dir, "rev-parse", "HEAD")
+  expect((await post(token, "/sessions/s-1/git/latest/undo", { before: "nope", after })).status).toBe(400)
+  expect((await post(token, "/sessions/s-x/git/latest/undo", { before: base, after })).status).toBe(404)
+  expect((await post(token, "/sessions/s-1/git/latest/undo", { before: base, after: base })).status).toBe(409)
+  const r = await post(token, "/sessions/s-1/git/latest/undo", { before: base, after })
+  expect(r.status).toBe(200)
+  expect(git(dir, "rev-parse", "HEAD")).toBe(base)
+})
+
+test("a chat in a folder (workspace) has status, publish, push, fetch and pull like a chat with its own copy", async () => {
+  const { dir, token } = await setup()
+  const origin = mkdtempSync(join(tmpdir(), "mux-origin-"))
+  git(origin, "init", "-q", "--bare")
+  git(dir, "remote", "add", "origin", origin)
+  git(dir, "commit", "-qam", "local work")
+  let st = (await (await get(token, "/workspaces/ws-1/git/status")).json()) as any
+  expect(st).toMatchObject({ isRepo: true, hasRemote: true, branch: "main", upstream: null })
+  expect(((await (await post(token, "/workspaces/ws-1/git/publish", {})).json()) as any).status).toBe("pushed")
+  st = (await (await get(token, "/workspaces/ws-1/git/status")).json()) as any
+  expect(st).toMatchObject({ upstream: "origin/main", ahead: 0, behind: 0 })
+  writeFileSync(join(dir, "a.txt"), "three\n"); git(dir, "commit", "-qam", "more")
+  expect(((await (await get(token, "/sessions/s-1/git/status")).json()) as any).ahead).toBe(1)
+  expect(((await (await post(token, "/workspaces/ws-1/git/push", {})).json()) as any).status).toBe("pushed")
+  expect(((await (await post(token, "/workspaces/ws-1/git/fetch", {})).json()) as any).ok).toBe(true)
+  expect(((await (await post(token, "/workspaces/ws-1/git/pull", {})).json()) as any).status).toBe("up_to_date")
+  expect((await get(token, "/workspaces/ws-x/git/status")).status).toBe(404)
+  expect((await post(token, "/workspaces/ws-x/git/push", {})).status).toBe(404)
+})
+
+test("the branch's pull request: no origin says so; off a branch says so", async () => {
+  const { dir, token } = await setup()
+  expect(await (await get(token, "/workspaces/ws-1/git/pr")).json()).toEqual({ status: "unavailable", reason: "no_remote" })
+  git(dir, "checkout", "-q", "--detach")
+  expect(await (await get(token, "/sessions/s-1/git/pr")).json()).toEqual({ status: "unavailable", reason: "no_branch" })
+  expect((await get(token, "/workspaces/ws-x/git/pr")).status).toBe(404)
+})
+
+test("creating a pull request needs a title and a target; ready needs a number; a log needs a check's URL", async () => {
+  const { token } = await setup()
+  expect((await post(token, "/workspaces/ws-1/git/pr", { title: "", target: "dev" })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/pr", { title: "T" })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-x/git/pr", { title: "T", target: "dev" })).status).toBe(404)
+  const noRemote = await post(token, "/workspaces/ws-1/git/pr", { title: "T", target: "dev" })
+  expect(noRemote.status).toBe(409)
+  expect(await noRemote.json()).toMatchObject({ status: "unavailable", reason: "no_remote" })
+  expect((await post(token, "/sessions/s-1/git/pr/ready", { number: "x" })).status).toBe(400)
+  expect((await get(token, "/sessions/s-1/git/pr/check-log")).status).toBe(400)
+  expect(await (await get(token, "/sessions/s-1/git/pr/check-log?url=https%3A%2F%2Fx.example%2F1")).json()).toEqual({ ok: false, reason: "unknown_check" })
+})
+
+test("a PR's title and description: from the commits when no agent writes them; a folder chat names its target", async () => {
+  const { dir, token } = await setup()
+  git(dir, "checkout", "-qb", "feature/search"); git(dir, "commit", "-qam", "Add a search box")
+  expect((await post(token, "/workspaces/ws-1/git/pr/text", {})).status).toBe(400)
+  const r = await post(token, "/workspaces/ws-1/git/pr/text", { target: "main" })
+  expect(r.status).toBe(200)
+  expect(await r.json()).toEqual({ title: "Add a search box", body: "- Add a search box", by: "commits" })
+})
+
 test("get latest needs the chat's own base; resolve and abort refuse bad input", async () => {
   const { token } = await setup()
   expect((await post(token, "/sessions/s-1/git/latest", {})).status).toBe(409)   // no base known here: no guess

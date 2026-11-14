@@ -138,6 +138,7 @@ import { BUILD_VERSION, BUILD_COMMIT, IS_COMPILED, versionString } from "./share
 import { createCheckoutWatch } from "./core/checkout-watch"
 import { gitAsync } from "./core/git/exec"
 import { runSyncOrThrow } from "./core/git/exec-sync"
+import { liveBranch } from "./core/git/branches"
 import { agentsCloseMode, captureWindowsTaskFlag, expectRestart, restartService } from "./core/update/apply"
 import { installMinGit, realMinGitDeps } from "./core/git/mingit"
 import { loadOrCreateHostKey } from "./core/host-identity"
@@ -253,7 +254,6 @@ import { buildAgentModels } from "./core/models/agent-models"
 import { createSessionBranch, createWorktree, ensureWorktreeAt, existingBranchNames, removeWorktree, worktreesRoot, type WorktreeHandle } from "./core/worktree/manager"
 import { startFinishJob, getFinishJob, clearFinishJob, type FinishJob, type FinishJobOpts, type FinishAction } from "./core/worktree/finish-job"
 import { computeReadiness, type FinishReadiness } from "./core/worktree/readiness"
-import { suggestVerify } from "./core/worktree/verify-suggest"
 import { loadFinishConfig } from "./core/worktree/finish-config"
 import { computeLiteStatus } from "./core/worktree/lite-status"
 import { GitStatusService, type ServiceSession } from "./core/worktree/git-status-service"
@@ -1837,7 +1837,7 @@ async function interruptSessionById(sessionId: string): Promise<{ ok: boolean; r
   return r
 }
 
-type FinishRequest = { action: FinishAction; skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string; /** #72: never archive the chat after a merge (the new UI's merge leaves it open). */ keep?: boolean }
+type FinishRequest = { action: FinishAction; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prTitle?: string; prBody?: string; /** #72: never archive the chat after a merge (the new UI's merge leaves it open). */ keep?: boolean }
 
 async function finishSessionById(sessionId: string, req: FinishRequest): Promise<FinishJob | { error: string }> {
   const s = registry.get(sessionId)
@@ -1847,9 +1847,12 @@ async function finishSessionById(sessionId: string, req: FinishRequest): Promise
   if (prev && prev.status !== "running") clearFinishJob(sessionId)
   // discard must stop the live agent BEFORE its worktree is force-removed
   if (req.action === "discard") await killSession(sessionId).catch(() => {})
-  const session = { id: sessionId, repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: s.session_branch, baseBranch: s.base_branch }
-  const cfg = loadFinishConfig(s.repo_root)
-  const opts: FinishJobOpts = { ...req, cleanup: false, prRequiresGreen: req.prRequiresGreen ?? cfg.prRequiresGreen }  // worktree removal handled by the archive path below
+  // #72: a chat follows its copy's branch (it can switch), so merge and PR use the branch checked out now. Discard
+  // removes the copy and only ever deletes the branch supermux made for it (session_branch), never one switched to.
+  const branch = req.action === "discard" ? s.session_branch : liveBranch(s.workdir)
+  if (!branch) return { error: "this chat isn't on a branch" }
+  const session = { id: sessionId, repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: branch, baseBranch: s.base_branch }
+  const opts: FinishJobOpts = { ...req, cleanup: false }  // worktree removal handled by the archive path below
   const sessionName = s.name
   return startFinishJob(session, opts, {
     onUpdate: (job) => webChannel?.broadcastToAll({ type: "finish_job", session: sessionId, job }),
@@ -1884,12 +1887,10 @@ function fireFinishPush(sessionName: string, sessionId: string, job: FinishJob):
     case "pr_opened": key = "finish.pr_opened"; break
     case "branch_published": key = "finish.branch_published"; break
     case "discarded": key = "finish.discarded"; break
-    case "tests_failed": key = "finish.tests_failed"; break
     case "sync_conflict": case "dirty_overlap": key = "finish.conflicts"; break
     case "push_auth_failed": key = "finish.push_auth_failed"; break
     case "push_rejected": key = "finish.push_rejected"; break
     case "uncommitted": key = "finish.uncommitted"; break
-    case "no_verify": key = "finish.no_verify"; break
     case "non_ff": key = "finish.non_ff"; break
     case "error": key = "finish.error"; break
     // kept / nothing_to_do → no push
@@ -1912,7 +1913,7 @@ function finishReadinessById(sessionId: string): FinishReadiness | { error: stri
   if (!s) return { error: "no such session" }
   if (!s.repo_root || !s.session_branch || !s.base_branch) return { error: "session is not worktree-backed" }
   const cfg = loadFinishConfig(s.repo_root)
-  return computeReadiness({ repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: s.session_branch, baseBranch: s.base_branch, defaultAction: cfg.defaultAction, prRequiresGreen: cfg.prRequiresGreen })
+  return computeReadiness({ repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: liveBranch(s.workdir) ?? s.session_branch, baseBranch: s.base_branch, defaultAction: cfg.defaultAction })
 }
 
 const TASK_KIND: Record<TaskEvent["taskKind"], BgTaskKind> = {
@@ -3494,6 +3495,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     startDisplay: (args) => displayManager.start({ sessionDisplayName: args.sessionName, provider: args.provider as any, device: args.device, width: args.width, height: args.height }),
     stopDisplay: (id) => displayManager.stop(id),
     getSessionWorkdir: (id) => registry.get(id)?.workdir,
+    // #72: a PR's title and description, by a one-shot agent worker (agent-rpc), like voice clean-up.
+    writePrText: (input) => agentRpc.callAgent({ key: "pr-text", taskType: "pr_text", payload: input, timeoutMs: 45_000 }),
     getSessionGitBase: (id) => {
       const s = registry.get(id)
       return s?.repo_root && s.base_branch && s.base_branch !== "HEAD" ? { repoRoot: s.repo_root, base: s.base_branch } : undefined
@@ -3638,19 +3641,6 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     sendUserMessage: (id, text) => deliverUserMessage(id, text),
     getWalkthrough: (id) => walkthroughStore.getCurrent(id),
     reviewSession: (id) => { const s = registry.get(id); return s ? { workdir: s.workdir, repoRoot: s.repo_root ?? undefined, baseCommits: s.base_commits ?? undefined } : undefined },
-    verifySuggest: (id) => { const s = registry.get(id); return s?.repo_root && s.session_branch ? suggestVerify(s.workdir) : undefined },
-    verifySave: (id, content) => {
-      const s = registry.get(id)
-      if (!s?.repo_root || !s.session_branch) return { ok: false, reason: "session is not worktree-backed" }
-      try {
-        const dir = join(s.workdir, ".mux")
-        mkdirSync(dir, { recursive: true })
-        const p = join(dir, "verify.sh")
-        writeFileSync(p, content.endsWith("\n") ? content : content + "\n")
-        platformFiles.makeExecutable(p)
-        return { ok: true }
-      } catch (err: any) { return { ok: false, reason: err?.message ?? String(err) } }
-    },
     getForgeConnections: () => forgeService.connections(),
     getForgeCliStatus: () => detectForgeClis(),
     addForgeConnection: (o) => forgeService.addConnection(o as any),
