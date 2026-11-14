@@ -9,6 +9,7 @@
 //   bun scripts/perf-timeline.ts chat [TRACE] [--device NAME] [--last N]   chat opens (default: the newest)
 //   bun scripts/perf-timeline.ts start [TRACE] [--last N]         session starts, send → first reply (card #75)
 //   bun scripts/perf-timeline.ts starts [--last N]                 the last N starts (default 10): each step's median, min, max
+//   bun scripts/perf-timeline.ts browser [TRACE] [--last N]       Browser tab opens, each step's ms (card #155)
 //   bun scripts/perf-timeline.ts ws [--minutes N]                 WebSocket frames per type (default 10 min)
 //
 // Reads <state>/perf/perf.jsonl (+ .1), or --file PATH. MUX_STATE_DIR picks another broker's state.
@@ -16,7 +17,7 @@ import { existsSync, readFileSync, statSync } from "fs"
 import { join } from "path"
 import { STATE_DIR } from "../src/shared/paths"
 import { PerfLog } from "../src/core/perf/perf-log"
-import { latestTrace, listTraces, parsePerfLines, renderChat, renderLaunch, renderStart, renderStartSummary, renderWs } from "../src/core/perf/timeline"
+import { latestTrace, listTraces, parsePerfLines, renderChat, renderLaunch, renderBrowser, renderStart, renderStartSummary, renderWs } from "../src/core/perf/timeline"
 
 const args = process.argv.slice(2)
 const flag = (name: string): string | undefined => {
@@ -91,12 +92,18 @@ switch (command) {
     console.log(renderStartSummary(events, traces))
     break
   }
+  case "browser": {
+    const events = parsePerfLines(load())
+    const traces = traceArg ? [traceArg] : listTraces(events).filter((t) => t.kind === "browser" && (device === undefined || t.device === device)).slice(-Math.max(1, Number(flagLast ?? 20))).map((t) => t.trace)
+    console.log(renderBrowser(events, traces))
+    break
+  }
   case "ws": {
     const events = parsePerfLines(load())
     console.log(renderWs(events, Date.now() - minutes * 60_000))
     break
   }
   default:
-    console.log("usage: bun scripts/perf-timeline.ts on|off|status|list|launch [TRACE]|chat [TRACE]|start [TRACE]|starts|ws [--minutes N] [--device NAME] [--last N] [--file PATH]")
+    console.log("usage: bun scripts/perf-timeline.ts on|off|status|list|launch [TRACE]|chat [TRACE]|start [TRACE]|starts|browser|ws [--minutes N] [--device NAME] [--last N] [--file PATH]")
     process.exit(1)
 }

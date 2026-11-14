@@ -3,6 +3,10 @@ package dev.supermux.webview.engine
 import dev.supermux.webview.FindResult
 import dev.supermux.webview.WebCookie
 import kotlin.math.roundToInt
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 
 /*
  * The pure rules of the browser operations (WebEngine.find, setZoom, setCookie) for an engine with no more than a
@@ -55,4 +59,31 @@ internal fun cookieHeader(c: WebCookie): String? {
         append("; SameSite=").append(sameSite)
         c.maxAgeSeconds?.let { append("; Max-Age=").append(maxOf(it, 0L)) }
     }
+}
+
+/**
+ * [c] as the DevTools protocol's `Network.setCookie` parameters (WebView2, #155), with `expires` from [nowEpochSeconds]
+ * and the cookie's Max-Age. Null for a cookie [cookieHeader] refuses: the same rules on every engine.
+ */
+internal fun cdpSetCookieParams(c: WebCookie, nowEpochSeconds: Long): String? {
+    cookieHeader(c) ?: return null
+    return buildJsonObject {
+        put("name", JsonPrimitive(c.name))
+        put("value", JsonPrimitive(c.value))
+        put("url", JsonPrimitive(c.url))
+        put("path", JsonPrimitive(c.path))
+        c.domain?.let { put("domain", JsonPrimitive(it)) }
+        put("secure", JsonPrimitive(c.secure))
+        put("httpOnly", JsonPrimitive(c.httpOnly))
+        put("sameSite", JsonPrimitive(c.sameSite.lowercase().replaceFirstChar { it.uppercase() }))
+        c.maxAgeSeconds?.let { put("expires", JsonPrimitive(nowEpochSeconds + maxOf(it, 0L))) }
+    }.toString()
+}
+
+/** Whether `Network.setCookie`'s answer [json] says the cookie went in: `success`, where the engine still sends it. */
+internal fun cdpCookieSet(json: String?): Boolean {
+    val answer = json?.let { runCatching { Json.parseToJsonElement(it) }.getOrNull() }
+        as? JsonObject ?: return json == null || json.isBlank()
+    val success = answer["success"] as? JsonPrimitive ?: return true
+    return success.content != "false"
 }

@@ -308,6 +308,15 @@ static void n_clear_data(JNIEnv *env, jclass c, jlong view, jlong request)
     wv_op_post(op);
 }
 
+static void n_set_cookie(JNIEnv *env, jclass c, jlong view, jlong request, jstring url, jstring header)
+{
+    WvOp *op = wv_op_new(WV_OP_SET_COOKIE, view);
+    op->i[0] = request;
+    op->s[0] = wv_utf8(env, url);
+    op->s[1] = wv_utf8(env, header);
+    wv_op_post(op);
+}
+
 static void n_answer(JNIEnv *env, jclass c, jlong view, jlong request, jboolean allow, jstring text, jobjectArray files)
 {
     WvOp *op = wv_op_new(WV_OP_ANSWER, view);
@@ -368,6 +377,7 @@ static const JNINativeMethod methods[] = {
     { "setenv", "(Ljava/lang/String;Ljava/lang/String;)V", (void *)n_setenv },
     { "frameSeq", "(J)J", (void *)n_frame_seq },
     { "clearData", "(JJ)V", (void *)n_clear_data },
+    { "setCookie", "(JJLjava/lang/String;Ljava/lang/String;)V", (void *)n_set_cookie },
     { "answer", "(JJZLjava/lang/String;[Ljava/lang/String;)V", (void *)n_answer },
     { "clipboard", "(Ljava/lang/String;)V", (void *)n_clipboard },
 #ifdef WV_GLBENCH

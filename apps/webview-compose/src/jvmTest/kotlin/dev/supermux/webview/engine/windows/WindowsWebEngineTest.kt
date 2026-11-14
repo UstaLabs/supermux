@@ -341,6 +341,27 @@ class WindowsWebEngineTest {
         rig.close()
     }
 
+    /** #155: a cookie goes into the page's profile through CDP's Network.setCookie, done when WebView2 says it took it. */
+    @Test fun aCookieGoesInThroughCdpAndIsDoneWhenWebView2Answers() = runTest {
+        val rig = WinRig(this, WebProfile.Named("supermux-browser"))
+        rig.warm()
+        val key = dev.supermux.webview.WebCookie("cmux_preview", "pv", "https://relay.test/p/", path = "/p/")
+        var result: Boolean? = null
+        rig.scope.launch { result = rig.engine.setCookie(key) }
+        val (request, _, params) = rig.page.devtools.last { it.second == "Network.setCookie" }
+        assertEquals(
+            "{\"name\":\"cmux_preview\",\"value\":\"pv\",\"url\":\"https://relay.test/p/\",\"path\":\"/p/\",\"secure\":true,\"httpOnly\":true,\"sameSite\":\"Lax\"}",
+            params,
+        )
+        rig.engine.onEvent(WinEvent.Result(request, true, "{}"))
+        assertEquals(true, result)
+        var refused: Boolean? = null
+        rig.scope.launch { refused = rig.engine.setCookie(key) }
+        rig.engine.onEvent(WinEvent.Result(rig.page.devtoolsRequest("Network.setCookie"), false, null))
+        assertEquals(false, refused)
+        rig.close()
+    }
+
     /** #122 2b: device mode on Windows is Chrome's own, through CDP; null takes it off. */
     @Test fun aDeviceIsEmulatedThroughCdpAndTakenOff() = runTest {
         val rig = WinRig(this, WebProfile.Default)

@@ -2670,9 +2670,8 @@ export class WebChannel implements Channel {
       const token = authToken(req)
       const preview = previewCookieToken(req)
       if (!(token && this.opts.proxyAuth?.(token)) && !(preview && this.store.verifyPreview(preview))) {
-        const mainUrl = this.opts.publicUrl.replace(/\/$/, "")
         return new Response(
-          `<!DOCTYPE html><meta charset="utf-8"><title>Not paired</title><body style="font-family:system-ui;background:#0a0a0a;color:#e5e5e5;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0"><p>Pair this device in the <a style="color:#6ea8fe" href="${mainUrl}/">main app</a> first, then reload.</p></body>`,
+          `<!DOCTYPE html><meta charset="utf-8"><title>Preview link expired</title><body style="font-family:system-ui;background:#0a0a0a;color:#e5e5e5;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0"><p>This preview link has expired. Reload the page to open it again.</p></body>`,
           { status: 401, headers: { "content-type": "text/html" } },
         )
       }

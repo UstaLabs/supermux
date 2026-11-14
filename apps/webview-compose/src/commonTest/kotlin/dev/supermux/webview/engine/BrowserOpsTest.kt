@@ -70,4 +70,29 @@ class BrowserOpsTest {
         assertEquals(500, textZoomPercent(50f))
         assertEquals(100, textZoomPercent(Float.NaN))
     }
+
+    // #155: WebView2 sets a cookie through the DevTools protocol, by the same rules as the other engines.
+    @Test fun theDevToolsCookieHasEveryPartAndExpiresByItsMaxAge() {
+        val c = WebCookie("cmux_preview", "tok", url, path = "/p/", domain = ".host", sameSite = "lax", maxAgeSeconds = 86400)
+        assertEquals(
+            """{"name":"cmux_preview","value":"tok","url":"https://host/p/","path":"/p/","domain":".host","secure":true,"httpOnly":true,"sameSite":"Lax","expires":1086400}""",
+            cdpSetCookieParams(c, nowEpochSeconds = 1_000_000),
+        )
+        assertEquals(
+            """{"name":"a","value":"b","url":"https://host/p/","path":"/","secure":true,"httpOnly":true,"sameSite":"Lax"}""",
+            cdpSetCookieParams(WebCookie("a", "b", url), nowEpochSeconds = 0),
+            "host-only and for the session",
+        )
+    }
+
+    @Test fun theDevToolsCookieRefusesWhatTheHeaderRefuses() {
+        assertNull(cdpSetCookieParams(WebCookie("a", "b; Domain=evil", url), 0))
+        assertNull(cdpSetCookieParams(WebCookie("a", "b", url, sameSite = "sometimes"), 0))
+    }
+
+    @Test fun theDevToolsAnswerSaysWhetherTheCookieWentIn() {
+        kotlin.test.assertTrue(cdpCookieSet("{}"))
+        kotlin.test.assertTrue(cdpCookieSet("""{"success":true}"""))
+        kotlin.test.assertFalse(cdpCookieSet("""{"success":false}"""))
+    }
 }

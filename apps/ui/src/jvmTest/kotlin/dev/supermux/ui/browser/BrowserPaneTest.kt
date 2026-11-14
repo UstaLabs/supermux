@@ -91,7 +91,7 @@ class BrowserPaneTest {
         saveView = { _, _, state, title -> writes += state to title; true },
         proxies = { previews },
         byPort = { byPort },
-        previewCookie = { cookie },
+        preview = PreviewKeeper(mint = { cookie }),
     )
 
     private fun ComposeUiTest.show(rig: Rig, view: MutableState<ViewDto>, actions: BrowserActions, platform: FakePlatform = FakePlatform(), opener: LinkOpener? = null, icons: SnapshotStateMap<String, String>? = null) {

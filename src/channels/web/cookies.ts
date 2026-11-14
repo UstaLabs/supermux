@@ -7,6 +7,8 @@ import { parseCookie } from "./proxy"
 export const AUTH_COOKIE = "cmux_token"
 /** #105's preview-only credential: a Browser tab's own cookie store holds it; it opens port previews and nothing else. */
 export const PREVIEW_COOKIE = "cmux_preview"
+/** The preview cookie lives as long as its token does on the broker (#155, PREVIEW_TTL_MS). */
+export const PREVIEW_COOKIE_MAX_AGE_S = 24 * 60 * 60
 
 interface CookieOpts {
   publicUrl: string
@@ -65,7 +67,7 @@ export function previewCookieSpec(token: string, o: CookieOpts): Record<string, 
     name: PREVIEW_COOKIE, value: token,
     url: `${origin}${sub ? "/" : "/p/"}`, path: sub ? "/" : "/p/",
     ...(sub ? { domain: `.${o.proxyBaseDomain}` } : {}),
-    httpOnly: true, secure: o.publicUrl.startsWith("https:") || isLocalhost(host), sameSite: "Lax", maxAge: 31536000,
+    httpOnly: true, secure: o.publicUrl.startsWith("https:") || isLocalhost(host), sameSite: "Lax", maxAge: PREVIEW_COOKIE_MAX_AGE_S,
   }
 }
 
