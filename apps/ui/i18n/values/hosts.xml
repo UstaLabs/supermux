@@ -156,6 +156,10 @@
     <string name="host_app_android_push_document">Sent a document</string>
     <string name="host_app_android_channel_sessions">Sessions</string>
     <string name="host_app_android_channel_sessions_description">Agent session updates</string>
+    <!-- #143: a permission prompt answered from its notification -->
+    <string name="host_app_android_prompt_answered">Answered: %1$s</string>
+    <string name="host_app_android_prompt_not_paired">Couldn't answer: this host isn't paired. Open Supermux.</string>
+    <string name="host_app_android_prompt_failed">Couldn't answer (already answered, or the host is unreachable). Open Supermux.</string>
 
     <!-- Android: app update notifications -->
     <string name="host_app_android_update_channel_progress">App update download</string>

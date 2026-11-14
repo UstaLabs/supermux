@@ -10,6 +10,8 @@ import dev.supermux.android.host.HostStores
 import dev.supermux.auth.SecureTokenStoreContext
 import dev.supermux.net.BrokerApi
 import dev.supermux.state.FleetStore
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import kotlinx.coroutines.CoroutineScope
@@ -39,15 +41,15 @@ class PromptAnswerReceiver : BroadcastReceiver() {
                 SecureTokenStoreContext.init(app)
                 val creds = credsFor(app, hostId)
                 val outcome = if (creds == null) {
-                    "Couldn't answer: this host isn't paired. Open Supermux."
+                    localized(Str.host_app_android_prompt_not_paired)
                 } else {
                     HttpClient(CIO).use { http ->
                         runCatching { BrokerApi(creds.baseUrl, creds.token, http).answerRequest(sessionId, requestId, optionId) }
                             .fold(
-                                onSuccess = { "Answered: $chosen" },
+                                onSuccess = { localized(Str.host_app_android_prompt_answered, chosen) },
                                 onFailure = { e ->
                                     Log.w(TAG, "answer failed: ${e.message}")
-                                    "Couldn't answer (already answered, or the host is unreachable). Open Supermux."
+                                    localized(Str.host_app_android_prompt_failed)
                                 },
                             )
                     }
