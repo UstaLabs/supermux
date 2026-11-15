@@ -27,6 +27,7 @@ import { ProjectImages } from "./core/project/images"
 import { propagateSessionRename } from "./core/workspace/name"
 import { makeReadAdvancer } from "./core/session-manager/read-status"
 import { AppletService } from "./core/applets/service"
+import { handleAppletOp } from "./core/applets/ops"
 import { ProxyLivenessMonitor, type ProxyStatus } from "./core/proxy/liveness"
 import { exposedLinksPublicUrl, hostRelayUrl } from "./core/relay/public-url"
 
@@ -1462,6 +1463,8 @@ const sessionManager = new SessionManager(registry, {
     telegramApi: telegram ? { token: TG_TOKEN!, getFile: (id: string) => telegram.getFile(id) } : undefined,
   },
   orchestration: {
+    // #117: `supermux applet …` from any session's shell.
+    appletOp: (sessionId, name, args) => handleAppletOp(appletService, name, args, { sessionId, publicUrl: exposedProxyLinksBaseUrl() }),
     // spawn_session: the app's create path, so the new session gets its workspace and the full frames.
     spawnSession: async (args) => {
       const trace = startTraces.begin()
