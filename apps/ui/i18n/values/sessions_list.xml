@@ -124,4 +124,16 @@
         <item quantity="one">%1$d agent</item>
         <item quantity="other">%1$d agents</item>
     </plurals>
+    <!-- #117: applets — the sidebar's Applets block, its menu, and the All applets page. -->
+    <string name="sessions_applets_title">Applets</string>
+    <string name="sessions_applets_all">All applets</string>
+    <string name="applets_menu_open">Open</string>
+    <string name="applets_menu_pin">Pin to sidebar</string>
+    <string name="applets_menu_unpin">Unpin</string>
+    <string name="applets_menu_updated">Updated %1$s</string>
+    <string name="applets_menu_expired">%1$s expired</string>
+    <string name="applets_menu_needed">%1$s needed</string>
+    <string name="applets_page_host">on %1$s</string>
+    <string name="applets_hint_desktop">To make a new one, ask any session: “make this an applet”. Right-click or ⋯ an applet for more.</string>
+    <string name="applets_hint_phone">To make a new one, ask any session: “make this an applet”. Long-press an applet for more.</string>
 </resources>

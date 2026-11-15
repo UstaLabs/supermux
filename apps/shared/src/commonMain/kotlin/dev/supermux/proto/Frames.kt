@@ -782,6 +782,10 @@ sealed interface ServerFrame {
     @Serializable @SerialName("proxy_removed")
     data class ProxyRemoved(val domain: String? = null) : ServerFrame
 
+    /** #117: the host's applets (or their pins) changed. No payload: a client showing applets reloads GET /applets. */
+    @Serializable @SerialName("applets_changed")
+    data object AppletsChanged : ServerFrame
+
     /** An Agent's avatar changed (set_avatar or an edit on disk); [avatar] is the new hash, null = none. */
     @Serializable @SerialName("agent_avatar_changed")
     data class AgentAvatarChanged(val id: String = "", val avatar: String? = null) : ServerFrame
