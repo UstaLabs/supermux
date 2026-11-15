@@ -125,7 +125,7 @@ Backups: nightly automatic (about two weeks kept), plus \`backup\`. They are pla
 \`info\`. To get data back, copy back only what is missing from a backup into data/; never overwrite live data
 with a whole backup (everything added since would be lost), and never edit a backup.
 
-From the applet's page: <script src="_supermux/api.js"></script>, then supermux.notify(title, body) (a push to
+Page API: include <script src="_supermux/api.js"></script> (the template has it; _supermux/ is reserved), then supermux.notify(title, body) (a push to
 their devices), supermux.agent.ask(text) and supermux.save(blob, name) (these two only in supermux's applet
 window, after a click). Each returns a promise of {ok, reason}.
 Notify the user from a server or job: POST $SUPERMUX_URL/applet-api/notify with header
@@ -478,7 +478,7 @@ export async function runAgentCli(argv: string[], io: AgentCliIo): Promise<numbe
           case "new": {
             const name = A("applet new APPLET [--from DIR] [--title T]")
             const v = await call("applet_new", { applet: name, ...(str("from") ? { from: local(str("from")!) } : {}), ...(str("title") ? { title: str("title") } : {}) })
-            out(v, () => io.out(`created applet ${v.name}\nfolder: ${v.folder}\nlink:   ${v.url}\nIt is in the Applets grid on every paired device.${v.error ? `\nbut: ${v.error}` : ""}`))
+            out(v, () => io.out(`created applet ${v.name}\nfolder: ${v.folder}\nlink:   ${v.url}\nIt is in the Applets grid on every paired device.${v.error ? `\nbut: ${v.error}` : ""}${(v.warnings ?? []).map((w: string) => `\nwarning: ${w}`).join("")}`))
             return 0
           }
           case "restart": {
