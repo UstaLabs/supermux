@@ -149,6 +149,7 @@ import dev.supermux.workspace.NewViewKind
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.collectViewIds
 import dev.supermux.workspace.firstGroupId
+import dev.supermux.workspace.addViewToGroup
 import dev.supermux.workspace.removeViewFromLayout
 import dev.supermux.workspace.groupIdOf
 import dev.supermux.chat.parseChatTs
@@ -413,18 +414,18 @@ private fun WorkspacePanesBody(
             null
         } else {
             PaneStripEnd(topRight, WorkspaceSplitButtonsWidth) {
-                WorkspaceSplitButtons { direction -> splitWorkspace(direction, hostId, current, layoutSync, app, ui) }
+                WorkspaceSplitButtons { direction -> splitWorkspace(direction, hostId, current, ws, app, ui) }
             }
         }
     }
     val keyScope = LocalKeyScope.current?.root
     if (mainWindow) {
         RegisterCommand(AppCommands.SplitRight, enabled = !ui.overlayOpen, scope = keyScope) {
-            splitWorkspace("row", hostId, current, layoutSync, app, ui)
+            splitWorkspace("row", hostId, current, ws, app, ui)
             true
         }
         RegisterCommand(AppCommands.SplitDown, enabled = !ui.overlayOpen, scope = keyScope) {
-            splitWorkspace("column", hostId, current, layoutSync, app, ui)
+            splitWorkspace("column", hostId, current, ws, app, ui)
             true
         }
     }
@@ -454,7 +455,7 @@ private fun WorkspacePanesBody(
         onEdit = { edit -> layoutSync.edit(edit) },
         addSlot = { groupId ->
             WorkspaceAddButton {
-                app.addNewTab(current.id, groupId) { id -> ui.windows.expandClaim(hostId, setOf(id), layoutSync.tree) }
+                openTabNow(ws, app, ui, hostId, current.id, NEW_TAB_KIND, EMPTY_STATE, groupId) { t, id -> addViewToGroup(t, groupId, id) }
             }
         },
         stripEnd = splitButtons,
@@ -1574,12 +1575,44 @@ private fun ViewTabIcon(v: ViewDto?, agent: String?, selected: Boolean) {
  * its own at the workspace's edge: "row" a new rightmost column, "column" a new bottom row.
  */
 @OptIn(ExperimentalUuidApi::class)
-private fun splitWorkspace(direction: String, hostId: String, current: WorkspaceDto, layoutSync: WorkspaceLayoutState, app: HostStore, ui: ShellUiState) {
+private fun splitWorkspace(direction: String, hostId: String, current: WorkspaceDto, ws: WorkspaceSession, app: HostStore, ui: ShellUiState) {
     val pane = Uuid.random().toString()
-    app.addNewTab(current.id, topRightGroupId(layoutSync.tree)) { id ->
-        ui.windows.expandClaim(hostId, setOf(id), layoutSync.tree)
-        layoutSync.edit { newTabToEdge(it, id, direction, pane) }
-    }
+    val group = topRightGroupId(ws.layoutSync.tree)
+    openTabNow(ws, app, ui, hostId, current.id, NEW_TAB_KIND, EMPTY_STATE, group) { t, id -> newTabToEdge(t, id, direction, pane) }
+}
+
+private val EMPTY_STATE = kotlinx.serialization.json.JsonObject(emptyMap())
+
+/**
+ * #151: open a tab at once. Its id is minted here and its view drawn provisionally ([WorkspaceSession.provisionalViews]);
+ * [place] puts it in the layout, whose save waits for the broker to make it. A view the broker refuses goes again.
+ * Logs how long the broker took ("[open] …").
+ */
+internal fun openTabNow(
+    ws: WorkspaceSession,
+    app: HostStore,
+    ui: ShellUiState,
+    hostId: String,
+    workspaceId: String,
+    kind: String,
+    state: kotlinx.serialization.json.JsonObject,
+    groupId: String?,
+    place: (LayoutNode, String) -> LayoutNode,
+): String {
+    val id = ws.newId()
+    val clicked = nowMillis()
+    ws.provisionalViews[id] = ViewDto(id = id, workspaceId = workspaceId, kind = kind, state = state)
+    ws.layoutSync.edit { place(it, id) }
+    ui.windows.expandClaim(hostId, setOf(id), ws.layoutSync.tree)
+    app.addWorkspaceView(
+        workspaceId, kind, state, id, groupId,
+        onDone = { println("[open] $kind $id: broker made it after ${nowMillis() - clicked} ms") },
+        onFailed = {
+            ws.provisionalViews.remove(id)
+            ws.layoutSync.edit { t -> removeViewFromLayout(t, id) ?: t }
+        },
+    )
+    return id
 }
 
 /** The tab ⌘W closes: the one on show in the pane last worked in ([focusedViewId]'s), else in the first pane. */
@@ -1614,17 +1647,10 @@ private fun NewTabView(newTab: ViewDto, hostId: String, current: WorkspaceDto, w
                     layoutSync.edit { setActiveViewInGroup(it, pick.groupId, pick.viewId) }
                     app.closeWorkspaceView(current.id, newTab.id)
                 }
+                // #151: the chosen view takes the New tab's place at once; the broker makes it after.
                 NewTabPick.Add -> groupIdOf(tree, newTab.id)?.let { group ->
-                    opening = kind
-                    app.addWorkspaceView(
-                        current.id, kind, group,
-                        onFailed = { opening = null },
-                        onCreated = { id ->
-                            ui.windows.expandClaim(hostId, setOf(id), layoutSync.tree)
-                            layoutSync.edit { pickedInPlace(it, newTab.id, id) }
-                            app.closeWorkspaceView(current.id, newTab.id)
-                        },
-                    )
+                    openTabNow(ws, app, ui, hostId, current.id, kind.wire, addViewState(kind, nowMillis()), group) { t, id -> pickedInPlace(t, newTab.id, id) }
+                    closeTabNow(ws, app, newTab) {}
                 }
             }
         },
