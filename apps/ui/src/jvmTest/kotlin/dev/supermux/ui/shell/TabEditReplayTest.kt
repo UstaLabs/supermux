@@ -36,4 +36,18 @@ class TabEditReplayTest {
     @Test fun closingTheLastTabLeavesAnEmptyPane() {
         assertEquals(emptyList(), (withoutTab(LayoutNode.Group("g", listOf("x"), "x"), "x") as LayoutNode.Group).viewIds)
     }
+
+    // A tab removed elsewhere: the broker's view_removed lands a frame before its layout. That frame's layout still
+    // lists the tab, but its view is gone, so the panes do not draw it.
+    @Test fun aTabWhoseViewIsGoneIsNotDrawn() {
+        assertEquals(brokerRemovedIt, withoutUnknownTabs(withTab, known = setOf("a")))
+    }
+
+    @Test fun everyKnownTabIsDrawn() {
+        assertEquals(withTab, withoutUnknownTabs(withTab, known = setOf("a", "x")))
+    }
+
+    @Test fun beforeAnyViewIsKnownTheLayoutIsDrawnAsItIs() {
+        assertEquals(withTab, withoutUnknownTabs(withTab, known = emptySet()))
+    }
 }

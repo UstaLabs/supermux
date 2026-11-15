@@ -448,7 +448,8 @@ private fun WorkspacePanesBody(
     }
 
     PaneHost(
-        layout = layout,
+        // #151: never a tab whose view is gone (the frame between a view_removed and its layout).
+        layout = withoutUnknownTabs(layout, viewsById.keys),
         tearOff = tearOff,
         titleFor = { vid -> viewsById[vid]?.let { if (it.isNewTab()) newTabWord else liveViewTitle(it, sessionNames::get) } ?: viewWord },
         onCloseView = { onCloseCandidate(viewsById[it]) },
@@ -644,7 +645,7 @@ fun PhoneWorkspacePanes(
         ui.windows.layoutFor(ui.windows.mainHostId, current.layout.toDomainOrNull() ?: ws.layoutSync.tree),
         ws.closing.keys,
     )
-    val tabs = phoneTabModel(layout, current.activeViewId)
+    val tabs = phoneTabModel(withoutUnknownTabs(layout, ws.viewsById.keys), current.activeViewId)
     ForgetClosedTabs(ws)
     val viewsById = ws.viewsById
     // A Browser tab closed here or elsewhere lets its live page go (#105).
@@ -1704,6 +1705,15 @@ internal fun closeTabNow(ws: WorkspaceSession, app: HostStore, view: ViewDto, on
  */
 internal fun placeWhileOpening(tree: LayoutNode, id: String, opening: Boolean, place: (LayoutNode, String) -> LayoutNode): LayoutNode =
     if (opening || groupIdOf(tree, id) != null) place(tree, id) else tree
+
+/**
+ * [tree] without the tabs whose view is not [known]: a tab removed elsewhere is gone from the views a frame before
+ * its layout follows, and there is nothing to draw for it. Before any view is known, [tree] as it is.
+ */
+internal fun withoutUnknownTabs(tree: LayoutNode, known: Set<String>): LayoutNode {
+    if (known.isEmpty()) return tree
+    return withoutClosing(tree, collectViewIds(tree).filterNot { it in known }.toSet())
+}
 
 /** [tree] without tab [id]; a workspace left with none keeps one empty pane. */
 internal fun withoutTab(tree: LayoutNode, id: String): LayoutNode = withoutClosing(tree, setOf(id))
