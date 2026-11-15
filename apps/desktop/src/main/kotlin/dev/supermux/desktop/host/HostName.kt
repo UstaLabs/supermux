@@ -68,7 +68,10 @@ class HostName internal constructor(
         /** The app's one instance: the OS's name, cached in the broker state dir. */
         val shared: HostName by lazy {
             HostName(
-                read = { osName(DesktopOs.current, System::getenv, ::runCommand, ::readFile) },
+                read = {
+                    // Commands go through OsEnv, the platform layer's one way to run them (#29).
+                    osName(SystemOsEnv.os, SystemOsEnv::getenv, { argv -> SystemOsEnv.runResult(argv, 5_000).takeIf { it.exit == 0 }?.out }, ::readFile)
+                },
                 cacheFile = runCatching { BrokerPaths.defaultStateDir().resolve("this-computer-name") }.getOrNull(),
                 fallback = "Desktop host",
             )
@@ -94,15 +97,6 @@ class HostName internal constructor(
                 DesktopOs.LINUX -> file("/etc/hostname").clean() ?: command(listOf("hostname")).clean()
             }
         }
-
-        private fun runCommand(argv: List<String>): String? = runCatching {
-            val p = ProcessBuilder(argv).redirectErrorStream(true).start()
-            if (!p.waitFor(5, TimeUnit.SECONDS)) {
-                p.destroyForcibly()
-                return@runCatching null
-            }
-            p.inputStream.bufferedReader().readText().takeIf { p.exitValue() == 0 }
-        }.getOrNull()
 
         private fun readFile(path: String): String? = runCatching { Files.readString(Path.of(path)) }.getOrNull()
     }
