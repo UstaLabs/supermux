@@ -9,6 +9,8 @@ package dev.supermux.ui.applets
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -209,7 +211,7 @@ fun AppletCover(state: AppletCoverState, fleet: FleetStore, onOpenChat: (String)
         Modifier
             .fillMaxSize()
             .background(cs.background)
-            .windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.safeDrawing)
+            .windowInsetsPadding(WindowInsets.safeDrawing)
             .testTag("applet_cover"),
     ) {
         androidx.compose.foundation.layout.Row(
