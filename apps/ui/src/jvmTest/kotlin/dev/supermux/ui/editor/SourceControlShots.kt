@@ -41,6 +41,7 @@ private val conflict = """[{"path":"src/App.jsx","status":"modified","staged":"c
 private val last = """{"sha":"c41e9d2aaaa","subject":"Add a product search box above the grid","author":"claude","at":1,"pushed":false}"""
 private val baseC = """[{"sha":"9f3c2a1bbbb","subject":"Cart: keep coupon on refresh","author":"deniz","at":1},{"sha":"71be004cccc","subject":"Bump checkout SDK to 4.2","author":"ahmet","at":1}]"""
 private val noRemote = """{"isRepo":true,"hasRemote":false,"branch":"product-search-box","upstream":null,"project":"shop"}"""
+private val unpublishedNo = """{"isRepo":true,"hasRemote":true,"branch":"product-search-box","upstream":"origin/product-search-box","ahead":0,"behind":0}"""
 private val prNoRemote = """{"status":"unavailable","reason":"no_remote"}"""
 private val pr = """{"status":"found","pr":{"forge":"github","number":12,"url":"https://github.com/acme/shop/pull/12","title":"Add a product search box above the grid","state":"open","draft":false,"target":"dev","head":"product-search-box",
     "review":{"state":"changes","by":["deniz"]},"checks":[{"name":"build","state":"ok","url":"u"},{"name":"unit tests","state":"bad","url":"u"},{"name":"lint","state":"ok","url":"u"}],
@@ -68,6 +69,9 @@ class SourceControlShots {
         /** publish-new's answer: a plain 404 is a broker from before the route. */
         val publishNew: Pair<HttpStatusCode, String> = HttpStatusCode.OK to "{}",
         val typed: String? = null,
+        /** GET …/git/pr/base: can a PR into the target be opened. */
+        val prBase: String = """{"target":"dev","onRemote":true,"local":true,"ahead":1}""",
+        val prCreate: Pair<HttpStatusCode, String> = HttpStatusCode.OK to """{"status":"opened","url":"u","number":1}""",
     )
 
     private fun api(s: Scene): SourceControlApi {
@@ -78,6 +82,8 @@ class SourceControlShots {
                 p.endsWith("/git/status") -> s.status
                 p.endsWith("/git/history") -> """{"branch":"product-search-box","base":"dev","chat":${s.commits},"baseCommits":${s.baseCommits},"incoming":${s.incoming}}"""
                 p.endsWith("/git/publish-new") -> return@MockEngine respond(ByteReadChannel(s.publishNew.second), s.publishNew.first, headersOf(HttpHeaders.ContentType, "text/plain"))
+                p.endsWith("/git/pr/base") -> s.prBase
+                p.endsWith("/git/pr") && req.method.value == "POST" -> return@MockEngine respond(ByteReadChannel(s.prCreate.second), s.prCreate.first, headersOf(HttpHeaders.ContentType, "application/json"))
                 p.endsWith("/git/pr") -> s.pr
                 p.endsWith("/git/branches") -> """{"current":"product-search-box","local":[{"name":"product-search-box","openIn":{"kind":"this"}},{"name":"feature/payments"},{"name":"dev","isDefault":true,"openIn":{"kind":"folder"}},{"name":"mux/refunds-endpoint","openIn":{"kind":"session","id":"s2","name":"Refunds endpoint"}}],"remote":[{"name":"origin/feature/checkout-v2"}]}"""
                 p.endsWith("/settings/config") -> "{}"
@@ -115,6 +121,13 @@ class SourceControlShots {
             Scene("15-incoming", incoming = 5, files = """[{"path":"src/debug.js","status":"added","staged":"none"}]"""),
             Scene("16-conflict", files = conflict, merging = true),
             Scene("17-pr-none"),
+            Scene("17b-pr-target-not-published", status = unpublishedNo, prBase = """{"target":"dev","onRemote":false,"local":true,"ahead":1}"""),
+            Scene("17c-pr-nothing-ahead", prBase = """{"target":"dev","onRemote":true,"local":true,"ahead":0}"""),
+            Scene("17d-pr-form-target-missing", prBase = """{"target":"dev","onRemote":false,"local":true,"ahead":1}""",
+                set = { prForm = PrForm(target = "dev", title = "Add a product search box above the grid", body = "## What", by = "agent", loading = false) }),
+            Scene("17e-pr-create-failed-details", set = { prForm = PrForm(target = "dev", title = "Add a product search box above the grid", body = "## What", by = "agent", loading = false) },
+                prCreate = HttpStatusCode.Conflict to """{"status":"unavailable","forge":"github","reason":"error","message":"pull request create failed: GraphQL: Something unexpected happened (createPullRequest)"}""",
+                click = listOf("scm_pr_create_go", "scm_pr_problem_details")),
             Scene("18-pr-form", set = { prForm = PrForm(target = "dev", title = "Add a product search box above the grid", body = "## What\n- Add a product search box above the grid", by = "agent", loading = false) }),
             Scene("19-pr-open", pr = pr),
             Scene("20-clean", commits = "[]"),
@@ -133,7 +146,7 @@ class SourceControlShots {
             state.apply(s.set)
             if (state.picking) state.branches = kotlinx.coroutines.runBlocking { state.api.branches() }
             waitForIdle()
-            s.click.forEach { onNodeWithTag(it).performClick(); waitForIdle() }
+            s.click.forEach { tag -> waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty() }; onNodeWithTag(tag).performClick(); waitForIdle() }
             if (s.click.any { it.startsWith("scm_publish_") }) { waitUntil(timeoutMillis = 5_000) { state.publishError != null || state.note != null }; waitForIdle() }
             save(dir, s.name, this, s.popup)
         }

@@ -197,6 +197,8 @@ class SourceControlState(val api: SourceControlApi) {
     var repos by mutableStateOf<List<RepoChanges>?>(null)
     var offline by mutableStateOf(false)
     var problem by mutableStateOf<String?>(null)
+    /** The tool's own words behind a failure (gh's, git's), shown under "Details": (the problem they explain, the text). */
+    var details by mutableStateOf<Pair<String, String>?>(null)
     var ask by mutableStateOf<ScmAsk?>(null)
     val collapsed = mutableStateMapOf<String, Boolean>()
 
@@ -258,8 +260,18 @@ class SourceControlState(val api: SourceControlApi) {
         base = h?.base
         ownCommits = h?.chat?.size ?: 0
         api.pr()?.let { pr = it }
+        // No PR yet: can one be opened into the target? (Only then is Create offered.)
+        prTarget = if (pr?.status == "none" && last != null && status?.hasRemote == true) api.prBase(prForm?.target ?: base) else null
         if (!prefsRead) api.prefs()?.let { (p, s) -> prefsRead = true; post = ScmPost.of(p); smart = s ?: "ask" }
         if (amend && (last == null || lastPushed)) amend = false
+    }
+
+    /** A failure in plain words; the tool's own text stays behind "Details". An older host says to update it. */
+    private fun failed(raw: String, plain: String? = null): String {
+        if (raw == ROUTE_MISSING) return localized(Str.scm_needs_newer_host)
+        val p = plain ?: localized(Str.scm_failed_plain)
+        details = raw.trim().takeIf { it.isNotEmpty() }?.let { p to it }
+        return p
     }
 
     /** ✨: the message written from what goes in (the staged files, else every changed file); amending, the commit's own. */
@@ -290,7 +302,7 @@ class SourceControlState(val api: SourceControlApi) {
         busy = false
         when {
             r == null -> problem = localized(Str.scm_offline)
-            !r.ok -> problem = scmFailed(r.message ?: r.reason ?: "")
+            !r.ok -> problem = failed(r.message ?: r.reason ?: "")
             else -> {
                 problem = null; ask = null
                 note = localized(if (amend) Str.scm_amended else Str.scm_committed, r.subject ?: "")
@@ -315,7 +327,7 @@ class SourceControlState(val api: SourceControlApi) {
             r == null -> localized(Str.scm_offline)
             r.status in setOf("pushed", "up_to_date", "clean", "ok", "fetched", "") -> null
             r.status == "conflict" -> localized(Str.scm_conflict_first, r.files.joinToString(", "))
-            else -> scmFailed(r.message ?: r.status)
+            else -> failed(r.message ?: r.status)
         }
     }
 
@@ -328,6 +340,11 @@ class SourceControlState(val api: SourceControlApi) {
     /** The choice running now ("github:private", "remote"), and why the last one failed: said in the pick, where it was clicked. */
     var publishRunning by mutableStateOf<String?>(null)
     var publishError by mutableStateOf<String?>(null)
+    var publishDetails by mutableStateOf<String?>(null)
+    /** Can a PR/MR into the target be opened (the form's, else the base, else origin's default); null: not known. */
+    var prTarget by mutableStateOf<dev.supermux.net.PrBaseCheck?>(null)
+    /** A PR action's failure, said in the PR section where it was clicked (its tool text under Details). */
+    var prProblem by mutableStateOf<String?>(null)
 
     fun openPublish() {
         picking = false; ask = null; problem = null
@@ -335,11 +352,11 @@ class SourceControlState(val api: SourceControlApi) {
         publishInput = status?.project.orEmpty()
     }
 
-    fun closePublish() { publishing = false; publishUrl = false; publishError = null; publishRunning = null }
+    fun closePublish() { publishing = false; publishUrl = false; publishError = null; publishDetails = null; publishRunning = null }
 
     /** Add Remote… ⇄ back to the list: the input becomes the URL, or the repository name again. */
     fun publishByUrl(on: Boolean) {
-        publishUrl = on; publishError = null
+        publishUrl = on; publishError = null; publishDetails = null
         publishInput = if (on) "" else status?.project.orEmpty()
     }
 
@@ -348,18 +365,22 @@ class SourceControlState(val api: SourceControlApi) {
         val name = publishInput.trim()
         val host = if (forge == "gitlab") "GitLab" else "GitHub" // i18n-ok: product names
         if (name.isNotEmpty() && !SCM_REPO_NAME.matches(name)) { publishError = localized(Str.scm_publish_bad_name); return }
-        publishRunning = "$forge:$visibility"; publishError = null; note = null
-        val r = api.publishNew(forge, visibility, name.ifEmpty { null })
+        publishRunning = "$forge:$visibility"; publishError = null; publishDetails = null; note = null
+        // A chat's branch takes its base along (pushed first: the new repo's default), so a PR into it works at once.
+        val r = api.publishNew(forge, visibility, name.ifEmpty { null }, base = base)
         publishRunning = null
         val cli = if (forge == "gitlab") "glab" else "gh" // i18n-ok: command names
         when {
             r == null -> publishError = localized(Str.scm_offline)
-            r.ok -> { closePublish(); problem = null; note = localized(Str.scm_published_to, r.url.orEmpty()) }
+            r.ok -> { closePublish(); problem = null; note = r.base?.let { b -> localized(Str.scm_published_to_with_base, r.url.orEmpty(), b) } ?: localized(Str.scm_published_to, r.url.orEmpty()) }
             r.message == ROUTE_MISSING -> publishError = localized(Str.scm_needs_newer_host)
             r.reason == "no_cli" -> publishError = localized(Str.scm_publish_no_cli, host, cli)
             r.reason == "not_authed" -> publishError = localized(Str.scm_publish_not_authed, host, cli)
             r.reason == "bad" -> publishError = localized(Str.scm_publish_bad_name)
-            else -> publishError = localized(Str.scm_publish_failed, host, r.message?.trim().orEmpty().ifEmpty { r.reason.orEmpty() })
+            r.reason == "name_taken" -> { publishError = localized(Str.scm_publish_name_taken, host, name.ifEmpty { status?.project.orEmpty() }); publishDetails = r.message }
+            // Made, but the push failed: the repo exists now (said with its URL); the tool's words under Details.
+            r.url != null -> { publishError = localized(Str.scm_publish_partial, r.url.orEmpty()); publishDetails = r.message }
+            else -> { publishError = localized(Str.scm_publish_failed_plain, host); publishDetails = r.message ?: r.reason }
         }
         refresh()
     }
@@ -368,7 +389,7 @@ class SourceControlState(val api: SourceControlApi) {
     suspend fun addRemote() {
         val url = publishInput.trim()
         if (url.isEmpty()) return
-        publishRunning = "remote"; publishError = null
+        publishRunning = "remote"; publishError = null; publishDetails = null
         val r = api.addRemote("origin", url)
         publishRunning = null
         when {
@@ -377,7 +398,7 @@ class SourceControlState(val api: SourceControlApi) {
             r.message == ROUTE_MISSING -> publishError = localized(Str.scm_needs_newer_host)
             r.reason == "exists" -> publishError = localized(Str.scm_remote_exists)
             r.reason == "bad" -> publishError = localized(Str.scm_remote_bad_url)
-            else -> publishError = localized(Str.scm_remote_failed, r.message?.trim().orEmpty())
+            else -> { publishError = localized(Str.scm_remote_failed_plain); publishDetails = r.message }
         }
         refresh()
     }
@@ -409,7 +430,7 @@ class SourceControlState(val api: SourceControlApi) {
             r.status == "clean" -> { problem = null; latest = r; note = localizedPlural(Plurals.scm_latest_got, r.commits, r.commits, base ?: r.from.orEmpty()) }
             r.status == "up_to_date" -> { problem = null; note = localized(Str.scm_latest_none, base ?: r.from.orEmpty()) }
             r.status == "conflict" -> problem = null
-            else -> problem = scmFailed(r.message ?: r.status)
+            else -> problem = failed(r.message ?: r.status)
         }
         refresh()
     }
@@ -422,7 +443,7 @@ class SourceControlState(val api: SourceControlApi) {
             r == null -> problem = localized(Str.scm_offline)
             r.ok -> note = localized(Str.scm_latest_undone)
             r.reason == "moved" -> problem = localized(Str.scm_latest_moved)
-            else -> problem = scmFailed(r.message ?: r.reason ?: "")
+            else -> problem = failed(r.message ?: r.reason ?: "")
         }
         refresh()
     }
@@ -430,13 +451,13 @@ class SourceControlState(val api: SourceControlApi) {
     /** VS Code's Accept Current / Incoming / Both, for the whole file (side: mine | theirs | both); then it is staged. */
     suspend fun resolve(path: String, side: String) {
         val r = api.resolve(repo, path, side)
-        problem = if (r == null) localized(Str.scm_offline) else if (r.ok) null else scmFailed(r.message ?: r.reason ?: "")
+        problem = if (r == null) localized(Str.scm_offline) else if (r.ok) null else failed(r.message ?: r.reason ?: "")
         refresh()
     }
 
     suspend fun abortMerge() {
         val r = api.abortMerge(repo)
-        problem = if (r == null) localized(Str.scm_offline) else if (r.ok) null else scmFailed(r.message ?: r.reason ?: "")
+        problem = if (r == null) localized(Str.scm_offline) else if (r.ok) null else failed(r.message ?: r.reason ?: "")
         if (r?.ok == true) note = localized(Str.scm_merge_aborted)
         refresh()
     }
@@ -465,16 +486,17 @@ class SourceControlState(val api: SourceControlApi) {
                 localized(Str.scm_switch_elsewhere, name, r.openIn?.name ?: r.path ?: "")
             }
             "merge_in_progress" -> localized(Str.scm_switch_merging)
-            "invalid_name" -> r.message ?: scmFailed(name)
-            else -> scmFailed(r.message ?: r.status)
+            "invalid_name" -> r.message ?: failed(name)
+            else -> failed(r.message ?: r.status)
         }
         refresh()
     }
 
     suspend fun openPrForm() {
-        val target = base ?: "main"
+        // The chat's base, else origin's own default branch (never a guessed main).
+        val target = base ?: prTarget?.target ?: api.prBase(null)?.target.orEmpty()
         prForm = PrForm(target = target)
-        val t = api.prText(base?.let { null } ?: target)
+        val t = api.prText(base?.let { null } ?: target.ifEmpty { null })
         prForm = prForm?.copy(title = t?.title.orEmpty(), body = t?.body.orEmpty(), by = t?.by, loading = false)
     }
 
@@ -488,21 +510,36 @@ class SourceControlState(val api: SourceControlApi) {
     suspend fun createPr() {
         val f = prForm ?: return
         if (f.title.isBlank()) return
-        busy = true
+        busy = true; prProblem = null
         val r = api.createPr(f.title.trim(), f.body, f.target, f.draft)
         busy = false
         when (r?.status) {
-            null -> problem = localized(Str.scm_offline)
-            "opened", "exists" -> { prForm = null; problem = null; pr = api.pr(fresh = true) ?: pr }
-            "publish_failed" -> problem = scmFailed(r.message ?: localized(Str.scm_publish_branch))
-            else -> problem = prUnavailable(r.reason, r.message)
+            null -> prProblem = localized(Str.scm_offline)
+            "opened", "exists" -> { prForm = null; prProblem = null; pr = api.pr(fresh = true) ?: pr }
+            "publish_failed" -> prProblem = failed(r.message ?: "", localized(Str.scm_pr_publish_failed, status?.branch.orEmpty()))
+            else -> prProblem = prUnavailable(r.reason, r.message)
         }
         refresh()
     }
 
+    /** "Publish <target>": the base put on origin, so a PR/MR can target it. */
+    suspend fun publishPrTarget(target: String) {
+        busy = true; note = null
+        val r = api.publishBase(target)
+        busy = false
+        when {
+            r == null -> prProblem = localized(Str.scm_offline)
+            r.ok -> { prProblem = null; note = localized(Str.scm_base_published, target); prTarget = api.prBase(target, fresh = true) }
+            else -> prProblem = failed(r.message ?: r.reason ?: "", localized(Str.scm_base_publish_failed, target))
+        }
+    }
+
+    /** The form's target changed: check it again. */
+    suspend fun checkPrTarget(target: String) { prTarget = api.prBase(target.ifEmpty { null }) }
+
     suspend fun prReady(number: Int) {
         val r = api.prReady(number)
-        problem = if (r?.ok == true) null else scmFailed(r?.message ?: "")
+        problem = if (r?.ok == true) null else failed(r?.message ?: "")
         pr = api.pr(fresh = true) ?: pr
     }
 
@@ -525,7 +562,9 @@ class SourceControlState(val api: SourceControlApi) {
         "no_cli" -> localized(Str.scm_pr_no_cli)
         "not_authed" -> localized(Str.scm_pr_not_authed)
         "no_branch" -> localized(Str.scm_pr_no_branch)
-        else -> scmFailed(message ?: reason ?: "")
+        "base_missing" -> { details = message?.let { localized(Str.scm_pr_target_missing_short, prForm?.target.orEmpty()) to it }; localized(Str.scm_pr_target_missing_short, prForm?.target.orEmpty()) }
+        "no_commits" -> { details = message?.let { localized(Str.scm_pr_nothing_short, prForm?.target.orEmpty()) to it }; localized(Str.scm_pr_nothing_short, prForm?.target.orEmpty()) }
+        else -> failed(message ?: reason ?: "", localized(if (pr?.forge == "gitlab") Str.scm_mr_create_failed else Str.scm_pr_create_failed))
     }
 
     suspend fun undoLastCommit() {
@@ -534,7 +573,7 @@ class SourceControlState(val api: SourceControlApi) {
             r == null -> problem = localized(Str.scm_offline)
             r.ok -> { message = r.subject.orEmpty(); note = localized(Str.scm_undone, r.subject ?: "") }
             r.reason == "pushed" -> problem = localized(Str.scm_undo_pushed)
-            else -> problem = scmFailed(r.message ?: r.reason ?: "")
+            else -> problem = failed(r.message ?: r.reason ?: "")
         }
         refresh()
     }
@@ -561,7 +600,7 @@ class SourceControlState(val api: SourceControlApi) {
             r == null -> localized(Str.scm_offline)
             r.ok -> null
             r.reason == "conflict" -> localized(Str.scm_conflict_first, r.paths.joinToString(", "))
-            else -> scmFailed(r.message ?: r.error ?: r.reason ?: "")
+            else -> failed(r.message ?: r.error ?: r.reason ?: "")
         }
     }
 }
@@ -624,7 +663,7 @@ fun SourceControlPane(
         if (state.picking) BranchPicker(state, scope, onOpenChat)
         if (state.publishing) PublishPicker(state, scope)
         state.problem?.let { p ->
-            Text(p, fontSize = 12.sp, color = cs.error, modifier = Modifier.padding(horizontal = Space.md, vertical = Space.xs).testTag("scm_problem"))
+            FailText(p, state.details?.takeIf { it.first == p }?.second, Modifier.padding(horizontal = Space.md, vertical = Space.xs), "scm_problem")
         }
         val repos = state.repos
         when {
@@ -1001,14 +1040,34 @@ private fun PrSection(state: SourceControlState, scope: kotlinx.coroutines.Corou
         }
         if (!state.prOpen) return@Column
         val pad = Modifier.padding(horizontal = 14.dp)
+        state.prProblem?.let { p -> FailText(p, state.details?.takeIf { it.first == p }?.second, pad.padding(top = 4.dp), "scm_pr_problem") }
         val form = state.prForm
         when {
-            read.status == "unavailable" -> Text(
-                when (read.reason) { "no_cli" -> localized(Str.scm_pr_no_cli); "not_authed" -> localized(Str.scm_pr_not_authed); else -> scmFailed(read.message ?: "") },
+            read.status == "unavailable" && read.reason in setOf("no_cli", "not_authed") -> Text(
+                localized(if (read.reason == "no_cli") Str.scm_pr_no_cli else Str.scm_pr_not_authed),
                 fontSize = 12.5.sp, color = cs.onSurfaceVariant, modifier = pad.padding(vertical = 6.dp),
             )
+            read.status == "unavailable" -> FailText(localized(Str.scm_pr_read_failed, host), read.message, pad.padding(vertical = 6.dp), "scm_pr_read_failed", muted = true)
             form != null -> PrFormView(state, scope, form, gitlab, host)
             pr == null && state.last == null -> Text(mono(localized(Str.scm_pr_commit_first, state.status?.branch ?: ""), state.status?.branch ?: ""), fontSize = 12.5.sp, color = cs.onSurfaceVariant, modifier = pad.padding(vertical = 6.dp))
+            pr == null && state.prTarget?.let { !it.onRemote } == true -> Column(pad.padding(vertical = 6.dp).testTag("scm_pr_target_missing")) {
+                // The target isn't on the forge: a PR into it can't be opened. Publish it (it is here), or pick another.
+                val t = state.prTarget!!
+                Text(mono(localized(if (t.local) (if (gitlab) Str.scm_mr_target_local else Str.scm_pr_target_local) else (if (gitlab) Str.scm_mr_target_absent else Str.scm_pr_target_absent), t.target, host), t.target),
+                    fontSize = 12.5.sp, color = cs.onSurfaceVariant)
+                Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (t.local) Text(localized(Str.scm_publish_named, t.target), fontSize = 12.5.sp, fontWeight = FontWeight.Medium, color = cs.onPrimary,
+                        modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(if (state.busy) cs.primary.copy(alpha = 0.5f) else cs.primary)
+                            .clickable(enabled = !state.busy) { scope.launch { state.publishPrTarget(t.target) } }.padding(horizontal = 12.dp, vertical = 5.dp).testTag("scm_pr_publish_target"))
+                    Text(localized(Str.scm_pr_other_target), fontSize = 12.5.sp, color = cs.onSurface,
+                        modifier = Modifier.clip(RoundedCornerShape(6.dp)).border(1.dp, cs.outlineVariant, RoundedCornerShape(6.dp))
+                            .clickable { scope.launch { state.openPrForm() } }.padding(horizontal = 12.dp, vertical = 5.dp).testTag("scm_pr_other_target"))
+                }
+            }
+            pr == null && state.prTarget?.ahead == 0 -> Text(
+                mono(localized(Str.scm_pr_nothing_ahead, state.status?.branch ?: "", state.prTarget!!.target), state.status?.branch ?: "", state.prTarget!!.target),
+                fontSize = 12.5.sp, color = cs.onSurfaceVariant, modifier = pad.padding(vertical = 6.dp).testTag("scm_pr_nothing_ahead"),
+            )
             pr == null -> Column(pad.padding(vertical = 6.dp)) {
                 Text(mono(localized(if (gitlab) Str.scm_mr_none else Str.scm_pr_none, state.status?.branch ?: ""), state.status?.branch ?: ""), fontSize = 12.5.sp, color = cs.onSurfaceVariant)
                 Row(
@@ -1131,11 +1190,26 @@ private fun PrFormView(state: SourceControlState, scope: kotlinx.coroutines.Coro
             Text(localized(Str.scm_pr_draft_check), fontSize = 12.5.sp, color = cs.onSurface, modifier = Modifier.padding(start = 8.dp))
         }
         val publishFirst = state.status?.upstream == null
+        LaunchedEffect(f.target) { state.checkPrTarget(f.target) }
+        // The target can't take a PR (not on the forge, or nothing to propose): say why; Create stays off.
+        val t = state.prTarget?.takeIf { it.target == f.target }
+        val why = when {
+            t == null -> null
+            !t.onRemote -> localized(if (t.local) Str.scm_pr_target_local_short else Str.scm_pr_target_absent_short, t.target, host)
+            t.ahead == 0 -> localized(Str.scm_pr_nothing_ahead, state.status?.branch.orEmpty(), t.target)
+            else -> null
+        }
+        if (why != null) Row(Modifier.padding(top = 8.dp).testTag("scm_pr_form_why"), verticalAlignment = Alignment.CenterVertically) {
+            Text(mono(why, t!!.target), fontSize = 12.sp, color = LocalSemantics.current.warning, modifier = Modifier.weight(1f, fill = false))
+            if (!t.onRemote && t.local) Text(localized(Str.scm_publish_named, t.target), fontSize = 12.sp, color = cs.primary,
+                modifier = Modifier.padding(start = 8.dp).clickable(enabled = !state.busy) { scope.launch { state.publishPrTarget(t.target) } }.testTag("scm_pr_form_publish_target"))
+        }
+        val can = f.title.isNotBlank() && !state.busy && why == null && f.target.isNotEmpty()
         Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
             val go = localized(if (publishFirst) Str.scm_pr_publish_create else Str.scm_pr_create_go) + if (f.draft) " " + localized(Str.scm_pr_draft) else ""
             Text(go, fontSize = 12.5.sp, fontWeight = FontWeight.Medium, color = cs.onPrimary,
-                modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(if (f.title.isNotBlank() && !state.busy) cs.primary else cs.primary.copy(alpha = 0.5f))
-                    .clickable(enabled = f.title.isNotBlank() && !state.busy) { scope.launch { state.createPr() } }.padding(horizontal = 12.dp, vertical = 5.dp).testTag("scm_pr_create_go"))
+                modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(if (can) cs.primary else cs.primary.copy(alpha = 0.5f))
+                    .clickable(enabled = can) { scope.launch { state.createPr() } }.padding(horizontal = 12.dp, vertical = 5.dp).testTag("scm_pr_create_go"))
             Text(localized(Str.scm_cancel), fontSize = 12.5.sp, color = cs.onSurfaceVariant,
                 modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable { state.prForm = null }.padding(horizontal = 12.dp, vertical = 5.dp))
         }
@@ -1367,8 +1441,24 @@ private fun PublishPicker(state: SourceControlState, scope: kotlinx.coroutines.C
                 )
             }
         }
-        state.publishError?.let {
-            Text(it, fontSize = 12.sp, color = cs.error, modifier = Modifier.padding(start = 2.dp, top = 6.dp).testTag("scm_publish_error"))
+        state.publishError?.let { FailText(it, state.publishDetails, Modifier.padding(start = 2.dp, top = 6.dp), "scm_publish_error") }
+    }
+}
+
+/** A failure in plain words; the tool's own text (gh's, git's) one click away under "Details", selectable to copy. */
+@Composable
+private fun FailText(text: String, details: String?, modifier: Modifier, tag: String, muted: Boolean = false) {
+    val cs = MaterialTheme.colorScheme
+    var open by remember(details) { mutableStateOf(false) }
+    Column(modifier.testTag(tag)) {
+        Text(text, fontSize = 12.sp, color = if (muted) cs.onSurfaceVariant else cs.error)
+        if (details != null) {
+            Text(localized(if (open) Str.scm_details_hide else Str.scm_details), fontSize = 11.5.sp, color = cs.primary,
+                modifier = Modifier.padding(top = 2.dp).clickable { open = !open }.testTag("${tag}_details"))
+            if (open) androidx.compose.foundation.text.selection.SelectionContainer {
+                Text(details, fontSize = 11.sp, fontFamily = MonoFontFamily, color = cs.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp).fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(cs.surfaceContainerLow).padding(8.dp))
+            }
         }
     }
 }

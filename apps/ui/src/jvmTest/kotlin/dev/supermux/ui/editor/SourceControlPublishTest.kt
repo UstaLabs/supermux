@@ -90,4 +90,30 @@ class SourceControlPublishTest {
         assertTrue(s.publishing && s.publishUrl)
         assertEquals(localized(Str.scm_remote_exists), s.publishError)
     }
+
+    @Test fun publish_from_a_chat_sends_its_base_and_says_it_became_the_default() {
+        val bodies = mutableListOf<String>()
+        val engine = MockEngine { req ->
+            val p = req.url.encodedPath
+            val b = when {
+                p.endsWith("/git/publish-new") -> { bodies += String((req.body as io.ktor.http.content.TextContent).bytes()); """{"ok":true,"url":"https://github.com/me/shop","base":"main"}""" }
+                p.endsWith("/git/status") -> noRemote
+                p.endsWith("/changes") -> """{"repos":[{"repo":"","baseSha":"h","files":[]}]}"""
+                p.endsWith("/git/history") -> """{"branch":"fix","base":"main","chat":[{"sha":"c41e9d2","subject":"x"}],"baseCommits":[]}"""
+                else -> "{}"
+            }
+            respond(ByteReadChannel(b), HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+        }
+        val s = SourceControlState(SourceControlApi(BrokerApi("http://h", "t", HttpClient(engine)), "w1", "s1"))
+        runBlocking { s.refresh(); s.sync("publish"); s.publishTo("github", "private") }
+        assertTrue(bodies.single().contains("\"base\":\"main\""), bodies.single())
+        assertEquals(localized(Str.scm_published_to_with_base, "https://github.com/me/shop", "main"), s.note)
+    }
+
+    @Test fun a_failure_says_it_plainly_and_keeps_the_tools_words_for_details() {
+        val (s, _) = state(HttpStatusCode.Conflict, """{"ok":false,"reason":"error","message":"GraphQL: Something unexpected happened (createRepository)"}""")
+        runBlocking { s.sync("publish"); s.publishTo("github", "private") }
+        assertEquals(localized(Str.scm_publish_failed_plain, "GitHub"), s.publishError)
+        assertEquals("GraphQL: Something unexpected happened (createRepository)", s.publishDetails)
+    }
 }

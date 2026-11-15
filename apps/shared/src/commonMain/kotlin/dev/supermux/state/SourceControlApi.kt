@@ -111,8 +111,13 @@ class SourceControlApi(
 
     suspend fun addRemote(name: String, url: String): GitWriteResult? = call("addRemote") { api.gitAddRemote(ws, workspaceId, name, url) }
 
-    suspend fun publishNew(forge: String, visibility: String, name: String? = null): dev.supermux.net.PublishNewResult? =
-        call("publishNew") { api.gitPublishNew(ws, workspaceId, forge, visibility, name) }
+    suspend fun publishNew(forge: String, visibility: String, name: String? = null, base: String? = null): dev.supermux.net.PublishNewResult? =
+        call("publishNew") { api.gitPublishNew(ws, workspaceId, forge, visibility, name, base) }
+
+    /** Can a PR/MR into [target] be opened; null target: origin's default branch. */
+    suspend fun prBase(target: String?, fresh: Boolean = false): dev.supermux.net.PrBaseCheck? = call("prBase") { api.gitPrBase(ws, workspaceId, target, fresh) }
+
+    suspend fun publishBase(target: String): GitWriteResult? = call("publishBase") { api.gitPrPublishBase(ws, workspaceId, target) }
 
     /** "Ask the agent to fix" / "Send to the agent": a message to the chat's agent. */
     suspend fun tellAgent(text: String): Boolean = sessionId?.let { s -> call("tellAgent") { api.sendMessage(s, text); true } } ?: false

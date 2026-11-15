@@ -1527,12 +1527,16 @@ data class PrText(val title: String = "", val body: String = "", val by: String 
 
 /** POST …/git/publish-new: the new repo's URL, or why not (bad | no_cli | not_authed | error). */
 @Serializable
-data class PublishNewResult(val ok: Boolean = false, val url: String? = null, val reason: String? = null, val message: String? = null)
+data class PublishNewResult(val ok: Boolean = false, val url: String? = null, val reason: String? = null, val message: String? = null, val base: String? = null)
+
+/** #72 GET …/git/pr/base: can a PR/MR into [target] be opened (on origin? here? how far ahead?). */
+@Serializable
+data class PrBaseCheck(val target: String = "", val onRemote: Boolean = false, val local: Boolean = false, val ahead: Int? = null)
 
 @Serializable
 internal data class RemoteBody(val name: String, val url: String)
 @Serializable
-internal data class PublishNewBody(val forge: String, val visibility: String, val name: String? = null)
+internal data class PublishNewBody(val forge: String, val visibility: String, val name: String? = null, val base: String? = null)
 
 @Serializable
 data class PrCheckLog(val ok: Boolean = false, val log: String? = null, val reason: String? = null, val message: String? = null)
@@ -3483,8 +3487,16 @@ class BrokerApi(
         answer("$httpBase/$scope/$id/git/remote", json.encodeToString(RemoteBody(name, url))) { GitWriteResult(reason = "failed", message = it) }
 
     /** POST /<sessions|workspaces>/<id>/git/publish-new: create the repo on GitHub / GitLab from this folder and push. */
-    suspend fun gitPublishNew(scope: String, id: String, forge: String, visibility: String, name: String? = null): PublishNewResult =
-        answer("$httpBase/$scope/$id/git/publish-new", json.encodeToString(PublishNewBody(forge, visibility, name))) { PublishNewResult(message = it) }
+    suspend fun gitPublishNew(scope: String, id: String, forge: String, visibility: String, name: String? = null, base: String? = null): PublishNewResult =
+        answer("$httpBase/$scope/$id/git/publish-new", json.encodeToString(PublishNewBody(forge, visibility, name, base))) { PublishNewResult(message = it) }
+
+    /** GET /<sessions|workspaces>/<id>/git/pr/base?target=: whether a PR/MR into it can be opened; no target: origin's default. */
+    suspend fun gitPrBase(scope: String, id: String, target: String?, fresh: Boolean = false): PrBaseCheck =
+        getJson("$httpBase/$scope/$id/git/pr/base?target=${urlEncode(target.orEmpty())}" + if (fresh) "&fresh=1" else "")
+
+    /** POST /<sessions|workspaces>/<id>/git/pr/publish-base: put that local branch (the chat's base) on origin. */
+    suspend fun gitPrPublishBase(scope: String, id: String, target: String): GitWriteResult =
+        answer("$httpBase/$scope/$id/git/pr/publish-base", json.encodeToString(PrTextBody(target))) { GitWriteResult(reason = "failed", message = it) }
 
     /** GET /<sessions|workspaces>/<id>/git/pr/check-log?url=: a failing check's log tail. */
     suspend fun gitPrCheckLog(scope: String, id: String, checkUrl: String): PrCheckLog =
