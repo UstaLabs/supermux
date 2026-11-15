@@ -1217,6 +1217,13 @@ jobs:
             sleep 1
             kill -0 "$APP_PID" 2>/dev/null || break
             if [ "$(main_window)" = "true" ]; then WINDOW_AT=$second; break; fi
+            if [ "$second" = 6 ]; then
+              # Inside the CI runner's host.init -> ws.connecting gap (about 2.5 s -> 13.5 s on 2026-11-15): which threads
+              # are busy or waiting, the UI thread and the coroutine workers that should be opening the socket.
+              echo "threads at 6 s (UI thread, main, coroutine workers):"
+              "$APP/Contents/runtime/Contents/Home/bin/jcmd" "$APP_PID" Thread.print > "$RUNNER_TEMP/threads-6s.txt" 2>&1 || true
+              awk '/^"AWT-EventQueue|^"main"|^"AppKit|^"DefaultDispatcher-worker/{p=1;n=0} /^$/{if(p)print; p=0} p&&n++<14' "$RUNNER_TEMP/threads-6s.txt" | head -220
+            fi
             if [ "$second" = "$LIMIT" ]; then
               echo "no main window after $LIMIT s: the JVM's threads at that moment follow"
               "$APP/Contents/runtime/Contents/Home/bin/jcmd" "$APP_PID" Thread.print > "$RUNNER_TEMP/threads-20s.txt" 2>&1 || true
