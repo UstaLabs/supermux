@@ -6,6 +6,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.remember
+import dev.supermux.net.BranchPrefixSetting
 import dev.supermux.net.WorktreeChangesDto
 import dev.supermux.net.WorktreeDeleteResultDto
 import dev.supermux.net.WorktreeListDto
@@ -28,6 +29,9 @@ class WorktreesSettingsActions(
     /** Live sizes and remote deletions from HostState (`worktree_sizes` / `worktrees_removed`). */
     val sizes: @Composable () -> Map<String, Long> = { emptyMap() },
     val removedIds: @Composable () -> Set<String> = { emptySet() },
+    /** #152: the prefix new branches get (null = couldn't ask), and setting it (null = back to automatic, "" = none). */
+    val branchPrefix: suspend () -> BranchPrefixSetting? = { null },
+    val setBranchPrefix: suspend (String?) -> BranchPrefixSetting? = { null },
 )
 
 /** [WorktreesSettingsActions] against one paired host — desktop's wiring. */
@@ -40,6 +44,8 @@ fun rememberWorktreesSettingsActions(app: HostStore): WorktreesSettingsActions =
         delete = { app.deleteWorktrees(it) },
         sizes = { app.state.collectAsState().value.worktreeSizes },
         removedIds = { app.state.collectAsState().value.removedWorktreeIds },
+        branchPrefix = { app.branchPrefixSetting() },
+        setBranchPrefix = { app.setBranchPrefixSetting(it) },
     )
 }
 
@@ -62,5 +68,7 @@ fun rememberWorktreesSettingsActions(fleet: FleetStore): WorktreesSettingsAction
         delete = { fleet.deleteWorktrees(it) },
         sizes = { fleet.activeApp()?.state?.collectAsState()?.value?.worktreeSizes ?: emptyMap() },
         removedIds = { fleet.activeApp()?.state?.collectAsState()?.value?.removedWorktreeIds ?: emptySet() },
+        branchPrefix = { fleet.branchPrefixSetting() },
+        setBranchPrefix = { fleet.setBranchPrefixSetting(it) },
     )
 }

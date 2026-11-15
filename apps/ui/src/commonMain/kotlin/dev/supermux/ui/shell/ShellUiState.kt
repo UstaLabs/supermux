@@ -311,6 +311,18 @@ class ShellUiState {
     fun openLauncherInProject(hostId: String, projectId: String) =
         navigate(Route.NewSession(projectHostId = hostId, projectId = projectId))
 
+    /**
+     * #152: #72's "Check Out Pull Request…": the launcher on [projectId] of [hostId], to work on its pull / merge
+     * request [number]. The launcher reads the PR from the forge again; the number is one-shot with the project.
+     */
+    fun openLauncherForPr(hostId: String, projectId: String, number: Int) =
+        navigate(Route.NewSession(projectHostId = hostId, projectId = projectId, prNumber = number))
+
+    /** The PR / MR [launcherProject] is opened for (consumed with it); null = none. */
+    val launcherPr: Int? get() = unconsumedLauncherRoute
+        ?.takeIf { it.projectId.isNotBlank() }
+        ?.prNumber?.takeIf { it > 0 }
+
     fun closeLauncher() {
         if (launcherOpen) goBack()
     }

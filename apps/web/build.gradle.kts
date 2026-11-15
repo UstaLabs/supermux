@@ -310,7 +310,12 @@ val distDir = layout.buildDirectory.dir("dist/wasmJs/productionExecutable")
 // 2026-11-15 (#152 launcher C1–C3, Tally): +50 KiB, measured 9125 KiB on train6 43741960086: the Local / Worktree row,
 // the three-tab branch picker with its Pull request tab, the line under it and the inline cards (session/LauncherWork*.kt),
 // and their strings in both catalogs. The prefix setting and C4 get their own measured raises.
-val maxGzipBytes = 9126L * 1024
+// 2026-11-15 (#152 prefix setting + C4, Tally): +4 KiB, measured 9129 KiB on train6 43750478449: Settings › Chat
+// worktrees' branch prefix, the chat header's PR chip, the launcher opened on a PR, the sidebar's live branch (~260 lines,
+// 3 DTOs, 14 strings × 2).
+// 2026-11-15 (#152 spacing, Tally/Ahmet): +1 KiB, measured 9130 KiB on train6 43753321986: the launcher row's spacing
+// as the prototype's (the row's own layout under the composer, the summary's 16 dp icon column).
+val maxGzipBytes = 9131L * 1024
 
 // THE NATIVE EDITOR'S SYNTAX MODULE IS OUTSIDE THAT CEILING, with a ceiling of its own (M5).
 // `supermux-syntax.wasm` is 7.45 MB raw / 2.69 MB gzipped (editor-syntax/native/README.md): counted

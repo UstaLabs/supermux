@@ -36,6 +36,9 @@
     <!-- The chat around the composer: header status, empty state, live rows -->
     <string name="composer_search_chats">Search chats</string>
     <string name="composer_not_responding">Not responding</string>
+    <!-- #152: the chat header's chip for a session started from a pull / merge request; %1$s is "#123" or "!7". -->
+    <string name="chat_pr_crumb_pushes">%1$s · pushes update it</string>
+    <string name="chat_pr_crumb_review">%1$s · review only</string>
     <string name="composer_reveal_gone">That message is no longer in the chat</string>
     <string name="composer_start_conversation">Start the conversation</string>
     <string name="composer_starter_state">What's the current state?</string>

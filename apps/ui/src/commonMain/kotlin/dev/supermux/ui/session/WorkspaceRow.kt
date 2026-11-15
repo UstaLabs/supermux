@@ -157,7 +157,7 @@ fun WorkspaceRow(
     // A suspended session whose agent is working is being woken (card #75): "starting", and not dimmed.
     val waking = sessionStatus == "suspended" && working
     val suspended = !waking && sessionStatus != null && sessionStatus != "active"
-    val branch = w.branch?.takeIf { it.isNotBlank() }
+    val branch = model.branch
     val twoLine = branch != null || host != null
 
     val rowBg = when {

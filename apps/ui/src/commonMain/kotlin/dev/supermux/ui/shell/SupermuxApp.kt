@@ -797,6 +797,7 @@ fun SupermuxApp(
             initialProjectHost = if (tab == null) ui.launcherProject?.first else null,
             initialProjectId = if (tab == null) ui.launcherProject?.second else null,
             onInitialProjectApplied = { if (tab == null) ui.consumeLauncherSeeds() },
+            initialPrNumber = if (tab == null) ui.launcherPr else null,
             hosts = hostViews,
             selectedHost = activeHostId,
             projectImageCache = projectImageCache,

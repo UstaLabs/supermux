@@ -129,6 +129,7 @@ internal object WorkRowTags {
     const val TAB_PR = "launcher_tab_pr"
     const val PR_SEARCH = "launcher_pr_search"
     const val PR_NOTE = "launcher_pr_note"
+    const val PR_LINK_NOTE = "launcher_pr_link_note"
     const val CARD = "launcher_work_card"
     const val CARD_HEAD = "launcher_work_card_head"
     const val CARD_USE_LOCAL = "launcher_card_use_local"
@@ -175,6 +176,8 @@ internal fun LauncherWorkRow(
     lookupPr: suspend (String) -> OpenPrRead? = { null },
     /** "Open that session", from the card of a branch another session has. */
     onOpenSession: ((String) -> Unit)? = null,
+    /** #152 C4: the PR / MR #72's "Check Out Pull Request…" opened the launcher for, and couldn't be used, with its read. */
+    prLink: Pair<Int, OpenPrRead?>? = null,
 ) {
     var open by remember { mutableStateOf<WorkPop?>(null) }
     val close = { open = null }
@@ -245,7 +248,29 @@ internal fun LauncherWorkRow(
                 modifier = Modifier.padding(top = 6.dp, start = 2.dp).testTag(WorkRowTags.NOT_REMEMBERED),
             )
         }
+        if (prLink != null) {
+            val (number, read) = prLink
+            Text(
+                prLinkNote(number, read, prs?.repo, ForgeWords(read?.forge == "gitlab" || prs?.forge == "gitlab")),
+                color = MaterialTheme.colorScheme.error,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(top = 6.dp, start = 2.dp).testTag(WorkRowTags.PR_LINK_NOTE),
+            )
+        }
     }
+}
+
+/** Why the PR / MR the launcher was opened for can't be worked on here: the Pull request tab's words, or no answer. */
+private fun prLinkNote(number: Int, read: OpenPrRead?, repo: String?, words: ForgeWords): String = when (read?.status) {
+    null -> localized(Str.launch_pr_link_unread, words.label(number))
+    "not_open" -> localized(if (read.state == "merged") Str.launch_pr_merged else Str.launch_pr_closed, words.label(number))
+    "other_repo" -> localized(Str.launch_pr_other_repo, read.repo.orEmpty())
+    "unavailable" -> when (read.reason) {
+        "no_cli" -> localized(Str.launch_pr_no_cli, words.cli, words.noun)
+        "not_authed" -> localized(Str.launch_pr_not_authed, words.cli, words.noun)
+        else -> localized(Str.launch_pr_link_failed, words.label(number), read.message?.takeIf { it.isNotBlank() } ?: read.reason.orEmpty())
+    }
+    else -> localized(Str.launch_pr_none, words.noun, words.sign + number, repo ?: read.repo.orEmpty())
 }
 
 // ── the pills ─────────────────────────────────────────────────────────────────────────────────────
@@ -271,7 +296,7 @@ private fun WorkPill(pointer: Boolean, open: Boolean, modifier: Modifier = Modif
         horizontalArrangement = Arrangement.spacedBy(7.dp),
     ) {
         content()
-        Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
+        Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(15.dp))
     }
 }
 
@@ -438,8 +463,18 @@ private fun ColumnScope.BranchPicker(
                     )
                 }
             }
+            // One paragraph, as the prototype's: where the base comes from, then where the prefix is set.
+            val st = argStyles()
             val origin = remoteName(branches)
-            if (origin != null) Hint(styled(argStyles(), Str.launch_base_fetched_hint, Arg.Plain(origin), Arg.Code(base.substringAfter('/'))))
+            val hint = listOfNotNull(
+                origin?.let { styled(st, Str.launch_base_fetched_hint, Arg.Plain(it), Arg.Code(base.substringAfter('/'))) },
+                when {
+                    legacy -> null
+                    prefix.isEmpty() -> styled(st, Str.launch_prefix_off)
+                    else -> styled(st, Str.launch_prefix_where, Arg.Code(prefix))
+                },
+            )
+            if (hint.isNotEmpty()) Hint(hint.reduce { a, b -> a + AnnotatedString(" ") + b })
         } else if (tab == BranchMode.PullRequest) {
             PrList(pointer, pick, prs, lookupPr, words, folderBranch, onPick, close)
         } else {
@@ -929,7 +964,10 @@ private fun WorkSummary(
     Column(modifier.testTag(WorkRowTags.SUMMARY).semantics(mergeDescendants = true) {}, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         lines.forEach { (icon, text) ->
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp).size(14.dp))
+                // The prototype's 16 px icon column, a 14 px icon at its start, centred on the first 18 px line.
+                Box(Modifier.width(16.dp)) {
+                    Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp).size(14.dp))
+                }
                 Text(text, fontSize = 12.5.sp, lineHeight = 18.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
@@ -940,7 +978,9 @@ private fun WorkSummary(
 @Composable
 internal fun NotGitSummary(projectPath: String, modifier: Modifier = Modifier) {
     Row(modifier.testTag(WorkRowTags.SUMMARY).semantics(mergeDescendants = true) {}, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Icon(Icons.Outlined.Info, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp).size(14.dp))
+        Box(Modifier.width(16.dp)) {
+            Icon(Icons.Outlined.Info, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp).size(14.dp))
+        }
         Text(styled(argStyles(), Str.launch_sum_not_git, Arg.Bold(projectPath)), fontSize = 12.5.sp, lineHeight = 18.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
@@ -969,7 +1009,9 @@ private class ArgStyles(val code: SpanStyle, val bold: SpanStyle, val tag: SpanS
 private fun argStyles(): ArgStyles {
     val cs = MaterialTheme.colorScheme
     return ArgStyles(
-        code = SpanStyle(fontFamily = MonoFontFamily, fontSize = 12.5.sp, color = cs.onSurface),
+        // The prototype's <code> (launcher.css: `font: 400 12.5px mono`): regular weight even in bold words, in the
+        // words' own colour; <b><code> only takes the brighter colour.
+        code = SpanStyle(fontFamily = MonoFontFamily, fontSize = 12.5.sp, fontWeight = FontWeight.Normal),
         bold = SpanStyle(color = cs.onSurface, fontWeight = FontWeight.Medium),
         tag = SpanStyle(fontSize = 10.5.sp, color = cs.onSurfaceVariant, background = cs.surfaceContainerHighest),
         link = SpanStyle(color = cs.primary),
@@ -994,7 +1036,7 @@ private fun styledText(st: ArgStyles, template: String, vararg args: Arg): Annot
                 is Arg.Link -> withStyle(st.link) { append(a.text) }
                 is Arg.Bold -> withStyle(st.bold) { append(a.text) }
                 is Arg.Code -> withStyle(code) { append(a.text) }
-                is Arg.CodeBold -> withStyle(code.copy(fontWeight = FontWeight.Medium)) { append(a.text) }
+                is Arg.CodeBold -> withStyle(code.copy(color = st.bold.color)) { append(a.text) }
                 is Arg.CodeTagged -> {
                     withStyle(code) { append(a.text) }
                     append(" ")

@@ -1438,6 +1438,13 @@ data class OpenPr(
     val localAhead: Int? = null,
 )
 
+/**
+ * GET/PUT /settings/branch-prefix (#152): the user's prefix as kept (null = automatic, "" = none), and what automatic
+ * gives. [refused]: the PUT's 400, a prefix git won't take; the broker never sends it.
+ */
+@Serializable
+data class BranchPrefixSetting(val branchPrefix: String? = null, val automatic: String = "", val refused: Boolean = false)
+
 /** GET /projects/prs: status ok ([repo] "host/owner/repo", [prs]) | unavailable ([reason]: no_remote | no_cli | not_authed | error). */
 @Serializable
 data class OpenPrList(val status: String = "unavailable", val forge: String? = null, val repo: String? = null, val prs: List<OpenPr> = emptyList(), val reason: String? = null, val message: String? = null)
@@ -3390,6 +3397,23 @@ class BrokerApi(
     /** GET /projects/pr?dir=&ref= (#152): one by #N, !N, N or its URL. */
     suspend fun projectPr(dir: String, ref: String): OpenPrRead =
         getJson("$httpBase/projects/pr?dir=${urlEncode(dir)}&ref=${urlEncode(ref.trim())}")
+
+    /** GET /settings/branch-prefix (#152) */
+    suspend fun branchPrefixSetting(): BranchPrefixSetting = getJson("$httpBase/settings/branch-prefix")
+
+    /**
+     * PUT /settings/branch-prefix (#152): [prefix] null = back to automatic, "" = none. The null goes as JSON null. A
+     * 400 is a prefix git won't take: [BranchPrefixSetting.refused], so the page can say that rather than "no answer".
+     */
+    suspend fun setBranchPrefixSetting(prefix: String?): BranchPrefixSetting {
+        val resp = http.put("$httpBase/settings/branch-prefix") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(if (prefix == null) "{\"branchPrefix\":null}" else json.encodeToString(BranchPrefixSetting(branchPrefix = prefix)))
+        }
+        if (resp.status.value == 400) return BranchPrefixSetting(refused = true)
+        return decode(resp)
+    }
 
     /** GET /projects/prefs?dir= (#152) */
     suspend fun projectPrefs(dir: String): ProjectPrefs =

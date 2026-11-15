@@ -321,7 +321,7 @@ val SettingsSearchIndex: List<SettingsSearchEntry> = listOf(
     ),
     // The machine page's Worktrees sub-page (#97 Step 2).
     SettingsSearchEntry(
-        SettingsSection.Machine, "worktrees", "Chat worktrees", "disk space delete clean folders",
+        SettingsSection.Machine, "worktrees", "Chat worktrees", "disk space delete clean folders branch prefix",
         sub = MachineSub.WORKTREES,
         text = SearchText(Str.search_machine_worktrees, Str.search_machine_worktrees_kw),
     ),

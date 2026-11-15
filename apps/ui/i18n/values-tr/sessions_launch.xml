@@ -52,6 +52,8 @@
     <string name="launch_branch_name">Dal adı</string>
     <string name="launch_branch_name_auto">Otomatik: ilk mesajınızdan adlandırılır</string>
     <string name="launch_base_fetched_hint">Temel dal önce %1$s deposundan getirilir; böylece dal, %2$s dalının en güncel hâlinden başlar.</string>
+    <string name="launch_prefix_where">%1$s öneki Ayarlar › Makine › Sohbet worktree'leri içinde ayarlanır.</string>
+    <string name="launch_prefix_off">Dal öneki Ayarlar › Makine › Sohbet worktree'leri içinde kapalı.</string>
     <string name="launch_new_branch_from">%2$s dalından yeni dal %1$s</string>
     <string name="launch_use_new_branch">Yeni dalı kullan</string>
     <string name="launch_branches_local">Yerel</string>
@@ -110,6 +112,9 @@
     <string name="launch_pr_other_repo">Bu %1$s deposuna ait, bu projeye değil.</string>
     <string name="launch_pr_no_cli">%2$s'leri görmek için bu makineye %1$s kurun.</string>
     <string name="launch_pr_not_authed">%2$s'leri görmek için bu makinede %1$s ile oturum açın.</string>
+    <!-- #152 C4: #72'nin "Pull Request'i Aç…" komutunun başlatıcıyı açtığı PR / MR okunamadığında. -->
+    <string name="launch_pr_link_unread">%1$s okunamadı: makine yanıt vermedi.</string>
+    <string name="launch_pr_link_failed">%1$s okunamadı: %2$s</string>
     <string name="launch_pr_failed">%1$s'ler listelenemedi: %2$s</string>
     <string name="launch_pr_foot">%1$s'in kendi dalında çalışır. Gönderilenler %1$s'i günceller.</string>
     <!-- Bir pull request satırının ikinci satırı: dalı, birleşeceği dal, yazarı. -->

@@ -102,6 +102,7 @@ import dev.supermux.ui.retain.rememberRetainedScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.key.key
@@ -120,6 +121,7 @@ import dev.supermux.net.ReasoningLevel
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.GitBranches
 import dev.supermux.net.OpenPrList
+import dev.supermux.net.OpenPrRead
 import dev.supermux.net.ProjectFolderState
 import dev.supermux.net.RepoInfo
 import dev.supermux.net.SessionSourceBody
@@ -200,6 +202,17 @@ fun shouldResetModelOnAgentChange(lastSeen: String?, current: String, restoring:
  * pane doesn't leave a thin ribbon of fields on ultra-wide layouts (a no-op on a phone).
  */
 private val LAUNCHER_MAX_WIDTH = 720.dp
+
+/**
+ * #152: the row under the composer sits 12 dp under the card, as the prototype's `.ln-where`. The launcher's column
+ * spaces its children by [Space.lg], so the row takes the difference back, in its layout as well as its drawing.
+ * Nothing clips there, so the part above its slot still takes clicks.
+ */
+private fun Modifier.underTheComposer(): Modifier = layout { measurable, constraints ->
+    val placeable = measurable.measure(constraints)
+    val back = (Space.lg - Space.md).roundToPx()
+    layout(placeable.width, (placeable.height - back).coerceAtLeast(0)) { placeable.place(0, -back) }
+}
 
 /**
  * The New-Session launcher. Broker access is injected through [actions] (cluster F1) — no store ref
@@ -304,6 +317,11 @@ fun SessionLauncherScreen(
      * navigation (a remount must not override the user's or a draft's workdir).
      */
     onInitialProjectApplied: () -> Unit = {},
+    /**
+     * #152: with [initialProjectId], a pull / merge request of it to work on (#72's "Check Out Pull Request…"). It is
+     * read from the forge again once the project is showing, and picked in a worktree for this session only.
+     */
+    initialPrNumber: Int? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -532,6 +550,9 @@ fun SessionLauncherScreen(
     var fetchedRepos by remember { mutableStateOf(setOf<String>()) }
     /** The folder whose Local / Worktree pick the broker couldn't keep (never silent: the row says so). */
     var workInNotSaved by remember { mutableStateOf<String?>(null) }
+    /** #152 C4: the PR / MR the launcher was opened for, until it is read; and one that couldn't be used, with why. */
+    var pendingPr by remember { mutableStateOf<Int?>(null) }
+    var prLinkFailed by remember { mutableStateOf<Pair<Int, OpenPrRead?>?>(null) }
     fun pickWorkIn(w: WorkIn) {
         workIn = w
         val wd = workdir ?: return
@@ -555,6 +576,7 @@ fun SessionLauncherScreen(
         folderState = null
         projectPrs = null
         sourcesKnown = false
+        prLinkFailed = null
         if (launcherRestoring) return@LaunchedEffect
         val switchedRepoHost = lastRepoHost != null && lastRepoHost != selectedHost
         lastRepoHost = selectedHost
@@ -593,6 +615,25 @@ fun SessionLauncherScreen(
             // From the forge (a network call): last, so the row is drawn without waiting for it.
             projectPrs = actions.projectPrs(wd, "")
         }
+    }
+    // #152 C4: opened for a PR / MR (#72's "Check Out Pull Request…"). It is read from the forge again (it may have
+    // been merged since), then picked in a worktree for this session; the project's own Local / Worktree pick is left
+    // as it is. One that can't be used says why under the row.
+    LaunchedEffect(pendingPr, sourcesKnown, workdir) {
+        val n = pendingPr ?: return@LaunchedEffect
+        val wd = workdir ?: return@LaunchedEffect
+        if (!sourcesKnown) return@LaunchedEffect
+        pendingPr = null
+        val read = actions.projectPr(wd, "#$n")
+        if (workdir != wd) return@LaunchedEffect
+        val pr = read?.pr?.takeIf { read.status == "found" }
+        if (pr == null) {
+            prLinkFailed = n to read
+            return@LaunchedEffect
+        }
+        workIn = WorkIn.Worktree
+        pick = pick.copy(mode = BranchMode.PullRequest, pr = pr, diverged = null, folderTo = null)
+        pickFor = wd
     }
     // A branch list opening: origin is fetched once per repo, then the branches and the folder's state are read again.
     fun refreshBranches() {
@@ -863,6 +904,8 @@ fun SessionLauncherScreen(
         val project = catalog.firstOrNull { it.id == id } ?: return@LaunchedEffect
         initialProjectApplied = true
         applyProject(project)
+        // Taken before the shell consumes the route: the PR is read once the project's row is showing.
+        pendingPr = initialPrNumber?.takeIf { it > 0 }
         onInitialProjectApplied()
     }
 
@@ -1128,7 +1171,8 @@ fun SessionLauncherScreen(
                         // The install panel brings its own heading; the project name alone stays.
                         if (!needsAgentInstall) {
                             Text(localized(Str.launch_title), color = cs.onSurface, fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
-                            Spacer(Modifier.height(Space.xs))
+                            // #152's prototype: 26 dp from the title's baseline to the project's capitals.
+                            Spacer(Modifier.height(11.dp))
                         }
                         // Project name IS the dropdown (iOS projectPicker / web heading-variant
                         // parity). The Box is the ANCHOR: where a pointer drives, the shared picker
@@ -1484,17 +1528,19 @@ fun SessionLauncherScreen(
                             onPick = { p ->
                                 pick = p
                                 pickFor = rowWorkdir
+                                prLinkFailed = null
                             },
                             onWorkIn = { pickWorkIn(it) },
                             onOpenBranches = { refreshBranches() },
-                            modifier = Modifier.padding(top = 12.dp),
+                            modifier = Modifier.underTheComposer(),
                             notRemembered = workInNotSaved == rowWorkdir,
                             prs = projectPrs,
                             lookupPr = { ref -> actions.projectPr(rowWorkdir, ref) },
                             onOpenSession = onOpenSession,
+                            prLink = prLinkFailed,
                         )
                     } else if (notGit && rowWorkdir != null) {
-                        NotGitSummary(formatWorkdir(rowWorkdir, home), Modifier.padding(top = 12.dp))
+                        NotGitSummary(formatWorkdir(rowWorkdir, home), Modifier.underTheComposer())
                     }
 
                     // Folder caption — a calm restatement of the resolved workdir (none yet → none), where the row

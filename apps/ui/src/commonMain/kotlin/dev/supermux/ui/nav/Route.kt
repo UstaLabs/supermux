@@ -43,6 +43,8 @@ sealed interface Route {
         val draftId: String = "",
         val projectHostId: String = "",
         val projectId: String = "",
+        /** #152: a pull / merge request of [projectId] to work on (#72's "Check Out Pull Request…"); 0 = none. */
+        val prNumber: Int = 0,
     ) : Route
 
     @Serializable

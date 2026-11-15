@@ -55,6 +55,14 @@ class RouteTest {
     }
 
     @Test
+    fun new_session_carries_a_pull_requests_number() {
+        // #152: "Check Out Pull Request…" opens the launcher on a project with the PR's number.
+        val route = Route.NewSession(projectHostId = "h1", projectId = "p1", prNumber = 123)
+        assertEquals(route, roundTrip(route))
+        assertEquals(0, Route.NewSession().prNumber)
+    }
+
+    @Test
     fun every_object_route_round_trips_as_itself() {
         val objects = listOf(
             Route.Home, Route.AddHost, Route.Usage, Route.Devices,

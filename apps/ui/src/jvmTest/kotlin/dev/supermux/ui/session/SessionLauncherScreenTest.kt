@@ -2,6 +2,14 @@ package dev.supermux.ui.session
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.test.click
+import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assert
@@ -43,6 +51,8 @@ import dev.supermux.net.RepoBranches
 import dev.supermux.net.RepoInfo
 import dev.supermux.net.SessionSourceBody
 import dev.supermux.proto.PermissionModeInfo
+import dev.supermux.proto.ProjectDto
+import dev.supermux.proto.ProjectLocationDto
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
 import dev.supermux.state.LauncherDraft
@@ -166,6 +176,10 @@ class SessionLauncherScreenTest {
         prRead: (String) -> OpenPrRead? = { null },
         switched: MutableList<String>? = null,
         onOpenSessionFromCard: ((String) -> Unit)? = null,
+        /** The host's projects, and the one the launcher opens on (the sidebar's "+", #72's "Check Out Pull Request…"). */
+        catalog: List<ProjectDto> = emptyList(),
+        initialProjectId: String? = null,
+        initialPrNumber: Int? = null,
     ) {
         SupermuxTheme(appearance = AppearanceMode.DARK) {
             SessionLauncherScreen(
@@ -189,6 +203,7 @@ class SessionLauncherScreenTest {
                     projectPrs = { _, _ -> prs },
                     projectPr = { _, ref -> prRead(ref) },
                     switchFolder = { d, n -> switched?.add("$d=$n"); GitSwitchResult(status = "switched", branch = n) },
+                    projectCatalog = kotlinx.coroutines.flow.flowOf(catalog),
                 ),
                 loadPrefs = { prefs },
                 onPrefsChange = onPrefsChange,
@@ -201,6 +216,8 @@ class SessionLauncherScreenTest {
                 standalone = standalone,
                 workspaceWorkdir = workspaceWorkdir,
                 workspaceLabel = workspaceLabel,
+                initialProjectId = initialProjectId,
+                initialPrNumber = initialPrNumber,
             )
         }
     }
@@ -1046,6 +1063,30 @@ class SessionLauncherScreenTest {
         assertEquals(listOf<SessionSourceBody?>(SessionSourceBody(kind = "new", base = "main", name = "ahmet/fix-the-login-redirect", auto = true)), sent)
     }
 
+    @Test fun the_new_branch_hint_says_where_the_prefix_is_set() = runComposeUiTest {
+        pointerContent {
+            Harness(draft = LauncherDraft(workdir = "/proj/x"), repoInfo = repo, projectPrefs = ProjectPrefs("worktree", "ahmet/"), branches = storefront, folder = clean)
+        }
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.BRANCH).performClick()
+        waitForIdle()
+        // One paragraph, as the prototype's: where the base comes from, then where the prefix is set.
+        onNode(
+            hasText("The base is fetched from origin first, so the branch starts from the latest main. Prefix ahmet/ is set in Settings › Machine › Chat worktrees."),
+            useUnmergedTree = true,
+        ).assertExists()
+    }
+
+    @Test fun no_prefix_says_it_is_off_and_where() = runComposeUiTest {
+        pointerContent {
+            Harness(draft = LauncherDraft(workdir = "/proj/x"), repoInfo = repo, projectPrefs = ProjectPrefs("worktree", ""), branches = storefront, folder = clean)
+        }
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.BRANCH).performClick()
+        waitForIdle()
+        onNode(hasText("The branch prefix is off in Settings › Machine › Chat worktrees.", substring = true), useUnmergedTree = true).assertExists()
+    }
+
     @Test fun a_branch_only_origin_has_is_tracked() = runComposeUiTest {
         val sent = mutableListOf<SessionSourceBody?>()
         pointerContent {
@@ -1175,6 +1216,106 @@ class SessionLauncherScreenTest {
         onNodeWithTag("launcher_submit").performClick()
         waitForIdle()
         assertEquals(listOf<SessionSourceBody?>(SessionSourceBody(kind = "pr", number = 123)), sent)
+    }
+
+    // ── #152: the row under the composer, measured against the prototype's launcher.css ──────────────────
+
+    /** The prototype's tokens: `.ln-where` 12 px under the card, flush with it; `.ln-sum` 10 px under the pills, 2 px in,
+     *  a 16 px icon column and an 8 px gap before the words, 18 px lines 4 px apart. */
+    private fun ComposeUiTest.rowSitsAsThePrototype(pillHeight: Float) {
+        val card = onNodeWithTag("launcher_composer_card").getUnclippedBoundsInRoot()
+        val pill = onNodeWithTag(WorkRowTags.WORK_IN).getUnclippedBoundsInRoot()
+        val sum = onNodeWithTag(WorkRowTags.SUMMARY).getUnclippedBoundsInRoot()
+        val lines = onAllNodes(
+            hasAnyAncestor(hasTestTag(WorkRowTags.SUMMARY)) and SemanticsMatcher.keyIsDefined(SemanticsProperties.Text),
+            useUnmergedTree = true,
+        ).fetchSemanticsNodes().map { it.boundsInRoot }
+        fun near(expected: Float, actual: Float, what: String) =
+            kotlin.test.assertTrue(kotlin.math.abs(expected - actual) <= 0.5f, "$what: expected $expected dp, was $actual dp")
+        val d = density.density
+        near(0f, (pill.left - card.left).value, "pills flush with the card")
+        near(12f, (pill.top - card.bottom).value, "card → pills")
+        near(pillHeight, (pill.bottom - pill.top).value, "pill height")
+        near(10f, (sum.top - pill.bottom).value, "pills → summary")
+        near(26f, lines[0].left / d - card.left.value, "summary words from the card's edge")
+        near(22f, (lines[1].top - lines[0].top) / d, "summary line pitch")
+    }
+
+    @Test fun the_row_and_its_lines_sit_where_the_prototype_puts_them() = runComposeUiTest {
+        pointerContent {
+            Harness(draft = LauncherDraft(workdir = "/proj/x"), repoInfo = repo, projectPrefs = ProjectPrefs("local", "ahmet/"), branches = storefront, folder = clean)
+        }
+        waitForIdle()
+        rowSitsAsThePrototype(pillHeight = 34f)
+        // The row is drawn 4 dp above its slot in the column; a click on the pill's top edge still opens its menu.
+        onNodeWithTag(WorkRowTags.WORK_IN).performMouseInput { click(Offset(width / 2f, 2f)) }
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.POPOVER).assertExists()
+    }
+
+    @Test fun on_a_phone_the_row_sits_the_same_with_taller_pills() = runComposeUiTest {
+        touchContent {
+            Harness(draft = LauncherDraft(workdir = "/proj/x"), repoInfo = repo, projectPrefs = ProjectPrefs("local", "ahmet/"), branches = storefront, folder = clean)
+        }
+        waitForIdle()
+        rowSitsAsThePrototype(pillHeight = 40f)
+    }
+
+    // ── #152 C4: #72's "Check Out Pull Request…" opens the launcher on a project with a PR's number ────────
+
+    private val storefrontProject = ProjectDto(id = "sf", name = "Storefront", locations = listOf(ProjectLocationDto("sf-l0", "/proj/x")))
+
+    @Test fun opened_for_a_pull_request_the_launcher_reads_it_again_and_picks_it_in_a_worktree() = runComposeUiTest {
+        val sent = mutableListOf<SessionSourceBody?>()
+        val asked = mutableListOf<String>()
+        val put = mutableListOf<String>()
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(text = "Address the review comments"), repoInfo = repo,
+                projectPrefs = ProjectPrefs("local", "ahmet/"), branches = storefront, folder = clean, prs = prs,
+                prRead = { ref -> asked += ref; OpenPrRead(status = "found", pr = pr123, forge = "github") },
+                prefsPut = put, catalog = listOf(storefrontProject), initialProjectId = "sf", initialPrNumber = 123,
+                onSubmit = captureSource(sent),
+            )
+        }
+        waitUntil(timeoutMillis = 5_000) { asked.isNotEmpty() }
+        waitForIdle()
+        assertEquals(listOf("#123"), asked)
+        // Local is the user's pick for this project; a PR is worked on in a worktree, and the pick is left as it was.
+        onNodeWithTag(WorkRowTags.WORK_IN).assertTextContains("Worktree")
+        onNodeWithTag(WorkRowTags.BRANCH).assertTextContains("#123")
+        onNodeWithTag(WorkRowTags.SUMMARY).assertTextContains("update PR #123", substring = true)
+        assertEquals(emptyList(), put)
+        onNodeWithTag("launcher_submit").performClick()
+        waitForIdle()
+        assertEquals(listOf<SessionSourceBody?>(SessionSourceBody(kind = "pr", number = 123)), sent)
+    }
+
+    @Test fun a_pull_request_that_cannot_be_opened_says_why_under_the_row() = runComposeUiTest {
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(text = "go"), repoInfo = repo,
+                projectPrefs = ProjectPrefs("worktree", "ahmet/"), branches = storefront, folder = clean, prs = prs,
+                prRead = { OpenPrRead(status = "not_open", state = "merged", forge = "github") },
+                catalog = listOf(storefrontProject), initialProjectId = "sf", initialPrNumber = 118,
+            )
+        }
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag(WorkRowTags.PR_LINK_NOTE).fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithTag(WorkRowTags.PR_LINK_NOTE).assertTextContains("PR #118 is already merged.")
+        // Nothing is picked for it: the row is as the project left it.
+        onNodeWithTag(WorkRowTags.BRANCH).assertTextContains("New branch", substring = true)
+    }
+
+    @Test fun a_pull_request_the_host_could_not_read_says_so() = runComposeUiTest {
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(text = "go"), repoInfo = repo,
+                projectPrefs = ProjectPrefs("worktree", "ahmet/"), branches = storefront, folder = clean, prs = prs,
+                prRead = { null }, catalog = listOf(storefrontProject), initialProjectId = "sf", initialPrNumber = 118,
+            )
+        }
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag(WorkRowTags.PR_LINK_NOTE).fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithTag(WorkRowTags.PR_LINK_NOTE).assertTextContains("Couldn’t read PR #118: the host didn’t answer.")
     }
 
     @Test fun no_remote_means_no_pull_request_tab() = runComposeUiTest {
