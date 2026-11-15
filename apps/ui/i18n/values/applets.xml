@@ -94,4 +94,6 @@
     <string name="applet_info_every_day1">day</string>
     <string name="applet_info_every_days">%1$d days</string>
     <string name="applet_info_secret_sign_in_expired">sign-in expired</string>
+    <string name="applet_info_files_db">Files: %1$s · database %2$s</string>
+    <string name="applet_info_ask_agent">Ask an agent</string>
 </resources>
