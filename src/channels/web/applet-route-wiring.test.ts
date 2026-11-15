@@ -12,6 +12,10 @@ import { openDb, runMigrations } from "../../core/storage/db"
 import { MIGRATIONS } from "../../core/storage/migrations"
 import { AppletService } from "../../core/applets/service"
 
+// These run POSIX shell command lines (sh -c, $VARS, printf), signal process groups and check file modes; the
+// Windows supervisor (cmd.exe /c, taskkill, the PowerShell start fingerprint) is covered by the platform layer's tests.
+const posix = test.skipIf(process.platform === "win32")
+
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => { while (cleanups.length) await cleanups.pop()!() })
 
@@ -40,7 +44,7 @@ async function boot() {
   return { base: `http://127.0.0.1:${channel.boundPort}`, device, preview: devices.mintPreview(device)!, devices }
 }
 
-test("the device cookie never opens an applet; the bearer and the preview cookie do, and neither reaches it", async () => {
+posix("the device cookie never opens an applet; the bearer and the preview cookie do, and neither reaches it", async () => {
   const { base, device, preview } = await boot()
   const viaId = createHash("sha256").update(device).digest("hex").slice(0, 16)
 
@@ -59,7 +63,7 @@ test("the device cookie never opens an applet; the bearer and the preview cookie
   expect((await fetch(`${base}/a/nope/`, { headers: { authorization: `Bearer ${device}` } })).status).toBe(404)
 })
 
-test("GET /applets lists the host's applets for a paired device and nobody else", async () => {
+posix("GET /applets lists the host's applets for a paired device and nobody else", async () => {
   const { base, device } = await boot()
   expect((await fetch(`${base}/applets`)).status).toBe(401)
   const list = await (await fetch(`${base}/applets`, { headers: { authorization: `Bearer ${device}` } })).json() as { name: string; url: string; kind: string }[]
