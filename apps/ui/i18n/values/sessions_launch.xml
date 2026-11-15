@@ -52,6 +52,8 @@
     <string name="launch_branch_name">Branch name</string>
     <string name="launch_branch_name_auto">Automatic: named from your first message</string>
     <string name="launch_base_fetched_hint">The base is fetched from %1$s first, so the branch starts from the latest %2$s.</string>
+    <string name="launch_prefix_where">Prefix %1$s is set in Settings › Machine › Chat worktrees.</string>
+    <string name="launch_prefix_off">The branch prefix is off in Settings › Machine › Chat worktrees.</string>
     <string name="launch_new_branch_from">New branch %1$s from %2$s</string>
     <string name="launch_use_new_branch">Use new branch</string>
     <string name="launch_branches_local">Local</string>

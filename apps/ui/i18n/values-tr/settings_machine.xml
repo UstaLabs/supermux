@@ -277,6 +277,15 @@
     <string name="worktrees_chat_worktrees">Sohbet worktree'leri</string>
     <string name="worktrees_disk_note">Ajanların çalıştığı klasörler. Hiçbir şey kendiliğinden silinmez.</string>
     <string name="worktrees_none">Sohbet worktree'si yok</string>
+    <!-- #152: başlatıcıdan açılan yeni bir dalın aldığı önek (Ayarlar › Makine › Sohbet worktree'leri). -->
+    <string name="worktrees_prefix_head">Yeni dallar</string>
+    <string name="worktrees_prefix_label">Dal öneki</string>
+    <string name="worktrees_prefix_auto">Otomatik: %1$s</string>
+    <string name="worktrees_prefix_none">Önek yok</string>
+    <string name="worktrees_prefix_note">Başlatıcıdan açılan yeni bir dal %1$sfix-login-redirect gibi adlandırılır. Boş bırakılırsa önek, projeye bağlı forge hesabını, o yoksa adınızı izler.</string>
+    <string name="worktrees_prefix_failed">Önek kaydedilemedi. Bağlantıyı kontrol edip yeniden deneyin.</string>
+    <string name="worktrees_folders_head">Klasörler</string>
+    <string name="worktrees_prefix_refused">Git, %1$s önekini dal öneki olarak kabul etmiyor.</string>
     <string name="worktrees_counting">Sayılıyor…</string>
     <string name="worktrees_refresh">Yenile</string>
     <string name="worktrees_refreshing">Yenileniyor…</string>

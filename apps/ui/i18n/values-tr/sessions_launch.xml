@@ -52,6 +52,8 @@
     <string name="launch_branch_name">Dal adı</string>
     <string name="launch_branch_name_auto">Otomatik: ilk mesajınızdan adlandırılır</string>
     <string name="launch_base_fetched_hint">Temel dal önce %1$s deposundan getirilir; böylece dal, %2$s dalının en güncel hâlinden başlar.</string>
+    <string name="launch_prefix_where">%1$s öneki Ayarlar › Makine › Sohbet worktree'leri içinde ayarlanır.</string>
+    <string name="launch_prefix_off">Dal öneki Ayarlar › Makine › Sohbet worktree'leri içinde kapalı.</string>
     <string name="launch_new_branch_from">%2$s dalından yeni dal %1$s</string>
     <string name="launch_use_new_branch">Yeni dalı kullan</string>
     <string name="launch_branches_local">Yerel</string>

@@ -41,11 +41,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
@@ -64,6 +66,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.fs.fileNameOf
 import dev.supermux.fs.hostParent
+import dev.supermux.net.BranchPrefixSetting
 import dev.supermux.net.WorktreeListDto
 import dev.supermux.net.WorktreeSummaryDto
 import dev.supermux.ui.i18n.Plurals
@@ -79,6 +82,8 @@ import dev.supermux.ui.settings.MachineSub
 import dev.supermux.ui.settings.SettingsPlace
 import dev.supermux.ui.settings.WorktreesSettingsActions
 import dev.supermux.ui.settings.kit.KitCheckbox
+import dev.supermux.ui.settings.kit.KitTextField
+import dev.supermux.ui.settings.kit.KitToggleRow
 import dev.supermux.ui.settings.kit.KitGhostButton
 import dev.supermux.ui.settings.kit.KitGlyphs
 import dev.supermux.ui.settings.kit.KitHairline
@@ -344,11 +349,90 @@ fun WorktreesPage(
                 tag = "worktrees_page",
                 maxWidth = 740.dp,
             ) {
-                if (offline != null) KitNote(offline, Modifier.testTag("wt_quiet")) else WorktreesList(actions, form, name)
+                if (offline != null) {
+                    KitNote(offline, Modifier.testTag("wt_quiet"))
+                } else {
+                    BranchPrefixSection(actions)
+                    WorktreesList(actions, form, name)
+                }
             }
         }
         if (offline == null) DeleteBar(actions, form, name)
     }
+}
+
+/**
+ * #152: the prefix a new branch from the launcher gets, the user's own: empty is automatic (its placeholder says what
+ * that gives here), "No prefix" is none. Saved on Enter and when the field loses focus. A prefix git refuses says so on
+ * the field and stays there to fix; a save that got no answer says that.
+ */
+@Composable
+private fun BranchPrefixSection(actions: WorktreesSettingsActions) {
+    val scope = rememberCoroutineScope()
+    var setting by remember { mutableStateOf<BranchPrefixSetting?>(null) }
+    var text by remember { mutableStateOf("") }
+    var refused by remember { mutableStateOf<String?>(null) }
+    var noAnswer by remember { mutableStateOf(false) }
+    LaunchedEffect(actions) {
+        setting = actions.branchPrefix()
+        text = setting?.branchPrefix.orEmpty()
+    }
+    val s = setting ?: return
+    val none = s.branchPrefix == ""
+    fun save(prefix: String?) {
+        // Enter, then the blur that follows: one save. A refused prefix isn't sent again until it is changed.
+        if (prefix == s.branchPrefix || (refused != null && prefix == refused)) return
+        if (prefix != null) text = prefix
+        scope.launch {
+            val saved = actions.setBranchPrefix(prefix)
+            noAnswer = saved == null
+            refused = prefix.takeIf { saved?.refused == true }
+            if (saved != null && !saved.refused) {
+                setting = saved
+                text = saved.branchPrefix.orEmpty()
+            }
+        }
+    }
+    KitSectionHead(localized(Str.worktrees_prefix_head))
+    KitTextField(
+        value = if (none) "" else text,
+        onValueChange = {
+            text = it.replace(" ", "-")
+            refused = null
+        },
+        modifier = Modifier.onFocusChanged { if (!it.hasFocus && !none) save(typedPrefix(text)) },
+        label = localized(Str.worktrees_prefix_label),
+        placeholder = localized(Str.worktrees_prefix_auto, s.automatic),
+        enabled = !none,
+        error = refused?.let { localized(Str.worktrees_prefix_refused, it) },
+        mono = true,
+        onSubmit = { save(typedPrefix(text)) },
+        fieldTag = "wt_prefix_field",
+    )
+    KitToggleRow(
+        localized(Str.worktrees_prefix_none),
+        checked = none,
+        onCheckedChange = { save(if (it) "" else null) },
+        modifier = Modifier.testTag("wt_prefix_none"),
+        divider = false,
+    )
+    if (noAnswer) {
+        Text(localized(Str.worktrees_prefix_failed), fontSize = 12.sp, color = kitColors().danger, modifier = Modifier.padding(top = 4.dp).testTag("wt_prefix_failed"))
+    } else {
+        KitNote(localized(Str.worktrees_prefix_note, s.branchPrefix ?: s.automatic))
+    }
+    // The folders below get their own head, so the list doesn't read as part of the prefix.
+    KitSectionHead(localized(Str.worktrees_folders_head))
+}
+
+/**
+ * What a typed prefix keeps: trimmed, spaces as dashes, and one that ends in a letter or digit gets a slash, or it would
+ * run into the name ("team" → team/fix-login, "ahmet-" stays). Empty is automatic: null.
+ */
+internal fun typedPrefix(text: String): String? {
+    val t = text.trim().replace(' ', '-')
+    if (t.isEmpty()) return null
+    return if (t.last().isLetterOrDigit()) "$t/" else t
 }
 
 /** What the list shows and the bar deletes, worked out once per frame from the load and the picks. */

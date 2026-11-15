@@ -1046,6 +1046,30 @@ class SessionLauncherScreenTest {
         assertEquals(listOf<SessionSourceBody?>(SessionSourceBody(kind = "new", base = "main", name = "ahmet/fix-the-login-redirect", auto = true)), sent)
     }
 
+    @Test fun the_new_branch_hint_says_where_the_prefix_is_set() = runComposeUiTest {
+        pointerContent {
+            Harness(draft = LauncherDraft(workdir = "/proj/x"), repoInfo = repo, projectPrefs = ProjectPrefs("worktree", "ahmet/"), branches = storefront, folder = clean)
+        }
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.BRANCH).performClick()
+        waitForIdle()
+        // One paragraph, as the prototype's: where the base comes from, then where the prefix is set.
+        onNode(
+            hasText("The base is fetched from origin first, so the branch starts from the latest main. Prefix ahmet/ is set in Settings › Machine › Chat worktrees."),
+            useUnmergedTree = true,
+        ).assertExists()
+    }
+
+    @Test fun no_prefix_says_it_is_off_and_where() = runComposeUiTest {
+        pointerContent {
+            Harness(draft = LauncherDraft(workdir = "/proj/x"), repoInfo = repo, projectPrefs = ProjectPrefs("worktree", ""), branches = storefront, folder = clean)
+        }
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.BRANCH).performClick()
+        waitForIdle()
+        onNode(hasText("The branch prefix is off in Settings › Machine › Chat worktrees.", substring = true), useUnmergedTree = true).assertExists()
+    }
+
     @Test fun a_branch_only_origin_has_is_tracked() = runComposeUiTest {
         val sent = mutableListOf<SessionSourceBody?>()
         pointerContent {

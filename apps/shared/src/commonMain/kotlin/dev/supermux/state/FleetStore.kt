@@ -75,6 +75,7 @@ import dev.supermux.net.PathValidation
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.RepoInfo
+import dev.supermux.net.BranchPrefixSetting
 import dev.supermux.net.OpenPrList
 import dev.supermux.net.OpenPrRead
 import dev.supermux.net.ProjectFolderState
@@ -1839,6 +1840,8 @@ class FleetStore(
     suspend fun launcherFolderState(dir: String): ProjectFolderState? = activeApp()?.launcherFolderState(dir)
     suspend fun launcherProjectPrefs(dir: String): ProjectPrefs? = activeApp()?.launcherProjectPrefs(dir)
     suspend fun launcherProjectPrs(dir: String, q: String = ""): OpenPrList? = activeApp()?.launcherProjectPrs(dir, q)
+    suspend fun branchPrefixSetting(): BranchPrefixSetting? = activeApp()?.branchPrefixSetting()
+    suspend fun setBranchPrefixSetting(prefix: String?): BranchPrefixSetting? = activeApp()?.setBranchPrefixSetting(prefix)
     suspend fun launcherProjectPr(dir: String, ref: String): OpenPrRead? = activeApp()?.launcherProjectPr(dir, ref)
     suspend fun launcherSwitchFolder(dir: String, name: String): GitSwitchResult? = activeApp()?.launcherSwitchFolder(dir, name)
     suspend fun setLauncherProjectPrefs(dir: String, workIn: String?, branchPrefix: String? = null): ProjectPrefs? =

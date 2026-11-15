@@ -438,8 +438,18 @@ private fun ColumnScope.BranchPicker(
                     )
                 }
             }
+            // One paragraph, as the prototype's: where the base comes from, then where the prefix is set.
+            val st = argStyles()
             val origin = remoteName(branches)
-            if (origin != null) Hint(styled(argStyles(), Str.launch_base_fetched_hint, Arg.Plain(origin), Arg.Code(base.substringAfter('/'))))
+            val hint = listOfNotNull(
+                origin?.let { styled(st, Str.launch_base_fetched_hint, Arg.Plain(it), Arg.Code(base.substringAfter('/'))) },
+                when {
+                    legacy -> null
+                    prefix.isEmpty() -> styled(st, Str.launch_prefix_off)
+                    else -> styled(st, Str.launch_prefix_where, Arg.Code(prefix))
+                },
+            )
+            if (hint.isNotEmpty()) Hint(hint.reduce { a, b -> a + AnnotatedString(" ") + b })
         } else if (tab == BranchMode.PullRequest) {
             PrList(pointer, pick, prs, lookupPr, words, folderBranch, onPick, close)
         } else {
@@ -969,7 +979,8 @@ private class ArgStyles(val code: SpanStyle, val bold: SpanStyle, val tag: SpanS
 private fun argStyles(): ArgStyles {
     val cs = MaterialTheme.colorScheme
     return ArgStyles(
-        code = SpanStyle(fontFamily = MonoFontFamily, fontSize = 12.5.sp, color = cs.onSurface),
+        // The prototype's <code>: mono in the words' own colour; only <b><code> is the brighter, heavier one.
+        code = SpanStyle(fontFamily = MonoFontFamily, fontSize = 12.5.sp),
         bold = SpanStyle(color = cs.onSurface, fontWeight = FontWeight.Medium),
         tag = SpanStyle(fontSize = 10.5.sp, color = cs.onSurfaceVariant, background = cs.surfaceContainerHighest),
         link = SpanStyle(color = cs.primary),
@@ -994,7 +1005,7 @@ private fun styledText(st: ArgStyles, template: String, vararg args: Arg): Annot
                 is Arg.Link -> withStyle(st.link) { append(a.text) }
                 is Arg.Bold -> withStyle(st.bold) { append(a.text) }
                 is Arg.Code -> withStyle(code) { append(a.text) }
-                is Arg.CodeBold -> withStyle(code.copy(fontWeight = FontWeight.Medium)) { append(a.text) }
+                is Arg.CodeBold -> withStyle(code.merge(st.bold)) { append(a.text) }
                 is Arg.CodeTagged -> {
                     withStyle(code) { append(a.text) }
                     append(" ")

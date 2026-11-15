@@ -279,6 +279,15 @@
     <string name="worktrees_chat_worktrees">Chat worktrees</string>
     <string name="worktrees_disk_note">Folders agents worked in. Nothing is deleted on its own.</string>
     <string name="worktrees_none">No chat worktrees</string>
+    <!-- #152: the prefix a new branch from the launcher gets (Settings › Machine › Chat worktrees). -->
+    <string name="worktrees_prefix_head">New branches</string>
+    <string name="worktrees_prefix_label">Branch prefix</string>
+    <string name="worktrees_prefix_auto">Automatic: %1$s</string>
+    <string name="worktrees_prefix_none">No prefix</string>
+    <string name="worktrees_prefix_note">A new branch from the launcher is named like %1$sfix-login-redirect. Left empty, the prefix follows the forge account connected for the project, or else your first name.</string>
+    <string name="worktrees_prefix_failed">Couldn’t save the prefix. Check the connection and try again.</string>
+    <string name="worktrees_folders_head">Folders</string>
+    <string name="worktrees_prefix_refused">Git doesn’t accept %1$s as a branch prefix.</string>
     <string name="worktrees_counting">Counting…</string>
     <string name="worktrees_refresh">Refresh</string>
     <string name="worktrees_refreshing">Refreshing…</string>

@@ -75,6 +75,7 @@ import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.RemoteRepo
 import dev.supermux.net.RepoInfo
+import dev.supermux.net.BranchPrefixSetting
 import dev.supermux.net.OpenPrList
 import dev.supermux.net.OpenPrRead
 import dev.supermux.net.ProjectFolderState
@@ -2687,6 +2688,8 @@ class HostStore(
         runApi("launcherFolderState") { api.projectFolderState(dir) }
     suspend fun launcherProjectPrefs(dir: String): ProjectPrefs? =
         runApi("launcherProjectPrefs") { api.projectPrefs(dir) }
+    suspend fun branchPrefixSetting(): BranchPrefixSetting? = runApi("branchPrefixSetting") { api.branchPrefixSetting() }
+    suspend fun setBranchPrefixSetting(prefix: String?): BranchPrefixSetting? = runApi("setBranchPrefixSetting") { api.setBranchPrefixSetting(prefix) }
     suspend fun launcherProjectPrs(dir: String, q: String = ""): OpenPrList? =
         runApi("launcherProjectPrs") { api.projectPrs(dir, q) }
     suspend fun launcherProjectPr(dir: String, ref: String): OpenPrRead? =
