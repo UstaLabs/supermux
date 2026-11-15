@@ -17,8 +17,8 @@ import { CardSendGuard } from "../../core/show-html/card-send"
 import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
 import { PayloadTooLargeError, EmptyUploadError, OffsetConflictError, UploadOverflowError, UploadNotFoundError } from "../../core/files/store"
 import { buildProxyPublicUrl, extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie, portFromSlug } from "./proxy"
-import { handleAppletRequest, matchAppletPath, resolveStaticFile, type AppletCaller } from "./applet-route"
-import { appletPayload } from "../../core/applets/service"
+import { handleAppletRequest, matchAppletPath, type AppletCaller } from "./applet-route"
+import { handleAppletApi } from "./applet-api"
 import { isOwnerOnly } from "../../core/applets/manifest"
 import { AUTH_COOKIE, PREVIEW_COOKIE, authToken, authedViaBearer, bearerToken, buildAuthCookie, buildClearCookie, crossSiteRefusal, previewCookieSpec, previewCookieToken, sameOriginOk } from "./cookies"
 import { browserStateError } from "../../core/workspace/browser-state"
@@ -5374,30 +5374,10 @@ export class WebChannel implements Channel {
         }),
       })
     }
-    // #117: the host's applets, for this device's Applets grid. Agents use `supermux applet …` instead.
+    // #117: the host's applets, for this device's Applets grid and Applet info. Agents use `supermux applet …` instead.
     if (path === "/applets" || path.startsWith("/applets/")) {
-      const applets = this.opts.applets
-      if (!applets) return this.json({ error: "applets are not available on this host" }, 404)
-      if (method === "GET" && path === "/applets") return this.json(applets.list().map(appletPayload))
-      const m = /^\/applets\/([^/]+)(?:\/(icon|logs|restart))?$/.exec(path)
-      const v = m ? applets.get(decodeURIComponent(m[1]!)) : undefined
-      if (!m || !v) return this.json({ error: "no such applet" }, 404)
-      if (method === "GET" && !m[2]) return this.json(appletPayload(v))
-      if (method === "GET" && m[2] === "icon") {
-        const file = v.row.icon ? resolveStaticFile(v.folder, v.row.icon) : null
-        if (!file) return new Response("not found", { status: 404 })
-        const f = Bun.file(file)
-        return new Response(f, { headers: { "content-type": f.type || "application/octet-stream", "cache-control": "no-cache" } })
-      }
-      if (method === "GET" && m[2] === "logs") {
-        const lines = Math.min(2000, Math.max(1, Number(url.searchParams.get("lines")) || 200))
-        return this.json({ logs: applets.supervisor.logs(v.row.id, lines) })
-      }
-      if (method === "POST" && m[2] === "restart") {
-        const r = await applets.restart(v.row.name)
-        return r.ok ? this.json(r) : this.json({ error: r.error }, 409)
-      }
-      return this.json({ error: "not found" }, 404)
+      if (!this.opts.applets) return this.json({ error: "applets are not available on this host" }, 404)
+      return handleAppletApi(req, { applets: this.opts.applets, device: auth.device.name, json: (b, st) => this.json(b, st) })
     }
     if (method === "GET" && path === "/proxies") {
       const proxies = this.opts.listProxies?.() ?? []

@@ -2405,7 +2405,10 @@ const proxyLivenessMonitor = new ProxyLivenessMonitor({
 })
 // #117: the host's applets (~/.mux/applets/<name>/), served at /a/<name>/ and kept running with no session involved.
 // Started after webChannel.start(); servers outlive a broker restart and are adopted by the next one.
-const appletService = new AppletService({ db, appletsDir: join(MUX_HOME, "applets"), stateDir: join(STATE_DIR, "applets"), rescanMs: 15_000 })
+const appletService = new AppletService({
+  db, appletsDir: join(MUX_HOME, "applets"), stateDir: join(STATE_DIR, "applets"), backupsDir: join(MUX_HOME, "backups", "applets"),
+  rescanMs: 15_000, jobTickMs: 30_000, maintenanceMs: 10 * 60_000,
+})
 // loginManager is declared here (before webChannel opts, which close over it) and
 // assigned after webChannel is constructed (so its onChange can reference webChannel).
 // Both closures are arrow functions that run at request/event time — well after both
