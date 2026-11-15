@@ -105,7 +105,7 @@ export async function handleAppletOp(svc: AppletService, name: string, args: Rec
         ok: true,
         value: {
           name: n, server: true, state: st?.state ?? "stopped", error: st?.error ?? null,
-          logs: svc.supervisor.logs(v.row.id, 20),
+          logs: svc.supervisor.logsSinceStart(v.row.id, 30),
           note: st?.state === "running"
             ? `restarted; the server keeps running after this command returned. Check it with: supermux applet logs ${n}`
             : `the server did not stay up; fix it and run supermux applet restart ${n} again`,

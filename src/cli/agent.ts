@@ -28,6 +28,8 @@ export interface AgentCliIo {
   stdin: () => string
   /** Broker call timeout, ms. */
   timeoutMs?: number
+  /** Runs a program with the terminal's own stdio (an applet's bin); its exit code. */
+  exec?: (file: string, args: string[], opts: { cwd: string; env: Record<string, string | undefined> }) => number
 }
 
 class Exit extends Error { constructor(readonly code: number) { super(`exit ${code}`) } }
@@ -57,6 +59,7 @@ const REF: Array<[string, string, string, string?]> = [
   ["memory", "search", "memory search QUERY [--limit N]                 search shared memory; to SAVE, append '## title (date)' to the domain file yourself", 'supermux memory search "codex limit"'],
   ["comments", "", "comments ls | reply ID TEXT | resolve ID [TEXT] | dismiss ID [TEXT]   the user's comments on browser pages"],
   ["display", "", "display start [--provider P] [--size WxH] | stop ID · device ls     virtual displays, Android devices"],
+  ["applet", "", "applet list|info|new|restart|logs|run|backup …   personal web tools supermux runs for the user (not a project's app); 'applet --help' has the rules", "supermux applet new job-tracker --title \"Job tracker\""],
   ["api", "", "api OP [-f key=value]... [--input FILE]         raw broker op (rarely needed); 'api OP --help' lists its params"],
 ]
 const LINE = (u: string) => `  supermux ${u}`
@@ -72,8 +75,60 @@ A <button onclick="supermux.send('text')"> sends that text to you as the user's 
 Prints 'shown', or the problems: then the user saw nothing; fix and show again. Use a card when numbers or options have
 a shape worth seeing, and answer in a sentence beside it. Not for a plain fact, code, or an image (attach a PNG).`
 
+/** `supermux applet --help`: the bench stand-in's text (#117: 33 agent runs, 31 passes, 0 wrong moves) + its 4 fixes. */
+const APPLET_HELP = `supermux applet — applets: small personal web tools that supermux runs for the user (boards, trackers,
+dashboards). An applet is NOT a project's product app: it lives in its own folder that supermux owns, runs whether
+or not any chat is open, and shows up in the Applets grid on every paired device.
+
+  supermux applet list                          every applet: name, state, link
+  supermux applet info APPLET                   folder, applet.json, jobs, secrets, backups, link
+  supermux applet new APPLET [--from DIR] [--title T]
+                                                create an applet (empty static template, or adopt an existing
+                                                folder with --from: copied in, git history kept). It gets a
+                                                .gitignore for data/ and its own git identity.
+  supermux applet restart APPLET                restart its server after you change code (static files in
+                                                public/ need no restart)
+  supermux applet logs APPLET [--job NAME] [--lines N]   server output, or a job's last runs
+  supermux applet run APPLET JOB                run one of its jobs now; prints its output and exit code
+  supermux applet backup APPLET [-m WHY]        copy its data/ to a new read-only backup. Run this before a
+                                                risky data change (migration, bulk edit, import).
+  supermux applet APPLET CMD …                  the applet's own command (its applet.json "bin")
+
+Examples:
+  supermux applet new job-tracker --title "Job tracker"
+  supermux applet new issues --from ~/projects/issues
+  supermux applet restart job-tracker
+  supermux applet logs job-tracker --job gmail
+  supermux applet run job-tracker gmail
+  supermux applet backup job-tracker -m "before the status migration"
+
+Changing an applet: edit the files in its folder directly and commit with git, then
+\`supermux applet restart APPLET\` if it has a server. A restarted server keeps running after the command
+returns; check it with \`supermux applet logs APPLET\`.
+
+applet.json:
+  { "title": "…", "icon": "public/icon.svg",
+    "run": "python3 server.py",          # how to start its server, any language; omit for a static applet
+    "jobs": [{ "name": "sync", "every": "30m", "run": "python3 jobs/sync.py" }],
+    "secrets": ["SOME_API_KEY"],         # names only
+    "ownerOnly": ["/api/settings"] }     # paths only the user's own devices may open
+  supermux gives the server $PORT and the applet's data dir as $DATA_DIR (= <folder>/data). A static applet's
+  public/ is served at its link. Every request through the link carries X-Mux-Via (device:<id> or
+  agent:<session>) and X-Mux-Via-Sig, the hex HMAC-SHA256 of X-Mux-Via with $MUX_VIA_KEY. For ownerOnly paths
+  your server must ALSO refuse requests without a valid signature over a device:… value: agents on this
+  machine can reach $PORT directly.
+
+Backups: nightly automatic (about two weeks kept), plus \`backup\`. They are plain read-only folders listed by
+\`info\`. To get data back, copy back only what is missing from a backup into data/; never overwrite live data
+with a whole backup (everything added since would be lost), and never edit a backup.
+
+Secrets: only the user can set secret values, on the applet's page. Declare the name in applet.json "secrets"
+and ask them to fill it in. You cannot read or set values.
+Owner only (refused here): deleting an applet, secret values.`
+
 export function helpText(noun = "", verb?: string): string {
   if (!noun || noun === "help") return FULL_REF
+  if (noun === "applet") return APPLET_HELP
   if (noun === "card") return LINE(REF.find(([n, v]) => n === "card" && v === "show")![2].replace(/; 'card --help' has the page rules/, "")) + "\n" + CARD_RULES + "\nExample:\n  supermux card show chart.html --title \"Rides\""
   const rows = REF.filter(([n]) => n === noun)
   const pick = verb ? rows.filter(([, v]) => v === verb) : rows
@@ -118,20 +173,20 @@ export async function runAgentCli(argv: string[], io: AgentCliIo): Promise<numbe
   // On Windows: the AF_UNIX file, then the pre-#156 named pipe (a broker that has not restarted onto #156 serves only it).
   const socks = io.env.MUX_SESSION_ID && io.env.MUX_SOCKETS_DIR ? localEndpoints(io.env.MUX_SESSION_ID, { socketsDir: io.env.MUX_SOCKETS_DIR }) : []
   const sock = socks[0]
-  async function call(name: string, args: Record<string, unknown>): Promise<any> {
+  async function call(name: string, args: Record<string, unknown>, timeoutMs?: number): Promise<any> {
     if (!sock) { io.err("supermux: not inside a supermux session (MUX_SESSION_ID and MUX_SOCKETS_DIR are unset)"); throw new Exit(5) }
     let r: { ok: boolean; value?: unknown; error?: string } | "unreachable" | "timeout" = "unreachable"
     for (const endpoint of socks) {
-      r = await callOn(endpoint, name, args)
+      r = await callOn(endpoint, name, args, timeoutMs)
       if (r !== "unreachable") break
     }
     return settle(r)
   }
-  function callOn(endpoint: string, name: string, args: Record<string, unknown>) {
+  function callOn(endpoint: string, name: string, args: Record<string, unknown>, timeoutMs?: number) {
     return new Promise<{ ok: boolean; value?: unknown; error?: string } | "unreachable" | "timeout">((res) => {
       const s = connect(endpoint)
       let buf: Buffer = Buffer.alloc(0)
-      const timer = setTimeout(() => { s.destroy(); res("timeout") }, io.timeoutMs ?? 30_000)
+      const timer = setTimeout(() => { s.destroy(); res("timeout") }, timeoutMs ?? io.timeoutMs ?? 30_000)
       s.on("error", () => { clearTimeout(timer); res("unreachable") })
       s.on("connect", () => s.write(encodeFrame({ kind: OUTBOUND.has(name) ? "outbound" : "orchestration", call_id: `cli-${process.pid}-${Date.now()}`, op: { name, args } })))
       s.on("data", (c: Buffer) => {
@@ -386,6 +441,77 @@ export async function runAgentCli(argv: string[], io: AgentCliIo): Promise<numbe
       }
       case "docs": help(verb ?? "")
       // eslint-disable-next-line no-fallthrough
+      case "applet": {
+        // #117. Every op goes over this session's socket, so the broker knows which session changed an applet.
+        const A = (line: string): string => { if (!rest[0]) usage("which applet?", line); return rest[0]! }
+        const appletRow = (a: any) => ({ name: a.name, title: a.title ?? null, state: a.state ?? null, url: a.url ?? null, needs_you: a.needs_you ?? [], error: a.error ?? null, updated_by: a.updated_by ?? null, updated_at: a.updated_at ?? null })
+        switch (verb) {
+          case undefined: help("applet")
+          // eslint-disable-next-line no-fallthrough
+          case "list": case "ls": {
+            const v = ((await call("applet_list", {})) as any[]).map(appletRow)
+            out(v, () => v.length ? table(v.map((a) => ({ ...a, state: a.needs_you.length ? `${a.state}, needs ${a.needs_you.join(", ")}` : a.state })), [["name", "NAME"], ["title", "TITLE"], ["state", "STATE"], ["url", "LINK"]]) : io.out("(no applets yet: supermux applet new NAME)"))
+            return 0
+          }
+          case "info": {
+            const v = await call("applet_info", { applet: A("applet info APPLET") })
+            out(v, () => {
+              io.out(`${v.name} — ${v.title}\nstate:   ${v.state}${v.error ? ` (${v.error})` : ""}\nlink:    ${v.url}\nfolder:  ${v.folder}\ndata:    ${v.data_dir}`)
+              if (v.server) io.out(`server:  ${v.server.run} · ${v.server.state}, ${v.server.restarts} restart${v.server.restarts === 1 ? "" : "s"}`)
+              io.out("jobs:    " + (v.jobs.length ? v.jobs.map((j: any) => `${j.name} every ${j.every} (last: ${j.last_run ? `${j.last_run.started_at.slice(0, 16)}, exit ${j.last_run.exit_code ?? "?"}` : "never"})`).join("; ") : "none"))
+              if (v.secrets.length) io.out("secrets: " + v.secrets.map((x: any) => `${x.name} ${x.state}`).join(", ") + (v.secrets.some((x: any) => x.state !== "set") ? " (the user sets values on the applet's page)" : ""))
+              if (v.bin.length) io.out(`bin:     ${v.bin.join(", ")} (supermux applet ${v.name} CMD …)`)
+              io.out("backups (read-only):" + (v.backups.length ? "\n" + v.backups.map((b: any) => `  ${b.path}  ${b.kind}${b.why ? ` — ${b.why}` : ""}`).join("\n") : " none yet"))
+              io.out(`applet.json: ${v.manifest ? JSON.stringify(v.manifest) : "(invalid)"}`)
+            })
+            return 0
+          }
+          case "new": {
+            const name = A("applet new APPLET [--from DIR] [--title T]")
+            const v = await call("applet_new", { applet: name, ...(str("from") ? { from: local(str("from")!) } : {}), ...(str("title") ? { title: str("title") } : {}) })
+            out(v, () => io.out(`created applet ${v.name}\nfolder: ${v.folder}\nlink:   ${v.url}\nIt is in the Applets grid on every paired device.${v.error ? `\nbut: ${v.error}` : ""}`))
+            return 0
+          }
+          case "restart": {
+            const v = await call("applet_restart", { applet: A("applet restart APPLET") })
+            out(v, () => io.out(v.server ? `${v.state === "running" ? "restarted" : "NOT running"}: ${v.name}${v.error ? ` (${v.error})` : ""}\n${v.logs ? `--- last output\n${v.logs}\n---\n` : ""}${v.note}` : v.note))
+            return v.server && v.state !== "running" ? 1 : 0
+          }
+          case "logs": {
+            const v = await call("applet_logs", { applet: A("applet logs APPLET [--job NAME]"), ...(str("job") ? { job: str("job") } : {}), ...(num("lines") ? { lines: num("lines") } : {}) })
+            out(v, () => {
+              if (v.runs) io.out(v.runs.length ? v.runs.map((r: any) => `--- ${r.started_at} (${r.trigger}) exit ${r.exit_code ?? "unknown"}\n${r.output || "(no output)"}`).join("\n") : `(${v.job} has not run yet: supermux applet run ${v.name} ${v.job})`)
+              else io.out(v.logs || v.note || "(no output yet)")
+            })
+            return 0
+          }
+          case "run": {
+            const name = A("applet run APPLET JOB")
+            if (!rest[1]) usage("which job? (supermux applet info " + name + ")", "applet run APPLET JOB")
+            const v = await call("applet_run", { applet: name, job: rest[1] }, 3_700_000)
+            out(v, () => io.out(`${v.output}${v.output && !v.output.endsWith("\n") ? "\n" : ""}--- ${v.name}/${v.job} exited ${v.exit_code ?? "unknown"}`))
+            return v.exit_code === 0 ? 0 : 1
+          }
+          case "backup": {
+            const v = await call("applet_backup", { applet: A("applet backup APPLET [-m WHY]"), ...(str("message") ? { why: str("message") } : {}) }, 600_000)
+            out(v, () => io.out(`backup of ${v.name}: ${v.path}${v.why ? ` (${v.why})` : ""}`))
+            return 0
+          }
+          case "delete": case "rm": case "secret": case "secrets": {
+            await call(`applet_${verb === "rm" ? "delete" : verb === "secrets" ? "secret" : verb}`, { applet: rest[0] ?? "" })
+            return 4
+          }
+          default: {
+            // supermux applet APPLET CMD …: the applet's own command, run here with this session's own access.
+            const v = await call("applet_info", { applet: verb })
+            const bins: string[] = v.bin ?? []
+            if (!bins.length) { io.err(`supermux: ${v.name} has no commands of its own (applet.json "bin"); its verbs: list, info, new, restart, logs, run, backup`); return 2 }
+            const [bin, args] = bins.length > 1 && rest[0] && bins.includes(rest[0]) ? [rest[0], rest.slice(1)] : [bins[0]!, rest]
+            if (!io.exec) { io.err("supermux: can't run commands here"); return 1 }
+            return io.exec(resolve(v.folder, bin), args, { cwd: io.cwd, env: { ...io.env, DATA_DIR: v.data_dir, APPLET_NAME: v.name } })
+          }
+        }
+      }
       case "api": {
         const tools = listTools(false, { councilMember: true })
         if (!verb) { io.out(tools.map((t) => t.name).concat(CLI_ONLY_OPS).join("\n")); return 0 }
@@ -412,8 +538,11 @@ export async function runAgentCli(argv: string[], io: AgentCliIo): Promise<numbe
   return 0
 }
 
+/** The broker ops behind `supermux applet` (#117): socket-only, never MCP tools. */
+export const APPLET_OPS = ["applet_list", "applet_info", "applet_new", "applet_restart", "applet_logs", "applet_run", "applet_backup"]
+
 /** Broker ops that are not MCP tools: only the CLI calls them (listed by a bare `supermux api`). */
-export const CLI_ONLY_OPS = ["list_proxies", "cli_adoption"]
+export const CLI_ONLY_OPS = ["list_proxies", "cli_adoption", ...APPLET_OPS]
 
 /** The CLI nouns `src/cli.ts` routes here (anything else is a broker subcommand). */
-export const AGENT_CLI_NOUNS = new Set(["help", "--help", "-h", "session", "s", "msg", "delegate", "council", "card", "attach", "file", "port", "memory", "comments", "display", "device", "docs", "api"])
+export const AGENT_CLI_NOUNS = new Set(["help", "--help", "-h", "session", "s", "msg", "delegate", "council", "card", "attach", "file", "port", "memory", "comments", "display", "device", "docs", "api", "applet"])
