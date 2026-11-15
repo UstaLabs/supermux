@@ -9,9 +9,10 @@ import { resolveStaticFile } from "./applet-route"
  *   GET    /applets/.deleted                deleted applets still kept (30 days)
  *   POST   /applets/.deleted/<id>/undelete
  *   GET    /applets/<name>                  everything Applet info shows
+ *   PATCH  /applets/<name> {title}            Settings ▸ Name (written to applet.json; the link stays)
  *   DELETE /applets/<name>
  *   GET    /applets/<name>/icon | logs[?lines=] | jobs/<job>/runs
- *   POST   /applets/<name>/restart | backup {why} | jobs/<job>/run | pin | unpin
+ *   POST   /applets/<name>/restart | backup {why} | jobs/<job>/run | pin | unpin | stop | start
  *   PUT    /applets/<name>/secrets/<NAME> {value, expiresAt?}   DELETE the same
  *   PUT    /applets/<name>/settings/<key> {value}
  */
@@ -33,6 +34,9 @@ function detail(applets: AppletService, v: AppletView) {
     }),
     settings: (m?.config ?? []).map((f) => ({ ...f, value: settingsValues[f.key] ?? (f.default !== undefined ? String(f.default) : null) })),
     backups: applets.backups.list(v.row.name),
+    data: applets.dataInfo(v),
+    run: m?.run ?? null,
+    folder: v.folder,
   }
 }
 
@@ -75,6 +79,12 @@ export async function handleAppletApi(req: Request, opts: { applets: AppletServi
 
   if (!a) {
     if (method === "GET") return json(detail(applets, v))
+    if (method === "PATCH") {
+      const p = await body(req)
+      if (typeof p.title !== "string") return json({ error: "title is required" }, 400)
+      const r = await applets.setTitle(name, p.title, by)
+      return r.ok ? json({ ok: true }) : json({ error: r.error }, 400)
+    }
     if (method === "DELETE") {
       const r = await applets.delete(name, by)
       return r.ok ? json(r) : json({ error: r.error }, 409)
@@ -89,6 +99,10 @@ export async function handleAppletApi(req: Request, opts: { applets: AppletServi
   if (a === "logs" && !b && method === "GET") {
     const lines = Math.min(2000, Math.max(1, Number(url.searchParams.get("lines")) || 200))
     return json({ logs: applets.supervisor.logs(v.row.id, lines) })
+  }
+  if ((a === "stop" || a === "start") && !b && method === "POST") {
+    const r = await applets.setStopped(name, a === "stop", by)
+    return r.ok ? json({ ok: true }) : json({ error: r.error }, 409)
   }
   if ((a === "pin" || a === "unpin") && !b && method === "POST") {
     const r = a === "pin" ? applets.pin(name) : applets.unpin(name)

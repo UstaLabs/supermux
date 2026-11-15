@@ -108,7 +108,7 @@ internal fun PreviewCookieDto.toWebCookie(): WebCookie = WebCookie(
 internal fun PreviewCookieDto.forApplets(): PreviewCookieDto {
     val scheme = url.indexOf("://")
     val slash = if (scheme < 0) -1 else url.indexOf('/', scheme + 3)
-    val origin = if (slash < 0) url.trimEnd('/') else url.substring(0, slash)
+    val origin = if (slash < 0) url.trimEnd('/') else url.substring(0, slash) // platform-ok: url
     return copy(url = "$origin/a/", path = "/a/", domain = null)
 }
 
