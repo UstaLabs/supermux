@@ -1455,7 +1455,8 @@ private fun Modifier.tabDragGestures(
                             .firstOrNull { it.id == down.id }
                         end = when {
                             change == null -> TouchEnd.Swipe
-                            change.changedToUpIgnoreConsumed() -> TouchEnd.Tap
+                            // A tap the tab's × took is the ×'s, not the tab's (#151).
+                            change.changedToUpIgnoreConsumed() -> if (change.isConsumed) TouchEnd.Swipe else TouchEnd.Tap
                             (change.position - down.position).getDistance() > slop -> TouchEnd.Swipe
                             else -> { downLocal = change.position; null }
                         }
@@ -1519,7 +1520,9 @@ private fun Modifier.tabDragGestures(
                     if (change.changedToUpIgnoreConsumed()) {
                         if (!passed) {
                             dragState.cancel()
-                            onSelect(viewId)
+                            // A release the tab's own × took (it closes the tab) selects nothing: selecting
+                            // first showed the tab for a split second before the close took it away (#151).
+                            if (!change.isConsumed) onSelect(viewId)
                         } else {
                             val target = dragState.finish()
                             when {
