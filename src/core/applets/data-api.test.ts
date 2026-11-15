@@ -11,7 +11,7 @@ function setup() {
   const dir = mkdtempSync(join(tmpdir(), "applet-data-"))
   const api = new AppletDataApi()
   cleanups.push(() => { api.closeAll(); rmSync(dir, { recursive: true, force: true }) })
-  const call = (method: string, rest: string, body?: unknown, raw?: BodyInit) =>
+  const call = (method: string, rest: string, body?: unknown, raw?: string) =>
     api.handle(new Request(`http://b/a/x/api${rest}`, { method, ...(body !== undefined ? { body: JSON.stringify(body), headers: { "content-type": "application/json" } } : raw !== undefined ? { body: raw } : {}) }), dir, rest.split("?")[0]!)
   return { dir, api, call }
 }
