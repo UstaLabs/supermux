@@ -760,10 +760,10 @@ fun SupermuxApp(
             // depends on this pane staying composed. Answers the new session's id and does NOT
             // open it: the spawn can outlive this composition (#89), and [onOpenSession] below is
             // called by whichever launcher is on screen when it lands.
-            onSubmit = { workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId, permissionMode, account ->
+            onSubmit = { workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId, permissionMode, account, source ->
                 if (tab == null) {
                     launcherActions.createSessionWithFirstMessage(
-                        workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId, permissionMode, account,
+                        workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId, permissionMode, account, source,
                     )
                 } else {
                     // A workspace tab's composer: JOIN that workspace and fill this very tab.

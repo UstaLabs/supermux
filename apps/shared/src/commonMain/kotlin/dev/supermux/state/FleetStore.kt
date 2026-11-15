@@ -59,6 +59,7 @@ import dev.supermux.net.BlobText
 import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsRefsResult
 import dev.supermux.net.FsSearchResult
+import dev.supermux.net.GitBranches
 import dev.supermux.net.GitOpResult
 import dev.supermux.net.LspInstallResult
 import dev.supermux.net.LspMutationResult
@@ -73,6 +74,9 @@ import dev.supermux.net.PathValidation
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.RepoInfo
+import dev.supermux.net.ProjectFolderState
+import dev.supermux.net.ProjectPrefs
+import dev.supermux.net.SessionSourceBody
 import dev.supermux.net.ReviewComment
 import dev.supermux.net.Walkthrough
 import dev.supermux.net.ReviewSubmitResult
@@ -1828,6 +1832,11 @@ class FleetStore(
         activeApp()?.launcherReasoning(agent, model)
     suspend fun launcherRepoInfo(workdir: String, fetch: Boolean = false): RepoInfo? =
         activeApp()?.launcherRepoInfo(workdir, fetch)
+    suspend fun launcherProjectBranches(dir: String): GitBranches? = activeApp()?.launcherProjectBranches(dir)
+    suspend fun launcherFolderState(dir: String): ProjectFolderState? = activeApp()?.launcherFolderState(dir)
+    suspend fun launcherProjectPrefs(dir: String): ProjectPrefs? = activeApp()?.launcherProjectPrefs(dir)
+    suspend fun setLauncherProjectPrefs(dir: String, workIn: String?, branchPrefix: String? = null): ProjectPrefs? =
+        activeApp()?.setLauncherProjectPrefs(dir, workIn, branchPrefix)
     suspend fun launcherCommands(agent: String, workdir: String): List<SlashCommand> =
         activeApp()?.launcherCommands(agent, workdir).orEmpty()
 
@@ -1958,12 +1967,14 @@ class FleetStore(
         viewId: String? = null,
         permissionMode: String? = null,
         account: String? = null,
+        /** #152: what the launcher picked (it wins over [worktree] / [baseBranch]). */
+        source: SessionSourceBody? = null,
     ): String {
         val app = spawnTarget(hostRecordId, workspaceId)
             ?: throw IllegalStateException("No host connected")
         val newId = app.createSessionWithFirstMessageOrThrow(
             workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
-            replaceDraftId, workspaceId, name, inheritFrom, firstMessage, viewId, permissionMode, account,
+            replaceDraftId, workspaceId, name, inheritFrom, firstMessage, viewId, permissionMode, account, source,
         )
         return newId
     }

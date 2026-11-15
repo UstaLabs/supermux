@@ -27,9 +27,9 @@
 // [launcherRestoring] gate plus lastSeenAgent (NOT a one-shot "armed" boolean) distinguishes a
 // draft-restore SETTLING from a genuine later agent change, so restoring a draft never wrongly swaps
 // the model on an agent echo. This caused a real device bug on iOS/Android, so the decision lives in
-// [shouldResetModelOnAgentChange]. The base branch needs no such heuristic: it is tagged with the
-// workdir it was chosen for (`baseBranchFor`), set BEFORE any fetch suspends, so a cancelled fetch
-// can never leave one project's branch on another.
+// [shouldResetModelOnAgentChange]. The branch pick (#152's row under the composer) needs no such
+// heuristic: it is tagged with the workdir it was made for (`pickFor`), set BEFORE any fetch suspends,
+// so a cancelled fetch can never leave one project's branch on another.
 //
 // NO PROJECT IS A STATE, not `~`: `workdir` is null until the draft, the most recent session, the
 // catalog or the user names one. Nothing (repo info, slash commands) loads for a null workdir, the
@@ -65,32 +65,23 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -113,7 +104,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextRange
@@ -128,7 +118,10 @@ import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ReasoningLevel
 import dev.supermux.net.ReasoningResponse
+import dev.supermux.net.GitBranches
+import dev.supermux.net.ProjectFolderState
 import dev.supermux.net.RepoInfo
+import dev.supermux.net.SessionSourceBody
 import dev.supermux.net.resolveReasoningLevel
 import dev.supermux.net.showReasoningPicker
 import dev.supermux.proto.LogEntry
@@ -169,7 +162,6 @@ import dev.supermux.ui.resources.mux_logo
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.rememberHaptics
-import dev.supermux.ui.widgets.Dialog
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
 import dev.supermux.workspace.LaunchLocation
@@ -183,6 +175,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.painterResource
+import kotlin.time.Clock
 
 /** Identifies this screen to `Platform.pickFiles`/`captureImage` (see the chat composer's twin). */
 const val LAUNCHER_PICK_REQUESTER: String = "session-launcher"
@@ -200,13 +193,6 @@ const val LAUNCHER_PICK_REQUESTER: String = "session-launcher"
  */
 fun shouldResetModelOnAgentChange(lastSeen: String?, current: String, restoring: Boolean): Boolean =
     !restoring && lastSeen != null && lastSeen != current
-
-/** Local + remote branches from [RepoInfo], filtered by a case-insensitive [query] substring. */
-fun filterBranches(repoInfo: RepoInfo?, query: String): List<String> {
-    val all = (repoInfo?.branches?.local ?: emptyList()) + (repoInfo?.branches?.remote ?: emptyList())
-    val q = query.trim().lowercase()
-    return if (q.isEmpty()) all else all.filter { it.lowercase().contains(q) }
-}
 
 /**
  * Max content width for the launcher form. Matches chat's reading column roughly so a wide detail
@@ -264,6 +250,8 @@ fun SessionLauncherScreen(
         permissionMode: String?,
         /** Account id for [agent]; null = Auto (the broker picks the account with the most room left). */
         account: String?,
+        /** #152: what the row under the composer picked; null for a workspace tab or a broker that predates it. */
+        source: SessionSourceBody?,
     ) -> String?,
     /** Snapshot catalog keyed by agent (labels + descriptions + default). */
     permissionCatalog: Map<String, List<PermissionModeInfo>> = emptyMap(),
@@ -522,64 +510,100 @@ fun SessionLauncherScreen(
         }
     }
 
-    // Worktree picker — refetch repo info on workdir change. Both the repo info and the base branch
-    // are tagged with the workdir they belong to, and dropped BEFORE the fetch suspends: the pill
-    // and a submit can never use the previous project's eligibility or branch.
+    // Repo info for the folder, refetched on workdir change. It is tagged with the workdir it answers for and
+    // dropped BEFORE the fetch suspends: Start can never use the previous project's eligibility or branch.
     var repoInfo by remember { mutableStateOf<RepoInfo?>(null) }
     /** The workdir [repoInfo] answers for; null while its fetch is in flight (send waits on it). */
     var repoInfoFor by remember { mutableStateOf<String?>(null) }
-    var baseBranch by remember { mutableStateOf("") }
-    /** The workdir [baseBranch] was picked or seeded for. */
-    var baseBranchFor by remember { mutableStateOf<String?>(null) }
-    // Worktree on/off is remembered PER FOLDER (LauncherPrefs.worktreeOff), on by default.
-    val worktreeKey = workdir?.let { worktreeChoiceKey(selectedHost.orEmpty(), it) }
-    val useWorktree = worktreeKey == null || worktreeKey !in worktreeOff
-    fun setWorktree(on: Boolean) {
-        val key = worktreeKey ?: return
-        worktreeOff = if (on) worktreeOff - key else worktreeOff + key
-        onPrefsChange(currentPrefs())
-    }
-    var showWorktreePicker by remember { mutableStateOf(false) }
-    var worktreeFetching by remember { mutableStateOf(false) }
+    // #152: the row under the composer. Local / Worktree is the user's own pick per project, kept on the broker;
+    // the branch pick is tagged with the workdir it was made for, set before any fetch suspends.
+    var workIn by remember { mutableStateOf(WorkIn.Worktree) }
+    var pick by remember { mutableStateOf(WorkPick()) }
+    var pickFor by remember { mutableStateOf<String?>(null) }
+    var projectBranches by remember { mutableStateOf<GitBranches?>(null) }
+    var folderState by remember { mutableStateOf<ProjectFolderState?>(null) }
+    var branchPrefix by remember { mutableStateOf("") }
+    /** The broker answered GET /projects/prefs, so it takes a `source`; an older one gets the worktree flag + base, as before. */
+    var sourcesKnown by remember { mutableStateOf(false) }
+    var branchesLoading by remember { mutableStateOf(false) }
     var fetchedRepos by remember { mutableStateOf(setOf<String>()) }
+    /** The folder whose Local / Worktree pick the broker couldn't keep (never silent: the row says so). */
+    var workInNotSaved by remember { mutableStateOf<String?>(null) }
+    fun pickWorkIn(w: WorkIn) {
+        workIn = w
+        val wd = workdir ?: return
+        // The old client-side opt-out (per host and folder) is the broker's now.
+        val oldKey = worktreeChoiceKey(selectedHost.orEmpty(), wd)
+        if (oldKey in worktreeOff) {
+            worktreeOff = worktreeOff - oldKey
+            onPrefsChange(currentPrefs())
+        }
+        if (sourcesKnown) {
+            scope.launch { workInNotSaved = if (actions.setProjectPrefs(wd, w.wire) == null) wd else null }
+        } else if (w == WorkIn.Local) {
+            worktreeOff = worktreeOff + oldKey
+            onPrefsChange(currentPrefs())
+        }
+    }
     LaunchedEffect(selectedHost, workdir, launcherRestoring) {
         repoInfo = null
         repoInfoFor = null
+        projectBranches = null
+        folderState = null
+        sourcesKnown = false
         if (launcherRestoring) return@LaunchedEffect
         val switchedRepoHost = lastRepoHost != null && lastRepoHost != selectedHost
         lastRepoHost = selectedHost
         if (switchedRepoHost) {
             fetchedRepos = emptySet()
-            baseBranchFor = null
+            pickFor = null
         }
         val wd = workdir
-        if (baseBranchFor != wd) {
-            baseBranch = ""
-            baseBranchFor = wd
+        if (pickFor != wd) {
+            pick = WorkPick()
+            pickFor = wd
         }
         if (wd == null) return@LaunchedEffect
         val info = actions.launcherRepoInfo(wd, false)
         repoInfo = info
         repoInfoFor = wd
-        if (baseBranch.isBlank()) baseBranch = info?.currentBranch.orEmpty()
-    }
-    // Re-list branches whenever the worktree picker opens; network fetch once per repo (web/iOS parity).
-    LaunchedEffect(showWorktreePicker, workdir) {
-        val wd = workdir
-        if (!showWorktreePicker || wd == null) return@LaunchedEffect
-        val root = repoInfo?.repoRoot
-        val shouldFetch = root != null && root !in fetchedRepos
-        worktreeFetching = shouldFetch
-        val fresh = actions.launcherRepoInfo(wd, shouldFetch)
-        if (fresh != null) {
-            repoInfo = fresh
-            if (baseBranch.isBlank()) baseBranch = fresh.currentBranch.orEmpty()
-            if (shouldFetch) {
-                val r = fresh.repoRoot
-                if (r != null) fetchedRepos = fetchedRepos + r
+        if (info?.eligible != true) return@LaunchedEffect
+        val prefs = actions.projectPrefs(wd)
+        sourcesKnown = prefs != null
+        branchPrefix = prefs?.branchPrefix.orEmpty()
+        val oldKey = worktreeChoiceKey(selectedHost.orEmpty(), wd)
+        workIn = when {
+            prefs == null -> if (oldKey in worktreeOff) WorkIn.Local else WorkIn.Worktree
+            // Once: a folder the old client-side opt-out kept off worktrees starts Local, and the broker keeps it.
+            oldKey in worktreeOff && prefs.workIn == WorkIn.Worktree.wire -> {
+                actions.setProjectPrefs(wd, WorkIn.Local.wire)
+                worktreeOff = worktreeOff - oldKey
+                onPrefsChange(currentPrefs())
+                WorkIn.Local
             }
+            else -> WorkIn.of(prefs.workIn)
         }
-        worktreeFetching = false
+        if (prefs != null) {
+            projectBranches = actions.projectBranches(wd)
+            folderState = actions.folderState(wd)
+        }
+    }
+    // A branch list opening: origin is fetched once per repo, then the branches and the folder's state are read again.
+    fun refreshBranches() {
+        val wd = workdir ?: return
+        if (!sourcesKnown) return
+        scope.launch {
+            branchesLoading = true
+            val root = repoInfo?.repoRoot
+            if (root != null && root !in fetchedRepos) {
+                actions.launcherRepoInfo(wd, true)?.repoRoot?.let { fetchedRepos = fetchedRepos + it }
+            }
+            if (workdir == wd) {
+                actions.projectBranches(wd)?.let { if (workdir == wd) projectBranches = it }
+                actions.folderState(wd)?.let { if (workdir == wd) folderState = it }
+            }
+            branchesLoading = false
+        }
     }
 
     // Agent slash commands for the composer "/" menu — refetched when the agent or project changes
@@ -611,8 +635,8 @@ fun SessionLauncherScreen(
         }
         // The draft's branch belongs to the draft's folder only — never to a default project.
         if (workspaceWorkdir == null && draft.workdir != null) {
-            baseBranch = draft.baseBranch
-            baseBranchFor = draft.workdir
+            pick = WorkPick(base = draft.baseBranch)
+            pickFor = draft.workdir
         }
         message = TextFieldValue(draft.text, TextRange(draft.text.length))
         launcherRestoring = false
@@ -625,14 +649,14 @@ fun SessionLauncherScreen(
     // save from just before submit would re-write the just-cleared draft — a resurrection race that
     // must not depend on the caller closing the launcher promptly. Nor while a send is in flight:
     // a launcher recreated under one restores the sent text, and must not write it back (#89).
-    LaunchedEffect(workdir, workdirTouched, useWorktree, baseBranch, message.text, launcherRestoring, draftCleared, submitting) {
+    LaunchedEffect(workdir, workdirTouched, workIn, pick, message.text, launcherRestoring, draftCleared, submitting) {
         if (launcherRestoring || draftCleared || submitting) return@LaunchedEffect
         delay(400)
         onDraftChange(
             LauncherDraft(
                 workdir = if (workdirTouched) workdir else null,
-                useWorktree = useWorktree,
-                baseBranch = baseBranch,
+                useWorktree = workIn == WorkIn.Worktree,
+                baseBranch = pick.base,
                 text = message.text,
             ),
         )
@@ -647,8 +671,8 @@ fun SessionLauncherScreen(
                 onDraftFlush(
                     LauncherDraft(
                         workdir = if (workdirTouched) workdir else null,
-                        useWorktree = useWorktree,
-                        baseBranch = baseBranch,
+                        useWorktree = workIn == WorkIn.Worktree,
+                        baseBranch = pick.base,
                         text = message.text,
                     ),
                 )
@@ -900,8 +924,17 @@ fun SessionLauncherScreen(
         installedAgents?.isEmpty() == true ||
             (refusedAgent == agent && installedAgents?.contains(agent) != true)
         )
-    // Send also waits for THIS workdir's repo info: the worktree decision is made from it.
-    val canSend = hasProject && repoInfoFor == workdir && (message.text.isNotBlank() || staged.isNotEmpty())
+    // #152: the row shows for a single repo outside a workspace tab; what it picked is Start's source.
+    val rowShown = repoInfo?.eligible == true && workspaceWorkdir == null && repoInfoFor == workdir
+    val workPick = pick.copy(workIn = workIn)
+    // An older broker lists names only, and has no folder state: the base list and the folder's branch come from its repo info.
+    val rowBranches = projectBranches ?: if (!sourcesKnown) repoInfo?.let { legacyBranches(it) } else null
+    val rowFolder = folderState ?: if (!sourcesKnown) ProjectFolderState(branch = repoInfo?.currentBranch) else null
+    val target = if (rowShown) workTarget(workPick, rowBranches, rowFolder?.branch, branchPrefix, message.text.trim()) else null
+    // Send also waits for THIS workdir's repo info (the worktree decision is made from it), and, while the row asks
+    // for a branch (an existing one not picked yet, or one git keeps elsewhere), for that choice.
+    val canSend = hasProject && repoInfoFor == workdir && (message.text.isNotBlank() || staged.isNotEmpty()) &&
+        (!rowShown || !sourcesKnown || (target != null && heldBranch(target, rowBranches) == null))
     val canSaveDraft = hasProject && message.text.isNotBlank()
     fun doSaveDraft() {
         val wd = workdir
@@ -935,10 +968,11 @@ fun SessionLauncherScreen(
         // is only ever reached through it (the button and Enter are both the composer's).
         submitting = true
         error = null
-        val eligible = repoInfo?.eligible == true
         // A workspace tab joins the workspace's own checkout — never a new worktree beside it.
-        val wantsWorktree = eligible && useWorktree && workspaceWorkdir == null
-        val base = if (wantsWorktree && baseBranch.isNotEmpty()) baseBranch else null
+        val wantsWorktree = rowShown && workIn == WorkIn.Worktree
+        val base = if (wantsWorktree) (target as? WorkTarget.NewBranch)?.base?.ifEmpty { null } else null
+        // An older broker reads only the flag and the base, as before.
+        val source = if (rowShown && sourcesKnown) sessionSource(target) else null
         val toUpload = staged.map {
             // Audio → "voice"; everything else null so the broker infers the kind from the MIME.
             StagedUpload(it.source, it.name, it.mime, if (it.mime.startsWith("audio")) "voice" else null)
@@ -966,7 +1000,7 @@ fun SessionLauncherScreen(
             try {
                 val sessionId = onSubmit(
                     wd.trim(), sentAgent, sentModel, sentLevel, sentText,
-                    toUpload, wantsWorktree, base, replaceDraftId, sentMode, sentAccount,
+                    toUpload, wantsWorktree, base, replaceDraftId, sentMode, sentAccount, source,
                 )
                 onClearDraft()
                 submission.created = sessionId
@@ -1186,20 +1220,6 @@ fun SessionLauncherScreen(
                         if (hosts.size > 1 && !pointer && workspaceWorkdir == null) {
                             Spacer(Modifier.height(Space.sm))
                             hostPill()
-                        }
-                        if (repoInfo?.eligible == true && workspaceWorkdir == null) {
-                            Spacer(Modifier.height(Space.sm))
-                            val worktreeLabel = when {
-                                !useWorktree -> localized(Str.launch_no_worktree)
-                                baseBranch.isNotEmpty() -> baseBranch
-                                else -> repoInfo?.currentBranch ?: "HEAD" // i18n-ok: git's name
-                            }
-                            WorktreePill(
-                                label = worktreeLabel,
-                                active = useWorktree,
-                                onClick = { showWorktreePicker = true },
-                                modifier = Modifier.testTag("launcher_worktree"),
-                            )
                         }
                     }
 
@@ -1426,8 +1446,42 @@ fun SessionLauncherScreen(
                         Text(it, color = cs.error, fontSize = 12.sp, modifier = Modifier.testTag("launcher_mic_error"))
                     }
 
-                    // Folder caption — a calm restatement of the resolved workdir (none yet → none).
-                    val captionText = workspaceLabel ?: workdir?.let { formatWorkdir(it, home) }
+                    // #152: where the session works and on which branch, and, under it, where the work lands and where
+                    // pushes go. A folder that isn't a repository says so instead.
+                    val rowWorkdir = workdir
+                    val notGit = workspaceWorkdir == null && rowWorkdir != null && repoInfoFor == rowWorkdir && repoInfo?.isGitRepo == false
+                    if (rowShown && rowWorkdir != null) {
+                        val owner = if (useCatalog) projectOwning(catalog, rowWorkdir) else null
+                        val shownPath = formatWorkdir(rowWorkdir, home)
+                        LauncherWorkRow(
+                            pointer = pointer,
+                            projectName = owner?.name ?: shownPath,
+                            projectPath = shownPath,
+                            pick = workPick,
+                            branches = rowBranches,
+                            loading = branchesLoading,
+                            folder = rowFolder,
+                            prefix = branchPrefix,
+                            message = message.text.trim(),
+                            fetchedBase = repoInfo?.repoRoot?.let { it in fetchedRepos } == true,
+                            nowMs = Clock.System.now().toEpochMilliseconds(),
+                            legacy = !sourcesKnown,
+                            onPick = { p ->
+                                pick = p
+                                pickFor = rowWorkdir
+                            },
+                            onWorkIn = { pickWorkIn(it) },
+                            onOpenBranches = { refreshBranches() },
+                            modifier = Modifier.padding(top = 12.dp),
+                            notRemembered = workInNotSaved == rowWorkdir,
+                        )
+                    } else if (notGit && rowWorkdir != null) {
+                        NotGitSummary(formatWorkdir(rowWorkdir, home), Modifier.padding(top = 12.dp))
+                    }
+
+                    // Folder caption — a calm restatement of the resolved workdir (none yet → none), where the row
+                    // above doesn't already say it.
+                    val captionText = if (rowShown || notGit) null else workspaceLabel ?: workdir?.let { formatWorkdir(it, home) }
                     if (captionText != null) Row(
                         Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.Center,
@@ -1481,24 +1535,6 @@ fun SessionLauncherScreen(
         }
     } else {
         body(Modifier)
-    }
-
-    if (showWorktreePicker) {
-        WorktreePicker(
-            pointer = pointer,
-            useWorktree = useWorktree,
-            onToggle = { setWorktree(it) },
-            baseBranch = baseBranch,
-            repoInfo = repoInfo,
-            loading = worktreeFetching,
-            onPickBranch = { branch ->
-                baseBranch = branch
-                baseBranchFor = workdir
-                setWorktree(true)
-                showWorktreePicker = false
-            },
-            onDismiss = { showWorktreePicker = false },
-        )
     }
 }
 
@@ -1565,182 +1601,6 @@ private fun LauncherHostPill(
                     )
                 }
             }
-        }
-    }
-}
-
-/** Capsule pill for the worktree toggle — tinted (primary) when worktree is on. */
-@Composable
-private fun WorktreePill(label: String, active: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val cs = MaterialTheme.colorScheme
-    val haptic = rememberHaptics()
-    val tint = if (active) cs.primary else cs.onSurfaceVariant
-    Row(
-        modifier = modifier
-            .clip(RoundedCornerShape(20.dp))
-            .background(cs.surfaceContainerHighest)
-            .clickable { haptic.perform(HapticKind.Tick); onClick() }
-            .padding(horizontal = 11.dp, vertical = 5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
-    ) {
-        Icon(Icons.AutoMirrored.Filled.CallSplit, contentDescription = null, tint = tint, modifier = Modifier.size(13.dp))
-        Text(label, color = tint, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1)
-        Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null, tint = tint.copy(alpha = 0.7f), modifier = Modifier.size(12.dp))
-    }
-}
-
-/**
- * Worktree picker (iOS WorktreeSheet parity): an "isolated worktree" toggle plus a searchable
- * base-branch list (local + remote). Picking a branch enables the toggle and dismisses. ONE body,
- * two containers — Android's [ModalBottomSheet] where there is no pointer, desktop's [Dialog]
- * otherwise. The dismiss is never guarded: a swipe-down mid-fetch simply closes (M3 hides the sheet
- * BEFORE reporting the dismiss, so a guarded one would strand it composed-but-invisible).
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun WorktreePicker(
-    pointer: Boolean,
-    useWorktree: Boolean,
-    onToggle: (Boolean) -> Unit,
-    baseBranch: String,
-    repoInfo: RepoInfo?,
-    loading: Boolean = false,
-    onPickBranch: (String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val cs = MaterialTheme.colorScheme
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    var search by remember { mutableStateOf("") }
-    val allBranches = remember(repoInfo) {
-        (repoInfo?.branches?.local ?: emptyList()) + (repoInfo?.branches?.remote ?: emptyList())
-    }
-    val filtered = remember(allBranches, search) { filterBranches(repoInfo, search) }
-
-    val bodyContent: @Composable () -> Unit = {
-        Text(
-            localized(Str.launch_worktree),
-            color = cs.onSurface,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 15.sp,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = if (pointer) 8.dp else 12.dp),
-        )
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { onToggle(!useWorktree) }
-                .padding(horizontal = 20.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(localized(Str.launch_isolated), color = cs.onSurface, fontSize = 14.sp)
-                Text(
-                    localized(Str.launch_isolated_hint),
-                    color = cs.onSurfaceVariant,
-                    fontSize = 12.sp,
-                )
-            }
-            Spacer(Modifier.width(12.dp))
-            Switch(
-                checked = useWorktree,
-                onCheckedChange = { onToggle(it) },
-                modifier = Modifier.testTag("launcher_worktree_toggle"),
-            )
-        }
-
-        if (useWorktree) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text(localized(Str.launch_base_branch), color = cs.onSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                if (loading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(14.dp),
-                        strokeWidth = 2.dp,
-                        color = cs.onSurfaceVariant,
-                    )
-                }
-            }
-            OutlinedTextField(
-                value = search,
-                onValueChange = { search = it },
-                placeholder = { Text(localized(Str.launch_search_branches), color = cs.onSurfaceVariant) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp).testTag("launcher_branch_search"),
-            )
-            Spacer(Modifier.height(8.dp))
-            if (filtered.isEmpty()) {
-                Text(
-                    when {
-                        loading && allBranches.isEmpty() -> localized(Str.launch_fetching)
-                        allBranches.isEmpty() -> localized(Str.launch_no_branches)
-                        else -> localized(Str.launch_no_match)
-                    },
-                    color = cs.onSurfaceVariant,
-                    fontSize = 13.sp,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
-                )
-            } else {
-                LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp)) {
-                    items(filtered, key = { it }) { branch ->
-                        val selected = branch == baseBranch
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onPickBranch(branch) }
-                                .background(if (selected) cs.primary.copy(alpha = 0.10f) else Color.Transparent)
-                                .padding(horizontal = 20.dp, vertical = 12.dp)
-                                .testTag("launcher_branch_$branch"),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            Text(
-                                branch,
-                                color = if (selected) cs.primary else cs.onSurface,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 13.sp,
-                                fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
-                                maxLines = 1,
-                            )
-                            if (selected) {
-                                Spacer(Modifier.width(8.dp))
-                                Icon(Icons.Filled.Check, contentDescription = null, tint = cs.primary, modifier = Modifier.size(16.dp))
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if (pointer) {
-        Dialog(onDismissRequest = onDismiss) {
-            Column(
-                modifier = Modifier
-                    .width(420.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(cs.surfaceContainerLow)
-                    .padding(vertical = 16.dp)
-                    .testTag("launcher_worktree_dialog"),
-            ) { bodyContent() }
-        }
-    } else {
-        ModalBottomSheet(
-            onDismissRequest = onDismiss,
-            sheetState = sheetState,
-            containerColor = cs.surfaceContainerLow,
-            contentColor = cs.onSurface,
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 24.dp)
-                    .testTag("launcher_worktree_sheet"),
-            ) { bodyContent() }
         }
     }
 }

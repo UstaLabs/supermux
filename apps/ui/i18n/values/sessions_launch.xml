@@ -35,6 +35,63 @@
     <string name="launch_no_branches">No branches</string>
     <string name="launch_no_match">No match</string>
 
+    <!-- #152 Launcher › where the session works, and on which branch (the row under the composer) -->
+    <string name="launch_work_local">Local</string>
+    <string name="launch_work_local_hint">Works in the project folder: files and branch are shared</string>
+    <string name="launch_work_worktree_hint">Its own copy of the files on its own branch</string>
+    <string name="launch_work_remembered">Remembered for %1$s. New projects start on Worktree.</string>
+    <string name="launch_work_not_remembered">Couldn't remember this for %1$s. It applies to this session only.</string>
+    <string name="launch_branch_new_from">New branch from</string>
+    <string name="launch_branch_choose">Choose a branch</string>
+    <string name="launch_local_on">on</string>
+    <string name="launch_local_switch_to">switch to</string>
+    <string name="launch_local_in_worktree_for">in the worktree for</string>
+    <string name="launch_tab_new">New branch</string>
+    <string name="launch_tab_existing">Existing branch</string>
+    <string name="launch_base">Base</string>
+    <string name="launch_branch_name">Branch name</string>
+    <string name="launch_branch_name_auto">Automatic: named from your first message</string>
+    <string name="launch_base_fetched_hint">The base is fetched from %1$s first, so the branch starts from the latest %2$s.</string>
+    <string name="launch_new_branch_from">New branch %1$s from %2$s</string>
+    <string name="launch_use_new_branch">Use new branch</string>
+    <string name="launch_branches_local">Local</string>
+    <string name="launch_branches_remote">Remote</string>
+    <string name="launch_existing_foot">The worktree checks out the branch itself. New commits go on it.</string>
+    <string name="launch_no_branch_match">No branch matches “%1$s”</string>
+    <string name="launch_tag_default">default</string>
+    <string name="launch_tag_in_folder">in your folder</string>
+    <string name="launch_tag_in_session">in a session</string>
+    <string name="launch_tag_in_worktree">in a worktree</string>
+    <string name="launch_tag_remote">remote</string>
+    <string name="launch_tag_current">current</string>
+    <string name="launch_tag_has_worktree">has a worktree</string>
+    <!-- A branch row's second line: who made its last commit, and when ("deniz · 2 h ago"). -->
+    <string name="launch_branch_by">%1$s · %2$s</string>
+    <string name="launch_local_switch_folder_to">Switch your folder to</string>
+    <string name="launch_local_works_in">in “%1$s”: the session works in that worktree</string>
+    <string name="launch_local_dirty_why">Commit or stash them to switch branches. Branches that already have a worktree still work.</string>
+    <string name="launch_local_foot">The switch happens when the session starts, not before.</string>
+    <plurals name="launch_local_dirty">
+        <item quantity="one">Your folder has %1$d uncommitted change.</item>
+        <item quantity="other">Your folder has %1$d uncommitted changes.</item>
+    </plurals>
+    <string name="launch_sum_not_git">%1$s isn't a git repository, so the agent works right in this folder.</string>
+    <string name="launch_sum_pick_branch">Pick the branch to work on.</string>
+    <string name="launch_sum_reuse">Works in the worktree that already has %1$s, shared with the session “%2$s”. Your folder stays on %3$s.</string>
+    <string name="launch_sum_here">Works in %1$s on %2$s. You and the agent share the same files.</string>
+    <string name="launch_sum_here_plain">Works in %1$s. You and the agent share the same files.</string>
+    <string name="launch_sum_switch">Switches your folder %1$s from %2$s to %3$s when the session starts, then works there. You and the agent share the same files.</string>
+    <string name="launch_sum_new">A worktree on a new branch %1$s, started from %2$s.</string>
+    <string name="launch_sum_new_unnamed">A worktree on a new branch, started from %1$s.</string>
+    <string name="launch_sum_named_tag">named from your message</string>
+    <string name="launch_sum_fetched">(fetched just now)</string>
+    <string name="launch_sum_existing">A worktree on %1$s itself. No new branch.</string>
+    <string name="launch_sum_existing_track">A worktree on %1$s itself. No new branch; a local %1$s is made to track %2$s.</string>
+    <string name="launch_sum_push_to">Pushes go to %1$s.</string>
+    <string name="launch_sum_first_push">First push creates %1$s.</string>
+    <string name="launch_sum_first_push_pr">First push creates %1$s. Open a pull request when you're ready.</string>
+    <string name="launch_sum_no_remote">No remote: commits stay on this machine.</string>
+
     <!-- First run: the project step -->
     <string name="firstproject_title">Where should your agents work?</string>
     <string name="firstproject_subtitle">Agents read and change files only inside the folder you choose.</string>

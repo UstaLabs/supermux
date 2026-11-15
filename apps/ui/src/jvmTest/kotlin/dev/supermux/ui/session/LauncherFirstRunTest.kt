@@ -136,7 +136,7 @@ class LauncherFirstRunTest {
             isThisComputer = { thisComputer },
         ),
         loadDraft = { draft },
-        onSubmit = { w, a, _, _, _, _, _, _, _, _, _ -> onSubmit(w, a) },
+        onSubmit = { w, a, _, _, _, _, _, _, _, _, _, _ -> onSubmit(w, a) },
     )
 
     // ── first-project screen ────────────────────────────────────────────────────────────────────

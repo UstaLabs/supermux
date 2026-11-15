@@ -35,6 +35,63 @@
     <string name="launch_no_branches">Dal yok</string>
     <string name="launch_no_match">Eşleşme yok</string>
 
+    <!-- #152 Başlatıcı › oturumun nerede çalıştığı ve hangi dalda (yazma kutusunun altındaki satır) -->
+    <string name="launch_work_local">Yerel</string>
+    <string name="launch_work_local_hint">Proje klasöründe çalışır: dosyalar ve dal ortaktır</string>
+    <string name="launch_work_worktree_hint">Dosyaların kendi kopyası, kendi dalında</string>
+    <string name="launch_work_remembered">%1$s için hatırlanır. Yeni projeler Worktree ile başlar.</string>
+    <string name="launch_work_not_remembered">%1$s için hatırlanamadı. Yalnızca bu oturum için geçerli.</string>
+    <string name="launch_branch_new_from">Yeni dal, kaynağı</string>
+    <string name="launch_branch_choose">Bir dal seçin</string>
+    <string name="launch_local_on">dal:</string>
+    <string name="launch_local_switch_to">geçilecek dal:</string>
+    <string name="launch_local_in_worktree_for">şunun worktree'sinde:</string>
+    <string name="launch_tab_new">Yeni dal</string>
+    <string name="launch_tab_existing">Var olan dal</string>
+    <string name="launch_base">Temel dal</string>
+    <string name="launch_branch_name">Dal adı</string>
+    <string name="launch_branch_name_auto">Otomatik: ilk mesajınızdan adlandırılır</string>
+    <string name="launch_base_fetched_hint">Temel dal önce %1$s deposundan getirilir; böylece dal, %2$s dalının en güncel hâlinden başlar.</string>
+    <string name="launch_new_branch_from">%2$s dalından yeni dal %1$s</string>
+    <string name="launch_use_new_branch">Yeni dalı kullan</string>
+    <string name="launch_branches_local">Yerel</string>
+    <string name="launch_branches_remote">Uzak</string>
+    <string name="launch_existing_foot">Worktree dalın kendisini açar. Yeni commit'ler bu dala gider.</string>
+    <string name="launch_no_branch_match">“%1$s” ile eşleşen dal yok</string>
+    <string name="launch_tag_default">varsayılan</string>
+    <string name="launch_tag_in_folder">klasörünüzde</string>
+    <string name="launch_tag_in_session">bir oturumda</string>
+    <string name="launch_tag_in_worktree">bir worktree'de</string>
+    <string name="launch_tag_remote">uzak</string>
+    <string name="launch_tag_current">şu anki</string>
+    <string name="launch_tag_has_worktree">worktree'si var</string>
+    <!-- Bir dal satırının ikinci satırı: son commit'i kim yaptı ve ne zaman ("deniz · 2 sa önce"). -->
+    <string name="launch_branch_by">%1$s · %2$s</string>
+    <string name="launch_local_switch_folder_to">Klasörünüzü şu dala geçirin</string>
+    <string name="launch_local_works_in">“%1$s” içinde: oturum o worktree'de çalışır</string>
+    <string name="launch_local_dirty_why">Dal değiştirmek için önce commit'leyin ya da stash'leyin. Worktree'si olan dallar yine de kullanılabilir.</string>
+    <string name="launch_local_foot">Dal değişikliği oturum başlarken yapılır, daha önce değil.</string>
+    <plurals name="launch_local_dirty">
+        <item quantity="one">Klasörünüzde commit'lenmemiş %1$d değişiklik var.</item>
+        <item quantity="other">Klasörünüzde commit'lenmemiş %1$d değişiklik var.</item>
+    </plurals>
+    <string name="launch_sum_not_git">%1$s bir git deposu değil; ajan doğrudan bu klasörde çalışır.</string>
+    <string name="launch_sum_pick_branch">Üzerinde çalışılacak dalı seçin.</string>
+    <string name="launch_sum_reuse">%1$s dalının zaten açık olduğu worktree'de, “%2$s” oturumuyla birlikte çalışır. Klasörünüz %3$s dalında kalır.</string>
+    <string name="launch_sum_here">%1$s içinde, %2$s dalında çalışır. Siz ve ajan aynı dosyaları kullanırsınız.</string>
+    <string name="launch_sum_here_plain">%1$s içinde çalışır. Siz ve ajan aynı dosyaları kullanırsınız.</string>
+    <string name="launch_sum_switch">Oturum başlarken %1$s klasörünüzü %2$s dalından %3$s dalına geçirir, sonra orada çalışır. Siz ve ajan aynı dosyaları kullanırsınız.</string>
+    <string name="launch_sum_new">Yeni bir dalda (%1$s) bir worktree; başlangıç noktası %2$s.</string>
+    <string name="launch_sum_new_unnamed">Yeni bir dalda bir worktree; başlangıç noktası %1$s.</string>
+    <string name="launch_sum_named_tag">mesajınızdan adlandırıldı</string>
+    <string name="launch_sum_fetched">(az önce getirildi)</string>
+    <string name="launch_sum_existing">%1$s dalının kendisinde bir worktree. Yeni dal açılmaz.</string>
+    <string name="launch_sum_existing_track">%1$s dalının kendisinde bir worktree. Yeni dal açılmaz; %2$s dalını izleyen yerel bir %1$s dalı oluşturulur.</string>
+    <string name="launch_sum_push_to">Gönderilenler %1$s dalına gider.</string>
+    <string name="launch_sum_first_push">İlk gönderim %1$s dalını oluşturur.</string>
+    <string name="launch_sum_first_push_pr">İlk gönderim %1$s dalını oluşturur. Hazır olduğunuzda bir pull request açın.</string>
+    <string name="launch_sum_no_remote">Uzak depo yok: commit'ler bu makinede kalır.</string>
+
     <!-- First run: the project step -->
     <string name="firstproject_title">Ajanlarınız nerede çalışsın?</string>
     <string name="firstproject_subtitle">Ajanlar yalnızca seçtiğiniz klasördeki dosyaları okur ve değiştirir.</string>
