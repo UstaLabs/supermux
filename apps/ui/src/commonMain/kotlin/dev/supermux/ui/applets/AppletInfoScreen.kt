@@ -184,7 +184,7 @@ fun AppletInfoScreen(name: String, actions: AppletInfoActions, phone: Boolean, o
                 }
                 Box(Modifier.fillMaxWidth().height(1.dp).background(cs.outlineVariant))
                 Spacer(Modifier.height(16.dp))
-                val refresh = { reload++ }
+                val refresh: () -> Unit = { reload++ }
                 when (shown) {
                     InfoTab.Overview -> OverviewTab(d, actions, refresh) { tab = InfoTab.Secrets }
                     InfoTab.Data -> DataTab(d, actions)
