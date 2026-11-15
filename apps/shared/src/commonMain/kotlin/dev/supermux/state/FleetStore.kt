@@ -337,6 +337,8 @@ class FleetStore(
     val agentErrors: StateFlow<Map<String, ServerFrame.AgentError>> = mergedMap { it.agentErrors }
     val bgTasks: StateFlow<Map<String, List<ServerFrame.BgTask>>> = mergedMap { it.bgTasks }
     val subagents: StateFlow<Map<String, List<dev.supermux.proto.Subagent>>> = mergedMap { it.subagents }
+    /** #143: every host's open prompts and questions, by session (ids are globally unique). */
+    val requests: StateFlow<Map<String, List<dev.supermux.proto.PromptRequest>>> = mergedMap { it.requests }
     val councils: StateFlow<Map<String, List<dev.supermux.proto.CouncilView>>> = mergedMap { it.councils }
     val commands: StateFlow<Map<String, List<SlashCommand>>> = mergedMap { it.commands }
     val commandsResolved: StateFlow<Map<String, Boolean>> = mergedMap { it.commandsResolved }
