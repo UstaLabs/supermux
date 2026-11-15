@@ -125,6 +125,9 @@ Backups: nightly automatic (about two weeks kept), plus \`backup\`. They are pla
 \`info\`. To get data back, copy back only what is missing from a backup into data/; never overwrite live data
 with a whole backup (everything added since would be lost), and never edit a backup.
 
+Notify the user from a server or job: POST $SUPERMUX_URL/applet-api/notify with header
+X-Supermux-Applet-Token: $SUPERMUX_APPLET_TOKEN and {"title": "…", "body": "…"} (a push to their devices).
+
 Secrets: only the user can set secret values, on the applet's page. Declare the name in applet.json "secrets"
 and ask them to fill it in. You cannot read or set values.
 Owner only (refused here): deleting an applet, secret values.`

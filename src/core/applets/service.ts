@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite"
-import { createHmac, randomBytes } from "crypto"
+import { createHmac, randomBytes, timingSafeEqual } from "crypto"
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs"
 import { spawnProcessSync } from "../process/launcher"
 import { dirs, files } from "@supermux/platform"
@@ -56,6 +56,10 @@ export interface AppletServiceDeps {
   /** How often the nightly backups and the 30-day purge are checked. 0 = never. */
   maintenanceMs?: number
   now?: () => Date
+  /** The broker's own loopback address, given to applet servers and jobs as $SUPERMUX_URL. */
+  brokerUrl?: () => string | undefined
+  /** Pushes a notice to the owner's devices (supermux.notify). */
+  notify?: (applet: { name: string; title: string }, title: string, body: string) => Promise<void>
   /** Where the pins live (the broker's settings table); an in-memory map when absent (tests). */
   settings?: { get<T>(key: string): T | undefined; set(key: string, value: unknown): void }
   onChange?: () => void
@@ -113,6 +117,37 @@ export class AppletService {
   /** The key an applet checks X-Mux-Via-Sig with: one per applet, so one applet can't forge another's header. */
   viaKey(id: string): string {
     return createHmac("sha256", this.hostKey).update(`applet-via:${id}`).digest("hex")
+  }
+
+  /**
+   * The token an applet's server and jobs call supermux with ($SUPERMUX_APPLET_TOKEN, header X-Supermux-Applet-Token):
+   * it can only do the supermux.* things for that one applet (notify today), nothing else of the broker's.
+   */
+  appletToken(id: string): string {
+    return createHmac("sha256", this.hostKey).update(`applet-token:${id}`).digest("hex")
+  }
+
+  /** The applet a token belongs to, or undefined. */
+  appletForToken(token: string): AppletView | undefined {
+    if (!/^[0-9a-f]{64}$/.test(token)) return undefined
+    const t = Buffer.from(token, "hex")
+    for (const v of this.views.values()) {
+      if (v.row.deletedAt) continue
+      const want = Buffer.from(this.appletToken(v.row.id), "hex")
+      if (timingSafeEqual(t, want)) return this.withProcess(v)
+    }
+    return undefined
+  }
+
+  /** supermux.notify: a push to the owner's devices, from the applet's page (via the app) or its server and jobs. */
+  async notify(name: string, title: unknown, body: unknown): Promise<Result<{}>> {
+    const v = this.get(name)
+    if (!v) return { ok: false, error: `no applet named "${name}"` }
+    if (typeof title !== "string" || !title.trim()) return { ok: false, error: "title is required" }
+    if (body !== undefined && typeof body !== "string") return { ok: false, error: "body must be text" }
+    if (!this.deps.notify) return { ok: false, error: "this machine can't send notifications" }
+    await this.deps.notify({ name: v.row.name, title: v.row.title }, title.trim().slice(0, 120), (body ?? "").trim().slice(0, 500))
+    return { ok: true }
   }
 
   /** X-Mux-Via-Sig for [via] to applet [id]: hex HMAC-SHA256(viaKey(id), via). */
@@ -178,7 +213,11 @@ export class AppletService {
     const settings: Record<string, unknown> = {}
     for (const f of m.config) if (f.default !== undefined) settings[f.key] = f.default
     Object.assign(settings, this.secrets.settings(row.id))
-    return { MUX_VIA_KEY: this.viaKey(row.id), APPLET_SETTINGS: JSON.stringify(settings), ...this.secrets.env(row.id) }
+    const url = this.deps.brokerUrl?.()
+    return {
+      MUX_VIA_KEY: this.viaKey(row.id), SUPERMUX_APPLET_TOKEN: this.appletToken(row.id), ...(url ? { SUPERMUX_URL: url } : {}),
+      APPLET_SETTINGS: JSON.stringify(settings), ...this.secrets.env(row.id),
+    }
   }
 
   private spec(row: AppletRow, folder: string, m: AppletManifest): AppletSpec {
