@@ -93,3 +93,14 @@ test("an applet can't take the name of one of the CLI's verbs", async () => {
   const { op } = setup()
   expect(((await op("applet_new", { applet: "logs" })) as any).error).toContain("own commands")
 })
+
+test("restart shows only what the server printed since this start", async () => {
+  const { op, root } = setup()
+  await op("applet_new", { applet: "svc" })
+  writeFileSync(join(root, "applets", "svc", "applet.json"), JSON.stringify({ title: "Svc", run: "echo --- not a header; echo run-$$; exec sleep 30" }))
+  await op("applet_restart", { applet: "svc" })
+  const second = await op("applet_restart", { applet: "svc" }) as any
+  expect(second.value.state).toBe("running")
+  expect(second.value.logs.match(/run-\d+/g)?.length).toBe(1)
+  expect(second.value.logs).toContain("--- not a header")
+})

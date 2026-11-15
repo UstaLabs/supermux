@@ -674,6 +674,10 @@ export class SessionManager {
    */
   orchestration(fromSession: string, op: ToolOperation, opts: { dedup?: boolean } = {}): Promise<OpResult> {
     if (opts.dedup === false) return this.runOrchestration(fromSession, op).catch((err: unknown): OpResult => ({ ok: false, error: `handler threw: ${err instanceof Error ? err.message : String(err)}` }))
+  orchestration(fromSession: string, op: ToolOperation): Promise<OpResult> {
+    // #117: `supermux applet` comes from a shell, never an MCP retry: an info right after a backup, or a second
+    // `applet run`, must not get the previous call's answer.
+    if (op.name.startsWith("applet_")) return this.runOrchestration(fromSession, op).catch((err: unknown): OpResult => ({ ok: false, error: `handler threw: ${err instanceof Error ? err.message : String(err)}` }))
     const key = `${fromSession}|${op.name}|${JSON.stringify(op.args)}`
     const inflight = this.orchInflight.get(key)
     if (inflight) {
