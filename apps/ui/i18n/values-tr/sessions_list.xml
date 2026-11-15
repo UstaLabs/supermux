@@ -140,4 +140,5 @@
     <string name="applets_window_no_key">Bu applet açılamıyor: makinesi bu cihaza onun için bir anahtar vermedi. Makinenin çevrimiçi olduğunu kontrol edip appleti yeniden açın.</string>
     <string name="applets_menu_info">Applet bilgisi</string>
     <string name="applets_cover_done">Bitti</string>
+    <string name="applets_save_not_yet">Appletten dosya kaydetmek bu sürümde henüz yok.</string>
 </resources>
