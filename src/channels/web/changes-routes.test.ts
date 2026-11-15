@@ -1,7 +1,7 @@
 import { test, expect, afterEach } from "bun:test"
 import { execFileSync } from "child_process"
 import { mkdirSync, mkdtempSync, writeFileSync } from "fs"
-import { join } from "path"
+import { basename, join } from "path"
 import { tmpdir } from "os"
 import { WebChannel } from "./index"
 import { DeviceStore } from "./device-store"
@@ -267,9 +267,12 @@ test("a chat in a folder (workspace) has status, publish, push, fetch and pull l
   const { dir, token } = await setup()
   const origin = mkdtempSync(join(tmpdir(), "mux-origin-"))
   git(origin, "init", "-q", "--bare")
+  let st = (await (await get(token, "/workspaces/ws-1/git/status")).json()) as any
+  expect(st).toMatchObject({ hasRemote: false, project: basename(dir) })
   git(dir, "remote", "add", "origin", origin)
   git(dir, "commit", "-qam", "local work")
-  let st = (await (await get(token, "/workspaces/ws-1/git/status")).json()) as any
+  st = (await (await get(token, "/workspaces/ws-1/git/status")).json()) as any
+  expect(st.project).toBeUndefined()
   expect(st).toMatchObject({ isRepo: true, hasRemote: true, branch: "main", upstream: null })
   expect(((await (await post(token, "/workspaces/ws-1/git/publish", {})).json()) as any).status).toBe("pushed")
   st = (await (await get(token, "/workspaces/ws-1/git/status")).json()) as any
@@ -311,6 +314,20 @@ test("a PR's title and description: from the commits when no agent writes them; 
   const r = await post(token, "/workspaces/ws-1/git/pr/text", { target: "main" })
   expect(r.status).toBe(200)
   expect(await r.json()).toEqual({ title: "Add a search box", body: "- Add a search box", by: "commits" })
+})
+
+test("a project with no remote: add one by URL; publishing to a forge needs a name and a visibility", async () => {
+  const { dir, token } = await setup()
+  expect((await post(token, "/workspaces/ws-1/git/remote", { name: "origin", url: "" })).status).toBe(400)
+  const r = await post(token, "/workspaces/ws-1/git/remote", { name: "origin", url: "https://example.com/a/b.git" })
+  expect(r.status).toBe(200)
+  expect(git(dir, "remote", "get-url", "origin")).toBe("https://example.com/a/b.git")
+  const again = await post(token, "/workspaces/ws-1/git/remote", { name: "origin", url: "https://example.com/c.git" })
+  expect(again.status).toBe(409)
+  expect(await again.json()).toEqual({ ok: false, reason: "exists" })
+  expect((await post(token, "/workspaces/ws-1/git/publish-new", { forge: "github", name: "x y", visibility: "private" })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/publish-new", { forge: "bitbucket", name: "x", visibility: "private" })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-x/git/remote", { name: "origin", url: "u" })).status).toBe(404)
 })
 
 test("get latest needs the chat's own base; resolve and abort refuse bad input", async () => {

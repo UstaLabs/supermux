@@ -11,7 +11,8 @@ import { home } from "../../shared/home"
 import { MUX_HOME, isMuxInternalPath } from "../../shared/paths"
 import { existsSync, writeFileSync, mkdirSync, rmSync, realpathSync } from "fs"
 import { tmpdir } from "os"
-import { join, resolve, sep } from "path"
+import { basename, dirname, join, resolve, sep } from "path"
+import { gitAsync } from "../../core/git/exec"
 import { CardSendGuard } from "../../core/show-html/card-send"
 import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
 import { PayloadTooLargeError, EmptyUploadError, OffsetConflictError, UploadOverflowError, UploadNotFoundError } from "../../core/files/store"
@@ -51,7 +52,7 @@ import { worktreesRoot } from "../../core/worktree/manager"
 import { getRepoInfo } from "../../core/git/repo-info"
 import { remoteStatus, fetchRemote, publishBranch, pushBranch, pullBranch } from "../../core/git/remote"
 import { branchList, liveBranch, realPath, samePath, switchBranch, type BranchOwner } from "../../core/git/branches"
-import { checkLog, createPr, markReady, readPr, type PrRead } from "../../core/git/forge"
+import { addRemote, checkLog, createPr, markReady, publishNew, readPr, type PrRead } from "../../core/git/forge"
 import { prInput, writePrText, type PrTextWriter } from "../../core/git/pr-text"
 import type { AgentKind } from "../../core/agents/types"
 import { AGENT_KINDS, isAgentKind } from "../../shared/agents"
@@ -186,6 +187,12 @@ function hostOrigin(req: Request): string | undefined {
 
 /** Largest body PUT /fs/write accepts (the editor reads at most 1 MB). */
 const FS_WRITE_MAX_BYTES = 8 * 1024 * 1024
+
+/** #72: the project's own folder name (a chat's copy lives in a uuid folder; the repo's common dir is the project's .git). */
+async function projectFolderName(workdir: string): Promise<string> {
+  const common = await gitAsync(workdir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).catch(() => "")
+  return common ? basename(dirname(common)) : basename(workdir)
+}
 
 /** How long a read PR/MR is reused (#72): the pane polls while open; gh / glab calls take a second or two. */
 const PR_CACHE_MS = 15_000
@@ -4241,6 +4248,29 @@ export class WebChannel implements Channel {
       this.prCache.clear()
       return this.json(r, r.status === "opened" || r.status === "exists" ? 200 : 409)
     }
+    // #72 G10: a project with no remote yet: add one by URL, or publish to GitHub / GitLab (VS Code's "Publish Branch").
+    const remoteOp = path.match(/^\/(sessions|workspaces)\/([^/]+)\/git\/(remote|publish-new)$/)
+    if (method === "POST" && remoteOp) {
+      const [, scope, rawId, op] = remoteOp
+      const id = decodeURIComponent(rawId!)
+      const workdir = scope === "sessions" ? this.opts.getSessionWorkdir?.(id) : this.opts.getWorkspaceWorkdir?.(id)
+      if (!workdir) return this.json({ error: `${scope === "sessions" ? "session" : "workspace"} not found` }, 404)
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      if (op === "remote") {
+        const name = typeof body.name === "string" ? body.name : "origin", url = typeof body.url === "string" ? body.url : ""
+        const r = await addRemote(workdir, name, url)
+        return this.json(r, r.ok ? 200 : r.reason === "bad" ? 400 : 409)
+      }
+      const forge = body.forge === "github" || body.forge === "gitlab" ? body.forge : null
+      const visibility = body.visibility === "public" ? "public" : body.visibility === "private" ? "private" : null
+      // No name: the project's own folder (a chat's copy sits in a uuid folder; its repo's common dir knows the real one).
+      const given = typeof body.name === "string" ? body.name.trim() : ""
+      const name = given || (await projectFolderName(workdir)).replace(/[^A-Za-z0-9._-]+/g, "-")
+      if (!forge || !visibility || !/^[A-Za-z0-9._-]+$/.test(name)) return this.json({ error: "bad request" }, 400)
+      const r = await publishNew(workdir, { forge, name, visibility, branch: liveBranch(workdir) ?? undefined })
+      this.prCache.clear()
+      return this.json(r, r.ok ? 200 : 409)
+    }
     // A branch's sync with origin, for a chat with its own copy (sessions) and a chat in a folder (workspaces) alike.
     const syncOp = path.match(/^\/(sessions|workspaces)\/([^/]+)\/git\/(status|fetch|publish|push|pull)$/)
     if (syncOp && (method === "GET") === (syncOp[3] === "status")) {
@@ -4248,7 +4278,11 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(rawId!)
       const workdir = scope === "sessions" ? this.opts.getSessionWorkdir?.(id) : this.opts.getWorkspaceWorkdir?.(id)
       if (!workdir) return this.json({ error: `${scope === "sessions" ? "session" : "workspace"} not found` }, 404)
-      if (op === "status") return this.json(remoteStatus(workdir))
+      if (op === "status") {
+        // No remote yet: the project's folder name too, the repository name Publish suggests (VS Code's).
+        const st = remoteStatus(workdir)
+        return this.json(st.hasRemote ? st : { ...st, project: await projectFolderName(workdir) })
+      }
       if (op === "fetch") return this.json(fetchRemote(workdir))
       if (op === "publish") return this.json(publishBranch(workdir))
       if (op === "push") return this.json(pushBranch(workdir))

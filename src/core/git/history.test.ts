@@ -32,6 +32,15 @@ test("the chat's list is what its branch has that the base doesn't; the base's c
   expect(h.baseCommits.map((c) => c.subject)).toEqual(["Base two", "Base one"])
 }, REAL_GIT_MS)
 
+// #72: the Graph's "Incoming Changes from <base>": what the base has that this chat doesn't yet.
+test("incoming counts the base's commits this chat doesn't have yet", async () => {
+  const d = repo()
+  expect((await history(d, "dev")).incoming).toBe(0)
+  git(d, "switch", "-q", "dev"); commit(d, "c.txt", "c\n", "Base three"); commit(d, "c.txt", "cc\n", "Base four"); git(d, "switch", "-q", "mux/chat")
+  expect((await history(d, "dev")).incoming).toBe(2)
+  expect((await history(d, null)).incoming).toBe(0)
+}, REAL_GIT_MS)
+
 test("no base known: no guess, the chat's list is the branch's own recent commits", async () => {
   const d = repo()
   const h = await history(d, null)

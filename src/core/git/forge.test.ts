@@ -180,3 +180,32 @@ test("a failing check's log: GitHub job from its URL, GitLab job trace; the tail
   expect(await checkLog("/r", "https://gitlab.com/a/b/-/jobs/555", gl)).toEqual({ ok: true, log: "boom" })
   expect(await checkLog("/r", "https://elsewhere.example/ci/1", gh)).toEqual({ ok: false, reason: "unknown_check" })
 })
+
+
+// ---- #72 G10: publishing a project that has no remote yet (VS Code's "Publish to GitHub") ----
+import { addRemote, publishNew } from "./forge"
+
+test("add a remote: a name and a URL git accepts; a taken name is said", async () => {
+  const ok = fake([[/^git -C \/r remote add origin git@github.com:a\/b.git$/, { ok: true, out: "" }]])
+  expect(await addRemote("/r", "origin", "git@github.com:a/b.git", ok)).toEqual({ ok: true })
+  const taken = fake([[/^git -C \/r remote add/, { ok: false, out: "error: remote origin already exists." }]])
+  expect(await addRemote("/r", "origin", "x", taken)).toEqual({ ok: false, reason: "exists" })
+  expect(await addRemote("/r", "bad name", "x", ok)).toEqual({ ok: false, reason: "bad" })
+  expect(await addRemote("/r", "origin", "", ok)).toEqual({ ok: false, reason: "bad" })
+})
+
+test("publish to GitHub: gh creates the repo from this folder, adds origin and pushes", async () => {
+  const ex = fake([[/^gh repo create shop --private --source \/r --remote origin --push$/, { ok: true, out: "https://github.com/acme/shop\n" }]])
+  expect(await publishNew("/r", { forge: "github", name: "shop", visibility: "private" }, ex)).toEqual({ ok: true, url: "https://github.com/acme/shop" })
+  const nocli = fake([[/^gh repo create/, { ok: false, out: "spawn gh ENOENT" }]])
+  expect(await publishNew("/r", { forge: "github", name: "shop", visibility: "public" }, nocli)).toMatchObject({ ok: false, reason: "no_cli" })
+})
+
+test("publish to GitLab: glab creates it, then origin is added and the branch pushed", async () => {
+  const ex = fake([
+    [/^glab repo create shop --private --defaultBranch/, { ok: true, out: "✓ Created repository acme/shop on GitLab: https://gitlab.com/acme/shop\n" }],
+    [/^git -C \/r remote add origin https:\/\/gitlab.com\/acme\/shop.git$/, { ok: true, out: "" }],
+    [/^git -C \/r push -u origin HEAD$/, { ok: true, out: "" }],
+  ])
+  expect(await publishNew("/r", { forge: "gitlab", name: "shop", visibility: "private", branch: "main" }, ex)).toEqual({ ok: true, url: "https://gitlab.com/acme/shop" })
+})

@@ -8,6 +8,9 @@ export interface GitLiteStatus {
   dirty: number             // uncommitted + untracked (gitignore-respected)
   unpublished?: boolean     // mode:"remote" only — no upstream yet
   touched?: boolean        // base mode: worktree has commits since creation (rev-list base_commit..HEAD > 0)
+  branch?: string | null   // #72: the branch checked out now (null: detached), for the footer
+  sync?: { ahead: number; behind: number } | null  // #72: ↑↓ against the branch's upstream; null: not published
+  hasRemote?: boolean      // #72: the repo has any remote (no remote: Publish offers GitHub / GitLab / Add Remote)
   computedAt: number        // epoch ms
 }
 
@@ -28,6 +31,20 @@ async function runGit(cwd: string, args: string[], timeout = 30_000): Promise<{ 
   } catch {
     return { ok: false, out: "" }
   }
+}
+
+/** #72: whether the repo has any remote at all. */
+async function anyRemote(cwd: string): Promise<boolean> {
+  const r = await runGit(cwd, ["remote"])
+  return r.ok && r.out.trim().length > 0
+}
+
+/** #72: ↑↓ of HEAD against its upstream, or null when the branch is not published. */
+async function upstreamSync(cwd: string): Promise<{ ahead: number; behind: number } | null> {
+  const counts = await runGit(cwd, ["rev-list", "--count", "--left-right", "@{upstream}...HEAD"])
+  if (!counts.ok) return null
+  const [b, a] = counts.out.split(/\s+/)
+  return { ahead: Number(a) || 0, behind: Number(b) || 0 }
 }
 
 /** Count of uncommitted + untracked files (excludes ignored — git's own rules). */
@@ -60,7 +77,8 @@ export async function computeLiteStatus(s: LiteStatusInput, now: number = Date.n
     } else {
       touched = ahead > 0   // fallback for sessions created before base_commit was recorded
     }
-    return { mode: "base", compareRef: base, ahead, behind: Number(b) || 0, dirty, touched, computedAt: now }
+    const br = await runGit(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"])
+    return { mode: "base", compareRef: base, ahead, behind: Number(b) || 0, dirty, touched, branch: br.ok && br.out ? br.out : null, sync: await upstreamSync(cwd), hasRemote: await anyRemote(cwd), computedAt: now }
   }
 
   // remote mode
@@ -72,9 +90,9 @@ export async function computeLiteStatus(s: LiteStatusInput, now: number = Date.n
   const dirty = await dirtyCount(cwd)
   const up = await runGit(cwd, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])
   const upstream = up.ok && up.out ? up.out : null
-  if (!upstream) return { mode: "remote", compareRef: branch, ahead: 0, behind: 0, dirty, unpublished: true, computedAt: now }
+  if (!upstream) return { mode: "remote", compareRef: branch, ahead: 0, behind: 0, dirty, unpublished: true, branch, sync: null, hasRemote: await anyRemote(cwd), computedAt: now }
   const counts = await runGit(cwd, ["rev-list", "--count", "--left-right", "@{upstream}...HEAD"])
   let ahead = 0, behind = 0
   if (counts.ok) { const [b, a] = counts.out.split(/\s+/); behind = Number(b) || 0; ahead = Number(a) || 0 }
-  return { mode: "remote", compareRef: upstream, ahead, behind, dirty, computedAt: now }
+  return { mode: "remote", compareRef: upstream, ahead, behind, dirty, branch, sync: { ahead, behind }, hasRemote: true, computedAt: now }
 }

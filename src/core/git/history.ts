@@ -5,7 +5,8 @@
 import { gitAsync } from "./exec"
 
 export interface LogCommit { sha: string; subject: string; author: string; at: number; pushed?: boolean }
-export interface History { branch: string | null; base: string | null; chat: LogCommit[]; baseCommits: LogCommit[] }
+/** incoming (#72): how many commits the base has that this chat doesn't yet (the Graph's "Incoming Changes"). */
+export interface History { branch: string | null; base: string | null; chat: LogCommit[]; baseCommits: LogCommit[]; incoming: number }
 
 const SEP = "\x1f", END = "\x1e"
 const FORMAT = `--format=%H${SEP}%s${SEP}%an${SEP}%ct${END}`
@@ -22,20 +23,21 @@ const verify = (dir: string, ref: string) => gitAsync(dir, ["rev-parse", "--veri
 /** `base` is the chat's own (null: none known; then the chat's list is just the branch's recent commits). */
 export async function history(dir: string, base: string | null, limit = 50): Promise<History> {
   const branch = await gitAsync(dir, ["symbolic-ref", "--quiet", "--short", "HEAD"]).catch(() => null)
-  if (!(await verify(dir, "HEAD"))) return { branch, base, chat: [], baseCommits: [] }
+  if (!(await verify(dir, "HEAD"))) return { branch, base, chat: [], baseCommits: [], incoming: 0 }
   const hasBase = !!base && base !== "HEAD" && (await verify(dir, base))
   const chatRange = hasBase ? [`${base}..HEAD`] : ["HEAD"]
-  const [chatOut, baseOut, upstream] = await Promise.all([
+  const [chatOut, baseOut, upstream, incomingOut] = await Promise.all([
     gitAsync(dir, ["log", FORMAT, `-n${limit}`, ...chatRange], { trim: false }),
     hasBase ? gitAsync(dir, ["log", FORMAT, `-n${Math.min(limit, 20)}`, base!], { trim: false }) : Promise.resolve(""),
     gitAsync(dir, ["rev-parse", "--verify", "--quiet", "@{upstream}"]).catch(() => ""),
+    hasBase ? gitAsync(dir, ["rev-list", "--count", `HEAD..${base}`]).catch(() => "0") : Promise.resolve("0"),
   ])
   let chat = parse(chatOut)
   if (upstream) {
     const pushed = new Set(parse(await gitAsync(dir, ["log", FORMAT, `-n${limit}`, upstream], { trim: false }).catch(() => "")).map((c) => c.sha))
     chat = chat.map((c) => ({ ...c, pushed: pushed.has(c.sha) }))
   }
-  return { branch, base: hasBase ? base : null, chat, baseCommits: parse(baseOut) }
+  return { branch, base: hasBase ? base : null, chat, baseCommits: parse(baseOut), incoming: Number(incomingOut) || 0 }
 }
 
 const SHA = /^[0-9a-f]{7,40}$/

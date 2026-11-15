@@ -201,3 +201,40 @@ export async function checkLog(cwd: string, checkUrl: string, exec: Exec = execC
   const r = gh ? await exec("gh", ["run", "view", "--job", gh[1]!, "--log-failed"], cwd) : await exec("glab", ["api", `projects/:id/jobs/${gl![1]}/trace`], cwd)
   return r.ok ? { ok: true, log: r.out.length > LOG_TAIL ? r.out.slice(-LOG_TAIL) : r.out } : { ok: false, reason: "failed", message: r.out.slice(0, 500) }
 }
+
+// ---- #72 G10: a project with no remote yet ----
+
+/** `git remote add <name> <url>`: a name git accepts (no spaces), a URL; a name already taken is "exists". */
+export async function addRemote(cwd: string, name: string, url: string, exec: Exec = execCli): Promise<{ ok: true } | { ok: false; reason: "bad" | "exists" | "failed"; message?: string }> {
+  if (!/^[A-Za-z0-9._-]+$/.test(name) || !url.trim() || url.trim().startsWith("-")) return { ok: false, reason: "bad" }
+  const r = await exec("git", ["-C", cwd, "remote", "add", name, url.trim()], cwd)
+  if (r.ok) return { ok: true }
+  return /already exists/i.test(r.out) ? { ok: false, reason: "exists" } : { ok: false, reason: "failed", message: r.out.slice(0, 500) }
+}
+
+export type PublishNewResult = { ok: true; url: string } | { ok: false; reason: "bad" | "no_cli" | "not_authed" | "error"; message?: string }
+
+/** VS Code's "Publish to GitHub": create the repo on the forge from this folder, add it as origin and push the branch. */
+export async function publishNew(
+  cwd: string,
+  o: { forge: Forge; name: string; visibility: "private" | "public"; branch?: string },
+  exec: Exec = execCli,
+): Promise<PublishNewResult> {
+  if (!/^[A-Za-z0-9._-]+$/.test(o.name)) return { ok: false, reason: "bad" }
+  const fail = (out: string): PublishNewResult => {
+    const f = failure(o.forge, out)
+    return f.status === "unavailable" && (f.reason === "no_cli" || f.reason === "not_authed") ? { ok: false, reason: f.reason } : { ok: false, reason: "error", message: out.slice(0, 500) }
+  }
+  if (o.forge === "github") {
+    const r = await exec("gh", ["repo", "create", o.name, `--${o.visibility}`, "--source", cwd, "--remote", "origin", "--push"], cwd)
+    return r.ok ? { ok: true, url: firstUrl(r.out) } : fail(r.out)
+  }
+  const r = await exec("glab", ["repo", "create", o.name, `--${o.visibility}`, "--defaultBranch", o.branch ?? "main"], cwd)
+  if (!r.ok) return fail(r.out)
+  const url = firstUrl(r.out)
+  if (!url) return { ok: false, reason: "error", message: r.out.slice(0, 500) }
+  const add = await exec("git", ["-C", cwd, "remote", "add", "origin", `${url}.git`], cwd)
+  if (!add.ok) return { ok: false, reason: "error", message: add.out.slice(0, 500) }
+  const push = await exec("git", ["-C", cwd, "push", "-u", "origin", "HEAD"], cwd)
+  return push.ok ? { ok: true, url } : { ok: false, reason: "error", message: push.out.slice(0, 500) }
+}

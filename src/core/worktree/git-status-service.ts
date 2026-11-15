@@ -30,6 +30,10 @@ function sameStatus(a: GitLiteStatus | null | undefined, b: GitLiteStatus | null
   return a.mode === b.mode && a.compareRef === b.compareRef && a.ahead === b.ahead
     && a.behind === b.behind && a.dirty === b.dirty && !!a.unpublished === !!b.unpublished
     && !!a.touched === !!b.touched
+    // #72: a branch switch, a publish or a push changes what the footer says.
+    && (a.branch ?? null) === (b.branch ?? null)
+    && (a.sync?.ahead ?? -1) === (b.sync?.ahead ?? -1) && (a.sync?.behind ?? -1) === (b.sync?.behind ?? -1)
+    && !!a.hasRemote === !!b.hasRemote
 }
 
 /**
