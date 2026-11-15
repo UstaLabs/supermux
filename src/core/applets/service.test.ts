@@ -37,7 +37,7 @@ const agent: AppletCaller = { kind: "agent", session: "s1" }
 const get = (svc: AppletService, path: string, caller: AppletCaller | null = device, init: RequestInit = {}) =>
   handleAppletRequest(new Request(`http://broker${path}`, init), { applets: svc, caller: () => caller ?? undefined, own: { cookies: ["cmux_token", "cmux_preview"] } })
 
-test("053: the applets table has no session id", () => {
+test("054: the applets table has no session id", () => {
   const db = openDb(":memory:")
   runMigrations(db, MIGRATIONS)
   const cols = (db.query("PRAGMA table_info(applets)").all() as { name: string }[]).map((c) => c.name)
