@@ -66,3 +66,19 @@ test("a user with a forge account connected for the project's origin gets its lo
   execFileSync("git", ["-C", a, "remote", "add", "origin", "https://github.com/acme/storefront.git"])
   expect(await (await call(phone, "GET", `/projects/prefs?dir=${encodeURIComponent(a)}`)).json()).toEqual({ workIn: "worktree", branchPrefix: "octocat/" })
 })
+
+test("Settings: the branch prefix is the user's own, automatic until set, None is a choice, and it can go back to automatic", async () => {
+  const { phone, laptop, call } = await boot()
+  const first = (await (await call(phone, "GET", "/settings/branch-prefix")).json()) as any
+  expect(first.branchPrefix).toBeNull()
+  expect(typeof first.automatic).toBe("string")
+  expect(await (await call(phone, "PUT", "/settings/branch-prefix", { branchPrefix: "dak/" })).json()).toMatchObject({ branchPrefix: "dak/" })
+  expect(await (await call(laptop, "GET", "/settings/branch-prefix")).json()).toMatchObject({ branchPrefix: "dak/" })
+  expect(await (await call(phone, "PUT", "/settings/branch-prefix", { branchPrefix: "" })).json()).toMatchObject({ branchPrefix: "" })
+  const a = repo()
+  expect(await (await call(phone, "GET", `/projects/prefs?dir=${encodeURIComponent(a)}`)).json()).toMatchObject({ branchPrefix: "" })
+  expect(await (await call(phone, "PUT", "/settings/branch-prefix", { branchPrefix: null })).json()).toMatchObject({ branchPrefix: null })
+  expect(await (await call(phone, "GET", `/projects/prefs?dir=${encodeURIComponent(a)}`)).json()).toMatchObject({ branchPrefix: "deniz/" })
+  expect((await call(phone, "PUT", "/settings/branch-prefix", { branchPrefix: "a b/" })).status).toBe(400)
+  expect((await call(phone, "PUT", "/settings/branch-prefix", { branchPrefix: 3 })).status).toBe(400)
+})

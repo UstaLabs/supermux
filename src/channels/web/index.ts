@@ -48,7 +48,7 @@ import type { KeepAwakeSettings } from "../../core/settings/keep-awake-config"
 import { parseKeepAwakeBody } from "../../core/settings/keep-awake-config"
 import { normalizeExistingWorkdir, uniqueKnownWorkdirs } from "../../core/session-manager/workdir-paths"
 import { parseSessionSource, SourceRefused } from "../../core/session-manager/born-asleep"
-import { launcherPrefs, OWNER, setLauncherPrefs, type UserPrefs, type WorkIn } from "../../core/settings/user-prefs"
+import { branchPrefixSetting, launcherPrefs, OWNER, setBranchPrefixSetting, setLauncherPrefs, type UserPrefs, type WorkIn } from "../../core/settings/user-prefs"
 import { worktreesRoot } from "../../core/worktree/manager"
 
 import { getRepoInfo } from "../../core/git/repo-info"
@@ -4347,6 +4347,17 @@ export class WebChannel implements Channel {
       if (!name) return this.json({ error: "name required" }, 400)
       const r = switchBranch(workdir, name, { create: body.create === true, requireClean: body.requireClean === true })
       return this.json(this.withOpenIn(r, this.branchOwners(id)))
+    }
+    // #152: Settings › Worktrees' branch prefix, the user's own (never the device's): null = automatic, "" = none.
+    if (path === "/settings/branch-prefix" && (method === "GET" || method === "PUT")) {
+      const prefs = this.opts.userPrefs
+      if (!prefs) return this.json({ error: "not configured" }, 503)
+      if (method === "PUT") {
+        const body = await req.json().catch(() => ({})) as Record<string, unknown>
+        if (body.branchPrefix !== null && typeof body.branchPrefix !== "string") return this.json({ error: "branchPrefix must be a string or null" }, 400)
+        try { await setBranchPrefixSetting(prefs, OWNER, home(), body.branchPrefix as string | null) } catch (err: any) { return this.json({ error: err?.message ?? String(err) }, 400) }
+      }
+      return this.json(await branchPrefixSetting(prefs, OWNER, home()))
     }
     // #152: the launcher reads and switches the project folder itself, every session an owner. Local mode switches
     // a folder only when it is clean (VS Code's rule): changes git could carry over are refused too. prefs: the
