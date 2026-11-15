@@ -388,6 +388,8 @@ compose.desktop {
                 // supervisor's watch loop must keep their timing.
                 // NSLocalNetworkUsageDescription: the text under macOS's "find devices on local
                 // networks" prompt (Local Network privacy, macOS 15+), which would otherwise show none.
+                // CFBundleURLTypes (#117): supermux:// — an installed applet's stub app opens
+                // supermux://applet/<host>/<name>, which macOS hands to this app (Main.kt's open-URI handler).
                 infoPlist {
                     extraKeysRawXml = """
                         <key>NSMicrophoneUsageDescription</key>
@@ -396,6 +398,15 @@ compose.desktop {
                         <string>Supermux connects to your agents' host and paired devices on your network.</string>
                         <key>NSAppSleepDisabled</key>
                         <true/>
+                        <key>CFBundleURLTypes</key>
+                        <array>
+                            <dict>
+                                <key>CFBundleURLName</key>
+                                <string>dev.supermux.desktop.applet</string>
+                                <key>CFBundleURLSchemes</key>
+                                <array><string>supermux</string></array>
+                            </dict>
+                        </array>
                     """.trimIndent()
                 }
                 // Signing is OPT-IN so unsigned local/CI dry-run builds keep working untouched:

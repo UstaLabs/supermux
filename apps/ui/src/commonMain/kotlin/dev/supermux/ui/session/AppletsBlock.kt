@@ -39,7 +39,7 @@ import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.AddBox
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Check
-import androidx.compose.material.icons.outlined.InstallDesktop
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Key
@@ -111,7 +111,7 @@ class AppletsActions(
 )
 
 /** [AppletsActions.installer], bound to the host. */
-class AppletInstall(val phone: Boolean, val isInstalled: (AppletDto) -> Boolean, val install: suspend (AppletDto) -> String?)
+class AppletInstall(val phone: Boolean, val label: String, val isInstalled: (AppletDto) -> Boolean, val install: suspend (AppletDto) -> String?)
 
 internal const val APPLETS_HEADER_KEY = "chrome:applets"
 internal const val APPLETS_GRID_KEY = "chrome:applets_grid"
@@ -358,7 +358,7 @@ private fun AppletMenu(a: AppletDto, actions: AppletsActions, anchor: Offset, sh
             if (inst.isInstalled(a)) {
                 add(AppletMenuItem(Icons.Outlined.Check, localized(if (inst.phone) Str.applets_menu_on_home else Str.applets_menu_installed), tag = "installed", dim = true) { null })
             } else {
-                add(AppletMenuItem(if (inst.phone) Icons.Outlined.AddBox else Icons.Outlined.InstallDesktop, localized(if (inst.phone) Str.applets_menu_add_home else Str.applets_menu_install), tag = "install") { inst.install(a) })
+                add(AppletMenuItem(if (inst.phone) Icons.Outlined.AddBox else Icons.Outlined.Download, inst.label, tag = "install") { inst.install(a) })
             }
         }
         if (pinned) add(AppletMenuItem(Icons.Outlined.GridView, localized(Str.applets_menu_unpin), tag = "unpin") { actions.pin(a, false) })

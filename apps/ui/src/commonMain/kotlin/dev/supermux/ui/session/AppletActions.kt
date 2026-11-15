@@ -30,6 +30,8 @@ interface AppletInstaller {
     val phone: Boolean
     /** Where it lands, for On your devices ("Home screen", "Start menu", "Applications"). */
     val where: String
+    /** The menu's words for it: "Add to Home screen", "Install on this Mac". */
+    val label: String
     /** Whether [applet] of [hostId] is already on this device's launcher (the menu then says so instead). */
     fun isInstalled(hostId: String, applet: AppletDto): Boolean
     /** Asks the system to add it: null once it is there, "" when he didn't (no error), else why it couldn't. */
@@ -61,6 +63,7 @@ fun rememberAppletsActions(fleet: FleetStore, hostId: String?, hostName: String,
             installer = installer?.let { i ->
                 AppletInstall(
                     phone = i.phone,
+                    label = i.label,
                     isInstalled = { a -> i.isInstalled(host, a) },
                     install = { a ->
                         i.install(host, a, if (a.iconUrl != null) fleet.appletIconBytes(a) else null)

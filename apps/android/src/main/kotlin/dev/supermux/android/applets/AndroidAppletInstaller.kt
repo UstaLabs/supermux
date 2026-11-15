@@ -23,6 +23,7 @@ class AndroidAppletInstaller(private val context: Context) : AppletInstaller {
 
     override val phone: Boolean = true
     override val where: String get() = localized(Str.applets_where_home)
+    override val label: String get() = localized(Str.applets_menu_add_home)
 
     private fun id(hostId: String, name: String) = "applet:$hostId/$name"
 
