@@ -119,6 +119,7 @@
 
     <string name="sessions_rail_working">çalışıyor</string>
     <string name="sessions_rail_idle">boşta</string>
+    <string name="sessions_rail_compact_advised">kullanım sınırından önce sıkıştırma önerildi</string>
     <string name="sessions_rail_unread">okunmamış</string>
     <plurals name="sessions_rail_agents">
         <item quantity="one">%1$d ajan</item>

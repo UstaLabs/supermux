@@ -2896,3 +2896,17 @@ acrossGrok("a compaction notice becomes the adapter's compaction event (#144)", 
   await flush()
   expect(seen).toEqual([{ kind: "compaction", compactionId: "grok-compact-1", status: "completed", before: 28200 }])
 })
+
+test("claude: a rate_limit_event reaches the adapter's raw \"rate-limits\" event (#146 advisor input)", async () => {
+  const fake = fakeAgentDriver("claude", { claudeFrames: true })
+  const { host, workdir } = await harness("claude", fake)
+  const adapter = makeAdapter("claude", host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  const raw: unknown[] = []
+  adapter.on("rate-limits", (r: unknown) => raw.push(r))
+  await adapter.start()
+  // Real 2.1.308 frame.
+  fake.emit({ protocol: "native", value: { type: "rate_limit_event", rate_limit_info: { status: "allowed", resetsAt: 1794711600, rateLimitType: "five_hour",
+    unifiedWindows: { five_hour: { utilization: 0.41, resetsAt: 1794711600 }, seven_day: { utilization: 0.09, resetsAt: 1795125600 } } } } })
+  await flush()
+  expect(raw).toHaveLength(1)
+})

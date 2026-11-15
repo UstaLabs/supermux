@@ -80,3 +80,50 @@ test("the cache life the requests reported decides whether a reset is far enough
   five.a.turnStarted("s1"); five.a.noteRateLimits("s1", "claude", reading(0.9)); await five.a.turnCompleted("s1", "claude", 400_000)
   expect(five.advice).toEqual([["s1", { usedPct: 90, resetsAt: soon * 1000, auto: false }]])
 })
+
+// Account-wide (Ahmet, 2026-11-16): the 5-hour meter is the account's. On Nov 14 the chats he was in had stale
+// readings (#90: 36% at its last turn end, the wall at its next) while other chats burned the shared meter.
+function teamOf(sessions: Record<string, string>, contexts: Record<string, number>, auto = false) {
+  const advice: Array<[string, unknown, string]> = []
+  const compacted: string[] = []
+  const a = new CompactAdvisor({
+    now: () => NOW, autoEnabled: () => auto,
+    onAdvice: (id, x, change) => advice.push([id, x, change.reason]),
+    compact: (id) => { compacted.push(id) },
+    accountOf: (id) => sessions[id],
+    sessionsOn: (account) => Object.keys(sessions).filter((id) => sessions[id] === account),
+    contextOf: (id) => contexts[id],
+  })
+  return { a, advice, compacted }
+}
+const flushAsync = () => new Promise((r) => setTimeout(r, 0))
+
+test("another chat's reading lights the advice in an idle chat on the same account, not on another account", async () => {
+  const { a, advice } = teamOf({ busy: "acct-1", idle: "acct-1", other: "acct-2" }, { busy: 300_000, idle: 400_000, other: 500_000 })
+  a.noteRateLimits("busy", "claude", claude(0.40))
+  await flushAsync()
+  expect(advice).toEqual([])
+  // The busy chat pushes the shared meter to 85%: the idle chat (and the busy one) show it, the other account's doesn't.
+  a.noteRateLimits("busy", "claude", claude(0.85))
+  await flushAsync()
+  const shown = advice.filter(([, x]) => x !== null).map(([id, , why]) => `${id}:${why}`).sort()
+  expect(shown).toEqual(["busy:account-reading", "idle:account-reading"])
+})
+
+test("another chat's reading never compacts an idle chat; only a chat's own turn end may", async () => {
+  const { a, compacted } = teamOf({ busy: "acct-1", idle: "acct-1" }, { busy: 300_000, idle: 400_000 }, true)
+  a.noteRateLimits("busy", "claude", claude(0.97))
+  await flushAsync()
+  expect(compacted).toEqual([])
+  a.turnStarted("idle"); await a.turnCompleted("idle", "claude", 400_000)
+  expect(compacted).toEqual(["idle"])
+})
+
+test("a chat whose size isn't known yet is left alone; every change says why", async () => {
+  const { a, advice } = teamOf({ busy: "acct-1", fresh: "acct-1" }, { busy: 300_000 })
+  a.noteRateLimits("busy", "claude", claude(0.90))
+  await flushAsync()
+  expect(advice.map(([id]) => id)).toEqual(["busy"])
+  a.compacted("busy")
+  expect(advice.at(-1)).toEqual(["busy", null, "compacted"])
+})

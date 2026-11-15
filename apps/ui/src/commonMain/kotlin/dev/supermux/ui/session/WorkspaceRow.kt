@@ -250,7 +250,7 @@ fun WorkspaceRow(
                                 modifier = markModifier.size(14.dp).testTag(WorkspaceListTestIds.selectBox(w.id)),
                             )
                         } else {
-                            WorkspaceStatusMark(working = working, unread = unread, modifier = markModifier)
+                            WorkspaceStatusMark(working = working, unread = unread, advice = model.compactAdvice, modifier = markModifier)
                         }
                         Spacer(Modifier.width(9.dp))
                         Column(Modifier.weight(1f)) {
@@ -321,9 +321,12 @@ fun WorkspaceRow(
  * One 14dp slot so names line up whatever the state.
  */
 @Composable
-internal fun WorkspaceStatusMark(working: Boolean, unread: Boolean, modifier: Modifier = Modifier) {
+internal fun WorkspaceStatusMark(working: Boolean, unread: Boolean, advice: Boolean = false, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
     val description = localized(if (working) Str.sessions_rail_working else Str.sessions_rail_unread)
+    val adviceDescription = localized(Str.sessions_rail_compact_advised)
+    // #146: amber (the near-limit ring's colour) while the chat is advised to compact before the usage-limit wait.
+    val ink = if (advice) cs.tertiary else cs.onSurface
     Box(modifier.size(14.dp), contentAlignment = Alignment.Center) {
         when {
             working -> CircularProgressIndicator(
@@ -338,11 +341,19 @@ internal fun WorkspaceStatusMark(working: Boolean, unread: Boolean, modifier: Mo
             unread -> Box(
                 Modifier
                     .size(10.dp)
-                    .border(1.25.dp, cs.onSurface.copy(alpha = 0.55f), CircleShape)
-                    .testTag("session_rail_unread")
-                    .semantics { contentDescription = description },
+                    .border(1.25.dp, ink.copy(alpha = if (advice) 0.85f else 0.55f), CircleShape)
+                    .testTag(if (advice) "session_rail_compact" else "session_rail_unread")
+                    .semantics { contentDescription = if (advice) "$description, $adviceDescription" else description },
                 contentAlignment = Alignment.Center,
-            ) { Box(Modifier.size(4.dp).clip(CircleShape).background(cs.onSurface)) }
+            ) { Box(Modifier.size(4.dp).clip(CircleShape).background(ink)) }
+            advice -> Box(
+                Modifier
+                    .size(7.dp)
+                    .clip(CircleShape)
+                    .background(cs.tertiary)
+                    .testTag("session_rail_compact")
+                    .semantics { contentDescription = adviceDescription },
+            )
             else -> Box(
                 Modifier
                     .size(7.dp)
@@ -355,7 +366,7 @@ internal fun WorkspaceStatusMark(working: Boolean, unread: Boolean, modifier: Mo
 
 /** An indented chat under a multi-chat workspace: a hairline guide, the same mark, smaller type. */
 @Composable
-internal fun WorkspaceChildRow(name: String, working: Boolean, unread: Boolean, onClick: () -> Unit) {
+internal fun WorkspaceChildRow(name: String, working: Boolean, unread: Boolean, advice: Boolean = false, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     Row(
         Modifier
@@ -370,7 +381,7 @@ internal fun WorkspaceChildRow(name: String, working: Boolean, unread: Boolean, 
     ) {
         Box(Modifier.width(1.dp).fillMaxHeight().background(cs.onSurfaceVariant.copy(alpha = 0.15f)))
         Spacer(Modifier.width(10.dp))
-        WorkspaceStatusMark(working = working, unread = unread)
+        WorkspaceStatusMark(working = working, unread = unread, advice = advice)
         Spacer(Modifier.width(7.dp))
         Text(
             name,

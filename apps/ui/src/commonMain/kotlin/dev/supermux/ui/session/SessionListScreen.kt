@@ -828,6 +828,7 @@ fun SessionListScreen(
                                     lastMessageTs = lastBySession[child.sessionId]?.ts,
                                     lastReadAt = lastRead[child.sessionId],
                                 ),
+                                advice = sessionById[child.sessionId]?.compactAdvice != null,
                                 onClick = { openChild(w.id, child.sessionId) },
                             )
                         }

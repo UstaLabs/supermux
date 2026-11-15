@@ -119,6 +119,7 @@
 
     <string name="sessions_rail_working">working</string>
     <string name="sessions_rail_idle">idle</string>
+    <string name="sessions_rail_compact_advised">compact advised before the usage limit</string>
     <string name="sessions_rail_unread">unread</string>
     <plurals name="sessions_rail_agents">
         <item quantity="one">%1$d agent</item>

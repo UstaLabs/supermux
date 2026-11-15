@@ -83,6 +83,8 @@ data class WorkspaceRowModel(
     val openSessionId: String?,
     /** #152: the branch line: the one the work tree is on now, or the worktree's recorded one until that is known. */
     val branch: String? = null,
+    /** #146: a chat of the workspace is advised to compact before the usage-limit wait (the amber dot). */
+    val compactAdvice: Boolean = false,
 )
 
 data class ArchivedWorkspaceRowModel(
@@ -137,6 +139,7 @@ fun deriveWorkspaceRow(
         primarySessionId = primarySid,
         openSessionId = resolveWorkspaceOpenSessionId(w),
         branch = primary?.git?.branch?.takeIf { it.isNotBlank() } ?: w.branch?.takeIf { it.isNotBlank() },
+        compactAdvice = chatIds.any { sessionsById[it]?.compactAdvice != null },
     )
 }
 
