@@ -1,4 +1,6 @@
 import { readFileSync } from "fs"
+import { sep } from "path"
+import { dirs } from "@supermux/platform"
 import { Resvg } from "@resvg/resvg-js"
 import { appletPayload, type AppletService, type AppletView } from "../../core/applets/service"
 import { resolveStaticFile } from "./applet-route"
@@ -21,6 +23,12 @@ import { resolveStaticFile } from "./applet-route"
 
 type Json = (body: unknown, status?: number) => Response
 
+/** A path under the home folder written as ~/…, as people read it. */
+function tildify(p: string): string {
+  const home = dirs.home()
+  return p === home ? "~" : p.startsWith(home + sep) ? "~/" + p.slice(home.length + 1).split(sep).join("/") : p // platform-ok: a display path
+}
+
 function detail(applets: AppletService, v: AppletView) {
   const m = v.manifest
   const settingsValues = applets.secrets.settings(v.row.id)
@@ -36,11 +44,11 @@ function detail(applets: AppletService, v: AppletView) {
     }),
     settings: (m?.config ?? []).map((f) => ({ ...f, value: settingsValues[f.key] ?? (f.default !== undefined ? String(f.default) : null) })),
     backups: applets.backups.list(v.row.name),
-    data: applets.dataInfo(v),
+    data: (() => { const di = applets.dataInfo(v); return { ...di, dir: tildify(di.dir) } })(),
     installs: applets.installs(v.row.id),
     updatedByName: applets.actorName(v.row.updatedBy),
     run: m?.run ?? null,
-    folder: v.folder,
+    folder: tildify(v.folder),
   }
 }
 
