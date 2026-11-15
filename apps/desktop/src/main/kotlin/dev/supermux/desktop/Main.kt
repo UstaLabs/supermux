@@ -233,7 +233,7 @@ private fun DesktopTokenStore.asPairingStore(): PairingTokenStore = object : Pai
     override fun saveBaseUrl(url: String) = this@asPairingStore.saveBaseUrl(url)
 }
 
-/** This computer's name on a host it pairs with: onboarding and Add host both offer it. */
+/** This computer's name on a host it pairs with: onboarding and Add host both offer it. Never blocks (#133). */
 private fun desktopDeviceName(): String = DesktopHostBootstrap.defaultHostName()
 
 /**
@@ -2112,7 +2112,8 @@ fun main() {
                             autoSelect = System.getenv("SM_AUTOSELECT") == "1",
                             autoSelectName = System.getenv("SM_SMOKE_SEND")
                                 ?.substringBefore(':')?.takeIf { it.isNotBlank() },
-                            defaultDeviceName = remember { desktopDeviceName() },
+                            // #133: never a lookup the first composition waits on; the field follows the OS's name.
+                            defaultDeviceName = dev.supermux.desktop.host.HostName.shared.name.collectAsState().value,
                             settingsSection = { place, scope ->
                                 DesktopSettingsSection(place, scope, fleet.activeApp() ?: app)
                             },

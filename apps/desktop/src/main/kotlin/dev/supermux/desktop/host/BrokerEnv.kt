@@ -17,7 +17,7 @@ fun brokerEnv(
     bins: HostBinaries.SidecarBinaries,
     carried: Map<String, String>,
     stateDir: Path,
-    hostName: String = DesktopHostBootstrap.defaultHostName(),
+    hostName: String = DesktopHostBootstrap.brokerHostName(),
     existingPath: String? = System.getenv("PATH"),
     home: String = SystemOsEnv.home.toString(),
     os: DesktopOs = SystemOsEnv.os,
