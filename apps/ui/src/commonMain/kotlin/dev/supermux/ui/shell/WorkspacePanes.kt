@@ -1275,7 +1275,14 @@ private fun WorkspacePaneContent(
                 val existing = openSingletonView(layout, viewsById, NewViewKind.DIFF)
                 if (existing != null) {
                     val (diffViewId, ownerGroup) = existing
-                    layoutSync.edit { setActiveViewInGroup(it, ownerGroup, diffViewId) }
+                    val chatGroup = groupIdOf(layout, viewId)
+                    // #72 v4: Source Control lives in its own pane to the chat's right. One already open as a tab in the
+                    // chat's own pane (opened before this rule) moves out beside it; one elsewhere is shown where it is.
+                    if (ownerGroup == chatGroup) {
+                        @OptIn(ExperimentalUuidApi::class)
+                        val pane = Uuid.random().toString()
+                        layoutSync.edit { splitGroup(it, ownerGroup, diffViewId, "row", pane) }
+                    } else layoutSync.edit { setActiveViewInGroup(it, ownerGroup, diffViewId) }
                     ui.windows.expandClaim(hostId, setOf(diffViewId), layoutSync.tree)
                 } else {
                     val groupId = groupIdOf(layout, viewId)
