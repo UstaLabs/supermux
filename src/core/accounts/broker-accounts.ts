@@ -8,8 +8,8 @@
 import { join } from "path"
 import { randomUUID } from "crypto"
 import { AccountRegistry, UsageStore, systemAccountId } from "../../../packages/supermux-core/src/accounts/index.js"
-import { pickAccount, switchable } from "../../../packages/supermux-core/src/accounts/policy.js"
-import { claudeAccountOrg } from "../../../packages/supermux-core/src/accounts/org.js"
+import { accountOrg, pickAccount, pickSwitchTarget, switchable } from "../../../packages/supermux-core/src/accounts/policy.js"
+import type { SwitchWhy } from "../../../packages/supermux-core/src/accounts/policy.js"
 import type { Account, AccountsOptions, LoginHandle, LoginState } from "../../../packages/supermux-core/src/accounts/index.js"
 import type { Core } from "../../../packages/supermux-core/src/index.js"
 import { STATE_DIR } from "../../shared/paths"
@@ -310,18 +310,24 @@ export class BrokerAccounts {
   }
 
   /** What removing `id` would do (#106): how many sessions move, and to which account (the remove sheet says it). */
-  async removalPlan(id: string): Promise<{ account: string; sessions: number; to: string; toLabel: string }> {
+  async removalPlan(id: string): Promise<{ account: string; sessions: number; to: string; toLabel: string; why?: SwitchWhy }> {
     const account = await this.deps.registry.get(id)
     if (!account) throw new AccountsApiError(404, `Account ${id} was not found`, "unknown_account")
-    const to = await this.removalTarget(account)
-    return { account: id, sessions: this.deps.sessionsOn?.(id).length ?? 0, to: to.id, toLabel: displayLabel(to) }
+    const { to, why } = await this.removalTarget(account)
+    return { account: id, sessions: this.deps.sessionsOn?.(id).length ?? 0, to: to.id, toLabel: displayLabel(to), ...(why ? { why } : {}) }
   }
 
-  /** Where a removal moves the account's sessions: Auto's pick among the agent's other accounts, else the system login. */
-  private async removalTarget(account: Account): Promise<Account> {
+  /**
+   * Where a removal moves the account's sessions: the auto-switch's own rule (#159), a seat in the removed account's
+   * org with room first (their prompt cache stays warm), else the most room among the rest; else the system login.
+   */
+  private async removalTarget(account: Account): Promise<{ to: Account; why?: SwitchWhy }> {
     await this.deps.usage.load()
     const rest = (await this.deps.registry.list(account.agent)).filter((a) => a.id !== account.id)
-    return this.choose(account.agent, rest) ?? rest.find((a) => a.method === "system")!
+    const candidates = rest.filter((a) => sessionAccountSupported(account.agent, a))
+    const now = this.deps.now?.() ?? Date.now()
+    const picked = pickSwitchTarget(candidates, (id) => this.deps.usage.get(id), accountOrg(account), now, (id) => this.deps.usage.unavailable(id) !== undefined)
+    return picked ? { to: picked.account, why: picked.why } : { to: rest.find((a) => a.method === "system")! }
   }
 
   /**
@@ -335,7 +341,7 @@ export class BrokerAccounts {
       if (account && account.method !== "system") {
         const pinned = this.deps.sessionsOn?.(id) ?? []
         if (pinned.length) {
-          const target = (await this.removalTarget(account)).id
+          const target = (await this.removalTarget(account)).to.id
           for (const session of pinned) await this.deps.rehome?.(session.id, target)
         }
       }
@@ -470,14 +476,14 @@ export class BrokerAccounts {
    * it is below `belowPct`. Unknown org or usage: no.
    */
   async sameOrgSeatHasRoom(account: string, belowPct: number): Promise<boolean> {
-    const homes = this.deps.registry.homesDirectory
-    const org = claudeAccountOrg(homes, { id: account, agent: "claude" })
+    const current = await this.deps.registry.get(account)
+    const org = current && accountOrg(current)
     if (!org) return false
     const now = this.deps.now?.() ?? Date.now()
     const seats = (await this.deps.registry.list("claude")).filter((a) =>
       a.id !== account && switchable(a) && sessionAccountSupported("claude", a) && this.deps.usage.unavailable(a.id) === undefined)
     return seats.some((seat) => {
-      if (claudeAccountOrg(homes, seat) !== org) return false
+      if (accountOrg(seat) !== org) return false
       const windows = this.deps.usage.get(seat.id)
       if (!windows?.length) return false
       return windows.every((w) => (w.resetsAt && w.resetsAt.getTime() <= now ? 0 : w.usedPercent) < belowPct)

@@ -1321,7 +1321,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       // A Core-internal reopen (limit switch, token refresh) replaced the Session object.
       const live = this.core.sessions.live(this.id)
       if (live && !this.restarting) this.session = live
-      if (event.type === "account.switched") this.emit("account", { kind: "account", event: "switched", from: event.from, to: event.to, reason: event.reason })
+      if (event.type === "account.switched") this.emit("account", { kind: "account", event: "switched", from: event.from, to: event.to, reason: event.reason, ...(event.why ? { why: event.why } : {}) })
       else this.emit("account", { kind: "account", event: "refreshed", account: event.account })
       return
     }

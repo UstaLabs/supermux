@@ -11,7 +11,8 @@ import { Session } from "./session.js"
 import { SessionStore } from "./store.js"
 import { AccountRegistry, systemAccountId } from "./accounts/registry.js"
 import { adapterFor } from "./accounts/adapters/index.js"
-import { ACCOUNT_UNAVAILABLE_ERROR, NOT_SIGNED_IN_ERROR, BALANCE_WINDOW, accountHttpStatus, earliestReset, freesAt, limited, pickAccount, switchable } from "./accounts/policy.js"
+import { ACCOUNT_UNAVAILABLE_ERROR, NOT_SIGNED_IN_ERROR, BALANCE_WINDOW, accountHttpStatus, accountOrg, earliestReset, freesAt, limited, pickAccount, pickSwitchTarget, switchable } from "./accounts/policy.js"
+import type { SwitchWhy } from "./accounts/policy.js"
 import { UsageStore } from "./accounts/usage-store.js"
 import { defaultLoginRunner, defaultLoginSchedule, findCommand, startLogin, type LoginKind } from "./accounts/login.js"
 import { assertVaultId } from "./accounts/vault.js"
@@ -465,7 +466,7 @@ export class Core {
     this.events.clear()
   }
 
-  private resume(id: string, options: ResumeOptions | undefined, reason: "manual" | "limit" | "unavailable" | "refresh" | "context"): Promise<Session> {
+  private resume(id: string, options: ResumeOptions | undefined, reason: "manual" | "limit" | "unavailable" | "refresh" | "context", why?: SwitchWhy): Promise<Session> {
     if (this.shuttingDown) return Promise.reject(new CoreError("core_closed", "Core is closing or closed"))
     let patch: SessionConfiguration | undefined
     let requestedAccount: string | undefined
@@ -561,7 +562,7 @@ export class Core {
         ...(adopted ?? {}),
       }, record.agentSessionId, undefined, original)
       if (reason === "refresh") this.events.emit({ type: "account.refreshed", sessionId: id, account: requestedAccount! })
-      else if (switchFrom !== undefined && reason !== "context") this.events.emit({ type: "account.switched", sessionId: id, from: switchFrom, to: requestedAccount!, reason })
+      else if (switchFrom !== undefined && reason !== "context") this.events.emit({ type: "account.switched", sessionId: id, from: switchFrom, to: requestedAccount!, reason, ...(why ? { why } : {}) })
       return session
     })
     this.restoring.set(id, operation)
@@ -724,16 +725,17 @@ export class Core {
 
   /**
    * Where a limit (or refused-account) switch would move a session on `account` (absent: the system
-   * account): the policy's pick among the agent's other accounts, `next` undefined when none is left.
-   * Undefined when the session's own account is never switched (isolated, Cursor).
+   * account): the policy's pick among the agent's other accounts, a seat in its own org first (#159), `next`
+   * undefined when none is left. Undefined when the session's own account is never switched (isolated, Cursor).
    */
-  private async switchTarget(agent: string, account: string | undefined): Promise<{ from: string; next: Account | undefined } | undefined> {
+  private async switchTarget(agent: string, account: string | undefined): Promise<{ from: string; next: Account | undefined; why?: SwitchWhy } | undefined> {
     const from = account ?? systemAccountId(agent)
     // A session whose account was removed can still move to a registered one.
     const current = await this.registry.get(from)
     if (current && !switchable(current)) return undefined
     const candidates = (await this.registry.list(agent)).filter(candidate => candidate.id !== from)
-    return { from, next: pickAccount(candidates, id => this.usage.get(id), Date.now(), id => this.usage.unavailable(id) !== undefined) }
+    const picked = pickSwitchTarget(candidates, id => this.usage.get(id), current && accountOrg(current), Date.now(), id => this.usage.unavailable(id) !== undefined)
+    return { from, next: picked?.account, ...(picked ? { why: picked.why } : {}) }
   }
 
   /** Runs a queued limit (or unavailable-account) switch once the session's current turn has ended (never mid-turn). */
@@ -762,7 +764,7 @@ export class Core {
         if (reason === "limit" && this.lastTurnLimited.delete(id)) await this.reportWait(id, record, target !== undefined, background)
         return
       }
-      const session = await this.resume(id, { account: next.id }, reason)
+      const session = await this.resume(id, { account: next.id }, reason, target.why)
       // The turn that hit the limit (or was refused) continues once on the new account, unless the host queued input itself.
       if (this.continuePrompts !== undefined && !queued && this.lastTurnLimited.delete(id)) {
         try {
