@@ -92,6 +92,11 @@ sealed interface Route {
     @SerialName("displays")
     data object Displays : Route
 
+    /** #117: All applets, a plain icon grid of the host picker's host's applets. */
+    @Serializable
+    @SerialName("applets")
+    data object Applets : Route
+
     // Appearance and the updater's page are General's rows since #97 (`openSettings(General)`,
     // `ShellUiState.openAppUpdate`); a saved back stack naming them decodes to Home.
 }

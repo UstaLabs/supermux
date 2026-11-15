@@ -965,6 +965,12 @@ fun SupermuxApp(
                     var settingsTryClose by remember { mutableStateOf<(() -> Unit)?>(null) }
                     val fullPaneOverlay = remember { FullPaneOverlaySceneStrategy<Route>() }
 
+                    // #117: the host picker's host's applets (null: none, or this platform can't open them).
+                    val appletsHostName = hostViews.firstOrNull { it.recordId == activeHostId }?.displayLabel.orEmpty()
+                    val appletsActions = dev.supermux.ui.session.rememberAppletsActions(
+                        fleet, activeHostId, appletsHostName, showAll = remember(ui) { { ui.openApplets() } },
+                    )
+
                     // The sidebar, drawn by Home on a wide host and by the Compact list layer.
                     val sidebarList: @Composable (standalone: Boolean, listState: LazyListState?) -> Unit =
                         { standalone, listState ->
@@ -972,6 +978,7 @@ fun SupermuxApp(
                                 agentAvatars = agentAvatars,
                                 archivedAgents = archivedAgents,
                                 agentsActions = dev.supermux.ui.session.rememberAgentsActions(fleet),
+                                applets = appletsActions,
                                 mode = sessionListMode,
                                 openWorkspaceByWorkspaceId = openByWorkspace,
                                 workspaces = workspaces,
@@ -1397,6 +1404,24 @@ fun SupermuxApp(
                                                 // review's blocker.
                                                 standalone = true,
                                             )
+                                        }
+                                    }
+                                }
+                            }
+
+                            entry<Route.Applets>(
+                                metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
+                            ) {
+                                EscapeBox("applets_overlay", onEscape = { ui.goBack() }) {
+                                    HostScopedPage(hostViews, activeHostId, fleet::setActiveHost) {
+                                        key(activeHostId) {
+                                            val actions = appletsActions
+                                            if (actions != null) {
+                                                dev.supermux.ui.session.AppletsScreen(actions, phone = compact, onBack = { ui.goBack() })
+                                            } else {
+                                                // The host can't have applets (or isn't connected yet): back to where he was.
+                                                LaunchedEffect(Unit) { ui.goBack() }
+                                            }
                                         }
                                     }
                                 }

@@ -69,6 +69,7 @@ import dev.supermux.net.OpenCodeProvider
 import dev.supermux.net.PADto
 import dev.supermux.net.PathValidation
 import dev.supermux.net.ProjectLocationConflict
+import dev.supermux.net.AppletDto
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.RemoteRepo
@@ -622,6 +623,12 @@ class HostStore(
     private val _onboarded = MutableStateFlow<Boolean?>(null)
     val onboarded: StateFlow<Boolean?> = _onboarded.asStateFlow()
 
+    // ── Applets (#117): the host's applets and their pins, for the sidebar grid and All applets. Null = not loaded yet,
+    // or a broker without applets (its GET /applets fails): the app then shows no Applets section at all.
+    private val _applets = MutableStateFlow<List<AppletDto>?>(null)
+    val applets: StateFlow<List<AppletDto>?> = _applets.asStateFlow()
+    private var appletsJob: Job? = null
+
     // ── Accounts state (slice A3b) — the calls live with the other settings calls below.
     private val _accounts = MutableStateFlow<List<AccountDto>?>(null)
     /** Every agent's accounts (system first per agent), live once [ensureAccounts] ran. */
@@ -841,6 +848,7 @@ class HostStore(
                 // The broker keeps live pins per socket: a new socket is told again (if it takes them at all).
                 if (livePinned.isNotEmpty()) sendLivePins()
                 refreshAgentModels()
+                refreshApplets()
                 if (accountsWanted) refreshAccounts()
                 if (!frame.partialLogs.isNullOrEmpty() || !frame.partialExtras.isNullOrEmpty()) prefetchRecentLogs()
                 // Anything may have been archived or resumed while we were away (card #54: this
@@ -880,6 +888,7 @@ class HostStore(
             ServerFrame.AccountsChanged -> if (accountsWanted) refreshAccounts()
             ServerFrame.AgentsChanged -> _agentsChanged.tryEmit(Unit)
             is ServerFrame.ProxyCreated, is ServerFrame.ProxyUpdated, is ServerFrame.ProxyRemoved -> refreshPreviewRoutes()
+            ServerFrame.AppletsChanged -> refreshApplets()
             is ServerFrame.AccountLoginState -> _accountLogins.tryEmit(frame.toDto())
             is ServerFrame.AccountsSettings -> {
                 _accountsAutoSwitch.value = frame.autoSwitch
@@ -2409,6 +2418,31 @@ class HostStore(
     /** POST /opencode/auth/oauth/finish — complete OAuth with a pasted code. */
     suspend fun finishOpenCodeOAuth(providerId: String, method: Int, code: String): Boolean =
         runApi("finishOpenCodeOAuth") { api.finishOpenCodeOAuth(providerId, method, code); true } ?: false
+
+    // ── Applets (#117) ────────────────────────────────────────────────────────────────────────
+    // Fetched at every snapshot (connect, reconnect) and on `applets_changed`. A broker without applets answers 404:
+    // the list stays null and the app shows no Applets section (an older host can't do it, so it isn't offered).
+
+    fun refreshApplets() {
+        appletsJob?.cancel()
+        appletsJob = stateScope.launch {
+            runApi("applets") { api.applets() }?.let { _applets.value = it }
+        }
+    }
+
+    /** Pins or unpins an applet in the host's sidebar grid. Null on success, else the broker's reason (shown where he clicked). */
+    suspend fun pinApplet(name: String, pinned: Boolean): String? =
+        try {
+            api.pinApplet(name, pinned)
+            refreshApplets()
+            null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            e.message ?: "couldn't change the pins"
+        }
+
+    suspend fun appletIconBytes(applet: AppletDto): ByteArray? = runApi("appletIcon") { api.appletIconBytes(applet) }
 
     // ── Accounts (slice A3b; HTTP + frames are A3a's) ────────────────────────────────────────
     // Fetched lazily: nothing asks for GET /accounts until a screen does ([ensureAccounts]), and
