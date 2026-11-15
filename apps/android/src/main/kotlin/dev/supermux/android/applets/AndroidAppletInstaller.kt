@@ -39,11 +39,19 @@ class AndroidAppletInstaller(private val context: Context) : AppletInstaller {
             .setIcon(Icon.createWithAdaptiveBitmap(iconBitmap(icon, title)))
             .setIntent(AppletActivity.intent(context, hostId, applet.name, title))
             .build()
-        return runCatching {
+        val asked = runCatching {
             // Offered among the app's own shortcuts too (long-press supermux), then pinned with the system's sheet.
             if (android.os.Build.VERSION.SDK_INT >= 30) runCatching { sm.pushDynamicShortcut(info) }
-            if (sm.requestPinShortcut(info, null)) null else localized(Str.applets_install_refused)
-        }.getOrElse { it.message ?: localized(Str.applets_install_refused) }
+            sm.requestPinShortcut(info, null)
+        }.getOrElse { return it.message ?: localized(Str.applets_install_refused) }
+        if (!asked) return localized(Str.applets_install_refused)
+        // The system's sheet decides: it counts as added only once the shortcut is really on the Home screen. A sheet
+        // he cancels (or leaves for a minute) is no error: "" leaves the button as it was.
+        repeat(60) {
+            if (isInstalled(hostId, applet)) return null
+            kotlinx.coroutines.delay(1_000)
+        }
+        return ""
     }
 
     /**

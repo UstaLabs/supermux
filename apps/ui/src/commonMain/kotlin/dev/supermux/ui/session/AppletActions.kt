@@ -32,7 +32,7 @@ interface AppletInstaller {
     val where: String
     /** Whether [applet] of [hostId] is already on this device's launcher (the menu then says so instead). */
     fun isInstalled(hostId: String, applet: AppletDto): Boolean
-    /** Asks the system to add it; null when asked, else why it couldn't (shown in the menu). */
+    /** Asks the system to add it: null once it is there, "" when he didn't (no error), else why it couldn't. */
     suspend fun install(hostId: String, applet: AppletDto, icon: ByteArray?): String?
 }
 
@@ -64,7 +64,12 @@ fun rememberAppletsActions(fleet: FleetStore, hostId: String?, hostName: String,
                     isInstalled = { a -> i.isInstalled(host, a) },
                     install = { a ->
                         i.install(host, a, if (a.iconUrl != null) fleet.appletIconBytes(a) else null)
-                            ?: run { fleet.appletAction { api -> api.addAppletInstall(a.name, i.where) }; null }
+                            ?.takeIf { it.isNotEmpty() }
+                            ?: run {
+                                if (!i.isInstalled(host, a)) return@run null
+                                fleet.appletAction { api -> api.addAppletInstall(a.name, i.where) }
+                                null
+                            }
                     },
                 )
             },
