@@ -26,11 +26,11 @@ function detail(applets: AppletService, v: AppletView) {
   const settingsValues = applets.secrets.settings(v.row.id)
   return {
     ...appletPayload(v, applets.needsYou(v), applets.pinnedIds().includes(v.row.id) ? applets.pinnedIds().indexOf(v.row.id) : null),
-    secrets: applets.secrets.status(v.row.id, m?.secrets ?? []).map((s) => ({ ...s, wanted: (m?.secrets ?? []).includes(s.name) })),
+    secrets: applets.secrets.status(v.row.id, m?.secrets ?? []).map((s) => ({ ...s, wanted: (m?.secrets ?? []).includes(s.name), label: m?.secretLabels?.[s.name] ?? null })),
     jobs: (m?.jobs ?? []).map((j) => {
       const last = applets.jobs.lastRun(v.row.id, j.name)
       return {
-        name: j.name, every: j.every, running: applets.jobs.isRunning(v.row.id, j.name),
+        name: j.name, label: j.label ?? null, every: j.every, running: applets.jobs.isRunning(v.row.id, j.name),
         lastRun: last ? { startedAt: last.startedAt, finishedAt: last.finishedAt, exitCode: last.exitCode, trigger: last.trigger } : null,
       }
     }),

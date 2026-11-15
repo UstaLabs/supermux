@@ -32,7 +32,7 @@ data class AppletDto(
 )
 
 @Serializable
-data class AppletNeedDto(val secret: String, val state: String)
+data class AppletNeedDto(val secret: String, val state: String, val label: String? = null)
 
 @Serializable
 data class AppletProcessDto(
@@ -93,10 +93,12 @@ data class AppletSecretDto(
     val updatedBy: String? = null,
     /** applet.json asks for it (false: a value kept for a name it no longer asks for). */
     val wanted: Boolean = true,
+    /** Words for it from applet.json ("Gmail read-only sign-in"), when it gives them. */
+    val label: String? = null,
 )
 
 @Serializable
-data class AppletJobDto(val name: String, val every: String = "", val running: Boolean = false, val lastRun: AppletJobRunSummaryDto? = null)
+data class AppletJobDto(val name: String, val label: String? = null, val every: String = "", val running: Boolean = false, val lastRun: AppletJobRunSummaryDto? = null)
 
 @Serializable
 data class AppletJobRunSummaryDto(val startedAt: String = "", val finishedAt: String? = null, val exitCode: Int? = null, val trigger: String = "")
