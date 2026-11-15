@@ -33,12 +33,14 @@ test("the source reaches the create path with the device that asked", async () =
   expect((await post({ source: { kind: "new", base: "main", name: "ahmet/fix", auto: true } })).status).toBe(200)
   expect((await post({ source: { kind: "local", switchTo: "dev" } })).status).toBe(200)
   expect((await post({ source: { kind: "reuse", sessionId: "s-9" } })).status).toBe(200)
+  expect((await post({ source: { kind: "pr", number: 123, divergedPolicy: "pr" } })).status).toBe(200)
   expect((await post({})).status).toBe(200)
   expect(seen.map((a) => a.source)).toEqual([
     { kind: "existing", branch: "feat/x" },
     { kind: "new", base: "main", name: "ahmet/fix", auto: true },
     { kind: "local", switchTo: "dev" },
     { kind: "reuse", sessionId: "s-9" },
+    { kind: "pr", number: 123, divergedPolicy: "pr" },
     undefined,
   ])
   expect(JSON.parse(seen[0].createdBy)).toEqual({ kind: "device", name: "laptop" })
@@ -47,7 +49,7 @@ test("the source reaches the create path with the device that asked", async () =
 test("a source that isn't one is a 400, and nothing is created", async () => {
   let calls = 0
   const post = await boot(async (a) => { calls++; return { id: "s1", name: "a", workdir: a.workdir, agent: "claude" as any } })
-  for (const source of ["existing", { kind: "existing" }, { kind: "reuse" }, { kind: "fork" }]) {
+  for (const source of ["existing", { kind: "existing" }, { kind: "reuse" }, { kind: "fork" }, { kind: "pr" }, { kind: "pr", number: "12" }]) {
     expect((await post({ source })).status).toBe(400)
   }
   expect(calls).toBe(0)

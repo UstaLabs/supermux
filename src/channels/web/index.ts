@@ -315,6 +315,10 @@ export interface SessionSnapshot {
   context?: { used: number; size: number }
   session_branch?: string
   repo_root?: string
+  /** #152: where its work comes from (new | existing | pr | local | reuse), its pull / merge request, and where pushes go. */
+  source?: string
+  pr?: { forge: "github" | "gitlab"; number: number; url: string }
+  push_remote?: string
   git?: import("../../core/worktree/lite-status").GitLiteStatus
   finish_job?: import("../../core/worktree/finish-job").FinishJob
 }

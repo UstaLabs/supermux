@@ -9,9 +9,11 @@ import { AgentKind } from "../../shared/agents"
 import { homeDirName } from "../../shared/paths"
 import { resolvePermissionMode } from "../agents/permission-modes"
 import { branchList, realPath, samePath, switchBranch, type OpenIn } from "../git/branches"
+import { readPrByNumber, type PrNumberRead } from "../git/forge"
 import { refFormatOk } from "../settings/user-prefs"
 import type { RepoInfo } from "../git/repo-info"
 import { createTrackingBranch, deriveSessionBranch, repoSlug, type WorktreeHandle } from "../worktree/manager"
+import { preparePrBranch } from "../worktree/pr-branch"
 import { deriveName, ensureUnique } from "./naming"
 import type { Registry } from "./registry"
 import type { Session } from "./types"
@@ -49,12 +51,15 @@ export type CreateAsleepArgs = {
 /**
  * #152: where a session's work comes from. new: a worktree on a new branch from `base`, named `name` (refused when
  * it exists; `auto`, made free instead) or as before. existing: a worktree on that branch itself (origin's gets a
- * local branch tracking it). local: the folder itself, switched to `switchTo` first, only when it is clean. reuse:
- * the copy, branch and diff base of another session.
+ * local branch tracking it). pr: a worktree on the pull / merge request's own head branch, with the PR's target as
+ * its base; a local branch with commits the PR lacks is refused unless `divergedPolicy` says whose wins. local: the
+ * folder itself, switched to `switchTo` first, only when it is clean. reuse: the copy, branch and diff base of another
+ * session.
  */
 export type SessionSource =
   | { kind: "new"; base?: string; name?: string; auto?: boolean }
   | { kind: "existing"; branch: string }
+  | { kind: "pr"; number: number; divergedPolicy?: "pr" | "mine" }
   | { kind: "local"; switchTo?: string }
   | { kind: "reuse"; sessionId: string }
 
@@ -65,9 +70,12 @@ export function parseSessionSource(raw: unknown): { source?: SessionSource } | {
   const o = raw as Record<string, unknown>
   const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined)
   const base = str(o.base), name = str(o.name), branch = str(o.branch), switchTo = str(o.switchTo), sessionId = str(o.sessionId)
+  const number = typeof o.number === "number" && Number.isInteger(o.number) && o.number > 0 ? o.number : undefined
+  const divergedPolicy = o.divergedPolicy === "pr" || o.divergedPolicy === "mine" ? o.divergedPolicy : undefined
   switch (o.kind) {
     case "new": return { source: { kind: "new", ...(base ? { base } : {}), ...(name ? { name } : {}), ...(o.auto === true ? { auto: true } : {}) } }
     case "existing": return branch ? { source: { kind: "existing", branch } } : { error: "source.branch required" }
+    case "pr": return number ? { source: { kind: "pr", number, ...(divergedPolicy ? { divergedPolicy } : {}) } } : { error: "source.number required" }
     case "local": return { source: { kind: "local", ...(switchTo ? { switchTo } : {}) } }
     case "reuse": return sessionId ? { source: { kind: "reuse", sessionId } } : { error: "source.sessionId required" }
     default: return { error: "unknown source kind" }
@@ -89,9 +97,19 @@ function holderAt(path: string, sessions: Session[]): OpenIn {
   return s ? { kind: "session", id: s.id, name: s.name } : { kind: "external", path: at }
 }
 
+/** Where git keeps [branch] already: a session made a moment ago (its copy is checked out at its first wake), else the
+ *  folder or a worktree. The folder reads as "folder" here, as the launcher shows it. */
+function holderOfBranch(repoRoot: string, branch: string, sessions: Session[], list = branchList(repoRoot, owners(sessions))): OpenIn | null {
+  const asleep = sessions.find((s) => s.session_branch === branch && s.repo_root && samePath(realPath(s.repo_root), realPath(repoRoot)) && !existsSync(s.workdir))
+  if (asleep) return { kind: "session", id: asleep.id, name: asleep.name }
+  const openIn = list.local.find((b) => b.name === branch)?.openIn
+  return openIn ? (openIn.kind === "this" ? { kind: "folder" } : openIn) : null
+}
+const owners = (sessions: Session[]) => sessions.flatMap((s) => (s.workdir ? [{ id: s.id, name: s.name, workdir: s.workdir }] : []))
+
 /** existing: the local branch to check out (origin's gets a tracking one at Send), refused when it is held. */
 function existingBranch(repoRoot: string, wanted: string, sessions: Session[]): { branch: string; base: string; track?: string } {
-  const list = branchList(repoRoot, sessions.flatMap((s) => (s.workdir ? [{ id: s.id, name: s.name, workdir: s.workdir }] : [])))
+  const list = branchList(repoRoot, owners(sessions))
   let branch = wanted, track: string | undefined
   if (!list.local.some((b) => b.name === wanted)) {
     const remote = list.remote.find((r) => r.name === wanted) ?? list.remote.find((r) => r.name === `origin/${wanted}`)
@@ -99,12 +117,8 @@ function existingBranch(repoRoot: string, wanted: string, sessions: Session[]): 
     branch = remote.name.slice(remote.name.indexOf("/") + 1) // platform-ok: a git ref name, /-separated on every OS
     if (!list.local.some((b) => b.name === branch)) track = remote.name
   }
-  const held = (holder: OpenIn) => new SourceRefused("held_elsewhere", `${branch} is checked out elsewhere`, { branch, holder })
-  // A session made a moment ago has its branch before its copy is checked out (at its first wake).
-  const asleep = sessions.find((s) => s.session_branch === branch && s.repo_root && samePath(realPath(s.repo_root), realPath(repoRoot)) && !existsSync(s.workdir))
-  if (asleep) throw held({ kind: "session", id: asleep.id, name: asleep.name })
-  const openIn = list.local.find((b) => b.name === branch)?.openIn
-  if (openIn) throw held(openIn.kind === "this" ? { kind: "folder" } : openIn)
+  const holder = holderOfBranch(repoRoot, branch, sessions, list)
+  if (holder) throw new SourceRefused("held_elsewhere", `${branch} is checked out elsewhere`, { branch, holder })
   const base = list.local.find((b) => b.isDefault)?.name ?? list.current ?? "HEAD"
   return { branch, base, track }
 }
@@ -138,6 +152,8 @@ export type CreateAsleepDeps = {
   stateDir: string
   captureBaseCommits(workdir: string): Record<string, string>
   newId(): string
+  /** #152: a pull / merge request by "#N" (default: gh / glab with the user's own sign-in). */
+  readPr?(cwd: string, ref: string): Promise<PrNumberRead>
 }
 
 /** Branch names being made right now, per repo: taken before git has them. */
@@ -157,6 +173,7 @@ export async function createAsleep(deps: CreateAsleepDeps, args: CreateAsleepArg
     let workdir = args.workdir
     let worktree: { repo_root: string; base_branch: string; session_branch: string } | undefined
     let baseCommits: Record<string, string> | undefined
+    let prFields: { pr_forge: "github" | "gitlab"; pr_number: number; pr_url: string; push_remote?: string } | undefined
     if (other) {
       workdir = other.workdir
       if (other.repo_root && other.session_branch) worktree = { repo_root: other.repo_root, base_branch: other.base_branch || "HEAD", session_branch: other.session_branch }
@@ -174,6 +191,27 @@ export async function createAsleep(deps: CreateAsleepDeps, args: CreateAsleepArg
       if (picked.track) await createTrackingBranch(repoRoot, picked.branch, picked.track)
       workdir = join(deps.worktreesRoot(), repoSlug(repoRoot), deps.newId())
       worktree = { repo_root: repoRoot, base_branch: picked.base, session_branch: picked.branch }
+    } else if (source?.kind === "pr") {
+      const info = await deps.repoInfo(args.workdir)
+      if (!info.eligible || !info.repoRoot) throw new SourceRefused("no_worktree", `${args.workdir} is not a single git repository, so no worktree can be made`)
+      const repoRoot = info.repoRoot
+      const read = await (deps.readPr ?? readPrByNumber)(repoRoot, `#${source.number}`)
+      if (read.status !== "found") {
+        throw new SourceRefused("pr_unavailable", `#${source.number} can't be worked on (${read.status})`, {
+          status: read.status, ...("state" in read ? { state: read.state } : {}), ...("reason" in read ? { reason: read.reason } : {}),
+        })
+      }
+      const pr = read.pr
+      const sessions = registry.list()
+      const got = await preparePrBranch(repoRoot, pr, source.divergedPolicy, (b) => holderOfBranch(repoRoot, b, sessions))
+      if (!got.ok) {
+        if (got.code === "held_elsewhere") throw new SourceRefused("held_elsewhere", `${got.branch} is checked out elsewhere`, { branch: got.branch, holder: got.holder })
+        if (got.code === "local_ahead") throw new SourceRefused("local_ahead", `your ${got.branch} has ${got.ahead} commits the pull request doesn't`, { branch: got.branch, ahead: got.ahead })
+        throw new SourceRefused("fetch_failed", got.message)
+      }
+      workdir = join(deps.worktreesRoot(), repoSlug(repoRoot), deps.newId())
+      worktree = { repo_root: repoRoot, base_branch: pr.base || info.currentBranch || "HEAD", session_branch: got.branch }
+      prFields = { pr_forge: pr.forge, pr_number: pr.number, pr_url: pr.url, ...(got.pushRemote ? { push_remote: got.pushRemote } : {}) }
     } else if (source?.kind === "new" || args.worktree !== false) {
       const info = await deps.repoInfo(args.workdir)
       if (info.eligible && info.repoRoot) {
@@ -231,6 +269,7 @@ export async function createAsleep(deps: CreateAsleepDeps, args: CreateAsleepArg
       ...(other ? (baseCommits ? { base_commits: baseCommits } : {}) : worktree && !args.worktreeHandle ? {} : { base_commits: deps.captureBaseCommits(workdir) }),
       ...(worktree ?? {}),
       ...(source ? { source_kind: source.kind } : {}),
+      ...(prFields ?? {}),
       ...(args.createdBy ? { created_by: args.createdBy } : {}),
     })
     registry.sessions.suspend(row.id)

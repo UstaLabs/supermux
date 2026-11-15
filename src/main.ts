@@ -54,6 +54,7 @@ import { resumedSessionPid } from "./core/session-manager/resume-pid"
 import { captureBaseCommits, spawnSession as spawnSessionHelper, spawnPA } from "./core/session-manager/spawn-helper"
 import { createAsleep, type CreateAsleepDeps, type SessionSource } from "./core/session-manager/born-asleep"
 import { UserPrefs } from "./core/settings/user-prefs"
+import { sessionSourceFields } from "./core/session-manager/source-fields"
 import { folderReady } from "./core/session-manager/folder-ready"
 import { SessionChain, deliverOnChain, ensureLiveWith, isLiveWith, type ChainDelivery, type LivenessDeps } from "./core/session-manager/session-chain"
 import { SessionManager } from "./core/session-manager/manager"
@@ -2564,6 +2565,7 @@ function sessionAddedPayload(entry: Session) {
     limitWait: limitWaitFields(limitWaits.get(entry.id)),
     repo_root: entry.repo_root || undefined,
     session_branch: entry.session_branch || undefined,
+    ...sessionSourceFields(entry),
     finish_job: entry.finish_job,
     user_status: entry.user_status,
     sort_order: entry.sort_order,
@@ -3030,6 +3032,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         status: s.status,
         session_branch: s.session_branch || undefined,
         repo_root: s.repo_root || undefined,
+        ...sessionSourceFields(s),
         git: gitStatusService.get(s.id),
         finish_job: s.finish_job,
         user_status: s.user_status,
