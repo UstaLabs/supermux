@@ -24,7 +24,9 @@ const verify = (dir: string, ref: string) => gitAsync(dir, ["rev-parse", "--veri
 export async function history(dir: string, base: string | null, limit = 50): Promise<History> {
   const branch = await gitAsync(dir, ["symbolic-ref", "--quiet", "--short", "HEAD"]).catch(() => null)
   if (!(await verify(dir, "HEAD"))) return { branch, base, chat: [], baseCommits: [], incoming: 0 }
-  const hasBase = !!base && base !== "HEAD" && (await verify(dir, base))
+  // A base that is the branch itself (a chat working on the branch it started from) is no base: its list is the
+  // branch's own commits, as with none.
+  const hasBase = !!base && base !== "HEAD" && base !== branch && (await verify(dir, base))
   const chatRange = hasBase ? [`${base}..HEAD`] : ["HEAD"]
   const [chatOut, baseOut, upstream, incomingOut] = await Promise.all([
     gitAsync(dir, ["log", FORMAT, `-n${limit}`, ...chatRange], { trim: false }),

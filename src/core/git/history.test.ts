@@ -50,6 +50,15 @@ test("no base known: no guess, the chat's list is the branch's own recent commit
   expect((await history(d, "no-such-branch")).base).toBeNull()
 }, REAL_GIT_MS)
 
+test("a base that is the branch itself is no base: the branch's own commits, not an empty list", async () => {
+  const d = repo()
+  commit(d, "b.txt", "b\n", "Add search box")
+  const h = await history(d, "mux/chat")
+  expect(h.base).toBeNull()
+  expect(h.chat.map((c) => c.subject)).toEqual(["Add search box", "Base two", "Base one"])
+  expect(h.incoming).toBe(0)
+}, REAL_GIT_MS)
+
 test("pushed commits say so", async () => {
   const d = repo()
   const remote = mkdtempSync(join(tmpdir(), "mux-history-remote-"))
