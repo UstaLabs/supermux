@@ -38,10 +38,10 @@ function stateOf(v: AppletView): string {
 export async function handleAppletOp(svc: AppletService, name: string, args: Record<string, unknown> | undefined, ctx: AppletOpContext): Promise<AppletOpResult> {
   const by = `agent:${ctx.sessionId}`
   if (OWNER_ONLY.has(name)) {
-    return { ok: false, code: "denied", error: "owner only: deleting an applet and secret values are done by the user on a paired device (Applet info). Ask them." }
+    return { ok: false, code: "denied", error: "not allowed: only the owner can delete an applet or see or set secret values, on a paired device (Applet info). Ask them." }
   }
   const need = (): string | AppletOpResult => str(args, "applet") ?? { ok: false, code: "usage", error: "which applet? (supermux applet list)" }
-  const find = (n: string): AppletView | AppletOpResult => svc.get(n) ?? { ok: false, code: "not_found", error: `no applet named "${n}" (supermux applet list)` }
+  const find = (n: string): AppletView | AppletOpResult => svc.get(n) ?? { ok: false, code: "not_found", error: `not found: no applet named "${n}" (supermux applet list)` }
 
   switch (name) {
     case "applet_list": {
@@ -106,6 +106,9 @@ export async function handleAppletOp(svc: AppletService, name: string, args: Rec
         value: {
           name: n, server: true, state: st?.state ?? "stopped", error: st?.error ?? null,
           logs: svc.supervisor.logs(v.row.id, 20),
+          note: st?.state === "running"
+            ? `restarted; the server keeps running after this command returned. Check it with: supermux applet logs ${n}`
+            : `the server did not stay up; fix it and run supermux applet restart ${n} again`,
         },
       }
     }
@@ -115,7 +118,7 @@ export async function handleAppletOp(svc: AppletService, name: string, args: Rec
       const lines = typeof args?.lines === "number" ? Math.min(2000, Math.max(1, args.lines)) : 100
       const job = str(args, "job")
       if (job) {
-        if (!v.manifest?.jobs.some((j) => j.name === job)) return { ok: false, code: "not_found", error: `"${n}" has no job "${job}" (its jobs: ${v.manifest?.jobs.map((j) => j.name).join(", ") || "none"})` }
+        if (!v.manifest?.jobs.some((j) => j.name === job)) return { ok: false, code: "not_found", error: `not found: "${n}" has no job "${job}" (its jobs: ${v.manifest?.jobs.map((j) => j.name).join(", ") || "none"})` }
         const runs = svc.jobs.runs(v.row.id, job, 5)
         return { ok: true, value: { name: n, job, runs: runs.map((r) => ({ started_at: r.startedAt, finished_at: r.finishedAt, exit_code: r.exitCode, trigger: r.trigger, output: r.output.split("\n").slice(-lines).join("\n") })) } }
       }
@@ -127,7 +130,7 @@ export async function handleAppletOp(svc: AppletService, name: string, args: Rec
       const job = str(args, "job")
       if (!job) return { ok: false, code: "usage", error: "which job? (supermux applet info " + n + ")" }
       const r = await svc.runJob(n, job)
-      if (!r.ok) return { ok: false, code: "not_found", error: r.error }
+      if (!r.ok) return { ok: false, code: "not_found", error: r.error.startsWith("not found") ? r.error : `not found: ${r.error}` }
       return { ok: true, value: { name: n, job, exit_code: r.run.exitCode, output: r.run.output, started_at: r.run.startedAt, finished_at: r.run.finishedAt } }
     }
     case "applet_backup": {
