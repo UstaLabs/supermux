@@ -187,3 +187,21 @@ test("removing run, or the folder, stops the server", async () => {
 test("restart delays grow to a minute", () => {
   expect([1, 2, 3, 7, 20].map(restartDelayMs)).toEqual([1000, 2000, 4000, 60000, 60000])
 })
+
+test("_supermux: the page API script, and notify through the applet's own route (devices only)", async () => {
+  const sent: string[] = []
+  const root = mkdtempSync(join(tmpdir(), "applets-api-"))
+  const db = openDb(":memory:"); runMigrations(db, MIGRATIONS)
+  const svc = new AppletService({ db, appletsDir: join(root, "applets"), stateDir: join(root, "state"), backupsDir: join(root, "backups"), notify: async (a, t, b) => { sent.push(`${a.title}|${t}|${b}`) } })
+  cleanups.push(() => { svc.shutdown(); rmSync(root, { recursive: true, force: true }) })
+  mkdirSync(join(root, "applets", "mail", "public"), { recursive: true })
+  writeFileSync(join(root, "applets", "mail", "applet.json"), JSON.stringify({ title: "Mail" }))
+  await svc.scan()
+  const js = await get(svc, "/a/mail/_supermux/api.js")
+  expect(js.headers.get("content-type")).toContain("javascript")
+  expect(await js.text()).toContain("window.supermux")
+  const ok = await get(svc, "/a/mail/_supermux/notify", device, { method: "POST", body: JSON.stringify({ title: "Hi", body: "there" }) })
+  expect(ok.status).toBe(200)
+  expect((await get(svc, "/a/mail/_supermux/notify", agent, { method: "POST", body: "{}" })).status).toBe(403)
+  expect(sent).toEqual(["Mail|Hi|there"])
+})
