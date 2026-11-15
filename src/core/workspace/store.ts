@@ -168,7 +168,8 @@ export class WorkspaceStore {
   closedSessions(workspaceId: string, limit = 20): ClosedSession[] {
     const shown = new Set(this.chatSessionIds(workspaceId))
     const rows = this.db.query(
-      "SELECT id, name, agent, killed_at FROM sessions WHERE workspace_id = ? AND status = 'archived' ORDER BY killed_at DESC, id",
+      // The archived list's rule (commands.ts): no child session (a delegate, a council member), and no internal one.
+      "SELECT id, name, agent, killed_at FROM sessions WHERE workspace_id = ? AND status = 'archived' AND parent_session_id IS NULL AND internal = 0 ORDER BY killed_at DESC, id",
     ).all(workspaceId) as { id: string; name: string; agent: string; killed_at: string | null }[]
     return rows.filter((r) => !shown.has(r.id)).slice(0, limit)
       .map((r) => ({ id: r.id, name: r.name, agent: r.agent, closedAt: r.killed_at }))

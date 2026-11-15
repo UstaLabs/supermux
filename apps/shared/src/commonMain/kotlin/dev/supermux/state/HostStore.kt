@@ -3139,8 +3139,15 @@ class HostStore(
         state: JsonObject,
         id: String? = null,
         groupId: String? = null,
+        /** #151: the broker made it (its id). */
+        onDone: (String) -> Unit = {},
+        /** #151: the broker did not make it. */
+        onFailed: () -> Unit = {},
     ) {
-        stateScope.launch { addView(workspaceId, AddViewBody(kind = kind, state = state, id = id, groupId = groupId)) }
+        stateScope.launch {
+            val view = addView(workspaceId, AddViewBody(kind = kind, state = state, id = id, groupId = groupId))
+            if (view != null) onDone(view.id) else onFailed()
+        }
     }
 
     /** PATCH /workspaces/:id with a new layout tree (drag-resize / split commits). */
