@@ -32,7 +32,10 @@ class TabCloseNoSelectTest {
             }
         }
         waitForIdle()
-        onNodeWithTag("tab-close-b", useUnmergedTree = true).performMouseInput { moveTo(center); click(center) }
+        // A background tab's × appears, and takes clicks, once the pointer is over it: hover first, as a mouse does.
+        onNodeWithTag("tab-close-b", useUnmergedTree = true).performMouseInput { moveTo(center) }
+        waitForIdle()
+        onNodeWithTag("tab-close-b", useUnmergedTree = true).performMouseInput { click(center) }
         waitForIdle()
         assertEquals(listOf("b"), closed)
         assertEquals("a", (tree as LayoutNode.Group).activeViewId, "the × selected the tab it closes")
