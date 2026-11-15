@@ -10,6 +10,7 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from "fs"
 import { host } from "@supermux/platform"
 import { spawnCommandSync } from "../process/launcher"
+import { readEnvironmentMd } from "../agents/environment"
 import { CLI_EQUIVALENT } from "../../shim/cli-equivalents"
 
 export interface AdoptionRow {
@@ -72,22 +73,31 @@ export function bindCliAdoption(a: CliAdoption): () => void { const prev = curre
 export function cliAdoption(): CliAdoption { return current }
 
 /**
- * The one-time note for a session whose agent process started before the CLI: prepended to its next turn (never a
- * wake of its own). That process has no `supermux` on PATH and, unless it is Claude, no session identity in its env,
- * so the note gives the exact command to run.
+ * The CLI hint every new session gets, as it stands in prompts/environment.md (the paragraph that starts "The same
+ * things are a CLI in your shell"): read from there, so the note can never drift from what new sessions are told.
  */
-export function cliNoteFor(sessionId: string, opts: { binDir: string; socketsDir: string; platform?: NodeJS.Platform }): string {
+export function cliHintFromEnvironment(env: string = readEnvironmentMd()): string | undefined {
+  return env.split(/\n\s*\n/).map((p) => p.trim()).find((p) => p.startsWith("The same things are a CLI in your shell"))
+}
+
+/**
+ * The one-time note for a session whose agent process started before the CLI: prepended to its next turn (never a
+ * wake of its own), framed as a system note (Ahmet, 2026-11-16). It carries the same hint new sessions get, plus the
+ * one thing that differs for this process: no `supermux` on PATH (and, unless it is Claude, no session identity in its
+ * env), so the exact command to run instead is shown once.
+ */
+export function cliNoteFor(sessionId: string, opts: { binDir: string; socketsDir: string; platform?: NodeJS.Platform; env?: string }): string {
   // PowerShell on Windows (the shell agents get there), sh everywhere else.
   const run = opts.platform === "win32"
     ? `$env:MUX_SESSION_ID="${sessionId}"; $env:MUX_SOCKETS_DIR="${opts.socketsDir}"; & "${opts.binDir}\\supermux.cmd"`
     : `MUX_SESSION_ID=${sessionId} MUX_SOCKETS_DIR=${opts.socketsDir} ${opts.binDir}/supermux`
-  // A SYSTEM note (Ahmet, 2026-11-16): framed so no agent takes it for the user's words or answers it.
+  const hint = cliHintFromEnvironment(opts.env)
   return [
     "<system-reminder>",
     "This is a one-time note from supermux, not from the user. It needs no reply or acknowledgement: just use the CLI from now on, and answer the user's message below as usual.",
-    "supermux now has a CLI that does what the mux-shim MCP tools do, from your shell.",
-    `Your process started before it, so run it as: ${run} help   (the whole reference on one page; then the same prefix for every command).`,
-    "Sessions started from now on have plain `supermux` on PATH. Background work (delegate, council, replies) arrives in your inbox: never wait or poll for it.",
+    "supermux now has a CLI that does what the mux-shim MCP tools do. New sessions are told:",
+    hint ?? "`supermux help` prints the whole reference on one page; add `--json` for JSON.",
+    `Your process started before it, so \`supermux\` is not on your PATH: wherever the above says \`supermux\`, run \`${run}\` instead.`,
     "</system-reminder>",
   ].join("\n")
 }
