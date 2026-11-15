@@ -216,8 +216,8 @@ test("branchList: default, upstream with ahead/behind, and where each branch is 
   expect(by["main"]).toMatchObject({ isDefault: true, upstream: "origin/main", ahead: 1, behind: 0, openIn: { kind: "this" } })
   expect(by["mux/s"]!.openIn).toEqual({ kind: "session", id: "s-1", name: "Search" })
   expect(by["dev"]!.openIn).toEqual({ kind: "external", path: realpathSync(wtX) })
-  expect(fromFolder.remote).toContainEqual({ name: "origin/main", isDefault: true })
-  expect(fromFolder.remote).toContainEqual({ name: "origin/remote-only", isDefault: false })
+  expect(fromFolder.remote.find((r) => r.name === "origin/main")).toMatchObject({ isDefault: true })
+  expect(fromFolder.remote.find((r) => r.name === "origin/remote-only")).toMatchObject({ isDefault: false })
   // from the session's copy, the main folder's branch reads as the folder
   expect(Object.fromEntries(branchList(wtS, owners).local.map((b) => [b.name, b.openIn]))["main"]).toEqual({ kind: "folder" })
   expect(fromFolder.current).toBe("main")
@@ -243,4 +243,18 @@ test("switchBranch requireClean: a folder with changes is refused before git run
   expect(switchBranch(work, "dev", { requireClean: true })).toEqual({ status: "dirty", changed: 1 })
   expect(g(work, "symbolic-ref", "--short", "HEAD")).toBe("main")
   expect(switchBranch(work, "dev")).toEqual({ status: "switched", branch: "dev" })   // without the rule, git's own
+}, G9_MS)
+
+test("branchList: each local and remote branch's last commit, its author and time (#152's who · ago)", () => {
+  const { work } = repo()
+  g(work, "switch", "-q", "dev")
+  writeFileSync(join(work, "d.txt"), "d\n"); g(work, "add", ".")
+  execFileSync("git", ["-C", work, "commit", "-qm", "dev work", "--author", "Deniz <d@x>"], { env: { ...process.env, GIT_COMMITTER_DATE: "2026-11-01T10:00:00Z" } })
+  g(work, "push", "-q", "origin", "dev")
+  g(work, "switch", "-q", "main")
+  const l = branchList(work, [])
+  const at = Date.parse("2026-11-01T10:00:00Z")
+  expect(l.local.find((b) => b.name === "dev")).toMatchObject({ author: "Deniz", at })
+  expect(l.remote.find((b) => b.name === "origin/dev")).toEqual({ name: "origin/dev", isDefault: false, author: "Deniz", at })
+  expect(l.local.find((b) => b.name === "main")!.author).toBe("t")
 }, G9_MS)
