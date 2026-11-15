@@ -112,8 +112,17 @@ data class GitLiteStatusDto(
     val dirty: Int = 0,
     val unpublished: Boolean? = null,
     val touched: Boolean = false,
+    /** #72: the branch checked out now (null: detached or an older broker), for the footer. */
+    val branch: String? = null,
+    /** #72: ↑↓ against the branch's upstream; null: not published (or an older broker). */
+    val sync: GitSyncDto? = null,
+    /** #72: the repo has any remote; false: Publish offers GitHub / GitLab / Add Remote. Null: an older broker. */
+    val hasRemote: Boolean? = null,
     val computedAt: Double = 0.0,     // epoch millis
 )
+
+@Serializable
+data class GitSyncDto(val ahead: Int = 0, val behind: Int = 0)
 
 @Serializable
 data class LogEntry(

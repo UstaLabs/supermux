@@ -81,6 +81,8 @@ data class WorkspaceRowModel(
     val children: List<WorkspaceChildRowModel>,
     val primarySessionId: String?,
     val openSessionId: String?,
+    /** #152: the branch line: the one the work tree is on now, or the worktree's recorded one until that is known. */
+    val branch: String? = null,
 )
 
 data class ArchivedWorkspaceRowModel(
@@ -134,6 +136,7 @@ fun deriveWorkspaceRow(
         children = children,
         primarySessionId = primarySid,
         openSessionId = resolveWorkspaceOpenSessionId(w),
+        branch = primary?.git?.branch?.takeIf { it.isNotBlank() } ?: w.branch?.takeIf { it.isNotBlank() },
     )
 }
 
