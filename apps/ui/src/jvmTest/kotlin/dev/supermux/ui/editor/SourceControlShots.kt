@@ -40,6 +40,8 @@ private val mixed = """[{"path":"src/App.jsx","status":"modified","staged":"all"
 private val conflict = """[{"path":"src/App.jsx","status":"modified","staged":"conflict","baseBlob":"a"},{"path":"src/styles.css","status":"modified","staged":"all","baseBlob":"b","indexBlob":"i"}]"""
 private val last = """{"sha":"c41e9d2aaaa","subject":"Add a product search box above the grid","author":"claude","at":1,"pushed":false}"""
 private val baseC = """[{"sha":"9f3c2a1bbbb","subject":"Cart: keep coupon on refresh","author":"deniz","at":1},{"sha":"71be004cccc","subject":"Bump checkout SDK to 4.2","author":"ahmet","at":1}]"""
+private val noRemote = """{"isRepo":true,"hasRemote":false,"branch":"product-search-box","upstream":null,"project":"shop"}"""
+private val prNoRemote = """{"status":"unavailable","reason":"no_remote"}"""
 private val pr = """{"status":"found","pr":{"forge":"github","number":12,"url":"https://github.com/acme/shop/pull/12","title":"Add a product search box above the grid","state":"open","draft":false,"target":"dev","head":"product-search-box",
     "review":{"state":"changes","by":["deniz"]},"checks":[{"name":"build","state":"ok","url":"u"},{"name":"unit tests","state":"bad","url":"u"},{"name":"lint","state":"ok","url":"u"}],
     "comments":[{"who":"deniz","body":"Can we debounce this? The catalog will be 2k items soon.","file":"src/App.jsx","line":17}]}}"""
@@ -62,6 +64,10 @@ class SourceControlShots {
         val set: SourceControlState.() -> Unit = {},
         val click: List<String> = emptyList(),
         val popup: Boolean = false,
+        val baseCommits: String = baseC,
+        /** publish-new's answer: a plain 404 is a broker from before the route. */
+        val publishNew: Pair<HttpStatusCode, String> = HttpStatusCode.OK to "{}",
+        val typed: String? = null,
     )
 
     private fun api(s: Scene): SourceControlApi {
@@ -70,7 +76,8 @@ class SourceControlShots {
             val body = when {
                 p.endsWith("/changes") -> """{"repos":[{"repo":"","baseSha":"h","files":${s.files},"merging":${s.merging}}]}"""
                 p.endsWith("/git/status") -> s.status
-                p.endsWith("/git/history") -> """{"branch":"product-search-box","base":"dev","chat":${s.commits},"baseCommits":$baseC,"incoming":${s.incoming}}"""
+                p.endsWith("/git/history") -> """{"branch":"product-search-box","base":"dev","chat":${s.commits},"baseCommits":${s.baseCommits},"incoming":${s.incoming}}"""
+                p.endsWith("/git/publish-new") -> return@MockEngine respond(ByteReadChannel(s.publishNew.second), s.publishNew.first, headersOf(HttpHeaders.ContentType, "text/plain"))
                 p.endsWith("/git/pr") -> s.pr
                 p.endsWith("/git/branches") -> """{"current":"product-search-box","local":[{"name":"product-search-box","openIn":{"kind":"this"}},{"name":"feature/payments"},{"name":"dev","isDefault":true,"openIn":{"kind":"folder"}},{"name":"mux/refunds-endpoint","openIn":{"kind":"session","id":"s2","name":"Refunds endpoint"}}],"remote":[{"name":"origin/feature/checkout-v2"}]}"""
                 p.endsWith("/settings/config") -> "{}"
@@ -98,7 +105,13 @@ class SourceControlShots {
             Scene("11-picker-create", files = f3, set = { picking = true; pickFilter = "fix/search" }),
             Scene("12-sync-ahead-behind", status = """{"isRepo":true,"hasRemote":true,"branch":"product-search-box","upstream":"origin/product-search-box","ahead":1,"behind":2}"""),
             Scene("13-unpublished", status = """{"isRepo":true,"hasRemote":true,"branch":"product-search-box","upstream":null,"ahead":0,"behind":0}"""),
-            Scene("14-no-remote", status = """{"isRepo":true,"hasRemote":false,"branch":"product-search-box","upstream":null}""", set = { ask = ScmAsk.NoRemote }),
+            Scene("14-no-remote", status = noRemote, pr = prNoRemote),
+            Scene("14b-no-remote-pick", status = noRemote, pr = prNoRemote, set = { openPublish() }),
+            Scene("14c-no-remote-pick-changes", files = f3, status = noRemote, pr = prNoRemote, set = { openPublish() }),
+            Scene("14d-no-remote-old-host", status = noRemote, pr = prNoRemote, set = { openPublish() }, click = listOf("scm_publish_github_private"), publishNew = HttpStatusCode.NotFound to "not found"),
+            Scene("14e-no-remote-no-cli", status = noRemote, pr = prNoRemote, set = { openPublish() }, click = listOf("scm_publish_github_private"), publishNew = HttpStatusCode.Conflict to """{"ok":false,"reason":"no_cli"}"""),
+            Scene("14f-no-remote-add-remote", status = noRemote, pr = prNoRemote, set = { openPublish(); publishByUrl(true); publishInput = "git@github.com:acme/shop.git" }),
+            Scene("14g-no-remote-nothing-committed", files = f3, commits = "[]", baseCommits = "[]", status = noRemote, pr = prNoRemote, set = { openPublish() }),
             Scene("15-incoming", incoming = 5, files = """[{"path":"src/debug.js","status":"added","staged":"none"}]"""),
             Scene("16-conflict", files = conflict, merging = true),
             Scene("17-pr-none"),
@@ -121,6 +134,7 @@ class SourceControlShots {
             if (state.picking) state.branches = kotlinx.coroutines.runBlocking { state.api.branches() }
             waitForIdle()
             s.click.forEach { onNodeWithTag(it).performClick(); waitForIdle() }
+            if (s.click.any { it.startsWith("scm_publish_") }) { waitUntil(timeoutMillis = 5_000) { state.publishError != null || state.note != null }; waitForIdle() }
             save(dir, s.name, this, s.popup)
         }
     }

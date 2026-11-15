@@ -195,8 +195,10 @@ fun ComposerFooter(
                         onClick = {
                             when {
                                 syncing -> Unit
-                                // No remote: Source Control asks where to publish (GitHub, GitLab, a URL), as VS Code does.
-                                failed != null || git.hasRemote == false -> { failed = null; onOpenChanges?.invoke() }
+                                // No remote: Source Control opens on its Publish pick (GitHub, GitLab, a URL), as VS Code's quick pick does.
+                                // (A broker before hasRemote: unpublished goes the same way; the pane knows if there is a remote.)
+                                git.hasRemote == false || (git.hasRemote == null && !published) -> { failed = null; dev.supermux.ui.editor.ScmRequests.askPublish(session.id); onOpenChanges?.invoke() }
+                                failed != null -> { failed = null; onOpenChanges?.invoke() }
                                 else -> scope.launch {
                                     syncing = true
                                     val ok = { r: dev.supermux.net.GitOpResult? -> r != null && r.status in setOf("pushed", "up_to_date", "clean", "ok", "") }

@@ -39,6 +39,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.CheckCircle
@@ -92,6 +93,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.net.ChangedFile
+import dev.supermux.net.ROUTE_MISSING
 import dev.supermux.net.RepoChanges
 import dev.supermux.state.SourceControlApi
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
@@ -157,13 +159,26 @@ sealed interface ScmAsk {
     data object MergeInto : ScmAsk
     /** Switch this chat to [branch]? (what moves with it is said) */
     data class Switch(val branch: String) : ScmAsk
-    /** VS Code's Publish Branch with no remote: Publish to GitHub (private / public), GitLab, or Add Remote…. */
-    data object NoRemote : ScmAsk
 }
 
 /** VS Code's Commit ▾: what the button does after committing (postCommitCommands). */
 enum class ScmPost(val wire: String) { Commit("commit"), Push("push"), Sync("sync");
     companion object { fun of(w: String?) = entries.firstOrNull { it.wire == w } ?: Commit }
+}
+
+/** A repository name GitHub and GitLab both take (the broker checks the same). */
+private val SCM_REPO_NAME = Regex("^[A-Za-z0-9._-]+$")
+
+/** "That didn't work: <why>"; a host whose broker predates the route says to update supermux there, not "not found". */
+fun scmFailed(message: String): String =
+    if (message == ROUTE_MISSING) localized(Str.scm_needs_newer_host) else localized(Str.scm_failed, message)
+
+/** #72: the composer footer's ☁ Publish on a project with no remote opens Source Control with this chat's Publish pick. */
+object ScmRequests {
+    /** The chat (session id) whose pane should publish, and when it was asked: the pane clears it; a stale ask is dropped. */
+    val publish = kotlinx.coroutines.flow.MutableStateFlow<Pair<String, Long>?>(null)
+
+    fun askPublish(sessionId: String) { publish.value = sessionId to kotlin.time.Clock.System.now().toEpochMilliseconds() }
 }
 
 /** "Update App.jsx", "Update App.jsx and server.ts", "Update App.jsx and 3 more files": the broker's own rule. */
@@ -227,6 +242,10 @@ class SourceControlState(val api: SourceControlApi) {
     val merging: Boolean get() = repos?.firstOrNull { it.repo == repo }?.merging == true
     val conflicts: Int get() = files.count { it.staged == "conflict" }
     val lastPushed: Boolean get() = last?.pushed == true
+    /** The branch has a commit to publish (unknown until the Graph loads: assume so). */
+    val hasCommits: Boolean get() = history == null || last != null || history?.baseCommits?.isNotEmpty() == true
+    /** VS Code's Publish Branch: a branch with commits and no upstream (with or without a remote yet). */
+    val publishDue: Boolean get() = status?.let { it.upstream == null && it.branch != null } == true && last != null
 
     suspend fun refresh() {
         val r = api.changes()
@@ -271,7 +290,7 @@ class SourceControlState(val api: SourceControlApi) {
         busy = false
         when {
             r == null -> problem = localized(Str.scm_offline)
-            !r.ok -> problem = localized(Str.scm_failed, r.message ?: r.reason ?: "")
+            !r.ok -> problem = scmFailed(r.message ?: r.reason ?: "")
             else -> {
                 problem = null; ask = null
                 note = localized(if (amend) Str.scm_amended else Str.scm_committed, r.subject ?: "")
@@ -288,7 +307,7 @@ class SourceControlState(val api: SourceControlApi) {
 
     /** Pull / push / publish / fetch, with VS Code's outcome in the note line. With no remote, Publish asks where to. */
     suspend fun sync(op: String) {
-        if ((op == "publish" || op == "push") && status?.hasRemote == false) { ask = ScmAsk.NoRemote; return }
+        if ((op == "publish" || op == "push") && status?.hasRemote == false) { openPublish(); return }
         busy = true
         val r = api.sync(op)
         busy = false
@@ -296,37 +315,69 @@ class SourceControlState(val api: SourceControlApi) {
             r == null -> localized(Str.scm_offline)
             r.status in setOf("pushed", "up_to_date", "clean", "ok", "fetched", "") -> null
             r.status == "conflict" -> localized(Str.scm_conflict_first, r.files.joinToString(", "))
-            else -> localized(Str.scm_failed, r.message ?: r.status)
+            else -> scmFailed(r.message ?: r.status)
         }
     }
 
-    /** VS Code's "Publish to GitHub": the repo is made from this folder (named after it) and the branch pushed. */
+    // ── Publish Branch with no remote: VS Code's quick pick (GitHub / GitLab, private / public, or Add Remote…) ──
+    /** The pick is open at the top of the pane; [publishUrl]: it asks for a remote's URL (Add Remote…). */
+    var publishing by mutableStateOf(false)
+    var publishUrl by mutableStateOf(false)
+    /** The new repository's name (the project's folder to start with) or, after Add Remote…, the remote's URL. */
+    var publishInput by mutableStateOf("")
+    /** The choice running now ("github:private", "remote"), and why the last one failed: said in the pick, where it was clicked. */
+    var publishRunning by mutableStateOf<String?>(null)
+    var publishError by mutableStateOf<String?>(null)
+
+    fun openPublish() {
+        picking = false; ask = null; problem = null
+        publishing = true; publishUrl = false; publishError = null; publishRunning = null
+        publishInput = status?.project.orEmpty()
+    }
+
+    fun closePublish() { publishing = false; publishUrl = false; publishError = null; publishRunning = null }
+
+    /** Add Remote… ⇄ back to the list: the input becomes the URL, or the repository name again. */
+    fun publishByUrl(on: Boolean) {
+        publishUrl = on; publishError = null
+        publishInput = if (on) "" else status?.project.orEmpty()
+    }
+
+    /** VS Code's "Publish to GitHub": a new repository on the forge, made from this folder, and the branch pushed to it. */
     suspend fun publishTo(forge: String, visibility: String) {
-        busy = true; note = null
-        val r = api.publishNew(forge, visibility)
-        busy = false
+        val name = publishInput.trim()
+        val host = if (forge == "gitlab") "GitLab" else "GitHub" // i18n-ok: product names
+        if (name.isNotEmpty() && !SCM_REPO_NAME.matches(name)) { publishError = localized(Str.scm_publish_bad_name); return }
+        publishRunning = "$forge:$visibility"; publishError = null; note = null
+        val r = api.publishNew(forge, visibility, name.ifEmpty { null })
+        publishRunning = null
+        val cli = if (forge == "gitlab") "glab" else "gh" // i18n-ok: command names
         when {
-            r == null -> problem = localized(Str.scm_offline)
-            r.ok -> { ask = null; problem = null; note = localized(Str.scm_published_to, r.url.orEmpty()) }
-            r.reason == "no_cli" -> problem = localized(Str.scm_pr_no_cli)
-            r.reason == "not_authed" -> problem = localized(Str.scm_pr_not_authed)
-            else -> problem = localized(Str.scm_failed, r.message ?: r.reason ?: "")
+            r == null -> publishError = localized(Str.scm_offline)
+            r.ok -> { closePublish(); problem = null; note = localized(Str.scm_published_to, r.url.orEmpty()) }
+            r.message == ROUTE_MISSING -> publishError = localized(Str.scm_needs_newer_host)
+            r.reason == "no_cli" -> publishError = localized(Str.scm_publish_no_cli, host, cli)
+            r.reason == "not_authed" -> publishError = localized(Str.scm_publish_not_authed, host, cli)
+            r.reason == "bad" -> publishError = localized(Str.scm_publish_bad_name)
+            else -> publishError = localized(Str.scm_publish_failed, host, r.message?.trim().orEmpty().ifEmpty { r.reason.orEmpty() })
         }
         refresh()
     }
 
-    var remoteUrl by mutableStateOf("")
-
-    /** Add Remote…: origin at the URL given; then Publish pushes there. */
+    /** Add Remote…: origin at the URL typed; then Publish Branch pushes there. */
     suspend fun addRemote() {
-        val url = remoteUrl.trim()
+        val url = publishInput.trim()
         if (url.isEmpty()) return
+        publishRunning = "remote"; publishError = null
         val r = api.addRemote("origin", url)
+        publishRunning = null
         when {
-            r == null -> problem = localized(Str.scm_offline)
-            r.ok -> { ask = null; problem = null; remoteUrl = ""; refresh(); sync("publish") }
-            r.reason == "exists" -> problem = localized(Str.scm_remote_exists)
-            else -> problem = localized(Str.scm_failed, r.message ?: r.reason ?: "")
+            r == null -> publishError = localized(Str.scm_offline)
+            r.ok -> { closePublish(); refresh(); sync("publish") }
+            r.message == ROUTE_MISSING -> publishError = localized(Str.scm_needs_newer_host)
+            r.reason == "exists" -> publishError = localized(Str.scm_remote_exists)
+            r.reason == "bad" -> publishError = localized(Str.scm_remote_bad_url)
+            else -> publishError = localized(Str.scm_remote_failed, r.message?.trim().orEmpty())
         }
         refresh()
     }
@@ -358,7 +409,7 @@ class SourceControlState(val api: SourceControlApi) {
             r.status == "clean" -> { problem = null; latest = r; note = localizedPlural(Plurals.scm_latest_got, r.commits, r.commits, base ?: r.from.orEmpty()) }
             r.status == "up_to_date" -> { problem = null; note = localized(Str.scm_latest_none, base ?: r.from.orEmpty()) }
             r.status == "conflict" -> problem = null
-            else -> problem = localized(Str.scm_failed, r.message ?: r.status)
+            else -> problem = scmFailed(r.message ?: r.status)
         }
         refresh()
     }
@@ -371,7 +422,7 @@ class SourceControlState(val api: SourceControlApi) {
             r == null -> problem = localized(Str.scm_offline)
             r.ok -> note = localized(Str.scm_latest_undone)
             r.reason == "moved" -> problem = localized(Str.scm_latest_moved)
-            else -> problem = localized(Str.scm_failed, r.message ?: r.reason ?: "")
+            else -> problem = scmFailed(r.message ?: r.reason ?: "")
         }
         refresh()
     }
@@ -379,13 +430,13 @@ class SourceControlState(val api: SourceControlApi) {
     /** VS Code's Accept Current / Incoming / Both, for the whole file (side: mine | theirs | both); then it is staged. */
     suspend fun resolve(path: String, side: String) {
         val r = api.resolve(repo, path, side)
-        problem = if (r == null) localized(Str.scm_offline) else if (r.ok) null else localized(Str.scm_failed, r.message ?: r.reason ?: "")
+        problem = if (r == null) localized(Str.scm_offline) else if (r.ok) null else scmFailed(r.message ?: r.reason ?: "")
         refresh()
     }
 
     suspend fun abortMerge() {
         val r = api.abortMerge(repo)
-        problem = if (r == null) localized(Str.scm_offline) else if (r.ok) null else localized(Str.scm_failed, r.message ?: r.reason ?: "")
+        problem = if (r == null) localized(Str.scm_offline) else if (r.ok) null else scmFailed(r.message ?: r.reason ?: "")
         if (r?.ok == true) note = localized(Str.scm_merge_aborted)
         refresh()
     }
@@ -397,6 +448,7 @@ class SourceControlState(val api: SourceControlApi) {
 
     suspend fun openPicker() {
         picking = !picking; pickFilter = ""; heldBy = null
+        if (picking) closePublish()
         if (picking) branches = api.branches()
     }
 
@@ -413,8 +465,8 @@ class SourceControlState(val api: SourceControlApi) {
                 localized(Str.scm_switch_elsewhere, name, r.openIn?.name ?: r.path ?: "")
             }
             "merge_in_progress" -> localized(Str.scm_switch_merging)
-            "invalid_name" -> r.message ?: localized(Str.scm_failed, name)
-            else -> localized(Str.scm_failed, r.message ?: r.status)
+            "invalid_name" -> r.message ?: scmFailed(name)
+            else -> scmFailed(r.message ?: r.status)
         }
         refresh()
     }
@@ -442,7 +494,7 @@ class SourceControlState(val api: SourceControlApi) {
         when (r?.status) {
             null -> problem = localized(Str.scm_offline)
             "opened", "exists" -> { prForm = null; problem = null; pr = api.pr(fresh = true) ?: pr }
-            "publish_failed" -> problem = localized(Str.scm_failed, r.message ?: localized(Str.scm_publish_branch))
+            "publish_failed" -> problem = scmFailed(r.message ?: localized(Str.scm_publish_branch))
             else -> problem = prUnavailable(r.reason, r.message)
         }
         refresh()
@@ -450,7 +502,7 @@ class SourceControlState(val api: SourceControlApi) {
 
     suspend fun prReady(number: Int) {
         val r = api.prReady(number)
-        problem = if (r?.ok == true) null else localized(Str.scm_failed, r?.message ?: "")
+        problem = if (r?.ok == true) null else scmFailed(r?.message ?: "")
         pr = api.pr(fresh = true) ?: pr
     }
 
@@ -473,7 +525,7 @@ class SourceControlState(val api: SourceControlApi) {
         "no_cli" -> localized(Str.scm_pr_no_cli)
         "not_authed" -> localized(Str.scm_pr_not_authed)
         "no_branch" -> localized(Str.scm_pr_no_branch)
-        else -> localized(Str.scm_failed, message ?: reason ?: "")
+        else -> scmFailed(message ?: reason ?: "")
     }
 
     suspend fun undoLastCommit() {
@@ -482,7 +534,7 @@ class SourceControlState(val api: SourceControlApi) {
             r == null -> problem = localized(Str.scm_offline)
             r.ok -> { message = r.subject.orEmpty(); note = localized(Str.scm_undone, r.subject ?: "") }
             r.reason == "pushed" -> problem = localized(Str.scm_undo_pushed)
-            else -> problem = localized(Str.scm_failed, r.message ?: r.reason ?: "")
+            else -> problem = scmFailed(r.message ?: r.reason ?: "")
         }
         refresh()
     }
@@ -509,7 +561,7 @@ class SourceControlState(val api: SourceControlApi) {
             r == null -> localized(Str.scm_offline)
             r.ok -> null
             r.reason == "conflict" -> localized(Str.scm_conflict_first, r.paths.joinToString(", "))
-            else -> localized(Str.scm_failed, r.message ?: r.error ?: r.reason ?: "")
+            else -> scmFailed(r.message ?: r.error ?: r.reason ?: "")
         }
     }
 }
@@ -536,6 +588,17 @@ fun SourceControlPane(
     // A phone has no hover: every row action stays shown.
     val touch = LocalWindowWidthClass.current == WindowWidthClass.Compact
     // Real time, off the UI's frame clock: a poll on it would keep a UI test from ever going idle.
+    // The footer's ☁ Publish asked: with no remote that is the pick, else the branch is published.
+    val wanted by ScmRequests.publish.collectAsState()
+    LaunchedEffect(wanted) {
+        val (id, at) = wanted ?: return@LaunchedEffect
+        if (state.api.sessionId != null && state.api.sessionId != id) return@LaunchedEffect
+        if (kotlin.time.Clock.System.now().toEpochMilliseconds() - at > 10_000) return@LaunchedEffect
+        ScmRequests.publish.value = null
+        if (state.status == null) state.refresh()
+        state.sync("publish")
+        state.refresh()
+    }
     LaunchedEffect(state) {
         withContext(Dispatchers.Default) {
             while (true) {
@@ -559,6 +622,7 @@ fun SourceControlPane(
         }
         WhereLine(state, scope, onBranches)
         if (state.picking) BranchPicker(state, scope, onOpenChat)
+        if (state.publishing) PublishPicker(state, scope)
         state.problem?.let { p ->
             Text(p, fontSize = 12.sp, color = cs.error, modifier = Modifier.padding(horizontal = Space.md, vertical = Space.xs).testTag("scm_problem"))
         }
@@ -568,7 +632,7 @@ fun SourceControlPane(
             repos == null -> Unit
             else -> LazyColumn(Modifier.fillMaxSize()) {
                 // Nothing to commit and nothing to amend: no message box (the prototype's clean state).
-                val nothing = repos.all { it.files.isEmpty() } && state.last == null && !state.merging && state.ask == null
+                val nothing = repos.all { it.files.isEmpty() } && state.last == null && !state.merging && state.ask == null && !state.publishDue
                 if (!nothing) item(key = "commit") { CommitBox(state, scope) }
                 item(key = "banners") { Banners(state, scope) }
                 if (repos.all { it.files.isEmpty() }) item(key = "empty") {
@@ -612,7 +676,8 @@ private fun CommitBox(state: SourceControlState, scope: kotlinx.coroutines.Corou
         // The message, with ✨ inside it.
         Box(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(cs.surfaceContainerLow)
-                .border(1.dp, cs.outlineVariant, RoundedCornerShape(8.dp)),
+                // The prototype's #272a25: the theme's outlineVariant is too faint on this pane.
+                .border(1.dp, cs.onSurfaceVariant.copy(alpha = 0.18f), RoundedCornerShape(8.dp)),
         ) {
             androidx.compose.foundation.text.BasicTextField(
                 value = state.message,
@@ -670,7 +735,7 @@ private fun CommitBox(state: SourceControlState, scope: kotlinx.coroutines.Corou
         // Nothing to commit: the button publishes or syncs instead, as VS Code's does.
         val st = state.status
         val idle = !state.merging && !state.amend && state.changedCount == 0
-        val publish = idle && st != null && st.upstream == null && state.last != null
+        val publish = idle && st != null && state.publishDue
         val syncN = idle && st != null && st.upstream != null && (st.ahead > 0 || st.behind > 0)
         val label = when {
             state.merging -> localized(Str.scm_continue)
@@ -801,12 +866,11 @@ private fun Banners(state: SourceControlState, scope: kotlinx.coroutines.Corouti
                 o?.status == "uncommitted" -> localized(Str.scm_merge_uncommitted)
                 o?.status == "nothing_to_do" -> localized(Str.scm_merge_nothing)
                 o?.status == "sync_conflict" -> localized(Str.scm_conflict_first, o.files.joinToString(", "))
-                else -> localized(Str.scm_failed, o?.message ?: o?.status ?: "")
+                else -> scmFailed(o?.message ?: o?.status ?: "")
             }
             Text(text, fontSize = 12.sp, color = if (o?.status == "integrated" || job.status == "running") cs.onSurfaceVariant else cs.error, modifier = Modifier.padding(bottom = 8.dp).testTag("scm_merge_job"))
             if (o?.status == "non_ff") Text(localized(Str.scm_get_latest, state.base ?: ""), fontSize = 12.sp, color = cs.primary, modifier = Modifier.padding(bottom = 8.dp).clickable { scope.launch { state.getLatest() } })
         }
-        if (state.ask == ScmAsk.NoRemote) NoRemoteBox(state, scope)
         if (state.ask == ScmAsk.MergeInto) {
             AskBox(
                 question = localizedPlural(Plurals.scm_merge_into_q, state.ownCommits, state.ownCommits, state.base ?: ""),
@@ -940,7 +1004,7 @@ private fun PrSection(state: SourceControlState, scope: kotlinx.coroutines.Corou
         val form = state.prForm
         when {
             read.status == "unavailable" -> Text(
-                when (read.reason) { "no_cli" -> localized(Str.scm_pr_no_cli); "not_authed" -> localized(Str.scm_pr_not_authed); else -> localized(Str.scm_failed, read.message ?: "") },
+                when (read.reason) { "no_cli" -> localized(Str.scm_pr_no_cli); "not_authed" -> localized(Str.scm_pr_not_authed); else -> scmFailed(read.message ?: "") },
                 fontSize = 12.5.sp, color = cs.onSurfaceVariant, modifier = pad.padding(vertical = 6.dp),
             )
             form != null -> PrFormView(state, scope, form, gitlab, host)
@@ -1228,43 +1292,106 @@ private fun Lane(color: Color, filled: Boolean) {
     }
 }
 
-/** VS Code's Publish Branch for a project with no remote: GitHub (private / public), GitLab, or a remote by its URL. */
+/**
+ * VS Code's Publish Branch for a project with no remote, as its quick pick at the top of the pane: the new repository's
+ * name (the project's folder), then where it goes: GitHub or GitLab, private or public, or Add Remote… by a URL.
+ * ↑ ↓ choose, Enter runs, Esc closes (or, on the URL, goes back). A failure stays here, where it was clicked.
+ */
 @Composable
-private fun NoRemoteBox(state: SourceControlState, scope: kotlinx.coroutines.CoroutineScope) {
+private fun PublishPicker(state: SourceControlState, scope: kotlinx.coroutines.CoroutineScope) {
     val cs = MaterialTheme.colorScheme
-    val shape = RoundedCornerShape(8.dp)
-    Row(Modifier.padding(bottom = 8.dp).fillMaxWidth().clip(shape).background(cs.surfaceContainerHighest).leftEdge(cs.primary).border(1.dp, cs.outlineVariant, shape).height(IntrinsicSize.Min).testTag("scm_no_remote")) {
-        Column(Modifier.padding(horizontal = 10.dp, vertical = 9.dp)) {
-            Text(localized(Str.scm_no_remote_q), fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface)
-            Text(localized(Str.scm_no_remote_body), fontSize = 12.5.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
-            val btn = { label: String, primary: Boolean, tag: String, on: () -> Unit ->
-                @Composable {
-                    Text(label, fontSize = 12.5.sp, fontWeight = if (primary) FontWeight.Medium else null, color = if (primary) cs.onPrimary else cs.onSurface,
-                        modifier = Modifier.padding(top = 6.dp).clip(RoundedCornerShape(6.dp)).background(if (primary) cs.primary else cs.surfaceContainerHigh)
-                            .border(1.dp, if (primary) cs.primary else cs.outlineVariant, RoundedCornerShape(6.dp)).clickable(enabled = !state.busy, onClick = on)
-                            .padding(horizontal = 12.dp, vertical = 4.dp).testTag(tag))
+    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+    LaunchedEffect(state.publishUrl) { runCatching { focus.requestFocus() } }
+    val busy = state.publishRunning != null
+    val branch = state.status?.branch.orEmpty()
+    val name = state.publishInput.trim()
+    val empty = !state.hasCommits
+    class Choice(val key: String, val label: String, val detail: String?, val icon: ImageVector, val enabled: Boolean, val run: () -> Unit)
+    val forge = { f: String, v: String, label: String -> Choice("$f:$v", label, name.ifEmpty { null }, Icons.Filled.CloudUpload, !empty) { scope.launch { state.publishTo(f, v) } } }
+    val choices = if (state.publishUrl) listOf(
+        Choice("remote", localized(Str.scm_add_remote_go), null, Icons.Filled.Add, name.isNotEmpty()) { scope.launch { state.addRemote() } },
+        Choice("back", localized(Str.scm_publish_back), null, Icons.AutoMirrored.Filled.ArrowBack, true) { state.publishByUrl(false) },
+    ) else listOf(
+        forge("github", "private", localized(Str.scm_publish_github_private)),
+        forge("github", "public", localized(Str.scm_publish_github_public)),
+        forge("gitlab", "private", localized(Str.scm_publish_gitlab_private)),
+        forge("gitlab", "public", localized(Str.scm_publish_gitlab_public)),
+        Choice("url", localized(Str.scm_add_remote_ellipsis), null, Icons.Filled.Add, true) { state.publishByUrl(true) },
+    )
+    var sel by remember(state.publishUrl) { mutableStateOf(0) }
+    val run = { i: Int -> choices.getOrNull(i)?.takeIf { it.enabled && !busy }?.run?.invoke() }
+    Column(
+        Modifier.padding(horizontal = 12.dp).padding(bottom = 10.dp).fillMaxWidth().clip(RoundedCornerShape(8.dp))
+            .background(cs.surfaceContainerHighest).border(1.dp, cs.outlineVariant, RoundedCornerShape(8.dp)).padding(8.dp).testTag("scm_publish_pick"),
+    ) {
+        Text(
+            mono(localized(if (state.publishUrl) Str.scm_publish_pick_url_title else Str.scm_publish_pick_title, branch), branch),
+            fontSize = 11.5.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(start = 2.dp, bottom = 6.dp),
+        )
+        androidx.compose.foundation.text.BasicTextField(
+            value = state.publishInput, onValueChange = { state.publishInput = it; state.publishError = null },
+            enabled = !busy,
+            textStyle = androidx.compose.ui.text.TextStyle(color = cs.onSurface, fontSize = 12.5.sp, fontFamily = MonoFontFamily),
+            cursorBrush = androidx.compose.ui.graphics.SolidColor(cs.primary), singleLine = true,
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(cs.surfaceContainerLow)
+                .border(1.dp, cs.primary, RoundedCornerShape(6.dp)).padding(horizontal = 8.dp, vertical = 6.dp)
+                .focusRequester(focus)
+                .onPreviewKeyEvent { e ->
+                    if (e.type != androidx.compose.ui.input.key.KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                    when (e.key) {
+                        androidx.compose.ui.input.key.Key.DirectionDown -> { sel = (sel + 1) % choices.size; true }
+                        androidx.compose.ui.input.key.Key.DirectionUp -> { sel = (sel - 1 + choices.size) % choices.size; true }
+                        androidx.compose.ui.input.key.Key.Enter -> { run(sel); true }
+                        androidx.compose.ui.input.key.Key.Escape -> { if (state.publishUrl) state.publishByUrl(false) else state.closePublish(); true }
+                        else -> false
+                    }
                 }
-            }
-            Column(Modifier.padding(top = 4.dp)) {
-                btn(localized(Str.scm_publish_github_private), true, "scm_publish_github_private") { scope.launch { state.publishTo("github", "private") } }()
-                btn(localized(Str.scm_publish_github_public), false, "scm_publish_github_public") { scope.launch { state.publishTo("github", "public") } }()
-                btn(localized(Str.scm_publish_gitlab), false, "scm_publish_gitlab") { scope.launch { state.publishTo("gitlab", "private") } }()
-            }
-            Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                androidx.compose.foundation.text.BasicTextField(
-                    value = state.remoteUrl, onValueChange = { state.remoteUrl = it }, singleLine = true,
-                    textStyle = androidx.compose.ui.text.TextStyle(color = cs.onSurface, fontSize = 12.sp, fontFamily = MonoFontFamily),
-                    cursorBrush = androidx.compose.ui.graphics.SolidColor(cs.primary),
-                    modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(cs.surfaceContainerLow).border(1.dp, cs.outlineVariant, RoundedCornerShape(6.dp))
-                        .padding(horizontal = 8.dp, vertical = 5.dp).testTag("scm_remote_url"),
-                    decorationBox = { inner -> if (state.remoteUrl.isEmpty()) Text(localized(Str.scm_remote_url), fontSize = 12.sp, color = cs.onSurfaceVariant, maxLines = 1); inner() },
+                .testTag("scm_publish_input"),
+            decorationBox = { inner ->
+                if (state.publishInput.isEmpty()) Text(localized(if (state.publishUrl) Str.scm_remote_url else Str.scm_repo_name), fontSize = 12.5.sp, fontFamily = MonoFontFamily, color = cs.onSurfaceVariant, maxLines = 1)
+                inner()
+            },
+        )
+        if (empty && !state.publishUrl) Text(
+            mono(localized(Str.scm_publish_commit_first, branch), branch),
+            fontSize = 12.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(start = 2.dp, top = 6.dp).testTag("scm_publish_commit_first"),
+        )
+        Column(Modifier.padding(top = 6.dp)) {
+            choices.forEachIndexed { i, c ->
+                if (c.key == "url") androidx.compose.material3.HorizontalDivider(Modifier.padding(vertical = 3.dp), color = cs.onSurfaceVariant.copy(alpha = 0.18f))
+                QuickRow(
+                    icon = c.icon, label = c.label,
+                    detail = if (state.publishRunning == c.key) localized(Str.scm_publishing) else c.detail,
+                    selected = i == sel && c.enabled, enabled = c.enabled && !busy, tag = "scm_publish_${c.key.replace(':', '_')}",
+                    onHover = { sel = i }, onClick = { sel = i; run(i) },
                 )
-                Text(localized(Str.scm_add_remote), fontSize = 12.5.sp, color = cs.onSurface,
-                    modifier = Modifier.padding(start = 6.dp).clip(RoundedCornerShape(6.dp)).background(cs.surfaceContainerHigh).border(1.dp, cs.outlineVariant, RoundedCornerShape(6.dp))
-                        .clickable(enabled = state.remoteUrl.isNotBlank()) { scope.launch { state.addRemote() } }.padding(horizontal = 12.dp, vertical = 4.dp).testTag("scm_add_remote"))
             }
-            Text(localized(Str.scm_cancel), fontSize = 12.5.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp).clickable { state.ask = null })
         }
+        state.publishError?.let {
+            Text(it, fontSize = 12.sp, color = cs.error, modifier = Modifier.padding(start = 2.dp, top = 6.dp).testTag("scm_publish_error"))
+        }
+    }
+}
+
+/** A row of a quick pick: VS Code's highlight (the accent) on the one the keyboard or the pointer is on. */
+@Composable
+private fun QuickRow(icon: ImageVector, label: String, detail: String?, selected: Boolean, enabled: Boolean, tag: String, onHover: () -> Unit, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val hover = remember { MutableInteractionSource() }
+    val hovered by hover.collectIsHoveredAsState()
+    LaunchedEffect(hovered) { if (hovered && enabled) onHover() }
+    val fg = when { !enabled -> cs.onSurfaceVariant.copy(alpha = 0.6f); selected -> cs.onPrimary; else -> cs.onSurface }
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 26.dp).clip(RoundedCornerShape(6.dp))
+            .background(if (selected) cs.primary else Color.Transparent)
+            .hoverable(hover).clickable(enabled = enabled, interactionSource = hover, indication = null, onClick = onClick)
+            .padding(horizontal = 8.dp).testTag(tag),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, null, tint = fg.copy(alpha = if (selected) 1f else 0.7f), modifier = Modifier.size(13.dp))
+        Text(label, fontSize = 12.5.sp, color = fg, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(start = 7.dp))
+        if (detail != null) Text(detail, fontSize = 11.sp, fontFamily = MonoFontFamily, color = when { selected -> cs.onPrimary.copy(alpha = 0.75f); enabled -> cs.onSurfaceVariant; else -> cs.onSurfaceVariant.copy(alpha = 0.6f) },
+            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 10.dp).widthIn(max = 150.dp))
     }
 }
 

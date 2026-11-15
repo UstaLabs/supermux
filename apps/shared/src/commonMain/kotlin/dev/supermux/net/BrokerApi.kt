@@ -964,7 +964,15 @@ data class GitRemoteStatus(
     val upstream: String? = null,
     val ahead: Int = 0,
     val behind: Int = 0,
+    /** #72: with no remote, the project's folder name: the repository name Publish suggests. */
+    val project: String? = null,
 )
+
+/**
+ * #72: the message of a write whose route the host's broker doesn't have yet (the app is newer than the broker):
+ * the pane says "update supermux on the host", never the router's bare "not found".
+ */
+const val ROUTE_MISSING = "\u0000route_missing"
 
 /** Flat result for git push/pull/fetch/publish — `status` discriminates. */
 @Serializable
@@ -3372,6 +3380,8 @@ class BrokerApi(
             setBody(body)
         }
         val text = resp.bodyAsText()
+        // The router's plain "not found" (no JSON): this broker predates the route, so say that, not "not found".
+        if (resp.status == HttpStatusCode.NotFound && !text.trimStart().startsWith("{")) return fallback(ROUTE_MISSING)
         return runCatching { json.decodeFromString<R>(text) }.getOrElse { fallback(text.take(200)) }
     }
 
