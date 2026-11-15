@@ -135,6 +135,14 @@ export class AppletSupervisor {
     return e && (e.st.state === "running" || e.st.state === "starting") ? e.st.port : undefined
   }
 
+  /** What the server printed since it last started (its own section of the log). */
+  logsSinceStart(id: string, lines = 50): string {
+    const all = this.logs(id, 2000)
+    let at = 0
+    for (const m of all.matchAll(/^--- \S+ supermux started: /gm)) at = m.index ?? 0
+    return all.slice(at).split("\n").slice(-lines).join("\n")
+  }
+
   /** The last [lines] lines of the server's output. */
   logs(id: string, lines = 200): string {
     const p = this.logPath(id)

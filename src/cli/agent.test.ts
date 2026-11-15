@@ -170,3 +170,52 @@ test("api with no args lists the ops; an op with required params prints them ins
   expect(spawn.out).toContain("-f workdir=string  (required)")
   expect(calls).toHaveLength(0)
 })
+
+// #117: `supermux applet …`
+test("applet: help points to the one long page; the page has the rules, an example per verb and the bench fixes", async () => {
+  expect((await run(["help"])).out).toContain("'applet --help' has the rules")
+  const page = (await run(["applet", "--help"])).out
+  expect(page).toBe(helpText("applet"))
+  for (const v of ["list", "info APPLET", "new APPLET", "restart APPLET", "logs APPLET", "run APPLET JOB", "backup APPLET", "APPLET CMD"]) expect(page).toContain(`supermux applet ${v}`)
+  for (const ex of ["applet new job-tracker", "applet restart job-tracker", "applet logs job-tracker --job", "applet run job-tracker gmail", "applet backup job-tracker -m"]) expect(page).toContain(ex)
+  expect(page).toContain("copy back only what is missing")
+  expect(page).toContain("never overwrite live data")
+  expect(page).toContain("NOT a project's product app")
+  expect(page).toContain("keeps running after the command")
+  expect((await run(["applet"])).out).toBe(page)
+})
+
+test("applet new resolves --from against the agent's cwd and prints the folder and link", async () => {
+  reply = (name, args) => name === "applet_new" ? { ok: true, value: { name: args.applet, title: "Job tracker", folder: "/h/.mux/applets/job-tracker", url: "https://r/a/job-tracker/", state: "static", error: null } } : { ok: true }
+  const r = await run(["applet", "new", "job-tracker", "--from", "src/app", "--title", "Job tracker"])
+  expect(r.code).toBe(0)
+  expect(calls).toEqual([{ kind: "orchestration", name: "applet_new", args: { applet: "job-tracker", from: join(dir, "src/app"), title: "Job tracker" } }])
+  expect(r.out).toContain("folder: /h/.mux/applets/job-tracker")
+  expect(r.out).toContain("link:   https://r/a/job-tracker/")
+})
+
+test("applet run prints the job's real output and exits with its result", async () => {
+  reply = (name) => name === "applet_run" ? { ok: true, value: { name: "t", job: "sync", exit_code: 2, output: "synced 3 rows\nerror: quota\n" } } : { ok: true }
+  const r = await run(["applet", "run", "t", "sync"])
+  expect(r.out).toBe("synced 3 rows\nerror: quota\n--- t/sync exited 2")
+  expect(r.code).toBe(1)
+  expect((await run(["applet", "run", "t"])).code).toBe(2)
+})
+
+test("applet restart says the server keeps running, or that it did not stay up", async () => {
+  reply = () => ({ ok: true, value: { name: "t", server: true, state: "crashed", error: "the server exited (code 1)", logs: "boom", note: "the server did not stay up; fix it" } })
+  const bad = await run(["applet", "restart", "t"])
+  expect(bad.code).toBe(1)
+  expect(bad.out).toContain("NOT running: t (the server exited (code 1))")
+  expect(bad.out).toContain("boom")
+})
+
+test("applet list: every row the same shape in --json; owner-only verbs exit 4, unknown applets 3", async () => {
+  reply = (name) => name === "applet_list" ? { ok: true, value: [{ name: "a", title: "A", state: "running", url: "u", needs_you: [] }] }
+    : name === "applet_delete" ? { ok: false, error: "not allowed: only the owner can delete an applet" }
+    : name === "applet_info" ? { ok: false, error: "not found: no applet named \"zz\"" } : { ok: true }
+  const j = await run(["applet", "list", "--json"])
+  expect(JSON.parse(j.out)).toEqual([{ name: "a", title: "A", state: "running", url: "u", needs_you: [], error: null, updated_by: null, updated_at: null }])
+  expect((await run(["applet", "delete", "a"])).code).toBe(4)
+  expect((await run(["applet", "zz", "list-cards"])).code).toBe(3)
+})
