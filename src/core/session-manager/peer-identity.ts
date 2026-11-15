@@ -15,6 +15,7 @@
 //          "unsupported" and the check passes (logged).
 import { readFileSync } from "node:fs"
 import type { Socket } from "node:net"
+import { host } from "@supermux/platform"
 
 export interface Peer { pid: number; uid: number | null }
 export type PeerCheck = { ok: true; peer: Peer | null; why?: string } | { ok: false; peer: Peer | null; why: string }
@@ -30,9 +31,9 @@ async function load(platform: NodeJS.Platform): Promise<Ffi | null> {
     const { dlopen, FFIType, ptr } = await import("bun:ffi")
     ptrOf = ptr as (v: ArrayBufferView) => unknown
     // Only the host's own library can load; another platform (a test's override) has none.
-    if (platform === "linux" && process.platform === "linux") {
+    if (platform === "linux" && host.os() === "linux") {
       f = dlopen("libc.so.6", { getsockopt: { args: [FFIType.i32, FFIType.i32, FFIType.i32, FFIType.ptr, FFIType.ptr], returns: FFIType.i32 } }).symbols as unknown as Ffi
-    } else if (platform === "darwin" && process.platform === "darwin") {
+    } else if (platform === "darwin" && host.os() === "darwin") {
       f = dlopen("libSystem.B.dylib", {
         getsockopt: { args: [FFIType.i32, FFIType.i32, FFIType.i32, FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
         getpeereid: { args: [FFIType.i32, FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
@@ -51,7 +52,7 @@ export function fdOf(socket: Socket): number | undefined {
 }
 
 /** The process on the other end, as the kernel reports it; null when this OS (or this socket) can't say. */
-export async function peerOf(socket: Socket, platform: NodeJS.Platform = process.platform): Promise<Peer | null> {
+export async function peerOf(socket: Socket, platform: NodeJS.Platform = host.os()): Promise<Peer | null> {
   const fd = fdOf(socket)
   const f = await load(platform)
   if (fd === undefined || !f || !ptrOf) return null
@@ -69,7 +70,7 @@ export async function peerOf(socket: Socket, platform: NodeJS.Platform = process
 }
 
 /** A process's parent and start time (start time guards against a reused pid); null when it's gone or unreadable. */
-export async function parentOf(pid: number, platform: NodeJS.Platform = process.platform): Promise<{ ppid: number; start: string } | null> {
+export async function parentOf(pid: number, platform: NodeJS.Platform = host.os()): Promise<{ ppid: number; start: string } | null> {
   if (platform === "linux") {
     try {
       // /proc/<pid>/stat: "pid (comm) state ppid … starttime(22nd)"; comm may hold spaces and parens, so cut after the last ")".
@@ -90,7 +91,7 @@ export async function parentOf(pid: number, platform: NodeJS.Platform = process.
 }
 
 /** True when `pid` is `root` or one of its descendants (walks parents; at most 64 steps). */
-export async function descendsFrom(pid: number, root: number, platform: NodeJS.Platform = process.platform): Promise<boolean> {
+export async function descendsFrom(pid: number, root: number, platform: NodeJS.Platform = host.os()): Promise<boolean> {
   let p = pid
   for (let i = 0; i < 64; i++) {
     if (p === root) return true
@@ -107,7 +108,7 @@ export async function descendsFrom(pid: number, root: number, platform: NodeJS.P
  * keeper; a persistent-runtime Claude session's own pid), or undefined when it is unknown (then it passes, with why).
  */
 export async function checkPeer(socket: Socket, root: number | undefined, opts: { platform?: NodeJS.Platform; uid?: number } = {}): Promise<PeerCheck> {
-  const platform = opts.platform ?? process.platform
+  const platform = opts.platform ?? host.os()
   const peer = await peerOf(socket, platform)
   if (!peer) return { ok: true, peer: null, why: `peer unknown on ${platform}` }
   const uid = opts.uid ?? process.getuid?.()

@@ -17,7 +17,7 @@ import { join } from 'node:path'
 import { TextDecoder } from 'node:util'
 import { assertNoLinksIn, assertRealDirectory, createPrivateFile, present, stagingPath, writeAll, writePrivateFile } from '../private-files.js'
 import { KEEPER_ENV, requestId, responseId, type FrameShape, type JournalEntry, type KeeperLimits, type KeeperMessage, type KeeperStatus } from './protocol.js'
-import { files, proc } from '@supermux/platform'
+import { files, host, proc } from '@supermux/platform'
 import { files as platformFiles } from "@supermux/platform"
 
 const STATUS_COALESCE_MS = 250
@@ -78,7 +78,7 @@ const alive = (pid: number): boolean => proc.isAlive(pid)
  * Returns a function that reaps now and reports how many (tests); a no-op elsewhere.
  */
 export async function becomeChildSubreaper(isAgent: (pid: number) => boolean, everyMs = 60_000): Promise<() => number> {
-  if (process.platform !== 'linux') return () => 0
+  if (host.os() !== 'linux') return () => 0
   try {
     const { dlopen, FFIType, ptr } = await import('bun:ffi')
     const libc = dlopen('libc.so.6', {
