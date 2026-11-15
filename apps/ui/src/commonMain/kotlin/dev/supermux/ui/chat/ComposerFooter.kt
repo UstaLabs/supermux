@@ -156,7 +156,9 @@ fun ComposerFooter(
         val git = session.git
         if (git != null) {
             var syncing by remember { mutableStateOf(false) }
-            val branch = git.branch ?: session.session_branch ?: git.compareRef.takeIf { git.mode == "remote" }
+            // An older broker sends no branch: a plain checkout's compareRef is its upstream ("origin/main") once published.
+            val branch = git.branch ?: session.session_branch
+                ?: git.compareRef.takeIf { git.mode == "remote" }?.let { if (git.unpublished == true) it else it.substringAfter('/') } // platform-ok: a git ref name
             Row(
                 Modifier.weight(1f).padding(start = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
