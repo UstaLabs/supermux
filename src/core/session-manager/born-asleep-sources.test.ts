@@ -20,8 +20,10 @@ const REAL_GIT_MS = 30_000
 
 const dirs: string[] = []
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
+// The native form: on Windows the temp dir can be an 8.3 short name (RUNNER~1), which the broker resolves (git does
+// too) to the long one, so a path compared with the broker's must be resolved the same way.
 function tmp(prefix: string): string {
-  const d = realpathSync(mkdtempSync(join(tmpdir(), prefix)))
+  const d = realpathSync.native(mkdtempSync(join(tmpdir(), prefix)))
   dirs.push(d)
   return d
 }
@@ -112,7 +114,7 @@ test("existing: the folder's own branch, or one a session has, is refused with w
   // A worktree no session owns.
   const wt = join(tmp("src-wt-"), "w")
   git(dir, "worktree", "add", "-q", wt, "dev")
-  expect(await refusal(createAsleep(deps, { workdir: dir, agent: AgentKind.Claude, source: { kind: "existing", branch: "dev" } }))).toEqual({ code: "held_elsewhere", branch: "dev", holder: { kind: "external", path: realpathSync(wt) } })
+  expect(await refusal(createAsleep(deps, { workdir: dir, agent: AgentKind.Claude, source: { kind: "existing", branch: "dev" } }))).toEqual({ code: "held_elsewhere", branch: "dev", holder: { kind: "external", path: realpathSync.native(wt) } })
   expect(await refusal(createAsleep(deps, { workdir: dir, agent: AgentKind.Claude, source: { kind: "existing", branch: "nope" } }))).toEqual({ code: "no_branch", branch: "nope" })
 }, REAL_GIT_MS)
 
