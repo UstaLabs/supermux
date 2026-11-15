@@ -336,6 +336,18 @@ class WorkspaceUiStateTest {
     // The sidebar "+" preselect is ONE-SHOT per navigation: consumed once applied (so a remount of
     // the launcher can't override a draft's workdir), yet a fresh "+" — even for the same project —
     // is a new request.
+    // #152: #72's "Check Out Pull Request…" opens the launcher on the project with the PR's number, once, like the project.
+    @Test fun launcherPrIsHandedOutWithItsProjectOncePerNavigation() {
+        val ui = ShellUiState()
+        ui.openLauncherForPr("h1", "p", 123)
+        assertEquals("h1" to "p", ui.launcherProject)
+        assertEquals(123, ui.launcherPr)
+        ui.consumeLauncherSeeds()
+        assertNull(ui.launcherPr)
+        ui.openLauncherInProject("h1", "p")
+        assertNull(ui.launcherPr)
+    }
+
     @Test fun launcherProjectIsConsumedOncePerNavigation() {
         val ui = ShellUiState()
         ui.openLauncherInProject("h1", "p")

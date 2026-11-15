@@ -43,6 +43,12 @@ data class SessionInfo(
     val git: GitLiteStatusDto? = null,
     /** Last/in-flight finish job for this session (mirrors the broker session record). */
     val finish_job: FinishJobDto? = null,
+    /** #152 B5: what the launcher started it from (new | existing | pr | local | reuse); null: an older session. */
+    val source: String? = null,
+    /** #152 B5: the pull / merge request it works on (its own head branch). */
+    val pr: SessionPrDto? = null,
+    /** #152 B5: the remote its pushes go to when they update [pr] ("origin", "pr-<owner>"); null with a [pr]: review only. */
+    val push_remote: String? = null,
     /**
      * User-facing task state (independent of lifecycle [status]):
      * draft | in_progress | settled. Broker JSON uses snake_case.
@@ -92,6 +98,10 @@ data class FinishJobDto(
     val startedAt: Double = 0.0,       // epoch millis (Date.now())
     val endedAt: Double? = null,
 )
+
+/** #152 B5: a session's pull request (GitHub) or merge request (GitLab). */
+@Serializable
+data class SessionPrDto(val forge: String = "github", val number: Int = 0, val url: String = "")
 
 @Serializable
 data class GitLiteStatusDto(

@@ -16,7 +16,7 @@ class ContractTest {
 
     @Test fun every_broker_fixture_parses_into_a_ServerFrame() {
         val names = listOf(
-            "snapshot", "session_added", "session_removed", "session_renamed", "session_state",
+            "snapshot", "session_added", "session_added_pr", "session_removed", "session_renamed", "session_state",
             "agent_state", "agent_error", "message_append", "activity_append", "bg_tasks",
             "commands_changed", "context_usage", "compaction", "compact_advice", "finish_job", "session_git", "session_git_remote",
             "sessions_reordered", "session_read",

@@ -89,6 +89,9 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
                     session_branch = incoming.session_branch ?: s.session_branch,
                     git = incoming.git ?: s.git,
                     finish_job = incoming.finish_job ?: s.finish_job,
+                    source = incoming.source ?: s.source,
+                    pr = incoming.pr ?: s.pr,
+                    push_remote = incoming.push_remote ?: s.push_remote,
                 )
             }
         }

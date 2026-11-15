@@ -43,6 +43,8 @@ import dev.supermux.net.RepoBranches
 import dev.supermux.net.RepoInfo
 import dev.supermux.net.SessionSourceBody
 import dev.supermux.proto.PermissionModeInfo
+import dev.supermux.proto.ProjectDto
+import dev.supermux.proto.ProjectLocationDto
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
 import dev.supermux.state.LauncherDraft
@@ -166,6 +168,10 @@ class SessionLauncherScreenTest {
         prRead: (String) -> OpenPrRead? = { null },
         switched: MutableList<String>? = null,
         onOpenSessionFromCard: ((String) -> Unit)? = null,
+        /** The host's projects, and the one the launcher opens on (the sidebar's "+", #72's "Check Out Pull Request…"). */
+        catalog: List<ProjectDto> = emptyList(),
+        initialProjectId: String? = null,
+        initialPrNumber: Int? = null,
     ) {
         SupermuxTheme(appearance = AppearanceMode.DARK) {
             SessionLauncherScreen(
@@ -189,6 +195,7 @@ class SessionLauncherScreenTest {
                     projectPrs = { _, _ -> prs },
                     projectPr = { _, ref -> prRead(ref) },
                     switchFolder = { d, n -> switched?.add("$d=$n"); GitSwitchResult(status = "switched", branch = n) },
+                    projectCatalog = kotlinx.coroutines.flow.flowOf(catalog),
                 ),
                 loadPrefs = { prefs },
                 onPrefsChange = onPrefsChange,
@@ -201,6 +208,8 @@ class SessionLauncherScreenTest {
                 standalone = standalone,
                 workspaceWorkdir = workspaceWorkdir,
                 workspaceLabel = workspaceLabel,
+                initialProjectId = initialProjectId,
+                initialPrNumber = initialPrNumber,
             )
         }
     }
@@ -1199,6 +1208,63 @@ class SessionLauncherScreenTest {
         onNodeWithTag("launcher_submit").performClick()
         waitForIdle()
         assertEquals(listOf<SessionSourceBody?>(SessionSourceBody(kind = "pr", number = 123)), sent)
+    }
+
+    // ── #152 C4: #72's "Check Out Pull Request…" opens the launcher on a project with a PR's number ────────
+
+    private val storefrontProject = ProjectDto(id = "sf", name = "Storefront", locations = listOf(ProjectLocationDto("sf-l0", "/proj/x")))
+
+    @Test fun opened_for_a_pull_request_the_launcher_reads_it_again_and_picks_it_in_a_worktree() = runComposeUiTest {
+        val sent = mutableListOf<SessionSourceBody?>()
+        val asked = mutableListOf<String>()
+        val put = mutableListOf<String>()
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(text = "Address the review comments"), repoInfo = repo,
+                projectPrefs = ProjectPrefs("local", "ahmet/"), branches = storefront, folder = clean, prs = prs,
+                prRead = { ref -> asked += ref; OpenPrRead(status = "found", pr = pr123, forge = "github") },
+                prefsPut = put, catalog = listOf(storefrontProject), initialProjectId = "sf", initialPrNumber = 123,
+                onSubmit = captureSource(sent),
+            )
+        }
+        waitUntil(timeoutMillis = 5_000) { asked.isNotEmpty() }
+        waitForIdle()
+        assertEquals(listOf("#123"), asked)
+        // Local is the user's pick for this project; a PR is worked on in a worktree, and the pick is left as it was.
+        onNodeWithTag(WorkRowTags.WORK_IN).assertTextContains("Worktree")
+        onNodeWithTag(WorkRowTags.BRANCH).assertTextContains("#123")
+        onNodeWithTag(WorkRowTags.SUMMARY).assertTextContains("update PR #123", substring = true)
+        assertEquals(emptyList(), put)
+        onNodeWithTag("launcher_submit").performClick()
+        waitForIdle()
+        assertEquals(listOf<SessionSourceBody?>(SessionSourceBody(kind = "pr", number = 123)), sent)
+    }
+
+    @Test fun a_pull_request_that_cannot_be_opened_says_why_under_the_row() = runComposeUiTest {
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(text = "go"), repoInfo = repo,
+                projectPrefs = ProjectPrefs("worktree", "ahmet/"), branches = storefront, folder = clean, prs = prs,
+                prRead = { OpenPrRead(status = "not_open", state = "merged", forge = "github") },
+                catalog = listOf(storefrontProject), initialProjectId = "sf", initialPrNumber = 118,
+            )
+        }
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag(WorkRowTags.PR_LINK_NOTE).fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithTag(WorkRowTags.PR_LINK_NOTE).assertTextContains("PR #118 is already merged.")
+        // Nothing is picked for it: the row is as the project left it.
+        onNodeWithTag(WorkRowTags.BRANCH).assertTextContains("New branch", substring = true)
+    }
+
+    @Test fun a_pull_request_the_host_could_not_read_says_so() = runComposeUiTest {
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(text = "go"), repoInfo = repo,
+                projectPrefs = ProjectPrefs("worktree", "ahmet/"), branches = storefront, folder = clean, prs = prs,
+                prRead = { null }, catalog = listOf(storefrontProject), initialProjectId = "sf", initialPrNumber = 118,
+            )
+        }
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag(WorkRowTags.PR_LINK_NOTE).fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithTag(WorkRowTags.PR_LINK_NOTE).assertTextContains("Couldn’t read PR #118: the host didn’t answer.")
     }
 
     @Test fun no_remote_means_no_pull_request_tab() = runComposeUiTest {

@@ -1135,6 +1135,25 @@ fun ChatPanel(
                         )
                         }
                     }
+                    // #152 C4: a session started from a pull / merge request says so after the crumb, and whether
+                    // its pushes reach it ("#123 · pushes update it") or can't (a fork that allows no edits).
+                    val pr = session.pr
+                    if (pr != null && showStatusText) {
+                        val number = (if (pr.forge == "gitlab") "!" else "#") + pr.number // i18n-ok: GitHub's / GitLab's number signs
+                        Text(
+                            text = localized(if (session.push_remote != null) Str.chat_pr_crumb_pushes else Str.chat_pr_crumb_review, number),
+                            fontSize = 11.5.sp,
+                            color = cs.primary,
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier
+                                .padding(start = 8.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(cs.primary.copy(alpha = 0.12f))
+                                .padding(horizontal = 8.dp, vertical = 2.dp)
+                                .testTag("chat_header_pr"),
+                        )
+                    }
                 }
                 IconButton(
                     onClick = { find.show() },

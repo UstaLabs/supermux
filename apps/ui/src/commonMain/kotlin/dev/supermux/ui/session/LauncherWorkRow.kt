@@ -129,6 +129,7 @@ internal object WorkRowTags {
     const val TAB_PR = "launcher_tab_pr"
     const val PR_SEARCH = "launcher_pr_search"
     const val PR_NOTE = "launcher_pr_note"
+    const val PR_LINK_NOTE = "launcher_pr_link_note"
     const val CARD = "launcher_work_card"
     const val CARD_HEAD = "launcher_work_card_head"
     const val CARD_USE_LOCAL = "launcher_card_use_local"
@@ -175,6 +176,8 @@ internal fun LauncherWorkRow(
     lookupPr: suspend (String) -> OpenPrRead? = { null },
     /** "Open that session", from the card of a branch another session has. */
     onOpenSession: ((String) -> Unit)? = null,
+    /** #152 C4: the PR / MR #72's "Check Out Pull Request…" opened the launcher for, and couldn't be used, with its read. */
+    prLink: Pair<Int, OpenPrRead?>? = null,
 ) {
     var open by remember { mutableStateOf<WorkPop?>(null) }
     val close = { open = null }
@@ -245,7 +248,29 @@ internal fun LauncherWorkRow(
                 modifier = Modifier.padding(top = 6.dp, start = 2.dp).testTag(WorkRowTags.NOT_REMEMBERED),
             )
         }
+        if (prLink != null) {
+            val (number, read) = prLink
+            Text(
+                prLinkNote(number, read, prs?.repo, ForgeWords(read?.forge == "gitlab" || prs?.forge == "gitlab")),
+                color = MaterialTheme.colorScheme.error,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(top = 6.dp, start = 2.dp).testTag(WorkRowTags.PR_LINK_NOTE),
+            )
+        }
     }
+}
+
+/** Why the PR / MR the launcher was opened for can't be worked on here: the Pull request tab's words, or no answer. */
+private fun prLinkNote(number: Int, read: OpenPrRead?, repo: String?, words: ForgeWords): String = when (read?.status) {
+    null -> localized(Str.launch_pr_link_unread, words.label(number))
+    "not_open" -> localized(if (read.state == "merged") Str.launch_pr_merged else Str.launch_pr_closed, words.label(number))
+    "other_repo" -> localized(Str.launch_pr_other_repo, read.repo.orEmpty())
+    "unavailable" -> when (read.reason) {
+        "no_cli" -> localized(Str.launch_pr_no_cli, words.cli, words.noun)
+        "not_authed" -> localized(Str.launch_pr_not_authed, words.cli, words.noun)
+        else -> localized(Str.launch_pr_link_failed, words.label(number), read.message?.takeIf { it.isNotBlank() } ?: read.reason.orEmpty())
+    }
+    else -> localized(Str.launch_pr_none, words.noun, words.sign + number, repo ?: read.repo.orEmpty())
 }
 
 // ── the pills ─────────────────────────────────────────────────────────────────────────────────────

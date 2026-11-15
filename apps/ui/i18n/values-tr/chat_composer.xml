@@ -35,6 +35,9 @@
     <!-- The chat around the composer: header status, empty state, live rows -->
     <string name="composer_search_chats">Sohbetlerde ara</string>
     <string name="composer_not_responding">Yanıt vermiyor</string>
+    <!-- #152: bir pull / merge request'ten başlatılan oturumun sohbet başlığındaki çipi; %1$s "#123" ya da "!7". -->
+    <string name="chat_pr_crumb_pushes">%1$s · gönderilenler onu günceller</string>
+    <string name="chat_pr_crumb_review">%1$s · yalnızca inceleme</string>
     <string name="composer_reveal_gone">Bu mesaj artık sohbette yok</string>
     <string name="composer_start_conversation">Sohbeti başlatın</string>
     <string name="composer_starter_state">Şu anki durum ne?</string>

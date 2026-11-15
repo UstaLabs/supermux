@@ -14,6 +14,7 @@ import dev.supermux.net.GitOpenIn
 import dev.supermux.net.GitRemoteBranch
 import dev.supermux.net.OpenPr
 import dev.supermux.net.OpenPrList
+import dev.supermux.net.OpenPrRead
 import dev.supermux.net.ProjectFolderState
 import dev.supermux.net.ProjectPrefs
 import dev.supermux.net.RepoBranches
@@ -86,6 +87,9 @@ class LauncherWorkShots {
         val message: String = "",
         val notGit: Boolean = false,
         val gitlab: Boolean = false,
+        /** #152 C4: opened for this PR (#72's "Check Out Pull Request…"), and what reading it again says. */
+        val prNumber: Int? = null,
+        val prRead: OpenPrRead? = null,
         val act: ComposeUiTest.() -> Unit = {},
     )
 
@@ -115,6 +119,8 @@ class LauncherWorkShots {
         Scene("21-diverged-done") { open(WorkRowTags.BRANCH); open(WorkRowTags.TAB_PR); open(WorkRowTags.pr(125)); open(WorkRowTags.CARD_USE_PR) },
         Scene("22-existing-in-session") { open(WorkRowTags.BRANCH); open(WorkRowTags.TAB_EXISTING); open(WorkRowTags.row("fix/cart-total")) },
         Scene("23-gitlab-pop", gitlab = true) { open(WorkRowTags.BRANCH); open(WorkRowTags.TAB_PR) },
+        Scene("24-opened-for-pr123", prNumber = 123, prRead = OpenPrRead(status = "found", pr = prList(false).prs.first(), forge = "github")),
+        Scene("25-opened-for-merged", prNumber = 118, prRead = OpenPrRead(status = "not_open", state = "merged", forge = "github")),
     )
 
     @Test
@@ -144,10 +150,13 @@ class LauncherWorkShots {
                                 folderState = { scene.folder ?: clean },
                                 setProjectPrefs = { _, wi -> scene.prefs?.copy(workIn = wi) },
                                 projectPrs = { _, _ -> if (scene.prefs == null) null else prList(scene.gitlab) },
+                                projectPr = { _, _ -> scene.prRead },
                             ),
                             loadDraft = { LauncherDraft(workdir = dir, text = scene.message) },
                             onSubmit = { _, _, _, _, _, _, _, _, _, _, _, _ -> null },
                             standalone = !pointer,
+                            initialProjectId = scene.prNumber?.let { "p1" },
+                            initialPrNumber = scene.prNumber,
                         )
                     }
                 }

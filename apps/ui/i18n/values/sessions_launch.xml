@@ -112,6 +112,9 @@
     <string name="launch_pr_other_repo">That one belongs to %1$s, not to this project.</string>
     <string name="launch_pr_no_cli">Install %1$s on this host to see its %2$ss.</string>
     <string name="launch_pr_not_authed">Sign in to %1$s on this host to see its %2$ss.</string>
+    <!-- #152 C4: the PR / MR #72's "Check Out Pull Request…" opened the launcher for, when it can't be read. -->
+    <string name="launch_pr_link_unread">Couldn’t read %1$s: the host didn’t answer.</string>
+    <string name="launch_pr_link_failed">Couldn’t read %1$s: %2$s</string>
     <string name="launch_pr_failed">Couldn't list the %1$ss: %2$s</string>
     <string name="launch_pr_foot">Works on the %1$s's own branch. Pushes update the %1$s.</string>
     <!-- A pull request row's second line: its branch, the branch it goes into, its author. -->

@@ -120,6 +120,7 @@ import dev.supermux.net.ReasoningLevel
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.GitBranches
 import dev.supermux.net.OpenPrList
+import dev.supermux.net.OpenPrRead
 import dev.supermux.net.ProjectFolderState
 import dev.supermux.net.RepoInfo
 import dev.supermux.net.SessionSourceBody
@@ -304,6 +305,11 @@ fun SessionLauncherScreen(
      * navigation (a remount must not override the user's or a draft's workdir).
      */
     onInitialProjectApplied: () -> Unit = {},
+    /**
+     * #152: with [initialProjectId], a pull / merge request of it to work on (#72's "Check Out Pull Request…"). It is
+     * read from the forge again once the project is showing, and picked in a worktree for this session only.
+     */
+    initialPrNumber: Int? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -532,6 +538,9 @@ fun SessionLauncherScreen(
     var fetchedRepos by remember { mutableStateOf(setOf<String>()) }
     /** The folder whose Local / Worktree pick the broker couldn't keep (never silent: the row says so). */
     var workInNotSaved by remember { mutableStateOf<String?>(null) }
+    /** #152 C4: the PR / MR the launcher was opened for, until it is read; and one that couldn't be used, with why. */
+    var pendingPr by remember { mutableStateOf<Int?>(null) }
+    var prLinkFailed by remember { mutableStateOf<Pair<Int, OpenPrRead?>?>(null) }
     fun pickWorkIn(w: WorkIn) {
         workIn = w
         val wd = workdir ?: return
@@ -555,6 +564,7 @@ fun SessionLauncherScreen(
         folderState = null
         projectPrs = null
         sourcesKnown = false
+        prLinkFailed = null
         if (launcherRestoring) return@LaunchedEffect
         val switchedRepoHost = lastRepoHost != null && lastRepoHost != selectedHost
         lastRepoHost = selectedHost
@@ -593,6 +603,25 @@ fun SessionLauncherScreen(
             // From the forge (a network call): last, so the row is drawn without waiting for it.
             projectPrs = actions.projectPrs(wd, "")
         }
+    }
+    // #152 C4: opened for a PR / MR (#72's "Check Out Pull Request…"). It is read from the forge again (it may have
+    // been merged since), then picked in a worktree for this session; the project's own Local / Worktree pick is left
+    // as it is. One that can't be used says why under the row.
+    LaunchedEffect(pendingPr, sourcesKnown, workdir) {
+        val n = pendingPr ?: return@LaunchedEffect
+        val wd = workdir ?: return@LaunchedEffect
+        if (!sourcesKnown) return@LaunchedEffect
+        pendingPr = null
+        val read = actions.projectPr(wd, "#$n")
+        if (workdir != wd) return@LaunchedEffect
+        val pr = read?.pr?.takeIf { read.status == "found" }
+        if (pr == null) {
+            prLinkFailed = n to read
+            return@LaunchedEffect
+        }
+        workIn = WorkIn.Worktree
+        pick = pick.copy(mode = BranchMode.PullRequest, pr = pr, diverged = null, folderTo = null)
+        pickFor = wd
     }
     // A branch list opening: origin is fetched once per repo, then the branches and the folder's state are read again.
     fun refreshBranches() {
@@ -863,6 +892,8 @@ fun SessionLauncherScreen(
         val project = catalog.firstOrNull { it.id == id } ?: return@LaunchedEffect
         initialProjectApplied = true
         applyProject(project)
+        // Taken before the shell consumes the route: the PR is read once the project's row is showing.
+        pendingPr = initialPrNumber?.takeIf { it > 0 }
         onInitialProjectApplied()
     }
 
@@ -1484,6 +1515,7 @@ fun SessionLauncherScreen(
                             onPick = { p ->
                                 pick = p
                                 pickFor = rowWorkdir
+                                prLinkFailed = null
                             },
                             onWorkIn = { pickWorkIn(it) },
                             onOpenBranches = { refreshBranches() },
@@ -1492,6 +1524,7 @@ fun SessionLauncherScreen(
                             prs = projectPrs,
                             lookupPr = { ref -> actions.projectPr(rowWorkdir, ref) },
                             onOpenSession = onOpenSession,
+                            prLink = prLinkFailed,
                         )
                     } else if (notGit && rowWorkdir != null) {
                         NotGitSummary(formatWorkdir(rowWorkdir, home), Modifier.padding(top = 12.dp))
