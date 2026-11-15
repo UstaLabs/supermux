@@ -124,7 +124,11 @@ fun scmDiffTab(repo: String, f: ChangedFile, group: ScmGroup): ScmDiffTab = when
 }
 
 /** The Create Pull Request form: target (the base by default), the agent's title and description, draft. */
-data class PrForm(val target: String, val title: String = "", val body: String = "", val draft: Boolean = false, val by: String? = null, val loading: Boolean = true)
+data class PrForm(val target: String, val title: String = "", val body: String = "", val draft: Boolean = false, val by: String? = null, val loading: Boolean = true,
+    /** The title or description was typed in: a new target no longer rewrites them. */
+    val edited: Boolean = false,
+    /** The target the title and description were written for (a new target writes them again, once). */
+    val textFor: String? = null)
 
 /** VS Code's groups, in its order. */
 enum class ScmGroup { Merge, Staged, Changes }
@@ -261,7 +265,10 @@ class SourceControlState(val api: SourceControlApi) {
         ownCommits = h?.chat?.size ?: 0
         api.pr()?.let { pr = it }
         // No PR yet: can one be opened into the target? (Only then is Create offered.)
-        prTarget = if (pr?.status == "none" && last != null && status?.hasRemote == true) api.prBase(prForm?.target ?: base) else null
+        val wantTarget = pr?.status == "none" && last != null && status?.hasRemote == true
+        prTarget = if (wantTarget) resolvePrTarget() else null
+        prTargetKnown = wantTarget
+        prForm?.target?.takeIf { it.isNotEmpty() }?.let { t -> api.prBase(t)?.let { prFormCheck = it } }
         if (!prefsRead) api.prefs()?.let { (p, s) -> prefsRead = true; post = ScmPost.of(p); smart = s ?: "ask" }
         if (amend && (last == null || lastPushed)) amend = false
     }
@@ -343,6 +350,10 @@ class SourceControlState(val api: SourceControlApi) {
     var publishDetails by mutableStateOf<String?>(null)
     /** Can a PR/MR into the target be opened (the form's, else the base, else origin's default); null: not known. */
     var prTarget by mutableStateOf<dev.supermux.net.PrBaseCheck?>(null)
+    /** The open form's target, checked (its own: the pane's poll never clears it); null: not checked yet, so Create is off. */
+    var prFormCheck by mutableStateOf<dev.supermux.net.PrBaseCheck?>(null)
+    /** [prTarget] was worked out (null then means: no other branch to propose into). */
+    var prTargetKnown by mutableStateOf(false)
     /** A PR action's failure, said in the PR section where it was clicked (its tool text under Details). */
     var prProblem by mutableStateOf<String?>(null)
 
@@ -492,19 +503,45 @@ class SourceControlState(val api: SourceControlApi) {
         refresh()
     }
 
-    suspend fun openPrForm() {
-        // The chat's base, else origin's own default branch (never a guessed main).
-        val target = base ?: prTarget?.target ?: api.prBase(null)?.target.orEmpty()
-        prForm = PrForm(target = target)
-        val t = api.prText(base?.let { null } ?: target.ifEmpty { null })
-        prForm = prForm?.copy(title = t?.title.orEmpty(), body = t?.body.orEmpty(), by = t?.by, loading = false)
+    /**
+     * Where a PR/MR from this branch goes: the chat's base, else origin's default branch, else a local main / master /
+     * trunk / develop. Never the branch itself (a repo published from a chat's branch has that branch as its default).
+     * null: no other branch to propose into.
+     */
+    suspend fun resolvePrTarget(): dev.supermux.net.PrBaseCheck? {
+        val head = status?.branch
+        base?.takeIf { it != head }?.let { return api.prBase(it) }
+        api.prBase(null)?.takeIf { it.target != head }?.let { return it }
+        val local = (branches ?: api.branches()?.also { branches = it })?.local?.map { it.name }.orEmpty()
+        return listOf("main", "master", "trunk", "develop").firstOrNull { it != head && it in local }?.let { api.prBase(it) }
+    }
+
+    /**
+     * Create Pull Request: the form opens only when it can work (a target on the forge, commits to propose); else the
+     * section says why. [anyTarget] ("Pick another target…"): the form opens to choose one.
+     */
+    suspend fun openPrForm(anyTarget: Boolean = false) {
+        prProblem = null
+        val t = resolvePrTarget()
+        prTarget = t; prTargetKnown = true
+        if (!anyTarget && (t == null || !t.onRemote || t.ahead == 0)) return
+        val target = t?.takeIf { it.onRemote && it.ahead != 0 }?.target.orEmpty()
+        prFormCheck = t?.takeIf { it.target == target }
+        prForm = PrForm(target = target, loading = target.isNotEmpty(), textFor = target.ifEmpty { null })
+        if (target.isNotEmpty()) writePrText(target)
+    }
+
+    /** The agent's title and description for [target] (else from the commits); kept once typed in. */
+    private suspend fun writePrText(target: String) {
+        val t = api.prText(target)
+        prForm = prForm?.takeIf { it.target == target && !it.edited }?.copy(title = t?.title.orEmpty(), body = t?.body.orEmpty(), by = t?.by, loading = false, textFor = target) ?: prForm?.copy(loading = false)
     }
 
     suspend fun rewritePr() {
         val f = prForm ?: return
-        prForm = f.copy(loading = true)
-        val t = api.prText(f.target)
-        prForm = prForm?.copy(title = t?.title ?: f.title, body = t?.body ?: f.body, by = t?.by, loading = false)
+        if (f.target.isEmpty()) return
+        prForm = f.copy(loading = true, edited = false)
+        writePrText(f.target)
     }
 
     suspend fun createPr() {
@@ -529,13 +566,26 @@ class SourceControlState(val api: SourceControlApi) {
         busy = false
         when {
             r == null -> prProblem = localized(Str.scm_offline)
-            r.ok -> { prProblem = null; note = localized(Str.scm_base_published, target); prTarget = api.prBase(target, fresh = true) }
+            r.ok -> {
+                prProblem = null; note = localized(Str.scm_base_published, target)
+                val c = api.prBase(target, fresh = true)
+                prTarget = c
+                if (prForm?.target == target) { prFormCheck = c; checkPrTarget(target) }
+            }
             else -> prProblem = failed(r.message ?: r.reason ?: "", localized(Str.scm_base_publish_failed, target))
         }
     }
 
-    /** The form's target changed: check it again. */
-    suspend fun checkPrTarget(target: String) { prTarget = api.prBase(target.ifEmpty { null }) }
+    /** The form's target changed: check it, and write the text for it (unless typed in). */
+    suspend fun checkPrTarget(target: String) {
+        prFormCheck = null
+        if (target.isEmpty() || target == status?.branch) return
+        prFormCheck = api.prBase(target)
+        val f = prForm ?: return
+        if (!f.edited && f.textFor != target && prFormCheck?.let { it.onRemote && it.ahead != 0 } == true) {
+            prForm = f.copy(loading = true); writePrText(target)
+        }
+    }
 
     suspend fun prReady(number: Int) {
         val r = api.prReady(number)
@@ -1061,13 +1111,20 @@ private fun PrSection(state: SourceControlState, scope: kotlinx.coroutines.Corou
                             .clickable(enabled = !state.busy) { scope.launch { state.publishPrTarget(t.target) } }.padding(horizontal = 12.dp, vertical = 5.dp).testTag("scm_pr_publish_target"))
                     Text(localized(Str.scm_pr_other_target), fontSize = 12.5.sp, color = cs.onSurface,
                         modifier = Modifier.clip(RoundedCornerShape(6.dp)).border(1.dp, cs.outlineVariant, RoundedCornerShape(6.dp))
-                            .clickable { scope.launch { state.openPrForm() } }.padding(horizontal = 12.dp, vertical = 5.dp).testTag("scm_pr_other_target"))
+                            .clickable { scope.launch { state.openPrForm(anyTarget = true) } }.padding(horizontal = 12.dp, vertical = 5.dp).testTag("scm_pr_other_target"))
                 }
             }
-            pr == null && state.prTarget?.ahead == 0 -> Text(
-                mono(localized(Str.scm_pr_nothing_ahead, state.status?.branch ?: "", state.prTarget!!.target), state.status?.branch ?: "", state.prTarget!!.target),
-                fontSize = 12.5.sp, color = cs.onSurfaceVariant, modifier = pad.padding(vertical = 6.dp).testTag("scm_pr_nothing_ahead"),
-            )
+            pr == null && (state.prTarget?.ahead == 0 || (state.prTargetKnown && state.prTarget == null)) -> Column(pad.padding(vertical = 6.dp)) {
+                val head = state.status?.branch.orEmpty()
+                val t = state.prTarget
+                Text(
+                    if (t != null) mono(localized(Str.scm_pr_nothing_ahead, head, t.target), head, t.target) else mono(localized(Str.scm_pr_no_target, head), head),
+                    fontSize = 12.5.sp, color = cs.onSurfaceVariant, modifier = Modifier.testTag(if (t != null) "scm_pr_nothing_ahead" else "scm_pr_no_target"),
+                )
+                Text(localized(Str.scm_pr_other_target), fontSize = 12.5.sp, color = cs.onSurface,
+                    modifier = Modifier.padding(top = 8.dp).clip(RoundedCornerShape(6.dp)).border(1.dp, cs.outlineVariant, RoundedCornerShape(6.dp))
+                        .clickable { scope.launch { state.openPrForm(anyTarget = true) } }.padding(horizontal = 12.dp, vertical = 5.dp).testTag("scm_pr_other_target"))
+            }
             pr == null -> Column(pad.padding(vertical = 6.dp)) {
                 Text(mono(localized(if (gitlab) Str.scm_mr_none else Str.scm_pr_none, state.status?.branch ?: ""), state.status?.branch ?: ""), fontSize = 12.5.sp, color = cs.onSurfaceVariant)
                 Row(
@@ -1162,7 +1219,7 @@ private fun PrFormView(state: SourceControlState, scope: kotlinx.coroutines.Coro
         Text(localized(Str.scm_pr_title_label), fontSize = 12.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
         Box(field) {
             androidx.compose.foundation.text.BasicTextField(
-                value = f.title, onValueChange = { state.prForm = f.copy(title = it) }, singleLine = true,
+                value = f.title, onValueChange = { state.prForm = f.copy(title = it, edited = true) }, singleLine = true,
                 textStyle = androidx.compose.ui.text.TextStyle(color = cs.onSurface, fontSize = 12.5.sp), cursorBrush = androidx.compose.ui.graphics.SolidColor(cs.primary),
                 modifier = Modifier.fillMaxWidth().padding(start = 8.dp, end = 32.dp, top = 6.dp, bottom = 6.dp).testTag("scm_pr_title_input"),
             )
@@ -1172,7 +1229,7 @@ private fun PrFormView(state: SourceControlState, scope: kotlinx.coroutines.Coro
         }
         Text(localized(Str.scm_pr_body_label), fontSize = 12.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
         androidx.compose.foundation.text.BasicTextField(
-            value = f.body, onValueChange = { state.prForm = f.copy(body = it) },
+            value = f.body, onValueChange = { state.prForm = f.copy(body = it, edited = true) },
             textStyle = androidx.compose.ui.text.TextStyle(color = cs.onSurface, fontSize = 12.sp, fontFamily = MonoFontFamily, lineHeight = 17.sp),
             cursorBrush = androidx.compose.ui.graphics.SolidColor(cs.primary),
             modifier = field.heightIn(min = 110.dp).padding(8.dp).testTag("scm_pr_body_input"),
@@ -1191,20 +1248,24 @@ private fun PrFormView(state: SourceControlState, scope: kotlinx.coroutines.Coro
         }
         val publishFirst = state.status?.upstream == null
         LaunchedEffect(f.target) { state.checkPrTarget(f.target) }
-        // The target can't take a PR (not on the forge, or nothing to propose): say why; Create stays off.
-        val t = state.prTarget?.takeIf { it.target == f.target }
+        // The target can't take a PR (none picked, the branch itself, not on the forge, nothing to propose): say why;
+        // Create stays off until the target is checked.
+        val head = state.status?.branch.orEmpty()
+        val t = state.prFormCheck?.takeIf { it.target == f.target }
         val why = when {
-            t == null -> null
+            f.target.isEmpty() -> localized(Str.scm_pr_pick_target)
+            f.target == head -> localized(Str.scm_pr_target_self, head)
+            t == null -> localized(Str.scm_pr_checking_target, f.target)
             !t.onRemote -> localized(if (t.local) Str.scm_pr_target_local_short else Str.scm_pr_target_absent_short, t.target, host)
             t.ahead == 0 -> localized(Str.scm_pr_nothing_ahead, state.status?.branch.orEmpty(), t.target)
             else -> null
         }
         if (why != null) Row(Modifier.padding(top = 8.dp).testTag("scm_pr_form_why"), verticalAlignment = Alignment.CenterVertically) {
-            Text(mono(why, t!!.target), fontSize = 12.sp, color = LocalSemantics.current.warning, modifier = Modifier.weight(1f, fill = false))
-            if (!t.onRemote && t.local) Text(localized(Str.scm_publish_named, t.target), fontSize = 12.sp, color = cs.primary,
+            Text(mono(why, f.target), fontSize = 12.sp, color = if (t == null && f.target.isNotEmpty() && f.target != head) cs.onSurfaceVariant else LocalSemantics.current.warning, modifier = Modifier.weight(1f, fill = false))
+            if (t != null && !t.onRemote && t.local) Text(localized(Str.scm_publish_named, t.target), fontSize = 12.sp, color = cs.primary,
                 modifier = Modifier.padding(start = 8.dp).clickable(enabled = !state.busy) { scope.launch { state.publishPrTarget(t.target) } }.testTag("scm_pr_form_publish_target"))
         }
-        val can = f.title.isNotBlank() && !state.busy && why == null && f.target.isNotEmpty()
+        val can = f.title.isNotBlank() && !state.busy && why == null && !f.loading
         Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
             val go = localized(if (publishFirst) Str.scm_pr_publish_create else Str.scm_pr_create_go) + if (f.draft) " " + localized(Str.scm_pr_draft) else ""
             Text(go, fontSize = 12.5.sp, fontWeight = FontWeight.Medium, color = cs.onPrimary,

@@ -312,4 +312,8 @@
     <string name="scm_publish_named">Publish %1$s</string>
     <string name="scm_pr_other_target">Pick another target…</string>
     <string name="scm_pr_nothing_ahead">%1$s has no commits that %2$s doesn't have yet, so there is nothing to propose.</string>
+    <string name="scm_pr_pick_target">Pick the branch to merge into.</string>
+    <string name="scm_pr_target_self">%1$s can't be its own target. Pick another branch.</string>
+    <string name="scm_pr_checking_target">Checking %1$s…</string>
+    <string name="scm_pr_no_target">There's no other branch to propose %1$s into yet. Pick a target, or publish one first.</string>
 </resources>

@@ -116,4 +116,67 @@ class SourceControlPublishTest {
         assertEquals(localized(Str.scm_publish_failed_plain, "GitHub"), s.publishError)
         assertEquals("GraphQL: Something unexpected happened (createRepository)", s.publishDetails)
     }
+
+    /**
+     * Ahmet's repo: published from the chat's branch (qweqweqweqw), so GitHub's default IS that branch, and main is only
+     * here. The PR's target is never the branch itself: main, and since it isn't on GitHub, "Publish main", no form.
+     */
+    private fun prState(baseChecks: Map<String, String>, history: String = """{"branch":"qweqweqweqw","base":null,"chat":[{"sha":"c41e9d2","subject":"x"}],"baseCommits":[]}"""): Pair<SourceControlState, MutableList<String>> {
+        val calls = mutableListOf<String>()
+        val engine = MockEngine { req ->
+            val p = req.url.encodedPath
+            calls += p + "?" + req.url.encodedQuery
+            val b = when {
+                p.endsWith("/git/pr/base") -> baseChecks[req.url.parameters["target"].orEmpty()] ?: "{}"
+                p.endsWith("/git/pr/text") -> """{"title":"Add the search box","body":"## What","by":"agent"}"""
+                p.endsWith("/git/pr") -> """{"status":"none","forge":"github"}"""
+                p.endsWith("/git/status") -> """{"isRepo":true,"hasRemote":true,"branch":"qweqweqweqw","upstream":"origin/qweqweqweqw"}"""
+                p.endsWith("/changes") -> """{"repos":[{"repo":"","baseSha":"h","files":[]}]}"""
+                p.endsWith("/git/history") -> history
+                p.endsWith("/git/branches") -> """{"current":"qweqweqweqw","local":[{"name":"qweqweqweqw"},{"name":"main"}],"remote":[]}"""
+                else -> "{}"
+            }
+            respond(ByteReadChannel(b), HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+        }
+        val s = SourceControlState(SourceControlApi(BrokerApi("http://h", "t", HttpClient(engine)), "w1", "s1"))
+        runBlocking { s.refresh() }
+        return s to calls
+    }
+
+    private val originDefaultIsHead = """{"target":"qweqweqweqw","onRemote":true,"local":true,"ahead":0}"""
+
+    @Test fun the_target_is_never_the_branch_itself_and_a_base_not_on_github_offers_publish_not_the_form() {
+        val (s, _) = prState(mapOf("" to originDefaultIsHead, "main" to """{"target":"main","onRemote":false,"local":true,"ahead":1}"""))
+        assertEquals("main", s.prTarget?.target)
+        assertFalse(s.prTarget!!.onRemote)
+        runBlocking { s.openPrForm() }
+        assertNull(s.prForm, "no form that can only fail")
+    }
+
+    @Test fun once_the_target_is_on_github_the_form_opens_on_it_with_the_agents_text() {
+        val (s, calls) = prState(mapOf("" to originDefaultIsHead, "main" to """{"target":"main","onRemote":true,"local":true,"ahead":1}"""))
+        runBlocking { s.openPrForm() }
+        assertEquals("main", s.prForm?.target)
+        assertEquals("Add the search box", s.prForm?.title)
+        assertEquals("## What", s.prForm?.body)
+        assertTrue(calls.any { it.endsWith("/git/pr/text?") }, "the text is written for main")
+    }
+
+    @Test fun a_base_equal_to_the_branch_is_skipped_and_nothing_ahead_opens_no_form() {
+        val (s, _) = prState(
+            mapOf("" to originDefaultIsHead, "main" to """{"target":"main","onRemote":true,"local":true,"ahead":0}"""),
+            history = """{"branch":"qweqweqweqw","base":"qweqweqweqw","chat":[{"sha":"c41e9d2","subject":"x"}],"baseCommits":[]}""",
+        )
+        assertEquals("main", s.prTarget?.target)
+        runBlocking { s.openPrForm() }
+        assertNull(s.prForm)
+    }
+
+    @Test fun the_forms_check_survives_the_poll_and_a_self_target_is_never_checked() {
+        val (s, _) = prState(mapOf("" to originDefaultIsHead, "main" to """{"target":"main","onRemote":true,"local":true,"ahead":2}"""))
+        runBlocking { s.openPrForm(); s.refresh() }
+        assertEquals(2, s.prFormCheck?.ahead)
+        runBlocking { s.checkPrTarget("qweqweqweqw") }
+        assertNull(s.prFormCheck, "the branch itself: Create stays off")
+    }
 }
