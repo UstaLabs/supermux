@@ -128,6 +128,7 @@ export async function handleAppletRequest(req: Request, deps: AppletRouteDeps): 
     return page(403, "Only the owner can open this", "This part of the applet is reserved for your own devices.")
   }
 
+  if (v.row.stoppedAt) return page(503, "This applet is stopped", "Start it again from Applet info in supermux.")
   if (!v.manifest.run) return serveStaticApplet(v.folder, m.rest, req.method.toUpperCase())
 
   let port = deps.applets.supervisor.port(v.row.id)
