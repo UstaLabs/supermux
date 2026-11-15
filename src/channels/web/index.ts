@@ -1208,6 +1208,14 @@ export class WebChannel implements Channel {
       return new Response("bad origin", { status: 403 })
     }
     if (am) return this.handleAppletRoute(req, server)
+    // #117: an applet's server or job calling supermux.* with its own token (never a device credential).
+    if (this.opts.applets && url.pathname === "/applet-api/notify" && req.method === "POST") {
+      const v = this.opts.applets.appletForToken(req.headers.get("x-supermux-applet-token") ?? "")
+      if (!v) return this.json({ error: "not an applet token" }, 401)
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>
+      const r = await this.opts.applets.notify(v.row.name, b.title, b.body)
+      return r.ok ? this.json({ ok: true }) : this.json({ error: r.error }, 400)
+    }
     if (sub) {
       return this.handleProxyRoute(req, sub, server)
     }

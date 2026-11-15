@@ -2398,6 +2398,16 @@ const proxyLivenessMonitor = new ProxyLivenessMonitor({
 const appletService = new AppletService({
   db, appletsDir: join(MUX_HOME, "applets"), stateDir: join(STATE_DIR, "applets"), backupsDir: join(MUX_HOME, "backups", "applets"),
   rescanMs: 15_000, jobTickMs: 30_000, maintenanceMs: 10 * 60_000, settings,
+  brokerUrl: () => (webChannel?.boundPort ? `http://127.0.0.1:${webChannel.boundPort}` : undefined),
+  // supermux.notify: every device, like a broker notice; the applet's title is the sender.
+  notify: async (applet, title, body) => {
+    await firePushToAll({
+      sender: pushSender, nativeSender, nativeDevices,
+      devices: () => pushStore.all().map((s) => s.device),
+      payload: { session: applet.title, text: body ? `${title}: ${body}` : title, ts: new Date().toISOString() },
+      trigger: "applet_notify",
+    })
+  },
   // No payload: a device showing applets reloads GET /applets (older apps skip the unknown frame).
   onChange: () => webChannel?.broadcastToAll({ type: "applets_changed" }),
 })
