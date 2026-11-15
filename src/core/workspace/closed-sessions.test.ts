@@ -89,3 +89,13 @@ test("a reopen that fails to resume leaves no tab behind", async () => {
   await expect(svc.reopenClosedSession(w.id, "c1")).rejects.toThrow("agent missing")
   expect(store.listViews(w.id)).toEqual([])
 })
+
+test("a child session (a delegate or a council member) or an internal one is never listed", () => {
+  const { db, store, w, session } = setup()
+  session("mine", w.id, "archived", "2026-11-12T10:00:00Z")
+  session("member", w.id, "archived", "2026-11-12T11:00:00Z")
+  db.run("UPDATE sessions SET parent_session_id = 'mine' WHERE id = 'member'")
+  session("helper", w.id, "archived", "2026-11-12T12:00:00Z")
+  db.run("UPDATE sessions SET internal = 1 WHERE id = 'helper'")
+  expect(store.closedSessions(w.id).map((s) => s.id)).toEqual(["mine"])
+})
