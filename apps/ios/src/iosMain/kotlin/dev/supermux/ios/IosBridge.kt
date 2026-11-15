@@ -192,6 +192,9 @@ interface IosBridge {
     /** Withdraw already-delivered notifications for [sessionId] (the user just opened it). */
     fun cancelNotificationsFor(sessionId: String)
 
+    /** #117 W1: WidgetKit redraws supermux's widgets (their snapshot in the App Group just changed). Swift-only API. */
+    fun reloadWidgets()
+
     // ── System (H2) ─────────────────────────────────────────────────────────────────────────
 
     /** Open [url] with `UIApplication.openURL`. Fire-and-forget. */
@@ -300,6 +303,7 @@ object NoopIosBridge : IosBridge {
 
     override fun registerPushIfPaired() = Unit
     override fun cancelNotificationsFor(sessionId: String) = Unit
+    override fun reloadWidgets() = Unit
 
     override fun openUrl(url: String) = Unit
 

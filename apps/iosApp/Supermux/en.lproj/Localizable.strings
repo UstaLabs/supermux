@@ -12,3 +12,10 @@
 "Allowed." = "Allowed.";
 "Denied." = "Denied.";
 "Couldn't answer (already answered, or the host is unreachable). Open Supermux." = "Couldn't answer (already answered, or the host is unreachable). Open Supermux.";
+
+/* #117 W1: the applet widgets and intents. */
+"Applet" = "Applet";
+"Open applet" = "Open applet";
+"Opens an applet in supermux." = "Opens an applet in supermux.";
+"Choose an applet" = "Choose an applet";
+"The applet this widget shows." = "The applet this widget shows.";
