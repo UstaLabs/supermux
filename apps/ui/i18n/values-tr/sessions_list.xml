@@ -131,7 +131,7 @@
     <string name="applets_menu_open">Aç</string>
     <string name="applets_menu_pin">Kenar çubuğuna sabitle</string>
     <string name="applets_menu_unpin">Sabitlemeyi kaldır</string>
-    <string name="applets_menu_updated">%1$s güncellendi</string>
+    <string name="applets_menu_updated">%1$s önce güncellendi</string>
     <string name="applets_menu_expired">%1$s süresi doldu</string>
     <string name="applets_menu_needed">%1$s gerekli</string>
     <string name="applets_page_host">%1$s üzerinde</string>
@@ -148,4 +148,6 @@
     <string name="applets_menu_installed">Yüklü</string>
     <string name="applets_install_no_home">Bu telefonun ana ekranı uygulamalardan kısayol almıyor.</string>
     <string name="applets_install_refused">Ana ekran kısayolu almadı.</string>
+    <string name="applets_where_home">Ana ekran</string>
+    <string name="applets_updated_just_now">Az önce güncellendi</string>
 </resources>

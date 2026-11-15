@@ -14,7 +14,7 @@ import { resolveStaticFile } from "./applet-route"
  *   PATCH  /applets/<name> {title}            Settings ▸ Name (written to applet.json; the link stays)
  *   DELETE /applets/<name>
  *   GET    /applets/<name>/icon | logs[?lines=] | jobs/<job>/runs
- *   POST   /applets/<name>/restart | backup {why} | jobs/<job>/run | pin | unpin | stop | start | notify {title, body} | ask {text, agent?}
+ *   POST   /applets/<name>/restart | backup {why} | jobs/<job>/run | pin | unpin | stop | start | notify {title, body} | ask {text, agent?} | chat | installs {where}
  *   PUT    /applets/<name>/secrets/<NAME> {value, expiresAt?}   DELETE the same
  *   PUT    /applets/<name>/settings/<key> {value}
  */
@@ -37,6 +37,8 @@ function detail(applets: AppletService, v: AppletView) {
     settings: (m?.config ?? []).map((f) => ({ ...f, value: settingsValues[f.key] ?? (f.default !== undefined ? String(f.default) : null) })),
     backups: applets.backups.list(v.row.name),
     data: applets.dataInfo(v),
+    installs: applets.installs(v.row.id),
+    updatedByName: applets.actorName(v.row.updatedBy),
     run: m?.run ?? null,
     folder: v.folder,
   }
@@ -108,6 +110,15 @@ export async function handleAppletApi(req: Request, opts: { applets: AppletServi
   if (a === "logs" && !b && method === "GET") {
     const lines = Math.min(2000, Math.max(1, Number(url.searchParams.get("lines")) || 200))
     return json({ logs: applets.supervisor.logs(v.row.id, lines) })
+  }
+  if (a === "chat" && !b && method === "POST") {
+    const r = await applets.ask(name, "")
+    return r.ok ? json({ ok: true, sessionId: r.sessionId, session: r.session }) : json({ error: r.error }, 400)
+  }
+  if (a === "installs" && !b && method === "POST") {
+    const p = await body(req)
+    const r = applets.addInstall(name, opts.device, typeof p.where === "string" ? p.where : "")
+    return r.ok ? json({ ok: true }) : json({ error: r.error }, 404)
   }
   if (a === "ask" && !b && method === "POST") {
     const p = await body(req)

@@ -2425,6 +2425,7 @@ const appletService = new AppletService({
   db, appletsDir: join(MUX_HOME, "applets"), stateDir: join(STATE_DIR, "applets"), backupsDir: join(MUX_HOME, "backups", "applets"),
   rescanMs: 15_000, jobTickMs: 30_000, maintenanceMs: 10 * 60_000, settings,
   brokerUrl: () => (webChannel?.boundPort ? `http://127.0.0.1:${webChannel.boundPort}` : undefined),
+  actorName: (by) => by.startsWith("agent:") ? registry.get(by.slice("agent:".length))?.name : undefined,
   // supermux.agent.ask: the applet's own chat (a visible session in its folder), or the named Agent's.
   ask: async (applet, text, opts) => {
     let target = opts.agent ? registry.resolveName(opts.agent) : (opts.chatId ? registry.get(opts.chatId) : undefined)
@@ -2436,6 +2437,7 @@ const appletService = new AppletService({
     }
     // Answered as soon as the message is in the chat: waking the agent can take a while, and the page is waiting.
     const chat = target
+    if (!text) return { sessionId: chat.id, name: chat.name }
     void deliverUserMessage(chat.id, text).then((sent) => { if (!sent.ok) log.warn("applet_ask_not_delivered", { session: chat.name, reason: sent.reason }) })
     return { sessionId: chat.id, name: chat.name }
   },

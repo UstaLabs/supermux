@@ -123,7 +123,7 @@ internal const val APPLETS_GRID_KEY = "chrome:applets_grid"
 internal fun LazyListScope.appletsZone(actions: AppletsActions, phone: Boolean) {
     val pins = actions.applets.pinned().take(if (phone) PHONE_PINS else MAX_APPLET_PINS)
     if (actions.applets.isEmpty()) return
-    item(key = APPLETS_HEADER_KEY) { AppletsHeader(onAll = actions.showAll) }
+    item(key = APPLETS_HEADER_KEY) { AppletsHeader(onAll = actions.showAll, phone = phone) }
     item(key = APPLETS_GRID_KEY) {
         Column(Modifier.fillMaxWidth()) {
             AppletGrid(
@@ -141,7 +141,7 @@ internal fun LazyListScope.appletsZone(actions: AppletsActions, phone: Boolean) 
 
 /** Same header as Agents and Workspaces: the title, then "All applets" on the right. */
 @Composable
-private fun AppletsHeader(onAll: () -> Unit) {
+private fun AppletsHeader(onAll: () -> Unit, phone: Boolean) {
     val cs = MaterialTheme.colorScheme
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
@@ -158,7 +158,8 @@ private fun AppletsHeader(onAll: () -> Unit) {
         )
         Text(
             localized(Str.sessions_applets_all),
-            color = if (hovered) cs.onSurface else cs.onSurfaceVariant,
+            // A link on a phone (the prototype's teal); a quiet one on a desktop that lights up on hover.
+            color = if (phone) cs.primary else if (hovered) cs.onSurface else cs.onSurfaceVariant,
             fontSize = 12.sp,
             modifier = Modifier
                 .clip(RoundedCornerShape(6.dp))
@@ -327,6 +328,16 @@ internal fun AppletIcon(a: AppletDto, size: Dp, loadIcon: suspend (AppletDto) ->
     }
 }
 
+/** "Updated 7m ago", "Updated just now", or null when the time can't be read. */
+internal fun appletUpdatedText(ts: String?): String? {
+    val ago = archivedRelTime(ts)
+    return when {
+        ago.isEmpty() -> null
+        ago == localized(Str.archived_time_now) -> localized(Str.applets_updated_just_now)
+        else -> localized(Str.applets_menu_updated, ago)
+    }
+}
+
 /** One line of an applet's menu. */
 private class AppletMenuItem(val icon: ImageVector, val label: String, val warn: Boolean = false, val tag: String, val dim: Boolean = false, val run: suspend () -> String?)
 
@@ -417,8 +428,7 @@ private fun AppletMenuBody(
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(a.title.ifBlank { a.name }, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                val ago = archivedRelTime(a.updatedAt)
-                if (ago.isNotEmpty()) Text(localized(Str.applets_menu_updated, ago), fontSize = 12.sp, color = cs.onSurfaceVariant, maxLines = 1)
+                appletUpdatedText(a.updatedAt)?.let { Text(it, fontSize = 12.sp, color = cs.onSurfaceVariant, maxLines = 1) }
             }
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(cs.outlineVariant))

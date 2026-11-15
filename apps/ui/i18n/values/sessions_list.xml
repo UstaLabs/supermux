@@ -131,7 +131,7 @@
     <string name="applets_menu_open">Open</string>
     <string name="applets_menu_pin">Pin to sidebar</string>
     <string name="applets_menu_unpin">Unpin</string>
-    <string name="applets_menu_updated">Updated %1$s</string>
+    <string name="applets_menu_updated">Updated %1$s ago</string>
     <string name="applets_menu_expired">%1$s expired</string>
     <string name="applets_menu_needed">%1$s needed</string>
     <string name="applets_page_host">on %1$s</string>
@@ -148,4 +148,6 @@
     <string name="applets_menu_installed">Installed</string>
     <string name="applets_install_no_home">This phone's Home screen doesn't take shortcuts from apps.</string>
     <string name="applets_install_refused">The Home screen didn't take the shortcut.</string>
+    <string name="applets_where_home">Home screen</string>
+    <string name="applets_updated_just_now">Updated just now</string>
 </resources>

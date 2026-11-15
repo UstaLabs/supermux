@@ -1438,7 +1438,13 @@ fun SupermuxApp(
                                         key(activeHostId) {
                                             val actions = appletsActions
                                             if (actions != null) {
-                                                val info = remember(fleet, actions) { dev.supermux.ui.applets.appletInfoActions(fleet, actions.hostName, actions.open) }
+                                                val info = remember(fleet, actions) {
+                                                    dev.supermux.ui.applets.appletInfoActions(
+                                                        fleet, actions.hostName, actions.open,
+                                                        openChat = { id -> ui.goBack(); ui.selectSession(id) },
+                                                        installer = actions.installer,
+                                                    )
+                                                }
                                                 dev.supermux.ui.applets.AppletInfoScreen(route.name, info, phone = compact, onBack = { ui.goBack() }, initialTab = route.tab)
                                             } else {
                                                 LaunchedEffect(Unit) { ui.goBack() }
