@@ -345,6 +345,9 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                // #117: applets open in their own tasks.
+                val appletOpener = remember { dev.supermux.android.applets.AppletActivity.opener(this@MainActivity) }
+                androidx.compose.runtime.CompositionLocalProvider(dev.supermux.ui.session.LocalAppletOpener provides appletOpener) {
                 SupermuxApp(
                     fleet = vm.fleet,
                     ui = ui,
@@ -381,6 +384,7 @@ class MainActivity : ComponentActivity() {
                     },
                     settingsSection = { place, scope -> FleetSettingsSection(place, scope, vm.fleet) },
                 )
+                }
             }
         }
     }
