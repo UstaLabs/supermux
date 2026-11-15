@@ -93,25 +93,43 @@ private val APPLET_SETTINGS = WebSettings(profile = BROWSER_PROFILE, inspectable
  * hosts (a cold start from a shortcut) waits for them; a host this device no longer has is said, never a blank window.
  */
 @Composable
-fun AppletPage(fleet: FleetStore?, hostId: String, name: String, modifier: Modifier = Modifier) {
+fun AppletPage(fleet: FleetStore?, hostId: String, name: String, modifier: Modifier = Modifier, onOpenChat: (String) -> Unit = {}) {
     val views by (fleet?.hostViews ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyList<dev.supermux.host.HostView>()) }).collectAsState()
     val app = remember(fleet, views, hostId) { fleet?.appForRecord(hostId) }
     when {
-        app != null -> AppletPage(app, name, modifier)
+        app != null -> AppletPage(app, name, modifier, onOpenChat)
         fleet != null && views.isNotEmpty() && views.none { it.recordId == hostId } -> AppletMessage(localized(Str.applets_window_no_host), modifier)
         else -> Box(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background))
     }
 }
 
-/** The applet [name] of host [app], filling its window. */
+/**
+ * The applet [name] of host [app], filling its window. The page's bridge (its own origin only) answers the page API's
+ * native calls: agent.ask after his click on a button, and openChat for the "Sent to …" link it shows; [onOpenChat]
+ * brings that chat up in the main window.
+ */
 @Composable
-fun AppletPage(app: HostStore, name: String, modifier: Modifier = Modifier) {
+fun AppletPage(app: HostStore, name: String, modifier: Modifier = Modifier, onOpenChat: (String) -> Unit = {}) {
     val cs = MaterialTheme.colorScheme
     val webViews = LocalAppWebViews.current ?: AppWebViews.app
     val state = remember(app, name) { WebViewState(BLANK) }
     val keeper = remember(app) { PreviewKeeper.of(app) }
     val sink = remember(state) { PreviewKeeper.Sink<PreviewCookieDto> { state.navigator.putPreviewKeys(it) } }
     var problem by remember(app, name) { mutableStateOf<String?>(null) }
+    // The bridge talks only to the applet's own origin, known once the key says where the page loads from.
+    var origin by remember(app, name) { mutableStateOf<String?>(null) }
+    val settings = remember(origin) { origin?.let { APPLET_SETTINGS.copy(bridgeOrigins = setOf(it.lowercase())) } ?: APPLET_SETTINGS }
+    val openChat by rememberUpdatedState(onOpenChat)
+    androidx.compose.runtime.DisposableEffect(state, app, name) {
+        val offAsk = state.bridge.handleAfterButtonClick("ask") { params, clicked -> askAnswer(app, name, params, clicked) }
+        val offOpen = state.bridge.handle("openChat") { params ->
+            val id = ((params as? kotlinx.serialization.json.JsonObject)?.get("sessionId") as? kotlinx.serialization.json.JsonPrimitive)?.content
+            if (!id.isNullOrBlank()) openChat(id)
+            kotlinx.serialization.json.JsonPrimitive(id != null)
+        }
+        val offSave = state.bridge.handleAfterButtonClick("save") { _, _ -> refusal(localized(Str.applets_save_not_yet)) }
+        onDispose { offAsk(); offOpen(); offSave() }
+    }
     val live = state.phase == WebViewPhase.Live
     LaunchedEffect(live, keeper) {
         if (!live) return@LaunchedEffect
@@ -123,6 +141,7 @@ fun AppletPage(app: HostStore, name: String, modifier: Modifier = Modifier) {
                 problem = localized(Str.applets_window_no_key)
             } else {
                 problem = null
+                origin = originOf(key.url)
                 sink.put(key)
                 if (state.content !is WebContent.Url) state.load(WebContent.Url(appletPageUrl(key, name)))
             }
@@ -136,9 +155,27 @@ fun AppletPage(app: HostStore, name: String, modifier: Modifier = Modifier) {
     val client = remember { AppletClient { openExternal(it) } }
     Box(modifier.fillMaxSize().background(cs.background).testTag("applet_page_$name")) {
         ProvideWebViewRuntime(webViews.runtime) {
-            WebView(state, Modifier.fillMaxSize(), settings = APPLET_SETTINGS, client = client, activation = Activation.Eager)
+            WebView(state, Modifier.fillMaxSize(), settings = settings, client = client, activation = Activation.Eager)
         }
         problem?.let { AppletMessage(it, Modifier.background(cs.background)) }
+    }
+}
+
+private fun refusal(reason: String) = kotlinx.serialization.json.JsonObject(mapOf("ok" to kotlinx.serialization.json.JsonPrimitive(false), "reason" to kotlinx.serialization.json.JsonPrimitive(reason)))
+
+/** supermux.agent.ask: only right after his click on a button in the page, 1 to 4,000 characters; answers which chat took it. */
+private suspend fun askAnswer(app: HostStore, name: String, params: kotlinx.serialization.json.JsonElement, clicked: Boolean): kotlinx.serialization.json.JsonElement {
+    val obj = params as? kotlinx.serialization.json.JsonObject
+    val text = (obj?.get("text") as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content
+    val agent = (obj?.get("agent") as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content
+    return when {
+        !clicked -> refusal("no click on a button in the page")
+        text.isNullOrBlank() -> refusal("the message is empty")
+        text.length > 4000 -> refusal("the message is over 4000 characters")
+        else -> app.appletAction { api -> api.askApplet(name, text, agent) }.fold(
+            onSuccess = { r -> kotlinx.serialization.json.JsonObject(mapOf("ok" to kotlinx.serialization.json.JsonPrimitive(true), "session" to kotlinx.serialization.json.JsonPrimitive(r.session), "sessionId" to kotlinx.serialization.json.JsonPrimitive(r.sessionId))) },
+            onFailure = { e -> refusal(e.message ?: "the message didn't go") },
+        )
     }
 }
 
@@ -165,7 +202,7 @@ class AppletCoverState {
 }
 
 @Composable
-fun AppletCover(state: AppletCoverState, fleet: FleetStore) {
+fun AppletCover(state: AppletCoverState, fleet: FleetStore, onOpenChat: (String) -> Unit = {}) {
     val (hostId, name) = state.open ?: return
     val cs = MaterialTheme.colorScheme
     androidx.compose.foundation.layout.Column(
@@ -187,6 +224,6 @@ fun AppletCover(state: AppletCoverState, fleet: FleetStore) {
                 modifier = Modifier.clickable { state.close() }.padding(vertical = 6.dp).testTag("applet_cover_done"),
             )
         }
-        AppletPage(fleet, hostId, name, Modifier.weight(1f))
+        AppletPage(fleet, hostId, name, Modifier.weight(1f), onOpenChat = { id -> state.close(); onOpenChat(id) })
     }
 }

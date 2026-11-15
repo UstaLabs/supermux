@@ -138,3 +138,10 @@ internal data class AppletValueBody(val value: String, val expiresAt: String? = 
 
 @Serializable
 internal data class AppletTitleBody(val title: String)
+
+/** POST /applets/<name>/ask's answer: the chat that took the message. */
+@Serializable
+data class AppletAskResponse(val ok: Boolean = true, val sessionId: String = "", val session: String = "")
+
+@Serializable
+internal data class AppletAskBody(val text: String, val agent: String? = null)

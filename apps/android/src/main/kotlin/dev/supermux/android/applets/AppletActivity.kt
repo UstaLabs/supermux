@@ -66,9 +66,20 @@ class AppletActivity : ComponentActivity() {
                     Modifier.fillMaxSize().semantics { testTagsAsResourceId = true },
                     color = MaterialTheme.colorScheme.background,
                 ) {
-                    AppletPage(fleet, hostId, name, Modifier.windowInsetsPadding(WindowInsets.safeDrawing))
+                    AppletPage(fleet, hostId, name, Modifier.windowInsetsPadding(WindowInsets.safeDrawing), onOpenChat = ::openChat)
                 }
             }
+        }
+    }
+
+    /** The "Sent to …" link: the main window, at that chat (the push tap's way in). */
+    private fun openChat(sessionId: String) {
+        runCatching {
+            startActivity(
+                Intent(this, dev.supermux.android.MainActivity::class.java)
+                    .putExtra(dev.supermux.android.push.SupermuxMessagingService.EXTRA_SESSION_ID, sessionId)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            )
         }
     }
 

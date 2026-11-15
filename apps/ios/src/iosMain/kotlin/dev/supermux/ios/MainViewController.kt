@@ -383,7 +383,7 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
                 // No `chatFallback`: that slot IS the host-specific escape hatch, and iOS has no
                 // screen to put in it. `UnavailableSessionPane` (H3.7) is what covers its absence.
             )
-            dev.supermux.ui.applets.AppletCover(appletCover, fleet)
+            dev.supermux.ui.applets.AppletCover(appletCover, fleet, onOpenChat = { id -> ui.selectSession(id) })
             }
             }
         }
