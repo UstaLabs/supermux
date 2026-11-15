@@ -295,6 +295,8 @@ fun SessionListScreen(
     archivedAgents: List<dev.supermux.net.ArchivedDto> = emptyList(),
     /** Create / rename / archive / make default / change character; null hides those entries. */
     agentsActions: AgentsActions? = null,
+    /** #117: the host picker's host's applets; null when it has none or can't have them (no Applets block then). */
+    applets: AppletsActions? = null,
     /** Agent session id → its avatar (rememberAgentAvatars); an Agent without one draws the default. */
     agentAvatars: Map<String, AvatarRig> = emptyMap(),
     initialGroupByProject: Boolean = true,
@@ -1750,6 +1752,7 @@ fun SessionListScreen(
     }
     // Index of the new-session card in the list (chrome paints the logo bar above it).
     val newSessionIndex = if (chrome) 1 else 0
+    val appletsTouch = !LocalPointerAvailable.current
     fun LazyListScope.content() {
         if (scrollingChrome) {
             if (chrome) item(key = "chrome:logo") { logoBar() }
@@ -1758,6 +1761,8 @@ fun SessionListScreen(
             item(key = "chrome:above") { aboveList() }
             needsYouItems()
             agentsItems()
+            // #117: on a phone the applets sit above the sessions, as on a home screen.
+            if (applets != null && !selecting) appletsZone(applets, phone = true)
             stickyHeader(key = "chrome:section") {
                 Box(Modifier.fillMaxWidth().background(cs.surfaceContainerHigh)) { sectionHeader() }
             }
@@ -1766,6 +1771,8 @@ fun SessionListScreen(
             // they have scrolled away (search, select and the menu stay reachable).
             needsYouItems()
             agentsItems()
+            // #117: between Agents and Workspaces.
+            if (applets != null && !selecting) appletsZone(applets, phone = appletsTouch)
             stickyHeader(key = "chrome:section") {
                 Box(Modifier.fillMaxWidth().background(cs.surfaceContainerHigh)) { sectionHeader() }
             }

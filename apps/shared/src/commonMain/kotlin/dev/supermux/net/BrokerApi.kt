@@ -3500,6 +3500,31 @@ class BrokerApi(
     suspend fun updatePA(id: String, isDefault: Boolean? = null, name: String? = null) =
         patchJson("$httpBase/api/pas/${urlEncode(id)}", UpdatePABody(isDefault, name))
 
+    /** GET /applets (#117): this host's applets, with their pins. */
+    suspend fun applets(): List<AppletDto> =
+        getJson("$httpBase/applets")
+
+    /** GET an applet's icon ([AppletDto.iconUrl]) with this client's bearer: raw bytes, null on non-2xx. */
+    suspend fun appletIconBytes(applet: AppletDto): ByteArray? {
+        val path = applet.iconUrl ?: return null
+        val resp = http.get("$httpBase$path?v=${urlEncode(applet.updatedAt)}") { authHeader() }
+        return if (resp.status.isSuccess()) resp.bodyAsBytes() else null
+    }
+
+    /**
+     * POST /applets/<name>/pin or /unpin: the host's one list of sidebar applets. The broker's reason when it
+     * refuses (the grid is full, the applet is gone) is the error message.
+     */
+    suspend fun pinApplet(name: String, pinned: Boolean) {
+        val resp = http.post("$httpBase/applets/${urlEncode(name)}/${if (pinned) "pin" else "unpin"}") { authHeader() }
+        if (!resp.status.isSuccess()) {
+            val body = resp.bodyAsText()
+            throw IllegalStateException(
+                runCatching { json.parseToJsonElement(body).jsonObject["error"]?.jsonPrimitive?.contentOrNull }.getOrNull() ?: "HTTP ${resp.status.value}",
+            )
+        }
+    }
+
     /** GET /proxies */
     suspend fun proxies(): List<ProxyDto> =
         getJson("$httpBase/proxies")
