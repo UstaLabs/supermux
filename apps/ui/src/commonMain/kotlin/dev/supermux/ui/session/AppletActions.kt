@@ -26,17 +26,18 @@ val LocalAppletOpener = staticCompositionLocalOf<AppletOpener?> { null }
  * this platform, a host whose broker has no applets, or not connected yet.
  */
 @Composable
-fun rememberAppletsActions(fleet: FleetStore, hostId: String?, hostName: String, showAll: () -> Unit): AppletsActions? {
+fun rememberAppletsActions(fleet: FleetStore, hostId: String?, hostName: String, showAll: () -> Unit, info: (AppletDto, String) -> Unit): AppletsActions? {
     val opener = LocalAppletOpener.current ?: return null
     val applets by fleet.activeApplets.collectAsState()
     val list = applets ?: return null
     val host = hostId ?: return null
-    return remember(list, host, hostName, opener, showAll) {
+    return remember(list, host, hostName, opener, showAll, info) {
         AppletsActions(
             applets = list,
             hostName = hostName,
             open = { a -> opener.open(host, a) },
             showAll = showAll,
+            info = info,
             pin = { a, on -> fleet.pinApplet(a.name, on) },
             loadIcon = { a -> fleet.appletIconBytes(a) },
         )

@@ -2452,6 +2452,24 @@ class HostStore(
 
     suspend fun appletIconBytes(applet: AppletDto): ByteArray? = runApi("appletIcon") { api.appletIconBytes(applet) }
 
+    /** Applet info's facts; null when the host can't say (offline, or the applet is gone). */
+    suspend fun appletDetail(name: String): dev.supermux.net.AppletDetailDto? = runApi("appletDetail") { api.appletDetail(name) }
+
+    suspend fun appletJobRuns(name: String, job: String): List<dev.supermux.net.AppletJobRunDto>? = runApi("appletJobRuns") { api.appletJobRuns(name, job) }
+
+    /**
+     * One owner action on an applet (Run now, a secret, a setting, Name, Stop, Delete): the result, or the broker's
+     * reason, which the screen shows where he clicked. The list refreshes after anything but a run.
+     */
+    suspend fun <T> appletAction(block: suspend (dev.supermux.net.BrokerApi) -> T): Result<T> =
+        try {
+            Result.success(block(api)).also { refreshApplets() }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Result.failure(IllegalStateException(e.message ?: "the machine didn't answer"))
+        }
+
     // ── Accounts (slice A3b; HTTP + frames are A3a's) ────────────────────────────────────────
     // Fetched lazily: nothing asks for GET /accounts until a screen does ([ensureAccounts]), and
     // from then on every snapshot (reconnect) and `accounts_changed` refreshes it. Null = never
