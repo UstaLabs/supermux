@@ -119,6 +119,7 @@ import dev.supermux.net.ModelInfo
 import dev.supermux.net.ReasoningLevel
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.GitBranches
+import dev.supermux.net.OpenPrList
 import dev.supermux.net.ProjectFolderState
 import dev.supermux.net.RepoInfo
 import dev.supermux.net.SessionSourceBody
@@ -522,6 +523,8 @@ fun SessionLauncherScreen(
     var pickFor by remember { mutableStateOf<String?>(null) }
     var projectBranches by remember { mutableStateOf<GitBranches?>(null) }
     var folderState by remember { mutableStateOf<ProjectFolderState?>(null) }
+    /** Origin's open PRs / MRs: the Pull request tab, its forge's words, and "update PR #N" in the line under the row. */
+    var projectPrs by remember { mutableStateOf<OpenPrList?>(null) }
     var branchPrefix by remember { mutableStateOf("") }
     /** The broker answered GET /projects/prefs, so it takes a `source`; an older one gets the worktree flag + base, as before. */
     var sourcesKnown by remember { mutableStateOf(false) }
@@ -550,6 +553,7 @@ fun SessionLauncherScreen(
         repoInfoFor = null
         projectBranches = null
         folderState = null
+        projectPrs = null
         sourcesKnown = false
         if (launcherRestoring) return@LaunchedEffect
         val switchedRepoHost = lastRepoHost != null && lastRepoHost != selectedHost
@@ -586,6 +590,8 @@ fun SessionLauncherScreen(
         if (prefs != null) {
             projectBranches = actions.projectBranches(wd)
             folderState = actions.folderState(wd)
+            // From the forge (a network call): last, so the row is drawn without waiting for it.
+            projectPrs = actions.projectPrs(wd, "")
         }
     }
     // A branch list opening: origin is fetched once per repo, then the branches and the folder's state are read again.
@@ -931,10 +937,11 @@ fun SessionLauncherScreen(
     val rowBranches = projectBranches ?: if (!sourcesKnown) repoInfo?.let { legacyBranches(it) } else null
     val rowFolder = folderState ?: if (!sourcesKnown) ProjectFolderState(branch = repoInfo?.currentBranch) else null
     val target = if (rowShown) workTarget(workPick, rowBranches, rowFolder?.branch, branchPrefix, message.text.trim()) else null
+    val conflict = if (rowShown) workConflict(workPick, target, rowBranches, rowFolder) else null
     // Send also waits for THIS workdir's repo info (the worktree decision is made from it), and, while the row asks
-    // for a branch (an existing one not picked yet, or one git keeps elsewhere), for that choice.
+    // for something (a branch not picked yet, a way out of one git keeps elsewhere), for that choice.
     val canSend = hasProject && repoInfoFor == workdir && (message.text.isNotBlank() || staged.isNotEmpty()) &&
-        (!rowShown || !sourcesKnown || (target != null && heldBranch(target, rowBranches) == null))
+        (!rowShown || !sourcesKnown || (target != null && conflict == null))
     val canSaveDraft = hasProject && message.text.isNotBlank()
     fun doSaveDraft() {
         val wd = workdir
@@ -973,6 +980,8 @@ fun SessionLauncherScreen(
         val base = if (wantsWorktree) (target as? WorkTarget.NewBranch)?.base?.ifEmpty { null } else null
         // An older broker reads only the flag and the base, as before.
         val source = if (rowShown && sourcesKnown) sessionSource(target) else null
+        // "Move the folder to main, then use it here": the folder moves first, at Start, and only then is the branch free.
+        val moveFolderTo = if (source != null) workPick.folderTo else null
         val toUpload = staged.map {
             // Audio → "voice"; everything else null so the broker infers the kind from the MIME.
             StagedUpload(it.source, it.name, it.mime, if (it.mime.startsWith("audio")) "voice" else null)
@@ -998,6 +1007,12 @@ fun SessionLauncherScreen(
             // open with this message's files. Kept only on a real failure, for the retry.
             var failed = false
             try {
+                if (moveFolderTo != null) {
+                    val moved = actions.switchFolder(wd.trim(), moveFolderTo)
+                    if (moved?.status != "switched") {
+                        throw IllegalStateException(localized(Str.launch_move_failed, moveFolderTo, moved?.message ?: moved?.status.orEmpty()))
+                    }
+                }
                 val sessionId = onSubmit(
                     wd.trim(), sentAgent, sentModel, sentLevel, sentText,
                     toUpload, wantsWorktree, base, replaceDraftId, sentMode, sentAccount, source,
@@ -1474,6 +1489,9 @@ fun SessionLauncherScreen(
                             onOpenBranches = { refreshBranches() },
                             modifier = Modifier.padding(top = 12.dp),
                             notRemembered = workInNotSaved == rowWorkdir,
+                            prs = projectPrs,
+                            lookupPr = { ref -> actions.projectPr(rowWorkdir, ref) },
+                            onOpenSession = onOpenSession,
                         )
                     } else if (notGit && rowWorkdir != null) {
                         NotGitSummary(formatWorkdir(rowWorkdir, home), Modifier.padding(top = 12.dp))

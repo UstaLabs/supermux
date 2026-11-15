@@ -92,6 +92,80 @@
     <string name="launch_sum_first_push_pr">İlk gönderim %1$s dalını oluşturur. Hazır olduğunuzda bir pull request açın.</string>
     <string name="launch_sum_no_remote">Uzak depo yok: commit'ler bu makinede kalır.</string>
 
+    <!-- #152 Başlatıcı › Pull request sekmesi (GitLab: Merge request) ve git bir dalı başka yerde tuttuğunda çıkış yolları -->
+    <string name="launch_pr_noun">pull request</string>
+    <string name="launch_mr_noun">merge request</string>
+    <string name="launch_tab_pr">Pull request</string>
+    <string name="launch_tab_mr">Merge request</string>
+    <!-- "PR #123" / "MR !7": bir cümlede pull / merge request'in adı. -->
+    <string name="launch_pr_label">PR #%1$d</string>
+    <string name="launch_mr_label">MR !%1$d</string>
+    <string name="launch_pr_search">Bir PR adresi ya da numarası yapıştırın veya arayın</string>
+    <string name="launch_mr_search">Bir MR adresi ya da numarası yapıştırın veya arayın</string>
+    <string name="launch_pr_open_list">Açık pull request'ler</string>
+    <string name="launch_mr_open_list">Açık merge request'ler</string>
+    <string name="launch_pr_none">%3$s içinde açık bir %1$s %2$s yok.</string>
+    <string name="launch_pr_merged">%1$s zaten birleştirilmiş.</string>
+    <string name="launch_pr_closed">%1$s kapatılmış.</string>
+    <string name="launch_pr_other_repo">Bu %1$s deposuna ait, bu projeye değil.</string>
+    <string name="launch_pr_no_cli">%2$s'leri görmek için bu makineye %1$s kurun.</string>
+    <string name="launch_pr_not_authed">%2$s'leri görmek için bu makinede %1$s ile oturum açın.</string>
+    <string name="launch_pr_failed">%1$s'ler listelenemedi: %2$s</string>
+    <string name="launch_pr_foot">%1$s'in kendi dalında çalışır. Gönderilenler %1$s'i günceller.</string>
+    <!-- Bir pull request satırının ikinci satırı: dalı, birleşeceği dal, yazarı. -->
+    <string name="launch_pr_row">%1$s → %2$s · %3$s</string>
+    <string name="launch_tag_draft">Taslak</string>
+    <string name="launch_tag_fork">fork</string>
+    <string name="launch_tag_fork_review">fork · yalnızca inceleme</string>
+    <string name="launch_tag_local_differs">yerel farklı</string>
+    <string name="launch_tag_checks_ok">✓ kontroller</string>
+    <string name="launch_tag_checks_bad">✕ kontroller</string>
+    <string name="launch_tag_checks_run">● kontroller</string>
+    <string name="launch_sum_pr">%1$s'in kendi dalında (%2$s) bir worktree. Yeni dal açılmaz.</string>
+    <string name="launch_sum_pr_fork">%1$s'in %3$s üzerindeki kendi dalında (%2$s) bir worktree. Yeni dal açılmaz.</string>
+    <plurals name="launch_sum_pr_backup">
+        <item quantity="one">Yerel commit'iniz %2$s dalında saklanır.</item>
+        <item quantity="other">%1$d yerel commit'iniz %2$s dalında saklanır.</item>
+    </plurals>
+    <plurals name="launch_sum_pr_mine">
+        <item quantity="one">Yerel sürümünüz kullanılıyor (%1$d commit önde).</item>
+        <item quantity="other">Yerel sürümünüz kullanılıyor (%1$d commit önde).</item>
+    </plurals>
+    <string name="launch_sum_pr_push">Gönderilenler %1$s dalına gider ve %2$s'i günceller. Oturum ona bağlı kalır.</string>
+    <string name="launch_sum_pr_push_fork">Gönderilenler %1$s dalına gider ve %2$s'i günceller (yazar düzenlemeye izin verdi). Oturum ona bağlı kalır.</string>
+    <string name="launch_sum_review_only">Yalnızca inceleme.</string>
+    <string name="launch_sum_pr_review_only">%1$s bakımcıların düzenlemesine izin vermedi; gönderilenler %2$s'e ulaşamaz. Yine de çalıştırıp inceleyebilirsiniz; gönderim yeni bir %3$s açar.</string>
+    <string name="launch_sum_push_to_pr">Gönderilenler %1$s dalına gider ve %2$s'i günceller.</string>
+    <string name="launch_sum_push_to_open">Gönderilenler %1$s dalına gider · bu daldan açık %2$s var.</string>
+    <string name="launch_card_in_folder">%1$s klasörünüzde açık (%2$s).</string>
+    <string name="launch_card_one_place">Git bir dalı aynı anda tek bir yerde tutar; bu yüzden bir worktree de onu açamaz.</string>
+    <string name="launch_card_use_local">Yerel'i kullan</string>
+    <string name="launch_card_use_local_hint">Oturumu, zaten %2$s dalında olan %1$s içinde çalıştır.</string>
+    <string name="launch_card_move">Klasörü %1$s dalına geçir, sonra %2$s dalını burada kullan</string>
+    <string name="launch_card_move_hint">Klasörünüz temiz; hiçbir şey kaybolmaz.</string>
+    <string name="launch_card_move_dirty">Klasörünüzde değişiklik var; olduğu yerde kalır.</string>
+    <string name="launch_card_new_from">Onun yerine %1$s dalından yeni dal</string>
+    <string name="launch_card_new_from_hint">Gönderilenler yeni dala gider.</string>
+    <string name="launch_card_new_from_pr_hint">Gönderilenler yeni dala gider, %1$s'e değil.</string>
+    <string name="launch_card_in_session">%1$s başka bir oturumda açık: “%2$s”.</string>
+    <string name="launch_card_in_worktree">%1$s şu worktree'de açık: %2$s.</string>
+    <string name="launch_card_one_place_short">Git bir dalı aynı anda tek bir yerde tutar.</string>
+    <string name="launch_card_open">“%1$s” oturumunu aç</string>
+    <string name="launch_card_open_hint">O oturumun kendi worktree'sinde %1$s zaten var.</string>
+    <plurals name="launch_card_ahead">
+        <item quantity="one">Yerel %2$s dalınızda %3$s üzerinde olmayan %1$d commit var.</item>
+        <item quantity="other">Yerel %2$s dalınızda %3$s üzerinde olmayan %1$d commit var.</item>
+    </plurals>
+    <string name="launch_card_ahead_why">%1$s'i açmak onların yerini alır. Siz söylemedikçe hiçbir şeyin üzerine yazılmaz.</string>
+    <string name="launch_card_use_pr">%1$s'i olduğu gibi kullan</string>
+    <plurals name="launch_card_use_pr_hint">
+        <item quantity="one">Commit'iniz önce %2$s dalına taşınır; hiçbir şey kaybolmaz.</item>
+        <item quantity="other">%1$d commit'iniz önce %2$s dalına taşınır; hiçbir şey kaybolmaz.</item>
+    </plurals>
+    <string name="launch_card_keep_mine">Yerel dalımı koru</string>
+    <string name="launch_card_keep_mine_hint">Kendi sürümünüzde çalışın. Göndermeden önce %1$s'in değişikliklerini çekersiniz.</string>
+    <string name="launch_move_failed">Klasörünüz %1$s dalına geçirilemedi: %2$s</string>
+
     <!-- First run: the project step -->
     <string name="firstproject_title">Ajanlarınız nerede çalışsın?</string>
     <string name="firstproject_subtitle">Ajanlar yalnızca seçtiğiniz klasördeki dosyaları okur ve değiştirir.</string>

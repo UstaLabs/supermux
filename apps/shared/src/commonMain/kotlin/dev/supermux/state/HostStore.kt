@@ -60,6 +60,7 @@ import dev.supermux.net.FsRefsResult
 import dev.supermux.net.FsSearchResult
 import dev.supermux.net.GitBranches
 import dev.supermux.net.GitOpResult
+import dev.supermux.net.GitSwitchResult
 import dev.supermux.net.LspInstallResult
 import dev.supermux.net.LspMutationResult
 import dev.supermux.net.LspServer
@@ -74,6 +75,8 @@ import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.RemoteRepo
 import dev.supermux.net.RepoInfo
+import dev.supermux.net.OpenPrList
+import dev.supermux.net.OpenPrRead
 import dev.supermux.net.ProjectFolderState
 import dev.supermux.net.ProjectPrefs
 import dev.supermux.net.SessionSourceBody
@@ -2684,6 +2687,13 @@ class HostStore(
         runApi("launcherFolderState") { api.projectFolderState(dir) }
     suspend fun launcherProjectPrefs(dir: String): ProjectPrefs? =
         runApi("launcherProjectPrefs") { api.projectPrefs(dir) }
+    suspend fun launcherProjectPrs(dir: String, q: String = ""): OpenPrList? =
+        runApi("launcherProjectPrs") { api.projectPrs(dir, q) }
+    suspend fun launcherProjectPr(dir: String, ref: String): OpenPrRead? =
+        runApi("launcherProjectPr") { api.projectPr(dir, ref) }
+    /** #152: the project folder to [name] (only when it is clean), for "Move the folder to main, then use it here". */
+    suspend fun launcherSwitchFolder(dir: String, name: String): GitSwitchResult? =
+        runApi("launcherSwitchFolder") { api.projectSwitch(dir, name) }
     suspend fun setLauncherProjectPrefs(dir: String, workIn: String?, branchPrefix: String? = null): ProjectPrefs? =
         runApi("setLauncherProjectPrefs") { api.setProjectPrefs(dir, workIn, branchPrefix) }
 

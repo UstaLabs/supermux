@@ -12,6 +12,8 @@ import dev.supermux.net.GitBranches
 import dev.supermux.net.GitLocalBranch
 import dev.supermux.net.GitOpenIn
 import dev.supermux.net.GitRemoteBranch
+import dev.supermux.net.OpenPr
+import dev.supermux.net.OpenPrList
 import dev.supermux.net.ProjectFolderState
 import dev.supermux.net.ProjectPrefs
 import dev.supermux.net.RepoBranches
@@ -65,6 +67,16 @@ class LauncherWorkShots {
         branches = RepoBranches(local = storefront.local.map { it.name }, remote = storefront.remote.map { it.name }),
     )
     private val clean = ProjectFolderState(branch = "feat/checkout-v2")
+    private fun prList(gitlab: Boolean) = OpenPrList(
+        status = "ok", forge = if (gitlab) "gitlab" else "github", repo = if (gitlab) "gitlab.com/acme/storefront" else "github.com/acme/storefront",
+        prs = listOf(
+            OpenPr(number = 123, title = "Fix login redirect loop", head = "feat/login-redirect", base = "main", author = "deniz", headRepo = "acme/storefront", checks = "ok"),
+            OpenPr(number = 118, title = "Checkout v2", head = "feat/checkout-v2", base = "main", author = "you", headRepo = "acme/storefront", draft = true, checks = "run"),
+            OpenPr(number = 121, title = "Bump payments SDK to 4.2", head = "deps/sdk-4.2", base = "main", author = "ozan", headRepo = "ozan/storefront", isFork = true, headOwner = "ozan", maintainerCanModify = true, checks = "ok"),
+            OpenPr(number = 125, title = "Speed up product search", head = "feat/search-speed", base = "main", author = "you", headRepo = "acme/storefront", checks = "ok", localAhead = 2),
+            OpenPr(number = 109, title = "Add Turkish translations", head = "i18n-tr", base = "main", author = "selin", headRepo = "selin/storefront", isFork = true, headOwner = "selin", maintainerCanModify = false, checks = "bad"),
+        ).map { if (gitlab) it.copy(forge = "gitlab") else it },
+    )
     private val dirty = ProjectFolderState(branch = "feat/checkout-v2", clean = false, changed = 2)
 
     private class Scene(
@@ -73,6 +85,7 @@ class LauncherWorkShots {
         val folder: ProjectFolderState? = null,
         val message: String = "",
         val notGit: Boolean = false,
+        val gitlab: Boolean = false,
         val act: ComposeUiTest.() -> Unit = {},
     )
 
@@ -93,6 +106,15 @@ class LauncherWorkShots {
         Scene("12-local-reuse", prefs = ProjectPrefs("local", "ahmet/")) { open(WorkRowTags.LOCAL_BRANCH); open(WorkRowTags.row("fix/cart-total")) },
         Scene("13-not-git", notGit = true),
         Scene("14-older-broker", prefs = null) { open(WorkRowTags.BRANCH) },
+        Scene("15-pop-pr") { open(WorkRowTags.BRANCH); open(WorkRowTags.TAB_PR) },
+        Scene("16-pr123") { open(WorkRowTags.BRANCH); open(WorkRowTags.TAB_PR); open(WorkRowTags.pr(123)) },
+        Scene("17-pr118-in-folder") { open(WorkRowTags.BRANCH); open(WorkRowTags.TAB_PR); open(WorkRowTags.pr(118)) },
+        Scene("18-fork-edits") { open(WorkRowTags.BRANCH); open(WorkRowTags.TAB_PR); open(WorkRowTags.pr(121)) },
+        Scene("19-fork-review-only") { open(WorkRowTags.BRANCH); open(WorkRowTags.TAB_PR); open(WorkRowTags.pr(109)) },
+        Scene("20-diverged") { open(WorkRowTags.BRANCH); open(WorkRowTags.TAB_PR); open(WorkRowTags.pr(125)) },
+        Scene("21-diverged-done") { open(WorkRowTags.BRANCH); open(WorkRowTags.TAB_PR); open(WorkRowTags.pr(125)); open(WorkRowTags.CARD_USE_PR) },
+        Scene("22-existing-in-session") { open(WorkRowTags.BRANCH); open(WorkRowTags.TAB_EXISTING); open(WorkRowTags.row("fix/cart-total")) },
+        Scene("23-gitlab-pop", gitlab = true) { open(WorkRowTags.BRANCH); open(WorkRowTags.TAB_PR) },
     )
 
     @Test
@@ -121,6 +143,7 @@ class LauncherWorkShots {
                                 projectBranches = { storefront },
                                 folderState = { scene.folder ?: clean },
                                 setProjectPrefs = { _, wi -> scene.prefs?.copy(workIn = wi) },
+                                projectPrs = { _, _ -> if (scene.prefs == null) null else prList(scene.gitlab) },
                             ),
                             loadDraft = { LauncherDraft(workdir = dir, text = scene.message) },
                             onSubmit = { _, _, _, _, _, _, _, _, _, _, _, _ -> null },

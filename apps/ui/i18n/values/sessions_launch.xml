@@ -92,6 +92,80 @@
     <string name="launch_sum_first_push_pr">First push creates %1$s. Open a pull request when you're ready.</string>
     <string name="launch_sum_no_remote">No remote: commits stay on this machine.</string>
 
+    <!-- #152 Launcher › the Pull request tab (GitLab: Merge request), and the ways out when git keeps a branch elsewhere -->
+    <string name="launch_pr_noun">pull request</string>
+    <string name="launch_mr_noun">merge request</string>
+    <string name="launch_tab_pr">Pull request</string>
+    <string name="launch_tab_mr">Merge request</string>
+    <!-- "PR #123" / "MR !7": how a pull / merge request is named in a sentence. -->
+    <string name="launch_pr_label">PR #%1$d</string>
+    <string name="launch_mr_label">MR !%1$d</string>
+    <string name="launch_pr_search">Paste a PR URL or number, or search</string>
+    <string name="launch_mr_search">Paste an MR URL or number, or search</string>
+    <string name="launch_pr_open_list">Open pull requests</string>
+    <string name="launch_mr_open_list">Open merge requests</string>
+    <string name="launch_pr_none">No open %1$s %2$s in %3$s.</string>
+    <string name="launch_pr_merged">%1$s is already merged.</string>
+    <string name="launch_pr_closed">%1$s is closed.</string>
+    <string name="launch_pr_other_repo">That one belongs to %1$s, not to this project.</string>
+    <string name="launch_pr_no_cli">Install %1$s on this host to see its %2$ss.</string>
+    <string name="launch_pr_not_authed">Sign in to %1$s on this host to see its %2$ss.</string>
+    <string name="launch_pr_failed">Couldn't list the %1$ss: %2$s</string>
+    <string name="launch_pr_foot">Works on the %1$s's own branch. Pushes update the %1$s.</string>
+    <!-- A pull request row's second line: its branch, the branch it goes into, its author. -->
+    <string name="launch_pr_row">%1$s → %2$s · %3$s</string>
+    <string name="launch_tag_draft">Draft</string>
+    <string name="launch_tag_fork">fork</string>
+    <string name="launch_tag_fork_review">fork · review only</string>
+    <string name="launch_tag_local_differs">local differs</string>
+    <string name="launch_tag_checks_ok">✓ checks</string>
+    <string name="launch_tag_checks_bad">✕ checks</string>
+    <string name="launch_tag_checks_run">● checks</string>
+    <string name="launch_sum_pr">A worktree on the %1$s's own branch %2$s. No new branch.</string>
+    <string name="launch_sum_pr_fork">A worktree on the %1$s's own branch %2$s from %3$s. No new branch.</string>
+    <plurals name="launch_sum_pr_backup">
+        <item quantity="one">Your local commit is kept on %2$s.</item>
+        <item quantity="other">Your %1$d local commits are kept on %2$s.</item>
+    </plurals>
+    <plurals name="launch_sum_pr_mine">
+        <item quantity="one">Using your local version (%1$d commit ahead).</item>
+        <item quantity="other">Using your local version (%1$d commits ahead).</item>
+    </plurals>
+    <string name="launch_sum_pr_push">Pushes go to %1$s and update %2$s. The session stays linked to it.</string>
+    <string name="launch_sum_pr_push_fork">Pushes go to %1$s and update %2$s (the author allowed edits). The session stays linked to it.</string>
+    <string name="launch_sum_review_only">Review only.</string>
+    <string name="launch_sum_pr_review_only">%1$s didn't allow edits from maintainers, so pushes can't reach %2$s. You can still run and review it; pushing opens a new %3$s.</string>
+    <string name="launch_sum_push_to_pr">Pushes go to %1$s and update %2$s.</string>
+    <string name="launch_sum_push_to_open">Pushes go to %1$s · %2$s is open from it.</string>
+    <string name="launch_card_in_folder">%1$s is checked out in your folder (%2$s).</string>
+    <string name="launch_card_one_place">Git keeps a branch in one place at a time, so a worktree can't have it too.</string>
+    <string name="launch_card_use_local">Use Local</string>
+    <string name="launch_card_use_local_hint">Run the session in %1$s, which is already on %2$s.</string>
+    <string name="launch_card_move">Move the folder to %1$s, then use %2$s here</string>
+    <string name="launch_card_move_hint">Your folder is clean, so nothing is lost.</string>
+    <string name="launch_card_move_dirty">Your folder has changes, so it stays where it is.</string>
+    <string name="launch_card_new_from">New branch from %1$s instead</string>
+    <string name="launch_card_new_from_hint">Pushes go to the new branch.</string>
+    <string name="launch_card_new_from_pr_hint">Pushes go to the new branch, not to %1$s.</string>
+    <string name="launch_card_in_session">%1$s is open in another session: “%2$s”.</string>
+    <string name="launch_card_in_worktree">%1$s is checked out in a worktree at %2$s.</string>
+    <string name="launch_card_one_place_short">Git keeps a branch in one place at a time.</string>
+    <string name="launch_card_open">Open “%1$s”</string>
+    <string name="launch_card_open_hint">That session already has %1$s in its own worktree.</string>
+    <plurals name="launch_card_ahead">
+        <item quantity="one">Your local %2$s has %1$d commit that isn't on %3$s.</item>
+        <item quantity="other">Your local %2$s has %1$d commits that aren't on %3$s.</item>
+    </plurals>
+    <string name="launch_card_ahead_why">Checking out the %1$s would replace them. Nothing is overwritten unless you say so.</string>
+    <string name="launch_card_use_pr">Use the %1$s as it is</string>
+    <plurals name="launch_card_use_pr_hint">
+        <item quantity="one">Your commit moves to %2$s first, so nothing is lost.</item>
+        <item quantity="other">Your %1$d commits move to %2$s first, so nothing is lost.</item>
+    </plurals>
+    <string name="launch_card_keep_mine">Keep my local branch</string>
+    <string name="launch_card_keep_mine_hint">Work on your version. You'll pull the %1$s's changes in before pushing.</string>
+    <string name="launch_move_failed">Couldn't move your folder to %1$s: %2$s</string>
+
     <!-- First run: the project step -->
     <string name="firstproject_title">Where should your agents work?</string>
     <string name="firstproject_subtitle">Agents read and change files only inside the folder you choose.</string>

@@ -34,6 +34,9 @@ import dev.supermux.net.ModelInfo
 import dev.supermux.net.PathValidation
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.GitBranches
+import dev.supermux.net.GitSwitchResult
+import dev.supermux.net.OpenPrList
+import dev.supermux.net.OpenPrRead
 import dev.supermux.net.ProjectFolderState
 import dev.supermux.net.ProjectPrefs
 import dev.supermux.net.RepoInfo
@@ -119,6 +122,11 @@ class LauncherActions(
     /** #152: the user's Local / Worktree pick for a project and their branch prefix, kept on the broker. */
     val projectPrefs: suspend (dir: String) -> ProjectPrefs? = { null },
     val setProjectPrefs: suspend (dir: String, workIn: String) -> ProjectPrefs? = { _, _ -> null },
+    /** #152: origin's open PRs / MRs (searched), and one by #N / !N / N / URL; null = couldn't ask. */
+    val projectPrs: suspend (dir: String, q: String) -> OpenPrList? = { _, _ -> null },
+    val projectPr: suspend (dir: String, ref: String) -> OpenPrRead? = { _, _ -> null },
+    /** #152: the project folder to a branch, only when it is clean ("Move the folder to main, then use it here"). */
+    val switchFolder: suspend (dir: String, name: String) -> GitSwitchResult? = { _, _ -> null },
     /** Agent slash commands for the composer's "/" menu — Android's `loadCommands`. */
     val launcherCommands: suspend (agent: String, workdir: String) -> List<SlashCommand> =
         { _, _ -> emptyList() },
@@ -250,6 +258,9 @@ fun rememberLauncherActions(
             folderState = { app.launcherFolderState(it) },
             projectPrefs = { app.launcherProjectPrefs(it) },
             setProjectPrefs = { dir, workIn -> app.setLauncherProjectPrefs(dir, workIn) },
+            projectPrs = { dir, q -> app.launcherProjectPrs(dir, q) },
+            projectPr = { dir, ref -> app.launcherProjectPr(dir, ref) },
+            switchFolder = { dir, name -> app.launcherSwitchFolder(dir, name) },
             launcherCommands = { agent, workdir -> app.launcherCommands(agent, workdir) },
             launcherAgents = { app.launcherAgents() },
             accounts = app.accounts,
@@ -320,6 +331,9 @@ fun rememberLauncherActions(
             folderState = { fleet.launcherFolderState(it) },
             projectPrefs = { fleet.launcherProjectPrefs(it) },
             setProjectPrefs = { dir, workIn -> fleet.setLauncherProjectPrefs(dir, workIn) },
+            projectPrs = { dir, q -> fleet.launcherProjectPrs(dir, q) },
+            projectPr = { dir, ref -> fleet.launcherProjectPr(dir, ref) },
+            switchFolder = { dir, name -> fleet.launcherSwitchFolder(dir, name) },
             launcherCommands = { agent, workdir -> fleet.launcherCommands(agent, workdir) },
             launcherAgents = { fleet.agentStatuses().orEmpty().filter { it.installed }.map { it.kind } },
             accounts = fleet.activeAccounts,

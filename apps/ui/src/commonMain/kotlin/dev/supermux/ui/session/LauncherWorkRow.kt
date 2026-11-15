@@ -28,11 +28,15 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.CallSplit
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.Cloud
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.SwapHoriz
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.WarningAmber
@@ -57,6 +61,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.addPathNodes
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -82,9 +87,13 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import dev.supermux.net.GitBranches
+import dev.supermux.net.OpenPr
+import dev.supermux.net.OpenPrList
+import dev.supermux.net.OpenPrRead
 import dev.supermux.net.ProjectFolderState
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.chat.ComposerSheet
+import dev.supermux.ui.i18n.PluralKey
 import dev.supermux.ui.i18n.Plurals
 import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.StringKey
@@ -117,6 +126,18 @@ internal object WorkRowTags {
     const val POPOVER = "launcher_work_popover"
     const val SHEET = "launcher_work_sheet"
     const val NOT_REMEMBERED = "launcher_work_not_remembered"
+    const val TAB_PR = "launcher_tab_pr"
+    const val PR_SEARCH = "launcher_pr_search"
+    const val PR_NOTE = "launcher_pr_note"
+    const val CARD = "launcher_work_card"
+    const val CARD_HEAD = "launcher_work_card_head"
+    const val CARD_USE_LOCAL = "launcher_card_use_local"
+    const val CARD_MOVE = "launcher_card_move"
+    const val CARD_NEW_FROM = "launcher_card_new_from"
+    const val CARD_OPEN = "launcher_card_open"
+    const val CARD_USE_PR = "launcher_card_use_pr"
+    const val CARD_KEEP_MINE = "launcher_card_keep_mine"
+    fun pr(number: Int) = "launcher_pr_row_$number"
     fun row(name: String) = "launcher_branch_row_$name"
 }
 
@@ -148,10 +169,18 @@ internal fun LauncherWorkRow(
     modifier: Modifier = Modifier,
     /** The broker couldn't keep the Local / Worktree pick: it holds for this session only, and the row says so. */
     notRemembered: Boolean = false,
+    /** Origin's open PRs / MRs (null: not asked, or a broker before #152). No remote: no Pull request tab. */
+    prs: OpenPrList? = null,
+    /** One PR / MR by #N, !N, N or its URL, for one the list doesn't have. */
+    lookupPr: suspend (String) -> OpenPrRead? = { null },
+    /** "Open that session", from the card of a branch another session has. */
+    onOpenSession: ((String) -> Unit)? = null,
 ) {
     var open by remember { mutableStateOf<WorkPop?>(null) }
     val close = { open = null }
     val target = workTarget(pick, branches, folder?.branch, prefix, message)
+    val conflict = workConflict(pick, target, branches, folder)
+    val words = ForgeWords(prs?.forge == "gitlab" || pick.pr?.forge == "gitlab")
     Column(modifier.fillMaxWidth()) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Box {
@@ -165,19 +194,23 @@ internal fun LauncherWorkRow(
             }
             Box(Modifier.weight(1f, fill = false)) {
                 if (pick.workIn == WorkIn.Worktree) {
-                    WorkPill(pointer, open == WorkPop.Branch, Modifier.testTag(WorkRowTags.BRANCH), onClick = { open = WorkPop.Branch; onOpenBranches() }) {
-                        PillIcon(Icons.AutoMirrored.Filled.CallSplit)
+                    WorkPill(pointer, open == WorkPop.Branch, Modifier.testTag(WorkRowTags.BRANCH), warn = conflict != null, onClick = { open = WorkPop.Branch; onOpenBranches() }) {
+                        PillIcon(if (target is WorkTarget.OnPr) PullRequestIcon else Icons.AutoMirrored.Filled.CallSplit)
                         when (val t = target) {
                             is WorkTarget.NewBranch -> {
                                 PillWords(localized(Str.launch_branch_new_from))
                                 PillCode(t.base)
                             }
                             is WorkTarget.OnBranch -> PillCode(t.branch)
+                            is WorkTarget.OnPr -> {
+                                PillWords(words.sign + t.pr.number) // i18n-ok: "#123" / "!7", the forge's own mark and a number
+                                PillCode(t.pr.head)
+                            }
                             else -> PillWords(localized(Str.launch_branch_choose))
                         }
                     }
                     if (open == WorkPop.Branch) WorkMenu(pointer, width = 460.dp, onDismiss = close) {
-                        BranchPicker(pointer, pick, branches, loading, folder?.branch, prefix, message, fetchedBase, nowMs, legacy, onPick, close)
+                        BranchPicker(pointer, pick, branches, loading, folder?.branch, prefix, message, fetchedBase, nowMs, legacy, prs, lookupPr, words, onPick, close)
                     }
                 } else {
                     WorkPill(pointer, open == WorkPop.Local, Modifier.testTag(WorkRowTags.LOCAL_BRANCH), onClick = { if (!legacy) { open = WorkPop.Local; onOpenBranches() } }) {
@@ -200,7 +233,10 @@ internal fun LauncherWorkRow(
                 }
             }
         }
-        WorkSummary(target, pick, branches, folder, projectPath, fetchedBase, legacy, Modifier.padding(top = 10.dp, start = 2.dp, end = 2.dp))
+        WorkSummary(target, pick, branches, folder, projectPath, fetchedBase, legacy, prs?.prs.orEmpty(), words, Modifier.padding(top = 10.dp, start = 2.dp, end = 2.dp))
+        if (conflict != null) {
+            ConflictCard(conflict, pick, projectPath, words, onPick, onWorkIn, onOpenSession, Modifier.padding(top = 12.dp))
+        }
         if (notRemembered) {
             Text(
                 localized(Str.launch_work_not_remembered, projectName),
@@ -215,17 +251,19 @@ internal fun LauncherWorkRow(
 // ── the pills ─────────────────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun WorkPill(pointer: Boolean, open: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit, content: @Composable RowScope.() -> Unit) {
+private fun WorkPill(pointer: Boolean, open: Boolean, modifier: Modifier = Modifier, warn: Boolean = false, onClick: () -> Unit, content: @Composable RowScope.() -> Unit) {
     val cs = MaterialTheme.colorScheme
     val haptic = rememberHaptics()
     val src = remember { MutableInteractionSource() }
     val hovered by src.collectIsHoveredAsState()
     val bg = if (open || hovered) cs.onSurface.copy(alpha = 0.13f).compositeOver(cs.surfaceContainerLow) else cs.surfaceContainerHighest
+    val shape = RoundedCornerShape(Radii.pill)
     Row(
         modifier
             .height(if (pointer) 34.dp else 40.dp)
-            .clip(RoundedCornerShape(Radii.pill))
+            .clip(shape)
             .background(bg)
+            .then(if (warn) Modifier.border(1.dp, LocalSemantics.current.warning, shape) else Modifier)
             .hoverable(src)
             .clickable(interactionSource = src, indication = null) { haptic.perform(HapticKind.Tick); onClick() }
             .padding(start = 10.dp, end = 8.dp),
@@ -340,16 +378,21 @@ private fun ColumnScope.BranchPicker(
     fetchedBase: Boolean,
     nowMs: Long,
     legacy: Boolean,
+    prs: OpenPrList?,
+    lookupPr: suspend (String) -> OpenPrRead?,
+    words: ForgeWords,
     onPick: (WorkPick) -> Unit,
     close: () -> Unit,
 ) {
     var tab by remember { mutableStateOf(if (legacy) BranchMode.New else pick.mode) }
+    // No remote (or a broker before #152): nothing to open a pull request on, so no tab for one.
+    val prTab = !legacy && prs != null && !(prs.status == "unavailable" && prs.reason == "no_remote")
     var query by remember { mutableStateOf("") }
     var baseOpen by remember { mutableStateOf(false) }
     var name by remember { mutableStateOf(pick.name) }
     var base by remember { mutableStateOf(pick.base.ifEmpty { defaultBase(branches, folderBranch) }) }
     val (local, remote) = remember(branches) { branchRows(branches) }
-    if (!legacy) Tabs(pointer, tab) { tab = it; query = ""; baseOpen = false }
+    if (!legacy) Tabs(pointer, tab, if (prTab) words.tab else null) { tab = it; query = ""; baseOpen = false }
     Column(menuBody(pointer).padding(bottom = 6.dp)) {
         if (tab == BranchMode.New) {
             Label(localized(Str.launch_base))
@@ -397,9 +440,11 @@ private fun ColumnScope.BranchPicker(
             }
             val origin = remoteName(branches)
             if (origin != null) Hint(styled(argStyles(), Str.launch_base_fetched_hint, Arg.Plain(origin), Arg.Code(base.substringAfter('/'))))
+        } else if (tab == BranchMode.PullRequest) {
+            PrList(pointer, pick, prs, lookupPr, words, folderBranch, onPick, close)
         } else {
             SearchField(pointer, query, { query = it }, onEnter = {
-                (filterRows(local, query) + filterRows(remote, query)).firstOrNull { !it.held }?.let { r ->
+                (filterRows(local, query) + filterRows(remote, query)).firstOrNull()?.let { r ->
                     onPick(pick.copy(mode = BranchMode.Existing, branch = r.name)); close()
                 }
             }, onEscape = close)
@@ -407,8 +452,8 @@ private fun ColumnScope.BranchPicker(
             val r = filterRows(remote, query)
             if (l.isNotEmpty()) Label(localized(Str.launch_branches_local))
             l.forEach { row ->
-                // Git keeps a branch in one place: one open in the folder or another worktree can't be this worktree's.
-                BranchRowItem(row, selected = pick.mode == BranchMode.Existing && pick.branch == row.name, nowMs = nowMs, enabled = !row.held, onClick = {
+                // One git keeps elsewhere is tagged with where; picking it brings the ways out under the row (C3).
+                BranchRowItem(row, selected = pick.mode == BranchMode.Existing && pick.branch == row.name, nowMs = nowMs, onClick = {
                     onPick(pick.copy(mode = BranchMode.Existing, branch = row.name)); close()
                 })
             }
@@ -422,7 +467,9 @@ private fun ColumnScope.BranchPicker(
         }
     }
     MenuFoot {
-        if (tab == BranchMode.New) {
+        if (tab == BranchMode.PullRequest) {
+            FootText(AnnotatedString(localized(Str.launch_pr_foot, words.noun)))
+        } else if (tab == BranchMode.New) {
             val shown = if (name.isBlank()) autoBranchName(prefix, message) else prefix + name.trim()
             val foot = if (legacy) styled(argStyles(), Str.launch_sum_new_unnamed, Arg.Code(base)) else styled(argStyles(), Str.launch_new_branch_from, Arg.CodeBold(shown), Arg.Code(base))
             FootText(foot, Modifier.weight(1f))
@@ -562,6 +609,7 @@ private fun MenuRow(
     title: String? = null,
     code: String? = null,
     subtitle: String? = null,
+    subtitleRich: AnnotatedString? = null,
     wrap: Boolean = false,
     tags: @Composable () -> Unit = {},
 ) {
@@ -590,6 +638,7 @@ private fun MenuRow(
         Column(Modifier.weight(1f)) {
             if (title != null) Text(title, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = cs.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (code != null) Text(code, fontFamily = MonoFontFamily, fontSize = 12.5.sp, color = cs.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (subtitleRich != null) Text(subtitleRich, fontSize = 11.5.sp, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (subtitle != null) {
                 Text(
                     subtitle,
@@ -604,7 +653,7 @@ private fun MenuRow(
     }
 }
 
-private enum class TagTone { Plain, Warn, Primary }
+private enum class TagTone { Plain, Warn, Primary, Ok }
 
 @Composable
 private fun Tag(text: String, tone: TagTone = TagTone.Plain) {
@@ -614,6 +663,7 @@ private fun Tag(text: String, tone: TagTone = TagTone.Plain) {
         TagTone.Plain -> cs.onSurfaceVariant to cs.surfaceContainerHighest
         TagTone.Warn -> warn to warn.copy(alpha = 0.12f)
         TagTone.Primary -> cs.primary to cs.primary.copy(alpha = 0.12f)
+        TagTone.Ok -> LocalSemantics.current.success to LocalSemantics.current.success.copy(alpha = 0.12f)
     }
     Text(
         text,
@@ -634,7 +684,7 @@ private fun CheckTag() {
 }
 
 @Composable
-private fun Tabs(pointer: Boolean, current: BranchMode, onTab: (BranchMode) -> Unit) {
+private fun Tabs(pointer: Boolean, current: BranchMode, prTab: String?, onTab: (BranchMode) -> Unit) {
     val cs = MaterialTheme.colorScheme
     Row(
         Modifier
@@ -645,9 +695,10 @@ private fun Tabs(pointer: Boolean, current: BranchMode, onTab: (BranchMode) -> U
             .padding(2.dp),
         horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        listOf(
-            Triple(BranchMode.New, Str.launch_tab_new, WorkRowTags.TAB_NEW),
-            Triple(BranchMode.Existing, Str.launch_tab_existing, WorkRowTags.TAB_EXISTING),
+        listOfNotNull(
+            Triple(BranchMode.New, localized(Str.launch_tab_new), WorkRowTags.TAB_NEW),
+            Triple(BranchMode.Existing, localized(Str.launch_tab_existing), WorkRowTags.TAB_EXISTING),
+            prTab?.let { Triple(BranchMode.PullRequest, it, WorkRowTags.TAB_PR) },
         ).forEach { (mode, label, tag) ->
             val on = mode == current
             val shape = RoundedCornerShape(8.dp)
@@ -661,7 +712,7 @@ private fun Tabs(pointer: Boolean, current: BranchMode, onTab: (BranchMode) -> U
                     .testTag(tag),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(localized(label), fontSize = 12.5.sp, color = if (on) cs.onSurface else cs.onSurfaceVariant, maxLines = 1)
+                Text(label, fontSize = 12.5.sp, color = if (on) cs.onSurface else cs.onSurfaceVariant, maxLines = 1)
             }
         }
     }
@@ -696,7 +747,15 @@ private fun Field(modifier: Modifier = Modifier, content: @Composable RowScope.(
 }
 
 @Composable
-private fun SearchField(pointer: Boolean, query: String, onQuery: (String) -> Unit, onEnter: () -> Unit, onEscape: () -> Unit) {
+private fun SearchField(
+    pointer: Boolean,
+    query: String,
+    onQuery: (String) -> Unit,
+    onEnter: () -> Unit,
+    onEscape: () -> Unit,
+    placeholder: String = localized(Str.launch_search_branches),
+    tag: String = WorkRowTags.SEARCH,
+) {
     val cs = MaterialTheme.colorScheme
     val focus = remember { FocusRequester() }
     val shape = RoundedCornerShape(9.dp)
@@ -714,14 +773,14 @@ private fun SearchField(pointer: Boolean, query: String, onQuery: (String) -> Un
     ) {
         Icon(Icons.Filled.Search, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
         Box(Modifier.weight(1f)) {
-            if (query.isEmpty()) Text(localized(Str.launch_search_branches), fontSize = 13.sp, color = cs.onSurfaceVariant, maxLines = 1)
+            if (query.isEmpty()) Text(placeholder, fontSize = 13.sp, color = cs.onSurfaceVariant, maxLines = 1)
             BasicTextField(
                 value = query,
                 onValueChange = onQuery,
                 singleLine = true,
                 textStyle = TextStyle(color = cs.onSurface, fontSize = 13.sp),
                 cursorBrush = SolidColor(cs.primary),
-                modifier = Modifier.fillMaxWidth().focusRequester(focus).testTag(WorkRowTags.SEARCH).onPreviewKeyEvent { e ->
+                modifier = Modifier.fillMaxWidth().focusRequester(focus).testTag(tag).onPreviewKeyEvent { e ->
                     if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                     when (e.key) {
                         Key.Enter, Key.NumPadEnter -> { onEnter(); true }
@@ -785,14 +844,19 @@ private fun WorkSummary(
     fetchedBase: Boolean,
     /** A broker before #152 names the new branch itself (mux/<session>), so no name is promised here. */
     legacy: Boolean,
+    prs: List<OpenPr>,
+    words: ForgeWords,
     modifier: Modifier = Modifier,
 ) {
     val st = argStyles()
     val remote = remoteName(branches)
     val lines = mutableListOf<Pair<ImageVector, AnnotatedString>>()
     fun s(key: StringKey, vararg args: Arg) = styled(st, key, *args)
-    fun pushLine(branch: String, upstream: String?, offerPr: Boolean) {
+    fun pushLine(branch: String, upstream: String?, offerPr: Boolean, local: Boolean = false) {
+        val open = openPrFrom(branch, prs)
         lines += Icons.Outlined.Cloud to when {
+            upstream != null && open != null && local -> s(Str.launch_sum_push_to_open, Arg.Code(upstream), Arg.Plain(words.label(open.number)))
+            upstream != null && open != null -> s(Str.launch_sum_push_to_pr, Arg.Code(upstream), Arg.Link(words.label(open.number)))
             upstream != null -> s(Str.launch_sum_push_to, Arg.Code(upstream))
             remote == null -> AnnotatedString(localized(Str.launch_sum_no_remote))
             offerPr -> s(Str.launch_sum_first_push_pr, Arg.Code("$remote/$branch"))
@@ -814,7 +878,7 @@ private fun WorkSummary(
                 branch != null -> s(Str.launch_sum_here, Arg.Bold(projectPath), Arg.Code(branch))
                 else -> s(Str.launch_sum_here_plain, Arg.Bold(projectPath))
             }
-            if (branch != null) pushLine(branch, upstreamOf(branch), offerPr = false)
+            if (branch != null) pushLine(branch, upstreamOf(branch), offerPr = false, local = true)
         }
         is WorkTarget.NewBranch -> {
             val start = baseLabel(target.base, branchRows(branches).let { (l, r) -> (l + r).firstOrNull { it.name == target.base } }, branches)
@@ -838,6 +902,27 @@ private fun WorkSummary(
                 s(Str.launch_sum_existing, Arg.Code(target.branch))
             }
             pushLine(target.branch, track ?: upstreamOf(target.branch), offerPr = false)
+        }
+        is WorkTarget.OnPr -> {
+            val pr = target.pr
+            val own = if (pr.isFork) s(Str.launch_sum_pr_fork, Arg.Plain(words.noun), Arg.Code(pr.head), Arg.Bold(pr.headRepo)) else s(Str.launch_sum_pr, Arg.Plain(words.noun), Arg.Code(pr.head))
+            val ahead = pr.localAhead ?: 0
+            val kept = when {
+                ahead > 0 && target.diverged == "pr" -> styledPlural(st, Plurals.launch_sum_pr_backup, ahead, Arg.Plain(ahead.toString()), Arg.Code("${target.local}-backup"))
+                ahead > 0 && target.diverged == "mine" -> styledPlural(st, Plurals.launch_sum_pr_mine, ahead, Arg.Plain(ahead.toString()))
+                else -> null
+            }
+            lines += Icons.Filled.ContentCopy to if (kept == null) own else buildAnnotatedString { append(own); append(" "); append(kept) }
+            val label = words.label(pr.number)
+            lines += when {
+                pr.isFork && !pr.maintainerCanModify -> Icons.Outlined.Lock to buildAnnotatedString {
+                    withStyle(st.bold) { append(localized(Str.launch_sum_review_only)) }
+                    append(" ")
+                    append(s(Str.launch_sum_pr_review_only, Arg.Bold(pr.author), Arg.Plain(words.sign + pr.number), Arg.Plain(words.noun)))
+                }
+                pr.isFork -> Icons.Outlined.Cloud to s(Str.launch_sum_pr_push_fork, Arg.Code("${pr.headOwner.orEmpty()}/${pr.head}"), Arg.Link(label))
+                else -> Icons.Outlined.Cloud to s(Str.launch_sum_pr_push, Arg.Code("origin/${pr.head}"), Arg.Link(label))
+            }
         }
     }
     // One block to a screen reader: where the work lands, then where pushes go.
@@ -864,6 +949,8 @@ internal fun NotGitSummary(projectPath: String, modifier: Modifier = Modifier) {
 
 private sealed interface Arg {
     data class Plain(val text: String) : Arg
+    /** A pull request's name ("PR #123"), in the link colour. */
+    data class Link(val text: String) : Arg
     data class Bold(val text: String) : Arg
     data class Code(val text: String) : Arg
     data class CodeBold(val text: String) : Arg
@@ -876,7 +963,7 @@ private sealed interface Arg {
 private val PLACEHOLDER = Regex("%(\\d+)\\$[ds]")
 
 /** How placeholders look: read once in composition, so [styled] itself is a plain function. */
-private class ArgStyles(val code: SpanStyle, val bold: SpanStyle, val tag: SpanStyle)
+private class ArgStyles(val code: SpanStyle, val bold: SpanStyle, val tag: SpanStyle, val link: SpanStyle)
 
 @Composable
 private fun argStyles(): ArgStyles {
@@ -885,12 +972,17 @@ private fun argStyles(): ArgStyles {
         code = SpanStyle(fontFamily = MonoFontFamily, fontSize = 12.5.sp, color = cs.onSurface),
         bold = SpanStyle(color = cs.onSurface, fontWeight = FontWeight.Medium),
         tag = SpanStyle(fontSize = 10.5.sp, color = cs.onSurfaceVariant, background = cs.surfaceContainerHighest),
+        link = SpanStyle(color = cs.primary),
     )
 }
 
 /** [key]'s text in the app's language, each `%N$s` replaced by its [args] entry, styled. */
-private fun styled(st: ArgStyles, key: StringKey, vararg args: Arg): AnnotatedString {
-    val template = localized(key)
+private fun styled(st: ArgStyles, key: StringKey, vararg args: Arg): AnnotatedString = styledText(st, localized(key), *args)
+
+/** A plural's text for [count], styled the same way. */
+private fun styledPlural(st: ArgStyles, key: PluralKey, count: Int, vararg args: Arg): AnnotatedString = styledText(st, localizedPlural(key, count), *args)
+
+private fun styledText(st: ArgStyles, template: String, vararg args: Arg): AnnotatedString {
     val code = st.code
     return buildAnnotatedString {
         var at = 0
@@ -899,6 +991,7 @@ private fun styled(st: ArgStyles, key: StringKey, vararg args: Arg): AnnotatedSt
             when (val a = args.getOrNull(m.groupValues[1].toInt() - 1)) {
                 null -> append(m.value)
                 is Arg.Plain -> append(a.text)
+                is Arg.Link -> withStyle(st.link) { append(a.text) }
                 is Arg.Bold -> withStyle(st.bold) { append(a.text) }
                 is Arg.Code -> withStyle(code) { append(a.text) }
                 is Arg.CodeBold -> withStyle(code.copy(fontWeight = FontWeight.Medium)) { append(a.text) }
@@ -916,4 +1009,226 @@ private fun styled(st: ArgStyles, key: StringKey, vararg args: Arg): AnnotatedSt
         }
         append(template.substring(at))
     }
+}
+
+// ── #152 C2: the Pull request tab (GitLab: Merge request) ─────────────────────────────────────────────
+
+/** How the project's forge names a pull request: "pull request" and "#123" on GitHub, "merge request" and "!7" on GitLab. */
+internal class ForgeWords(private val gitlab: Boolean) {
+    val noun: String get() = localized(if (gitlab) Str.launch_mr_noun else Str.launch_pr_noun)
+    val tab: String get() = localized(if (gitlab) Str.launch_tab_mr else Str.launch_tab_pr)
+    val search: String get() = localized(if (gitlab) Str.launch_mr_search else Str.launch_pr_search)
+    val openList: String get() = localized(if (gitlab) Str.launch_mr_open_list else Str.launch_pr_open_list)
+    val sign: String get() = if (gitlab) "!" else "#"
+    /** The CLI that holds the user's sign-in to the forge. */
+    val cli: String get() = if (gitlab) "glab" else "gh"
+    fun label(n: Int): String = localized(if (gitlab) Str.launch_mr_label else Str.launch_pr_label, n)
+}
+
+@Composable
+private fun ColumnScope.PrList(
+    pointer: Boolean,
+    pick: WorkPick,
+    prs: OpenPrList?,
+    lookupPr: suspend (String) -> OpenPrRead?,
+    words: ForgeWords,
+    folderBranch: String?,
+    onPick: (WorkPick) -> Unit,
+    close: () -> Unit,
+) {
+    var query by remember { mutableStateOf("") }
+    val all = prs?.prs.orEmpty()
+    val number = parsePrNumber(query)
+    val listed = number?.let { n -> all.firstOrNull { it.number == n } }
+    // One the list doesn't have (a URL pasted, one past the first 50): read it by number.
+    var looked by remember { mutableStateOf<OpenPrRead?>(null) }
+    LaunchedEffect(number, listed) {
+        looked = null
+        if (number != null && listed == null) looked = lookupPr(query.trim())
+    }
+    val pickPr: (OpenPr) -> Unit = { p -> onPick(pick.copy(mode = BranchMode.PullRequest, pr = p, diverged = null, folderTo = null)); close() }
+    val found = looked?.takeIf { it.status == "found" }?.pr
+    val shown: List<OpenPr> = when {
+        listed != null -> listOf(listed)
+        number != null -> listOfNotNull(found)
+        else -> query.trim().lowercase().let { q -> if (q.isEmpty()) all else all.filter { "${it.number} ${it.title} ${it.head} ${it.author}".lowercase().contains(q) } }
+    }
+    SearchField(pointer, query, { query = it }, onEnter = { shown.firstOrNull()?.let(pickPr) }, onEscape = close, placeholder = words.search, tag = WorkRowTags.PR_SEARCH)
+    // What can't be listed or found is said, never an empty list.
+    val read = looked
+    val note: String? = when {
+        prs?.status == "unavailable" -> when (prs.reason) {
+            "no_cli" -> localized(Str.launch_pr_no_cli, words.cli, words.noun)
+            "not_authed" -> localized(Str.launch_pr_not_authed, words.cli, words.noun)
+            else -> localized(Str.launch_pr_failed, words.noun, prs.message.orEmpty())
+        }
+        number != null && listed == null && read != null && read.status != "found" -> when (read.status) {
+            "not_open" -> localized(if (read.state == "merged") Str.launch_pr_merged else Str.launch_pr_closed, words.label(number))
+            "other_repo" -> localized(Str.launch_pr_other_repo, read.repo.orEmpty())
+            else -> localized(Str.launch_pr_none, words.noun, words.sign + number, prs?.repo.orEmpty())
+        }
+        else -> null
+    }
+    if (note != null) {
+        Text(note, fontSize = 12.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp).testTag(WorkRowTags.PR_NOTE))
+    }
+    if (prs?.status == "ok") Label(words.openList, right = prs.repo)
+    shown.forEach { p -> PrRowItem(p, selected = pick.mode == BranchMode.PullRequest && pick.pr?.number == p.number, words, folderBranch, onClick = { pickPr(p) }) }
+    if (prs == null) Empty(localized(Str.launch_fetching))
+}
+
+@Composable
+private fun PrRowItem(pr: OpenPr, selected: Boolean, words: ForgeWords, folderBranch: String?, onClick: () -> Unit) {
+    val base = argStyles()
+    val st = ArgStyles(base.code.copy(fontSize = 11.sp), base.bold, base.tag, base.link)
+    val head = if (pr.isFork && !pr.headOwner.isNullOrEmpty()) "${pr.headOwner}:${pr.head}" else pr.head
+    MenuRow(
+        icon = PullRequestIcon,
+        selected = selected,
+        onClick = onClick,
+        modifier = Modifier.testTag(WorkRowTags.pr(pr.number)),
+        title = words.sign + pr.number + " " + pr.title, // i18n-ok: the forge's mark, a number and the PR's own title
+        subtitleRich = styled(st, Str.launch_pr_row, Arg.Code(head), Arg.Code(pr.base), Arg.Plain(pr.author)),
+        tags = {
+            if (pr.draft) Tag(localized(Str.launch_tag_draft))
+            if (pr.isFork) Tag(localized(if (pr.maintainerCanModify) Str.launch_tag_fork else Str.launch_tag_fork_review), if (pr.maintainerCanModify) TagTone.Plain else TagTone.Warn)
+            if (!pr.isFork && pr.head == folderBranch) Tag(localized(Str.launch_tag_in_folder), TagTone.Warn)
+            if ((pr.localAhead ?: 0) > 0) Tag(localized(Str.launch_tag_local_differs), TagTone.Warn)
+            when (pr.checks) {
+                "ok" -> Tag(localized(Str.launch_tag_checks_ok), TagTone.Ok)
+                "bad" -> Tag(localized(Str.launch_tag_checks_bad), TagTone.Warn)
+                "run" -> Tag(localized(Str.launch_tag_checks_run))
+            }
+        },
+    )
+}
+
+// ── #152 C3: the ways out when git keeps the branch elsewhere, or the PR would replace local commits ──────
+
+@Composable
+private fun ConflictCard(
+    conflict: WorkConflict,
+    pick: WorkPick,
+    projectPath: String,
+    words: ForgeWords,
+    onPick: (WorkPick) -> Unit,
+    onWorkIn: (WorkIn) -> Unit,
+    onOpenSession: ((String) -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    val cs = MaterialTheme.colorScheme
+    val st = argStyles()
+    val warn = LocalSemantics.current.warning
+    val shape = RoundedCornerShape(14.dp)
+    val prLabel = pick.pr?.let { words.sign + it.number } // i18n-ok: "#118" / "!7", the forge's mark and a number
+    val newFrom: @Composable (String) -> Unit = { branch ->
+        CardOption(
+            Icons.Filled.Add, styled(st, Str.launch_card_new_from, Arg.Code(branch)),
+            AnnotatedString(if (prLabel != null) localized(Str.launch_card_new_from_pr_hint, prLabel) else localized(Str.launch_card_new_from_hint)),
+            tag = WorkRowTags.CARD_NEW_FROM,
+        ) { onPick(newBranchFrom(pick, branch)) }
+    }
+    val (head, why) = when (conflict) {
+        is WorkConflict.InFolder -> styled(st, Str.launch_card_in_folder, Arg.CodeBold(conflict.branch), Arg.Plain(projectPath)) to localized(Str.launch_card_one_place)
+        is WorkConflict.InSession -> styled(st, Str.launch_card_in_session, Arg.CodeBold(conflict.branch), Arg.Plain(conflict.sessionName)) to localized(Str.launch_card_one_place_short)
+        is WorkConflict.InWorktree -> styled(st, Str.launch_card_in_worktree, Arg.CodeBold(conflict.branch), Arg.Code(conflict.path)) to localized(Str.launch_card_one_place_short)
+        is WorkConflict.LocalAhead -> styledPlural(st, Plurals.launch_card_ahead, conflict.ahead, Arg.Plain(conflict.ahead.toString()), Arg.CodeBold(conflict.branch), Arg.Plain(words.sign + conflict.pr.number)) to
+            localized(Str.launch_card_ahead_why, words.noun)
+    }
+    Column(
+        modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(warn.copy(alpha = 0.09f).compositeOver(cs.surfaceContainerLow))
+            .border(1.dp, warn.copy(alpha = 0.45f), shape)
+            .padding(horizontal = 14.dp, vertical = 12.dp)
+            .testTag(WorkRowTags.CARD),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Icon(Icons.Outlined.WarningAmber, contentDescription = null, tint = warn, modifier = Modifier.padding(top = 1.dp).size(16.dp))
+            Text(head, fontSize = 13.sp, lineHeight = 19.sp, color = cs.onSurface, modifier = Modifier.testTag(WorkRowTags.CARD_HEAD))
+        }
+        Text(why, fontSize = 12.5.sp, lineHeight = 18.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(start = 24.dp, top = 2.dp))
+        Column(Modifier.padding(start = 24.dp, top = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            when (conflict) {
+                is WorkConflict.InFolder -> {
+                    CardOption(
+                        Icons.Outlined.Folder, AnnotatedString(localized(Str.launch_card_use_local)),
+                        styled(st, Str.launch_card_use_local_hint, Arg.Plain(projectPath), Arg.Code(conflict.branch)),
+                        tag = WorkRowTags.CARD_USE_LOCAL,
+                    ) { onWorkIn(WorkIn.Local); onPick(pick.copy(switchTo = null)) }
+                    CardOption(
+                        Icons.Outlined.SwapHoriz, styled(st, Str.launch_card_move, Arg.Code(conflict.moveTo), Arg.Code(conflict.branch)),
+                        AnnotatedString(localized(if (conflict.canMove) Str.launch_card_move_hint else Str.launch_card_move_dirty)),
+                        enabled = conflict.canMove, tag = WorkRowTags.CARD_MOVE,
+                    ) { onPick(pick.copy(folderTo = conflict.moveTo)) }
+                    newFrom(conflict.branch)
+                }
+                is WorkConflict.InSession -> {
+                    if (onOpenSession != null) {
+                        CardOption(
+                            Icons.AutoMirrored.Filled.OpenInNew, AnnotatedString(localized(Str.launch_card_open, conflict.sessionName)),
+                            styled(st, Str.launch_card_open_hint, Arg.Code(conflict.branch)),
+                            tag = WorkRowTags.CARD_OPEN,
+                        ) { onOpenSession(conflict.sessionId) }
+                    }
+                    newFrom(conflict.branch)
+                }
+                is WorkConflict.InWorktree -> newFrom(conflict.branch)
+                is WorkConflict.LocalAhead -> {
+                    CardOption(
+                        Icons.Outlined.SwapHoriz, AnnotatedString(localized(Str.launch_card_use_pr, words.noun)),
+                        styledPlural(st, Plurals.launch_card_use_pr_hint, conflict.ahead, Arg.Plain(conflict.ahead.toString()), Arg.Code("${conflict.branch}-backup")),
+                        tag = WorkRowTags.CARD_USE_PR,
+                    ) { onPick(pick.copy(diverged = "pr")) }
+                    CardOption(
+                        Icons.AutoMirrored.Filled.CallSplit, AnnotatedString(localized(Str.launch_card_keep_mine)),
+                        AnnotatedString(localized(Str.launch_card_keep_mine_hint, words.noun)),
+                        tag = WorkRowTags.CARD_KEEP_MINE,
+                    ) { onPick(pick.copy(diverged = "mine")) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CardOption(icon: ImageVector, title: AnnotatedString, hint: AnnotatedString, enabled: Boolean = true, tag: String, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val src = remember { MutableInteractionSource() }
+    val hovered by src.collectIsHoveredAsState()
+    val shape = RoundedCornerShape(10.dp)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .alpha(if (enabled) 1f else 0.5f)
+            .clip(shape)
+            .background(cs.surfaceContainerLowest)
+            .border(1.dp, if (hovered && enabled) cs.primary else cs.outline, shape)
+            .hoverable(src)
+            .then(if (enabled) Modifier.clickable(interactionSource = src, indication = null, onClick = onClick) else Modifier)
+            .padding(horizontal = 10.dp, vertical = 8.dp)
+            .testTag(tag),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(icon, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp).size(16.dp))
+        Column {
+            Text(title, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = cs.onSurface)
+            Text(hint, fontSize = 12.sp, lineHeight = 17.sp, color = cs.onSurfaceVariant)
+        }
+    }
+}
+
+/** The pull request glyph (the prototype's own path): Material has none. */
+private val PullRequestIcon: ImageVector by lazy {
+    ImageVector.Builder(name = "PullRequest", defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f)
+        .addPath(
+            pathData = addPathNodes(
+                "M6 3a3 3 0 0 1 1 5.83v6.34A3 3 0 1 1 5 15.17V8.83A3 3 0 0 1 6 3zm0 2a1 1 0 1 0 0 2 1 1 0 0 0 0-2zm0 12a1 1 0 1 0 0 2 " +
+                    "1 1 0 0 0 0-2zM13 2v2h1a3 3 0 0 1 3 3v8.17A3 3 0 1 1 15 15.17V7a1 1 0 0 0-1-1h-1v2L9.5 5 13 2zm3 15a1 1 0 1 0 0 2 " +
+                    "1 1 0 0 0 0-2z",
+            ),
+            fill = SolidColor(Color.Black),
+        )
+        .build()
 }

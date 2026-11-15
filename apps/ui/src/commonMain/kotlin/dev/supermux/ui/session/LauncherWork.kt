@@ -7,6 +7,8 @@ import dev.supermux.net.GitBranches
 import dev.supermux.net.GitLocalBranch
 import dev.supermux.net.GitOpenIn
 import dev.supermux.net.GitRemoteBranch
+import dev.supermux.net.OpenPr
+import dev.supermux.net.ProjectFolderState
 import dev.supermux.net.RepoInfo
 import dev.supermux.net.SessionSourceBody
 
@@ -21,7 +23,7 @@ enum class WorkIn(val wire: String) {
 }
 
 /** How a worktree gets its branch: the picker's tabs. */
-enum class BranchMode { New, Existing }
+enum class BranchMode { New, Existing, PullRequest }
 
 /** What is picked under the composer. */
 data class WorkPick(
@@ -35,6 +37,12 @@ data class WorkPick(
     val branch: String? = null,
     /** Local: the branch the folder switches to at Start; null = it stays where it is. */
     val switchTo: String? = null,
+    /** PullRequest: the one picked, as listed or read. */
+    val pr: OpenPr? = null,
+    /** PullRequest: whose version wins when the local branch has commits the PR lacks ("pr" | "mine"); null = not asked. */
+    val diverged: String? = null,
+    /** The folder moves to this branch at Start first, so a branch it has can be the worktree's (C3). */
+    val folderTo: String? = null,
 )
 
 /** One branch as a picker lists it. [name] is what gets picked: a local name, or "origin/x" for one only origin has. */
@@ -119,7 +127,12 @@ sealed interface WorkTarget {
     data class NewBranch(val name: String, val auto: Boolean, val base: String) : WorkTarget
     /** A worktree on [branch] itself; [track] when only that remote branch exists, so a local one is made to follow it. */
     data class OnBranch(val branch: String, val track: String?) : WorkTarget
+    /** A worktree on the pull / merge request's own branch, here [local] (a fork's carries its owner's name). */
+    data class OnPr(val pr: OpenPr, val local: String, val diverged: String? = null) : WorkTarget
 }
+
+/** The local branch a pull request's head becomes: its own name, or "<owner>/<head>" for a fork's. */
+fun prLocalBranch(pr: OpenPr): String = if (pr.isFork && !pr.headOwner.isNullOrEmpty()) "${pr.headOwner}/${pr.head}" else pr.head
 
 /** What [pick] means for this folder, or null when the pick isn't complete (no existing branch chosen yet). */
 fun workTarget(pick: WorkPick, branches: GitBranches?, folderBranch: String?, prefix: String, message: String): WorkTarget? {
@@ -149,6 +162,7 @@ fun workTarget(pick: WorkPick, branches: GitBranches?, folderBranch: String?, pr
                 else -> WorkTarget.OnBranch(b, null)
             }
         }
+        BranchMode.PullRequest -> pick.pr?.let { WorkTarget.OnPr(it, prLocalBranch(it), pick.diverged) }
     }
 }
 
@@ -157,8 +171,60 @@ fun workTarget(pick: WorkPick, branches: GitBranches?, folderBranch: String?, pr
  * Null when the target is free. A new branch is always free.
  */
 fun heldBranch(target: WorkTarget?, branches: GitBranches?): GitOpenIn? {
-    val name = (target as? WorkTarget.OnBranch)?.branch ?: return null
+    val name = when (target) {
+        is WorkTarget.OnBranch -> target.branch
+        is WorkTarget.OnPr -> target.local
+        else -> return null
+    }
     return branches?.local?.firstOrNull { it.name == name }?.openIn
+}
+
+/** What has to be chosen before Start, said inline under the row (C3). Null: nothing, Start can go. */
+sealed interface WorkConflict {
+    /** The project folder has [branch]. [canMove]: it is clean, so it can move to [moveTo] first. */
+    data class InFolder(val branch: String, val moveTo: String, val canMove: Boolean) : WorkConflict
+    data class InSession(val branch: String, val sessionId: String, val sessionName: String) : WorkConflict
+    /** In a worktree no session owns. */
+    data class InWorktree(val branch: String, val path: String) : WorkConflict
+    /** The local branch has [ahead] commits the pull request doesn't: checking it out would replace them. */
+    data class LocalAhead(val pr: OpenPr, val branch: String, val ahead: Int) : WorkConflict
+}
+
+fun workConflict(pick: WorkPick, target: WorkTarget?, branches: GitBranches?, folder: ProjectFolderState?): WorkConflict? {
+    val branch = when (target) {
+        is WorkTarget.OnBranch -> target.branch
+        is WorkTarget.OnPr -> target.local
+        else -> return null
+    }
+    val held = heldBranch(target, branches)
+    if (held != null) {
+        when (held.kind) {
+            "this", "folder" -> if (pick.folderTo == null) {
+                val moveTo = defaultBase(branches, folder?.branch)
+                return WorkConflict.InFolder(branch, moveTo, folder?.clean == true && moveTo.isNotEmpty() && moveTo != branch)
+            }
+            "session" -> return WorkConflict.InSession(branch, held.id.orEmpty(), held.name.orEmpty())
+            "external" -> return WorkConflict.InWorktree(branch, held.path.orEmpty())
+        }
+    }
+    val ahead = (target as? WorkTarget.OnPr)?.pr?.localAhead ?: 0
+    if (target is WorkTarget.OnPr && ahead > 0 && target.diverged == null) return WorkConflict.LocalAhead(target.pr, branch, ahead)
+    return null
+}
+
+/** "New branch from it instead": a new branch from the held one, named after it with -2. */
+fun newBranchFrom(pick: WorkPick, branch: String): WorkPick =
+    pick.copy(mode = BranchMode.New, base = branch, name = branch.substringAfterLast('/') + "-2", branch = null, pr = null, diverged = null, folderTo = null) // platform-ok: a git ref name, /-separated on every OS
+
+/** The open (same-repo) pull request whose head is [branch]: its pushes update it. */
+fun openPrFrom(branch: String?, prs: List<OpenPr>): OpenPr? = branch?.let { b -> prs.firstOrNull { !it.isFork && it.head == b } }
+
+/** "#123", "!7", "42", or a PR / MR URL, as a number. */
+fun parsePrNumber(text: String): Int? {
+    val s = text.trim()
+    val n = Regex("^[#!]?(\\d+)$").find(s)?.groupValues?.get(1)
+        ?: Regex("/(?:pull|merge_requests)/(\\d+)").find(s)?.groupValues?.get(1)
+    return n?.toIntOrNull()?.takeIf { it > 0 }
 }
 
 /** What the broker is asked for at Start; null while the pick is incomplete (Start stays off). */
@@ -168,4 +234,5 @@ fun sessionSource(target: WorkTarget?): SessionSourceBody? = when (target) {
     is WorkTarget.Reuse -> SessionSourceBody(kind = "reuse", sessionId = target.sessionId)
     is WorkTarget.NewBranch -> SessionSourceBody(kind = "new", base = target.base.ifEmpty { null }, name = target.name, auto = if (target.auto) true else null)
     is WorkTarget.OnBranch -> SessionSourceBody(kind = "existing", branch = target.track ?: target.branch)
+    is WorkTarget.OnPr -> SessionSourceBody(kind = "pr", number = target.pr.number, divergedPolicy = target.diverged)
 }

@@ -16,6 +16,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pressKey
@@ -31,6 +32,10 @@ import dev.supermux.net.GitBranches
 import dev.supermux.net.GitLocalBranch
 import dev.supermux.net.GitOpenIn
 import dev.supermux.net.GitRemoteBranch
+import dev.supermux.net.GitSwitchResult
+import dev.supermux.net.OpenPr
+import dev.supermux.net.OpenPrList
+import dev.supermux.net.OpenPrRead
 import dev.supermux.net.ProjectFolderState
 import dev.supermux.net.ProjectPrefs
 import dev.supermux.net.ReasoningResponse
@@ -156,6 +161,11 @@ class SessionLauncherScreenTest {
         prefsPut: MutableList<String>? = null,
         /** The broker can't keep a pick (PUT /projects/prefs fails). */
         prefsSaveFails: Boolean = false,
+        /** Origin's open PRs (GET /projects/prs), one read by ref, and every POST /projects/switch as "dir=name". */
+        prs: OpenPrList? = null,
+        prRead: (String) -> OpenPrRead? = { null },
+        switched: MutableList<String>? = null,
+        onOpenSessionFromCard: ((String) -> Unit)? = null,
     ) {
         SupermuxTheme(appearance = AppearanceMode.DARK) {
             SessionLauncherScreen(
@@ -176,6 +186,9 @@ class SessionLauncherScreenTest {
                     projectBranches = { branches },
                     folderState = { folder },
                     setProjectPrefs = { d, w -> prefsPut?.add("$d=$w"); if (prefsSaveFails) null else projectPrefs?.copy(workIn = w) },
+                    projectPrs = { _, _ -> prs },
+                    projectPr = { _, ref -> prRead(ref) },
+                    switchFolder = { d, n -> switched?.add("$d=$n"); GitSwitchResult(status = "switched", branch = n) },
                 ),
                 loadPrefs = { prefs },
                 onPrefsChange = onPrefsChange,
@@ -184,7 +197,7 @@ class SessionLauncherScreenTest {
                 onClearDraft = onClearDraft,
                 onSubmit = onSubmit,
                 permissionCatalog = permissionCatalog,
-                onOpenSession = onOpenSession,
+                onOpenSession = onOpenSession ?: onOpenSessionFromCard,
                 standalone = standalone,
                 workspaceWorkdir = workspaceWorkdir,
                 workspaceLabel = workspaceLabel,
@@ -1033,7 +1046,7 @@ class SessionLauncherScreenTest {
         assertEquals(listOf<SessionSourceBody?>(SessionSourceBody(kind = "new", base = "main", name = "ahmet/fix-the-login-redirect", auto = true)), sent)
     }
 
-    @Test fun a_branch_held_elsewhere_cannot_be_picked_and_one_only_origin_has_is_tracked() = runComposeUiTest {
+    @Test fun a_branch_only_origin_has_is_tracked() = runComposeUiTest {
         val sent = mutableListOf<SessionSourceBody?>()
         pointerContent {
             Harness(
@@ -1047,11 +1060,6 @@ class SessionLauncherScreenTest {
         waitForIdle()
         onNodeWithTag(WorkRowTags.TAB_EXISTING).performClick()
         waitForIdle()
-        // The folder's own branch and the one a session has open aren't pickable; tapping one changes nothing.
-        onNodeWithTag(WorkRowTags.row("feat/checkout-v2")).performClick()
-        onNodeWithTag(WorkRowTags.row("fix/cart-total")).performClick()
-        waitForIdle()
-        onNodeWithTag(WorkRowTags.POPOVER).assertIsDisplayed()
         onNodeWithTag(WorkRowTags.row("origin/feat/login-redirect")).performClick()
         waitForIdle()
         onNodeWithTag(WorkRowTags.BRANCH).assertTextContains("feat/login-redirect")
@@ -1129,6 +1137,140 @@ class SessionLauncherScreenTest {
         onNodeWithTag("launcher_submit").performClick()
         waitForIdle()
         assertEquals(listOf<SessionSourceBody?>(SessionSourceBody(kind = "local")), sent)
+    }
+
+    // ── #152 C2 (Pull request) + C3 (the ways out) ──────────────────────────────────────────────────
+
+    private val pr123 = OpenPr(number = 123, title = "Fix login redirect loop", head = "feat/login-redirect", base = "main", author = "deniz", headRepo = "acme/storefront", checks = "ok")
+    private val pr125 = OpenPr(number = 125, title = "Speed up product search", head = "fix/cart-total", base = "main", headRepo = "acme/storefront", localAhead = 2)
+    private val prs = OpenPrList(status = "ok", forge = "github", repo = "github.com/acme/storefront", prs = listOf(pr123))
+
+    @Test fun a_pull_request_is_picked_from_the_list_or_by_its_number_and_start_sends_it() = runComposeUiTest {
+        val sent = mutableListOf<SessionSourceBody?>()
+        val asked = mutableListOf<String>()
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(workdir = "/proj/x", text = "go"), repoInfo = repo,
+                projectPrefs = ProjectPrefs("worktree", "ahmet/"), branches = storefront, folder = clean, prs = prs,
+                prRead = { ref -> asked += ref; OpenPrRead(status = "not_open", state = "merged") },
+                onSubmit = captureSource(sent),
+            )
+        }
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.BRANCH).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.TAB_PR).assertTextContains("Pull request").performClick()
+        waitForIdle()
+        // A number the list doesn't have is read from the forge, and what it says is said.
+        onNodeWithTag(WorkRowTags.PR_SEARCH).performTextInput("#5")
+        waitUntil(timeoutMillis = 5_000) { asked.isNotEmpty() }
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.PR_NOTE).assertTextContains("PR #5 is already merged.")
+        onNodeWithTag(WorkRowTags.PR_SEARCH).performTextClearance()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.pr(123)).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.BRANCH).assertTextContains("#123")
+        onNodeWithTag(WorkRowTags.SUMMARY).assertTextContains("update PR #123", substring = true)
+        onNodeWithTag("launcher_submit").performClick()
+        waitForIdle()
+        assertEquals(listOf<SessionSourceBody?>(SessionSourceBody(kind = "pr", number = 123)), sent)
+    }
+
+    @Test fun no_remote_means_no_pull_request_tab() = runComposeUiTest {
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(workdir = "/proj/x"), repoInfo = repo,
+                projectPrefs = ProjectPrefs("worktree", "ahmet/"), branches = storefront, folder = clean,
+                prs = OpenPrList(status = "unavailable", reason = "no_remote"),
+            )
+        }
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.BRANCH).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.TAB_EXISTING).assertIsDisplayed()
+        onNodeWithTag(WorkRowTags.TAB_PR).assertDoesNotExist()
+    }
+
+    @Test fun the_folders_branch_waits_for_a_way_out_and_moving_the_folder_happens_at_start() = runComposeUiTest {
+        val sent = mutableListOf<SessionSourceBody?>()
+        val switched = mutableListOf<String>()
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(workdir = "/proj/x", text = "go"), repoInfo = repo,
+                projectPrefs = ProjectPrefs("worktree", "ahmet/"), branches = storefront, folder = clean, prs = prs,
+                switched = switched, onSubmit = captureSource(sent),
+            )
+        }
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.BRANCH).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.TAB_EXISTING).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.row("feat/checkout-v2")).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.CARD_HEAD).assertTextContains("is checked out in your folder", substring = true)
+        onNodeWithTag("launcher_submit").assertIsNotEnabled()
+        onNodeWithTag(WorkRowTags.CARD_MOVE).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.CARD).assertDoesNotExist()
+        assertTrue(switched.isEmpty(), "nothing moves before Start")
+        onNodeWithTag("launcher_submit").performClick()
+        waitForIdle()
+        assertEquals(listOf("/proj/x=main"), switched)
+        assertEquals(listOf<SessionSourceBody?>(SessionSourceBody(kind = "existing", branch = "feat/checkout-v2")), sent)
+    }
+
+    @Test fun a_branch_another_session_has_offers_that_session_or_a_new_branch_from_it() = runComposeUiTest {
+        val opened = mutableListOf<String>()
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(workdir = "/proj/x", text = "go"), repoInfo = repo,
+                projectPrefs = ProjectPrefs("worktree", "ahmet/"), branches = storefront, folder = clean,
+                onOpenSessionFromCard = { opened += it },
+            )
+        }
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.BRANCH).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.TAB_EXISTING).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.row("fix/cart-total")).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.CARD_OPEN).performClick()
+        assertEquals(listOf("s-2"), opened)
+        onNodeWithTag(WorkRowTags.CARD_NEW_FROM).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.CARD).assertDoesNotExist()
+        onNodeWithTag(WorkRowTags.BRANCH).assertTextContains("fix/cart-total")
+        onNodeWithTag(WorkRowTags.SUMMARY).assertTextContains("ahmet/cart-total-2", substring = true)
+    }
+
+    @Test fun local_commits_the_pr_lacks_wait_for_whose_version_wins() = runComposeUiTest {
+        val sent = mutableListOf<SessionSourceBody?>()
+        val free = storefront.copy(local = storefront.local.map { if (it.name == "fix/cart-total") it.copy(openIn = null) else it })
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(workdir = "/proj/x", text = "go"), repoInfo = repo,
+                projectPrefs = ProjectPrefs("worktree", "ahmet/"), branches = free, folder = clean,
+                prs = prs.copy(prs = listOf(pr123, pr125)), onSubmit = captureSource(sent),
+            )
+        }
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.BRANCH).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.TAB_PR).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.pr(125)).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.CARD_HEAD).assertTextContains("has 2 commits that aren't on #125", substring = true)
+        onNodeWithTag("launcher_submit").assertIsNotEnabled()
+        onNodeWithTag(WorkRowTags.CARD_USE_PR).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.SUMMARY).assertTextContains("fix/cart-total-backup", substring = true)
+        onNodeWithTag("launcher_submit").performClick()
+        waitForIdle()
+        assertEquals(listOf<SessionSourceBody?>(SessionSourceBody(kind = "pr", number = 125, divergedPolicy = "pr")), sent)
     }
 
     @Test fun an_old_client_side_opt_out_moves_to_the_broker_once() = runComposeUiTest {

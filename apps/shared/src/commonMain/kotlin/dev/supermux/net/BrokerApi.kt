@@ -1409,7 +1409,42 @@ data class SessionSourceBody(
     val branch: String? = null,
     val switchTo: String? = null,
     val sessionId: String? = null,
+    /** pr: the pull / merge request, and whose version wins when the local branch has commits it lacks ("pr" | "mine"). */
+    val number: Int? = null,
+    val divergedPolicy: String? = null,
 )
+
+/**
+ * An open pull request (GitHub) / merge request (GitLab) as the launcher lists it (GET /projects/prs, /projects/pr,
+ * #152): its own [head] branch, the repo it lives in, whether it comes from a fork (and the author lets maintainers
+ * push to it), its [checks] rolled up (ok | bad | run | none), and how many commits a local branch of the same name
+ * has that it doesn't.
+ */
+@Serializable
+data class OpenPr(
+    val forge: String = "github",
+    val number: Int = 0,
+    val title: String = "",
+    val url: String = "",
+    val author: String = "",
+    val base: String = "",
+    val head: String = "",
+    val headRepo: String = "",
+    val isFork: Boolean = false,
+    val headOwner: String? = null,
+    val maintainerCanModify: Boolean = false,
+    val draft: Boolean = false,
+    val checks: String = "none",
+    val localAhead: Int? = null,
+)
+
+/** GET /projects/prs: status ok ([repo] "host/owner/repo", [prs]) | unavailable ([reason]: no_remote | no_cli | not_authed | error). */
+@Serializable
+data class OpenPrList(val status: String = "unavailable", val forge: String? = null, val repo: String? = null, val prs: List<OpenPr> = emptyList(), val reason: String? = null, val message: String? = null)
+
+/** GET /projects/pr: found ([pr]) | none | not_open ([state]) | other_repo | bad_ref | unavailable ([reason]). */
+@Serializable
+data class OpenPrRead(val status: String = "unavailable", val pr: OpenPr? = null, val forge: String? = null, val state: String? = null, val repo: String? = null, val reason: String? = null, val message: String? = null)
 
 /** kind: this | folder (the main folder) | session (with [id], [name]) | external (a worktree no session owns, at [path]) */
 @Serializable
@@ -3347,6 +3382,14 @@ class BrokerApi(
     /** POST /projects/switch (#152): the project folder to [name], only when it is clean (else `dirty`). */
     suspend fun projectSwitch(dir: String, name: String): GitSwitchResult =
         answer("$httpBase/projects/switch", json.encodeToString(ProjectSwitchBody(dir, name))) { GitSwitchResult(message = it) }
+
+    /** GET /projects/prs?dir=&q= (#152): origin's open PRs / MRs, searched. */
+    suspend fun projectPrs(dir: String, q: String = ""): OpenPrList =
+        getJson("$httpBase/projects/prs?dir=${urlEncode(dir)}" + if (q.isBlank()) "" else "&q=${urlEncode(q.trim())}")
+
+    /** GET /projects/pr?dir=&ref= (#152): one by #N, !N, N or its URL. */
+    suspend fun projectPr(dir: String, ref: String): OpenPrRead =
+        getJson("$httpBase/projects/pr?dir=${urlEncode(dir)}&ref=${urlEncode(ref.trim())}")
 
     /** GET /projects/prefs?dir= (#152) */
     suspend fun projectPrefs(dir: String): ProjectPrefs =
