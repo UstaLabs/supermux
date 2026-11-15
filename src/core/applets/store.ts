@@ -69,6 +69,11 @@ export class AppletStore {
     return true
   }
 
+  /** Records who changed the applet, now. */
+  touch(id: string, updatedBy: string | null): void {
+    this.db.query("UPDATE applets SET updated_by = ?, updated_at = ? WHERE id = ?").run(updatedBy, this.now().toISOString(), id)
+  }
+
   rename(id: string, name: string, updatedBy: string | null): void {
     this.db.query("UPDATE applets SET name = ?, updated_by = ?, updated_at = ? WHERE id = ?").run(name, updatedBy, this.now().toISOString(), id)
   }
