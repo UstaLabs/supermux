@@ -47,6 +47,17 @@ test("the branch prefix: the user's own, else the first name git commits with, e
   expect((await launcherPrefs(p, "owner", dir)).branchPrefix).toBe("")                // no prefix at all is a choice too
 })
 
+test("the prefix comes from the forge account connected for the project's origin before git's name", async () => {
+  const dir = repo("Ahmet Hüseyin Dok")
+  execFileSync("git", ["-C", dir, "remote", "add", "origin", "git@github.com:acme/storefront.git"])
+  const logins = (accounts: Record<string, string[]>) => (host: string) => accounts[host] ?? []
+  expect(await defaultBranchPrefix(dir, logins({ "github.com": ["Octo-Cat"] }))).toBe("octo-cat/")
+  // Two accounts on that host: which one is this user's isn't known, so git's name.
+  expect(await defaultBranchPrefix(dir, logins({ "github.com": ["a", "b"] }))).toBe("ahmet/")
+  expect(await defaultBranchPrefix(dir, logins({ "gitlab.com": ["octo"] }))).toBe("ahmet/")
+  expect((await launcherPrefs(store(), "owner", dir, logins({ "github.com": ["octo"] }))).branchPrefix).toBe("octo/")
+})
+
 test("only Local or Worktree, and a prefix git accepts, are kept", async () => {
   const p = store(), dir = repo("A")
   await expect(setLauncherPrefs(p, "owner", dir, { workIn: "cloud" as any })).rejects.toThrow()

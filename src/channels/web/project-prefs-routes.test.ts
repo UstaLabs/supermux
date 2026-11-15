@@ -20,13 +20,14 @@ function repo(): string {
   return dir
 }
 
-async function boot() {
+async function boot(connections: Array<{ host: string; account: { login: string } }> = []) {
   const db = openDb(":memory:"); runMigrations(db, MIGRATIONS)
   const devicesFile = join(mkdtempSync(join(tmpdir(), "mux-project-prefs-dev-")), "devices.json")
   channel = new WebChannel({
     port: 0, devicesFile, publicUrl: "http://localhost", updateChecker: null,
     getSessionsSnapshot: () => [], getSessionLog: () => [], setMute: () => {}, onSendFromWeb: () => {},
     userPrefs: new UserPrefs(db),
+    getForgeConnections: () => connections as any,
   })
   await channel.start()
   const store = new DeviceStore(devicesFile)
@@ -57,4 +58,11 @@ test("a value it can't keep, or no folder, is a 400 and changes nothing", async 
   expect((await call(phone, "PUT", "/projects/prefs", { dir: a, branchPrefix: 7 })).status).toBe(400)
   expect((await call(phone, "PUT", "/projects/prefs", { workIn: "local" })).status).toBe(400)
   expect(await (await call(phone, "GET", `/projects/prefs?dir=${encodeURIComponent(a)}`)).json()).toEqual({ workIn: "worktree", branchPrefix: "deniz/" })
+})
+
+test("a user with a forge account connected for the project's origin gets its login as the prefix", async () => {
+  const { phone, call } = await boot([{ host: "github.com", account: { login: "OctoCat" } }])
+  const a = repo()
+  execFileSync("git", ["-C", a, "remote", "add", "origin", "https://github.com/acme/storefront.git"])
+  expect(await (await call(phone, "GET", `/projects/prefs?dir=${encodeURIComponent(a)}`)).json()).toEqual({ workIn: "worktree", branchPrefix: "octocat/" })
 })

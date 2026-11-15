@@ -23,11 +23,17 @@ export const execCli: Exec = (cmd, args, cwd) => new Promise((resolve) => {
   child.on("close", (code) => finish(code === 0 ? { ok: true, out: out.trim() } : { ok: false, out: (err || out).trim() }))
 })
 
+/** The host of a remote's URL (scp-like `git@host:a/b`, ssh:// or https://), null for a local path. */
+export function hostOf(originUrl: string): string | null {
+  const m = originUrl.match(/^[^@/]+@([^:/]+):/) ?? originUrl.match(/^[a-z+]+:\/\/(?:[^@/]+@)?([^/:]+)/i)
+  return m ? m[1]! : null
+}
+
 /** GitLab when origin's host says so (gitlab.com, gitlab.acme.io); any other host is taken as GitHub. */
 export function forgeOf(originUrl: string): Forge | null {
-  const m = originUrl.match(/^[^@]+@([^:]+):/) ?? originUrl.match(/^[a-z+]+:\/\/(?:[^@/]+@)?([^/:]+)/i)
-  if (!m) return null
-  return /(^|\.)gitlab\./i.test(m[1]!) || /^gitlab/i.test(m[1]!) ? "gitlab" : "github"
+  const host = hostOf(originUrl)
+  if (!host) return null
+  return /(^|\.)gitlab\./i.test(host) || /^gitlab/i.test(host) ? "gitlab" : "github"
 }
 
 export interface PrCheck { name: string; state: "ok" | "bad" | "run" | "skip"; url?: string }

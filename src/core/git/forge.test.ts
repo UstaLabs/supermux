@@ -1,6 +1,6 @@
 // #72: a branch's pull request (GitHub) or merge request (GitLab): state, review, checks and comments, in one shape.
 import { test, expect } from "bun:test"
-import { forgeOf, parseGhPr, parseGlabMr, readPr, type Exec } from "./forge"
+import { forgeOf, hostOf, parseGhPr, parseGlabMr, readPr, type Exec } from "./forge"
 
 test("the forge comes from origin's host", () => {
   expect(forgeOf("git@github.com:acme/shop.git")).toBe("github")
@@ -280,4 +280,12 @@ test("no target (a chat in a folder): origin's own default branch", async () => 
     [/^git -C \/r rev-list --count/, { ok: true, out: "0" }],
   ])
   expect(await prBase("/r", "", ex)).toEqual({ target: "trunk", onRemote: true, local: false, ahead: 0 })
+})
+
+test("hostOf: origin's host from ssh, scp-like and https remotes; none for a local path", () => {
+  expect(hostOf("git@github.com:acme/storefront.git")).toBe("github.com")
+  expect(hostOf("https://gitlab.acme.io/team/app.git")).toBe("gitlab.acme.io")
+  expect(hostOf("ssh://git@git.example.com:2222/a/b.git")).toBe("git.example.com")
+  expect(hostOf("https://user:tok@github.com/a/b")).toBe("github.com")
+  expect(hostOf("/srv/repos/b.git")).toBeNull()
 })

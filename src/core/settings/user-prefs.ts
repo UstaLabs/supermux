@@ -2,6 +2,7 @@
 // everywhere): the launcher's Local / Worktree and the new-branch prefix. "owner" is the only user until users exist.
 import type { Database as Db } from "bun:sqlite"
 import { gitAsync } from "../git/exec"
+import { hostOf } from "../git/forge"
 
 export const OWNER = "owner"
 
@@ -24,18 +25,33 @@ export class UserPrefs {
 export type WorkIn = "local" | "worktree"
 export interface LauncherPrefs { workIn: WorkIn; branchPrefix: string }
 
-/** The first name git commits with in [dir], as a branch prefix ("Ahmet Hüseyin Dok" → "ahmet/"); else mux/. */
-export async function defaultBranchPrefix(dir: string): Promise<string> {
+/** The forge logins connected for a host ("github.com" → ["octocat"]). */
+export type ForgeLogins = (host: string) => string[]
+
+/** A name as a branch prefix: ASCII, lowercase ("Çağrı" → "cagri/"), or "" when nothing is left. */
+function prefixOf(name: string): string {
+  const slug = name.replace(/ı/g, "i").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9-]+/g, "")
+  return slug ? `${slug}/` : ""
+}
+
+/**
+ * The prefix a user who never set one gets: the login of the one forge account connected for the project's origin
+ * (what people see on pull requests), else the first name git commits with ("Ahmet Hüseyin Dok" → "ahmet/"), else mux/.
+ */
+export async function defaultBranchPrefix(dir: string, forgeLogins: ForgeLogins = () => []): Promise<string> {
+  const origin = await gitAsync(dir, ["remote", "get-url", "origin"], { timeoutMs: 5_000 }).catch(() => "")
+  const host = origin ? hostOf(origin) : null
+  const logins = host ? forgeLogins(host) : []
+  if (logins.length === 1 && prefixOf(logins[0]!)) return prefixOf(logins[0]!)
   const name = await gitAsync(dir, ["config", "user.name"], { timeoutMs: 5_000 }).catch(() => "")
   const first = name.trim().split(/\s+/)[0] ?? ""
-  const slug = first.replace(/ı/g, "i").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9-]+/g, "")
-  return slug ? `${slug}/` : "mux/"
+  return prefixOf(first) || "mux/"
 }
 
 /** What the launcher starts with in [dir]: the last Local / Worktree pick there (Worktree for a new project), and the prefix. */
-export async function launcherPrefs(prefs: UserPrefs, user: string, dir: string): Promise<LauncherPrefs> {
+export async function launcherPrefs(prefs: UserPrefs, user: string, dir: string, forgeLogins?: ForgeLogins): Promise<LauncherPrefs> {
   const workIn = prefs.get(user, dir, "workIn") === "local" ? "local" : "worktree"
-  return { workIn, branchPrefix: prefs.get(user, "", "branchPrefix") ?? await defaultBranchPrefix(dir) }
+  return { workIn, branchPrefix: prefs.get(user, "", "branchPrefix") ?? await defaultBranchPrefix(dir, forgeLogins) }
 }
 
 /** Remembers a pick: Local / Worktree for [dir], the prefix for every project. Throws on a value it can't keep. */

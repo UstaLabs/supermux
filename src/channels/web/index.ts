@@ -4361,7 +4361,8 @@ export class WebChannel implements Channel {
           const patch = { ...(body.workIn !== undefined ? { workIn: body.workIn as WorkIn } : {}), ...(typeof body.branchPrefix === "string" ? { branchPrefix: body.branchPrefix } : {}) }
           try { await setLauncherPrefs(prefs, OWNER, dir, patch) } catch (err: any) { return this.json({ error: err?.message ?? String(err) }, 400) }
         }
-        return this.json(await launcherPrefs(prefs, OWNER, dir))
+        const logins = (host: string) => (this.opts.getForgeConnections?.() ?? []).filter((c) => c.host.toLowerCase() === host.toLowerCase()).map((c) => c.account.login)
+        return this.json(await launcherPrefs(prefs, OWNER, dir, logins))
       }
       if (!repoToplevel(dir)) return this.json({ error: "not a git repository" }, 409)
       if (op === "branches") return this.json(branchList(dir, this.branchOwners()))
