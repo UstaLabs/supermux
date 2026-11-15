@@ -9,7 +9,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: applets117, sha: 36e0aaaa050bf0439dfd5590da09f40b103b61fa }
+          - { name: applets117, sha: ad8c0e70eb5ae1d71296a32994b80c4bd6459f16 }
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
