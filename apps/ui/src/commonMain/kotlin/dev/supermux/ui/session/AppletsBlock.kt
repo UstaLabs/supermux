@@ -36,7 +36,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
+import androidx.compose.material.icons.outlined.AddBox
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.InstallDesktop
 import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Key
@@ -103,7 +106,12 @@ class AppletsActions(
     val pin: suspend (AppletDto, Boolean) -> String?,
     /** The icon's bytes, null when it has none (the tile is lettered). */
     val loadIcon: suspend (AppletDto) -> ByteArray?,
+    /** Putting an applet on this device's launcher; null where it can't (no such menu item). */
+    val installer: AppletInstall? = null,
 )
+
+/** [AppletsActions.installer], bound to the host. */
+class AppletInstall(val phone: Boolean, val isInstalled: (AppletDto) -> Boolean, val install: suspend (AppletDto) -> String?)
 
 internal const val APPLETS_HEADER_KEY = "chrome:applets"
 internal const val APPLETS_GRID_KEY = "chrome:applets_grid"
@@ -320,7 +328,7 @@ internal fun AppletIcon(a: AppletDto, size: Dp, loadIcon: suspend (AppletDto) ->
 }
 
 /** One line of an applet's menu. */
-private class AppletMenuItem(val icon: ImageVector, val label: String, val warn: Boolean = false, val tag: String, val run: suspend () -> String?)
+private class AppletMenuItem(val icon: ImageVector, val label: String, val warn: Boolean = false, val tag: String, val dim: Boolean = false, val run: suspend () -> String?)
 
 /**
  * An applet's menu: a popup at the pointer (desktop) or a sheet (phone). Items appear only for what this device can
@@ -335,6 +343,13 @@ private fun AppletMenu(a: AppletDto, actions: AppletsActions, anchor: Offset, sh
     val full = actions.applets.count { it.pin != null } >= MAX_APPLET_PINS
     val items = buildList {
         add(AppletMenuItem(Icons.AutoMirrored.Outlined.OpenInNew, localized(Str.applets_menu_open), tag = "open") { actions.open(a); null })
+        actions.installer?.let { inst ->
+            if (inst.isInstalled(a)) {
+                add(AppletMenuItem(Icons.Outlined.Check, localized(if (inst.phone) Str.applets_menu_on_home else Str.applets_menu_installed), tag = "installed", dim = true) { null })
+            } else {
+                add(AppletMenuItem(if (inst.phone) Icons.Outlined.AddBox else Icons.Outlined.InstallDesktop, localized(if (inst.phone) Str.applets_menu_add_home else Str.applets_menu_install), tag = "install") { inst.install(a) })
+            }
+        }
         if (pinned) add(AppletMenuItem(Icons.Outlined.GridView, localized(Str.applets_menu_unpin), tag = "unpin") { actions.pin(a, false) })
         else if (!full) add(AppletMenuItem(Icons.Outlined.GridView, localized(Str.applets_menu_pin), tag = "pin") { actions.pin(a, true) })
         add(AppletMenuItem(Icons.Outlined.Info, localized(Str.applets_menu_info), tag = "info") { actions.info(a, ""); null })
@@ -410,7 +425,10 @@ private fun AppletMenuBody(
         Spacer(Modifier.height(4.dp))
         // What he needs to fix comes first: it opens Applet info at Secrets.
         needLines.forEach { line -> AppletMenuLine(Icons.Outlined.Key, line, warn = true, sheet = sheet, tag = "applet_menu_need") { onFix() } }
-        items.forEach { item -> AppletMenuLine(item.icon, item.label, warn = item.warn, sheet = sheet, tag = "applet_menu_${item.tag}") { onPick(item) } }
+        items.forEach { item ->
+            if (item.dim) AppletMenuLine(item.icon, item.label, warn = false, sheet = sheet, tag = "applet_menu_${item.tag}", dim = true, onClick = null)
+            else AppletMenuLine(item.icon, item.label, warn = item.warn, sheet = sheet, tag = "applet_menu_${item.tag}") { onPick(item) }
+        }
         if (error != null) {
             Text(
                 error,
@@ -423,11 +441,15 @@ private fun AppletMenuBody(
 }
 
 @Composable
-private fun AppletMenuLine(icon: ImageVector, label: String, warn: Boolean, sheet: Boolean, tag: String, onClick: (() -> Unit)?) {
+private fun AppletMenuLine(icon: ImageVector, label: String, warn: Boolean, sheet: Boolean, tag: String, dim: Boolean = false, onClick: (() -> Unit)?) {
     val cs = MaterialTheme.colorScheme
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
-    val tint = if (warn) cs.error else cs.onSurfaceVariant
+    val tint = when {
+        warn -> cs.error
+        dim -> dev.supermux.ui.theme.LocalSemantics.current.success
+        else -> cs.onSurfaceVariant
+    }
     Row(
         Modifier
             .fillMaxWidth()
@@ -442,7 +464,7 @@ private fun AppletMenuLine(icon: ImageVector, label: String, warn: Boolean, shee
     ) {
         Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
         Spacer(Modifier.width(10.dp))
-        Text(label, color = if (warn) cs.error else cs.onSurface, fontSize = if (sheet) 15.sp else 13.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(label, color = when { warn -> cs.error; dim -> cs.onSurfaceVariant; else -> cs.onSurface }, fontSize = if (sheet) 15.sp else 13.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
