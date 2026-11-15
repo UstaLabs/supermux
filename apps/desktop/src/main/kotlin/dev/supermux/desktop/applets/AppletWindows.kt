@@ -4,6 +4,8 @@ package dev.supermux.desktop.applets
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.awt.ComposeWindow
@@ -30,6 +32,12 @@ internal object DesktopApplets {
     private val windows = mutableMapOf<String, ComposeWindow>()
 
     val opener = AppletOpener { hostId, applet: AppletDto -> open(hostId, applet.name, applet.title.ifBlank { applet.name }) }
+
+    /** Install on this Mac / PC / computer. */
+    val installer = DesktopAppletInstaller()
+
+    /** A second launch of the installed app asked for the main window (AppletHandOff). */
+    val activateRequests = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 4)
 
     fun open(hostId: String, name: String, title: String) {
         val a = OpenApplet(hostId, name, title)
@@ -61,9 +69,13 @@ internal fun AppletWindows(fleet: FleetStore?, onOpenChat: (String) -> Unit, the
     for (a in DesktopApplets.open) {
         key(a.key) {
             val state = rememberWindowState(position = WindowPosition.PlatformDefault, size = DpSize(1100.dp, 780.dp))
+            // Opened from a shortcut it has only its name: the window takes the title the host gives it.
+            val none = androidx.compose.runtime.remember { kotlinx.coroutines.flow.MutableStateFlow<List<AppletDto>?>(null) }
+            val listed by (fleet?.appForRecord(a.hostId)?.applets ?: none).collectAsState()
+            val title = listed?.firstOrNull { it.name == a.name }?.title?.takeIf { it.isNotBlank() } ?: a.title
             Window(
                 onCloseRequest = { DesktopApplets.close(a.key) },
-                title = a.title,
+                title = title,
                 icon = painterResource("supermux-icon.png"),
                 state = state,
             ) {

@@ -150,4 +150,12 @@
     <string name="applets_install_refused">The Home screen didn't take the shortcut.</string>
     <string name="applets_where_home">Home screen</string>
     <string name="applets_updated_just_now">Updated just now</string>
+    <string name="applets_where_applications">Applications</string>
+    <string name="applets_where_start_menu">Start menu</string>
+    <string name="applets_where_app_menu">App menu</string>
+    <string name="applets_menu_install_mac">Install on this Mac</string>
+    <string name="applets_menu_install_pc">Install on this PC</string>
+    <string name="applets_install_failed">Couldn't install it.</string>
+    <string name="applets_install_dev_build">This build of supermux can't install applets (it isn't an installed copy).</string>
+    <string name="applets_install_comment">A supermux applet</string>
 </resources>
