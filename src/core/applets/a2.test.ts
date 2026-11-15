@@ -171,3 +171,21 @@ test("delete moves the applet aside for 30 days; undelete brings it back with it
   expect(readdirSync(join(appletsDir, ".deleted"))).toEqual([])
   expect(readdirSync(join(root, "backups/.deleted"))).toEqual([])
 })
+
+test("pins: the 9 most recently updated until he pins; then his list, capped at 9, in order", async () => {
+  let t = Date.parse("2026-11-15T10:00:00Z")
+  const { svc, make, api } = setup(() => new Date(t))
+  for (let i = 1; i <= 11; i++) { make(`a${i}`, { title: `A${i}` }); await svc.scan(); t += 1000 }
+  const names = (ids: string[]) => ids.map((id) => svc.store.byId(id)!.name)
+  expect(names(svc.pinnedIds())).toEqual(["a11", "a10", "a9", "a8", "a7", "a6", "a5", "a4", "a3"])
+  expect((await (await api("POST", "/applets/a1/pin")).json() as any).error).toContain("unpin one first")
+  await api("POST", "/applets/a5/unpin")
+  expect(names(svc.pinnedIds())).toEqual(["a11", "a10", "a9", "a8", "a7", "a6", "a4", "a3"])
+  await api("POST", "/applets/a1/pin")
+  expect(names(svc.pinnedIds()).at(-1)).toBe("a1")
+  const list = await (await api("GET", "/applets")).json() as any[]
+  expect(list.find((a) => a.name === "a1").pin).toBe(8)
+  expect(list.find((a) => a.name === "a5").pin).toBeNull()
+  await svc.delete("a11", "device:laptop")
+  expect(names(svc.pinnedIds())[0]).toBe("a10")
+})
