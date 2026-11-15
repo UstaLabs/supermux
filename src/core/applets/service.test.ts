@@ -41,7 +41,7 @@ test("054: the applets table has no session id", () => {
   const db = openDb(":memory:")
   runMigrations(db, MIGRATIONS)
   const cols = (db.query("PRAGMA table_info(applets)").all() as { name: string }[]).map((c) => c.name)
-  expect(cols).toEqual(["id", "name", "title", "icon", "status", "updated_by", "updated_at", "created_at", "deleted_at"])
+  expect(cols).toEqual(["id", "name", "title", "icon", "status", "updated_by", "updated_at", "created_at", "deleted_at", "stopped_at"])
 })
 
 test("a folder with an applet.json becomes an applet with a stable id; title changes keep it; a gone folder is kept as missing", async () => {

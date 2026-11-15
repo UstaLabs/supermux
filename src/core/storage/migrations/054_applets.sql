@@ -11,7 +11,9 @@ CREATE TABLE IF NOT EXISTS applets (
   updated_by  TEXT,
   updated_at  TEXT NOT NULL,
   created_at  TEXT NOT NULL,
-  deleted_at  TEXT
+  deleted_at  TEXT,
+  -- Set while the owner has stopped it (Applet info ▸ Stop): no server, no jobs, its page says so.
+  stopped_at  TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_applets_live_name ON applets(name) WHERE deleted_at IS NULL;
 

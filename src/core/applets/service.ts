@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite"
+import { Database } from "bun:sqlite"
 import { createHmac, randomBytes } from "crypto"
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs"
 import { spawnProcessSync } from "../process/launcher"
@@ -18,6 +18,15 @@ export const DELETED_KEEP_MS = 30 * 86_400_000
 const log = makeLogger("applets")
 
 const escapeHtml = (t: string) => t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!)
+
+/** The Data tab's facts about an applet's data folder. */
+export interface AppletDataInfo {
+  dir: string
+  tables: { name: string; rows: number; file: string }[]
+  files: number
+  bytes: number
+  databaseBytes: number
+}
 
 /** One applet as the broker knows it: its row, what its folder says, and how its server is doing. */
 export interface AppletView {
@@ -174,7 +183,7 @@ export class AppletService {
 
   private jobTarget(v: AppletView): JobTarget | undefined {
     const m = v.manifest
-    if (!m || !m.jobs.length) return undefined
+    if (!m || !m.jobs.length || v.row.stoppedAt) return undefined
     return {
       appletId: v.row.id, name: v.row.name, folder: v.folder, jobs: m.jobs,
       env: () => {
@@ -340,6 +349,83 @@ export class AppletService {
     return { ok: true }
   }
 
+  /**
+   * Owner only: stops the applet (its server goes down, its jobs pause, its page says it is stopped) or starts it again.
+   * Kept across broker restarts.
+   */
+  async setStopped(name: string, stopped: boolean, by: string): Promise<Result<{}>> {
+    const v = this.get(name)
+    if (!v) return { ok: false, error: `no applet named "${name}"` }
+    this.store.setStopped(v.row.id, stopped, by)
+    this.views.set(v.row.id, { ...this.views.get(v.row.id)!, row: this.store.byId(v.row.id)! })
+    if (stopped) this.supervisor.stop(v.row.id)
+    await this.scan()
+    this.deps.onChange?.()
+    return { ok: true }
+  }
+
+  /**
+   * Owner only: the applet's title, as Settings ▸ Name changes it. The title belongs to the applet's code, so it is
+   * written to its applet.json and committed under the applet's own git identity; the link (its name) stays the same.
+   */
+  async setTitle(name: string, title: string, by: string): Promise<Result<{}>> {
+    const v = this.get(name)
+    if (!v?.manifest) return { ok: false, error: v ? v.error ?? "applet.json can't be read" : `no applet named "${name}"` }
+    const t = title.trim()
+    if (!t) return { ok: false, error: "the name is empty" }
+    if (t.length > 80) return { ok: false, error: "the name is longer than 80 characters" }
+    const file = join(v.folder, "applet.json")
+    try {
+      const raw = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>
+      raw.title = t
+      writeFileSync(file, JSON.stringify(raw, null, 2) + "\n")
+      if (existsSync(join(v.folder, ".git"))) {
+        spawnProcessSync(["git", "add", "applet.json"], { cwd: v.folder, stdout: "pipe", stderr: "pipe" })
+        spawnProcessSync(["git", "-c", "user.name=supermux applet", "-c", "user.email=applet@supermux.invalid", "commit", "-q", "-m", `Renamed to "${t}" by the owner`, "--", "applet.json"], { cwd: v.folder, stdout: "pipe", stderr: "pipe" })
+      }
+    } catch (err) {
+      return { ok: false, error: `couldn't write applet.json: ${(err as Error).message}` }
+    }
+    await this.scan()
+    this.touchBy(v.row.id, by)
+    this.deps.onChange?.()
+    return { ok: true }
+  }
+
+  /** What the Data tab shows: the applet's SQLite tables with their row counts, and how much it keeps. */
+  dataInfo(v: AppletView): AppletDataInfo {
+    const dir = this.dataDir(v.folder, v.manifest)
+    const info: AppletDataInfo = { dir, tables: [], files: 0, bytes: 0, databaseBytes: 0 }
+    if (!existsSync(dir)) return info
+    let seen = 0
+    const walk = (d: string) => {
+      for (const n of readdirSync(d)) {
+        if (++seen > 20_000) return
+        const p = join(d, n)
+        let st
+        try { st = statSync(p) } catch { continue }
+        if (st.isDirectory()) { walk(p); continue }
+        info.files++
+        info.bytes += st.size
+        if (/\.(db|sqlite3?)$/i.test(n) && d === dir) {
+          info.databaseBytes += st.size
+          try {
+            const db = new Database(p, { readonly: true })
+            try {
+              const names = (db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[]).slice(0, 30)
+              for (const t of names) {
+                const c = db.query(`SELECT count(*) AS n FROM "${t.name.replace(/"/g, '""')}"`).get() as { n: number }
+                info.tables.push({ name: t.name, rows: c.n, file: n })
+              }
+            } finally { db.close() }
+          } catch { /* not readable as SQLite: counted as a file */ }
+        }
+      }
+    }
+    try { walk(dir) } catch { /* best effort */ }
+    return info
+  }
+
   /** Records that [by] changed the applet (a restart, a backup) without changing what its folder says. */
   touchBy(id: string, by: string): void {
     this.store.touch(id, by)
@@ -494,7 +580,7 @@ export class AppletService {
 
     const running = new Set<string>()
     for (const v of this.views.values()) {
-      if (v.manifest?.run) {
+      if (v.manifest?.run && !v.row.stoppedAt) {
         running.add(v.row.id)
         await this.supervisor.ensure(this.spec(v.row, v.folder, v.manifest))
       }
@@ -515,6 +601,7 @@ export function appletPayload(v: AppletView, needsYou: SecretStatus[] = [], pin:
     iconUrl: v.row.icon ? `/applets/${v.row.name}/icon` : null,
     status: v.row.status,
     kind: m?.run ? "server" : "static",
+    stopped: !!v.row.stoppedAt,
     ...(v.error ? { error: v.error } : {}),
     needsYou: needsYou.map((s) => ({ secret: s.name, state: s.state })),
     /** Its place in the sidebar grid, or null when it isn't pinned. */

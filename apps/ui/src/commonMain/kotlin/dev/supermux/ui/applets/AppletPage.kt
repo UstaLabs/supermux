@@ -24,7 +24,6 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -39,6 +38,7 @@ import dev.supermux.ui.browser.PreviewKeeper
 import dev.supermux.ui.browser.putPreviewKeys
 import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.webview.Activation
 import dev.supermux.webview.NewWindowDecision
 import dev.supermux.webview.NewWindowRequest
@@ -59,7 +59,7 @@ fun appletUri(hostId: String, name: String): String = "$APPLET_URI_PREFIX$hostId
 /** (host record id, applet name) from [appletUri]'s form; null for anything else. */
 fun parseAppletUri(uri: String): Pair<String, String>? {
     if (!uri.startsWith(APPLET_URI_PREFIX)) return null
-    val parts = uri.removePrefix(APPLET_URI_PREFIX).trimEnd('/').split('/')
+    val parts = uri.removePrefix(APPLET_URI_PREFIX).trimEnd('/').split('/') // platform-ok: url
     if (parts.size != 2 || parts.any { it.isBlank() }) return null
     return parts[0] to parts[1]
 }
@@ -67,7 +67,7 @@ fun parseAppletUri(uri: String): Pair<String, String>? {
 /** "https://relay.example" from "https://relay.example/p/": where the preview key is valid, which serves /a/ too. */
 internal fun originOf(url: String): String {
     val scheme = url.indexOf("://")
-    if (scheme < 0) return url.trimEnd('/')
+    if (scheme < 0) return url.trimEnd('/') // platform-ok: url
     val slash = url.indexOf('/', scheme + 3)
     return if (slash < 0) url else url.substring(0, slash)
 }
@@ -129,8 +129,8 @@ fun AppletPage(app: HostStore, name: String, modifier: Modifier = Modifier) {
             detach()
         }
     }
-    val uriHandler = LocalUriHandler.current
-    val openExternal by rememberUpdatedState<(String) -> Unit>({ url -> runCatching { uriHandler.openUri(url) } })
+    val platform = LocalPlatform.current
+    val openExternal by rememberUpdatedState<(String) -> Unit>({ url -> platform.openUrl(url) })
     val client = remember { AppletClient { openExternal(it) } }
     Box(modifier.fillMaxSize().background(cs.background).testTag("applet_page_$name")) {
         ProvideWebViewRuntime(webViews.runtime) {

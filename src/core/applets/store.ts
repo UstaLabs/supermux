@@ -18,16 +18,18 @@ export interface AppletRow {
   updatedAt: string
   createdAt: string
   deletedAt: string | null
+  /** Set while the owner has stopped it: no server, no jobs. */
+  stoppedAt: string | null
 }
 
 type Raw = {
   id: string; name: string; title: string; icon: string | null; status: string
-  updated_by: string | null; updated_at: string; created_at: string; deleted_at: string | null
+  updated_by: string | null; updated_at: string; created_at: string; deleted_at: string | null; stopped_at: string | null
 }
 
 const fromRaw = (r: Raw): AppletRow => ({
   id: r.id, name: r.name, title: r.title, icon: r.icon, status: r.status,
-  updatedBy: r.updated_by, updatedAt: r.updated_at, createdAt: r.created_at, deletedAt: r.deleted_at,
+  updatedBy: r.updated_by, updatedAt: r.updated_at, createdAt: r.created_at, deletedAt: r.deleted_at, stoppedAt: r.stopped_at ?? null,
 })
 
 /** Write-through storage for the `applets` table. Rules (names, scanning) live in the registrar; this is pure storage. */
@@ -67,6 +69,12 @@ export class AppletStore {
     this.db.query("UPDATE applets SET title = ?, icon = ?, status = ?, updated_by = ?, updated_at = ? WHERE id = ?")
       .run(next.title, next.icon, next.status, p.updatedBy !== undefined ? p.updatedBy : cur.updatedBy, this.now().toISOString(), id)
     return true
+  }
+
+  /** Stops (or starts again) the applet: host state, kept across broker restarts. */
+  setStopped(id: string, stopped: boolean, updatedBy: string | null): void {
+    const ts = this.now().toISOString()
+    this.db.query("UPDATE applets SET stopped_at = ?, updated_by = ?, updated_at = ? WHERE id = ?").run(stopped ? ts : null, updatedBy, ts, id)
   }
 
   /** Records who changed the applet, now. */
