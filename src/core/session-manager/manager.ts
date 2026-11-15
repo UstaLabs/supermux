@@ -63,6 +63,8 @@ const log = makeLogger("session-manager")
 
 /** How long a settled orchestration call's result is shared with identical calls. */
 export const ORCH_DEDUP_MS = 10_000
+/** Orchestration ops that only read: never served from a settled call (see orchestration()). */
+export const READ_OPS = new Set(["list_sessions", "find_sessions", "read_session", "memory_search", "list_models", "list_devices", "list_proxies", "browser_comments"])
 /** Why the session tools refuse a draft (a launcher chat nothing has been sent in): its id is temporary too. */
 const DRAFT_HAS_NO_AGENT = "a draft has no agent until its first message is sent"
 
@@ -534,7 +536,9 @@ export class SessionManager {
 
   /** The external shim's socket path (`orchestration` frame). */
   handleOrchestration(msg: OrchestrationFrame & { session_id: string }): Promise<OpResult> {
-    return this.orchestration(msg.session_id, msg.op)
+    // #156: a `supermux` CLI command is one explicit call from its own process (call ids "cli-…"), never a retry or a
+    // second shim's copy, so it is not deduplicated: re-running a command must run it, and must read fresh state.
+    return this.orchestration(msg.session_id, msg.op, { dedup: !String(msg.call_id ?? "").startsWith("cli-") })
   }
 
   /**
@@ -657,7 +661,8 @@ export class SessionManager {
    * end (a mutation is applied completely, never half), and a retry within the window gets the
    * same result instead of a second mutation.
    */
-  orchestration(fromSession: string, op: ToolOperation): Promise<OpResult> {
+  orchestration(fromSession: string, op: ToolOperation, opts: { dedup?: boolean } = {}): Promise<OpResult> {
+    if (opts.dedup === false) return this.runOrchestration(fromSession, op).catch((err: unknown): OpResult => ({ ok: false, error: `handler threw: ${err instanceof Error ? err.message : String(err)}` }))
     const key = `${fromSession}|${op.name}|${JSON.stringify(op.args)}`
     const inflight = this.orchInflight.get(key)
     if (inflight) {
@@ -666,7 +671,12 @@ export class SessionManager {
     }
     const p = this.runOrchestration(fromSession, op).catch((err: unknown): OpResult => ({ ok: false, error: `handler threw: ${err instanceof Error ? err.message : String(err)}` }))
     this.orchInflight.set(key, p)
-    void p.finally(() => { const t = setTimeout(() => { if (this.orchInflight.get(key) === p) this.orchInflight.delete(key) }, ORCH_DEDUP_MS); t.unref?.() })
+    // A read shares a call only while it is in flight: after it settles the next one reads fresh state (#156: `port ls`
+    // after `port private` within 10 s showed the old link). A mutation keeps the window, so a retry never runs it twice.
+    void p.finally(() => {
+      if (READ_OPS.has(op.name)) { if (this.orchInflight.get(key) === p) this.orchInflight.delete(key); return }
+      const t = setTimeout(() => { if (this.orchInflight.get(key) === p) this.orchInflight.delete(key) }, ORCH_DEDUP_MS); t.unref?.()
+    })
     return p
   }
 
