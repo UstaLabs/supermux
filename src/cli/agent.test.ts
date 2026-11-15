@@ -112,17 +112,20 @@ test("delegate and council say in their output that they returned and answers ar
 test("card show reads the page itself (any path) and sends its HTML; a missing file says so, exit 3", async () => {
   const page = join(mkdtempSync(join(tmpdir(), "sm-page-")), "chart.html")
   writeFileSync(page, "<svg></svg>")
-  reply = () => ({ ok: true, value: { shown: true, problems: [] } })
+  reply = () => ({ ok: true, value: "shown" })
   const r = await run(["card", "show", page, "--title", "Rides"])
   expect(r.code).toBe(0)
   expect(calls[0]).toEqual({ kind: "outbound", name: "show_html", args: { title: "Rides", html: "<svg></svg>" } })
   const missing = await run(["card", "show", "/nope/x.html", "--title", "T"])
   expect(missing.code).toBe(3)
   expect(missing.err).toContain("no such file")
-  reply = () => ({ ok: true, value: { shown: false, problems: ["blank page"] } })
+  reply = () => ({ ok: true, value: "not shown — fix the page and call show_html again:\n- the page is blank at 390 px" })
   const bad = await run(["card", "show", page, "--title", "Rides"])
   expect(bad.code).toBe(1)
   expect(bad.out).toContain("NOT shown")
+  expect(bad.out).toContain("- the page is blank at 390 px")
+  reply = () => ({ ok: true, value: "shown" })
+  expect(JSON.parse((await run(["card", "show", page, "--title", "Rides", "--json"])).out)).toEqual({ shown: true, problems: [], text: "shown" })
 })
 
 test("attach sends absolute paths (relative to the shell's folder)", async () => {

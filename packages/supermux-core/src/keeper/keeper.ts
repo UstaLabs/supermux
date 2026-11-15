@@ -11,13 +11,13 @@
  * other write replaces a file whole, and the directory is checked each time.
  */
 import type { ChildProcess } from 'node:child_process'
-import { chmodSync, closeSync, constants, existsSync, renameSync, unlinkSync } from 'node:fs'
+import { chmodSync, closeSync, constants, existsSync, readdirSync, readFileSync, renameSync, unlinkSync } from 'node:fs'
 import { createServer, type Server, type Socket } from 'node:net'
 import { join } from 'node:path'
 import { TextDecoder } from 'node:util'
 import { assertNoLinksIn, assertRealDirectory, createPrivateFile, present, stagingPath, writeAll, writePrivateFile } from '../private-files.js'
 import { KEEPER_ENV, requestId, responseId, type FrameShape, type JournalEntry, type KeeperLimits, type KeeperMessage, type KeeperStatus } from './protocol.js'
-import { files, proc } from '@supermux/platform'
+import { files, host, proc } from '@supermux/platform'
 import { files as platformFiles } from "@supermux/platform"
 
 const STATUS_COALESCE_MS = 250
@@ -70,6 +70,52 @@ function deadlineReply(shape: FrameShape, id: string | number): string {
 /** Whether [pid] is a live process: the platform's rule, where EPERM (someone else's live process) is alive. */
 const alive = (pid: number): boolean => proc.isAlive(pid)
 
+/** The slice of bun:ffi the subreaper uses (typed here: Node's types, which this package checks with, lack it). */
+type BunFfi = {
+  dlopen: (lib: string, symbols: Record<string, { args: unknown[]; returns: unknown }>) => {
+    symbols: { prctl: (option: number, a2: number, a3: number, a4: number, a5: number) => number; waitpid: (pid: number, status: unknown, options: number) => number }
+  }
+  FFIType: Record<'i32' | 'u64' | 'ptr', unknown>
+  ptr: (view: ArrayBufferView) => unknown
+}
+
+/**
+ * prctl(PR_SET_CHILD_SUBREAPER, 1) on Linux, and the reaping that comes with it: orphans re-parented here must be
+ * waited for when they exit, or they stay zombies for the keeper's whole life. Bun waits only for children it spawned
+ * (the agent), so every minute the zombies among this process's OTHER children (read from /proc) are reaped one pid at
+ * a time; the agent's own exit is never touched. Any failure is harmless: detached processes then lose their session.
+ * Returns a function that reaps now and reports how many (tests); a no-op elsewhere.
+ */
+export async function becomeChildSubreaper(isAgent: (pid: number) => boolean, everyMs = 60_000): Promise<() => number> {
+  if (host.os() !== 'linux') return () => 0
+  try {
+    // Through a variable: this package typechecks with Node's types only, which have no 'bun:ffi' (a Bun builtin).
+    const ffiModule = 'bun:ffi'
+    const { dlopen, FFIType, ptr } = (await import(ffiModule)) as BunFfi
+    const libc = dlopen('libc.so.6', {
+      prctl: { args: [FFIType.i32, FFIType.u64, FFIType.u64, FFIType.u64, FFIType.u64], returns: FFIType.i32 },
+      waitpid: { args: [FFIType.i32, FFIType.ptr, FFIType.i32], returns: FFIType.i32 },
+    })
+    if (libc.symbols.prctl(36 /* PR_SET_CHILD_SUBREAPER */, 1, 0, 0, 0) !== 0) return () => 0
+    const status = new Int32Array(1)
+    const reap = (): number => {
+      let n = 0
+      for (const entry of readdirSync('/proc')) {
+        const pid = Number(entry)
+        if (!Number.isInteger(pid) || pid <= 0 || isAgent(pid)) continue
+        let stat: string
+        try { stat = readFileSync(`/proc/${pid}/stat`, 'utf8') } catch { continue }
+        const f = stat.slice(stat.lastIndexOf(')') + 2).split(' ')
+        if (f[0] !== 'Z' || Number(f[1]) !== process.pid) continue
+        if (libc.symbols.waitpid(pid, ptr(status), 1 /* WNOHANG */) === pid) n++
+      }
+      return n
+    }
+    setInterval(reap, everyMs).unref()
+    return reap
+  } catch { return () => 0 /* not under Bun, or no libc.so.6: carry on without */ }
+}
+
 async function main() {
   const sessionDir = requiredEnv(KEEPER_ENV.sessionDir)
   const command = requiredEnv(KEEPER_ENV.command)
@@ -85,6 +131,12 @@ async function main() {
   if (captureStderrRaw !== 'true' && captureStderrRaw !== 'false') throw new TypeError('invalid spec.captureStderr')
   const captureStderr = captureStderrRaw === 'true'
   if (!Array.isArray(args) || args.some(a => typeof a !== 'string')) throw new TypeError('invalid args')
+
+  // A process the agent detaches (setsid, nohup, &) is re-parented to this keeper instead of init, so it stays a
+  // descendant: the broker tells a session's processes by their ancestry (supermux #156). Linux only; elsewhere a no-op.
+  // (The agent is spawned below; until then no pid is the agent's.)
+  let agentPidForReaper = 0
+  await becomeChildSubreaper((pid) => pid === agentPidForReaper)
 
   // The client made the directory and passes its real path: a directory of this user's, with no link to it or in it.
   const verify = () => assertRealDirectory(sessionDir)
@@ -278,6 +330,7 @@ async function main() {
     env: agentEnv,
     stdio: ['pipe', 'pipe', 'pipe'],
   })
+  agentPidForReaper = agent.pid ?? 0
   // The last stderr lines are always kept for the exit report. Some agents (OpenCode with --print-logs) also report
   // provider failures only on stderr: with captureStderr, every line is journaled and sent to the client too.
   let errBuffer = ''

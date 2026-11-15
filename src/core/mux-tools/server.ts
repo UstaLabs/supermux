@@ -14,6 +14,7 @@
  * mutation (spawn, kill, expose) is applied completely or not at all; see
  * SessionManager.orchestration for the retry de-dup.
  */
+import { cliAdoption } from "../cli/adoption"
 import { mcpServer, McpServer, fromJsonSchema, type ConnectionContext } from "../../../packages/supermux-core/src/mcp/index.js"
 import { listTools, toolCallIdOf, toolResult, toolRoute, type ToolAgentChoices, type ToolCallResult } from "../../shim/tools"
 import type { ToolOperation } from "../../shared/socket-frames"
@@ -53,6 +54,8 @@ export function buildMuxToolsServer(ctx: ConnectionContext, rpcOnly: boolean): M
       const op: ToolOperation = { name: route.op, args: args ?? {}, ...(callId ? { callId } : {}) }
       let result: ToolCallResult
       try {
+        // #156 adoption: the host server is an MCP path (the socket path records in handleOrchestration/handleOutbound).
+        cliAdoption().recordCall(ctx.sessionId, "mcp", op.name)
         result = route.kind === "outbound" ? await bound.outbound(ctx.sessionId, op) : await bound.orchestration(ctx.sessionId, op)
       } catch (err) {
         // The socket path's wording for a handler that threw.

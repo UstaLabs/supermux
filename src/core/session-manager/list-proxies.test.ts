@@ -44,3 +44,24 @@ test("reads are never served from a settled call, and CLI calls are never dedupl
   await priv("cli-3", true)
   expect(((await ls("cli-4")).value as any[]).map((p) => p.isPublic)).toEqual([true])
 })
+
+test("cli_adoption: who knows the CLI, who doesn't yet, and when a moved tool was last used over MCP (#156)", async () => {
+  const { bindCliAdoption, CliAdoption } = await import("../cli/adoption")
+  const a = new CliAdoption(undefined, () => new Date("2026-11-15T20:00:00Z"))
+  const unbind = bindCliAdoption(a)
+  try {
+    const db = openDb(":memory:")
+    runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+    const registry = new Registry(db)
+    const m = new SessionManager(registry, fakePorts(db, { frames: [] }))
+    const fresh = registry.register({ name: "fresh", workdir: "/tmp", pid: 0, agent: "codex", connected: false })
+    const old = registry.register({ name: "old", workdir: "/tmp", pid: 0, agent: "grok", connected: false })
+    a.markLaunch(fresh.id)
+    await m.handleOrchestration({ kind: "orchestration", call_id: "c7", session_id: old.id, op: { name: "list_sessions", args: {} } } as any)
+    const r = await m.handleOrchestration({ kind: "orchestration", call_id: "cli-1", session_id: fresh.id, op: { name: "cli_adoption", args: {} } } as any)
+    expect(r.ok).toBe(true)
+    const v = r.value as any
+    expect({ live: v.live, know: v.know, notYet: v.notYet, last: v.lastMcpMovedAt }).toEqual({ live: 2, know: 1, notYet: ["old"], last: "2026-11-15T20:00:00.000Z" })
+    expect(v.sessions.find((s: any) => s.name === "fresh")).toMatchObject({ knows: true, cliCalls: 1 })
+  } finally { unbind() }
+})

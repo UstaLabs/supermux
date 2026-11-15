@@ -8,6 +8,7 @@ import { Registry } from "../session-manager/registry"
 import { SessionManager } from "../session-manager/manager"
 import { fakePorts } from "../../../tests/helpers/session-manager-ports"
 import { callTool, listTools, RPC_TOOLS } from "../../shim/tools"
+import { cliTip } from "../../shim/cli-equivalents"
 import { AgentKind } from "../../shared/agents"
 import { modesFor } from "../agents/permission-modes"
 import { CoreAdapter } from "../agents/core-bridge/core-adapter"
@@ -15,6 +16,9 @@ import type { AgentPhase } from "../session-manager/agent-state-store"
 import { bindMuxTools, buildMuxToolsServer, muxRpcHostServer, muxShimHostServer, MUX_HOST_SERVERS } from "./server"
 
 type Msg = Record<string, any>
+
+/** #156: a moved tool's result ends with a block naming its CLI command (src/shim/cli-equivalents.ts). */
+const TIP = Object.fromEntries(["kill_session", "rename_session"].map((n) => [n, { type: "text", text: cliTip(n)!.trim() }])) as Record<string, { type: string; text: string }>
 
 /** A connected SDK server and a raw client end: request() resolves with the JSON-RPC response. */
 async function connect(agent: string, sessionId: string, rpcOnly = false) {
@@ -125,7 +129,7 @@ describe("mux-shim host server: calls through the shared handlers", () => {
     expect(JSON.parse(listed.content[0].text).map((s: any) => s.name).sort()).toEqual(["pa", "worker"])
     const spawned = JSON.parse((await call(worker, "spawn_session", { workdir: "/tmp/w", name: "kid" })).content[0].text)
     expect(t.spawns).toHaveLength(1)
-    expect(await call(worker, "kill_session", { id: spawned.session_id })).toEqual({ content: [{ type: "text", text: "\"killed\"" }] })
+    expect(await call(worker, "kill_session", { id: spawned.session_id })).toEqual({ content: [{ type: "text", text: "\"killed\"" }, TIP.kill_session] })
     expect(t.registry.get(spawned.session_id)).toBeUndefined()
     const denied = { isError: true, content: [{ type: "text", text: "permission denied (can_orchestrate=false)" }] }
     expect(await call(worker, "mute_session", { name: "pa", muted: true })).toEqual(denied)
@@ -161,18 +165,18 @@ describe("mux-shim host server: calls through the shared handlers", () => {
   test("rename_session needs no gate: a worker renames itself", async () => {
     const t = setup(); cleanups.push(t.unbind)
     const worker = await connect(AgentKind.Codex, t.worker.id)
-    expect(await call(worker, "rename_session", { name: "Better Name" })).toEqual({ content: [{ type: "text", text: JSON.stringify({ name: "Better Name" }) }] })
+    expect(await call(worker, "rename_session", { name: "Better Name" })).toEqual({ content: [{ type: "text", text: JSON.stringify({ name: "Better Name" }) }, TIP.rename_session] })
     expect(t.registry.get(t.worker.id)!.name).toBe("Better Name")
   })
 
   test("rename_session: a worker renames itself once; an Agent any time", async () => {
     const t = setup(); cleanups.push(t.unbind)
     const worker = await connect(AgentKind.Codex, t.worker.id)
-    expect(await call(worker, "rename_session", { name: "First Name" })).toEqual({ content: [{ type: "text", text: JSON.stringify({ name: "First Name" }) }] })
+    expect(await call(worker, "rename_session", { name: "First Name" })).toEqual({ content: [{ type: "text", text: JSON.stringify({ name: "First Name" }) }, TIP.rename_session] })
     expect(await call(worker, "rename_session", { name: "Second Name" })).toEqual({ isError: true, content: [{ type: "text", text: "this session was already renamed once; names can only be changed once" }] })
     const agent = await connect(AgentKind.Claude, t.pa.id)
     for (const name of ["Hoot", "Miso", "Hoot Again"]) {
-      expect(await call(agent, "rename_session", { name })).toEqual({ content: [{ type: "text", text: JSON.stringify({ name }) }] })
+      expect(await call(agent, "rename_session", { name })).toEqual({ content: [{ type: "text", text: JSON.stringify({ name }) }, TIP.rename_session] })
       expect(t.registry.get(t.pa.id)!.name).toBe(name)
     }
     // An Agent's self-rename still passes the Agent name rules.
@@ -459,7 +463,7 @@ describe("kill_session", () => {
     const victim = t.registry.register({ name: "victim", workdir: "/tmp", pid: 0, agent: "codex", connected: false })
     t.registry.db.run("UPDATE sessions SET workspace_id = ? WHERE id = ?", [ws.id, victim.id])
     const c = await connect(AgentKind.Claude, t.pa.id)
-    expect(await call(c, "kill_session", { id: victim.id })).toEqual({ content: [{ type: "text", text: "\"killed\"" }] })
+    expect(await call(c, "kill_session", { id: victim.id })).toEqual({ content: [{ type: "text", text: "\"killed\"" }, TIP.kill_session] })
     expect(t.registry.sessions.getById(victim.id)?.status).toBe("archived")
     expect(retired).toEqual([ws.id])
     expect(forgotten).toEqual([victim.id])

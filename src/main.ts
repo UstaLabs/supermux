@@ -169,7 +169,6 @@ import { brokerLang, t as brokerText, type MessageKey } from "./core/i18n/messag
 import { DevicePushTokenStore } from "./core/push/device-tokens"
 import { createRelayClient } from "./core/push/relay-adapter"
 import { ViewingTracker } from "./core/push/viewing-tracker"
-import { usesFilesystemEndpoint } from "./core/local-endpoint"
 import {
   MUX_HOME, MUX_HOME_NOTE, STATE_DIR, PID_FILE, SOCKETS_DIR, ENV_FILE, INBOX_DIR, HTML_DIR, SESSION_INBOX_DIR, DEVICES_FILE, HOST_KEY_FILE,
 } from "./shared/paths"
@@ -202,7 +201,8 @@ import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discov
 import { followAdapterModels, LearnedModels } from "./core/models/learned"
 import { discoverGrokModels } from "./core/agents/grok/model-discovery"
 import { grokHasScheduledTasks } from "./core/agents/grok/scheduled-tasks"
-import { keeperAgentRunning } from "../packages/supermux-core/src/keeper/index.js"
+import { keeperAgentRunning, keeperPidOf } from "../packages/supermux-core/src/keeper/index.js"
+import { checkPeer } from "./core/session-manager/peer-identity"
 import { discoverAntigravityModels } from "./core/agents/antigravity/model-discovery"
 import { refreshModelCache, seedModelCache, SharedRefreshes, type ModelDiscoverers } from "./core/models/refresh"
 import { listOpenCodeProviders, setOpenCodeApiKey, startOpenCodeOAuth, finishOpenCodeOAuth } from "./core/agents/opencode/auth-ops"
@@ -237,6 +237,7 @@ import { ForgeStore } from "./core/forge/store"
 import { ForgeService } from "./core/forge/service"
 import { detectForgeClis, importCliToken } from "./core/forge/cli-import"
 import { installSupermuxLauncher } from "./cli/launcher"
+import { bindCliAdoption, CliAdoption } from "./core/cli/adoption"
 import { installCredentialLauncher } from "./core/forge/launcher"
 import { SETTINGS_KEY_CURATOR, parseCuratorConfig, type CuratorConfig } from "./core/settings/curator-config"
 import { listLspServerSettingsRows } from "./core/lsp/editor-settings"
@@ -394,7 +395,7 @@ const tighten = (dir: string): void => {
   }
 }
 tighten(STATE_DIR)
-if (usesFilesystemEndpoint()) tighten(SOCKETS_DIR)
+tighten(SOCKETS_DIR)
 
 // load .env
 try {
@@ -635,6 +636,8 @@ catch (err) { log.error("forge_credential_launcher_failed", { err: String(err) }
 // #156: the `supermux` CLI agents run from their shell (session-cli-env.ts puts this bin dir first on their PATH).
 try { installSupermuxLauncher(join(STATE_DIR, "bin"), join(import.meta.dir, "..")) }
 catch (err) { log.error("supermux_launcher_failed", { err: String(err) }) }
+// #156: which sessions know the CLI (launched with it, or told once), and whether moved MCP tools are still used.
+bindCliAdoption(new CliAdoption(join(STATE_DIR, "cli-adoption.json")))
 const forgeStore = new ForgeStore(db)
 const forgeService = new ForgeService(forgeStore, {
   projectsRoot: join(STATE_DIR, "projects"),
@@ -4032,6 +4035,16 @@ const server = await startSocketServer({
     onRegister: (m) => sessionManager.handleRegister(m),
     onOutbound: (m) => sessionManager.handleOutbound(m),
     onOrchestration: (m) => sessionManager.handleOrchestration(m),
+  },
+  // #156: is a connection's process part of the socket's session? Its root is the session's keeper (a persistent-runtime
+  // session's own pid). MUX_PEER_AUTH: "log" (default while it beds in: would-be denials are only logged) | "enforce" | "off".
+  peerAuth: {
+    mode: (["off", "log", "enforce"] as const).find((m) => m === process.env.MUX_PEER_AUTH) ?? "log",
+    check: async (session_id, socket) => {
+      const s = registry.get(session_id)
+      const root = !s ? undefined : isPersistentRuntimeSession(s) ? (s.pid || undefined) : await keeperPidOf(join(STATE_DIR, "core", s.agent), s.id)
+      return checkPeer(socket, root)
+    },
   },
 })
 

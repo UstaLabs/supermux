@@ -106,3 +106,17 @@ test("show_html's result reaches the agent as the sentence, an error as an error
   expect(toolResult("show_html", { ok: true, value: "shown (id: ab)" })).toEqual({ content: [{ type: "text", text: "shown (id: ab)" }] })
   expect(toolResult("show_html", { ok: false, error: "file must be inside" })).toEqual({ isError: true, content: [{ type: "text", text: "file must be inside" }] })
 })
+
+describe("#156: while MCP and the CLI run side by side", () => {
+  test("a tool the CLI also does leads with its command; the kept tools don't", () => {
+    const byName = Object.fromEntries(listTools().map((t) => [t.name, t.description]))
+    expect(byName.list_sessions!.startsWith("Prefer the CLI in your shell: `supermux session ls`")).toBe(true)
+    expect(byName.expose_port!.startsWith("Prefer the CLI in your shell: `supermux port expose PORT`")).toBe(true)
+    for (const kept of ["message_session", "show_html", "attach", "react", "set_active"]) expect(byName[kept]!.startsWith("Prefer the CLI")).toBe(false)
+  })
+  test("its result ends with the command; an error or a kept tool's result does not", () => {
+    expect(toolResult("list_sessions", { ok: true, value: [] }).content.map((c) => c.text)).toEqual(["[]", "(next time: `supermux session ls` in your shell does this; `supermux help` lists everything)"])
+    expect(toolResult("list_sessions", { ok: false, error: "boom" }).content).toHaveLength(1)
+    expect(toolResult("message_session", { ok: true, value: { ids: {} } }).content).toHaveLength(1)
+  })
+})

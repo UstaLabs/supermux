@@ -1,5 +1,6 @@
 import { AGENT_KINDS, AgentKind } from "../shared/agents"
 import { SHOW_HTML_DESCRIPTION } from "../core/show-html/description"
+import { cliLead, cliTip } from "./cli-equivalents"
 import type { ShimTool, ToolOperation, ToolRoute } from "../shared/socket-frames"
 export type { AgentKind } from "../shared/agents"
 export type { ToolRoute } from "../shared/socket-frames"
@@ -378,7 +379,9 @@ const STARTS_SESSIONS = new Set(["spawn_session", "delegate", "council", "counci
 
 export function listTools(rpcOnly = false, opts: { councilMember?: boolean; choices?: ToolAgentChoices } = {}) {
   if (rpcOnly) return RPC_TOOLS
-  const tools = opts.councilMember ? ALL : ALL.filter((t) => !MEMBER_ONLY.has(t.name))
+  // #156: while MCP and the CLI run side by side, a tool the CLI also does leads with its command.
+  const tools = (opts.councilMember ? ALL : ALL.filter((t) => !MEMBER_ONLY.has(t.name)))
+    .map((t) => { const lead = cliLead(t.name); return lead ? { ...t, description: lead + t.description } : t })
   const choices = opts.choices
   if (!choices) return tools
   return tools.map((t) => (STARTS_SESSIONS.has(t.name) ? { ...t, inputSchema: withChoices(t.inputSchema as Record<string, unknown>, choices) as typeof t.inputSchema } : t))
@@ -446,6 +449,14 @@ export function shimTools(server: string | undefined, opts: { councilMember?: bo
  * else → JSON of the value ("ok" when there is none).
  */
 export function toolResult(name: string, result: ToolCallResult, rpcOnly = false): { isError?: boolean; content: Array<{ type: "text"; text: string }> } {
+  const r = toolResultText(name, result, rpcOnly)
+  // #156: a result of a tool the CLI also does ends with the command, so the agent learns it while using the tool.
+  const tip = !rpcOnly && result.ok ? cliTip(name) : undefined
+  // A block of its own: the result's own text (JSON for most tools) stays exactly what it was.
+  return tip ? { ...r, content: [...r.content, { type: "text", text: tip.trim() }] } : r
+}
+
+function toolResultText(name: string, result: ToolCallResult, rpcOnly: boolean): { isError?: boolean; content: Array<{ type: "text"; text: string }> } {
   if (!result.ok) return { isError: true, content: [{ type: "text", text: result.error ?? "unknown error" }] }
   if (!rpcOnly && name === "attach") {
     const value = result.value

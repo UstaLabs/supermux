@@ -16,7 +16,7 @@ import { connect } from "node:net"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { encodeFrame, decodeFrames } from "../shared/frame-codec"
-import { localEndpoint } from "../core/local-endpoint"
+import { localEndpoints } from "../core/local-endpoint"
 import { listTools } from "../shim/tools"
 
 export interface AgentCliIo {
@@ -115,11 +115,21 @@ export async function runAgentCli(argv: string[], io: AgentCliIo): Promise<numbe
   const [noun = "", verb, ...rest] = pos
   const help = (topic: string, v?: string): never => { io.out(helpText(topic, v)); throw new Exit(0) }
 
-  const sock = io.env.MUX_SESSION_ID && io.env.MUX_SOCKETS_DIR ? localEndpoint(io.env.MUX_SESSION_ID, { socketsDir: io.env.MUX_SOCKETS_DIR }) : undefined
+  // On Windows: the AF_UNIX file, then the pre-#156 named pipe (a broker that has not restarted onto #156 serves only it).
+  const socks = io.env.MUX_SESSION_ID && io.env.MUX_SOCKETS_DIR ? localEndpoints(io.env.MUX_SESSION_ID, { socketsDir: io.env.MUX_SOCKETS_DIR }) : []
+  const sock = socks[0]
   async function call(name: string, args: Record<string, unknown>): Promise<any> {
     if (!sock) { io.err("supermux: not inside a supermux session (MUX_SESSION_ID and MUX_SOCKETS_DIR are unset)"); throw new Exit(5) }
-    const r = await new Promise<{ ok: boolean; value?: unknown; error?: string } | "unreachable" | "timeout">((res) => {
-      const s = connect(sock)
+    let r: { ok: boolean; value?: unknown; error?: string } | "unreachable" | "timeout" = "unreachable"
+    for (const endpoint of socks) {
+      r = await callOn(endpoint, name, args)
+      if (r !== "unreachable") break
+    }
+    return settle(r)
+  }
+  function callOn(endpoint: string, name: string, args: Record<string, unknown>) {
+    return new Promise<{ ok: boolean; value?: unknown; error?: string } | "unreachable" | "timeout">((res) => {
+      const s = connect(endpoint)
       let buf: Buffer = Buffer.alloc(0)
       const timer = setTimeout(() => { s.destroy(); res("timeout") }, io.timeoutMs ?? 30_000)
       s.on("error", () => { clearTimeout(timer); res("unreachable") })
@@ -131,6 +141,8 @@ export async function runAgentCli(argv: string[], io: AgentCliIo): Promise<numbe
         for (const m of messages as any[]) if (m?.kind === "result") { clearTimeout(timer); s.end(); res({ ok: !!m.ok, value: m.value, error: m.error }) }
       })
     })
+  }
+  function settle(r: { ok: boolean; value?: unknown; error?: string } | "unreachable" | "timeout"): any {
     if (r === "unreachable" || r === "timeout") { io.err(`supermux: the broker ${r === "timeout" ? "did not answer" : "is unreachable"} (${sock})`); throw new Exit(5) }
     if (!r.ok) {
       const e = String(r.error ?? "failed")
@@ -277,9 +289,12 @@ export async function runAgentCli(argv: string[], io: AgentCliIo): Promise<numbe
           try { html = rest[0] === "-" ? io.stdin() : readFileSync(local(rest[0]!), "utf8") }
           catch { io.err(`supermux: can't read ${local(rest[0]!)}: no such file`); throw new Exit(3) }
           const v = await call("show_html", { title: str("title"), html, ...(num("height") ? { height: num("height") } : {}) })
-          const problems: string[] = Array.isArray(v?.problems) ? v.problems : []
-          out(v ?? { shown: true }, () => io.out(problems.length ? `NOT shown, the user saw nothing. Fix and show again:\n- ${problems.join("\n- ")}` : "shown"))
-          return problems.length ? 1 : 0
+          // The broker answers in a sentence: "shown…", or "not shown — fix the page…" and one "- problem" per line.
+          const said = typeof v === "string" ? v : Array.isArray(v?.problems) && v.problems.length ? `not shown:\n${v.problems.map((p: string) => `- ${p}`).join("\n")}` : "shown"
+          const shown = !/^not shown/i.test(said)
+          const problems = shown ? [] : said.split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2))
+          out({ shown, problems, text: said }, () => io.out(shown ? said : `NOT shown, the user saw nothing. Fix the page and run supermux card show again:\n${problems.map((p) => `- ${p}`).join("\n")}`))
+          return shown ? 0 : 1
         }
         if (verb === "walkthrough") {
           if (!rest[0]) usage("which FILE.json?", "card walkthrough FILE.json")
@@ -349,7 +364,8 @@ export async function runAgentCli(argv: string[], io: AgentCliIo): Promise<numbe
         if (!verb || !map[verb]) help("comments")
         const [op, args] = map[verb!]!
         const v = await call(op, args())
-        out(v ?? { ok: true }, () => io.out(Array.isArray(v) ? (v.length ? JSON.stringify(v, null, 1) : "(no open comments)") : "done"))
+        // browser_comments answers in markdown (the user's own words); the other verbs with a value or nothing.
+        out(typeof v === "string" ? { text: v } : v ?? { ok: true }, () => io.out(typeof v === "string" ? v : Array.isArray(v) ? (v.length ? JSON.stringify(v, null, 1) : "(no open comments)") : "done"))
         return 0
       }
       case "display": {
@@ -372,7 +388,7 @@ export async function runAgentCli(argv: string[], io: AgentCliIo): Promise<numbe
       // eslint-disable-next-line no-fallthrough
       case "api": {
         const tools = listTools(false, { councilMember: true })
-        if (!verb) { io.out(tools.map((t) => t.name).concat("list_proxies").join("\n")); return 0 }
+        if (!verb) { io.out(tools.map((t) => t.name).concat(CLI_ONLY_OPS).join("\n")); return 0 }
         const hasArgs = ((flags.f as string[] | undefined) ?? []).length > 0 || !!str("input")
         const tool = tools.find((t) => t.name === verb)
         if (flags.help || (!hasArgs && tool && ((tool.inputSchema as any).required ?? []).length)) {
@@ -395,6 +411,9 @@ export async function runAgentCli(argv: string[], io: AgentCliIo): Promise<numbe
   }
   return 0
 }
+
+/** Broker ops that are not MCP tools: only the CLI calls them (listed by a bare `supermux api`). */
+export const CLI_ONLY_OPS = ["list_proxies", "cli_adoption"]
 
 /** The CLI nouns `src/cli.ts` routes here (anything else is a broker subcommand). */
 export const AGENT_CLI_NOUNS = new Set(["help", "--help", "-h", "session", "s", "msg", "delegate", "council", "card", "attach", "file", "port", "memory", "comments", "display", "device", "docs", "api"])
