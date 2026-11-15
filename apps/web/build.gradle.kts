@@ -307,7 +307,10 @@ val distDir = layout.buildDirectory.dir("dist/wasmJs/productionExecutable")
 // (train4 43624150506). Ceiling = 9064 + 8 KiB. From here a feature that grows the bundle raises it by its measured size.
 // 2026-11-15 (#151 instant open, Tally): +2 KiB, the optimistic open tipped it over by <1 KiB (dev 9071); web shrink is card #142.
 // 2026-11-15 (#143 sidebar "Needs you", Tally/Ahmet): +2 KiB, measured 9075 KiB on dev ad0a2b707 (train10 43684753882).
-val maxGzipBytes = 9076L * 1024
+// 2026-11-15 (#152 launcher C1–C3, Tally): +50 KiB, measured 9125 KiB on train6 43741960086: the Local / Worktree row,
+// the three-tab branch picker with its Pull request tab, the line under it and the inline cards (session/LauncherWork*.kt),
+// and their strings in both catalogs. The prefix setting and C4 get their own measured raises.
+val maxGzipBytes = 9126L * 1024
 
 // THE NATIVE EDITOR'S SYNTAX MODULE IS OUTSIDE THAT CEILING, with a ceiling of its own (M5).
 // `supermux-syntax.wasm` is 7.45 MB raw / 2.69 MB gzipped (editor-syntax/native/README.md): counted
