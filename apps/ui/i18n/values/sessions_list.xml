@@ -141,4 +141,10 @@
     <string name="applets_menu_info">Applet info</string>
     <string name="applets_cover_done">Done</string>
     <string name="applets_save_not_yet">Saving files from an applet isn't available in this version yet.</string>
+    <string name="applets_menu_add_home">Add to Home screen</string>
+    <string name="applets_menu_on_home">On Home screen</string>
+    <string name="applets_menu_install">Install on this computer</string>
+    <string name="applets_menu_installed">Installed</string>
+    <string name="applets_install_no_home">This phone's Home screen doesn't take shortcuts from apps.</string>
+    <string name="applets_install_refused">The Home screen didn't take the shortcut.</string>
 </resources>

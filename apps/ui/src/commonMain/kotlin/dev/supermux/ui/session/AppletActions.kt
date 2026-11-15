@@ -22,16 +22,32 @@ fun interface AppletOpener {
 val LocalAppletOpener = staticCompositionLocalOf<AppletOpener?> { null }
 
 /**
+ * Puts an applet on this device's own launcher: a Home screen shortcut on a phone, an app in the Start menu /
+ * Applications / the app menu on a desktop (S1). Null where this device can't: the menu then has no such item.
+ */
+interface AppletInstaller {
+    /** Phone wording ("Add to Home screen") or desktop wording ("Install on this …"). */
+    val phone: Boolean
+    /** Whether [applet] of [hostId] is already on this device's launcher (the menu then says so instead). */
+    fun isInstalled(hostId: String, applet: AppletDto): Boolean
+    /** Asks the system to add it; null when asked, else why it couldn't (shown in the menu). */
+    suspend fun install(hostId: String, applet: AppletDto, icon: ByteArray?): String?
+}
+
+val LocalAppletInstaller = staticCompositionLocalOf<AppletInstaller?> { null }
+
+/**
  * The active host's applets as the sidebar and All applets use them; null when there is nothing to show: no opener on
  * this platform, a host whose broker has no applets, or not connected yet.
  */
 @Composable
 fun rememberAppletsActions(fleet: FleetStore, hostId: String?, hostName: String, showAll: () -> Unit, info: (AppletDto, String) -> Unit): AppletsActions? {
     val opener = LocalAppletOpener.current ?: return null
+    val installer = LocalAppletInstaller.current
     val applets by fleet.activeApplets.collectAsState()
     val list = applets ?: return null
     val host = hostId ?: return null
-    return remember(list, host, hostName, opener, showAll, info) {
+    return remember(list, host, hostName, opener, installer, showAll, info) {
         AppletsActions(
             applets = list,
             hostName = hostName,
@@ -40,6 +56,13 @@ fun rememberAppletsActions(fleet: FleetStore, hostId: String?, hostName: String,
             info = info,
             pin = { a, on -> fleet.pinApplet(a.name, on) },
             loadIcon = { a -> fleet.appletIconBytes(a) },
+            installer = installer?.let { i ->
+                AppletInstall(
+                    phone = i.phone,
+                    isInstalled = { a -> i.isInstalled(host, a) },
+                    install = { a -> i.install(host, a, if (a.iconUrl != null) fleet.appletIconBytes(a) else null) },
+                )
+            },
         )
     }
 }
