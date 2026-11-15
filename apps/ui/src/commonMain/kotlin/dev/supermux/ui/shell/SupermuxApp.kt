@@ -221,6 +221,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.localizedHost
 
 /**
  * Which chats of one workspace are actually ON SCREEN (spec §11).
@@ -370,7 +371,7 @@ fun SupermuxApp(
             val seen = lastSeenAgo(now, h.lastSeenAt)?.let(::timeAgoText).orEmpty()
             KitMachine(
                 id = h.recordId,
-                name = h.displayLabel,
+                name = h.displayLabel.localizedHost(),
                 local = isLocalHost(h.hostId),
                 online = h.online,
                 status = when {

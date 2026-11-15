@@ -26,4 +26,5 @@
     <string name="words_agent_name_slash">Ad / veya \\ içeremez</string>
     <string name="words_git_failed">%1$s başarısız</string>
     <string name="words_git_done">%1$s tamamlandı</string>
+    <string name="words_host_unnamed">Makine</string>
 </resources>

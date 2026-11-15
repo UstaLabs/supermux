@@ -48,6 +48,9 @@ data class HostView(
  * host then appeared as the identical `This` badge. Preserve custom names, but unwrap that legacy
  * local-only prefix everywhere so existing installs become clear without a destructive migration.
  */
+/** What an unnamed host is called in stored data and in [hostDisplayLabel]; the UI words it in the app's language. */
+const val HOST_FALLBACK = "Host"
+
 fun hostDisplayLabel(displayName: String): String {
     val trimmed = displayName.trim()
     val wrapped = Regex("^This\\s+(?:computer|host)\\s*\\((.+)\\)$", RegexOption.IGNORE_CASE)
@@ -59,8 +62,8 @@ fun hostDisplayLabel(displayName: String): String {
     if (wrapped.isNotEmpty()) return wrapped
     if (trimmed.equals("This computer", ignoreCase = true) ||
         trimmed.equals("This host", ignoreCase = true)
-    ) return "Host"
-    return trimmed.ifEmpty { "Host" }
+    ) return HOST_FALLBACK
+    return trimmed.ifEmpty { HOST_FALLBACK }
 }
 
 fun isLegacyHostDisplayName(displayName: String): Boolean =
@@ -86,7 +89,7 @@ fun hostColorIndex(seed: String, paletteSize: Int = HOST_PALETTE_SIZE): Int {
 fun hostShortLabel(displayName: String): String {
     val label = hostDisplayLabel(displayName)
     val firstToken = label.split(Regex("\\s+")).firstOrNull().orEmpty()
-    return firstToken.take(14).ifEmpty { "Host" }
+    return firstToken.take(14).ifEmpty { HOST_FALLBACK }
 }
 
 /**

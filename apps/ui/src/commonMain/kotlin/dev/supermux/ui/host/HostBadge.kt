@@ -52,6 +52,7 @@ import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.localizedHost
 import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.widgets.AlertDialog
 import dev.supermux.ui.widgets.DropdownMenu
@@ -131,7 +132,7 @@ fun HostScopePicker(
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             hosts.forEach { host ->
                 DropdownMenuItem(
-                    text = { Text(if (host.online) host.displayLabel else localized(Str.host_offline_paren, host.displayLabel)) },
+                    text = { Text(if (host.online) host.displayLabel.localizedHost() else localized(Str.host_offline_paren, host.displayLabel.localizedHost())) },
                     leadingIcon = { HostDot(host.colorIndex, size = 10.dp) },
                     onClick = { expanded = false; onSelect(host.recordId) },
                 )
@@ -158,7 +159,7 @@ fun HostScopePicker(
             }
             HostDot(selected.colorIndex, size = 9.dp)
             Text(
-                if (selected.online) selected.displayLabel else localized(Str.host_offline_dot, selected.displayLabel),
+                if (selected.online) selected.displayLabel.localizedHost() else localized(Str.host_offline_dot, selected.displayLabel.localizedHost()),
                 modifier = Modifier.padding(start = 7.dp, end = 5.dp),
                 color = cs.onSurface,
                 fontSize = if (compact) 14.sp else TextUnit.Unspecified,
@@ -250,7 +251,7 @@ fun HostSwitcher(
             ) {
                 Icon(
                     Icons.Filled.Dns,
-                    contentDescription = current?.displayLabel ?: allHosts,
+                    contentDescription = current?.displayLabel?.localizedHost() ?: allHosts,
                     tint = cs.onSurfaceVariant,
                     modifier = Modifier.size(16.dp),
                 )
@@ -282,7 +283,7 @@ fun HostSwitcher(
                 Icon(Icons.Filled.Dns, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(14.dp))
             }
             Text(
-                current?.displayLabel ?: allHosts,
+                current?.displayLabel?.localizedHost() ?: allHosts,
                 modifier = Modifier.weight(1f, fill = false),
                 color = if (current == null || current.online) cs.onSurface else cs.onSurfaceVariant.copy(alpha = 0.7f),
                 fontSize = 12.sp,
@@ -310,7 +311,7 @@ fun HostSwitcher(
                 DropdownMenuItem(
                     text = {
                         Text(
-                            h.displayLabel + if (!h.online) " · ${lastSeen.ifEmpty { offlineWord }}" else "",
+                            h.displayLabel.localizedHost() + if (!h.online) " · ${lastSeen.ifEmpty { offlineWord }}" else "",
                             color = if (h.online) Color.Unspecified else cs.onSurfaceVariant.copy(alpha = 0.7f),
                         )
                     },
@@ -323,7 +324,7 @@ fun HostSwitcher(
             HorizontalDivider(Modifier.padding(vertical = 4.dp))
             if (current != null && onOpenHost != null) {
                 DropdownMenuItem(
-                    text = { Text(localized(Str.host_open, current.displayLabel)) },
+                    text = { Text(localized(Str.host_open, current.displayLabel.localizedHost())) },
                     leadingIcon = {
                         Icon(Icons.Filled.Dns, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(14.dp))
                     },
@@ -333,12 +334,12 @@ fun HostSwitcher(
             }
             if (current != null) {
                 DropdownMenuItem(
-                    text = { Text(localized(Str.host_rename_item, current.displayLabel)) },
+                    text = { Text(localized(Str.host_rename_item, current.displayLabel.localizedHost())) },
                     onClick = { expanded = false; renameText = current.displayLabel; renameTarget = current },
                     modifier = Modifier.testTag("host_switcher_rename"),
                 )
                 DropdownMenuItem(
-                    text = { Text(localized(Str.host_forget_item, current.displayLabel), color = cs.error) },
+                    text = { Text(localized(Str.host_forget_item, current.displayLabel.localizedHost()), color = cs.error) },
                     onClick = { expanded = false; forgetTarget = current },
                     modifier = Modifier.testTag("host_switcher_forget"),
                 )
@@ -378,7 +379,7 @@ fun HostSwitcher(
         AlertDialog(
             onDismissRequest = { forgetTarget = null },
             title = { Text(localized(Str.host_forget_title)) },
-            text = { Text(localized(Str.host_forget_text, target.displayLabel)) },
+            text = { Text(localized(Str.host_forget_text, target.displayLabel.localizedHost())) },
             confirmButton = {
                 TextButton(
                     onClick = { onForgetHost(target.recordId); forgetTarget = null },
