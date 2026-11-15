@@ -66,3 +66,11 @@ test("ownerOnly can't be stepped around by encoding, slashes, case or params", (
   }
   expect(isOwnerOnly("/api/settingsx", o)).toBe(false)
 })
+
+test("jobs and secrets may carry words for the owner", () => {
+  const r = parseManifest(JSON.stringify({ title: "x", jobs: [{ name: "gmail", label: "Read Gmail for replies", every: "30m", run: "a" }], secrets: [{ name: "GMAIL_OAUTH_TOKEN", label: "Gmail read-only sign-in" }, "OTHER"] }))
+  if (!r.ok) throw new Error(r.error)
+  expect(r.manifest.jobs[0]!.label).toBe("Read Gmail for replies")
+  expect(r.manifest.secrets).toEqual(["GMAIL_OAUTH_TOKEN", "OTHER"])
+  expect(r.manifest.secretLabels).toEqual({ GMAIL_OAUTH_TOKEN: "Gmail read-only sign-in" })
+})

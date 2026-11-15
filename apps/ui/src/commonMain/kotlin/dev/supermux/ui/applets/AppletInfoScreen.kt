@@ -63,6 +63,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -238,6 +239,19 @@ private fun InfoTabChip(label: String, selected: Boolean, badge: Boolean, tag: S
     }
 }
 
+/** "30m" → "30 min", "1h" → "1 hour", "1d" → "day": a job's schedule as people say it. */
+@Composable
+private fun everyText(every: String): String {
+    val m = Regex("^(\\d+)\\s*([smhd])$").find(every.trim()) ?: return every
+    val n = m.groupValues[1].toInt()
+    return when (m.groupValues[2]) {
+        "m" -> localized(Str.applet_info_every_min, n)
+        "h" -> if (n == 1) localized(Str.applet_info_every_hour1) else localized(Str.applet_info_every_hours, n)
+        "d" -> if (n == 1) localized(Str.applet_info_every_day1) else localized(Str.applet_info_every_days, n)
+        else -> every
+    }
+}
+
 /** A short paragraph above a tab's rows. */
 @Composable
 private fun Lede(text: String) {
@@ -250,8 +264,9 @@ private fun Small(text: String) {
 }
 
 @Composable
-private fun SectionTitle(text: String) {
-    Text(text, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 14.dp, bottom = 8.dp))
+private fun SectionTitle(text: String, sub: String? = null) {
+    Text(text.uppercaseInAppLanguage(), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant, letterSpacing = 0.6.sp, modifier = Modifier.padding(top = 16.dp, bottom = if (sub != null) 2.dp else 8.dp))
+    if (sub != null) Text(sub, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
 }
 
 /** A bordered group of rows. */
@@ -262,8 +277,8 @@ private fun InfoBox(content: @Composable () -> Unit) {
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .border(1.dp, cs.outlineVariant, RoundedCornerShape(12.dp))
-            .background(cs.surfaceContainerLow),
+            .border(1.dp, cs.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
+            .background(cs.surfaceContainerLowest),
     ) { content() }
 }
 
@@ -276,7 +291,7 @@ private fun InfoRow(icon: ImageVector?, title: String, sub: String? = null, subW
             Spacer(Modifier.width(12.dp))
         }
         Column(Modifier.weight(1f)) {
-            Text(title, fontSize = 13.5.sp, fontWeight = FontWeight.Medium, color = cs.onSurface, fontFamily = if (mono) MonoFontFamily else null)
+            Text(title, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface, fontFamily = if (mono) MonoFontFamily else null)
             if (sub != null) Text(sub, fontSize = 12.5.sp, color = if (subWarn) cs.error else cs.onSurfaceVariant)
         }
         trailing()
@@ -382,8 +397,8 @@ private fun NeedCard(d: AppletDetailDto, s: AppletSecretDto, actions: AppletInfo
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text(
-                    s.name + " · " + localized(if (s.state == "expired") Str.applet_info_secret_expired else Str.applet_info_secret_missing),
-                    fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface, fontFamily = MonoFontFamily,
+                    (s.label ?: s.name) + " · " + localized(if (s.state == "expired") Str.applet_info_secret_sign_in_expired else Str.applet_info_secret_missing),
+                    fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface, fontFamily = if (s.label == null) MonoFontFamily else null,
                 )
                 Text(localized(Str.applet_info_need_sub, d.title.ifBlank { d.name }), fontSize = 12.5.sp, color = cs.onSurfaceVariant)
             }
@@ -571,14 +586,23 @@ private fun JobRow(d: AppletDetailDto, j: AppletJobDto, actions: AppletInfoActio
         Icon(Icons.Outlined.History, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp).size(18.dp))
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(j.name, fontSize = 13.5.sp, fontWeight = FontWeight.Medium, color = cs.onSurface)
+            Text(j.label?.takeIf { it.isNotBlank() } ?: j.name, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface)
             val last = startedAt?.let { archivedRelTime(it) }.orEmpty()
-            val result = when {
-                startedAt == null -> localized(Str.applet_info_job_never)
-                exit == 0 -> localized(Str.applet_info_job_ok, last)
-                else -> localized(Str.applet_info_job_failed, last, exit?.toString() ?: "?")
+            val every = localized(Str.applet_info_job_every, everyText(j.every))
+            val line = androidx.compose.ui.text.buildAnnotatedString {
+                append(every)
+                append(" · ")
+                when {
+                    startedAt == null -> append(localized(Str.applet_info_job_never))
+                    exit == 0 -> append(localized(Str.applet_info_job_ok, last))
+                    else -> {
+                        append(localized(Str.applet_info_job_last_run) + " ")
+                        withStyle(androidx.compose.ui.text.SpanStyle(color = cs.error)) { append(localized(Str.applet_info_job_failed_word, exit?.toString() ?: "?")) }
+                        append(", " + localized(Str.applet_info_backup_ago, last))
+                    }
+                }
             }
-            Text(localized(Str.applet_info_job_every, j.every) + " · " + result, fontSize = 12.5.sp, color = if (startedAt != null && exit != 0) cs.error else cs.onSurfaceVariant)
+            Text(line, fontSize = 12.5.sp, color = cs.onSurfaceVariant)
             output?.takeIf { it.isNotBlank() }?.let { out ->
                 Text(
                     out.trimEnd().lines().takeLast(8).joinToString("\n"),
@@ -625,7 +649,7 @@ private fun SecretRow(d: AppletDetailDto, s: AppletSecretDto, actions: AppletInf
         "missing" -> localized(Str.applet_info_secret_missing)
         else -> localized(Str.applet_info_secret_set)
     }
-    InfoRow(Icons.Outlined.Key, s.name, sub = sub, subWarn = s.state != "set", mono = true) {
+    InfoRow(Icons.Outlined.Key, s.name, sub = s.label?.let { "$it · $sub" } ?: sub, subWarn = s.state != "set", mono = true) {
         InfoButton(null, localized(if (s.state == "set") Str.applet_info_secret_replace else Str.applet_info_secret_set_value), primary = s.state != "set", tag = "applet_secret_${s.name}") {
             editing = true
             null
@@ -702,7 +726,7 @@ private fun SecretDialog(d: AppletDetailDto, s: AppletSecretDto, actions: Applet
 private fun SettingsTab(d: AppletDetailDto, actions: AppletInfoActions, refresh: () -> Unit, onDeleted: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     if (d.settings.isNotEmpty()) {
-        SectionTitle(localized(Str.applet_info_own_settings, d.title.ifBlank { d.name }))
+        SectionTitle(localized(Str.applet_info_own_settings, d.title.ifBlank { d.name }), sub = localized(Str.applet_info_own_settings_sub))
         InfoBox {
             d.settings.forEachIndexed { i, s ->
                 if (i > 0) RowDivider()
@@ -785,7 +809,8 @@ private fun SettingRow(d: AppletDetailDto, s: AppletSettingDto, actions: AppletI
         InfoRow(null, s.label.ifBlank { s.key }) {
             val options = s.options
             if (s.type == "select" && !options.isNullOrEmpty()) {
-                Row(Modifier.clip(RoundedCornerShape(8.dp)).border(1.dp, cs.outlineVariant, RoundedCornerShape(8.dp))) {
+                // A pill track with the chosen option lifted out of it.
+                Row(Modifier.clip(RoundedCornerShape(50)).background(cs.onSurface.copy(alpha = 0.07f)).padding(3.dp)) {
                     options.forEach { o ->
                         val on = o == current
                         Text(
@@ -794,7 +819,8 @@ private fun SettingRow(d: AppletDetailDto, s: AppletSettingDto, actions: AppletI
                             color = if (on) cs.onSurface else cs.onSurfaceVariant,
                             fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
                             modifier = Modifier
-                                .background(if (on) cs.onSurface.copy(alpha = 0.08f) else Color.Transparent)
+                                .clip(RoundedCornerShape(50))
+                                .background(if (on) cs.surfaceContainerLowest else Color.Transparent)
                                 .clickable {
                                     error = null
                                     scope.launch {
@@ -802,7 +828,7 @@ private fun SettingRow(d: AppletDetailDto, s: AppletSettingDto, actions: AppletI
                                         if (why == null) chosen[s.key] = o else error = why
                                     }
                                 }
-                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                                .padding(horizontal = 11.dp, vertical = 5.dp)
                                 .testTag("applet_setting_${s.key}_$o"),
                         )
                     }

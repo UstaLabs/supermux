@@ -85,4 +85,13 @@
     <string name="applet_info_on_devices">On your devices</string>
     <string name="applet_info_open_full">Open full screen</string>
     <string name="applet_info_via">via</string>
+    <string name="applet_info_own_settings_sub">Options the applet offers.</string>
+    <string name="applet_info_job_last_run">last run</string>
+    <string name="applet_info_job_failed_word">failed (exit %1$s)</string>
+    <string name="applet_info_every_min">%1$d min</string>
+    <string name="applet_info_every_hour1">hour</string>
+    <string name="applet_info_every_hours">%1$d hours</string>
+    <string name="applet_info_every_day1">day</string>
+    <string name="applet_info_every_days">%1$d days</string>
+    <string name="applet_info_secret_sign_in_expired">sign-in expired</string>
 </resources>
