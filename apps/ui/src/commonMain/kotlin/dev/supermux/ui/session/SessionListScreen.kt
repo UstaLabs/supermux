@@ -1751,7 +1751,6 @@ fun SessionListScreen(
     }
     // Index of the new-session card in the list (chrome paints the logo bar above it).
     val newSessionIndex = if (chrome) 1 else 0
-    val appletsTouch = !LocalPointerAvailable.current
     fun LazyListScope.content() {
         if (scrollingChrome) {
             if (chrome) item(key = "chrome:logo") { logoBar() }
@@ -1770,8 +1769,9 @@ fun SessionListScreen(
             // they have scrolled away (search, select and the menu stay reachable).
             needsYouItems()
             agentsItems()
-            // #117: between Agents and Workspaces.
-            if (applets != null && !selecting) appletsZone(applets, phone = appletsTouch)
+            // #117: between Agents and Workspaces, 3×3 in a sidebar whatever the input (an unfolded Fold cut the
+            // phone's four-across labels short); long-press still opens the menu on touch.
+            if (applets != null && !selecting) appletsZone(applets, phone = false)
             stickyHeader(key = "chrome:section") {
                 Box(Modifier.fillMaxWidth().background(cs.surfaceContainerHigh)) { sectionHeader() }
             }
