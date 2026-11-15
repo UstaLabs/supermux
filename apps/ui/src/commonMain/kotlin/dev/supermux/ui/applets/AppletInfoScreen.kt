@@ -451,6 +451,7 @@ private fun SideColumn(d: AppletDetailDto, actions: AppletInfoActions) {
             InfoRow(null, inst.device, sub = inst.where, trailing = { Text(localized(Str.applet_info_added), fontSize = 12.sp, color = dev.supermux.ui.theme.LocalSemantics.current.success) })
         }
     }
+    Spacer(Modifier.height(14.dp))
     SideTitle(localized(Str.applet_info_about))
     InfoBox {
         KeyValue(localized(Str.applet_info_last_change), d.updatedByName ?: d.updatedBy?.let { whoChanged(it) } ?: "—")
@@ -474,8 +475,9 @@ private fun SideTitle(text: String) {
 private fun KeyValue(key: String, value: String, mono: Boolean = false) {
     val cs = MaterialTheme.colorScheme
     Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(key, fontSize = 12.5.sp, color = cs.onSurfaceVariant, modifier = Modifier.weight(1f))
-        Text(value, fontSize = 12.5.sp, color = cs.onSurface, fontFamily = if (mono) MonoFontFamily else null, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1.6f, fill = false))
+        Text(key, fontSize = 12.5.sp, color = cs.onSurfaceVariant)
+        Spacer(Modifier.width(16.dp))
+        Text(value, fontSize = 12.5.sp, color = cs.onSurface, fontFamily = if (mono) MonoFontFamily else null, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.End, modifier = Modifier.weight(1f))
     }
 }
 
