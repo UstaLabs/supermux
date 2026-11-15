@@ -115,6 +115,8 @@ class ShellActions(
     val workspaceFsWrite: suspend (workspaceId: String, path: String, content: String) -> Boolean =
         { _, _, _ -> false },
     val workspaceFsDiff: suspend (workspaceId: String, base: String?) -> FsDiffResult? = { _, _ -> null },
+    /** #72: the Source Control pane's broker calls for a workspace and its chat; null: no host has it. */
+    val sourceControl: (workspaceId: String, sessionId: String?) -> dev.supermux.state.SourceControlApi? = { _, _ -> null },
     /** #72: whole files into the next commit, or out of it; null: this host can't stage (no checkboxes). */
     val workspaceStage: (suspend (workspaceId: String, repo: String, paths: List<String>, staged: Boolean) -> Boolean)? = null,
     /** A lazy Changes file's base text by blob; null: this host can't load one (no Retry offered). */
@@ -199,6 +201,7 @@ fun rememberShellActions(
             connectWorkspaceTerminal = { wsId, terminalId -> app.connectWorkspaceTerminal(wsId, terminalId) },
             workspaceFsRead = { wsId, path -> app.workspaceFsRead(wsId, path) },
             workspaceFsWrite = { wsId, path, content -> app.workspaceFsWrite(wsId, path, content) },
+            sourceControl = { wsId, sid -> app.sourceControl(wsId, sid) },
             workspaceStage = { wsId, repo, paths, staged -> app.workspaceStage(wsId, repo, paths, staged) },
             workspaceFsDiff = { wsId, base -> app.workspaceFsDiff(wsId, base) },
             workspaceChangesBlob = { wsId, repo, sha, force -> app.workspaceChangesBlob(wsId, repo, sha, force) },
@@ -259,6 +262,7 @@ fun rememberShellActions(fleet: FleetStore): ShellActions {
             connectWorkspaceTerminal = { wsId, terminalId -> fleet.connectWorkspaceTerminal(wsId, terminalId) },
             workspaceFsRead = { wsId, path -> fleet.workspaceFsRead(wsId, path) },
             workspaceFsWrite = { wsId, path, content -> fleet.workspaceFsWrite(wsId, path, content) },
+            sourceControl = { wsId, sid -> fleet.sourceControl(wsId, sid) },
             workspaceStage = { wsId, repo, paths, staged -> fleet.workspaceStage(wsId, repo, paths, staged) },
             workspaceFsDiff = { wsId, base -> fleet.workspaceFsDiff(wsId, base) },
             workspaceChangesBlob = { wsId, repo, sha, force -> fleet.workspaceChangesBlob(wsId, repo, sha, force) },

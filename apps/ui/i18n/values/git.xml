@@ -26,4 +26,35 @@
         <item quantity="other">%1$d of %2$d in the next commit</item>
     </plurals>
     <string name="git_include_in_commit">In the next commit</string>
+    <!-- #72 v4 Source Control, VS Code's words. -->
+    <string name="scm_title">Source Control</string>
+    <string name="scm_refresh">Refresh</string>
+    <string name="scm_group_merge">Merge Changes</string>
+    <string name="scm_group_staged">Staged Changes</string>
+    <string name="scm_group_changes">Changes</string>
+    <string name="scm_stage">Stage Changes</string>
+    <string name="scm_unstage">Unstage Changes</string>
+    <string name="scm_stage_all">Stage All</string>
+    <string name="scm_unstage_all">Unstage All</string>
+    <string name="scm_discard">Discard Changes</string>
+    <string name="scm_discard_all">Discard All Changes</string>
+    <string name="scm_open_file">Open File</string>
+    <string name="scm_discard_q">Discard changes in '%1$s'?</string>
+    <string name="scm_irreversible">This is irreversible.</string>
+    <string name="scm_discard_file">Discard File</string>
+    <plurals name="scm_discard_all_q">
+        <item quantity="one">Discard ALL changes in %1$d file?</item>
+        <item quantity="other">Discard ALL changes in %1$d files?</item>
+    </plurals>
+    <string name="scm_discard_all_body">This is IRREVERSIBLE! Your current working set will be FOREVER LOST.</string>
+    <plurals name="scm_discard_all_n">
+        <item quantity="one">Discard %1$d File</item>
+        <item quantity="other">Discard All %1$d Files</item>
+    </plurals>
+    <string name="scm_cancel">Cancel</string>
+    <string name="scm_no_changes">No changes.</string>
+    <string name="scm_conflict_first">%1$s is in a conflict: resolve it first.</string>
+    <string name="scm_failed">That didn't work: %1$s</string>
+    <string name="scm_offline">The host can't be reached.</string>
+    <string name="scm_back">Back to Source Control</string>
 </resources>

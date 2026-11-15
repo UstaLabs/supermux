@@ -26,4 +26,35 @@
         <item quantity="other">%2$d dosyadan %1$d tanesi sonraki commit'te</item>
     </plurals>
     <string name="git_include_in_commit">Sonraki commit'te</string>
+    <!-- #72 v4 Kaynak Denetimi, VS Code'un Türkçe sözcükleriyle. -->
+    <string name="scm_title">Kaynak Denetimi</string>
+    <string name="scm_refresh">Yenile</string>
+    <string name="scm_group_merge">Birleştirme Değişiklikleri</string>
+    <string name="scm_group_staged">Hazırlanan Değişiklikler</string>
+    <string name="scm_group_changes">Değişiklikler</string>
+    <string name="scm_stage">Değişiklikleri Hazırla</string>
+    <string name="scm_unstage">Hazırlığı Geri Al</string>
+    <string name="scm_stage_all">Tümünü Hazırla</string>
+    <string name="scm_unstage_all">Tüm Hazırlığı Geri Al</string>
+    <string name="scm_discard">Değişiklikleri At</string>
+    <string name="scm_discard_all">Tüm Değişiklikleri At</string>
+    <string name="scm_open_file">Dosyayı Aç</string>
+    <string name="scm_discard_q">'%1$s' dosyasındaki değişiklikler atılsın mı?</string>
+    <string name="scm_irreversible">Bu geri alınamaz.</string>
+    <string name="scm_discard_file">Dosyayı At</string>
+    <plurals name="scm_discard_all_q">
+        <item quantity="one">%1$d dosyadaki TÜM değişiklikler atılsın mı?</item>
+        <item quantity="other">%1$d dosyadaki TÜM değişiklikler atılsın mı?</item>
+    </plurals>
+    <string name="scm_discard_all_body">Bu GERİ ALINAMAZ! Üzerinde çalıştığınız değişiklikler SONSUZA DEK KAYBOLUR.</string>
+    <plurals name="scm_discard_all_n">
+        <item quantity="one">%1$d Dosyayı At</item>
+        <item quantity="other">%1$d Dosyanın Tümünü At</item>
+    </plurals>
+    <string name="scm_cancel">Vazgeç</string>
+    <string name="scm_no_changes">Değişiklik yok.</string>
+    <string name="scm_conflict_first">%1$s bir çakışmada: önce onu çözün.</string>
+    <string name="scm_failed">Olmadı: %1$s</string>
+    <string name="scm_offline">Bilgisayara ulaşılamıyor.</string>
+    <string name="scm_back">Kaynak Denetimine dön</string>
 </resources>

@@ -14,6 +14,19 @@
 // The shared host takes desktop's [previewModeFor] lambda, which Android simply does not pass.
 package dev.supermux.ui.shell
 
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Icon
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import dev.supermux.ui.editor.ScmGroup
+import dev.supermux.ui.editor.SourceControlPane
+import dev.supermux.ui.editor.SourceControlState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.CompositionLocalProvider
 import dev.supermux.ui.browser.trackClickModifiers
@@ -784,6 +797,32 @@ private fun DiffPaneForWorkspace(
     // The holder is null where the host installed no walkthrough seam (the builder checks the cap).
     val walkthrough = selectedWalkthroughId?.let { actions.walkthroughState(it) }
     val reviewWalkthrough = reviewSessionId?.let { actions.walkthroughState(it) }
+    // #72 v4: the workspace's Changes view IS VS Code's Source Control; a file's diff opens in it, with a way back.
+    val sourceControl = remember(workspaceId, reviewSessionId) { actions.sourceControl(workspaceId, reviewSessionId)?.let { SourceControlState(it) } }
+    var openFile by remember(workspaceId) { mutableStateOf<ScmOpenFile?>(null) }
+    if (sourceControl != null && openFile == null) {
+        SourceControlPane(
+            state = sourceControl,
+            onOpenDiff = { repo, path, group ->
+                val f = sourceControl.repos?.firstOrNull { it.repo == repo }?.files?.firstOrNull { it.path == path }
+                // "(Working Tree)": a partly staged file's unstaged part is its staged version → the file.
+                openFile = ScmOpenFile(repo, path, if (group == ScmGroup.Changes && f?.staged == "partial") f.indexBlob else null)
+            },
+            onOpenFile = { repo, path -> onOpenFile(repoPath(repo, path), null, null) },
+            modifier = modifier.fillMaxSize(),
+        )
+        return
+    }
+    val shown = openFile
+    if (sourceControl != null && shown != null) {
+        LaunchedEffect(shown) {
+            diff.diffBase = "head"
+            diff.reloadDiff { spec -> actions.workspaceFsDiff(workspaceId, spec) }
+        }
+    }
+    Column(modifier.fillMaxSize()) {
+    // platform-ok: a git path, repo-relative, always / on every OS
+    if (sourceControl != null && shown != null) ScmBackRow(shown.path.substringAfterLast('/')) { openFile = null }
     DiffPane(
         diff = diff,
         walkthrough = walkthrough,
@@ -820,8 +859,29 @@ private fun DiffPaneForWorkspace(
         retainKey = "diff:$workspaceId:$viewId",
         // #72: the "in the next commit" boxes wait for the commit bar (car 4b); a box with no way to commit is half a feature.
         stageFiles = null,
-        modifier = modifier.fillMaxSize(),
+        onlyFile = shown?.let { it.repo to it.path },
+        baseBlobFor = shown?.base,
+        modifier = Modifier.weight(1f).fillMaxSize(),
     )
+    }
+}
+
+/** #72: the Source Control file whose diff is open in its pane, and the blob it is compared from (null: HEAD's). */
+private data class ScmOpenFile(val repo: String, val path: String, val base: String?)
+
+/** #72: back from a file's diff to the Source Control list. */
+@Composable
+private fun ScmBackRow(name: String, onBack: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth().background(cs.surfaceContainer).clickable(onClick = onBack).heightIn(min = 34.dp)
+            .padding(horizontal = Space.sm).testTag("scm_back"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = localized(Str.scm_back), tint = cs.onSurfaceVariant, modifier = Modifier.size(18.dp))
+        Text(localized(Str.scm_title), fontSize = 12.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(start = Space.sm))
+        Text(" · $name", fontSize = 12.sp, color = cs.onSurface, maxLines = 1)
+    }
 }
 
 /**
