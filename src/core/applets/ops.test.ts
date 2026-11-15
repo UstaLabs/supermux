@@ -88,3 +88,8 @@ test("backup copies data/ read-only and says where; info lists it; delete and se
   const list = await op("applet_list") as any
   expect(list.value.map((a: any) => [a.name, a.state])).toEqual([["notes", "static"]])
 })
+
+test("an applet can't take the name of one of the CLI's verbs", async () => {
+  const { op } = setup()
+  expect(((await op("applet_new", { applet: "logs" })) as any).error).toContain("own commands")
+})
