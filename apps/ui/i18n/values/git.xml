@@ -194,4 +194,17 @@
     <string name="scm_switch_go">Switch to %1$s</string>
     <string name="scm_switch_merging">A merge is in progress: finish or abort it first.</string>
     <string name="scm_switch_q">Switch this chat to %1$s?</string>
+    <string name="scm_graph">GRAPH</string>
+    <string name="scm_incoming_from">Incoming Changes from %1$s</string>
+    <string name="scm_incoming">Incoming Changes</string>
+    <string name="scm_merge_link">Merge</string>
+    <string name="scm_from_origin">%1$d from %2$s</string>
+    <string name="scm_pushed">pushed</string>
+    <string name="scm_copy_hash">Copy Commit Hash</string>
+    <string name="scm_copy_message">Copy Commit Message</string>
+    <string name="scm_hint_copy">Copies it to the clipboard.</string>
+    <plurals name="scm_commits_n">
+        <item quantity="one">%1$d commit</item>
+        <item quantity="other">%1$d commits</item>
+    </plurals>
 </resources>

@@ -90,6 +90,7 @@ import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.i18n.localizedPlural
 import dev.supermux.ui.theme.LocalSemantics
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
 import kotlinx.coroutines.Dispatchers
@@ -185,6 +186,9 @@ class SourceControlState(val api: SourceControlApi) {
     var base by mutableStateOf<String?>(null)
     /** This chat's own commits (not in its base), for "Merge N commits into <base>". */
     var ownCommits by mutableStateOf(0)
+    /** The Graph (U6): this chat's commits, the base's, and what the base has that this chat doesn't. */
+    var history by mutableStateOf<dev.supermux.net.GitHistory?>(null)
+    var graphOpen by mutableStateOf(true)
     /** The last clean Get latest, for "Undo Get latest" right after it. */
     var latest by mutableStateOf<dev.supermux.net.LatestResult?>(null)
     // ── the branch picker (U5) ──
@@ -211,6 +215,7 @@ class SourceControlState(val api: SourceControlApi) {
         if (r != null) repos = r.repos
         status = api.status() ?: status
         val h = api.history(repo)
+        if (h != null) history = h
         last = h?.chat?.firstOrNull()
         base = h?.base
         ownCommits = h?.chat?.size ?: 0
@@ -479,6 +484,7 @@ fun SourceControlPane(
                         }
                     }
                 }
+                item(key = "graph") { Graph(state, scope) }
             }
         }
     }
@@ -787,6 +793,82 @@ private fun PickRow(name: String, detail: String?, openChat: (() -> Unit)?, tag:
             modifier = Modifier.padding(start = 10.dp).weight(1f, fill = false))
         if (openChat != null) Text(localized(Str.scm_open_that_chat), fontSize = 11.sp, color = cs.primary, maxLines = 1,
             modifier = Modifier.padding(start = 8.dp).clickable(onClick = openChat))
+    }
+}
+
+/** VS Code's Source Control Graph (Basics): incoming changes on top (from the base → Merge, from origin → Pull),
+ *  then this chat's commits and the base's, with their branch badges; a commit's menu copies its hash or message. */
+@Composable
+private fun Graph(state: SourceControlState, scope: kotlinx.coroutines.CoroutineScope) {
+    val cs = MaterialTheme.colorScheme
+    val h = state.history ?: return
+    val st = state.status
+    Column(Modifier.fillMaxWidth().padding(top = 10.dp).testTag("scm_graph")) {
+        androidx.compose.material3.HorizontalDivider(color = cs.outlineVariant)
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 28.dp).clickable { state.graphOpen = !state.graphOpen }.padding(start = 4.dp, end = Space.xs),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(if (state.graphOpen) Icons.Filled.KeyboardArrowDown else Icons.Filled.KeyboardArrowRight, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
+            Text(localized(Str.scm_graph), fontSize = 11.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.44.sp, color = cs.onSurfaceVariant, modifier = Modifier.weight(1f).padding(start = 2.dp))
+            ScmIcon(Icons.Filled.Refresh, localized(Str.scm_fetch), "scm_graph_fetch", hint = localized(Str.scm_hint_fetch)) { scope.launch { state.sync("fetch"); state.refresh() } }
+        }
+        if (!state.graphOpen) return@Column
+        val base = h.base
+        if (base != null && h.incoming > 0) GraphNode(localized(Str.scm_incoming_from, base), localizedPlural(Plurals.scm_commits_n, h.incoming, h.incoming), localized(Str.scm_merge_link)) { scope.launch { state.getLatest() } }
+        if (st?.upstream != null && st.behind > 0) GraphNode(localized(Str.scm_incoming), localized(Str.scm_from_origin, st.behind, st.upstream!!), localized(Str.scm_pull)) { scope.launch { state.sync("pull"); state.refresh() } }
+        h.chat.forEachIndexed { i, c -> GraphCommit(c, own = true, refs = if (i == 0) listOfNotNull(h.branch) else emptyList()) }
+        h.baseCommits.forEachIndexed { i, c -> GraphCommit(c, own = false, refs = if (i == 0 && base != null) listOf(base) else emptyList()) }
+    }
+}
+
+@Composable
+private fun GraphNode(title: String, sub: String, action: String, onAction: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Lane(color = LocalSemantics.current.info, filled = true)
+        Column(Modifier.weight(1f).padding(vertical = 5.dp, horizontal = 8.dp)) {
+            Text("↓ $title", fontSize = 12.5.sp, color = cs.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(sub, fontSize = 11.sp, color = cs.onSurfaceVariant)
+        }
+        Text(action, fontSize = 12.sp, color = cs.primary, modifier = Modifier.clickable(onClick = onAction).padding(4.dp))
+    }
+}
+
+@Composable
+private fun GraphCommit(c: dev.supermux.net.LogCommit, own: Boolean, refs: List<String>) {
+    val cs = MaterialTheme.colorScheme
+    val platform = LocalPlatform.current
+    var menu by remember { mutableStateOf(false) }
+    Box {
+        Row(Modifier.fillMaxWidth().clickable { menu = true }.padding(start = 18.dp, end = 8.dp).testTag("scm_commit_${c.sha.take(7)}"), verticalAlignment = Alignment.CenterVertically) {
+            Lane(color = if (own) cs.primary else cs.onSurfaceVariant, filled = false)
+            Column(Modifier.weight(1f).padding(vertical = 5.dp, horizontal = 8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(c.subject, fontSize = 12.5.sp, color = cs.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    refs.forEach { r ->
+                        Text(r, fontFamily = MonoFontFamily, fontSize = 10.5.sp, color = if (own) cs.primary else cs.onSurfaceVariant, maxLines = 1,
+                            modifier = Modifier.padding(start = 6.dp).clip(RoundedCornerShape(4.dp)).background(if (own) cs.primary.copy(alpha = 0.2f) else cs.surfaceContainerHighest).padding(horizontal = 5.dp))
+                    }
+                }
+                Text(c.author.ifBlank { "—" } + " · " + c.sha.take(7) + if (c.pushed == true) " · " + localized(Str.scm_pushed) else "", fontSize = 11.sp, color = cs.onSurfaceVariant, fontFamily = MonoFontFamily)
+            }
+        }
+        androidx.compose.material3.DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            MenuItem(localized(Str.scm_copy_hash), Str.scm_hint_copy) { menu = false; platform.copyToClipboard(c.sha) }
+            MenuItem(localized(Str.scm_copy_message), Str.scm_hint_copy) { menu = false; platform.copyToClipboard(c.subject) }
+        }
+    }
+}
+
+/** The graph's lane: a line with a dot. */
+@Composable
+private fun Lane(color: Color, filled: Boolean) {
+    val line = MaterialTheme.colorScheme.outlineVariant
+    Box(Modifier.width(12.dp).height(38.dp)) {
+        Box(Modifier.align(Alignment.Center).width(2.dp).fillMaxHeight().background(line))
+        Box(Modifier.align(Alignment.Center).size(9.dp).clip(androidx.compose.foundation.shape.CircleShape).background(if (filled) color else MaterialTheme.colorScheme.surfaceContainer)
+            .border(2.dp, color, androidx.compose.foundation.shape.CircleShape))
     }
 }
 

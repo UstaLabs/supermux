@@ -194,4 +194,17 @@
     <string name="scm_switch_go">%1$s dalına geç</string>
     <string name="scm_switch_merging">Bir birleştirme sürüyor: önce bitirin ya da iptal edin.</string>
     <string name="scm_switch_q">Bu sohbet %1$s dalına geçsin mi?</string>
+    <string name="scm_graph">GRAFİK</string>
+    <string name="scm_incoming_from">%1$s dalından gelen değişiklikler</string>
+    <string name="scm_incoming">Gelen Değişiklikler</string>
+    <string name="scm_merge_link">Birleştir</string>
+    <string name="scm_from_origin">%2$s dalından %1$d</string>
+    <string name="scm_pushed">gönderildi</string>
+    <string name="scm_copy_hash">Commit Karmasını Kopyala</string>
+    <string name="scm_copy_message">Commit İletisini Kopyala</string>
+    <string name="scm_hint_copy">Panoya kopyalar.</string>
+    <plurals name="scm_commits_n">
+        <item quantity="one">%1$d commit</item>
+        <item quantity="other">%1$d commit</item>
+    </plurals>
 </resources>

@@ -1343,6 +1343,8 @@ data class GitHistory(
     val base: String? = null,
     val chat: List<LogCommit> = emptyList(),
     val baseCommits: List<LogCommit> = emptyList(),
+    /** #72: how many commits the base has that this chat doesn't yet (the Graph's "Incoming Changes"). */
+    val incoming: Int = 0,
 )
 
 @Serializable
