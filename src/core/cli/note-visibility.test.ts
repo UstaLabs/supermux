@@ -33,11 +33,12 @@ test("the agent gets the note in front of the user's message; the user's bubble 
   await send("m2", "and again")
 
   // the agent: the note once, in front of the first message only
-  expect(toAgent[0]).toStartWith("[supermux note, shown once]")
+  expect(toAgent[0]).toStartWith("<system-reminder>\nThis is a one-time note from supermux, not from the user. It needs no reply or acknowledgement")
+  expect(toAgent[0]).toContain("</system-reminder>\n\nhello")
   expect(toAgent[0]!.endsWith("\n\nhello")).toBe(true)
   expect(toAgent[1]).toBe("and again")
   // the user: what is stored (and broadcast / reloaded from it) is exactly what they typed
   const stored = messageLog.get(s.id, 50)
   expect(stored.map((x) => x.text)).toEqual(["hello", "and again"])
-  expect(JSON.stringify(stored)).not.toContain("supermux note")
+  expect(JSON.stringify(stored)).not.toContain("system-reminder")
 })

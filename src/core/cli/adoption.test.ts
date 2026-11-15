@@ -56,7 +56,7 @@ test("unbound (tests, scripts) the store is off: no note is ever added", () => {
 test("a broker restart re-attaches running agents: the launch mark alone doesn't spare a process that lacks the CLI", () => {
   const a = new CliAdoption()
   a.markLaunch("old")                                   // prepared at the restart, but the agent process is days old
-  expect(withCliNote("old", false, "hi", { ...opts, hasCli: () => false }, a)).toContain("[supermux note, shown once]")
+  expect(withCliNote("old", false, "hi", { ...opts, hasCli: () => false }, a)).toContain("<system-reminder>\nThis is a one-time note from supermux, not from the user.")
   expect(withCliNote("old", false, "again", { ...opts, hasCli: () => false }, a)).toBe("again")  // told once
   a.markLaunch("new")
   expect(withCliNote("new", false, "hi", { ...opts, hasCli: () => true }, a)).toBe("hi")

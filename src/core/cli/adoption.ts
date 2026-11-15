@@ -81,10 +81,14 @@ export function cliNoteFor(sessionId: string, opts: { binDir: string; socketsDir
   const run = opts.platform === "win32"
     ? `$env:MUX_SESSION_ID="${sessionId}"; $env:MUX_SOCKETS_DIR="${opts.socketsDir}"; & "${opts.binDir}\\supermux.cmd"`
     : `MUX_SESSION_ID=${sessionId} MUX_SOCKETS_DIR=${opts.socketsDir} ${opts.binDir}/supermux`
+  // A SYSTEM note (Ahmet, 2026-11-16): framed so no agent takes it for the user's words or answers it.
   return [
-    "[supermux note, shown once] supermux now has a CLI that does what the mux-shim MCP tools do, from your shell.",
+    "<system-reminder>",
+    "This is a one-time note from supermux, not from the user. It needs no reply or acknowledgement: just use the CLI from now on, and answer the user's message below as usual.",
+    "supermux now has a CLI that does what the mux-shim MCP tools do, from your shell.",
     `Your process started before it, so run it as: ${run} help   (the whole reference on one page; then the same prefix for every command).`,
     "Sessions started from now on have plain `supermux` on PATH. Background work (delegate, council, replies) arrives in your inbox: never wait or poll for it.",
+    "</system-reminder>",
   ].join("\n")
 }
 
