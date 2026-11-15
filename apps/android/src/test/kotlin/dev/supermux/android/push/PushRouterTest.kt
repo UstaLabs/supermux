@@ -61,6 +61,12 @@ class PushRouterTest {
         assertEquals("flights booked", note?.text)
     }
 
+    @Test fun parseNotification_carries_the_applet_that_sent_it() {
+        val note = PushRouter.parseNotification("""{"session":"Issues","text":"2 waiting","ts":"t","applet":"issues"}""")
+        assertEquals("issues", note?.applet)
+        assertNull(PushRouter.parseNotification("""{"session":"chat","text":"hi","ts":"t"}""")?.applet)
+    }
+
     @Test fun parseNotification_allows_missing_sessionId() {
         val note = PushRouter.parseNotification("""{"session":"chat","text":"hi","ts":"t"}""")
         assertEquals("chat", note?.session)

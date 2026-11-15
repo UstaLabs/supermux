@@ -65,6 +65,8 @@ object PushRouter {
         val hostId: String? = null,
         /** #143: set for an agent's permission prompt, so the notification can answer it. */
         val prompt: Prompt? = null,
+        /** #117: the applet that sent it (supermux.notify); its widgets are refreshed. */
+        val applet: String? = null,
     )
 
     /** One answer a notification action sends. */
@@ -95,6 +97,7 @@ object PushRouter {
             text = text,
             hostId = obj["hostId"]?.jsonPrimitive?.contentOrNull,
             prompt = parsePrompt(obj["request"] as? JsonObject),
+            applet = obj["applet"]?.jsonPrimitive?.contentOrNull,
         )
     }
 

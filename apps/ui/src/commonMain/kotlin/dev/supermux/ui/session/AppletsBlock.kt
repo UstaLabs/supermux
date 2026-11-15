@@ -44,6 +44,7 @@ import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.MoreHoriz
+import androidx.compose.material.icons.outlined.Widgets
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -108,7 +109,12 @@ class AppletsActions(
     val loadIcon: suspend (AppletDto) -> ByteArray?,
     /** Putting an applet on this device's launcher; null where it can't (no such menu item). */
     val installer: AppletInstall? = null,
+    /** "Add widget" (phones with widgets); null: no such item. */
+    val widget: AppletWidgetAdd? = null,
 )
+
+/** [AppletsActions.widget]: [pin] asks the system ([canPin]), else the menu shows how to add one (iPhone). */
+class AppletWidgetAdd(val canPin: Boolean, val pin: suspend (AppletDto) -> String?)
 
 /** [AppletsActions.installer], bound to the host. */
 class AppletInstall(val phone: Boolean, val label: String, val isInstalled: (AppletDto) -> Boolean, val install: suspend (AppletDto) -> String?)
@@ -208,6 +214,8 @@ private fun AppletCell(a: AppletDto, iconSize: Dp, labelSize: Float, actions: Ap
     val hovered by interaction.collectIsHoveredAsState()
     // Where the menu opens, relative to the cell: the pointer for a right-click, under the ⋯ otherwise.
     var menuAt by remember { mutableStateOf<Offset?>(null) }
+    // iPhone: "Add widget" shows how (only he can place a widget); it outlives the menu that asked for it.
+    var widgetHowTo by remember { mutableStateOf(false) }
     val needs = a.needsYou.isNotEmpty() || a.status != "ok"
     Box(
         Modifier
@@ -283,8 +291,9 @@ private fun AppletCell(a: AppletDto, iconSize: Dp, labelSize: Float, actions: Ap
             }
         }
         menuAt?.let { at ->
-            AppletMenu(a, actions, anchor = at, sheet = !pointer, onDismiss = { menuAt = null })
+            AppletMenu(a, actions, anchor = at, sheet = !pointer, onDismiss = { menuAt = null }, onWidgetHowTo = { widgetHowTo = true })
         }
+        if (widgetHowTo) AppletWidgetHowTo(actions, onDismiss = { widgetHowTo = false })
     }
 }
 
@@ -347,7 +356,7 @@ private class AppletMenuItem(val icon: ImageVector, val label: String, val warn:
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AppletMenu(a: AppletDto, actions: AppletsActions, anchor: Offset, sheet: Boolean, onDismiss: () -> Unit) {
+private fun AppletMenu(a: AppletDto, actions: AppletsActions, anchor: Offset, sheet: Boolean, onDismiss: () -> Unit, onWidgetHowTo: () -> Unit) {
     val scope = rememberCoroutineScope()
     var error by remember { mutableStateOf<String?>(null) }
     val pinned = a.pin != null
@@ -360,6 +369,11 @@ private fun AppletMenu(a: AppletDto, actions: AppletsActions, anchor: Offset, sh
             } else {
                 add(AppletMenuItem(if (inst.phone) Icons.Outlined.AddBox else Icons.Outlined.Download, inst.label, tag = "install") { inst.install(a) })
             }
+        }
+        actions.widget?.let { w ->
+            add(AppletMenuItem(Icons.Outlined.Widgets, localized(Str.applets_menu_add_widget), tag = "widget") {
+                if (w.canPin) w.pin(a) else { onWidgetHowTo(); null }
+            })
         }
         if (pinned) add(AppletMenuItem(Icons.Outlined.GridView, localized(Str.applets_menu_unpin), tag = "unpin") { actions.pin(a, false) })
         else if (!full) add(AppletMenuItem(Icons.Outlined.GridView, localized(Str.applets_menu_pin), tag = "pin") { actions.pin(a, true) })

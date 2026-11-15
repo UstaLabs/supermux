@@ -41,6 +41,18 @@ interface AppletInstaller {
 val LocalAppletInstaller = staticCompositionLocalOf<AppletInstaller?> { null }
 
 /**
+ * Home screen widgets for applets (W1), on a phone: null where this device has none (the menu then has no "Add widget").
+ */
+interface AppletWidgets {
+    /** True: the app asks the system to place one (Android's "Add widget?"). False: only he can (iPhone): a how-to sheet. */
+    val canPin: Boolean
+    /** Asks the system for a widget showing [applet]: null once asked, else why it couldn't. */
+    suspend fun pin(hostId: String, applet: AppletDto): String?
+}
+
+val LocalAppletWidgets = staticCompositionLocalOf<AppletWidgets?> { null }
+
+/**
  * The active host's applets as the sidebar and All applets use them; null when there is nothing to show: no opener on
  * this platform, a host whose broker has no applets, or not connected yet.
  */
@@ -48,10 +60,11 @@ val LocalAppletInstaller = staticCompositionLocalOf<AppletInstaller?> { null }
 fun rememberAppletsActions(fleet: FleetStore, hostId: String?, hostName: String, showAll: () -> Unit, info: (AppletDto, String) -> Unit): AppletsActions? {
     val opener = LocalAppletOpener.current ?: return null
     val installer = LocalAppletInstaller.current
+    val widgets = LocalAppletWidgets.current
     val applets by fleet.activeApplets.collectAsState()
     val list = applets ?: return null
     val host = hostId ?: return null
-    return remember(list, host, hostName, opener, installer, showAll, info) {
+    return remember(list, host, hostName, opener, installer, widgets, showAll, info) {
         AppletsActions(
             applets = list,
             hostName = hostName,
@@ -76,6 +89,7 @@ fun rememberAppletsActions(fleet: FleetStore, hostId: String?, hostName: String,
                     },
                 )
             },
+            widget = widgets?.let { w -> AppletWidgetAdd(w.canPin) { a -> w.pin(host, a) } },
         )
     }
 }
