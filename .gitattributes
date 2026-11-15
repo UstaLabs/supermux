@@ -1,0 +1,4 @@
+# Text the broker reads at runtime and hands to agents (prompts, memory seed templates) is LF on every checkout,
+# Windows included (#156: environment.md came out CRLF on the windows lane). The readers normalize too.
+prompts/** text eol=lf
+*.tmpl text eol=lf

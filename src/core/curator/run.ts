@@ -106,7 +106,7 @@ export async function runCurator(deps: CuratorDeps): Promise<void> {
   const prevActive = deps.getActive(deps.chatId)
   let curatorName: string | undefined
   try {
-    const prompt = readFileSync(deps.promptPath, "utf8")
+    const prompt = readFileSync(deps.promptPath, "utf8").replace(/\r\n?/g, "\n")  // LF from a CRLF (Windows) checkout too
     const { name } = await deps.spawn({ workdir: deps.repoPath, name: "nightly-curator" })
     curatorName = name
     const sid = await deps.waitReady(name)
