@@ -54,7 +54,7 @@ import { worktreesRoot } from "../../core/worktree/manager"
 import { getRepoInfo } from "../../core/git/repo-info"
 import { remoteStatus, fetchRemote, publishBranch, pushBranch, pullBranch } from "../../core/git/remote"
 import { branchList, folderState, liveBranch, realPath, repoToplevel, samePath, switchBranch, type BranchOwner, type OpenIn, type SwitchResult } from "../../core/git/branches"
-import { addRemote, checkLog, createPr, markReady, prBase, publishBase, publishNew, readPr, type PrBase, type PrRead } from "../../core/git/forge"
+import { addRemote, checkLog, createPr, listOpenPrs, markReady, prBase, publishBase, publishNew, readPr, readPrByNumber, type PrBase, type PrRead } from "../../core/git/forge"
 import { prInput, writePrText, type PrTextWriter } from "../../core/git/pr-text"
 import type { AgentKind } from "../../core/agents/types"
 import { AGENT_KINDS, isAgentKind } from "../../shared/agents"
@@ -4342,8 +4342,9 @@ export class WebChannel implements Channel {
     }
     // #152: the launcher reads and switches the project folder itself, every session an owner. Local mode switches
     // a folder only when it is clean (VS Code's rule): changes git could carry over are refused too. prefs: the
-    // user's Local / Worktree pick for the folder and their branch prefix (B4).
-    const projectGit = path.match(/^\/projects\/(branches|folder-state|switch|prefs)$/)
+    // user's Local / Worktree pick for the folder and their branch prefix (B4). prs / pr: the Pull request tab, origin's
+    // open PRs/MRs (searched with ?q=) or one by ?ref= (#N, !N, N or its URL), read with the user's own gh / glab (B2).
+    const projectGit = path.match(/^\/projects\/(branches|folder-state|switch|prefs|prs|pr)$/)
     const projectMethods = projectGit?.[1] === "switch" ? ["POST"] : projectGit?.[1] === "prefs" ? ["GET", "PUT"] : ["GET"]
     if (projectGit && projectMethods.includes(method)) {
       const op = projectGit[1]
@@ -4367,6 +4368,8 @@ export class WebChannel implements Channel {
       if (!repoToplevel(dir)) return this.json({ error: "not a git repository" }, 409)
       if (op === "branches") return this.json(branchList(dir, this.branchOwners()))
       if (op === "folder-state") return this.json(folderState(dir))
+      if (op === "prs") return this.json(await listOpenPrs(dir, url.searchParams.get("q") ?? ""))
+      if (op === "pr") return this.json(await readPrByNumber(dir, url.searchParams.get("ref") ?? ""))
       const name = String(body.name ?? "").trim()
       if (!name) return this.json({ error: "name required" }, 400)
       return this.json(this.withOpenIn(switchBranch(dir, name, { requireClean: true }), this.branchOwners()))

@@ -106,3 +106,15 @@ test("no folder, a missing one, a folder that is not a repository, or no branch 
   expect((await call(token, "/projects/switch", { dir: repo })).status).toBe(400)
   expect((await call(token, "/projects/switch", { name: "main" })).status).toBe(400)
 }, REAL_GIT_MS)
+
+test("the Pull request tab: a folder without origin says so, and a ref that names no PR is refused", async () => {
+  const { root, repo, token } = await setup()
+  const lone = join(root, "lone")
+  execFileSync("git", ["init", "-q", "-b", "main", lone])
+  expect(await (await call(token, `/projects/prs${q(lone)}`)).json()).toEqual({ status: "unavailable", reason: "no_remote" })
+  expect(await (await call(token, `/projects/pr${q(lone)}&ref=${encodeURIComponent("#12")}`)).json()).toEqual({ status: "unavailable", reason: "no_remote" })
+  expect(await (await call(token, `/projects/pr${q(lone)}&ref=feat%2Fx`)).json()).toEqual({ status: "bad_ref" })
+  // An origin that is a folder on this machine is no forge either.
+  expect(await (await call(token, `/projects/prs${q(repo)}`)).json()).toEqual({ status: "unavailable", reason: "no_remote" })
+  expect((await call(token, `/projects/prs?dir=${encodeURIComponent(join(root, "nope"))}`)).status).toBe(400)
+}, REAL_GIT_MS)
