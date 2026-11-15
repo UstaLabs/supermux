@@ -2399,6 +2399,19 @@ const appletService = new AppletService({
   db, appletsDir: join(MUX_HOME, "applets"), stateDir: join(STATE_DIR, "applets"), backupsDir: join(MUX_HOME, "backups", "applets"),
   rescanMs: 15_000, jobTickMs: 30_000, maintenanceMs: 10 * 60_000, settings,
   brokerUrl: () => (webChannel?.boundPort ? `http://127.0.0.1:${webChannel.boundPort}` : undefined),
+  // supermux.agent.ask: the applet's own chat (a visible session in its folder), or the named Agent's.
+  ask: async (applet, text, opts) => {
+    let target = opts.agent ? registry.resolveName(opts.agent) : (opts.chatId ? registry.get(opts.chatId) : undefined)
+    if (opts.agent && (!target || target.role !== "personal_assistant")) throw new Error(`no Agent named "${opts.agent}"`)
+    if (!target) {
+      const made = await createSessionWithWorkspace({ workdir: applet.folder, name: `${applet.title} applet`, worktree: false, asleep: true })
+      target = registry.get(made.id)
+      if (!target) throw new Error("the chat could not be made")
+    }
+    const sent = await deliverUserMessage(target.id, text)
+    if (!sent.ok) throw new Error(sent.reason ?? "the chat didn't take the message")
+    return { sessionId: target.id, name: target.name }
+  },
   // supermux.notify: every device, like a broker notice; the applet's title is the sender.
   notify: async (applet, title, body) => {
     await firePushToAll({

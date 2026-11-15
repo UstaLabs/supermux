@@ -60,6 +60,11 @@ export interface AppletServiceDeps {
   brokerUrl?: () => string | undefined
   /** Pushes a notice to the owner's devices (supermux.notify). */
   notify?: (applet: { name: string; title: string }, title: string, body: string) => Promise<void>
+  /**
+   * supermux.agent.ask: hands [text] to the applet's own chat ([chatId], made when absent or gone) or to the named
+   * Agent's; answers which session took it.
+   */
+  ask?: (applet: { name: string; title: string; folder: string }, text: string, opts: { agent?: string; chatId?: string }) => Promise<{ sessionId: string; name: string }>
   /** Where the pins live (the broker's settings table); an in-memory map when absent (tests). */
   settings?: { get<T>(key: string): T | undefined; set(key: string, value: unknown): void }
   onChange?: () => void
@@ -148,6 +153,30 @@ export class AppletService {
     if (!this.deps.notify) return { ok: false, error: "this machine can't send notifications" }
     await this.deps.notify({ name: v.row.name, title: v.row.title }, title.trim().slice(0, 120), (body ?? "").trim().slice(0, 500))
     return { ok: true }
+  }
+
+  /**
+   * supermux.agent.ask (after his click in the applet's window): one chat per applet, "<Title> applet" in its folder,
+   * made on the first ask and again if he archived it; {agent} sends to that Agent's chat instead.
+   */
+  async ask(name: string, text: unknown, agent?: unknown): Promise<Result<{ sessionId: string; session: string }>> {
+    const v = this.get(name)
+    if (!v) return { ok: false, error: `no applet named "${name}"` }
+    if (typeof text !== "string" || !text.trim()) return { ok: false, error: "the message is empty" }
+    if (agent !== undefined && agent !== null && typeof agent !== "string") return { ok: false, error: "agent must be an Agent's name" }
+    if (!this.deps.ask) return { ok: false, error: "this machine can't start a chat" }
+    const key = `applets.chat.${v.row.id}`
+    try {
+      const r = await this.deps.ask(
+        { name: v.row.name, title: v.row.title, folder: v.folder },
+        `From the applet ${v.row.title}: ${text.trim().slice(0, 4000)}`,
+        { ...(agent ? { agent: agent as string } : {}), chatId: this.settings.get<string>(key) },
+      )
+      if (!agent) this.settings.set(key, r.sessionId)
+      return { ok: true, sessionId: r.sessionId, session: r.name }
+    } catch (err) {
+      return { ok: false, error: (err as Error).message }
+    }
   }
 
   /** X-Mux-Via-Sig for [via] to applet [id]: hex HMAC-SHA256(viaKey(id), via). */
@@ -317,7 +346,7 @@ export class AppletService {
    * a data/ folder git ignores and a repo-local git identity ("supermux applet") so agents never commit as the user,
    * commits it, and registers it at once.
    */
-  async create(name: string, opts: { from?: string; title?: string }, by: string): Promise<Result<{ view: AppletView }>> {
+  async create(name: string, opts: { from?: string; title?: string }, by: string): Promise<Result<{ view: AppletView; warnings: string[] }>> {
     if (!isAppletName(name)) return { ok: false, error: `"${name}" can't be an applet name: use lowercase letters, digits and dashes, starting with a letter (e.g. job-tracker)` }
     if (RESERVED_APPLET_NAMES.has(name)) return { ok: false, error: `"${name}" is one of supermux applet's own commands; pick another name` }
     const folder = this.folderOf(name)
@@ -328,12 +357,17 @@ export class AppletService {
       if (!up || (!up.startsWith("..") && !isAbsolute(up))) return { ok: false, error: "--from can't be a folder that contains the applets folder" }
     }
     const title = opts.title?.trim() || name
+    const warnings: string[] = []
+    for (const where of ["_supermux", join("public", "_supermux")]) {
+      if (opts.from && existsSync(join(opts.from, where))) warnings.push(`${where}/ is reserved: supermux serves its page API there, so the applet's own ${where}/ can't be reached at its link; rename it`)
+    }
     try {
       mkdirSync(this.deps.appletsDir, { recursive: true })
       if (opts.from) files.copyTreeSync(opts.from, folder)
       else {
         mkdirSync(join(folder, "public"), { recursive: true })
-        writeFileSync(join(folder, "public", "index.html"), `<!doctype html>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<title>${escapeHtml(title)}</title>\n<h1>${escapeHtml(title)}</h1>\n`)
+        // The page API's script tag is in from the start, so supermux.notify/save/agent.ask are there when needed.
+        writeFileSync(join(folder, "public", "index.html"), `<!doctype html>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<title>${escapeHtml(title)}</title>\n<script src="_supermux/api.js"></script>\n<h1>${escapeHtml(title)}</h1>\n`)
       }
       if (!existsSync(join(folder, "applet.json"))) writeFileSync(join(folder, "applet.json"), JSON.stringify({ title }, null, 2) + "\n")
       mkdirSync(join(folder, "data"), { recursive: true })
@@ -359,7 +393,7 @@ export class AppletService {
     const v = this.get(name)
     if (!v) return { ok: false, error: "the folder was made but isn't listed; check applet.json" }
     this.touchBy(v.row.id, by)
-    return { ok: true, view: this.get(name)! }
+    return { ok: true, view: this.get(name)!, warnings }
   }
 
   /**
