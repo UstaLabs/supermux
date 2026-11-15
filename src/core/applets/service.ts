@@ -709,7 +709,7 @@ export function appletPayload(v: AppletView, needsYou: SecretStatus[] = [], pin:
     kind: m?.run ? "server" : "static",
     stopped: !!v.row.stoppedAt,
     ...(v.error ? { error: v.error } : {}),
-    needsYou: needsYou.map((s) => ({ secret: s.name, state: s.state })),
+    needsYou: needsYou.map((s) => ({ secret: s.name, state: s.state, label: m?.secretLabels?.[s.name] ?? null })),
     /** Its place in the sidebar grid, or null when it isn't pinned. */
     pin,
     ...(m ? { jobs: m.jobs.map((j) => ({ name: j.name, every: j.every })), secrets: m.secrets, widget: m.widget ?? null } : {}),

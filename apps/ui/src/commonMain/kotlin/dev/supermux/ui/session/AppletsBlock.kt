@@ -367,7 +367,7 @@ private fun AppletMenu(a: AppletDto, actions: AppletsActions, anchor: Offset, sh
     }
     val needs = a.needsYou
     val body: @Composable () -> Unit = {
-        AppletMenuBody(a, actions, needs.map { n -> localized(if (n.state == "expired") Str.applets_menu_expired else Str.applets_menu_needed, n.secret) }, items, error, sheet, onFix = { onDismiss(); actions.info(a, "secrets") }) { item ->
+        AppletMenuBody(a, actions, needs.map { n -> localized(if (n.state == "expired") Str.applets_menu_expired else Str.applets_menu_needed, n.label ?: n.secret) }, items, error, sheet, onFix = { onDismiss(); actions.info(a, "secrets") }) { item ->
             scope.launch {
                 val why = item.run()
                 if (why == null) onDismiss() else error = why

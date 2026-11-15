@@ -110,7 +110,7 @@ applet.json:
   { "title": "…", "icon": "public/icon.svg",
     "run": "python3 server.py",          # how to start its server, any language; omit for a static applet
     "jobs": [{ "name": "sync", "every": "30m", "run": "python3 jobs/sync.py" }],
-    "secrets": ["SOME_API_KEY"],         # names only
+    "secrets": ["SOME_API_KEY"],         # names only (or {"name": "…", "label": "Gmail sign-in"})
     "ownerOnly": ["/api/settings"] }     # paths only the user's own devices may open
   supermux gives the server $PORT and the applet's data dir as $DATA_DIR (= <folder>/data). A static applet's
   public/ is served at its link, and it keeps data with the built-in data API, relative to its page:
