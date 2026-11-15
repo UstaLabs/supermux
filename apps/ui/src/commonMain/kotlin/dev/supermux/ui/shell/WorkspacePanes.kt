@@ -9,6 +9,7 @@
 // The pane CONTENT is one `ViewHost` call for every width; only the chrome around it differs.
 package dev.supermux.ui.shell
 
+import dev.supermux.ui.editor.ScmDiffTab
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.Animatable
@@ -525,6 +526,7 @@ private fun WorkspacePanesBody(
                             state = tabState,
                             dot = if (v.tabUnread(tabState.selected, unreadSessions)) LocalSemantics.current.success else null,
                             labelFont = GeistFontFamily,
+                            italic = v?.isScmDiffPreview() == true,
                             onClose = { _ -> onCloseCandidate(v) },
                             icon = {
                                 val agent = v?.chatSessionId()?.let { sid -> app.sessions.value.firstOrNull { it.id == sid }?.agent }
@@ -1293,15 +1295,18 @@ private fun WorkspacePaneContent(
             }
             // #72: a Source Control file's diff opens as a tab in the chat's pane (VS Code's editor), reusing the tab
             // already showing that file. A phone has no groups: the diff opens inside Source Control instead.
-            val openScmDiff: ((String, String, String?) -> Unit)? = groupIdOf(layout, viewId)?.let { ownGroup ->
-                { repo, path, base ->
-                    val open = viewsById.values.firstOrNull { it.isScmDiffOf(repo, path) }
+            // VS Code's preview tab: a single click replaces the previous preview; a double click keeps the tab.
+            val openScmDiff: ((ScmDiffTab, Boolean) -> Unit)? = groupIdOf(layout, viewId)?.let { ownGroup ->
+                { tab, keep ->
+                    val open = viewsById.values.firstOrNull { it.isScmDiffOf(tab) }
                     val openGroup = open?.let { groupIdOf(layout, it.id) }
                     if (open != null && openGroup != null) {
                         layoutSync.edit { setActiveViewInGroup(it, openGroup, open.id) }
+                        if (keep && open.isScmDiffPreview()) app.setWorkspaceViewState(current.id, open.id, scmDiffState(tab, preview = false))
                     } else {
+                        if (!keep) viewsById.values.filter { it.isScmDiffPreview() }.forEach { app.closeWorkspaceView(current.id, it.id) }
                         val chatGroup = viewsById.values.filter { it.kind == "chat" }.firstNotNullOfOrNull { groupIdOf(layout, it.id) }
-                        app.addWorkspaceView(current.id, "editor", scmDiffState(repo, path, base), groupId = chatGroup ?: ownGroup)
+                        app.addWorkspaceView(current.id, "editor", scmDiffState(tab, preview = !keep), groupId = chatGroup ?: ownGroup)
                     }
                 }
             }
@@ -1598,16 +1603,22 @@ private fun addChangesBeside(hostId: String, current: WorkspaceDto, groupId: Str
     }
 }
 
-/** #72: a "scmdiff" tab's state: one Source Control file's diff, from [base] (null: HEAD's blob). */
-private fun scmDiffState(repo: String, path: String, base: String?) = kotlinx.serialization.json.buildJsonObject {
+/** #72: a "scmdiff" tab's state: one file's "(Working Tree)" or "(Index)" diff, and whether it is a preview. */
+private fun scmDiffState(tab: ScmDiffTab, preview: Boolean) = kotlinx.serialization.json.buildJsonObject {
     put("mode", kotlinx.serialization.json.JsonPrimitive("scmdiff"))
-    put("repo", kotlinx.serialization.json.JsonPrimitive(repo))
-    put("path", kotlinx.serialization.json.JsonPrimitive(path))
-    if (base != null) put("base", kotlinx.serialization.json.JsonPrimitive(base))
+    put("repo", kotlinx.serialization.json.JsonPrimitive(tab.repo))
+    put("path", kotlinx.serialization.json.JsonPrimitive(tab.path))
+    put("side", kotlinx.serialization.json.JsonPrimitive(tab.side))
+    tab.base?.let { put("base", kotlinx.serialization.json.JsonPrimitive(it)) }
+    tab.work?.let { put("work", kotlinx.serialization.json.JsonPrimitive(it)) }
+    if (preview) put("preview", kotlinx.serialization.json.JsonPrimitive(true))
 }
 
-private fun ViewDto.isScmDiffOf(repo: String, path: String): Boolean =
-    kind == "editor" && stateString("mode") == "scmdiff" && stateString("repo").orEmpty() == repo && stateString("path") == path
+private fun ViewDto.isScmDiffOf(tab: ScmDiffTab): Boolean =
+    kind == "editor" && stateString("mode") == "scmdiff" && stateString("repo").orEmpty() == tab.repo &&
+        stateString("path") == tab.path && (stateString("side") ?: "worktree") == tab.side
+
+private fun ViewDto.isScmDiffPreview(): Boolean = kind == "editor" && stateString("mode") == "scmdiff" && stateString("preview") == "true"
 
 /**
  * The workspace's split buttons (and ⌘\ / ⌘⌥\): a New tab, made in the top-right pane, then moved into a pane of

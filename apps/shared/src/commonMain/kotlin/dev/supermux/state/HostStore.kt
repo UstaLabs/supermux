@@ -1991,6 +1991,14 @@ class HostStore(
         }
     }
 
+    /** Replace a view's state (the broker stores it whole): #72 keeps a Source Control preview tab. */
+    fun setWorkspaceViewState(workspaceId: String, viewId: String, state: JsonObject) {
+        stateScope.launch {
+            runCatching { api.patchView(workspaceId, viewId, PatchViewBody(state = state)) }
+                .onFailure { println("[HostStore] setWorkspaceViewState failed: $it") }
+        }
+    }
+
     /**
      * Bind a pending chat view to the session that was just created for it, so
      * the tab stops being a composer and becomes the conversation. Same tab, same

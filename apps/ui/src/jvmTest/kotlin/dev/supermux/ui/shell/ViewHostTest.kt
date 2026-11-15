@@ -292,7 +292,8 @@ class ViewHostTest {
         assertEquals("Files", viewTitle(view("editor", mapOf("mode" to "tree"))))
         assertEquals("Files", viewTitle(view("editor", emptyMap())))
         assertEquals("Source Control", viewTitle(view("editor", mapOf("mode" to "diff"))))
-        assertEquals("App.jsx", viewTitle(view("editor", mapOf("mode" to "scmdiff", "repo" to "", "path" to "src/App.jsx"))))
+        assertEquals("App.jsx (Working Tree)", viewTitle(view("editor", mapOf("mode" to "scmdiff", "repo" to "", "path" to "src/App.jsx"))))
+        assertEquals("App.jsx (Index)", viewTitle(view("editor", mapOf("mode" to "scmdiff", "repo" to "", "path" to "src/App.jsx", "side" to "index"))))
     }
 
     // ── The chat-tap conversion (this used to be dropped on the floor) ───────────────────────

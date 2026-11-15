@@ -8,6 +8,7 @@ package dev.supermux.ui.editor
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -83,6 +84,18 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 
+/**
+ * One file's diff tab, as VS Code opens it: "(Working Tree)" = what is staged (or HEAD) → the file;
+ * "(Index)" = HEAD → what is staged. [base] / [work] are blobs; null base = HEAD's, null work = the file.
+ */
+data class ScmDiffTab(val repo: String, val path: String, val side: String, val base: String?, val work: String?)
+
+/** The tab a click in [group] opens for [f]: Staged → "(Index)"; Changes / Merge → "(Working Tree)". */
+fun scmDiffTab(repo: String, f: ChangedFile, group: ScmGroup): ScmDiffTab = when (group) {
+    ScmGroup.Staged -> ScmDiffTab(repo, f.path, "index", base = null, work = f.indexBlob)
+    else -> ScmDiffTab(repo, f.path, "worktree", base = if (f.staged == "partial") f.indexBlob else null, work = null)
+}
+
 /** VS Code's groups, in its order. */
 enum class ScmGroup { Merge, Staged, Changes }
 
@@ -157,8 +170,8 @@ private const val SCM_POLL_MS = 5_000L
 @Composable
 fun SourceControlPane(
     state: SourceControlState,
-    /** A file's diff (repo, path, the group it was clicked in). */
-    onOpenDiff: (repo: String, path: String, group: ScmGroup) -> Unit,
+    /** A file's diff: [keep] false = a preview tab (a single click), true = kept (a double click). */
+    onOpenDiff: (repo: String, file: ChangedFile, group: ScmGroup, keep: Boolean) -> Unit,
     /** The file itself, in the editor. */
     onOpenFile: (repo: String, path: String) -> Unit,
     modifier: Modifier = Modifier,
@@ -288,7 +301,7 @@ private fun GroupHeader(
 private fun FileRow(
     state: SourceControlState, repo: String, group: ScmGroup, f: ChangedFile, touch: Boolean,
     scope: kotlinx.coroutines.CoroutineScope,
-    onOpenDiff: (String, String, ScmGroup) -> Unit, onOpenFile: (String, String) -> Unit,
+    onOpenDiff: (String, ChangedFile, ScmGroup, Boolean) -> Unit, onOpenFile: (String, String) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     val hover = remember { MutableInteractionSource() }
@@ -298,7 +311,8 @@ private fun FileRow(
     val letter = scmLetter(f, group)
     Column {
         Row(
-            Modifier.fillMaxWidth().hoverable(hover).clickable { onOpenDiff(repo, f.path, group) }
+            Modifier.fillMaxWidth().hoverable(hover)
+                .combinedClickable(onClick = { onOpenDiff(repo, f, group, false) }, onDoubleClick = { onOpenDiff(repo, f, group, true) })
                 .heightIn(min = if (touch) 36.dp else 24.dp).padding(start = 24.dp, end = Space.xs)
                 .testTag("scm_row_${group.name.lowercase()}_${f.path}"),
             verticalAlignment = Alignment.CenterVertically,

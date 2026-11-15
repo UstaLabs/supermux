@@ -68,4 +68,6 @@
     <string name="scm_hint_discard_all">Buradaki commit edilmemiş tüm düzenlemeleri atar (yeni dosyalar silinir). Geri alınamaz.</string>
     <string name="scm_hint_open_file">Dosyanın kendisini düzenleyicide açar.</string>
     <string name="scm_hint_refresh">Değişen dosyaların listesini yeniden okur. Hiçbir şeyi değiştirmez.</string>
+    <string name="scm_side_worktree">Çalışma Ağacı</string>
+    <string name="scm_side_index">Dizin</string>
 </resources>

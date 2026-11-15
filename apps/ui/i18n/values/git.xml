@@ -68,4 +68,6 @@
     <string name="scm_hint_discard_all">Throws away every uncommitted edit here (new files are deleted). Cannot be undone.</string>
     <string name="scm_hint_open_file">Opens the file itself in the editor.</string>
     <string name="scm_hint_refresh">Reloads the list of changed files. Changes nothing.</string>
+    <string name="scm_side_worktree">Working Tree</string>
+    <string name="scm_side_index">Index</string>
 </resources>

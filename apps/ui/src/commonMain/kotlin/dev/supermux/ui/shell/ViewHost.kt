@@ -14,6 +14,9 @@
 // The shared host takes desktop's [previewModeFor] lambda, which Android simply does not pass.
 package dev.supermux.ui.shell
 
+import dev.supermux.net.BlobText
+import dev.supermux.ui.editor.scmDiffTab
+import dev.supermux.ui.editor.ScmDiffTab
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.heightIn
@@ -183,7 +186,7 @@ fun ViewHost(
      * #72: open a Source Control file's diff (repo, path, the blob it is compared from; null: HEAD's) as a tab next to
      * the chat, as VS Code does. Null (a phone: no panes): the diff opens inside the Source Control pane.
      */
-    onOpenScmDiff: ((repo: String, path: String, base: String?) -> Unit)? = null,
+    onOpenScmDiff: ((tab: ScmDiffTab, keep: Boolean) -> Unit)? = null,
     /**
      * A Files pane renamed (`old → new`) or deleted (`old → null`) an entry; ABSOLUTE host paths.
      * The workspace retargets or flags the file tabs open under it (WorkspaceSession.applyEntryMoved).
@@ -348,7 +351,7 @@ fun ViewHost(
                     onWalkthroughClosed = {},
                     onClose = onCloseView,
                     onOpenFile = onOpenFile,
-                    file = ScmOpenFile(view.stateString("repo").orEmpty(), view.stateString("path").orEmpty(), view.stateString("base")),
+                    file = ScmOpenFile(view.stateString("repo").orEmpty(), view.stateString("path").orEmpty(), view.stateString("base"), view.stateString("work")),
                     modifier = modifier.testTag("editor-$workdir"),
                 )
                 else -> ExplorerPaneForWorkspace(
@@ -803,7 +806,7 @@ private fun DiffPaneForWorkspace(
     onOpenFile: (path: String, line: Int?, endLine: Int?) -> Unit,
     modifier: Modifier,
     /** #72: a Source Control file's diff as a tab next to the chat; null: inside the pane. */
-    onOpenScmDiff: ((repo: String, path: String, base: String?) -> Unit)? = null,
+    onOpenScmDiff: ((tab: ScmDiffTab, keep: Boolean) -> Unit)? = null,
     /** #72: this view IS one file's diff (a "scmdiff" tab): no Source Control list, no way back. */
     file: ScmOpenFile? = null,
 ) {
@@ -833,11 +836,9 @@ private fun DiffPaneForWorkspace(
         SourceControlPane(
             onReview = { scmMode.review = true },
             state = sourceControl,
-            onOpenDiff = { repo, path, group ->
-                val f = sourceControl.repos?.firstOrNull { it.repo == repo }?.files?.firstOrNull { it.path == path }
-                // "(Working Tree)": a partly staged file's unstaged part is its staged version → the file.
-                val base = if (group == ScmGroup.Changes && f?.staged == "partial") f.indexBlob else null
-                if (onOpenScmDiff != null) onOpenScmDiff(repo, path, base) else openFile = ScmOpenFile(repo, path, base)
+            onOpenDiff = { repo, f, group, keep ->
+                val tab = scmDiffTab(repo, f, group)
+                if (onOpenScmDiff != null) onOpenScmDiff(tab, keep) else openFile = ScmOpenFile(repo, f.path, tab.base, tab.work)
             },
             onOpenFile = { repo, path -> onOpenFile(repoPath(repo, path), null, null) },
             modifier = modifier.fillMaxSize(),
@@ -870,7 +871,15 @@ private fun DiffPaneForWorkspace(
         },
         getReviewComments = { reviewSessionId?.let { actions.reviewComments(it) }.orEmpty() },
         readWalkthroughFile = { repo, path ->
-            actions.workspaceFsRead(workspaceId, repoPath(repo, path))
+            // "(Index)": the working side is the staged blob, not the file on disk.
+            val work = shown?.work
+            if (work != null && shown.repo == repo && shown.path == path) {
+                when (val b = actions.workspaceChangesBlob?.invoke(workspaceId, repo, work, false)) {
+                    is BlobText.Text -> Result.success(b.text)
+                    is BlobText.Failed -> Result.failure(IllegalStateException(b.message))
+                    else -> Result.failure(IllegalStateException(localized(Str.editor_file_unavailable)))
+                }
+            } else actions.workspaceFsRead(workspaceId, repoPath(repo, path))
         },
         onOpenWalkthroughFile = { repo, path, line ->
             onOpenFile(repoPath(repo, path), line, null)
@@ -887,7 +896,8 @@ private fun DiffPaneForWorkspace(
         onWalkthroughClosed = onWalkthroughClosed,
         onReviewSubmit = { reviewSessionId?.let { actions.reviewSubmit(it) } },
         onClose = onClose,
-        writeDiffFile = { repo, path, text -> actions.workspaceFsWrite(workspaceId, repoPath(repo, path), text) },
+        // An "(Index)" diff shows the staged version: nothing on disk to write back.
+        writeDiffFile = if (shown?.work != null) null else { repo, path, text -> actions.workspaceFsWrite(workspaceId, repoPath(repo, path), text) },
         diffDocuments = documents,
         baseText = actions.workspaceChangesBlob?.let { f -> { repo, sha, force -> f(workspaceId, repo, sha, force) } },
         // The review drafts outlive the workspace's composition, which a rotation rebuilds (#89).
@@ -907,7 +917,7 @@ private class ScmMode {
 }
 
 /** #72: the Source Control file whose diff is open in its pane, and the blob it is compared from (null: HEAD's). */
-private data class ScmOpenFile(val repo: String, val path: String, val base: String?)
+private data class ScmOpenFile(val repo: String, val path: String, val base: String?, val work: String? = null)
 
 /** #72: back from a file's diff to the Source Control list. */
 @Composable

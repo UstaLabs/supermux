@@ -29,4 +29,11 @@ class SourceControlGroupsTest {
         assertEquals("R", scmLetter(f("r", "all", status = "renamed"), ScmGroup.Staged))
         assertEquals("C", scmLetter(f("c", "conflict"), ScmGroup.Merge))
     }
+
+    @Test fun a_click_in_staged_opens_the_index_diff_and_in_changes_the_working_tree_one() {
+        val partial = ChangedFile(path = "a", status = "modified", staged = "partial", baseBlob = "head", indexBlob = "idx")
+        assertEquals(ScmDiffTab("", "a", "index", base = null, work = "idx"), scmDiffTab("", partial, ScmGroup.Staged))
+        assertEquals(ScmDiffTab("", "a", "worktree", base = "idx", work = null), scmDiffTab("", partial, ScmGroup.Changes))
+        assertEquals(ScmDiffTab("", "c", "worktree", base = null, work = null), scmDiffTab("", f("c", "none"), ScmGroup.Changes))
+    }
 }
