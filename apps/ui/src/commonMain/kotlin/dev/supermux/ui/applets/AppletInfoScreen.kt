@@ -298,6 +298,12 @@ private fun InfoRow(icon: ImageVector?, title: String, sub: String? = null, subW
     }
 }
 
+/** A box's only line when it has nothing yet: quiet, not a row. */
+@Composable
+private fun EmptyRow(text: String) {
+    Text(text, fontSize = 12.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(14.dp))
+}
+
 @Composable
 private fun RowDivider() {
     Box(Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)))
@@ -509,7 +515,7 @@ private fun HeadActions(d: AppletDetailDto, actions: AppletInfoActions, phone: B
                     InfoButton(Icons.Outlined.Check, localized(if (inst.phone) Str.applets_menu_on_home else Str.applets_menu_installed), tag = "applet_info_installed", full = phone) { null }
                 } else {
                     InfoButton(if (inst.phone) Icons.Outlined.AddBox else Icons.Outlined.Download, localized(if (inst.phone) Str.applets_menu_add_home else Str.applet_info_install), tag = "applet_info_install", full = phone) {
-                        inst.install(d.asApplet()).also { if (it == null) installed = true }
+                        inst.install(d.asApplet()).also { installed = inst.isInstalled(d.asApplet()) }
                     }
                 }
             }
@@ -544,7 +550,7 @@ private fun DataTab(d: AppletDetailDto, actions: AppletInfoActions) {
     SectionTitle(localized(Str.applet_info_tables))
     InfoBox {
         val tables = data?.tables.orEmpty()
-        if (tables.isEmpty()) InfoRow(Icons.Outlined.Storage, localized(Str.applet_info_no_tables))
+        if (tables.isEmpty()) EmptyRow(localized(Str.applet_info_no_tables))
         tables.forEachIndexed { i, t ->
             if (i > 0) RowDivider()
             InfoRow(Icons.Outlined.Storage, t.name, trailing = { Text(localized(Str.applet_info_rows, t.rows.toString()), fontSize = 12.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) })
@@ -559,7 +565,7 @@ private fun DataTab(d: AppletDetailDto, actions: AppletInfoActions) {
     }
     SectionTitle(localized(Str.applet_info_backups))
     InfoBox {
-        if (d.backups.isEmpty()) InfoRow(Icons.Outlined.History, localized(Str.applet_info_no_backups))
+        if (d.backups.isEmpty()) EmptyRow(localized(Str.applet_info_no_backups))
         d.backups.forEachIndexed { i, b ->
             if (i > 0) RowDivider()
             InfoRow(
