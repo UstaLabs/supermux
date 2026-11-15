@@ -99,6 +99,9 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
@@ -160,6 +163,7 @@ import dev.supermux.ui.resources.mux_logo
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.rememberHaptics
@@ -229,6 +233,11 @@ fun SessionListScreen(
     /** Bare sessionId → ISO last_read_at (server + optimistic local marks). */
     lastRead: Map<String, String> = emptyMap(),
     agentState: Map<String, AgentStatus?> = emptyMap(),
+    /**
+     * #143: session id → the question it waits on ([needsYouAsks]). Its workspace leaves its usual place for the
+     * "Needs you" section on top until the question is answered.
+     */
+    waiting: Map<String, String> = emptyMap(),
     /** session id → running subagents (only sessions with any); drives the "2 agents" tag. */
     runningAgents: Map<String, Int> = emptyMap(),
     /** session id → display name for multi-agent child rows; defaults from [sessions]. */
@@ -378,9 +387,14 @@ fun SessionListScreen(
             locs.isNotEmpty() && locs.all { loc -> agentHomeRoots.any { root -> hostIsInside(loc.path, root) } }
         }
     }
-    val groups = remember(visibleWorkspaces, effectiveHome, roles, visibleProjects, workspaceHost, archivedWorkspaces, archivedPending, homeDirs) {
+    // #143: a workspace waiting on the user is listed under "Needs you" instead of in its group.
+    val needsYou = remember(visibleWorkspaces, waiting) { waitingWorkspaces(visibleWorkspaces, waiting.keys) }
+    val listedWorkspaces = remember(visibleWorkspaces, needsYou) {
+        if (needsYou.isEmpty()) visibleWorkspaces else needsYou.map { it.id }.toSet().let { ids -> visibleWorkspaces.filterNot { it.id in ids } }
+    }
+    val groups = remember(listedWorkspaces, effectiveHome, roles, visibleProjects, workspaceHost, archivedWorkspaces, archivedPending, homeDirs) {
         // Archived rows only decide whether an empty project is shown (archived-only → hidden).
-        groupWorkspaces(visibleWorkspaces, effectiveHome, visibleProjects, workspaceHost, archivedWorkspaces, hideEmptyProjects = archivedPending, homeOf = { homeDirs[it] }) { w ->
+        groupWorkspaces(listedWorkspaces, effectiveHome, visibleProjects, workspaceHost, archivedWorkspaces, hideEmptyProjects = archivedPending, homeOf = { homeDirs[it] }) { w ->
             val sid = w.primarySessionId ?: w.chatSessionIds().firstOrNull()
             sid != null && roles[sid] == "personal_assistant"
         }
@@ -1617,6 +1631,38 @@ fun SessionListScreen(
             avatars = agentAvatars,
         )
     }
+    // #143: sessions blocked on the user, on top of everything else, until answered.
+    fun LazyListScope.needsYouItems() {
+        if (selecting || searching) return
+        val rows: List<Pair<String, String>> = if (useWorkspaces) {
+            needsYou.mapNotNull { w ->
+                val sid = (listOfNotNull(w.primarySessionId) + w.chatSessionIds()).firstOrNull { it in waiting } ?: return@mapNotNull null
+                w.id to sid
+            }
+        } else {
+            visibleSessions.filter { it.id in waiting }.map { it.id to it.id }
+        }
+        if (rows.isEmpty()) return
+        item(key = "needs-you:h") { NeedsYouLabel(rows.size) }
+        items(rows, key = { "needs-you:${it.first}" }) { (rowId, sid) ->
+            val workspace = needsYou.firstOrNull { it.id == rowId }
+            val name = workspace?.let { w ->
+                sessionById[sid]?.name?.takeIf { it.isNotBlank() } ?: w.name
+            } ?: sessionById[sid]?.name ?: sid
+            NeedsYouRow(
+                name = name,
+                question = waiting[sid].orEmpty(),
+                sessionId = sid,
+                onClick = {
+                    when {
+                        workspace == null -> onOpen(sid)
+                        openWorkspaceByWorkspaceId -> onOpenSession?.invoke(workspace.id, sid) ?: onOpen(workspace.id)
+                        else -> onOpen(sid)
+                    }
+                },
+            )
+        }
+    }
     val newSessionCard: @Composable () -> Unit = {
         // No extra room above it: under the title band its top lines up with the sheets beside it.
         NewSessionListRow(onClick = onNewSession)
@@ -1709,6 +1755,7 @@ fun SessionListScreen(
             item(key = "chrome:new_session") { newSessionCard() }
             // Banners and "can't reach the host" come before the Agents, as on wide hosts.
             item(key = "chrome:above") { aboveList() }
+            needsYouItems()
             agentsItems()
             stickyHeader(key = "chrome:section") {
                 Box(Modifier.fillMaxWidth().background(cs.surfaceContainerHigh)) { sectionHeader() }
@@ -1716,6 +1763,7 @@ fun SessionListScreen(
         } else {
             // Wide hosts: the Agents scroll with the list, and the Workspaces header pins once
             // they have scrolled away (search, select and the menu stay reachable).
+            needsYouItems()
             agentsItems()
             stickyHeader(key = "chrome:section") {
                 Box(Modifier.fillMaxWidth().background(cs.surfaceContainerHigh)) { sectionHeader() }
@@ -2008,6 +2056,74 @@ private fun groupedRowShape(first: Boolean, last: Boolean) = RoundedCornerShape(
     bottomStart = if (last) Radii.lg else 0.dp,
     bottomEnd = if (last) Radii.lg else 0.dp,
 )
+
+/** #143: the "Needs you · N" label, in the warning role (the app's colour for "a human is needed"). */
+@Composable
+private fun NeedsYouLabel(count: Int) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = 6.dp).testTag("needs-you-header"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            localized(Str.sessions_needs_you).uppercaseInAppLanguage(),
+            color = LocalSemantics.current.warning,
+            fontFamily = MonoFontFamily,
+            fontSize = 11.sp,
+            modifier = Modifier.weight(1f),
+        )
+        Text("$count", color = LocalSemantics.current.warning, fontFamily = MonoFontFamily, fontSize = 11.sp)
+    }
+}
+
+/** #143: a session waiting on the user: an amber mark, its name with a "Needs you" chip, and its question. */
+@Composable
+private fun NeedsYouRow(name: String, question: String, sessionId: String, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val wait = LocalSemantics.current.warning
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Space.sm, vertical = 1.dp)
+            .clip(RoundedCornerShape(7.dp))
+            .clickable(onClick = onClick)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .padding(start = 14.dp, end = 10.dp, top = 6.dp, bottom = 6.dp)
+            .testTag("needs-you:$sessionId"),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Box(Modifier.padding(top = 6.dp).size(9.dp).rotate(45f).clip(RoundedCornerShape(2.dp)).background(wait))
+        Column(Modifier.weight(1f).padding(start = 10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = cs.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                Text(
+                    localized(Str.sessions_needs_you),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = LocalSemantics.current.onStatus,
+                    maxLines = 1,
+                    modifier = Modifier.padding(start = 6.dp).clip(RoundedCornerShape(6.dp)).background(wait).padding(horizontal = 6.dp),
+                )
+            }
+            if (question.isNotBlank()) {
+                Text(
+                    question,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = wait,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
 
 @Composable
 private fun SectionLabel(text: String) {

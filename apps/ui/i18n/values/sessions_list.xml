@@ -7,6 +7,8 @@
     <string name="sessions_list_drafts">Drafts</string>
     <string name="sessions_list_in_progress">In progress</string>
     <string name="sessions_list_active">Active</string>
+    <!-- #143: a session blocked on an open prompt or question: the sidebar section and its rows' chip -->
+    <string name="sessions_needs_you">Needs you</string>
     <string name="sessions_list_everything_else">Everything else</string>
     <string name="sessions_list_workspaces">Workspaces</string>
     <string name="sessions_list_sessions">Sessions</string>

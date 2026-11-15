@@ -354,6 +354,13 @@ fun SupermuxApp(
         subagentsBySession.mapValues { dev.supermux.ui.chat.runningSubagentCount(it.value) }.filterValues { it > 0 }
     }
     val lastRead by fleet.lastRead.collectAsState()
+    // #143: sessions blocked on the user ("Needs you" on top of the sidebar), with the question each waits on.
+    val openRequests by fleet.requests.collectAsState()
+    val allowWord = localized(Str.chatcard_request_allow_title, "%s")
+    val questionWord = localized(Str.chatcard_request_question)
+    val waiting = remember(openRequests, allowWord, questionWord) {
+        dev.supermux.ui.session.needsYouAsks(openRequests, allowTitle = { tool -> allowWord.replace("%s", tool) }, question = questionWord)
+    }
     val hostViews by fleet.hostViews.collectAsState()
     val sessionHost by fleet.sessionHost.collectAsState()
     val activeHostId by fleet.activeHost.collectAsState()
@@ -992,6 +999,7 @@ fun SupermuxApp(
                                 lastBySession = lastBySession,
                                 lastRead = lastRead,
                                 agentState = agentState,
+                                waiting = waiting,
                                 runningAgents = runningAgents,
                                 onOpenSession = { _, sid -> ui.focusChatTab(sid) },
                                 actions = remember(listActions, workspaces) {
