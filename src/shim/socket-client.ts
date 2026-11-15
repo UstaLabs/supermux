@@ -1,5 +1,5 @@
 import { connect, Socket } from "net"
-import { localEndpoint } from "../core/local-endpoint"
+import { localEndpoints } from "../core/local-endpoint"
 import { encodeFrame, decodeFrames } from "../shared/frame-codec"
 import { makeLogger } from "../shared/log"
 import { parseSocketFrame, type ShimTool, type SocketFrame, type ToolOperation } from "../shared/socket-frames"
@@ -36,7 +36,8 @@ export type ShimClient = ShimRegistration & {
 }
 
 export async function connectShim(opts: ShimClientOpts): Promise<ShimClient> {
-  const sockPath = opts.socketPath ?? localEndpoint(opts.sessionId, { socketsDir: opts.socketsDir })
+  // On Windows: the AF_UNIX file, then the pre-#156 named pipe (a broker that has not restarted onto #156 serves only it).
+  const endpoints = opts.socketPath ? [opts.socketPath] : localEndpoints(opts.sessionId, { socketsDir: opts.socketsDir })
   const pending = new Map<string, (r: { ok: boolean; value?: unknown; error?: string }) => void>()
   let registered: ShimRegistration | undefined
   let sock: Socket
@@ -112,12 +113,19 @@ export async function connectShim(opts: ShimClientOpts): Promise<ShimClient> {
   }
 
   async function attemptConnect(): Promise<Socket> {
-    return await new Promise<Socket>((res, rej) => {
-      const s = connect(sockPath)
-      s.once("connect", () => res(s))
-      s.once("error", rej)
-    })
+    let last: unknown
+    for (const endpoint of endpoints) {
+      try {
+        return await new Promise<Socket>((res, rej) => {
+          const s = connect(endpoint)
+          s.once("connect", () => res(s))
+          s.once("error", rej)
+        })
+      } catch (err) { last = err }
+    }
+    throw last
   }
+
 
   async function reconnectLoop() {
     for (let attempt = 0; !closedByUs; attempt++) {

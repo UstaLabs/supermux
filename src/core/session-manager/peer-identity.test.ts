@@ -53,7 +53,7 @@ test.if(posix)("parents: this process descends from its parent, not from an unre
   try { expect(await descendsFrom(process.pid, other.pid!)).toBe(false) } finally { other.kill() }
 })
 
-test("an OS without a peer lookup yet (Windows until its spike) passes, saying why", async () => {
+test("a peer the OS cannot name (a pre-#156 Windows named pipe; another host OS) passes, saying why", async () => {
   const fake = { _handle: { fd: 3 } } as unknown as Socket
   expect(await checkPeer(fake, 1, { platform: "win32" })).toEqual({ ok: true, peer: null, why: "peer unknown on win32" })
 })

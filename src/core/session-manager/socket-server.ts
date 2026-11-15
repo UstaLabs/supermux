@@ -1,6 +1,7 @@
 import { createServer, Server, Socket } from "net"
 import { mkdirSync, chmodSync, existsSync, unlinkSync } from "fs"
-import { localEndpoint, usesFilesystemEndpoint } from "../local-endpoint"
+import { host } from "@supermux/platform"
+import { isFileEndpoint, legacyPipeEndpoint, localEndpoint } from "../local-endpoint"
 import { encodeFrame, decodeFrames } from "../../shared/frame-codec"
 import { makeLogger } from "../../shared/log"
 import { TickGap } from "../power/wake"
@@ -83,16 +84,19 @@ export async function startSocketServer(opts: {
   handler: ServerHandler
   onStatusChange?: (session_id: string, connected: boolean, last_pong_at?: number) => void
   peerAuth?: PeerAuth
+  /** Also serve each session's pre-#156 Windows named pipe (default: on Windows). */
+  serveLegacyPipe?: boolean
 }): Promise<SocketServer> {
-  const usesFilesystem = usesFilesystemEndpoint()
-  if (usesFilesystem) {
-    files.mkdirPrivate(opts.socketsDir)
-  }
+  files.mkdirPrivate(opts.socketsDir)
+  // #156: Windows moved from named pipes to AF_UNIX files. Agents (and their shims) started before keep reconnecting to
+  // the pipe after a broker restart, since their keepers outlive it, so the pipe is served too for now.
+  const servePipe = opts.serveLegacyPipe ?? host.os() === "win32"
   // A session can have MORE THAN ONE shim connection on the same session_id (an external-mode
   // Claude session also starts the zero-tools `mux-channel` copy from ~/.claude.json), so every
   // connection is tracked and the session is disconnected only when the last one closes.
   const conns = new Map<string, Set<Socket>>()
   const servers = new Map<string, Server>()
+  const legacyServers = new Map<string, Server>()
   const liveness = new ShimLiveness()
   // Any frame from a shim proves liveness; only announce the false->true edge.
   function markAlive(session_id: string): void {
@@ -111,18 +115,28 @@ export async function startSocketServer(opts: {
     return [...set].filter(s => s.writable && !s.destroyed)
   }
 
-  async function bindOne(session_id: string): Promise<void> {
-    const sockPath = localEndpoint(session_id, { socketsDir: opts.socketsDir })
-    if (usesFilesystem && existsSync(sockPath)) unlinkSync(sockPath)
+  async function listenOn(session_id: string, endpoint: string): Promise<Server> {
+    const file = isFileEndpoint(endpoint)
+    if (file && existsSync(endpoint)) unlinkSync(endpoint)
     const s = createServer(socket => handleConnection(session_id, socket))
     await new Promise<void>((res, rej) => {
       s.once("error", rej)
-      s.listen(sockPath, () => {
-        if (usesFilesystem) files.makePrivate(sockPath)
+      s.listen(endpoint, () => {
+        if (file) files.makePrivate(endpoint)
         res()
       })
     })
-    servers.set(session_id, s)
+    return s
+  }
+
+  async function bindOne(session_id: string): Promise<void> {
+    const endpoint = localEndpoint(session_id, { socketsDir: opts.socketsDir })
+    servers.set(session_id, await listenOn(session_id, endpoint))
+    if (servePipe && isFileEndpoint(endpoint)) {
+      // A pipe another process holds (an old broker still exiting) must not cost the session its new endpoint.
+      try { legacyServers.set(session_id, await listenOn(session_id, legacyPipeEndpoint(session_id))) }
+      catch (err) { log.warn("legacy_pipe_bind_failed", { session_id, err: err instanceof Error ? err.message : String(err) }) }
+    }
   }
 
   function handleConnection(session_id: string, socket: Socket) {
@@ -246,9 +260,10 @@ export async function startSocketServer(opts: {
     },
     async close() {
       for (const set of conns.values()) for (const s of set) s.destroy()
-      for (const srv of servers.values()) await new Promise<void>(r => srv.close(() => r()))
+      for (const srv of [...servers.values(), ...legacyServers.values()]) await new Promise<void>(r => srv.close(() => r()))
       conns.clear()
       servers.clear()
+      legacyServers.clear()
     },
   }
 }

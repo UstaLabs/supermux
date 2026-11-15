@@ -169,7 +169,6 @@ import { brokerLang, t as brokerText, type MessageKey } from "./core/i18n/messag
 import { DevicePushTokenStore } from "./core/push/device-tokens"
 import { createRelayClient } from "./core/push/relay-adapter"
 import { ViewingTracker } from "./core/push/viewing-tracker"
-import { usesFilesystemEndpoint } from "./core/local-endpoint"
 import {
   MUX_HOME, MUX_HOME_NOTE, STATE_DIR, PID_FILE, SOCKETS_DIR, ENV_FILE, INBOX_DIR, HTML_DIR, SESSION_INBOX_DIR, DEVICES_FILE, HOST_KEY_FILE,
 } from "./shared/paths"
@@ -396,7 +395,7 @@ const tighten = (dir: string): void => {
   }
 }
 tighten(STATE_DIR)
-if (usesFilesystemEndpoint()) tighten(SOCKETS_DIR)
+tighten(SOCKETS_DIR)
 
 // load .env
 try {

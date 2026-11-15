@@ -16,7 +16,7 @@ import { connect } from "node:net"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { encodeFrame, decodeFrames } from "../shared/frame-codec"
-import { localEndpoint } from "../core/local-endpoint"
+import { localEndpoints } from "../core/local-endpoint"
 import { listTools } from "../shim/tools"
 
 export interface AgentCliIo {
@@ -115,11 +115,21 @@ export async function runAgentCli(argv: string[], io: AgentCliIo): Promise<numbe
   const [noun = "", verb, ...rest] = pos
   const help = (topic: string, v?: string): never => { io.out(helpText(topic, v)); throw new Exit(0) }
 
-  const sock = io.env.MUX_SESSION_ID && io.env.MUX_SOCKETS_DIR ? localEndpoint(io.env.MUX_SESSION_ID, { socketsDir: io.env.MUX_SOCKETS_DIR }) : undefined
+  // On Windows: the AF_UNIX file, then the pre-#156 named pipe (a broker that has not restarted onto #156 serves only it).
+  const socks = io.env.MUX_SESSION_ID && io.env.MUX_SOCKETS_DIR ? localEndpoints(io.env.MUX_SESSION_ID, { socketsDir: io.env.MUX_SOCKETS_DIR }) : []
+  const sock = socks[0]
   async function call(name: string, args: Record<string, unknown>): Promise<any> {
     if (!sock) { io.err("supermux: not inside a supermux session (MUX_SESSION_ID and MUX_SOCKETS_DIR are unset)"); throw new Exit(5) }
-    const r = await new Promise<{ ok: boolean; value?: unknown; error?: string } | "unreachable" | "timeout">((res) => {
-      const s = connect(sock)
+    let r: { ok: boolean; value?: unknown; error?: string } | "unreachable" | "timeout" = "unreachable"
+    for (const endpoint of socks) {
+      r = await callOn(endpoint, name, args)
+      if (r !== "unreachable") break
+    }
+    return settle(r)
+  }
+  function callOn(endpoint: string, name: string, args: Record<string, unknown>) {
+    return new Promise<{ ok: boolean; value?: unknown; error?: string } | "unreachable" | "timeout">((res) => {
+      const s = connect(endpoint)
       let buf: Buffer = Buffer.alloc(0)
       const timer = setTimeout(() => { s.destroy(); res("timeout") }, io.timeoutMs ?? 30_000)
       s.on("error", () => { clearTimeout(timer); res("unreachable") })
@@ -131,6 +141,8 @@ export async function runAgentCli(argv: string[], io: AgentCliIo): Promise<numbe
         for (const m of messages as any[]) if (m?.kind === "result") { clearTimeout(timer); s.end(); res({ ok: !!m.ok, value: m.value, error: m.error }) }
       })
     })
+  }
+  function settle(r: { ok: boolean; value?: unknown; error?: string } | "unreachable" | "timeout"): any {
     if (r === "unreachable" || r === "timeout") { io.err(`supermux: the broker ${r === "timeout" ? "did not answer" : "is unreachable"} (${sock})`); throw new Exit(5) }
     if (!r.ok) {
       const e = String(r.error ?? "failed")
