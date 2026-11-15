@@ -273,11 +273,12 @@ test("shellLine: sh -c elsewhere, cmd.exe verbatim on Windows (#117)", () => {
   })
 })
 
-test("startToken: Linux reads field 22 after the last ')', macOS asks ps, Windows has none (#117)", () => {
+test("startToken: Linux reads field 22 after the last ')', macOS asks ps, Windows asks PowerShell (#117)", () => {
   const stat = "4242 (a (weird) name) S 1 4242 4242 0 -1 4194560 100 0 0 0 1 2 0 0 20 0 1 0 987654 1000 10"
   expect(proc.startToken(4242, { platform: "linux", readFile: () => stat })).toBe("987654")
   expect(proc.startToken(4242, { platform: "darwin", run: () => ({ exitCode: 0, stdout: "Sun Nov 15 10:00:00 2026\n" }) })).toBe("Sun Nov 15 10:00:00 2026")
   expect(proc.startToken(4242, { platform: "darwin", run: () => ({ exitCode: 1, stdout: "" }) })).toBeNull()
-  expect(proc.startToken(4242, { platform: "win32" })).toBeNull()
+  expect(proc.startToken(4242, { platform: "win32", run: (argv) => ({ exitCode: 0, stdout: argv.join(" ").includes("Get-Process -Id 4242") ? "133456789012345678\r\n" : "" }) })).toBe("133456789012345678")
+  expect(proc.startToken(4242, { platform: "win32", run: () => ({ exitCode: 1, stdout: "" }) })).toBeNull()
   expect(proc.startToken(4242, { platform: "linux", readFile: () => { throw new Error("gone") } })).toBeNull()
 })
