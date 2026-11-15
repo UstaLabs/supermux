@@ -454,7 +454,7 @@ private fun SideColumn(d: AppletDetailDto, actions: AppletInfoActions) {
     Spacer(Modifier.height(12.dp))
     Box(Modifier.fillMaxWidth()) {
         InfoButton(Icons.Outlined.ChatBubbleOutline, localized(Str.applet_info_change_in_chat), tag = "applet_info_chat", full = true) {
-            actions.act { api -> api.appletChat(d.name).also { actions.openChat(it.sessionId) } }
+            actions.act { api -> actions.openChat(api.appletChat(d.name).sessionId) }
         }
     }
 }
@@ -529,7 +529,17 @@ private fun whoChanged(by: String): String = when {
 @Composable
 private fun DataTab(d: AppletDetailDto, actions: AppletInfoActions) {
     val data = d.data
-    Lede(localized(Str.applet_info_data_lede, actions.hostName.ifBlank { "—" }, data?.dir ?: "${d.folder}/data")) // platform-ok: url
+    val dir = data?.dir ?: "${d.folder}/data" // platform-ok: url
+    // The folder in mono, as a path: the sentence is split around it.
+    val lede = localized(Str.applet_info_data_lede, actions.hostName.ifBlank { "—" }, "\u0000")
+    Text(
+        androidx.compose.ui.text.buildAnnotatedString {
+            append(lede.substringBefore("\u0000"))
+            withStyle(androidx.compose.ui.text.SpanStyle(fontFamily = MonoFontFamily)) { append(dir) }
+            append(lede.substringAfter("\u0000", ""))
+        },
+        fontSize = 13.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 12.dp),
+    )
     SectionTitle(localized(Str.applet_info_tables))
     InfoBox {
         val tables = data?.tables.orEmpty()
@@ -540,7 +550,10 @@ private fun DataTab(d: AppletDetailDto, actions: AppletInfoActions) {
         }
         if (data != null) {
             RowDivider()
-            InfoRow(null, localized(Str.applet_info_files, data.files.toString(), dev.supermux.ui.worktree.formatBytes(data.bytes)))
+            Text(
+                localized(Str.applet_info_files_db, if (data.files == 0) "—" else data.files.toString(), if (data.databaseBytes == 0L) "—" else dev.supermux.ui.worktree.formatBytes(data.databaseBytes)),
+                fontSize = 12.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            )
         }
     }
     SectionTitle(localized(Str.applet_info_backups))
@@ -550,12 +563,16 @@ private fun DataTab(d: AppletDetailDto, actions: AppletInfoActions) {
             if (i > 0) RowDivider()
             InfoRow(
                 Icons.Outlined.History,
-                archivedRelTime(b.createdAt).let { if (it.isEmpty()) b.id else localized(Str.applet_info_backup_ago, it) },
+                dev.supermux.chat.parseChatTs(b.createdAt)?.let { runCatching { dev.supermux.util.formatLocalDateTimeMedium(it) }.getOrNull() } ?: b.id,
                 sub = b.why ?: localized(if (b.kind == "nightly") Str.applet_info_backup_nightly else Str.applet_info_backup_manual),
             )
         }
     }
     Small(localized(Str.applet_info_backups_note))
+    Spacer(Modifier.height(12.dp))
+    InfoButton(Icons.Outlined.ChatBubbleOutline, localized(Str.applet_info_ask_agent), tag = "applet_info_ask_agent") {
+        actions.act { api -> actions.openChat(api.appletChat(d.name).sessionId) }
+    }
 }
 
 
