@@ -73,7 +73,21 @@ export class AppletStore {
     this.db.query("UPDATE applets SET name = ?, updated_by = ?, updated_at = ? WHERE id = ?").run(name, updatedBy, this.now().toISOString(), id)
   }
 
-  /** Soft delete: the row (and the folder) are kept; the 30-day purge is A2's. */
+  /** Deleted applets (kept 30 days), oldest first. */
+  listDeleted(): AppletRow[] {
+    return (this.db.query("SELECT * FROM applets WHERE deleted_at IS NOT NULL ORDER BY deleted_at").all() as Raw[]).map(fromRaw)
+  }
+
+  undelete(id: string, updatedBy: string | null): void {
+    this.db.query("UPDATE applets SET deleted_at = NULL, updated_by = ?, updated_at = ? WHERE id = ?").run(updatedBy, this.now().toISOString(), id)
+  }
+
+  /** The end of the 30 days: the row is gone for good. */
+  purge(id: string): void {
+    this.db.query("DELETE FROM applets WHERE id = ?").run(id)
+  }
+
+  /** Soft delete: the row (and the folder, moved aside) are kept for 30 days. */
   softDelete(id: string, updatedBy: string | null): void {
     const ts = this.now().toISOString()
     this.db.query("UPDATE applets SET deleted_at = ?, updated_by = ?, updated_at = ? WHERE id = ?").run(ts, updatedBy, ts, id)

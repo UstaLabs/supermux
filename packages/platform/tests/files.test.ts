@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync, type Stats } from "node:fs"
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync, type Stats } from "node:fs"
 import { tmpdir } from "node:os"
 import { isAbsolute, join } from "node:path"
 import { Unsupported, files } from "@supermux/platform"
@@ -202,4 +202,17 @@ test("replace (async) waits out a busy target on Windows too", async () => {
   let tries = 0
   await files.replace("a", "b", { platform: "win32", rename: async () => { if (++tries < 2) throw busy("EACCES") } })
   expect(tries).toBe(2)
+})
+
+test("makeReadOnlyTree / makeWritableTree: files 0444 and folders 0555, then back so the tree can go (#117)", () => {
+  if (process.platform === "win32") return
+  const root = mkdtempSync(join(tmpdir(), "ro-"))
+  mkdirSync(join(root, "a"))
+  writeFileSync(join(root, "a", "f"), "x")
+  files.makeReadOnlyTree(root)
+  expect(statSync(join(root, "a", "f")).mode & 0o777).toBe(0o444)
+  expect(statSync(join(root, "a")).mode & 0o777).toBe(0o555)
+  files.makeWritableTree(root)
+  expect(statSync(join(root, "a", "f")).mode & 0o777).toBe(0o644)
+  rmSync(root, { recursive: true })
 })

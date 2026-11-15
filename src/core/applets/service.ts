@@ -1,12 +1,18 @@
 import type { Database } from "bun:sqlite"
 import { createHmac, randomBytes } from "crypto"
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "fs"
-import { files } from "@supermux/platform"
-import { join } from "path"
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "fs"
+import { dirs, files } from "@supermux/platform"
+import { isAbsolute, join } from "path"
 import { makeLogger } from "../../shared/log"
 import { isAppletName, parseManifest, type AppletManifest } from "./manifest"
 import { AppletStore, type AppletRow } from "./store"
-import { AppletSupervisor, type AppletProcessState, type AppletSpec } from "./supervisor"
+import { AppletSupervisor, appletBaseEnv, type AppletProcessState, type AppletSpec } from "./supervisor"
+import { AppletSecrets, type SecretStatus } from "./secrets"
+import { JobRunner, type JobRun, type JobTarget } from "./jobs"
+import { AppletBackups, nightlyDue, type BackupInfo } from "./backups"
+
+/** How long a deleted applet (row, folder, backups) is kept before it is gone for good. */
+export const DELETED_KEEP_MS = 30 * 86_400_000
 
 const log = makeLogger("applets")
 
@@ -26,11 +32,21 @@ export interface AppletServiceDeps {
   appletsDir: string
   /** <state>/applets: pid files, logs, the via key. */
   stateDir: string
+  /** ~/.mux/backups/applets */
+  backupsDir: string
   supervisor?: AppletSupervisor
+  jobs?: JobRunner
   /** How often folders are re-read, so an applet an agent made by hand appears on its own. 0 = never. */
   rescanMs?: number
+  /** How often due jobs are looked for. 0 = never (tests run jobs by hand). */
+  jobTickMs?: number
+  /** How often the nightly backups and the 30-day purge are checked. 0 = never. */
+  maintenanceMs?: number
+  now?: () => Date
   onChange?: () => void
 }
+
+export type Result<T> = ({ ok: true } & T) | { ok: false; error: string }
 
 /**
  * #117: the applets of this host. Folders under ~/.mux/applets/ that hold an applet.json are applets; each gets a row
@@ -40,14 +56,22 @@ export interface AppletServiceDeps {
 export class AppletService {
   readonly store: AppletStore
   readonly supervisor: AppletSupervisor
+  readonly secrets: AppletSecrets
+  readonly jobs: JobRunner
+  readonly backups: AppletBackups
   private views = new Map<string, AppletView>()
-  private timer?: ReturnType<typeof setInterval>
+  private timers: ReturnType<typeof setInterval>[] = []
   private hostKey: Buffer
+  private readonly now: () => Date
 
   constructor(private readonly deps: AppletServiceDeps) {
-    this.store = new AppletStore(deps.db)
+    this.now = deps.now ?? (() => new Date())
+    this.store = new AppletStore(deps.db, this.now)
     mkdirSync(deps.stateDir, { recursive: true })
     this.supervisor = deps.supervisor ?? new AppletSupervisor({ stateDir: deps.stateDir })
+    this.secrets = new AppletSecrets(deps.db, this.now)
+    this.jobs = deps.jobs ?? new JobRunner({ db: deps.db })
+    this.backups = new AppletBackups(deps.backupsDir, this.now)
     this.hostKey = this.loadHostKey()
   }
 
@@ -74,12 +98,18 @@ export class AppletService {
 
   async start(): Promise<void> {
     await this.scan()
-    if (this.deps.rescanMs) this.timer = setInterval(() => void this.scan(), this.deps.rescanMs)
+    const every = (ms: number | undefined, fn: () => void) => { if (ms) this.timers.push(setInterval(fn, ms)) }
+    every(this.deps.rescanMs, () => void this.scan())
+    every(this.deps.jobTickMs, () => this.jobs.tick(this.jobTargets()))
+    every(this.deps.maintenanceMs, () => this.maintenance())
+    if (this.deps.jobTickMs) this.jobs.tick(this.jobTargets())
+    if (this.deps.maintenanceMs) this.maintenance()
   }
 
-  /** Broker shutdown: stop rescanning and leave servers running for the next broker. */
+  /** Broker shutdown: stop the timers and leave servers running for the next broker. */
   shutdown(): void {
-    if (this.timer) clearInterval(this.timer)
+    for (const t of this.timers) clearInterval(t)
+    this.timers = []
     this.supervisor.detach()
   }
 
@@ -110,12 +140,196 @@ export class AppletService {
     return { ok: true, server: true }
   }
 
+  /** $DATA_DIR: <folder>/data, or an adopted applet's own `data` folder (~ and relative paths allowed). */
+  dataDir(folder: string, m?: AppletManifest): string {
+    const d = m?.data
+    if (!d) return join(folder, "data")
+    if (d === "~" || /^~[\\/]/.test(d)) return join(dirs.home(), d.slice(2))
+    return isAbsolute(d) ? d : join(folder, d)
+  }
+
+  /** What the server and its jobs get besides PORT/DATA_DIR: the via key, the Settings values, the secrets. */
+  private env(row: AppletRow, m: AppletManifest): Record<string, string> {
+    const settings: Record<string, unknown> = {}
+    for (const f of m.config) if (f.default !== undefined) settings[f.key] = f.default
+    Object.assign(settings, this.secrets.settings(row.id))
+    return { MUX_VIA_KEY: this.viaKey(row.id), APPLET_SETTINGS: JSON.stringify(settings), ...this.secrets.env(row.id) }
+  }
+
   private spec(row: AppletRow, folder: string, m: AppletManifest): AppletSpec {
+    return { id: row.id, name: row.name, folder, run: m.run!, dataDir: this.dataDir(folder, m), env: this.env(row, m) }
+  }
+
+  private jobTarget(v: AppletView): JobTarget | undefined {
+    const m = v.manifest
+    if (!m || !m.jobs.length) return undefined
     return {
-      id: row.id, name: row.name, folder, run: m.run!,
-      dataDir: join(folder, "data"),
-      env: { MUX_VIA_KEY: this.viaKey(row.id) },
+      appletId: v.row.id, name: v.row.name, folder: v.folder, jobs: m.jobs,
+      env: () => {
+        const port = this.supervisor.port(v.row.id)
+        const dataDir = this.dataDir(v.folder, m)
+        mkdirSync(dataDir, { recursive: true })
+        return { ...appletBaseEnv(), ...this.env(v.row, m), DATA_DIR: dataDir, APPLET_NAME: v.row.name, ...(port ? { PORT: String(port) } : {}) }
+      },
     }
+  }
+
+  jobTargets(): JobTarget[] {
+    return [...this.views.values()].map((v) => this.jobTarget(v)).filter((t): t is JobTarget => !!t)
+  }
+
+  /** Runs [job] now and waits for it: its exit code and output (`supermux applet run`, "Run now"). */
+  async runJob(name: string, job: string): Promise<Result<{ run: JobRun }>> {
+    await this.scan()
+    const v = this.get(name)
+    if (!v) return { ok: false, error: `no applet named "${name}"` }
+    const t = this.jobTarget(v)
+    const j = t?.jobs.find((x) => x.name === job)
+    if (!t || !j) {
+      const names = v.manifest?.jobs.map((x) => x.name) ?? []
+      return { ok: false, error: names.length ? `"${name}" has no job "${job}" (its jobs: ${names.join(", ")})` : `"${name}" has no jobs` }
+    }
+    return { ok: true, run: await this.jobs.run(t, j, "manual") }
+  }
+
+  /** An extra read-only copy of the applet's data, labelled with why (`supermux applet backup`). */
+  backup(name: string, why?: string): Result<{ backup: BackupInfo }> {
+    const v = this.get(name)
+    if (!v) return { ok: false, error: `no applet named "${name}"` }
+    try {
+      const b = this.backups.backup(name, this.dataDir(v.folder, v.manifest), "manual", why)
+      return b ? { ok: true, backup: b } : { ok: false, error: `"${name}" has no data folder yet, so there is nothing to back up` }
+    } catch (err) {
+      return { ok: false, error: `the backup failed: ${(err as Error).message}` }
+    }
+  }
+
+  /** The secrets applet.json asks for that have no value or have expired: the "Needs you" of its page. */
+  needsYou(v: AppletView): SecretStatus[] {
+    return this.secrets.status(v.row.id, v.manifest?.secrets ?? []).filter((s) => s.state !== "set" && (v.manifest?.secrets ?? []).includes(s.name))
+  }
+
+  /** Owner only: stores a secret's value and restarts the server so it sees it. */
+  async setSecret(name: string, secret: string, value: string, opts: { expiresAt?: string | null; by: string }): Promise<Result<{}>> {
+    const v = this.get(name)
+    if (!v?.manifest) return { ok: false, error: v ? v.error ?? "applet.json can't be read" : `no applet named "${name}"` }
+    if (!v.manifest.secrets.includes(secret)) return { ok: false, error: `"${name}" doesn't ask for a secret named ${secret}` }
+    if (!value) return { ok: false, error: "the value is empty" }
+    if (opts.expiresAt && Number.isNaN(Date.parse(opts.expiresAt))) return { ok: false, error: "expiresAt is not a date" }
+    this.secrets.set(v.row.id, secret, value, { expiresAt: opts.expiresAt ?? null, updatedBy: opts.by })
+    await this.restartIfServer(v)
+    this.deps.onChange?.()
+    return { ok: true }
+  }
+
+  async removeSecret(name: string, secret: string): Promise<Result<{}>> {
+    const v = this.get(name)
+    if (!v) return { ok: false, error: `no applet named "${name}"` }
+    if (!this.secrets.remove(v.row.id, secret)) return { ok: false, error: `${secret} has no value` }
+    await this.restartIfServer(v)
+    this.deps.onChange?.()
+    return { ok: true }
+  }
+
+  /** Owner only: a value for one of applet.json's `config` fields; the server restarts to read APPLET_SETTINGS. */
+  async setSetting(name: string, key: string, value: string, by: string): Promise<Result<{}>> {
+    const v = this.get(name)
+    if (!v?.manifest) return { ok: false, error: v ? v.error ?? "applet.json can't be read" : `no applet named "${name}"` }
+    const field = v.manifest.config.find((f) => f.key === key)
+    if (!field) return { ok: false, error: `"${name}" has no setting "${key}"` }
+    if (field.options && !field.options.includes(value)) return { ok: false, error: `"${key}" must be one of: ${field.options.join(", ")}` }
+    this.secrets.setSetting(v.row.id, key, value, by)
+    await this.restartIfServer(v)
+    this.deps.onChange?.()
+    return { ok: true }
+  }
+
+  private async restartIfServer(v: AppletView): Promise<void> {
+    if (v.manifest?.run) await this.supervisor.restart(this.spec(v.row, v.folder, v.manifest))
+  }
+
+  private deletedDir(): string { return join(this.deps.appletsDir, ".deleted") }
+  private deletedBackupsDir(): string { return join(this.deps.backupsDir, ".deleted") }
+
+  /**
+   * Owner only: the applet disappears from every device. Its server stops; its folder and backups move aside (out of
+   * the scanner's sight) and are kept with its row for 30 days, then purged.
+   */
+  async delete(name: string, by: string): Promise<Result<{ id: string }>> {
+    const v = this.get(name)
+    if (!v) return { ok: false, error: `no applet named "${name}"` }
+    this.supervisor.stop(v.row.id)
+    const aside = `${name}-${v.row.id}`
+    try {
+      mkdirSync(this.deletedDir(), { recursive: true })
+      if (existsSync(v.folder)) files.replaceSync(v.folder, join(this.deletedDir(), aside))
+      const b = this.backups.dirOf(name)
+      if (existsSync(b)) {
+        mkdirSync(this.deletedBackupsDir(), { recursive: true })
+        files.replaceSync(b, join(this.deletedBackupsDir(), aside))
+      }
+    } catch (err) {
+      await this.scan()
+      return { ok: false, error: `couldn't move the applet's folder aside: ${(err as Error).message}` }
+    }
+    this.store.softDelete(v.row.id, by)
+    this.views.delete(v.row.id)
+    log.info("applet.deleted", { name, id: v.row.id, by })
+    this.deps.onChange?.()
+    return { ok: true, id: v.row.id }
+  }
+
+  /** Owner only, within the 30 days: puts a deleted applet back under its old name, with its id, secrets and runs. */
+  async undelete(id: string, by: string): Promise<Result<{ name: string }>> {
+    const row = this.store.byId(id)
+    if (!row?.deletedAt) return { ok: false, error: "no deleted applet with that id" }
+    if (this.store.byName(row.name) || existsSync(this.folderOf(row.name))) {
+      return { ok: false, error: `an applet named "${row.name}" exists again; rename it first` }
+    }
+    const aside = `${row.name}-${row.id}`
+    const folder = join(this.deletedDir(), aside)
+    if (!existsSync(folder)) return { ok: false, error: "its folder is gone" }
+    files.replaceSync(folder, this.folderOf(row.name))
+    const b = join(this.deletedBackupsDir(), aside)
+    if (existsSync(b) && !existsSync(this.backups.dirOf(row.name))) files.replaceSync(b, this.backups.dirOf(row.name))
+    this.store.undelete(id, by)
+    await this.scan()
+    return { ok: true, name: row.name }
+  }
+
+  /** The 30-day end of deleted applets: row, secrets, job runs, folder and backups. */
+  purgeDeleted(): void {
+    const cutoff = this.now().getTime() - DELETED_KEEP_MS
+    for (const row of this.store.listDeleted()) {
+      if (Date.parse(row.deletedAt!) > cutoff) continue
+      const aside = `${row.name}-${row.id}`
+      for (const p of [join(this.deletedDir(), aside), join(this.deletedBackupsDir(), aside)]) {
+        if (!existsSync(p)) continue
+        try { files.makeWritableTree(p) } catch { /* best effort */ }
+        try { rmSync(p, { recursive: true, force: true }) } catch (err) { log.warn("applet.purge_failed", { path: p, err: (err as Error).message }) }
+      }
+      this.secrets.forget(row.id)
+      this.jobs.forget(row.id)
+      this.store.purge(row.id)
+      log.info("applet.purged", { name: row.name, id: row.id })
+    }
+  }
+
+  /** Nightly backups (once a day after 03:30, or at the first check after it), their two-week pruning, the purge. */
+  maintenance(): void {
+    const now = this.now()
+    for (const v of this.views.values()) {
+      if (!v.manifest) continue
+      if (nightlyDue(now, this.backups.list(v.row.name).find((b) => b.kind === "nightly")?.id)) {
+        try {
+          this.backups.backup(v.row.name, this.dataDir(v.folder, v.manifest), "nightly")
+        } catch (err) {
+          log.warn("applet.nightly_backup_failed", { name: v.row.name, err: (err as Error).message })
+        }
+      }
+      try { this.backups.prune(v.row.name) } catch (err) { log.warn("applet.prune_failed", { name: v.row.name, err: (err as Error).message }) }
+    }
+    this.purgeDeleted()
   }
 
   private readFolder(name: string): { manifest?: AppletManifest; error?: string } | undefined {
@@ -192,7 +406,7 @@ export class AppletService {
 }
 
 /** What a device sees of one applet (GET /applets): no paths on the host, no keys. */
-export function appletPayload(v: AppletView) {
+export function appletPayload(v: AppletView, needsYou: SecretStatus[] = []) {
   const m = v.manifest
   return {
     id: v.row.id,
@@ -203,6 +417,7 @@ export function appletPayload(v: AppletView) {
     status: v.row.status,
     kind: m?.run ? "server" : "static",
     ...(v.error ? { error: v.error } : {}),
+    needsYou: needsYou.map((s) => ({ secret: s.name, state: s.state })),
     ...(m ? { jobs: m.jobs.map((j) => ({ name: j.name, every: j.every })), secrets: m.secrets, widget: m.widget ?? null } : {}),
     ...(v.process ? {
       process: {
