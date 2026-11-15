@@ -11,6 +11,7 @@ import { AppletSupervisor, appletBaseEnv, type AppletProcessState, type AppletSp
 import { AppletSecrets, type SecretStatus } from "./secrets"
 import { JobRunner, type JobRun, type JobTarget } from "./jobs"
 import { AppletBackups, nightlyDue, type BackupInfo } from "./backups"
+import { AppletDataApi } from "./data-api"
 
 /** How long a deleted applet (row, folder, backups) is kept before it is gone for good. */
 export const DELETED_KEEP_MS = 30 * 86_400_000
@@ -77,6 +78,8 @@ export class AppletService {
   readonly secrets: AppletSecrets
   readonly jobs: JobRunner
   readonly backups: AppletBackups
+  /** The built-in data API static applets keep their data with (/a/<name>/api/). */
+  readonly dataApi = new AppletDataApi()
   private views = new Map<string, AppletView>()
   private timers: ReturnType<typeof setInterval>[] = []
   private hostKey: Buffer
@@ -130,6 +133,7 @@ export class AppletService {
   /** Broker shutdown: stop the timers and leave servers running for the next broker. */
   shutdown(): void {
     for (const t of this.timers) clearInterval(t)
+    this.dataApi.closeAll()
     this.timers = []
     this.supervisor.detach()
   }
@@ -444,6 +448,7 @@ export class AppletService {
     const v = this.get(name)
     if (!v) return { ok: false, error: `no applet named "${name}"` }
     this.supervisor.stop(v.row.id)
+    this.dataApi.forget(this.dataDir(v.folder, v.manifest))
     const aside = `${name}-${v.row.id}`
     try {
       mkdirSync(this.deletedDir(), { recursive: true })

@@ -113,7 +113,10 @@ applet.json:
     "secrets": ["SOME_API_KEY"],         # names only
     "ownerOnly": ["/api/settings"] }     # paths only the user's own devices may open
   supermux gives the server $PORT and the applet's data dir as $DATA_DIR (= <folder>/data). A static applet's
-  public/ is served at its link. Every request through the link carries X-Mux-Via (device:<id> or
+  public/ is served at its link, and it keeps data with the built-in data API, relative to its page:
+  fetch("api/collections/books/records") (GET ?field=value&sort=-created, POST, and records/ID for GET, PATCH,
+  DELETE; api/collections/books/events streams changes), api/kv/KEY (any JSON) and api/files/PATH (bytes), all
+  stored in data/. Every request through the link carries X-Mux-Via (device:<id> or
   agent:<session>) and X-Mux-Via-Sig, the hex HMAC-SHA256 of X-Mux-Via with $MUX_VIA_KEY. For ownerOnly paths
   your server must ALSO refuse requests without a valid signature over a device:… value: agents on this
   machine can reach $PORT directly.

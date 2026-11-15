@@ -129,7 +129,11 @@ export async function handleAppletRequest(req: Request, deps: AppletRouteDeps): 
   }
 
   if (v.row.stoppedAt) return page(503, "This applet is stopped", "Start it again from Applet info in supermux.")
-  if (!v.manifest.run) return serveStaticApplet(v.folder, m.rest, req.method.toUpperCase())
+  if (!v.manifest.run) {
+    // A static applet's data API (a server applet owns its whole route, /api included).
+    if (m.rest === "/api" || m.rest.startsWith("/api/")) return deps.applets.dataApi.handle(req, deps.applets.dataDir(v.folder, v.manifest), m.rest.slice(4))
+    return serveStaticApplet(v.folder, m.rest, req.method.toUpperCase())
+  }
 
   let port = deps.applets.supervisor.port(v.row.id)
   const st = deps.applets.supervisor.state(v.row.id)
