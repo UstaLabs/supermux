@@ -117,9 +117,14 @@ class WorkspaceBrowserOpener(
     private fun place(url: String, groupId: String, split: Boolean, onPlaced: (viewId: String) -> Unit) {
         // A link the broker would refuse as a tab's page (over 4096 characters) still opens, in the system's browser.
         val state = BrowserViewState.page(url)?.toJson() ?: return openSystem(url)
+        // #158: a tab the broker won't make (one older than v0.18.0 has no "browser" kind, or the network failed) is
+        // taken back out, so the link opens in the system's browser instead: a tap must never do nothing.
+        val postOrOpen: suspend (String, JsonObject, String) -> String? = { id, s, g ->
+            post(id, s, g).also { created -> if (created == null) openSystem(url) }
+        }
         placeNewView(
             id = newId(), kind = "browser", state = state, groupId = groupId, split = split, workspaceId = workspaceId,
-            provisional = provisional, edit = edit, post = post, scope = scope, newId = newId,
+            provisional = provisional, edit = edit, post = postOrOpen, scope = scope, newId = newId,
             onPlaced = onPlaced, onWithdrawn = {},
         )
     }
