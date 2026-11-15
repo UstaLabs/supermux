@@ -104,3 +104,34 @@ test("restart shows only what the server printed since this start", async () => 
   expect(second.value.logs.match(/run-\d+/g)?.length).toBe(1)
   expect(second.value.logs).toContain("--- not a header")
 })
+
+test("new: the template carries the page API; --from warns about a reserved _supermux/", async () => {
+  const { op, root } = setup()
+  await op("applet_new", { applet: "plain" })
+  expect(readFileSync(join(root, "applets", "plain", "public", "index.html"), "utf8")).toContain('<script src="_supermux/api.js"></script>')
+  const src = join(root, "src2")
+  mkdirSync(join(src, "public", "_supermux"), { recursive: true })
+  const r = await op("applet_new", { applet: "clash", from: src }) as any
+  expect(r.value.warnings[0]).toContain("reserved")
+})
+
+test("ask: one chat per applet, made once; an Agent by name", async () => {
+  const root = mkdtempSync(join(tmpdir(), "applets-ask-"))
+  const db = openDb(":memory:"); runMigrations(db, MIGRATIONS)
+  const calls: any[] = []
+  const svc = new AppletService({ db, appletsDir: join(root, "applets"), stateDir: join(root, "state"), backupsDir: join(root, "backups"),
+    ask: async (a, text, o) => { calls.push({ text, ...o }); return { sessionId: o.agent ? "pa" : o.chatId ?? "new-chat", name: o.agent ?? `${a.title} applet` } } })
+  cleanups.push(() => { svc.shutdown(); rmSync(root, { recursive: true, force: true }) })
+  mkdirSync(join(root, "applets", "mail"), { recursive: true })
+  writeFileSync(join(root, "applets", "mail", "applet.json"), JSON.stringify({ title: "Mail" }))
+  await svc.scan()
+  expect(await svc.ask("mail", "fix this card")).toEqual({ ok: true, sessionId: "new-chat", session: "Mail applet" })
+  await svc.ask("mail", "again")
+  await svc.ask("mail", "to tally", "Tally")
+  expect(calls).toEqual([
+    { text: "From the applet Mail: fix this card", chatId: undefined },
+    { text: "From the applet Mail: again", chatId: "new-chat" },
+    { text: "From the applet Mail: to tally", agent: "Tally", chatId: "new-chat" },
+  ])
+  expect(await svc.ask("mail", " ")).toMatchObject({ ok: false })
+})
