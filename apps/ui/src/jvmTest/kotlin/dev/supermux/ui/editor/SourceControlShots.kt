@@ -142,12 +142,17 @@ class SourceControlShots {
             Scene("20-clean", commits = "[]"),
             Scene("21-merge-into", set = { ask = ScmAsk.MergeInto }),
         )
+        // SHOTS_VARIANT: desktop dark (default), desktop light, or a phone (dark, touch, compact width).
+        val variant = System.getenv("SHOTS_VARIANT") ?: "desk-dark"
+        val phone = variant.startsWith("phone")
+        val appearance = if (variant.endsWith("light")) AppearanceMode.LIGHT else AppearanceMode.DARK
         for (s in scenes) runComposeUiTest {
             val state = SourceControlState(api(s))
             setContent {
-                PlatformTestProviders(FakePlatform(), pointer = true, widthClass = WindowWidthClass.Expanded, inputMode = InputMode.Pointer, uiPrefs = UiPrefs(FakeSettingsStore())) {
-                    SupermuxTheme(appearance = AppearanceMode.DARK) {
-                        Box(Modifier.size(380.dp, 860.dp)) { SourceControlPane(state, onOpenDiff = { _, _, _, _ -> }, onOpenFile = { _, _ -> }, onReview = {}) }
+                PlatformTestProviders(FakePlatform(), pointer = !phone, widthClass = if (phone) WindowWidthClass.Compact else WindowWidthClass.Expanded,
+                    inputMode = if (phone) InputMode.Touch else InputMode.Pointer, uiPrefs = UiPrefs(FakeSettingsStore())) {
+                    SupermuxTheme(appearance = appearance) {
+                        Box(Modifier.size(if (phone) 390.dp else 380.dp, if (phone) 844.dp else 860.dp)) { SourceControlPane(state, onOpenDiff = { _, _, _, _ -> }, onOpenFile = { _, _ -> }, onReview = {}) }
                     }
                 }
             }

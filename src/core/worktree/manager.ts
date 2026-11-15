@@ -129,7 +129,7 @@ export async function createSessionBranch(repoRoot: string, branch: string, base
 export async function recordBase(repoRoot: string, branch: string, base: string): Promise<void> {
   if (!base || base === "HEAD") return
   const remoteRef = await gitAsync(repoRoot, ["rev-parse", "--verify", "--quiet", `refs/remotes/${base}`]).then(() => true, () => false)
-  const name = remoteRef ? base.slice(base.indexOf("/") + 1) : base
+  const name = remoteRef ? base.slice(base.indexOf("/") + 1) : base // platform-ok: a git ref name ("origin/main"), not a path
   await gitAsync(repoRoot, ["config", `branch.${branch}.base`, name]).catch(() => {})
 }
 
