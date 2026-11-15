@@ -141,6 +141,20 @@ describe("menuRefresher (card #75)", () => {
 })
 
 // #123: Telegram shows a bot's command list in the user's language when one is set for it (language_code).
+describe("Telegram's 100-command limit (BOT_COMMANDS_TOO_MUCH)", () => {
+  test("many sessions: the menu stops at 100 commands and keeps every fixed command", () => {
+    const fixed = buildMenuEntries(registryWith()).map(e => e.command)
+    const many = buildMenuEntries(registryWith(...Array.from({ length: 150 }, (_, i) => `s${i}`)))
+    expect(many.length).toBe(100)
+    expect(many.slice(0, fixed.length).map(e => e.command)).toEqual(fixed)
+    expect(many.at(-1)?.command).toBe(`switch_to_s${99 - fixed.length}`)
+  })
+
+  test("few sessions: nothing is cut", () => {
+    expect(buildMenuEntries(registryWith("a", "b")).length).toBe(buildMenuEntries(registryWith()).length + 2)
+  })
+})
+
 describe("the menu in the user's language", () => {
   test("a Turkish menu has the same commands, worded in Turkish; session shortcuts keep their names", () => {
     const en = buildMenuEntries(registryWith("zoom"))

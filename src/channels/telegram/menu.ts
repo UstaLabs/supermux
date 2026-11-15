@@ -105,8 +105,13 @@ export function buildMenuEntries(registry: SessionLister, lang: BrokerLang = "en
     // The visible label keeps the original pretty name; only `command` is sanitized.
     push(sanitizeCommand(`switch_to_${safeName}`), `→ ${s.name}`)
   }
-  return out.filter(e => TG_COMMAND_RE.test(e.command))
+  // Telegram takes at most 100 commands and rejects the WHOLE list beyond that (BOT_COMMANDS_TOO_MUCH): the fixed
+  // commands come first, so only the last session shortcuts drop off (/sessions still reaches every session).
+  return out.filter(e => TG_COMMAND_RE.test(e.command)).slice(0, TG_MENU_MAX)
 }
+
+/** Telegram's limit on a bot's command list. */
+const TG_MENU_MAX = 100
 
 /**
  * Pushes the default list (English), then each [localized] list under its language: Telegram shows a user the list
@@ -122,7 +127,7 @@ export async function setMenu(api: any, entries: MenuEntry[], localized: Partial
 /**
  * The menu refresh, two ways (card #75): `refresh` for a caller that waits for it, `inBackground` for a
  * session start, which never does. Neither throws. A failure is logged once: the same error again stays
- * quiet until a refresh succeeds (with more than 100 sessions every refresh fails BOT_COMMANDS_TOO_MUCH).
+ * quiet until a refresh succeeds.
  */
 export function menuRefresher(refresh: () => Promise<void>, warn: (err: string) => void): { refresh(): Promise<void>; inBackground(): void } {
   let failing: string | undefined
