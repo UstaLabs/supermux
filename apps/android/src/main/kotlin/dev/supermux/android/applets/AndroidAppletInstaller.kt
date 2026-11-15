@@ -1,0 +1,81 @@
+// #117 S1: "Add to Home screen" for an applet on Android — a pinned shortcut (ShortcutManager.requestPinShortcut, One UI
+// shows its own "Add to Home screen?" sheet and badges the icon with supermux's) that opens the applet's own task, the
+// same AppletActivity intent the app opens it with, so a tap brings its existing Recents card back. Each applet is
+// also a dynamic shortcut (long-press supermux's icon), most recent first.
+package dev.supermux.android.applets
+
+import android.content.Context
+import android.content.pm.ShortcutInfo
+import android.content.pm.ShortcutManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.drawable.Icon
+import dev.supermux.net.AppletDto
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.session.AppletInstaller
+
+class AndroidAppletInstaller(private val context: Context) : AppletInstaller {
+    private val shortcuts: ShortcutManager? get() = context.getSystemService(ShortcutManager::class.java)
+
+    override val phone: Boolean = true
+
+    private fun id(hostId: String, name: String) = "applet:$hostId/$name"
+
+    override fun isInstalled(hostId: String, applet: AppletDto): Boolean =
+        runCatching { shortcuts?.pinnedShortcuts?.any { it.id == id(hostId, applet.name) } == true }.getOrDefault(false)
+
+    override suspend fun install(hostId: String, applet: AppletDto, icon: ByteArray?): String? {
+        val sm = shortcuts ?: return localized(Str.applets_install_no_home)
+        if (!sm.isRequestPinShortcutSupported) return localized(Str.applets_install_no_home)
+        val title = applet.title.ifBlank { applet.name }
+        val info = ShortcutInfo.Builder(context, id(hostId, applet.name))
+            .setShortLabel(title.take(24))
+            .setLongLabel(title)
+            .setIcon(Icon.createWithAdaptiveBitmap(iconBitmap(icon, title)))
+            .setIntent(AppletActivity.intent(context, hostId, applet.name, title))
+            .build()
+        return runCatching {
+            // Offered among the app's own shortcuts too (long-press supermux), then pinned with the system's sheet.
+            if (android.os.Build.VERSION.SDK_INT >= 30) runCatching { sm.pushDynamicShortcut(info) }
+            if (sm.requestPinShortcut(info, null)) null else localized(Str.applets_install_refused)
+        }.getOrElse { it.message ?: localized(Str.applets_install_refused) }
+    }
+
+    /**
+     * An adaptive icon's 108dp square with the applet's own image in its safe zone, or the app's lettered tile: the
+     * project tiles' colour (hsl of the title's hash, 45 %, 42 %) and the title's first letter in white.
+     */
+    private fun iconBitmap(bytes: ByteArray?, title: String): Bitmap {
+        val size = 432
+        val out = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val c = Canvas(out)
+        val decoded = bytes?.let { runCatching { BitmapFactory.decodeByteArray(it, 0, it.size) }.getOrNull() }
+        if (decoded != null) {
+            c.drawColor(Color.WHITE)
+            val inset = size / 6
+            c.drawBitmap(decoded, null, android.graphics.Rect(inset, inset, size - inset, size - inset), Paint(Paint.FILTER_BITMAP_FLAG))
+            return out
+        }
+        val hue = ((title.hashCode() ushr 1) % 360).toFloat()
+        c.drawColor(Color.HSVToColor(hslToHsv(hue, 0.45f, 0.42f)))
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = size * 0.36f
+            textAlign = Paint.Align.CENTER
+            isFakeBoldText = true
+        }
+        val y = size / 2f - (p.descent() + p.ascent()) / 2f
+        c.drawText(title.first().uppercaseChar().toString(), size / 2f, y, p)
+        return out
+    }
+
+    private fun hslToHsv(h: Float, s: Float, l: Float): FloatArray {
+        val v = l + s * minOf(l, 1 - l)
+        val sv = if (v == 0f) 0f else 2 * (1 - l / v)
+        return floatArrayOf(h, sv, v)
+    }
+}
