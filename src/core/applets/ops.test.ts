@@ -8,6 +8,10 @@ import { AppletService } from "./service"
 import { handleAppletOp } from "./ops"
 import { spawnProcessSync } from "../process/launcher"
 
+// These run POSIX shell command lines (sh -c, $VARS, printf), signal process groups and check file modes; the
+// Windows supervisor (cmd.exe /c, taskkill, the PowerShell start fingerprint) is covered by the platform layer's tests.
+const posix = test.skipIf(process.platform === "win32")
+
 const cleanups: (() => void)[] = []
 afterEach(() => { while (cleanups.length) cleanups.pop()!() })
 
@@ -22,7 +26,7 @@ function setup() {
 }
 const git = (cwd: string, ...a: string[]) => spawnProcessSync(["git", ...a], { cwd, stdout: "pipe", stderr: "pipe" }).stdout.toString().trim()
 
-test("new: a static applet with data/ ignored and its own git identity, listed at once, made by the session", async () => {
+posix("new: a static applet with data/ ignored and its own git identity, listed at once, made by the session", async () => {
   const { svc, op, root } = setup()
   const r = await op("applet_new", { applet: "job-tracker", title: "Job tracker" }) as any
   expect(r.ok).toBe(true)
@@ -38,7 +42,7 @@ test("new: a static applet with data/ ignored and its own git identity, listed a
   expect(((await op("applet_new", { applet: "Job_Tracker" })) as any).error).toContain("can't be an applet name")
 })
 
-test("new --from adopts a folder, keeps its history and adds the ignore + identity", async () => {
+posix("new --from adopts a folder, keeps its history and adds the ignore + identity", async () => {
   const { op, root } = setup()
   const src = join(root, "src")
   mkdirSync(join(src, "public"), { recursive: true })
@@ -55,7 +59,7 @@ test("new --from adopts a folder, keeps its history and adds the ignore + identi
   expect(((await op("applet_new", { applet: "rel", from: "relative/dir" })) as any).error).toContain("absolute")
 })
 
-test("run and logs print the real output and the exit code; restart reports a server that dies", async () => {
+posix("run and logs print the real output and the exit code; restart reports a server that dies", async () => {
   const { op, root } = setup()
   await op("applet_new", { applet: "svc" })
   const folder = join(root, "applets", "svc")
@@ -70,7 +74,7 @@ test("run and logs print the real output and the exit code; restart reports a se
   expect(((await op("applet_run", { applet: "svc", job: "nope" })) as any).error).toContain("its jobs: sync")
 })
 
-test("backup copies data/ read-only and says where; info lists it; delete and secrets are refused", async () => {
+posix("backup copies data/ read-only and says where; info lists it; delete and secrets are refused", async () => {
   const { op, root } = setup()
   await op("applet_new", { applet: "notes" })
   writeFileSync(join(root, "applets", "notes", "data", "n.json"), "[1]")
@@ -89,12 +93,12 @@ test("backup copies data/ read-only and says where; info lists it; delete and se
   expect(list.value.map((a: any) => [a.name, a.state])).toEqual([["notes", "static"]])
 })
 
-test("an applet can't take the name of one of the CLI's verbs", async () => {
+posix("an applet can't take the name of one of the CLI's verbs", async () => {
   const { op } = setup()
   expect(((await op("applet_new", { applet: "logs" })) as any).error).toContain("own commands")
 })
 
-test("restart shows only what the server printed since this start", async () => {
+posix("restart shows only what the server printed since this start", async () => {
   const { op, root } = setup()
   await op("applet_new", { applet: "svc" })
   writeFileSync(join(root, "applets", "svc", "applet.json"), JSON.stringify({ title: "Svc", run: "echo --- not a header; echo run-$$; exec sleep 30" }))
@@ -105,7 +109,7 @@ test("restart shows only what the server printed since this start", async () => 
   expect(second.value.logs).toContain("--- not a header")
 })
 
-test("new: the template carries the page API; --from warns about a reserved _supermux/", async () => {
+posix("new: the template carries the page API; --from warns about a reserved _supermux/", async () => {
   const { op, root } = setup()
   await op("applet_new", { applet: "plain" })
   expect(readFileSync(join(root, "applets", "plain", "public", "index.html"), "utf8")).toContain('<script src="_supermux/api.js"></script>')
@@ -115,7 +119,7 @@ test("new: the template carries the page API; --from warns about a reserved _sup
   expect(r.value.warnings[0]).toContain("reserved")
 })
 
-test("ask: one chat per applet, made once; an Agent by name", async () => {
+posix("ask: one chat per applet, made once; an Agent by name", async () => {
   const root = mkdtempSync(join(tmpdir(), "applets-ask-"))
   const db = openDb(":memory:"); runMigrations(db, MIGRATIONS)
   const calls: any[] = []

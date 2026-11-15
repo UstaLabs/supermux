@@ -473,13 +473,14 @@ fun AppletsScreen(actions: AppletsActions, phone: Boolean, onBack: () -> Unit) {
         }
         Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), contentAlignment = Alignment.TopCenter) {
             BoxWithConstraints(Modifier.widthIn(max = 860.dp).fillMaxWidth().padding(horizontal = if (phone) 10.dp else 32.dp, vertical = if (phone) 8.dp else 24.dp)) {
+                val width = maxWidth
                 Column(Modifier.fillMaxWidth()) {
                     if (!phone) {
                         Text(localized(Str.sessions_applets_title), fontSize = 26.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface)
                         Spacer(Modifier.height(12.dp))
                     }
                     // The desktop grid fits as many 110dp-wide cells as the width allows; a phone has 4 across.
-                    val columns = if (phone) 4 else maxOf(1, (maxWidth / 120.dp).toInt())
+                    val columns = if (phone) 4 else maxOf(1, (width / 120.dp).toInt())
                     AppletGrid(
                         actions.applets.sortedBy { it.title.ifBlank { it.name }.lowercase() },
                         columns = columns,

@@ -9,6 +9,10 @@ import { AppletService } from "./service"
 import { AppletSupervisor, restartDelayMs } from "./supervisor"
 import { handleAppletRequest, type AppletCaller } from "../../channels/web/applet-route"
 
+// These run POSIX shell command lines (sh -c, $VARS, printf), signal process groups and check file modes; the
+// Windows supervisor (cmd.exe /c, taskkill, the PowerShell start fingerprint) is covered by the platform layer's tests.
+const posix = test.skipIf(process.platform === "win32")
+
 const cleanups: (() => void)[] = []
 afterEach(() => { while (cleanups.length) cleanups.pop()!() })
 
@@ -37,14 +41,14 @@ const agent: AppletCaller = { kind: "agent", session: "s1" }
 const get = (svc: AppletService, path: string, caller: AppletCaller | null = device, init: RequestInit = {}) =>
   handleAppletRequest(new Request(`http://broker${path}`, init), { applets: svc, caller: () => caller ?? undefined, own: { cookies: ["cmux_token", "cmux_preview"] } })
 
-test("054: the applets table has no session id", () => {
+posix("054: the applets table has no session id", () => {
   const db = openDb(":memory:")
   runMigrations(db, MIGRATIONS)
   const cols = (db.query("PRAGMA table_info(applets)").all() as { name: string }[]).map((c) => c.name)
   expect(cols).toEqual(["id", "name", "title", "icon", "status", "updated_by", "updated_at", "created_at", "deleted_at", "stopped_at"])
 })
 
-test("a folder with an applet.json becomes an applet with a stable id; title changes keep it; a gone folder is kept as missing", async () => {
+posix("a folder with an applet.json becomes an applet with a stable id; title changes keep it; a gone folder is kept as missing", async () => {
   const { svc, make, appletsDir } = setup()
   make("notes", { title: "Notes" })
   mkdirSync(join(appletsDir, "not-yet")) // no applet.json: not an applet
@@ -64,7 +68,7 @@ test("a folder with an applet.json becomes an applet with a stable id; title cha
   expect(svc.get("notes")!.row).toMatchObject({ id, status: "ok", title: "Back" })
 })
 
-test("a broken applet.json is listed as invalid with the reason, and its page says so", async () => {
+posix("a broken applet.json is listed as invalid with the reason, and its page says so", async () => {
   const { svc, make } = setup()
   make("bad", { title: "Bad", run: 5 })
   await svc.scan()
@@ -74,7 +78,7 @@ test("a broken applet.json is listed as invalid with the reason, and its page sa
   expect(await res.text()).toContain("must be a non-empty string")
 })
 
-test("a static applet serves public/, never outside it", async () => {
+posix("a static applet serves public/, never outside it", async () => {
   const { svc, make, root } = setup()
   make("notes", { title: "Notes" }, { "public/index.html": "<h1>hi</h1>", "public/a/b.js": "x()", "secret.txt": "no" })
   writeFileSync(join(root, "outside.txt"), "no")
@@ -98,7 +102,7 @@ const ECHO = `Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1",
   return Response.json({ path: new URL(req.url).pathname, headers: h, dataDir: process.env.DATA_DIR, telegram: process.env.MUX_TELEGRAM_BOT_TOKEN ?? null })
 } })`
 
-test("a server applet gets $PORT and $DATA_DIR, a clean env, and a signed X-Mux-Via; forged X-Mux-* and supermux's cookie never reach it", async () => {
+posix("a server applet gets $PORT and $DATA_DIR, a clean env, and a signed X-Mux-Via; forged X-Mux-* and supermux's cookie never reach it", async () => {
   process.env.MUX_TELEGRAM_BOT_TOKEN = "leak-me"
   cleanups.push(() => { delete process.env.MUX_TELEGRAM_BOT_TOKEN })
   const { svc, make } = setup()
@@ -120,7 +124,7 @@ test("a server applet gets $PORT and $DATA_DIR, a clean env, and a signed X-Mux-
   expect(body.headers["x-mux-via-sig"]).toBe(createHmac("sha256", svc.viaKey(id)).update("device:0123456789abcdef").digest("hex"))
 })
 
-test("ownerOnly paths answer 403 to an agent and pass for a device", async () => {
+posix("ownerOnly paths answer 403 to an agent and pass for a device", async () => {
   const { svc, make } = setup()
   make("echo", { title: "Echo", run: `${process.execPath} server.ts`, ownerOnly: ["/api/settings"] }, { "server.ts": ECHO })
   await svc.scan()
@@ -131,7 +135,7 @@ test("ownerOnly paths answer 403 to an agent and pass for a device", async () =>
   expect((await get(svc, "/a/echo/api/settings", device)).status).toBe(200)
 })
 
-test("a crashed server is restarted, and its output is in the log", async () => {
+posix("a crashed server is restarted, and its output is in the log", async () => {
   const { svc, make } = setup()
   make("flaky", { title: "Flaky", run: `printf 'b%s\\n' ooted; ${process.execPath} server.ts` }, { "server.ts": ECHO })
   await svc.scan()
@@ -146,7 +150,7 @@ test("a crashed server is restarted, and its output is in the log", async () => 
   expect(svc.supervisor.logs(id).match(/^booted$/gm)?.length).toBe(2)
 })
 
-test("a new broker adopts the server the last one left running, and starts over when it is gone", async () => {
+posix("a new broker adopts the server the last one left running, and starts over when it is gone", async () => {
   const { svc, make, db, root } = setup()
   make("echo", { title: "Echo", run: `${process.execPath} server.ts` }, { "server.ts": ECHO })
   await svc.scan()
@@ -171,7 +175,7 @@ test("a new broker adopts the server the last one left running, and starts over 
   expect((await get(svc3, "/a/echo/")).status).toBe(200)
 })
 
-test("removing run, or the folder, stops the server", async () => {
+posix("removing run, or the folder, stops the server", async () => {
   const { svc, make, appletsDir } = setup()
   make("echo", { title: "Echo", run: `${process.execPath} server.ts` }, { "server.ts": ECHO, "public/index.html": "static now" })
   await svc.scan()
@@ -184,11 +188,11 @@ test("removing run, or the folder, stops the server", async () => {
   expect(await (await get(svc, "/a/echo/")).text()).toBe("static now")
 })
 
-test("restart delays grow to a minute", () => {
+posix("restart delays grow to a minute", () => {
   expect([1, 2, 3, 7, 20].map(restartDelayMs)).toEqual([1000, 2000, 4000, 60000, 60000])
 })
 
-test("_supermux: the page API script, and notify through the applet's own route (devices only)", async () => {
+posix("_supermux: the page API script, and notify through the applet's own route (devices only)", async () => {
   const sent: string[] = []
   const root = mkdtempSync(join(tmpdir(), "applets-api-"))
   const db = openDb(":memory:"); runMigrations(db, MIGRATIONS)
