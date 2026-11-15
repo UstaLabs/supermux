@@ -127,6 +127,15 @@ test("discardSession force-removes worktree + branch without merging", async () 
   expect(() => g(repo, "rev-parse", "--verify", h.sessionBranch)).toThrow()
 })
 
+test("#152: discarding a session on a branch the user picked removes the copy and keeps the branch", async () => {
+  const repo = tmpRepo()
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
+  const r = await discardSession({ ...sess(repo, h), keepBranch: true })
+  expect(r.status).toBe("discarded")
+  expect(existsSync(h.worktreeDir)).toBe(false)
+  expect(g(repo, "rev-parse", "--verify", h.sessionBranch)).toBe(g(repo, "rev-parse", "main"))
+})
+
 test("openPrForSession pushes the branch to origin (the reliable floor)", async () => {
   const repo = tmpRepo()
   const bare = mkdtempSync(join(tmpdir(), "mux-bare-")); execFileSync("git", ["init", "--bare", "-b", "main", bare])

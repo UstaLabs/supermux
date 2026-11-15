@@ -7,7 +7,11 @@ import { publishBranch } from "../git/remote"
 import { openPullRequest, compareUrl } from "../git/pr"
 import { paths } from "@supermux/platform"
 
-export interface FinishSession { repoRoot: string; worktreeDir: string; sessionBranch: string; baseBranch: string }
+export interface FinishSession {
+  repoRoot: string; worktreeDir: string; sessionBranch: string; baseBranch: string
+  /** #152: a branch the user picked (an existing one, a pull request's) is theirs: discard keeps it. */
+  keepBranch?: boolean
+}
 export interface FinishOpts { commitFirst?: boolean; commitMessage?: string; cleanup?: boolean; deleteBranch?: boolean; draft?: boolean; prTitle?: string; prBody?: string }
 
 export type FinishResult =
@@ -145,6 +149,6 @@ export async function openPrForSession(s: FinishSession, opts?: FinishOpts, onPr
 /** Throw the session away: force-remove the (mux-owned) worktree + its branch
  *  without integrating anything. The base branch is never touched. */
 export async function discardSession(s: FinishSession): Promise<FinishResult> {
-  if (isMuxOwned(s.worktreeDir)) await removeWorktree(s.repoRoot, s.worktreeDir, s.sessionBranch, { force: true })
+  if (isMuxOwned(s.worktreeDir)) await removeWorktree(s.repoRoot, s.worktreeDir, s.sessionBranch, { force: true, keepBranch: s.keepBranch })
   return { status: "discarded", branch: s.sessionBranch }
 }

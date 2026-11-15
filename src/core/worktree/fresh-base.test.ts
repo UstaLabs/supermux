@@ -93,3 +93,14 @@ test("createWorktree (a worktree made beforehand) starts from the fetched base t
   expect(h.baseBranch).toBe("dev")
   await removeWorktree(h.repoRoot, h.worktreeDir, h.sessionBranch)
 }, REAL_GIT_MS)
+
+test("#152: a branch the user picked is checked out as it is: never moved to the fetched base, never remade", async () => {
+  const { local, other } = setup()
+  git(local, "branch", "feat/x", "dev")   // untouched: at the base's tip, which a session's own branch would leave
+  pushNew(other, "two")
+  const workdir = join(worktreesRoot(), repoSlug(local), "as-is")
+  expect(await ensureWorktreeAt({ repoRoot: local, workdir, sessionBranch: "feat/x", baseBranch: "dev", asIs: true })).toEqual({ created: true })
+  expect(git(workdir, "rev-parse", "HEAD")).toBe(git(local, "rev-parse", "dev"))
+  await removeWorktree(local, workdir, "feat/x")   // the branch goes too
+  await expect(ensureWorktreeAt({ repoRoot: local, workdir, sessionBranch: "feat/x", baseBranch: "dev", asIs: true })).rejects.toThrow("feat/x no longer exists")
+}, REAL_GIT_MS)

@@ -52,7 +52,8 @@ import { isProcessAlive, releasePidFile } from "./core/session-manager/pid-file"
 import { ensureWindowId } from "./core/session-manager/window-id"
 import { resumedSessionPid } from "./core/session-manager/resume-pid"
 import { captureBaseCommits, spawnSession as spawnSessionHelper, spawnPA } from "./core/session-manager/spawn-helper"
-import { createAsleep, type CreateAsleepDeps } from "./core/session-manager/born-asleep"
+import { createAsleep, type CreateAsleepDeps, type SessionSource } from "./core/session-manager/born-asleep"
+import { UserPrefs } from "./core/settings/user-prefs"
 import { folderReady } from "./core/session-manager/folder-ready"
 import { SessionChain, deliverOnChain, ensureLiveWith, isLiveWith, type ChainDelivery, type LivenessDeps } from "./core/session-manager/session-chain"
 import { SessionManager } from "./core/session-manager/manager"
@@ -1853,7 +1854,7 @@ async function finishSessionById(sessionId: string, req: FinishRequest): Promise
   // removes the copy and only ever deletes the branch supermux made for it (session_branch), never one switched to.
   const branch = req.action === "discard" ? s.session_branch : liveBranch(s.workdir)
   if (!branch) return { error: "this chat isn't on a branch" }
-  const session = { id: sessionId, repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: branch, baseBranch: s.base_branch }
+  const session = { id: sessionId, repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: branch, baseBranch: s.base_branch, keepBranch: s.source_kind === "existing" || s.source_kind === "pr" }
   const opts: FinishJobOpts = { ...req, cleanup: false }  // worktree removal handled by the archive path below
   const sessionName = s.name
   return startFinishJob(session, opts, {
@@ -2369,7 +2370,7 @@ try {
 const worktreeService = new WorktreeService({
   root: worktreesRoot(),
   owners: () => registry.db
-    .query("SELECT id, name, status, user_status, workdir, base_branch, session_branch FROM sessions")
+    .query("SELECT id, name, status, user_status, workdir, base_branch, session_branch, source_kind FROM sessions")
     .all() as OwnerRow[],
   broadcast: (frame) => webChannel?.broadcastToAll(frame),
   watch: (dir, onEvent) => watchDir(dir, onEvent),
@@ -3113,6 +3114,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     },
     onSendFromWeb: () => {},                                // wired below via webChannel.on('inbound')
     fileStore,
+    userPrefs: new UserPrefs(db),
     htmlPages,
     findCard: (session, id) => messageLog.findCard(session, id),
     pushStore,
@@ -3224,6 +3226,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         perfTrace: trace,
         // Card #75: answered as soon as the session exists; its agent starts on the wake below.
         asleep: true,
+        source: args.source,
+        createdBy: args.createdBy,
       }).catch((err) => {
         startTraces.mark(trace, "failed", { ms: msSince(t0), err: String(err).slice(0, 200) })
         throw err
@@ -3930,7 +3934,7 @@ const killSession = (id: string) => sessionManager.kill(id)
 // base commits review diffs against, and the git pane starts watching it. A checkout that fails fails
 // the start with git's reason; it never falls back to the main repo. No-op when the workdir is
 // healthy or the session isn't worktree-backed.
-async function ensureSessionWorktree(session: { id: string; name: string; workdir: string; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null }): Promise<void> {
+async function ensureSessionWorktree(session: { id: string; name: string; workdir: string; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null; source_kind?: string | null }): Promise<void> {
   if (!session.repo_root || !session.session_branch) return
   if (existsSync(session.workdir) && readdirSync(session.workdir).length > 0) return
   const t = performance.now()
@@ -3940,6 +3944,8 @@ async function ensureSessionWorktree(session: { id: string; name: string; workdi
     workdir: session.workdir,
     sessionBranch: session.session_branch,
     baseBranch: session.base_branch || "HEAD",
+    // #152: a branch the user picked is theirs, checked out as it is.
+    asIs: session.source_kind === "existing" || session.source_kind === "pr",
     onCheckedOut: () => { checkoutsInFlight.delete(session.workdir) },
   }).finally(() => { checkoutsInFlight.delete(session.workdir) })
   startTraces.markSession(session.id, "worktree", { ms: msSince(t), created })
@@ -4147,6 +4153,9 @@ async function spawnSessionDirect(args: {
   worktreeHandle?: WorktreeHandle
   /** Card #75: this start's trace id (StartTraces.begin), when tracing is on. */
   perfTrace?: string
+  /** #152: what the launcher picked, and who asked (JSON). */
+  source?: SessionSource
+  createdBy?: string
 }) {
   const agent = args.agent ?? AgentKind.Claude
   const trace = args.perfTrace
@@ -4379,6 +4388,8 @@ async function spawnSession(args: SpawnSessionArgs): Promise<{ name: string; ses
     workspaceId: args.workspaceId,
     id: args.id,
     worktreeHandle: args.worktreeHandle,
+    source: args.source,
+    createdBy: args.createdBy,
   }).catch((err) => {
     startTraces.mark(trace, "create_failed", { ms: msSince(t), err: String(err).slice(0, 200) })
     throw err
@@ -4388,7 +4399,8 @@ async function spawnSession(args: SpawnSessionArgs): Promise<{ name: string; ses
   startTraces.mark(trace, "row", { ms: msSince(t), session: row.id, worktree: !!row.session_branch })
   // What this start made, read now: the copy below writes a peer's worktree fields into the same row
   // object, and a failed start must remove only its own branch, never the peer's checkout.
-  const made = row.session_branch && row.repo_root && !args.worktreeHandle
+  // #152: a branch the user picked, or another session's copy, was not made by this start.
+  const made = row.session_branch && row.repo_root && !args.worktreeHandle && (!row.source_kind || row.source_kind === "new")
     ? { repoRoot: row.repo_root, workdir: row.workdir, branch: row.session_branch }
     : undefined
   if (!row.session_branch) {

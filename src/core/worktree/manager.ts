@@ -117,6 +117,11 @@ export async function createSessionBranch(repoRoot: string, branch: string, base
   await gitAsync(repoRoot, ["branch", branch, base])
 }
 
+/** #152: a branch picked that is only on a remote gets a local branch tracking it, made at Send like a new one. */
+export async function createTrackingBranch(repoRoot: string, branch: string, remoteRef: string): Promise<void> {
+  await gitAsync(repoRoot, ["branch", "--track", branch, remoteRef])
+}
+
 /** A large (or LFS) repo's checkout at a session's wake: as long as the setup hook may run. */
 const CHECKOUT_TIMEOUT_MS = 600_000
 
@@ -129,6 +134,8 @@ const CHECKOUT_TIMEOUT_MS = 600_000
  */
 export async function ensureWorktreeAt(opts: {
   repoRoot: string; workdir: string; sessionBranch: string; baseBranch: string
+  /** #152: a branch the user picked (an existing one, a pull request's): checked out as it is, never moved or remade. */
+  asIs?: boolean
   /** git has checked the files out (the includes and the setup hook come after). */
   onCheckedOut?: () => void
 }): Promise<{ created: boolean }> {
@@ -142,8 +149,10 @@ export async function ensureWorktreeAt(opts: {
   await gitAsync(opts.repoRoot, ["worktree", "prune"])
   if ((await existingBranchNames(opts.repoRoot)).has(opts.sessionBranch)) {
     // The branch exists (made at Send, or only the dir was removed): check it out at the same path.
-    await startFromFreshBase(opts.repoRoot, opts.sessionBranch, opts.baseBranch)
+    if (!opts.asIs) await startFromFreshBase(opts.repoRoot, opts.sessionBranch, opts.baseBranch)
     await gitAsync(opts.repoRoot, ["worktree", "add", opts.workdir, opts.sessionBranch], { timeoutMs: CHECKOUT_TIMEOUT_MS })
+  } else if (opts.asIs) {
+    throw new Error(`the branch ${opts.sessionBranch} no longer exists`)
   } else {
     // Branch was deleted (e.g., after merge) — recreate it from the base so work can continue.
     const start = await freshBase(opts.repoRoot, opts.baseBranch)
