@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What Android's widget picker shows for supermux's widgets (#117 W1); everything inside the app comes from the
+     shared catalog (apps/ui/i18n). -->
+<resources>
+    <string name="widget_applets_label">Applets</string>
+    <string name="widget_applets_description">Your pinned applets. A tap opens one.</string>
+    <string name="widget_applet_label">Applet</string>
+    <string name="widget_applet_description">One applet and what it has to say, like how many are open.</string>
+</resources>

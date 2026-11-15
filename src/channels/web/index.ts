@@ -1216,6 +1216,13 @@ export class WebChannel implements Channel {
       const r = await this.opts.applets.notify(v.row.name, b.title, b.body)
       return r.ok ? this.json({ ok: true }) : this.json({ error: r.error }, 400)
     }
+    // ...and telling supermux its widget summary changed, so phone widgets follow now rather than within 15 minutes.
+    if (this.opts.applets && url.pathname === "/applet-api/widget" && req.method === "POST") {
+      const v = this.opts.applets.appletForToken(req.headers.get("x-supermux-applet-token") ?? "")
+      if (!v) return this.json({ error: "not an applet token" }, 401)
+      const r = await this.opts.applets.refreshWidget(v.row.name)
+      return r.ok ? this.json({ ok: true, summary: r.summary }) : this.json({ error: r.error }, 400)
+    }
     if (sub) {
       return this.handleProxyRoute(req, sub, server)
     }

@@ -55,6 +55,8 @@ export interface AppletServiceDeps {
   jobTickMs?: number
   /** How often the nightly backups and the 30-day purge are checked. 0 = never. */
   maintenanceMs?: number
+  /** How often the widget summaries ("widget": "/widget.json") are re-read. 0 = never (tests refresh by hand). */
+  widgetMs?: number
   now?: () => Date
   /** The broker's own loopback address, given to applet servers and jobs as $SUPERMUX_URL. */
   brokerUrl?: () => string | undefined
@@ -74,6 +76,22 @@ export interface AppletServiceDeps {
 
 /** How many applets the sidebar grid holds (3×3); a phone shows the first 8. */
 export const MAX_PINS = 9
+
+/** What a phone widget shows for an applet: its applet.json "widget" path answers this (all optional). */
+export interface WidgetSummary { value?: string; label?: string; lines?: string[] }
+
+/** The summary an applet answered, trimmed to what fits a widget; null when it isn't one. */
+export function parseWidgetSummary(raw: unknown): WidgetSummary | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null
+  const o = raw as Record<string, unknown>
+  const text = (x: unknown, max: number) =>
+    typeof x === "string" ? x.trim().slice(0, max) : typeof x === "number" && Number.isFinite(x) ? String(x).slice(0, max) : ""
+  const value = text(o.value, 12)
+  const label = text(o.label, 40)
+  const lines = Array.isArray(o.lines) ? o.lines.map((l) => text(l, 80)).filter(Boolean).slice(0, 3) : []
+  if (!value && !label && !lines.length) return null
+  return { ...(value ? { value } : {}), ...(label ? { label } : {}), ...(lines.length ? { lines } : {}) }
+}
 const PINS_KEY = "applets.pins"
 
 export type Result<T> = ({ ok: true } & T) | { ok: false; error: string }
@@ -92,6 +110,8 @@ export class AppletService {
   /** The built-in data API static applets keep their data with (/a/<name>/api/). */
   readonly dataApi = new AppletDataApi()
   private views = new Map<string, AppletView>()
+  /** The last widget summary each applet answered, by applet id. */
+  private summaries = new Map<string, WidgetSummary>()
   private timers: ReturnType<typeof setInterval>[] = []
   private hostKey: Buffer
   private readonly now: () => Date
@@ -154,7 +174,60 @@ export class AppletService {
     if (body !== undefined && typeof body !== "string") return { ok: false, error: "body must be text" }
     if (!this.deps.notify) return { ok: false, error: "this machine can't send notifications" }
     await this.deps.notify({ name: v.row.name, title: v.row.title }, title.trim().slice(0, 120), (body ?? "").trim().slice(0, 500))
+    // Something happened: its widget's numbers likely moved too.
+    void this.refreshWidget(v.row.name)
     return { ok: true }
+  }
+
+  /** The summary its widget shows, as last read; undefined when the applet has none (or it couldn't be read). */
+  widgetSummary(id: string): WidgetSummary | undefined { return this.summaries.get(id) }
+
+  /** Reads one applet's widget summary again (an applet's server asks this after a change, so widgets follow at once). */
+  async refreshWidget(name: string): Promise<Result<{ summary: WidgetSummary | null }>> {
+    const v = this.get(name)
+    if (!v) return { ok: false, error: `no applet named "${name}"` }
+    const changed = await this.readWidget(v)
+    if (changed) this.deps.onChange?.()
+    return { ok: true, summary: this.summaries.get(v.row.id) ?? null }
+  }
+
+  /** Every applet's summary again; one change notice when any moved. */
+  async refreshWidgets(): Promise<void> {
+    let changed = false
+    for (const v of this.list()) if (await this.readWidget(v)) changed = true
+    if (changed) this.deps.onChange?.()
+  }
+
+  /** Reads [v]'s summary: a file under public/ for a static applet, a GET to its server otherwise. True when it moved. */
+  private async readWidget(v: AppletView): Promise<boolean> {
+    const before = JSON.stringify(this.summaries.get(v.row.id) ?? null)
+    const path = v.manifest?.widget
+    let raw: unknown = undefined
+    if (path && !v.row.stoppedAt) {
+      try {
+        if (v.manifest?.run) {
+          const port = this.supervisor.port(v.row.id)
+          if (port && v.process?.state === "running") {
+            const res = await fetch(`http://127.0.0.1:${port}${path}`, { signal: AbortSignal.timeout(5_000), headers: { "x-mux-via": "supermux:widget", "x-mux-via-sig": this.signVia(v.row.id, "supermux:widget") } })
+            if (res.ok) raw = await res.json()
+          } else {
+            // A server that isn't up keeps showing what it last said.
+            return false
+          }
+        } else {
+          const root = join(v.folder, "public")
+          const file = join(root, decodeURIComponent(path.split("?")[0]!))
+          const inside = relative(root, file)
+          if (inside && !inside.startsWith("..") && !isAbsolute(inside) && existsSync(file)) raw = JSON.parse(readFileSync(file, "utf8"))
+        }
+      } catch (err) {
+        log.debug("applet_widget_read_failed", { applet: v.row.name, error: (err as Error).message })
+      }
+    }
+    const summary = parseWidgetSummary(raw)
+    if (summary) this.summaries.set(v.row.id, summary)
+    else this.summaries.delete(v.row.id)
+    return JSON.stringify(summary) !== before
   }
 
   /**
@@ -218,6 +291,8 @@ export class AppletService {
     every(this.deps.rescanMs, () => void this.scan())
     every(this.deps.jobTickMs, () => this.jobs.tick(this.jobTargets()))
     every(this.deps.maintenanceMs, () => this.maintenance())
+    every(this.deps.widgetMs, () => void this.refreshWidgets())
+    if (this.deps.widgetMs) void this.refreshWidgets()
     if (this.deps.jobTickMs) this.jobs.tick(this.jobTargets())
     if (this.deps.maintenanceMs) this.maintenance()
   }
@@ -697,7 +772,7 @@ export class AppletService {
 }
 
 /** What a device sees of one applet (GET /applets): no paths on the host, no keys. */
-export function appletPayload(v: AppletView, needsYou: SecretStatus[] = [], pin: number | null = null) {
+export function appletPayload(v: AppletView, needsYou: SecretStatus[] = [], pin: number | null = null, summary?: WidgetSummary) {
   const m = v.manifest
   return {
     id: v.row.id,
@@ -713,6 +788,8 @@ export function appletPayload(v: AppletView, needsYou: SecretStatus[] = [], pin:
     /** Its place in the sidebar grid, or null when it isn't pinned. */
     pin,
     ...(m ? { jobs: m.jobs.map((j) => ({ name: j.name, every: j.every })), secrets: m.secrets, widget: m.widget ?? null } : {}),
+    /** What its phone widget shows (from its "widget" path); null when it has none. */
+    summary: summary ?? null,
     ...(v.process ? {
       process: {
         state: v.process.state, restarts: v.process.restarts, startedAt: v.process.startedAt ?? null,

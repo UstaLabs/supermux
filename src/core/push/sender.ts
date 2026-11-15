@@ -18,6 +18,8 @@ export interface PushPayload {
   hostId?: string
   /** #143: set when the notification is an agent's prompt: what a client needs to answer it from the notification. */
   request?: PushRequest
+  /** #117: the applet that sent it (supermux.notify): a phone refreshes its applet widgets on it. */
+  applet?: string
 }
 
 /** An open prompt, as a notification carries it (inside the encrypted native payload). */
