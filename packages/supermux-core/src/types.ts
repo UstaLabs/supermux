@@ -173,7 +173,8 @@ export type CoreEvent =
   | { type: "message.accepted"; sessionId: string; messageId: string }
   | { type: "message.started"; sessionId: string; messageId: string }
   | { type: "message.completed"; sessionId: string; messageId: string; result: Completion }
-  | { type: "account.switched"; sessionId: string; from: string; to: string; reason: "manual" | "limit" | "unavailable" }
+  /** `why` (limit/unavailable switches, #159): the target was a seat in the session's own org with room, or the most room anywhere. */
+  | { type: "account.switched"; sessionId: string; from: string; to: string; reason: "manual" | "limit" | "unavailable"; why?: "same_org" | "most_room" }
   /** An idle token-account session was reopened (same account, same native id) to pick up a refreshed access token. */
   | { type: "account.refreshed"; sessionId: string; account: string }
   /** A rate limit was hit, or the account was refused, and no other account of the agent is available. */

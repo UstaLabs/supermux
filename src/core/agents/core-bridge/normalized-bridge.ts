@@ -18,6 +18,8 @@ export type NormalizedBridgeOpts = {
   onContext?: (context: { used: number; size: number }) => void
   /** A tool the main thread started (#144: "used in this chat"); a Skill call as `Skill:<skill>`. */
   onToolUsed?: (name: string) => void
+  /** #146: how long the agent's prompt cache lives, as its latest main-thread request said. */
+  onCacheTtl?: (ttl: "1h" | "5m") => void
   /** #144: a compaction of the main conversation, as it starts and as it ends (with its sizes, where known). */
   onCompaction?: (compaction: {
     compactionId: string; status: "in_progress" | "completed" | "failed" | "cancelled"
@@ -293,6 +295,7 @@ export function createNormalizedBridge(opts: NormalizedBridgeOpts) {
       opts.onUsage?.(event.rateLimits)
     }
     if (kind === "usage" && event.context != null && !child) opts.onContext?.(event.context)
+    if (kind === "usage" && event.cacheTtl != null && !child) opts.onCacheTtl?.(event.cacheTtl)
     if (kind === "compaction" && !child) {
       const { compactionId, status, before, after, trigger, summary, error } = event
       opts.onCompaction?.({

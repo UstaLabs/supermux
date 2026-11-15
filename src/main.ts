@@ -1280,6 +1280,12 @@ const compactAdvisor = new CompactAdvisor({
   now: () => Date.now(),
   autoEnabled: () => accountsSettings().compactBeforeWait,
   onAdvice: (id, advice) => webChannel?.broadcastToAll({ type: "compact_advice", session: id, advice }),
+  // Team seats: auto-switch would carry the chat to another seat of the same Anthropic org (cache warm there).
+  teammateCanTakeOver: async (id, threshold) => {
+    const s = registry.get(id)
+    if (!s || s.agent !== "claude" || !accountsSettings().autoSwitch) return false
+    return brokerAccounts.sameOrgSeatHasRoom(sessionAccountFields(s).account, threshold)
+  },
   compact: (id) => {
     void compactSession(id, undefined, { kind: "supermux" }).then((r) => {
       if (!r.ok) log.warn("auto_compact_refused", { session: id, err: r.error })
@@ -2162,13 +2168,16 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   // pushed to every client and said in the chat; so is an account the API refused, and an
   // auto-switch that found no other account. A refused account's mark (set or cleared) reaches the
   // Accounts screens through accounts_changed.
-  adapter.on("account", (ev: { event: string; from?: string; to?: string; reason?: string; account?: string; resetsAt?: Date; background?: boolean }) => {
+  adapter.on("account", (ev: { event: string; from?: string; to?: string; reason?: string; why?: string; account?: string; resetsAt?: Date; background?: boolean }) => {
     if (ev.event === "switched" && ev.to) {
       applySessionAccount(sessionId, ev.to)
       const why = ev.reason === "limit" ? "usage limit reached"
         : ev.reason === "unavailable" ? `${brokerAccounts.label(ev.from)} is unavailable`
         : "switched manually"
-      void notifySession(sessionId, `Switched to ${brokerAccounts.label(ev.to)} — ${why}`)
+      // Why the auto-switch picked this account (#159): a seat in the same organization keeps the prompt cache warm.
+      const picked = ev.why === "same_org" ? "; same organization, so the prompt cache stays warm" : ev.why === "most_room" ? "; the account with the most room left" : ""
+      log.info("account_switched", { session: sessionId, from: ev.from, to: ev.to, reason: ev.reason, why: ev.why })
+      void notifySession(sessionId, `Switched to ${brokerAccounts.label(ev.to)} — ${why}${picked}`)
     } else if (ev.event === "exhausted") {
       // A limit with auto-resume on: the "waiting" event that follows says it, with the time.
       if (ev.reason === "limit" && accountsSettings().autoResume) return
@@ -2285,7 +2294,8 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   // #146: the agent's own limit readings, and at each turn's end whether to compact before the wall.
   adapter.on("rate-limits", (raw: unknown) => compactAdvisor.noteRateLimits(sessionId, adapter.kind, raw))
   adapter.on("turn-start", () => compactAdvisor.turnStarted(sessionId))
-  adapter.on("turn-complete", () => compactAdvisor.turnCompleted(sessionId, adapter.kind, contextUsage.get(sessionId)?.used))
+  adapter.on("cache-ttl", (ttl: "1h" | "5m") => compactAdvisor.noteCacheLife(sessionId, adapter.kind, ttl === "5m" ? 5 * 60_000 : 60 * 60_000))
+  adapter.on("turn-complete", () => { void compactAdvisor.turnCompleted(sessionId, adapter.kind, contextUsage.get(sessionId)?.used) })
   // #144: a compaction starts (every client shows it at once) and ends as a "Compacted" line kept in the chat.
   adapter.on("compaction", (c: { compactionId: string; status: "in_progress" | "completed" | "failed" | "cancelled"; before?: number; after?: number; trigger?: "manual" | "auto"; summary?: string; error?: string }) => {
     webChannel?.broadcastToAll({ type: "compaction", session: sessionId, id: c.compactionId, status: c.status })
