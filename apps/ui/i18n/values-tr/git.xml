@@ -254,6 +254,8 @@
     <string name="scm_sent_fix">Bu sohbete gönderildi: başarısız “%1$s” denetimini günlüğüyle birlikte düzelt.</string>
     <string name="scm_sent_to_agent">Ajana gönderildi</string>
     <string name="scm_view_comment">Görüntüle</string>
+    <string name="scm_comment_on">·</string>
+    <string name="scm_pr_target_pick">Birleştirilecek dalı seç</string>
     <plurals name="scm_checks_failing">
         <item quantity="one">%1$d başarısız</item>
         <item quantity="other">%1$d başarısız</item>

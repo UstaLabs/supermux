@@ -156,4 +156,5 @@
         <item quantity="one">%1$d araç kullanıldı</item>
         <item quantity="other">%1$d araç kullanıldı</item>
     </plurals>
+    <string name="chatline_media_download_failed_click">İndirilemedi — tekrar denemek için tıklayın</string>
 </resources>

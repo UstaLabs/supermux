@@ -29,6 +29,11 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.border
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.text.withLink
+import androidx.compose.ui.draw.shadow
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -36,7 +41,6 @@ import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
-import androidx.compose.material.icons.automirrored.filled.CallMerge
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.RemoveCircleOutline
@@ -44,6 +48,7 @@ import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.runtime.collectAsState
 import androidx.compose.material.icons.filled.Check
@@ -132,7 +137,7 @@ fun scmGroups(files: List<ChangedFile>): Map<ScmGroup, List<ChangedFile>> {
 
 /** VS Code's letter on the right of a row: U untracked, A added, M modified, D deleted, R renamed, C conflict. */
 fun scmLetter(f: ChangedFile, group: ScmGroup): String = when {
-    group == ScmGroup.Merge -> "C"
+    group == ScmGroup.Merge -> "!"
     f.status == "added" && f.baseBlob == null && group == ScmGroup.Changes && f.staged == "none" -> "U"
     f.status == "added" -> "A"
     f.status == "deleted" -> "D"
@@ -562,14 +567,15 @@ fun SourceControlPane(
             repos == null && state.offline -> Note(localized(Str.scm_offline))
             repos == null -> Unit
             else -> LazyColumn(Modifier.fillMaxSize()) {
-                item(key = "commit") { CommitBox(state, scope) }
+                // Nothing to commit and nothing to amend: no message box (the prototype's clean state).
+                val nothing = repos.all { it.files.isEmpty() } && state.last == null && !state.merging && state.ask == null
+                if (!nothing) item(key = "commit") { CommitBox(state, scope) }
                 item(key = "banners") { Banners(state, scope) }
                 if (repos.all { it.files.isEmpty() }) item(key = "empty") {
                     val st = state.status
-                    Note(
-                        if (st?.upstream != null && st.ahead == 0 && st.behind == 0) localized(Str.scm_no_changes_synced, st.upstream!!)
-                        else localized(Str.scm_no_changes),
-                    )
+                    // Out of sync or unpublished: the button above already says what to do.
+                    if (st?.upstream != null && st.ahead == 0 && st.behind == 0) Note(mono(localized(Str.scm_no_changes_synced, st.upstream!!), st.upstream!!))
+                    else if (st?.upstream == null && st?.hasRemote != false && state.last == null) Note(localized(Str.scm_no_changes))
                 }
                 val multi = repos.count { it.files.isNotEmpty() } > 1
                 for (repo in repos) {
@@ -695,7 +701,7 @@ private fun CommitBox(state: SourceControlState, scope: kotlinx.coroutines.Corou
                 Box(Modifier.width(1.dp).fillMaxHeight().background(cs.onPrimary.copy(alpha = 0.25f)))
                 Box(Modifier.width(30.dp).fillMaxHeight().clickable { menu = true }.testTag("scm_commit_menu"), contentAlignment = Alignment.Center) {
                     Icon(Icons.Filled.KeyboardArrowDown, localized(Str.scm_commit_options), tint = cs.onPrimary, modifier = Modifier.size(16.dp))
-                    androidx.compose.material3.DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    ScmMenu(expanded = menu, onDismiss = { menu = false }, tag = "scm_commit_menu_list") {
                         PostItem(localized(Str.scm_commit), state.post == ScmPost.Commit) { menu = false; scope.launch { state.pick(ScmPost.Commit) } }
                         PostItem(localized(Str.scm_commit_amend), false, enabled = state.last != null && !state.lastPushed) { menu = false; if (!state.amend) state.toggleAmend() }
                         PostItem(localized(Str.scm_commit_push), state.post == ScmPost.Push) { menu = false; scope.launch { state.pick(ScmPost.Push) } }
@@ -767,8 +773,16 @@ private fun Banners(state: SourceControlState, scope: kotlinx.coroutines.Corouti
             ) {
                 Icon(Icons.Filled.Warning, null, tint = LocalSemantics.current.warning, modifier = Modifier.size(15.dp))
                 Column(Modifier.padding(start = 8.dp)) {
-                    Text(localized(Str.scm_merging, state.base ?: "", state.status?.branch ?: ""), fontSize = 12.sp, color = cs.onSurface)
-                    Text(localized(Str.scm_abort_merge), fontSize = 12.sp, color = cs.primary, modifier = Modifier.padding(top = 4.dp).clickable { scope.launch { state.abortMerge() } }.testTag("scm_abort"))
+                    // Abort Merge runs on in the sentence, as the prototype's link does.
+                    val said = mono(localized(Str.scm_merging, state.base ?: "", state.status?.branch ?: ""), state.base ?: "", state.status?.branch ?: "", bold = true)
+                    val abort = localized(Str.scm_abort_merge)
+                    Text(
+                        androidx.compose.ui.text.buildAnnotatedString {
+                            append(said); append(" ")
+                            withLink(androidx.compose.ui.text.LinkAnnotation.Clickable("abort", androidx.compose.ui.text.TextLinkStyles(androidx.compose.ui.text.SpanStyle(color = cs.primary))) { scope.launch { state.abortMerge() } }) { append(abort) }
+                        },
+                        fontSize = 12.sp, color = cs.onSurface, modifier = Modifier.testTag("scm_abort"),
+                    )
                 }
             }
         }
@@ -839,7 +853,7 @@ private fun BranchPicker(state: SourceControlState, scope: kotlinx.coroutines.Co
                     }
                 }
                 .testTag("scm_picker_filter"),
-            decorationBox = { inner -> if (state.pickFilter.isEmpty()) Text(localized(Str.scm_picker_placeholder), fontSize = 12.5.sp, color = cs.onSurfaceVariant); inner() },
+            decorationBox = { inner -> if (state.pickFilter.isEmpty()) Text(localized(Str.scm_picker_placeholder), fontSize = 12.5.sp, fontFamily = MonoFontFamily, color = cs.onSurfaceVariant); inner() },
         )
         if (typed.isNotEmpty() && !exists) {
             PickRow(localized(Str.scm_create_branch_named, typed), null, null, "scm_pick_create") { scope.launch { state.switchTo(typed, create = true) } }
@@ -891,10 +905,10 @@ private fun PickRow(name: String, detail: String?, openChat: (() -> Unit)?, tag:
     ) {
         if (detail != null) Icon(Icons.AutoMirrored.Filled.CallSplit, null, tint = cs.onSurfaceVariant.copy(alpha = 0.7f), modifier = Modifier.size(13.dp))
         Text(name, fontFamily = if (detail != null) MonoFontFamily else null, fontSize = 12.5.sp, color = if (dim) cs.onSurfaceVariant else cs.onSurface,
-            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false).padding(start = if (detail != null) 7.dp else 0.dp))
-        Spacer(Modifier.weight(1f))
+            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(start = if (detail != null) 7.dp else 0.dp))
+        // The name keeps its width; where it is open shrinks first (the prototype's).
         if (detail != null) Text(detail, fontSize = 11.sp, color = if (current) cs.primary else cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(start = 10.dp).weight(1f, fill = false))
+            modifier = Modifier.padding(start = 10.dp).widthIn(max = 150.dp))
         if (openChat != null) Text(localized(Str.scm_open_that_chat), fontSize = 11.sp, color = cs.primary, maxLines = 1,
             modifier = Modifier.padding(start = 8.dp).clickable(onClick = openChat))
     }
@@ -930,15 +944,15 @@ private fun PrSection(state: SourceControlState, scope: kotlinx.coroutines.Corou
                 fontSize = 12.5.sp, color = cs.onSurfaceVariant, modifier = pad.padding(vertical = 6.dp),
             )
             form != null -> PrFormView(state, scope, form, gitlab, host)
-            pr == null && state.last == null -> Text(localized(Str.scm_pr_commit_first, state.status?.branch ?: ""), fontSize = 12.5.sp, color = cs.onSurfaceVariant, modifier = pad.padding(vertical = 6.dp))
+            pr == null && state.last == null -> Text(mono(localized(Str.scm_pr_commit_first, state.status?.branch ?: ""), state.status?.branch ?: ""), fontSize = 12.5.sp, color = cs.onSurfaceVariant, modifier = pad.padding(vertical = 6.dp))
             pr == null -> Column(pad.padding(vertical = 6.dp)) {
-                Text(localized(if (gitlab) Str.scm_mr_none else Str.scm_pr_none, state.status?.branch ?: ""), fontSize = 12.5.sp, color = cs.onSurfaceVariant)
+                Text(mono(localized(if (gitlab) Str.scm_mr_none else Str.scm_pr_none, state.status?.branch ?: ""), state.status?.branch ?: ""), fontSize = 12.5.sp, color = cs.onSurfaceVariant)
                 Row(
                     Modifier.padding(top = 8.dp).fillMaxWidth().height(30.dp).clip(RoundedCornerShape(6.dp)).border(1.dp, cs.outlineVariant, RoundedCornerShape(6.dp))
                         .clickable { scope.launch { state.openPrForm() } }.testTag("scm_pr_create"),
                     horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(Icons.AutoMirrored.Filled.CallMerge, null, tint = cs.onSurface, modifier = Modifier.size(15.dp))
+                    Icon(PullRequestGlyph, null, tint = cs.onSurface, modifier = Modifier.size(15.dp))
                     Text(localized(if (gitlab) Str.scm_mr_create else Str.scm_pr_create), fontSize = 12.5.sp, color = cs.onSurface, modifier = Modifier.padding(start = 6.dp))
                 }
             }
@@ -959,13 +973,14 @@ private fun PrSection(state: SourceControlState, scope: kotlinx.coroutines.Corou
                 if (pr.state == "open") {
                     val bad = pr.checks.count { it.state == "bad" }
                     val run = pr.checks.count { it.state == "run" }
-                    Text(
-                        localized(Str.scm_checks) + " · " + when { bad > 0 -> localizedPlural(Plurals.scm_checks_failing, bad, bad); run > 0 -> localized(Str.scm_checks_running); pr.checks.isEmpty() -> localized(Str.scm_checks_none); else -> localized(Str.scm_checks_passing) },
-                        fontSize = 11.sp, color = if (bad > 0) cs.error else cs.onSurfaceVariant, modifier = Modifier.padding(top = 10.dp, bottom = 2.dp),
-                    )
+                    val verdict = when { bad > 0 -> localizedPlural(Plurals.scm_checks_failing, bad, bad); run > 0 -> localized(Str.scm_checks_running); pr.checks.isEmpty() -> localized(Str.scm_checks_none); else -> localized(Str.scm_checks_passing) }
+                    Row(Modifier.padding(top = 12.dp, bottom = 2.dp)) {
+                        SubHead(localized(Str.scm_checks) + " · ")
+                        SubHead(verdict, if (bad > 0) cs.error else cs.onSurfaceVariant)
+                    }
                     pr.checks.forEach { k -> CheckRow(k, onFix = { scope.launch { state.askFix(k) } }, onLog = { k.url?.let(platform::openUrl) }) }
                     if (pr.comments.isNotEmpty()) {
-                        Text(localizedPlural(Plurals.scm_review_comments, pr.comments.size, pr.comments.size), fontSize = 11.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 10.dp, bottom = 4.dp))
+                        Box(Modifier.padding(top = 12.dp, bottom = 6.dp)) { SubHead(localizedPlural(Plurals.scm_review_comments, pr.comments.size, pr.comments.size)) }
                         pr.comments.forEach { c -> CommentCard(c, sent = state.sentComments[c.body] == true, onSend = { scope.launch { state.sendComment(c) } }, onOpen = { (c.url ?: pr.url).let(platform::openUrl) }) }
                     }
                     Row(Modifier.padding(top = 12.dp, bottom = 4.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -976,6 +991,32 @@ private fun PrSection(state: SourceControlState, scope: kotlinx.coroutines.Corou
                         Text(localized(Str.scm_merge_on, host) + " ↗", fontSize = 12.5.sp, color = cs.primary, modifier = Modifier.clickable { platform.openUrl(pr.url) }.testTag("scm_pr_merge_on"))
                     }
                 }
+            }
+        }
+    }
+}
+
+/** The form's "into" branch: a chip whose menu lists the local branches (the base first). */
+@Composable
+private fun TargetPicker(state: SourceControlState, scope: kotlinx.coroutines.CoroutineScope, f: PrForm) {
+    val cs = MaterialTheme.colorScheme
+    var open by remember { mutableStateOf(false) }
+    Box(Modifier.padding(start = 6.dp)) {
+        Row(
+            Modifier.clip(RoundedCornerShape(6.dp)).border(1.dp, cs.outlineVariant, RoundedCornerShape(6.dp))
+                .clickable { open = true; if (state.branches == null) scope.launch { state.branches = state.api.branches() } }
+                .padding(start = 6.dp, end = 4.dp, top = 2.dp, bottom = 2.dp).testTag("scm_pr_target"),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.AutoMirrored.Filled.CallSplit, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(12.dp))
+            Text(f.target, fontFamily = MonoFontFamily, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface, modifier = Modifier.padding(start = 4.dp))
+            Icon(Icons.Filled.KeyboardArrowDown, localized(Str.scm_pr_target_pick), tint = cs.onSurfaceVariant, modifier = Modifier.size(14.dp))
+        }
+        ScmMenu(expanded = open, onDismiss = { open = false }, tag = "scm_pr_target_menu") {
+            val head = state.status?.branch
+            val names = state.branches?.local?.map { it.name }?.filter { it != head }.orEmpty()
+            (listOfNotNull(state.base) + names).distinct().forEach { n ->
+                ScmMenuItem(n, onClick = { open = false; state.prForm = state.prForm?.copy(target = n) }, strong = n == f.target)
             }
         }
     }
@@ -993,7 +1034,7 @@ private fun PrFormView(state: SourceControlState, scope: kotlinx.coroutines.Coro
             Text(localized(Str.scm_pr_merge_word), fontSize = 12.sp, color = cs.onSurfaceVariant)
             Text(state.status?.branch ?: "", fontFamily = MonoFontFamily, fontSize = 12.sp, color = cs.onSurface, modifier = Modifier.padding(horizontal = 6.dp))
             Text(localized(Str.scm_pr_into_word), fontSize = 12.sp, color = cs.onSurfaceVariant)
-            Text(f.target, fontFamily = MonoFontFamily, fontSize = 12.sp, color = cs.onSurface, modifier = Modifier.padding(start = 6.dp).testTag("scm_pr_target"))
+            TargetPicker(state, scope, f)
         }
         Text(localized(Str.scm_pr_title_label), fontSize = 12.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
         Box(field) {
@@ -1039,6 +1080,12 @@ private fun PrFormView(state: SourceControlState, scope: kotlinx.coroutines.Coro
     }
 }
 
+/** The PR section's CHECKS / REVIEW COMMENTS heads: small caps, as the section titles. */
+@Composable
+private fun SubHead(text: String, color: Color = MaterialTheme.colorScheme.onSurfaceVariant) {
+    Text(text.uppercase(), fontSize = 10.5.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.4.sp, color = color)
+}
+
 @Composable
 private fun ReviewLine(r: dev.supermux.net.PrReview, gitlab: Boolean) {
     val cs = MaterialTheme.colorScheme
@@ -1050,7 +1097,11 @@ private fun ReviewLine(r: dev.supermux.net.PrReview, gitlab: Boolean) {
         "required" -> { val need = r.need; (if (gitlab && need != null) localized(Str.scm_review_approvals, r.got ?: 0, need) else localized(Str.scm_review_required)) to sem.warning }
         else -> return
     }
-    Text(text, fontSize = 12.sp, color = color, modifier = Modifier.padding(top = 6.dp).testTag("scm_pr_review"))
+    val icon = when (r.state) { "approved" -> Icons.Filled.CheckCircle; "changes" -> Icons.Filled.Cancel; else -> Icons.Filled.Schedule }
+    Row(Modifier.padding(top = 7.dp).testTag("scm_pr_review"), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, tint = color, modifier = Modifier.size(14.dp))
+        Text(text, fontSize = 12.sp, color = color, modifier = Modifier.padding(start = 6.dp))
+    }
 }
 
 @Composable
@@ -1077,7 +1128,13 @@ private fun CheckRow(k: dev.supermux.net.PrCheck, onFix: () -> Unit, onLog: () -
 private fun CommentCard(c: dev.supermux.net.PrComment, sent: Boolean, onSend: () -> Unit, onOpen: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     Column(Modifier.padding(bottom = 6.dp).fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(cs.surfaceContainerHigh).padding(horizontal = 10.dp, vertical = 8.dp)) {
-        Text(c.who + (c.file?.let { f -> " · $f" + (c.line?.let { ":$it" } ?: "") } ?: ""), fontSize = 11.5.sp, color = cs.onSurfaceVariant, fontFamily = MonoFontFamily, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(c.who, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface, maxLines = 1)
+            c.file?.let { f ->
+                Text(" " + localized(Str.scm_comment_on) + " ", fontSize = 11.5.sp, color = cs.onSurfaceVariant)
+                Text(f + (c.line?.let { ":$it" } ?: ""), fontSize = 11.sp, color = cs.onSurfaceVariant, fontFamily = MonoFontFamily, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
         Text(c.body, fontSize = 12.5.sp, color = cs.onSurface, maxLines = 6, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 3.dp))
         Row(Modifier.padding(top = 7.dp), verticalAlignment = Alignment.CenterVertically) {
             if (sent) Text(localized(Str.scm_sent_to_agent), fontSize = 12.sp, color = cs.onSurfaceVariant)
@@ -1119,7 +1176,7 @@ private fun Graph(state: SourceControlState, scope: kotlinx.coroutines.Coroutine
 @Composable
 private fun GraphNode(title: String, sub: String, action: String, onAction: () -> Unit) {
     val cs = MaterialTheme.colorScheme
-    Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(start = 18.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Lane(color = LocalSemantics.current.info, filled = true)
         Column(Modifier.weight(1f).padding(vertical = 5.dp, horizontal = 8.dp)) {
             Text("↓ $title", fontSize = 12.5.sp, color = cs.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -1135,20 +1192,25 @@ private fun GraphCommit(c: dev.supermux.net.LogCommit, own: Boolean, refs: List<
     val platform = LocalPlatform.current
     var menu by remember { mutableStateOf(false) }
     Box {
-        Row(Modifier.fillMaxWidth().clickable { menu = true }.padding(start = 18.dp, end = 8.dp).testTag("scm_commit_${c.sha.take(7)}"), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).clickable { menu = true }.padding(start = 18.dp, end = 8.dp).testTag("scm_commit_${c.sha.take(7)}"), verticalAlignment = Alignment.CenterVertically) {
             Lane(color = if (own) cs.primary else cs.onSurfaceVariant, filled = false)
             Column(Modifier.weight(1f).padding(vertical = 5.dp, horizontal = 8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(c.subject, fontSize = 12.5.sp, color = cs.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    // The badge shrinks before the subject does (the prototype's).
                     refs.forEach { r ->
-                        Text(r, fontFamily = MonoFontFamily, fontSize = 10.5.sp, color = if (own) cs.primary else cs.onSurfaceVariant, maxLines = 1,
-                            modifier = Modifier.padding(start = 6.dp).clip(RoundedCornerShape(4.dp)).background(if (own) cs.primary.copy(alpha = 0.2f) else cs.surfaceContainerHighest).padding(horizontal = 5.dp))
+                        Text(r, fontFamily = MonoFontFamily, fontSize = 10.5.sp, color = if (own) cs.primary else cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(start = 6.dp).widthIn(max = 88.dp).clip(RoundedCornerShape(4.dp)).background(if (own) cs.primary.copy(alpha = 0.2f) else cs.surfaceContainerHighest).padding(horizontal = 5.dp))
                     }
                 }
-                Text(c.author.ifBlank { "—" } + " · " + c.sha.take(7) + if (c.pushed == true) " · " + localized(Str.scm_pushed) else "", fontSize = 11.sp, color = cs.onSurfaceVariant, fontFamily = MonoFontFamily)
+                Row {
+                    Text(c.author.ifBlank { "—" } + " · ", fontSize = 11.sp, color = cs.onSurfaceVariant)
+                    Text(c.sha.take(7), fontSize = 11.sp, color = cs.onSurfaceVariant, fontFamily = MonoFontFamily)
+                    if (c.pushed == true) Text(" · " + localized(Str.scm_pushed), fontSize = 11.sp, color = cs.onSurfaceVariant)
+                }
             }
         }
-        androidx.compose.material3.DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+        ScmMenu(expanded = menu, onDismiss = { menu = false }, tag = "scm_commit_menu_${c.sha.take(7)}") {
             MenuItem(localized(Str.scm_copy_hash), Str.scm_hint_copy) { menu = false; platform.copyToClipboard(c.sha) }
             MenuItem(localized(Str.scm_copy_message), Str.scm_hint_copy) { menu = false; platform.copyToClipboard(c.subject) }
         }
@@ -1158,8 +1220,8 @@ private fun GraphCommit(c: dev.supermux.net.LogCommit, own: Boolean, refs: List<
 /** The graph's lane: a line with a dot. */
 @Composable
 private fun Lane(color: Color, filled: Boolean) {
-    val line = MaterialTheme.colorScheme.outlineVariant
-    Box(Modifier.width(12.dp).height(38.dp)) {
+    val line = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.18f) // the prototype's #272a25 on the pane
+    Box(Modifier.width(12.dp).fillMaxHeight().heightIn(min = 38.dp)) {
         Box(Modifier.align(Alignment.Center).width(2.dp).fillMaxHeight().background(line))
         Box(Modifier.align(Alignment.Center).size(9.dp).clip(androidx.compose.foundation.shape.CircleShape).background(if (filled) color else MaterialTheme.colorScheme.surfaceContainer)
             .border(2.dp, color, androidx.compose.foundation.shape.CircleShape))
@@ -1171,8 +1233,7 @@ private fun Lane(color: Color, filled: Boolean) {
 private fun NoRemoteBox(state: SourceControlState, scope: kotlinx.coroutines.CoroutineScope) {
     val cs = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(8.dp)
-    Row(Modifier.padding(bottom = 8.dp).fillMaxWidth().clip(shape).background(cs.surfaceContainerHighest).border(1.dp, cs.outlineVariant, shape).height(IntrinsicSize.Min).testTag("scm_no_remote")) {
-        Box(Modifier.width(2.dp).fillMaxHeight().background(cs.primary))
+    Row(Modifier.padding(bottom = 8.dp).fillMaxWidth().clip(shape).background(cs.surfaceContainerHighest).leftEdge(cs.primary).border(1.dp, cs.outlineVariant, shape).height(IntrinsicSize.Min).testTag("scm_no_remote")) {
         Column(Modifier.padding(horizontal = 10.dp, vertical = 9.dp)) {
             Text(localized(Str.scm_no_remote_q), fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface)
             Text(localized(Str.scm_no_remote_body), fontSize = 12.5.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
@@ -1222,18 +1283,18 @@ private fun MoreMenu(state: SourceControlState, scope: kotlinx.coroutines.Corout
     var sub by remember { mutableStateOf<String?>(null) }
     Box {
         ScmIcon(Icons.Filled.MoreHoriz, localized(Str.scm_more), "scm_more", hint = localized(Str.scm_hint_more)) { open = true; sub = null }
-        androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.testTag("scm_more_menu")) {
+        ScmMenu(expanded = open, onDismiss = { open = false }, tag = "scm_more_menu") {
             val go = { f: suspend () -> Unit -> open = false; scope.launch { f() }; Unit }
             MenuItem(localized(Str.scm_pull), Str.scm_hint_pull) { go { state.sync("pull"); state.refresh() } }
             MenuItem(localized(Str.scm_push), Str.scm_hint_push) { go { state.sync(if (state.status?.upstream == null) "publish" else "push"); state.refresh() } }
             MenuItem(localized(Str.scm_checkout_to), Str.scm_branch_hint) { open = false; onBranches() }
             MenuItem(localized(Str.scm_fetch), Str.scm_hint_fetch) { go { state.sync("fetch"); state.refresh() } }
             state.base?.let { b ->
-                androidx.compose.material3.HorizontalDivider()
+                ScmMenuSep()
                 MenuItem(localized(Str.scm_get_latest, b), Str.scm_hint_get_latest) { go { state.getLatest() } }
                 MenuItem(localized(Str.scm_merge_into, b), Str.scm_hint_merge_into, enabled = state.ownCommits > 0) { open = false; state.ask = ScmAsk.MergeInto }
             }
-            androidx.compose.material3.HorizontalDivider()
+            ScmMenuSep()
             SubHead(localized(Str.scm_sub_commit), sub == "commit") { sub = if (sub == "commit") null else "commit" }
             if (sub == "commit") {
                 MenuItem(localized(Str.scm_commit), Str.scm_hint_commit, indent = true) { go { state.commit() } }
@@ -1263,36 +1324,80 @@ private fun MoreMenu(state: SourceControlState, scope: kotlinx.coroutines.Corout
 
 @Composable
 private fun MenuItem(label: String, hint: dev.supermux.ui.i18n.StringKey, indent: Boolean = false, enabled: Boolean = true, onClick: () -> Unit) {
-    ScmHint(label, localized(hint)) {
-        androidx.compose.material3.DropdownMenuItem(
-            text = { Text(label, fontSize = 12.5.sp, modifier = Modifier.padding(start = if (indent) 12.dp else 0.dp)) },
-            enabled = enabled, onClick = onClick, modifier = Modifier.heightIn(min = 30.dp),
+    ScmHint(label, localized(hint)) { ScmMenuItem(label, onClick = onClick, enabled = enabled, indent = indent) }
+}
+
+/** A submenu that opens in place (the prototype's), not a flyout over the chat. */
+@Composable
+private fun SubHead(label: String, open: Boolean, onClick: () -> Unit) = ScmMenuItem(label, onClick = onClick, trailing = if (open) "⌄" else "›", strong = open)
+
+@Composable
+private fun PostItem(label: String, picked: Boolean, enabled: Boolean = true, onClick: () -> Unit) =
+    ScmMenuItem(label, onClick = onClick, enabled = enabled, trailing = if (picked) "✓" else null)
+
+/**
+ * The pane's menu, as the v4 prototype (and a desktop app) draws it: a compact rounded panel under its button, 26 dp
+ * rows, the accent under the pointer, Esc or a click outside closes it. Not Material's dropdown (a phone's 48 dp rows).
+ */
+@Composable
+internal fun ScmMenu(expanded: Boolean, onDismiss: () -> Unit, tag: String, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+    if (!expanded) return
+    val cs = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(10.dp)
+    val y = with(androidx.compose.ui.platform.LocalDensity.current) { 28.dp.roundToPx() }
+    androidx.compose.ui.window.Popup(
+        alignment = Alignment.TopEnd, offset = androidx.compose.ui.unit.IntOffset(0, y), onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.PopupProperties(focusable = true),
+    ) {
+        Column(
+            Modifier.widthIn(min = 230.dp, max = 320.dp).heightIn(max = 560.dp).shadow(16.dp, shape).clip(shape).background(cs.surfaceContainerHighest)
+                .border(1.dp, cs.outline, shape).padding(5.dp).verticalScroll(androidx.compose.foundation.rememberScrollState())
+                .onPreviewKeyEvent { e -> if (e.key == androidx.compose.ui.input.key.Key.Escape) { onDismiss(); true } else false }
+                .testTag(tag),
+            content = content,
         )
     }
 }
 
 @Composable
-private fun SubHead(label: String, open: Boolean, onClick: () -> Unit) {
-    androidx.compose.material3.DropdownMenuItem(
-        text = { Text(label, fontSize = 12.5.sp, fontWeight = if (open) FontWeight.Medium else null) },
-        trailingIcon = { Icon(if (open) Icons.Filled.KeyboardArrowDown else Icons.Filled.KeyboardArrowRight, null, modifier = Modifier.size(14.dp)) },
-        onClick = onClick, modifier = Modifier.heightIn(min = 30.dp),
-    )
+internal fun ScmMenuItem(label: String, onClick: () -> Unit, enabled: Boolean = true, trailing: String? = null, indent: Boolean = false, strong: Boolean = false) {
+    val cs = MaterialTheme.colorScheme
+    val hover = remember { MutableInteractionSource() }
+    val hovered by hover.collectIsHoveredAsState()
+    val on = hovered && enabled
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 26.dp).clip(RoundedCornerShape(6.dp)).background(if (on) cs.primary else Color.Transparent)
+            .hoverable(hover).clickable(enabled = enabled, onClick = onClick).padding(start = if (indent) 22.dp else 10.dp, end = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, fontSize = 12.5.sp, fontWeight = if (strong) FontWeight.Medium else null, maxLines = 1,
+            color = when { on -> cs.onPrimary; enabled -> cs.onSurface; else -> cs.onSurfaceVariant.copy(alpha = 0.6f) }, modifier = Modifier.weight(1f))
+        if (trailing != null) Text(trailing, fontSize = 12.sp, color = if (on) cs.onPrimary else cs.onSurfaceVariant, modifier = Modifier.padding(start = 18.dp))
+    }
 }
 
 @Composable
-private fun PostItem(label: String, picked: Boolean, enabled: Boolean = true, onClick: () -> Unit) {
-    androidx.compose.material3.DropdownMenuItem(
-        text = { Text(label, fontSize = 12.5.sp) },
-        trailingIcon = if (picked) { { Icon(Icons.Filled.Check, null, modifier = Modifier.size(14.dp)) } } else null,
-        enabled = enabled,
-        onClick = onClick,
-    )
-}
+internal fun ScmMenuSep() = Box(Modifier.padding(horizontal = 6.dp, vertical = 4.dp).fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outline))
 
 @Composable
-private fun Note(text: String) {
+private fun Note(text: String) = Note(androidx.compose.ui.text.AnnotatedString(text))
+
+@Composable
+private fun Note(text: androidx.compose.ui.text.AnnotatedString) {
     Text(text, fontSize = 12.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = Space.md, vertical = Space.sm))
+}
+
+/** [text] with [name] (a branch, a remote branch) in mono, as the prototype sets names. */
+@Composable
+private fun mono(text: String, vararg names: String, bold: Boolean = false): androidx.compose.ui.text.AnnotatedString {
+    val family = MonoFontFamily
+    return androidx.compose.ui.text.buildAnnotatedString {
+    append(text)
+    names.filter { it.isNotEmpty() }.forEach { n ->
+        val i = text.indexOf(n)
+        if (i >= 0) addStyle(androidx.compose.ui.text.SpanStyle(fontFamily = if (bold) null else family, fontWeight = if (bold) FontWeight.SemiBold else null), i, i + n.length)
+    }
+    }
 }
 
 @Composable
@@ -1379,7 +1484,7 @@ private fun FileRow(
                 textDecoration = if (letter == "D") TextDecoration.LineThrough else null, modifier = Modifier.padding(start = 6.dp),
             )
             Text(dir, fontSize = 11.5.sp, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(start = 6.dp))
-            if (group == ScmGroup.Merge) {
+            if (group == ScmGroup.Merge && (hovered || touch)) {
                 // VS Code's CodeLens words, for the whole file: keep mine, theirs, or both.
                 ConflictLink(localized(Str.scm_accept_current), localized(Str.scm_hint_accept_current), "scm_accept_current_${f.path}") { scope.launch { state.resolve(f.path, "mine") } }
                 ConflictLink(localized(Str.scm_accept_incoming), localized(Str.scm_hint_accept_incoming), "scm_accept_incoming_${f.path}") { scope.launch { state.resolve(f.path, "theirs") } }
@@ -1419,8 +1524,29 @@ private fun letterColor(letter: String): Color {
     return when (letter) {
         "M" -> LocalSemantics.current.warning
         "U", "A" -> LocalSemantics.current.success
-        else -> cs.error
+        else -> cs.error // D, R, ! (a conflict)
     }
+}
+
+/** VS Code's git-pull-request glyph: two branch ends and the arrow between them. */
+private val PullRequestGlyph: androidx.compose.ui.graphics.vector.ImageVector by lazy {
+    androidx.compose.ui.graphics.vector.ImageVector.Builder("scm.pr", 24.dp, 24.dp, 24f, 24f).path(
+        fill = null, stroke = androidx.compose.ui.graphics.SolidColor(Color.Black), strokeLineWidth = 2f,
+        strokeLineCap = androidx.compose.ui.graphics.StrokeCap.Round, strokeLineJoin = androidx.compose.ui.graphics.StrokeJoin.Round,
+    ) {
+        // The two ends: (6,6) and (18,18), radius 3.
+        moveTo(9f, 6f); arcTo(3f, 3f, 0f, true, true, 3f, 6f); arcTo(3f, 3f, 0f, true, true, 9f, 6f); close()
+        moveTo(21f, 18f); arcTo(3f, 3f, 0f, true, true, 15f, 18f); arcTo(3f, 3f, 0f, true, true, 21f, 18f); close()
+        moveTo(6f, 9f); lineTo(6f, 21f)
+        moveTo(18f, 15f); lineTo(18f, 8f); quadTo(18f, 6f, 16f, 6f); lineTo(13f, 6f)
+        moveTo(15f, 3.5f); lineTo(12.5f, 6f); lineTo(15f, 8.5f)
+    }.build()
+}
+
+/** A box's 2 dp left edge, drawn over its border as the prototype's border-left is. */
+private fun Modifier.leftEdge(color: Color): Modifier = drawWithContent {
+    drawContent()
+    drawRect(color, size = androidx.compose.ui.geometry.Size(2.dp.toPx(), size.height))
 }
 
 /** VS Code's confirm, in the pane, right under what it is about. */
@@ -1435,10 +1561,9 @@ private fun AskBox(
     val accent = when { danger -> cs.error; warn -> LocalSemantics.current.warning; else -> cs.primary }
     Row(
         Modifier.padding(start = start, end = if (start == 0.dp) 0.dp else Space.sm, top = if (start == 0.dp) 8.dp else 2.dp, bottom = 6.dp).fillMaxWidth()
-            .clip(shape).background(cs.surfaceContainerHighest).border(1.dp, cs.outlineVariant, shape).height(IntrinsicSize.Min).testTag(tag),
+            .clip(shape).background(cs.surfaceContainerHighest).leftEdge(accent).border(1.dp, cs.outlineVariant, shape).height(IntrinsicSize.Min).testTag(tag),
     ) {
-        // The left edge: red for throwing work away, amber for a missing message, the accent for a question.
-        Box(Modifier.width(2.dp).fillMaxHeight().background(accent))
+        // The left edge (leftEdge): red for throwing work away, amber for a missing message, the accent for a question.
         Column(Modifier.padding(horizontal = 10.dp, vertical = 9.dp)) {
             Text(question, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface)
             Text(body, fontSize = 12.5.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))

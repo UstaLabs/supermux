@@ -27,7 +27,7 @@ class SourceControlGroupsTest {
         assertEquals("M", scmLetter(f("m", "none"), ScmGroup.Changes))
         assertEquals("D", scmLetter(f("x", "none", status = "deleted"), ScmGroup.Changes))
         assertEquals("R", scmLetter(f("r", "all", status = "renamed"), ScmGroup.Staged))
-        assertEquals("C", scmLetter(f("c", "conflict"), ScmGroup.Merge))
+        assertEquals("!", scmLetter(f("c", "conflict"), ScmGroup.Merge))
     }
 
     @Test fun a_click_in_staged_opens_the_index_diff_and_in_changes_the_working_tree_one() {
