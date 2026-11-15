@@ -408,7 +408,7 @@ private fun WorkspacePanesBody(
     // workspace). Theirs is made in that pane, then moved into a pane of its own at the workspace's edge.
     val mainWindow = hostId == ui.windows.mainHostId
     val topRight = topRightGroupId(layout)
-    ForgetClosedTabs(ws)
+    ForgetClosedTabs(ws, current.views)
     val splitButtons = remember(mainWindow, topRight, layoutSync, app, current.id, hostId) {
         if (!mainWindow) {
             null
@@ -448,7 +448,8 @@ private fun WorkspacePanesBody(
     }
 
     PaneHost(
-        layout = layout,
+        // #151: never a tab whose view is gone (the frame between a view_removed and its layout).
+        layout = withoutUnknownTabs(layout, viewsById.keys),
         tearOff = tearOff,
         titleFor = { vid -> viewsById[vid]?.let { if (it.isNewTab()) newTabWord else liveViewTitle(it, sessionNames::get) } ?: viewWord },
         onCloseView = { onCloseCandidate(viewsById[it]) },
@@ -644,8 +645,8 @@ fun PhoneWorkspacePanes(
         ui.windows.layoutFor(ui.windows.mainHostId, current.layout.toDomainOrNull() ?: ws.layoutSync.tree),
         ws.closing.keys,
     )
-    val tabs = phoneTabModel(layout, current.activeViewId)
-    ForgetClosedTabs(ws)
+    val tabs = phoneTabModel(withoutUnknownTabs(layout, ws.viewsById.keys), current.activeViewId)
+    ForgetClosedTabs(ws, current.views)
     val viewsById = ws.viewsById
     // A Browser tab closed here or elsewhere lets its live page go (#105).
     dev.supermux.ui.browser.ReleaseClosedBrowserTabs(viewsById.values)
@@ -1602,7 +1603,8 @@ internal fun openTabNow(
     val id = ws.newId()
     val clicked = nowMillis()
     ws.provisionalViews[id] = ViewDto(id = id, workspaceId = workspaceId, kind = kind, state = state)
-    ws.layoutSync.edit { place(it, id) }
+    // Replayed onto every broker frame until the layout is saved: it must never put back a tab closed meanwhile.
+    ws.layoutSync.edit { t -> placeWhileOpening(t, id, opening = id in ws.provisionalViews, place) }
     ui.windows.expandClaim(hostId, setOf(id), ws.layoutSync.tree)
     app.addWorkspaceView(
         workspaceId, kind, state, id, groupId,
@@ -1645,7 +1647,7 @@ private fun NewTabView(newTab: ViewDto, hostId: String, current: WorkspaceDto, w
             when (val pick = newTabPick(kind, tree, ws.viewsById)) {
                 is NewTabPick.SwitchTo -> {
                     layoutSync.edit { setActiveViewInGroup(it, pick.groupId, pick.viewId) }
-                    app.closeWorkspaceView(current.id, newTab.id)
+                    closeTabNow(ws, app, newTab) {}
                 }
                 // #151: the chosen view takes the New tab's place at once; the broker makes it after.
                 NewTabPick.Add -> groupIdOf(tree, newTab.id)?.let { group ->
@@ -1654,13 +1656,13 @@ private fun NewTabView(newTab: ViewDto, hostId: String, current: WorkspaceDto, w
                 }
             }
         },
-        onClose = { app.closeWorkspaceView(current.id, newTab.id) },
+        onClose = { closeTabNow(ws, app, newTab) {} },
         closed = closed.map { c -> ClosedSessionRow(c.id, c.name, c.agent, timeAgo(now, parseChatTs(c.closedAt) ?: now)) },
         onReopen = { sessionId ->
             app.reopenClosedSession(current.id, sessionId, groupIdOf(layoutSync.tree, newTab.id)) { id ->
                 ui.windows.expandClaim(hostId, setOf(id), layoutSync.tree)
                 layoutSync.edit { pickedInPlace(it, newTab.id, id) }
-                app.closeWorkspaceView(current.id, newTab.id)
+                closeTabNow(ws, app, newTab) {}
             }
         },
     )
@@ -1684,25 +1686,58 @@ internal fun withoutClosing(tree: LayoutNode, closing: Set<String>): LayoutNode 
 internal fun closeTabNow(ws: WorkspaceSession, app: HostStore, view: ViewDto, onFailed: (ViewDto) -> Unit) {
     val clicked = Clock.System.now().toEpochMilliseconds()
     ws.closing[view.id] = clicked
+    // The close is an edit of its own too, so no earlier edit still being replayed (an open's) can put it back.
+    val group = groupIdOf(ws.layoutSync.tree, view.id)
+    ws.layoutSync.edit { t -> withoutTab(t, view.id) }
     app.closeWorkspaceView(
         view.workspaceId, view.id,
         onDone = { println("[close] ${view.kind} ${view.id}: broker answered after ${Clock.System.now().toEpochMilliseconds() - clicked} ms") },
     ) {
         ws.closing.remove(view.id)
+        // Back where it was, or in the first pane if that one is gone: a view the broker kept must be in its layout.
+        ws.layoutSync.edit { t ->
+            if (groupIdOf(t, view.id) != null) t
+            else (group?.takeIf { hasGroup(t, it) } ?: firstGroupId(t))?.let { addViewToGroup(t, it, view.id) } ?: t
+        }
         onFailed(view)
     }
 }
 
+/**
+ * [place] of a tab opened at once ([id]), replayed onto broker frames until the layout is saved: only while it is
+ * still being [opening] (no broker answer yet) or the broker's frame has it. A tab closed meanwhile is not put back.
+ */
+internal fun placeWhileOpening(tree: LayoutNode, id: String, opening: Boolean, place: (LayoutNode, String) -> LayoutNode): LayoutNode =
+    if (opening || groupIdOf(tree, id) != null) place(tree, id) else tree
+
+/**
+ * [tree] without the tabs whose view is not [known]: a tab removed elsewhere is gone from the views a frame before
+ * its layout follows, and there is nothing to draw for it. Before any view is known, [tree] as it is.
+ */
+internal fun withoutUnknownTabs(tree: LayoutNode, known: Set<String>): LayoutNode {
+    if (known.isEmpty()) return tree
+    return withoutClosing(tree, collectViewIds(tree).filterNot { it in known }.toSet())
+}
+
+/** [tree] without tab [id]; a workspace left with none keeps one empty pane. */
+internal fun withoutTab(tree: LayoutNode, id: String): LayoutNode = withoutClosing(tree, setOf(id))
+
 /** #151: a tab whose close the broker has made is gone from its tree too, so [WorkspaceSession.closing] lets it go. */
 @Composable
-internal fun ForgetClosedTabs(ws: WorkspaceSession) {
-    val tree = ws.layoutSync.tree
-    LaunchedEffect(tree) {
-        val present = collectViewIds(tree).toSet()
+internal fun ForgetClosedTabs(ws: WorkspaceSession, serverViews: List<ViewDto>) {
+    // The broker's views, not the local tree: the close is a local edit too, so the tree drops the tab at once, and
+    // the phone, which draws the broker's layout, would show it again before the broker had closed it.
+    val present = serverViews.map { it.id }.toSet()
+    LaunchedEffect(present) {
         val now = Clock.System.now().toEpochMilliseconds()
         ws.closing.filterKeys { it !in present }.forEach { (id, clicked) ->
-            println("[close] $id: gone from the broker's layout after ${now - clicked} ms")
+            println("[close] $id: gone from the broker's views after ${now - clicked} ms")
             ws.closing.remove(id)
         }
     }
+}
+
+private fun hasGroup(node: LayoutNode, groupId: String): Boolean = when (node) {
+    is LayoutNode.Group -> node.id == groupId
+    is LayoutNode.Split -> node.children.any { hasGroup(it, groupId) }
 }
