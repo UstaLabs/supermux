@@ -225,3 +225,24 @@ test("C3: stop pauses the server, jobs and page; rename writes applet.json and c
   expect(info.data.files).toBe(2)
   expect(info.run).toContain("Bun.serve")
 })
+
+test("notify: an applet's token reaches only its own notify; the server gets the token and the broker's address", async () => {
+  const sent: string[] = []
+  const root = mkdtempSync(join(tmpdir(), "applets-notify-"))
+  const db = openDb(":memory:"); runMigrations(db, MIGRATIONS)
+  const svc = new AppletService({ db, appletsDir: join(root, "applets"), stateDir: join(root, "state"), backupsDir: join(root, "backups"),
+    brokerUrl: () => "http://127.0.0.1:9", notify: async (a, t, b) => { sent.push(`${a.title}|${t}|${b}`) } })
+  cleanups.push(() => { svc.shutdown(); rmSync(root, { recursive: true, force: true }) })
+  mkdirSync(join(root, "applets", "mail"), { recursive: true })
+  writeFileSync(join(root, "applets", "mail", "applet.json"), JSON.stringify({ title: "Mail", jobs: [{ name: "env", every: "1h", run: "echo $SUPERMUX_URL $SUPERMUX_APPLET_TOKEN" }] }))
+  await svc.scan()
+  const id = svc.get("mail")!.row.id
+  const run = await svc.runJob("mail", "env")
+  expect(run.ok && run.run.output.trim()).toBe(`http://127.0.0.1:9 ${svc.appletToken(id)}`)
+  expect(svc.appletForToken(svc.appletToken(id))?.row.name).toBe("mail")
+  expect(svc.appletForToken("0".repeat(64))).toBeUndefined()
+  expect(svc.appletForToken("nope")).toBeUndefined()
+  expect(await svc.notify("mail", "Interview!", "Acme replied")).toEqual({ ok: true })
+  expect(await svc.notify("mail", "", "x")).toMatchObject({ ok: false })
+  expect(sent).toEqual(["Mail|Interview!|Acme replied"])
+})

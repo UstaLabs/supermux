@@ -12,7 +12,7 @@ import { resolveStaticFile } from "./applet-route"
  *   PATCH  /applets/<name> {title}            Settings ▸ Name (written to applet.json; the link stays)
  *   DELETE /applets/<name>
  *   GET    /applets/<name>/icon | logs[?lines=] | jobs/<job>/runs
- *   POST   /applets/<name>/restart | backup {why} | jobs/<job>/run | pin | unpin | stop | start
+ *   POST   /applets/<name>/restart | backup {why} | jobs/<job>/run | pin | unpin | stop | start | notify {title, body}
  *   PUT    /applets/<name>/secrets/<NAME> {value, expiresAt?}   DELETE the same
  *   PUT    /applets/<name>/settings/<key> {value}
  */
@@ -99,6 +99,11 @@ export async function handleAppletApi(req: Request, opts: { applets: AppletServi
   if (a === "logs" && !b && method === "GET") {
     const lines = Math.min(2000, Math.max(1, Number(url.searchParams.get("lines")) || 200))
     return json({ logs: applets.supervisor.logs(v.row.id, lines) })
+  }
+  if (a === "notify" && !b && method === "POST") {
+    const p = await body(req)
+    const r = await applets.notify(name, p.title, p.body)
+    return r.ok ? json({ ok: true }) : json({ error: r.error }, 400)
   }
   if ((a === "stop" || a === "start") && !b && method === "POST") {
     const r = await applets.setStopped(name, a === "stop", by)
