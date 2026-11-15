@@ -74,6 +74,10 @@ data class AppletDetailDto(
     val run: String? = null,
     /** Its folder on the host. */
     val folder: String = "",
+    /** Where it is on devices' launchers (On your devices). */
+    val installs: List<AppletInstallDto> = emptyList(),
+    /** Who last changed it, readable: the chat's name for an agent; null for a device or the machine. */
+    val updatedByName: String? = null,
     val updatedBy: String? = null,
     val updatedAt: String = "",
     val createdAt: String = "",
@@ -145,3 +149,9 @@ data class AppletAskResponse(val ok: Boolean = true, val sessionId: String = "",
 
 @Serializable
 internal data class AppletAskBody(val text: String, val agent: String? = null)
+
+@Serializable
+data class AppletInstallDto(val device: String = "", val where: String = "", val at: String = "")
+
+@Serializable
+internal data class AppletWhereBody(val where: String)

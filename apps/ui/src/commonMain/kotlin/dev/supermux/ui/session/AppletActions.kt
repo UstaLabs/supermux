@@ -28,6 +28,8 @@ val LocalAppletOpener = staticCompositionLocalOf<AppletOpener?> { null }
 interface AppletInstaller {
     /** Phone wording ("Add to Home screen") or desktop wording ("Install on this …"). */
     val phone: Boolean
+    /** Where it lands, for On your devices ("Home screen", "Start menu", "Applications"). */
+    val where: String
     /** Whether [applet] of [hostId] is already on this device's launcher (the menu then says so instead). */
     fun isInstalled(hostId: String, applet: AppletDto): Boolean
     /** Asks the system to add it; null when asked, else why it couldn't (shown in the menu). */
@@ -60,7 +62,10 @@ fun rememberAppletsActions(fleet: FleetStore, hostId: String?, hostName: String,
                 AppletInstall(
                     phone = i.phone,
                     isInstalled = { a -> i.isInstalled(host, a) },
-                    install = { a -> i.install(host, a, if (a.iconUrl != null) fleet.appletIconBytes(a) else null) },
+                    install = { a ->
+                        i.install(host, a, if (a.iconUrl != null) fleet.appletIconBytes(a) else null)
+                            ?: run { fleet.appletAction { api -> api.addAppletInstall(a.name, i.where) }; null }
+                    },
                 )
             },
         )

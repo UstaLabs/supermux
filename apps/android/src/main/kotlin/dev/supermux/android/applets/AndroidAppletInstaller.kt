@@ -22,6 +22,7 @@ class AndroidAppletInstaller(private val context: Context) : AppletInstaller {
     private val shortcuts: ShortcutManager? get() = context.getSystemService(ShortcutManager::class.java)
 
     override val phone: Boolean = true
+    override val where: String get() = localized(Str.applets_where_home)
 
     private fun id(hostId: String, name: String) = "applet:$hostId/$name"
 

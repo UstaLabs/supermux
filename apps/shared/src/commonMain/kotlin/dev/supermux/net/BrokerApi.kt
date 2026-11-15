@@ -3467,6 +3467,19 @@ class BrokerApi(
             setBody(json.encodeToString(AppletAskBody.serializer(), AppletAskBody(text, agent)))
         }))
 
+    /** POST /applets/<name>/chat: the applet's own chat ("Change it in a chat"), made if needed. */
+    suspend fun appletChat(name: String): AppletAskResponse =
+        json.decodeFromString(AppletAskResponse.serializer(), appletCall(http.post("$httpBase/applets/${urlEncode(name)}/chat") { authHeader() }))
+
+    /** POST /applets/<name>/installs {where}: this device put the applet on its launcher. */
+    suspend fun addAppletInstall(name: String, where: String) {
+        appletCall(http.post("$httpBase/applets/${urlEncode(name)}/installs") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(AppletWhereBody.serializer(), AppletWhereBody(where)))
+        })
+    }
+
     /** DELETE /applets/<name> (owner only): gone from every device, kept 30 days. */
     suspend fun deleteApplet(name: String) {
         appletCall(http.delete("$httpBase/applets/${urlEncode(name)}") { authHeader() })
