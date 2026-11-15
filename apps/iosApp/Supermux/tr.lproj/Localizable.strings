@@ -16,6 +16,6 @@
 /* #117 W1: the applet intents (Spotlight, the control's settings), compiled into the app too. */
 "Applet" = "Applet";
 "Open applet" = "Applet aç";
-"Opens an applet in supermux." = "Bir appleti supermux’ta açar.";
+"Opens an applet in supermux." = "Bir appleti supermux'ta açar.";
 "Choose an applet" = "Bir applet seçin";
-"The applet this widget shows." = "Bu widget’ın gösterdiği applet.";
+"The applet this widget shows." = "Bu widget'ın gösterdiği applet.";

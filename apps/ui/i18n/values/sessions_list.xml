@@ -166,10 +166,10 @@
     <string name="applets_widget_gone">This applet is gone. Choose another.</string>
     <string name="applets_widget_needs_you">Needs you</string>
     <string name="applets_widget_no_home">This Home screen doesn't take widgets from apps.</string>
-    <string name="applets_widget_none">No applets on this computer yet.</string>
+    <string name="applets_widget_none">No applets on this machine yet.</string>
     <string name="applets_widget_ios_title">Add the Applets widget</string>
     <string name="applets_widget_ios_step1">Touch and hold an empty spot on your Home Screen</string>
     <string name="applets_widget_ios_step2">Tap Edit, then Add Widget</string>
     <string name="applets_widget_ios_step3">Find supermux and pick “Applets”, or “Applet” for one</string>
-    <string name="applets_widget_ios_note">iOS only lets you add widgets yourself; supermux can’t place one for you.</string>
+    <string name="applets_widget_ios_note">iOS only lets you add widgets yourself; supermux can't place one for you.</string>
 </resources>
