@@ -117,6 +117,7 @@ export interface AppletRouteDeps {
  *   notify(title, body)      a push to his devices; plain fetch, so it works in any browser on a paired device
  *   agent.ask(text, {agent}) a message to an agent about this applet; only in supermux's applet window, after a click
  *   save(blob | url, name)   saves a file through supermux's downloads; only in supermux's applet window
+ *   openChat(sessionId)      shows a chat agent.ask answered with (its "Sent to …" link); supermux's window only
  * Each returns a promise of {ok: true, …} or {ok: false, reason}.
  */
 export const SUPERMUX_API_JS = `(function () {
@@ -145,7 +146,11 @@ export const SUPERMUX_API_JS = `(function () {
       r.readAsDataURL(data);
     });
   }
-  window.supermux = { notify: notify, agent: { ask: ask }, save: save, inApp: !!bridge };
+  function openChat(sessionId) {
+    if (!bridge) return fail('only in the supermux app');
+    return bridge.call('openChat', { sessionId: String(sessionId || '') }).then(function (r) { return r === true ? { ok: true } : { ok: false, reason: 'no such chat' }; }, err);
+  }
+  window.supermux = { notify: notify, agent: { ask: ask }, save: save, openChat: openChat, inApp: !!bridge };
 })();
 `
 

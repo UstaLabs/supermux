@@ -2224,7 +2224,7 @@ fun main() {
             }
 
         // #117: applet windows, each its own OS window with only the applet's page in it.
-        dev.supermux.desktop.applets.AppletWindows(pairedFleet) { content ->
+        dev.supermux.desktop.applets.AppletWindows(pairedFleet, onOpenChat = { id -> pairedUi?.selectSession(id); showWindow() }) { content ->
             ProvideDesktopAdaptiveLocals {
                 DesktopTheme(appearance = ui.appearance, textScale = appTextScale, uiPrefs = desktopUiPrefs) { content() }
             }

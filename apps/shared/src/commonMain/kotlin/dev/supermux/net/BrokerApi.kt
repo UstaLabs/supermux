@@ -3584,6 +3584,14 @@ class BrokerApi(
         appletCall(http.post("$httpBase/applets/${urlEncode(name)}/${if (stopped) "stop" else "start"}") { authHeader() })
     }
 
+    /** POST /applets/<name>/ask: supermux.agent.ask, after his click in the applet's window. */
+    suspend fun askApplet(name: String, text: String, agent: String? = null): AppletAskResponse =
+        json.decodeFromString(AppletAskResponse.serializer(), appletCall(http.post("$httpBase/applets/${urlEncode(name)}/ask") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(AppletAskBody.serializer(), AppletAskBody(text, agent)))
+        }))
+
     /** DELETE /applets/<name> (owner only): gone from every device, kept 30 days. */
     suspend fun deleteApplet(name: String) {
         appletCall(http.delete("$httpBase/applets/${urlEncode(name)}") { authHeader() })

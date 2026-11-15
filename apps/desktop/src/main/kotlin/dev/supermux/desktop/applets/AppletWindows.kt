@@ -57,7 +57,7 @@ internal object DesktopApplets {
  * Called from `application { }`, beside the main window.
  */
 @Composable
-internal fun AppletWindows(fleet: FleetStore?, theme: @Composable (@Composable () -> Unit) -> Unit) {
+internal fun AppletWindows(fleet: FleetStore?, onOpenChat: (String) -> Unit, theme: @Composable (@Composable () -> Unit) -> Unit) {
     for (a in DesktopApplets.open) {
         key(a.key) {
             val state = rememberWindowState(position = WindowPosition.PlatformDefault, size = DpSize(1100.dp, 780.dp))
@@ -72,7 +72,7 @@ internal fun AppletWindows(fleet: FleetStore?, theme: @Composable (@Composable (
                     onDispose { DesktopApplets.unregister(a.key, window) }
                 }
                 theme {
-                    AppletPage(fleet, a.hostId, a.name)
+                    AppletPage(fleet, a.hostId, a.name, onOpenChat = onOpenChat)
                 }
             }
         }
