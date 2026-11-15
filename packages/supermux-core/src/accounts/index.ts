@@ -5,6 +5,7 @@ export type {
 } from "./types.js"
 export { fileVault, memoryVault } from "./vault.js"
 export { ensureHome, homePath, claudeLayout, codexLayout, claudeRoot, codexRoot } from "./homes.js"
+export { claudeAccountOrg, claudeJsonPath, readClaudeOrg } from "./org.js"
 export { AccountRegistry, systemAccountId, sameIdentity, REFRESH_MARGIN_MS } from "./registry.js"
 export { RefreshCoordinator } from "./refresh.js"
 export { UsageStore } from "./usage-store.js"
