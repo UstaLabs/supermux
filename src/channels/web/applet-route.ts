@@ -8,9 +8,11 @@ import { handleProxyRequest, type OwnCredentials } from "./proxy"
 /**
  * #117: /a/<name>/, an applet's route. Paired devices only; the broker serves a static applet's public/ itself and
  * proxies to a server applet's loopback $PORT. Whatever the caller sent as X-Mux-* is dropped, and supermux's own
- * credentials never reach the applet; it gets X-Mux-Via (who is asking) and X-Mux-Via-Sig (hex HMAC-SHA256 of the
- * X-Mux-Via value under the applet's $MUX_VIA_KEY), so its own port, reached directly, can't be fooled. No session is
- * involved anywhere.
+ * credentials never reach the applet; it gets X-Mux-Via (who is asking: device:<id> or agent:<session>), X-Mux-Via-Sig
+ * (hex HMAC-SHA256 of the X-Mux-Via value under the applet's $MUX_VIA_KEY) and X-Mux-Device-Name (unsigned, display
+ * only). The proxy refuses ownerOnly paths to agents, but an agent on this host can reach the server's port directly,
+ * so an applet's server must ALSO refuse ownerOnly requests without a valid signature over a device:… value. No
+ * session is involved anywhere.
  */
 
 /** /a/<name> → { name, rest: null } (301 to add "/"); /a/<name>/x → { name, rest: "/x" }; anything else null. */
@@ -20,11 +22,20 @@ export function matchAppletPath(pathname: string): { name: string; rest: string 
   return { name: m[1]!, rest: m[2] ?? null }
 }
 
-/** Who is asking. Only a device is the owner: an agent's request never reaches an ownerOnly path. */
-export type AppletCaller = { kind: "device"; name: string } | { kind: "agent"; session: string }
+/**
+ * Who is asking. Only a device is the owner: an agent's request never reaches an ownerOnly path. A device is named in
+ * X-Mux-Via by a stable id (a prefix of its token's stored hash: names change and collide); its name goes along
+ * unsigned, for display only.
+ */
+export type AppletCaller = { kind: "device"; id: string; name: string } | { kind: "agent"; session: string }
 
 export function viaValue(c: AppletCaller): string {
-  return c.kind === "device" ? `device:${c.name}` : `agent:${c.session}`
+  return c.kind === "device" ? `device:${c.id}` : `agent:${c.session}`
+}
+
+/** A device's id in X-Mux-Via: the first 16 hex characters of its token's stored SHA-256. */
+export function deviceViaId(tokenHash: string): string {
+  return tokenHash.slice(0, 16)
 }
 
 const page = (status: number, title: string, body: string) =>
@@ -142,6 +153,7 @@ export async function handleAppletRequest(req: Request, deps: AppletRouteDeps): 
       setHeaders: {
         "x-mux-via": via,
         "x-mux-via-sig": deps.applets.signVia(v.row.id, via),
+        ...(caller.kind === "device" ? { "x-mux-device-name": encodeURIComponent(caller.name) } : {}),
         "x-forwarded-prefix": `/a/${m.name}`,
       },
       label: `The applet "${m.name}"`,
