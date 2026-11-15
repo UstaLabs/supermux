@@ -9,6 +9,10 @@ import { AppletService, DELETED_KEEP_MS } from "./service"
 import { AppletBackups, KEEP_DAYS, nightlyDue } from "./backups"
 import { handleAppletApi } from "../../channels/web/applet-api"
 
+// These run POSIX shell command lines (sh -c, $VARS, printf), signal process groups and check file modes; the
+// Windows supervisor (cmd.exe /c, taskkill, the PowerShell start fingerprint) is covered by the platform layer's tests.
+const posix = test.skipIf(process.platform === "win32")
+
 const cleanups: (() => void)[] = []
 afterEach(() => { while (cleanups.length) cleanups.pop()!() })
 
@@ -37,7 +41,7 @@ function setup(now?: () => Date) {
   return { root, db, svc, make, api, appletsDir }
 }
 
-test("a job prints real output and its exit code, with the applet's secrets, settings and data dir", async () => {
+posix("a job prints real output and its exit code, with the applet's secrets, settings and data dir", async () => {
   const { svc, make, api } = setup()
   const dir = make("mail", {
     title: "Mail", secrets: ["TOKEN"], config: [{ key: "every", type: "select", options: ["15m", "30m"], default: "30m" }],
@@ -67,7 +71,7 @@ test("a job prints real output and its exit code, with the applet's secrets, set
   expect((await api("POST", "/applets/mail/jobs/nope/run")).status).toBe(404)
 })
 
-test("an expired secret is Needs you", async () => {
+posix("an expired secret is Needs you", async () => {
   let now = new Date("2026-11-15T12:00:00Z")
   const { svc, make } = setup(() => now)
   make("mail", { title: "Mail", secrets: ["TOKEN"] })
@@ -78,7 +82,7 @@ test("an expired secret is Needs you", async () => {
   expect(svc.needsYou(svc.get("mail")!)).toMatchObject([{ name: "TOKEN", state: "expired" }])
 })
 
-test("the scheduler runs a job when it is due, once at a time, and not again until its interval passes", async () => {
+posix("the scheduler runs a job when it is due, once at a time, and not again until its interval passes", async () => {
   let t = Date.parse("2026-11-15T12:00:00Z")
   const { svc, make, db, root } = setup()
   make("tick", { title: "Tick", jobs: [{ name: "t", every: "1h", run: "echo ran >> \"$DATA_DIR/count\"" }] })
@@ -98,7 +102,7 @@ test("the scheduler runs a job when it is due, once at a time, and not again unt
   expect(readFileSync(join(root, "applets/tick/data/count"), "utf8")).toBe("ran\nran\n")
 })
 
-test("a backup is a read-only copy, SQLite included, and restoring is left to an agent", async () => {
+posix("a backup is a read-only copy, SQLite included, and restoring is left to an agent", async () => {
   const { svc, make, root, api } = setup()
   const dir = make("notes", { title: "Notes" }, { "data/files/a.txt": "hello" })
   const db = new Database(join(dir, "data/app.db"))
@@ -120,7 +124,7 @@ test("a backup is a read-only copy, SQLite included, and restoring is left to an
   expect(((await (await api("GET", "/applets/notes")).json()) as any).backups.map((b: any) => b.id)).toEqual([backup.id])
 })
 
-test("nightly backups: one a day after 03:30, two weeks kept", () => {
+posix("nightly backups: one a day after 03:30, two weeks kept", () => {
   let now = new Date(2026, 10, 15, 3, 0)
   expect(nightlyDue(now, undefined)).toBe(false)
   now = new Date(2026, 10, 15, 3, 30)
@@ -143,7 +147,7 @@ test("nightly backups: one a day after 03:30, two weeks kept", () => {
   expect(b.backup("n", join(root, "nope"), "manual")).toBeNull()
 })
 
-test("delete moves the applet aside for 30 days; undelete brings it back with its id; then it is purged", async () => {
+posix("delete moves the applet aside for 30 days; undelete brings it back with its id; then it is purged", async () => {
   let now = new Date("2026-11-15T12:00:00Z")
   const { svc, make, appletsDir, api, root } = setup(() => now)
   make("notes", { title: "Notes", secrets: ["K"] }, { "data/x": "1", "public/index.html": "hi" })
@@ -172,7 +176,7 @@ test("delete moves the applet aside for 30 days; undelete brings it back with it
   expect(readdirSync(join(root, "backups/.deleted"))).toEqual([])
 })
 
-test("pins: the 9 most recently updated until he pins; then his list, capped at 9, in order", async () => {
+posix("pins: the 9 most recently updated until he pins; then his list, capped at 9, in order", async () => {
   let t = Date.parse("2026-11-15T10:00:00Z")
   const { svc, make, api } = setup(() => new Date(t))
   for (let i = 1; i <= 11; i++) { make(`a${i}`, { title: `A${i}` }); await svc.scan(); t += 1000 }
@@ -190,7 +194,7 @@ test("pins: the 9 most recently updated until he pins; then his list, capped at 
   expect(names(svc.pinnedIds())[0]).toBe("a10")
 })
 
-test("C3: stop pauses the server, jobs and page; rename writes applet.json and commits; the Data tab counts rows", async () => {
+posix("C3: stop pauses the server, jobs and page; rename writes applet.json and commits; the Data tab counts rows", async () => {
   const { svc, make, api, root } = setup()
   const dir = make("notes", { title: "Notes", run: `${process.execPath} -e "Bun.serve({port:Number(process.env.PORT),hostname:'127.0.0.1',fetch(){return new Response('ok')}})"`, jobs: [{ name: "j", every: "1h", run: "true" }], extra: "kept" })
   const { spawnProcessSync } = await import("../process/launcher")
@@ -226,7 +230,7 @@ test("C3: stop pauses the server, jobs and page; rename writes applet.json and c
   expect(info.run).toContain("Bun.serve")
 })
 
-test("notify: an applet's token reaches only its own notify; the server gets the token and the broker's address", async () => {
+posix("notify: an applet's token reaches only its own notify; the server gets the token and the broker's address", async () => {
   const sent: string[] = []
   const root = mkdtempSync(join(tmpdir(), "applets-notify-"))
   const db = openDb(":memory:"); runMigrations(db, MIGRATIONS)
