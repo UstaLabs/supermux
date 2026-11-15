@@ -189,6 +189,22 @@ test("keeps a mux branch the chat switched to but did not make", async () => {
   expect(git(f.repo, "branch", "--list", "mux/b")).toContain("mux/b")
 })
 
+// #152: a new branch named with the user's prefix is supermux's to delete with its copy; a branch the user picked is theirs.
+test("deletes the branch a new-branch session made, whatever its prefix", async () => {
+  const f = fixture()
+  const a = f.add("u1", "ahmet/fix-login")
+  await deleteWorktrees(f.root, ["repo-abc/u1"], () => [row({ id: "s", workdir: a, status: "archived", session_branch: "ahmet/fix-login", source_kind: "new" })])
+  expect(git(f.repo, "branch", "--list", "ahmet/fix-login")).toBe("")
+})
+
+test("keeps a branch the user picked to work on, even a mux/ one", async () => {
+  const f = fixture()
+  const a = f.add("u1", "mux/older")
+  await deleteWorktrees(f.root, ["repo-abc/u1"], () => [row({ id: "s", workdir: a, status: "archived", session_branch: "mux/older", source_kind: "existing" })])
+  expect(existsSync(a)).toBe(false)
+  expect(git(f.repo, "branch", "--list", "mux/older")).toContain("mux/older")
+})
+
 test("keeps a non-mux branch", async () => {
   const f = fixture()
   const a = f.add("u1", "feature/x")

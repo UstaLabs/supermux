@@ -3,6 +3,7 @@
 // card #75; a door's once its agent is up), puts it in a workspace (its own, or the one it joins) and
 // tells the clients: the workspace frame first, then the full session_added.
 import { AgentKind } from "../../shared/agents"
+import type { SessionSource } from "./born-asleep"
 import type { Session } from "./types"
 import type { WorkspaceDto } from "../workspace/dto"
 import { msSince, startTraces } from "../perf/start-trace"
@@ -29,6 +30,10 @@ export type CreateSessionArgs = {
   perfTrace?: string
   /** Card #75, the launcher: the session is created asleep and announced at once; its first message wakes it. */
   asleep?: boolean
+  /** #152: what the launcher picked (a new branch, an existing one, the folder, another session's copy). */
+  source?: SessionSource
+  /** #152: who asked for it, as JSON ({"kind":"device","name":…}). */
+  createdBy?: string
 }
 
 export type CreatedSession = {
@@ -58,6 +63,8 @@ export type CreateSessionDeps = {
     inheritFromSessionId?: string
     perfTrace?: string
     asleep?: boolean
+    source?: SessionSource
+    createdBy?: string
   }): Promise<{ name: string; session_id: string }>
   /** A live (not archived) session. */
   getSession(id: string): Session | undefined
@@ -108,6 +115,8 @@ export function announceCreated(
 }
 
 export async function createSession(deps: CreateSessionDeps, args: CreateSessionArgs): Promise<CreatedSession> {
+  // #152: a session in another session's copy joins that session's workspace, as a continued conversation does.
+  const inheritFrom = args.inheritFrom ?? (args.source?.kind === "reuse" ? args.source.sessionId : undefined)
   const r = await deps.spawn({
     workdir: args.workdir,
     requestedName: args.name,
@@ -118,13 +127,15 @@ export async function createSession(deps: CreateSessionDeps, args: CreateSession
     account: args.account,
     worktree: args.worktree,
     baseBranch: args.baseBranch,
-    inheritFromSessionId: args.inheritFrom,
+    inheritFromSessionId: inheritFrom,
     perfTrace: args.perfTrace,
     asleep: args.asleep,
+    source: args.source,
+    createdBy: args.createdBy,
   })
   const entry = deps.getSession(r.session_id)
   const t = performance.now()
-  if (entry) announceCreated(deps, entry, { workspaceId: args.workspaceId, viewId: args.viewId, inheritFrom: args.inheritFrom })
+  if (entry) announceCreated(deps, entry, { workspaceId: args.workspaceId, viewId: args.viewId, inheritFrom })
   startTraces.mark(args.perfTrace, "announced", { ms: msSince(t) })
   // No Telegram menu refresh here: the spawn already started the start's one, in the background (card #75).
   return {

@@ -62,7 +62,18 @@ export type SessionRecord = {
   draft_payload?: DraftPayload
   /** The session that created this one (delegate / council); undefined for a top-level session. */
   parent_session_id?: string
+  /** #152: where its work comes from; undefined = made before #152 (a new mux/ branch, or the folder itself). */
+  source_kind?: SessionSourceKind
+  /** #152: the pull/merge request it works on, and the remote its pushes go to (a fork's own). */
+  pr_forge?: "github" | "gitlab"
+  pr_number?: number
+  pr_url?: string
+  push_remote?: string
+  /** #152: who asked for it, as JSON ({"kind":"device","name":…}). */
+  created_by?: string
 }
+
+export type SessionSourceKind = "new" | "existing" | "pr" | "local" | "reuse"
 
 export type TmuxRef = {
   tmux_target?: string
@@ -104,6 +115,12 @@ export type SessionRow = {
   sort_order?: number
   draft_payload?: string | null
   parent_session_id?: string | null
+  source_kind?: string | null
+  pr_forge?: string | null
+  pr_number?: number | null
+  pr_url?: string | null
+  push_remote?: string | null
+  created_by?: string | null
 }
 
 export type Session = SessionRecord & {
@@ -153,6 +170,12 @@ export function rowToRecord(row: SessionRow): SessionRecord {
     sort_order: row.sort_order ?? 0,
     draft_payload: row.draft_payload ? JSON.parse(row.draft_payload) : undefined,
     parent_session_id: row.parent_session_id ?? undefined,
+    source_kind: (row.source_kind as SessionSourceKind | null) ?? undefined,
+    pr_forge: (row.pr_forge as "github" | "gitlab" | null) ?? undefined,
+    pr_number: row.pr_number ?? undefined,
+    pr_url: row.pr_url ?? undefined,
+    push_remote: row.push_remote ?? undefined,
+    created_by: row.created_by ?? undefined,
   }
 }
 

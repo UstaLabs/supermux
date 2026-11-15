@@ -17,6 +17,8 @@ export interface OwnerRow {
   workdir: string
   base_branch: string | null
   session_branch: string | null
+  /** #152: where the session's branch came from (new | existing | pr | local | reuse); null = made before #152. */
+  source_kind?: string | null
 }
 
 export interface WorktreeOwner { id: string; name: string; status: "live" | "archived" }
@@ -422,14 +424,19 @@ async function deleteOne(root: string, id: string, owners: () => OwnerRow[], can
   const rows = await canonRows(owners(), canon)
   const live = ownersOf(path, rows).filter((o) => o.status === "live")
   // #72: a chat may have switched its copy to another branch; only the branch a chat was made with is deleted.
-  const made = rows.filter((r) => owns(resolve(path), r.workdir)).map((r) => r.session_branch).filter(Boolean)
+  const owning = rows.filter((r) => owns(resolve(path), r.workdir))
+  const made = owning.map((r) => r.session_branch).filter(Boolean)
+  // #152: a new branch goes with its copy whatever its prefix; a branch the user picked (an existing one, a pull
+  // request's) stays theirs, even a mux/ one.
+  const ours = owning.filter((r) => r.source_kind === "new").map((r) => r.session_branch)
+  const theirs = owning.filter((r) => r.source_kind === "existing" || r.source_kind === "pr").map((r) => r.session_branch)
   if (live.length) return { id, ok: false, error: "in_use", inUseBy: live.map((o) => o.name) }
   try {
     if (repoRoot) await gitAsync(repoRoot, ["worktree", "remove", "--force", "--force", path]).catch(() => {})
     if (await exists(path)) await rm(path, { recursive: true, force: true })
     if (repoRoot) {
       await gitAsync(repoRoot, ["worktree", "prune"]).catch(() => {})
-      if (branch?.startsWith("mux/") && (!made.length || made.includes(branch)) && !(await branchCheckedOutElsewhere(repoRoot, branch, path, canon))) {
+      if (branch && (branch.startsWith("mux/") || ours.includes(branch)) && !theirs.includes(branch) && (!made.length || made.includes(branch)) && !(await branchCheckedOutElsewhere(repoRoot, branch, path, canon))) {
         await gitAsync(repoRoot, ["branch", "-D", branch]).catch(() => {})
       }
     }

@@ -47,12 +47,14 @@ import type { KeepAwakeState } from "../../core/power/keep-awake"
 import type { KeepAwakeSettings } from "../../core/settings/keep-awake-config"
 import { parseKeepAwakeBody } from "../../core/settings/keep-awake-config"
 import { normalizeExistingWorkdir, uniqueKnownWorkdirs } from "../../core/session-manager/workdir-paths"
+import { parseSessionSource, SourceRefused } from "../../core/session-manager/born-asleep"
+import { launcherPrefs, OWNER, setLauncherPrefs, type UserPrefs, type WorkIn } from "../../core/settings/user-prefs"
 import { worktreesRoot } from "../../core/worktree/manager"
 
 import { getRepoInfo } from "../../core/git/repo-info"
 import { remoteStatus, fetchRemote, publishBranch, pushBranch, pullBranch } from "../../core/git/remote"
 import { branchList, folderState, liveBranch, realPath, repoToplevel, samePath, switchBranch, type BranchOwner, type OpenIn, type SwitchResult } from "../../core/git/branches"
-import { addRemote, checkLog, createPr, markReady, prBase, publishBase, publishNew, readPr, type PrBase, type PrRead } from "../../core/git/forge"
+import { addRemote, checkLog, createPr, listOpenPrs, markReady, prBase, publishBase, publishNew, readPr, readPrByNumber, type PrBase, type PrRead } from "../../core/git/forge"
 import { prInput, writePrText, type PrTextWriter } from "../../core/git/pr-text"
 import type { AgentKind } from "../../core/agents/types"
 import { AGENT_KINDS, isAgentKind } from "../../shared/agents"
@@ -313,6 +315,10 @@ export interface SessionSnapshot {
   context?: { used: number; size: number }
   session_branch?: string
   repo_root?: string
+  /** #152: where its work comes from (new | existing | pr | local | reuse), its pull / merge request, and where pushes go. */
+  source?: string
+  pr?: { forge: "github" | "gitlab"; number: number; url: string }
+  push_remote?: string
   git?: import("../../core/worktree/lite-status").GitLiteStatus
   finish_job?: import("../../core/worktree/finish-job").FinishJob
 }
@@ -441,7 +447,9 @@ export interface WebChannelOpts {
   sendUserMessage?: (id: string, text: string) => Promise<{ ok: boolean; reason?: string }>
   getWalkthrough?: (id: string) => import("../../core/walkthrough/store").Walkthrough | undefined
   reviewSession?: (id: string) => { workdir: string; repoRoot?: string; baseCommits?: Record<string, string> } | undefined
-  spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; account?: string; worktree?: boolean; baseBranch?: string; inheritFrom?: string; workspaceId?: string; viewId?: string; firstMessage?: string; firstAttachments?: InboundAttachment[]; /** Card #75: the app's own id for the first message (`web-<uuid>`). */ firstMessageId?: string; device?: string; /** Card #75: the app's session-start trace (`x-mux-trace: S…/<req>`). */ perfTrace?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; repo_root?: string; session_branch?: string }>
+  /** #152 B4: the user's own choices (the launcher's Local / Worktree per project, the branch prefix). */
+  userPrefs?: UserPrefs
+  spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; account?: string; worktree?: boolean; baseBranch?: string; inheritFrom?: string; workspaceId?: string; viewId?: string; firstMessage?: string; firstAttachments?: InboundAttachment[]; /** Card #75: the app's own id for the first message (`web-<uuid>`). */ firstMessageId?: string; device?: string; /** Card #75: the app's session-start trace (`x-mux-trace: S…/<req>`). */ perfTrace?: string; /** #152: what the launcher picked, and who asked (JSON). */ source?: import("../../core/session-manager/born-asleep").SessionSource; createdBy?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; repo_root?: string; session_branch?: string }>
   createDraft?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; draftPayload?: { text?: string; attachments?: unknown[] } }) => Promise<{ id: string; name: string; workdir: string; agent: AgentKind }>
   killSession?: (name: string) => Promise<void>
   /** Explicit worktree cleanup (spec 2026-09-22-explicit-worktree-cleanup). */
@@ -4341,18 +4349,35 @@ export class WebChannel implements Channel {
       return this.json(this.withOpenIn(r, this.branchOwners(id)))
     }
     // #152: the launcher reads and switches the project folder itself, every session an owner. Local mode switches
-    // a folder only when it is clean (VS Code's rule): changes git could carry over are refused too.
-    const projectGit = path.match(/^\/projects\/(branches|folder-state|switch)$/)
-    if (projectGit && method === (projectGit[1] === "switch" ? "POST" : "GET")) {
+    // a folder only when it is clean (VS Code's rule): changes git could carry over are refused too. prefs: the
+    // user's Local / Worktree pick for the folder and their branch prefix (B4). prs / pr: the Pull request tab, origin's
+    // open PRs/MRs (searched with ?q=) or one by ?ref= (#N, !N, N or its URL), read with the user's own gh / glab (B2).
+    const projectGit = path.match(/^\/projects\/(branches|folder-state|switch|prefs|prs|pr)$/)
+    const projectMethods = projectGit?.[1] === "switch" ? ["POST"] : projectGit?.[1] === "prefs" ? ["GET", "PUT"] : ["GET"]
+    if (projectGit && projectMethods.includes(method)) {
       const op = projectGit[1]
-      const body = op === "switch" ? await req.json().catch(() => ({})) as Record<string, unknown> : {}
-      const raw = op === "switch" ? body.dir : url.searchParams.get("dir")
+      const body = method === "GET" ? {} : await req.json().catch(() => ({})) as Record<string, unknown>
+      const raw = method === "GET" ? url.searchParams.get("dir") : body.dir
       if (typeof raw !== "string" || !raw.trim()) return this.json({ error: "dir required" }, 400)
       let dir: string
       try { dir = normalizeExistingWorkdir(raw, home()) } catch (err: any) { return this.json({ error: err?.message ?? String(err) }, 400) }
+      if (op === "prefs") {
+        const prefs = this.opts.userPrefs
+        if (!prefs) return this.json({ error: "not configured" }, 503)
+        // The user's own, never the device's (the team rule); the owner's until users exist.
+        if (method === "PUT") {
+          if (body.branchPrefix !== undefined && typeof body.branchPrefix !== "string") return this.json({ error: "branchPrefix must be a string" }, 400)
+          const patch = { ...(body.workIn !== undefined ? { workIn: body.workIn as WorkIn } : {}), ...(typeof body.branchPrefix === "string" ? { branchPrefix: body.branchPrefix } : {}) }
+          try { await setLauncherPrefs(prefs, OWNER, dir, patch) } catch (err: any) { return this.json({ error: err?.message ?? String(err) }, 400) }
+        }
+        const logins = (host: string) => (this.opts.getForgeConnections?.() ?? []).filter((c) => c.host.toLowerCase() === host.toLowerCase()).map((c) => c.account.login)
+        return this.json(await launcherPrefs(prefs, OWNER, dir, logins))
+      }
       if (!repoToplevel(dir)) return this.json({ error: "not a git repository" }, 409)
       if (op === "branches") return this.json(branchList(dir, this.branchOwners()))
       if (op === "folder-state") return this.json(folderState(dir))
+      if (op === "prs") return this.json(await listOpenPrs(dir, url.searchParams.get("q") ?? ""))
+      if (op === "pr") return this.json(await readPrByNumber(dir, url.searchParams.get("ref") ?? ""))
       const name = String(body.name ?? "").trim()
       if (!name) return this.json({ error: "name required" }, 400)
       return this.json(this.withOpenIn(switchBranch(dir, name, { requireClean: true }), this.branchOwners()))
@@ -4643,6 +4668,8 @@ export class WebChannel implements Channel {
           return this.json({ error: `unknown agent: ${String(requestedAgent)}` }, 400)
         }
         const agent = requestedAgent == null ? undefined : requestedAgent
+        const parsedSource = parseSessionSource(body.source)
+        if ("error" in parsedSource) return this.json({ error: parsedSource.error }, 400)
         const userStatus = body.userStatus as string | undefined
         if (userStatus === "draft") {
           if (!this.opts.createDraft) return this.json({ error: "not configured" }, 503)
@@ -4710,6 +4737,9 @@ export class WebChannel implements Channel {
           firstMessageId: clientMessageIdOf(body.client_message_id),
           device: auth.device.name,
           perfTrace: (req.headers.get("x-mux-trace") ?? "").split("/")[0] || undefined,
+          source: parsedSource.source,
+          // Who asked: the paired device (the team rule: the actor goes with what it made).
+          createdBy: JSON.stringify({ kind: "device", name: auth.device.name }),
         })
         return this.json(result)
       } catch (err: any) {
@@ -4719,9 +4749,10 @@ export class WebChannel implements Channel {
           model: body.model as string | undefined,
           err: err?.message ?? String(err),
         })
-        // A rejected account (unknown, another agent's, unsupported) is the caller's error.
+        // A rejected account (unknown, another agent's, unsupported) is the caller's error; so is a refused
+        // source (#152), with what the launcher needs to offer a way out (who holds the branch, …).
         const status = typeof err?.status === "number" ? err.status : 500
-        return this.json({ ...(err?.code ? { code: err.code } : {}), ...(err?.agent ? { agent: err.agent } : {}), error: err?.message ?? String(err) }, status)
+        return this.json({ ...(err?.code ? { code: err.code } : {}), ...(err?.agent ? { agent: err.agent } : {}), error: err?.message ?? String(err), ...(err instanceof SourceRefused ? err.details : {}) }, status)
       }
     }
     if (method === "DELETE" && path.match(/^\/sessions\/[^/]+$/)) {

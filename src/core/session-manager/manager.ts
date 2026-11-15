@@ -206,7 +206,7 @@ export type SessionManagerPorts = {
     /** Socket bind — the server is constructed after the component (late-bound). */
     bind(sessionId: string): Promise<void>
     /** Recreate a merged-away worktree at the SAME path before any respawn. */
-    ensureSessionWorktree(session: { id: string; name: string; workdir: string; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null }): Promise<void>
+    ensureSessionWorktree(session: { id: string; name: string; workdir: string; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null; source_kind?: string | null }): Promise<void>
     /** Resolved CLI effort for a session (model cache lives in main.ts). */
     sessionEffort(s: { agent?: string; model?: string; reasoningLevel?: string }): string | undefined
     /** Resolved fast mode for a session (model cache lives in main.ts). */

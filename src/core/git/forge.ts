@@ -23,11 +23,17 @@ export const execCli: Exec = (cmd, args, cwd) => new Promise((resolve) => {
   child.on("close", (code) => finish(code === 0 ? { ok: true, out: out.trim() } : { ok: false, out: (err || out).trim() }))
 })
 
+/** The host of a remote's URL (scp-like `git@host:a/b`, ssh:// or https://), null for a local path. */
+export function hostOf(originUrl: string): string | null {
+  const m = originUrl.match(/^[^@/]+@([^:/]+):/) ?? originUrl.match(/^[a-z+]+:\/\/(?:[^@/]+@)?([^/:]+)/i)
+  return m ? m[1]! : null
+}
+
 /** GitLab when origin's host says so (gitlab.com, gitlab.acme.io); any other host is taken as GitHub. */
 export function forgeOf(originUrl: string): Forge | null {
-  const m = originUrl.match(/^[^@]+@([^:]+):/) ?? originUrl.match(/^[a-z+]+:\/\/(?:[^@/]+@)?([^/:]+)/i)
-  if (!m) return null
-  return /(^|\.)gitlab\./i.test(m[1]!) || /^gitlab/i.test(m[1]!) ? "gitlab" : "github"
+  const host = hostOf(originUrl)
+  if (!host) return null
+  return /(^|\.)gitlab\./i.test(host) || /^gitlab/i.test(host) ? "gitlab" : "github"
 }
 
 export interface PrCheck { name: string; state: "ok" | "bad" | "run" | "skip"; url?: string }
@@ -303,4 +309,166 @@ export async function publishNew(
   }
   const push = await exec("git", ["-C", cwd, "push", "-u", "origin", "HEAD"], cwd)
   return push.ok ? { ok: true, url, ...(base ? { base } : {}) } : { ok: false, reason: "error", url, message: `Created ${url} and added it as origin, but the push failed: ${push.out.slice(0, 400)}` }
+}
+
+// ---- #152: the launcher's Pull request tab ----
+
+/** An open PR (GitHub) / MR (GitLab) as the launcher lists it: enough to say where a session on it works and pushes. */
+export interface PrSummary {
+  forge: Forge
+  number: number
+  title: string
+  url: string
+  author: string
+  /** The PR's target: a session on it has it as its base. */
+  base: string
+  /** The PR's own branch, as the repo it lives in names it. */
+  head: string
+  /** "owner/repo" the head lives in: origin's own, or a fork's. */
+  headRepo: string
+  isFork: boolean
+  /** A fork's owner and clone URL (in origin's scheme): the remote a session adds so its pushes update the PR. */
+  headOwner?: string
+  headUrl?: string
+  /** The author lets maintainers push to the fork's branch (GitHub maintainerCanModify, GitLab allow_collaboration). */
+  maintainerCanModify: boolean
+  draft: boolean
+  checks: "ok" | "bad" | "run" | "none"
+  /** Commits the local branch of the same name has that the PR's head doesn't (local refs, no fetch). */
+  localAhead?: number
+}
+type Unavailable = Extract<PrRead, { status: "unavailable" }>
+export type PrList = { status: "ok"; forge: Forge; repo: string; prs: PrSummary[] } | Unavailable
+export type PrNumberRead =
+  | { status: "found"; pr: PrSummary }
+  | { status: "none"; forge: Forge }
+  | { status: "not_open"; forge: Forge; number: number; state: "merged" | "closed" }
+  | { status: "other_repo"; forge: Forge; repo: string }
+  | { status: "bad_ref" }
+  | Unavailable
+
+/** "#123", "!7", "42", or a PR / MR URL (GitHub /pull/N, GitLab /-/merge_requests/N). */
+export function parsePrRef(ref: string): { number: number; repo?: string } | null {
+  const s = ref.trim()
+  const n = s.match(/^[#!]?(\d+)$/)
+  if (n) return Number(n[1]) > 0 ? { number: Number(n[1]) } : null
+  const u = s.match(/^https?:\/\/[^/]+\/(.+?)\/(?:pull|-\/merge_requests|merge_requests)\/(\d+)(?:[/?#].*)?$/i)
+  return u && Number(u[2]) > 0 ? { number: Number(u[2]), repo: u[1]! } : null
+}
+
+/** "owner/repo" (GitLab: "group/sub/repo") from a remote's URL. */
+function repoPathOf(originUrl: string): string | null {
+  const m = originUrl.match(/^[^@/]+@[^:/]+:(.+?)(?:\.git)?\/?$/) ?? originUrl.match(/^[a-z+]+:\/\/(?:[^@/]+@)?[^/]+\/(.+?)(?:\.git)?\/?$/i)
+  return m ? m[1]! : null
+}
+const sshRemote = (originUrl: string) => /^[^@/]+@[^:/]+:/.test(originUrl) || /^ssh:\/\//i.test(originUrl)
+
+function rollupChecks(states: PrCheck["state"][]): PrSummary["checks"] {
+  if (states.includes("bad")) return "bad"
+  if (states.includes("run")) return "run"
+  return states.includes("ok") ? "ok" : "none"
+}
+
+const GH_LIST_FIELDS = "number,title,url,state,headRefName,headRepository,headRepositoryOwner,isCrossRepository,maintainerCanModify,baseRefName,isDraft,author,statusCheckRollup"
+
+function ghSummary(v: any, origin: string, host: string): PrSummary {
+  const owner = String(v.headRepositoryOwner?.login ?? ""), name = String(v.headRepository?.name ?? "")
+  const isFork = v.isCrossRepository === true
+  return {
+    forge: "github", number: Number(v.number), title: String(v.title ?? ""), url: String(v.url ?? ""), author: String(v.author?.login ?? ""),
+    base: String(v.baseRefName ?? ""), head: String(v.headRefName ?? ""), headRepo: isFork ? `${owner}/${name}` : repoPathOf(origin) ?? `${owner}/${name}`, isFork,
+    ...(isFork ? { headOwner: owner, headUrl: sshRemote(origin) ? `git@${host}:${owner}/${name}.git` : `https://${host}/${owner}/${name}.git` } : {}),
+    maintainerCanModify: v.maintainerCanModify === true, draft: v.isDraft === true,
+    checks: rollupChecks(newestRuns(v.statusCheckRollup ?? []).map(ghCheck).map((c) => c.state)),
+  }
+}
+
+function glChecks(status: unknown): PrSummary["checks"] {
+  const s = String(status ?? "")
+  if (!s) return "none"
+  return s === "success" ? "ok" : s === "failed" || s === "canceled" ? "bad" : s === "skipped" || s === "manual" ? "none" : "run"
+}
+
+async function glSummary(mr: any, origin: string, cwd: string, exec: Exec): Promise<PrSummary> {
+  const isFork = mr.source_project_id != null && mr.target_project_id != null && Number(mr.source_project_id) !== Number(mr.target_project_id)
+  let fork: { headRepo: string; headOwner?: string; headUrl?: string } = { headRepo: repoPathOf(origin) ?? "" }
+  if (isFork) {
+    const p = await exec("glab", ["api", `projects/${Number(mr.source_project_id)}`], cwd)
+    const proj = p.ok ? json(p.out) : null
+    fork = {
+      headRepo: String(proj?.path_with_namespace ?? ""),
+      ...(proj?.namespace?.path ? { headOwner: String(proj.namespace.path) } : {}),
+      ...(proj ? { headUrl: String(sshRemote(origin) ? proj.ssh_url_to_repo ?? "" : proj.http_url_to_repo ?? "") } : {}),
+    }
+  }
+  return {
+    forge: "gitlab", number: Number(mr.iid), title: String(mr.title ?? ""), url: String(mr.web_url ?? ""), author: String(mr.author?.username ?? ""),
+    base: String(mr.target_branch ?? ""), head: String(mr.source_branch ?? ""), ...fork, isFork,
+    maintainerCanModify: mr.allow_collaboration === true || mr.allow_maintainer_to_push === true,
+    draft: mr.draft === true || mr.work_in_progress === true, checks: glChecks(mr.head_pipeline?.status ?? mr.pipeline?.status),
+  }
+}
+
+/** A same-repo PR whose branch is also here: how many local commits its head doesn't have (a checkout would replace them). */
+async function withLocalAhead(pr: PrSummary, cwd: string, exec: Exec): Promise<PrSummary> {
+  if (pr.isFork || !pr.head) return pr
+  const has = await exec("git", ["-C", cwd, "rev-parse", "--verify", "--quiet", `refs/heads/${pr.head}`], cwd)
+  if (!has.ok) return pr
+  const n = await exec("git", ["-C", cwd, "rev-list", "--count", `refs/remotes/origin/${pr.head}..refs/heads/${pr.head}`], cwd)
+  return n.ok ? { ...pr, localAhead: Number(n.out) || 0 } : pr
+}
+
+async function originOf(cwd: string, exec: Exec): Promise<{ url: string; forge: Forge; host: string } | null> {
+  const o = await exec("git", ["-C", cwd, "remote", "get-url", "origin"], cwd)
+  const forge = o.ok ? forgeOf(o.out) : null
+  return o.ok && forge ? { url: o.out, forge, host: hostOf(o.out) ?? "" } : null
+}
+
+/** The open PRs/MRs of origin's repo, newest first (the forge's order), optionally searched, with the user's own gh / glab sign-in. */
+export async function listOpenPrs(cwd: string, q: string, exec: Exec = execCli): Promise<PrList> {
+  const origin = await originOf(cwd, exec)
+  if (!origin) return { status: "unavailable", reason: "no_remote" }
+  const search = q.trim()
+  const repo = `${origin.host}/${repoPathOf(origin.url) ?? ""}`
+  if (origin.forge === "github") {
+    const r = await exec("gh", ["pr", "list", "--state", "open", "--limit", "50", "--json", GH_LIST_FIELDS, ...(search ? ["--search", search] : [])], cwd)
+    if (!r.ok) return failure("github", r.out) as Unavailable
+    const list = json(r.out)
+    if (!Array.isArray(list)) return { status: "unavailable", forge: "github", reason: "error", message: "unreadable answer from gh" }
+    const prs = await Promise.all(list.map((v) => withLocalAhead(ghSummary(v, origin.url, origin.host), cwd, exec)))
+    return { status: "ok", forge: "github", repo, prs }
+  }
+  const r = await exec("glab", ["mr", "list", "-F", "json", "--per-page", "50", ...(search ? ["--search", search] : [])], cwd)
+  if (!r.ok) return failure("gitlab", r.out) as Unavailable
+  const list = json(r.out)
+  if (!Array.isArray(list)) return { status: "unavailable", forge: "gitlab", reason: "error", message: "unreadable answer from glab" }
+  const prs = await Promise.all(list.map(async (mr) => withLocalAhead(await glSummary(mr, origin.url, cwd, exec), cwd, exec)))
+  return { status: "ok", forge: "gitlab", repo, prs }
+}
+
+/** One PR/MR by "#N", "!N", "N" or its URL: only origin's own repo, and only an open one (a session works on it). */
+export async function readPrByNumber(cwd: string, ref: string, exec: Exec = execCli): Promise<PrNumberRead> {
+  const parsed = parsePrRef(ref)
+  if (!parsed) return { status: "bad_ref" }
+  const origin = await originOf(cwd, exec)
+  if (!origin) return { status: "unavailable", reason: "no_remote" }
+  const own = repoPathOf(origin.url)
+  if (parsed.repo && own && parsed.repo.toLowerCase() !== own.toLowerCase()) return { status: "other_repo", forge: origin.forge, repo: parsed.repo }
+  const missing = (out: string) => /could not resolve to a pull ?request|merge request not found|404 not found/i.test(out)
+  if (origin.forge === "github") {
+    const r = await exec("gh", ["pr", "view", String(parsed.number), "--json", GH_LIST_FIELDS], cwd)
+    if (!r.ok) return missing(r.out) ? { status: "none", forge: "github" } : failure("github", r.out) as Unavailable | { status: "none"; forge: Forge }
+    const v = json(r.out)
+    if (!v) return { status: "unavailable", forge: "github", reason: "error", message: "unreadable answer from gh" }
+    const state = String(v.state ?? "").toUpperCase()
+    if (state !== "OPEN") return { status: "not_open", forge: "github", number: parsed.number, state: state === "MERGED" ? "merged" : "closed" }
+    return { status: "found", pr: await withLocalAhead(ghSummary(v, origin.url, origin.host), cwd, exec) }
+  }
+  const r = await exec("glab", ["mr", "view", String(parsed.number), "-F", "json"], cwd)
+  if (!r.ok) return missing(r.out) ? { status: "none", forge: "gitlab" } : failure("gitlab", r.out) as Unavailable | { status: "none"; forge: Forge }
+  const mr = json(r.out)
+  if (!mr) return { status: "unavailable", forge: "gitlab", reason: "error", message: "unreadable answer from glab" }
+  const state = String(mr.state ?? "")
+  if (state !== "opened") return { status: "not_open", forge: "gitlab", number: parsed.number, state: state === "merged" ? "merged" : "closed" }
+  return { status: "found", pr: await withLocalAhead(await glSummary(mr, origin.url, cwd, exec), cwd, exec) }
 }

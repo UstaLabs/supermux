@@ -52,6 +52,8 @@ test("036 widens sessions.agent to antigravity, keeping every column, index, CHE
   db.run("DELETE FROM workspaces WHERE id='w1'")
   expect(db.query("SELECT workspace_id AS w FROM sessions WHERE id='s1'").get()).toEqual({ w: null })
 
+  // Today's store writes today's columns: bring the schema up to date before using it.
+  runMigrations(db, MIGRATIONS.filter((m) => m.version > 36))
   const store = new SessionStore(db)
   const s = store.register({ name: "agy2", agent: "antigravity", workdir: "/w", pid: 0 })
   expect(new SessionStore(db).getById(s.id)?.agent).toBe("antigravity")
