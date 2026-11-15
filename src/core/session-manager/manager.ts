@@ -185,6 +185,8 @@ export type SessionManagerPorts = {
     createAgentDeps(): CreateAgentDeps
     /** set_avatar saved a new avatar for this Agent: tell the clients. */
     agentAvatarChanged?(agentId: string): void
+    /** #117: `supermux applet …` ops (applet_*), open to every session; undefined = no applets on this broker. */
+    appletOp?(sessionId: string, name: string, args: Record<string, unknown> | undefined): Promise<{ ok: true; value: unknown } | { ok: false; error: string }>
     /** delegate (spec §3): start a child session for parentId and hand it the task. */
     delegate(args: { parentId: string; task: string; agent: AgentKind; model?: string; effort?: string; access: string; checkout: "shared" | "worktree"; title?: string; callId?: string }): Promise<{ session: string; agent: AgentKind; model: string | null; access: string }>
     /** council (spec §5): start the members and send them the question. */
@@ -696,6 +698,11 @@ export class SessionManager {
     // personal assistants have: today that leaves mute_session, set_active and get_active (spec §4).
     // A new tool meant for every session must be added here.
     const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment", "browser_comments", "resolve_browser_comment", "reply_browser_comment", "dismiss_browser_comment", "message_session", "list_models", "spawn_session", "kill_session", "list_sessions", "delegate", "council", "council_round", "council_add", "council_remove", "council_end", "council_report", "preview_avatar", "set_avatar", "list_proxies", "cli_adoption"])
+    if (op.name.startsWith("applet_")) {
+      if (!s) return { ok: false, error: "unknown session" }
+      const applets = this.ports.orchestration.appletOp
+      return applets ? await applets(s.id, op.name, op.args) : { ok: false, error: "applets are not available on this broker" }
+    }
     if (!s?.can_orchestrate && !NO_ORCHESTRATE_REQUIRED.has(op.name)) {
       return { ok: false, error: "permission denied (can_orchestrate=false)" }
     }

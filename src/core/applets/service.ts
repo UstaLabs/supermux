@@ -1,8 +1,9 @@
 import type { Database } from "bun:sqlite"
 import { createHmac, randomBytes } from "crypto"
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs"
+import { spawnProcessSync } from "../process/launcher"
 import { dirs, files } from "@supermux/platform"
-import { isAbsolute, join } from "path"
+import { isAbsolute, join, relative } from "path"
 import { makeLogger } from "../../shared/log"
 import { isAppletName, parseManifest, type AppletManifest } from "./manifest"
 import { AppletStore, type AppletRow } from "./store"
@@ -15,6 +16,8 @@ import { AppletBackups, nightlyDue, type BackupInfo } from "./backups"
 export const DELETED_KEEP_MS = 30 * 86_400_000
 
 const log = makeLogger("applets")
+
+const escapeHtml = (t: string) => t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!)
 
 /** One applet as the broker knows it: its row, what its folder says, and how its server is doing. */
 export interface AppletView {
@@ -246,6 +249,62 @@ export class AppletService {
 
   private async restartIfServer(v: AppletView): Promise<void> {
     if (v.manifest?.run) await this.supervisor.restart(this.spec(v.row, v.folder, v.manifest))
+  }
+
+  /**
+   * `supermux applet new`: makes the folder (an empty static applet, or a copy of [from], git history included), with
+   * a data/ folder git ignores and a repo-local git identity ("supermux applet") so agents never commit as the user,
+   * commits it, and registers it at once.
+   */
+  async create(name: string, opts: { from?: string; title?: string }, by: string): Promise<Result<{ view: AppletView }>> {
+    if (!isAppletName(name)) return { ok: false, error: `"${name}" can't be an applet name: use lowercase letters, digits and dashes, starting with a letter (e.g. job-tracker)` }
+    const folder = this.folderOf(name)
+    if (existsSync(folder) || this.store.byName(name)) return { ok: false, error: `an applet named "${name}" exists already (supermux applet info ${name})` }
+    if (opts.from) {
+      if (!existsSync(opts.from) || !statSync(opts.from).isDirectory()) return { ok: false, error: `--from ${opts.from} is not a folder` }
+      const up = relative(opts.from, folder)
+      if (!up || (!up.startsWith("..") && !isAbsolute(up))) return { ok: false, error: "--from can't be a folder that contains the applets folder" }
+    }
+    const title = opts.title?.trim() || name
+    try {
+      mkdirSync(this.deps.appletsDir, { recursive: true })
+      if (opts.from) files.copyTreeSync(opts.from, folder)
+      else {
+        mkdirSync(join(folder, "public"), { recursive: true })
+        writeFileSync(join(folder, "public", "index.html"), `<!doctype html>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<title>${escapeHtml(title)}</title>\n<h1>${escapeHtml(title)}</h1>\n`)
+      }
+      if (!existsSync(join(folder, "applet.json"))) writeFileSync(join(folder, "applet.json"), JSON.stringify({ title }, null, 2) + "\n")
+      mkdirSync(join(folder, "data"), { recursive: true })
+      const gi = join(folder, ".gitignore")
+      const cur = existsSync(gi) ? readFileSync(gi, "utf8") : ""
+      if (!cur.split(/\r?\n/).some((l) => ["data", "data/", "/data", "/data/"].includes(l.trim()))) {
+        writeFileSync(gi, cur + (cur && !cur.endsWith("\n") ? "\n" : "") + "# the applet's live data: backed up by supermux, never committed\ndata/\n")
+      }
+      const git = (...args: string[]) => {
+        const r = spawnProcessSync(["git", ...args], { cwd: folder, stdout: "pipe", stderr: "pipe" })
+        if (r.exitCode !== 0) throw new Error(`git ${args[0]}: ${r.stderr.toString().trim()}`)
+      }
+      if (!existsSync(join(folder, ".git"))) git("init", "-q")
+      git("config", "user.name", "supermux applet")
+      git("config", "user.email", "applet@supermux.invalid")
+      git("add", "-A")
+      const staged = spawnProcessSync(["git", "diff", "--cached", "--quiet"], { cwd: folder })
+      if (staged.exitCode !== 0) git("commit", "-q", "-m", opts.from ? `applet created from ${opts.from}` : "applet created")
+    } catch (err) {
+      return { ok: false, error: `couldn't create the applet: ${(err as Error).message}` }
+    }
+    await this.scan()
+    const v = this.get(name)
+    if (!v) return { ok: false, error: "the folder was made but isn't listed; check applet.json" }
+    this.touchBy(v.row.id, by)
+    return { ok: true, view: this.get(name)! }
+  }
+
+  /** Records that [by] changed the applet (a restart, a backup) without changing what its folder says. */
+  touchBy(id: string, by: string): void {
+    this.store.touch(id, by)
+    const v = this.views.get(id)
+    if (v) this.views.set(id, { ...v, row: this.store.byId(id)! })
   }
 
   private deletedDir(): string { return join(this.deps.appletsDir, ".deleted") }
