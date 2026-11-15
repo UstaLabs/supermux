@@ -5,7 +5,7 @@ import { spawnProcessSync } from "../process/launcher"
 import { dirs, files } from "@supermux/platform"
 import { isAbsolute, join, relative } from "path"
 import { makeLogger } from "../../shared/log"
-import { isAppletName, parseManifest, type AppletManifest } from "./manifest"
+import { isAppletName, parseManifest, RESERVED_APPLET_NAMES, type AppletManifest } from "./manifest"
 import { AppletStore, type AppletRow } from "./store"
 import { AppletSupervisor, appletBaseEnv, type AppletProcessState, type AppletSpec } from "./supervisor"
 import { AppletSecrets, type SecretStatus } from "./secrets"
@@ -258,6 +258,7 @@ export class AppletService {
    */
   async create(name: string, opts: { from?: string; title?: string }, by: string): Promise<Result<{ view: AppletView }>> {
     if (!isAppletName(name)) return { ok: false, error: `"${name}" can't be an applet name: use lowercase letters, digits and dashes, starting with a letter (e.g. job-tracker)` }
+    if (RESERVED_APPLET_NAMES.has(name)) return { ok: false, error: `"${name}" is one of supermux applet's own commands; pick another name` }
     const folder = this.folderOf(name)
     if (existsSync(folder) || this.store.byName(name)) return { ok: false, error: `an applet named "${name}" exists already (supermux applet info ${name})` }
     if (opts.from) {

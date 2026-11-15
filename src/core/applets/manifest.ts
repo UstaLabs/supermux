@@ -38,6 +38,9 @@ export type ManifestResult = { ok: true; manifest: AppletManifest } | { ok: fals
 /** A name is the folder and the route segment: lowercase letters, digits and dashes, starting with a letter. */
 export const APPLET_NAME = /^[a-z][a-z0-9-]{0,47}$/
 
+/** The CLI's own verbs: `supermux applet <name> <cmd>` runs an applet's bin, so an applet can't be called one. */
+export const RESERVED_APPLET_NAMES = new Set(["list", "info", "new", "restart", "logs", "run", "backup", "delete", "help", "secret", "secrets", "share"])
+
 export function isAppletName(name: string): boolean {
   return APPLET_NAME.test(name) && !name.endsWith("-")
 }
