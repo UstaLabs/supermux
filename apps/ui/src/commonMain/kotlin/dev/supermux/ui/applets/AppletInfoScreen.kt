@@ -152,12 +152,19 @@ fun AppletInfoScreen(name: String, actions: AppletInfoActions, phone: Boolean, o
     var tab by remember(name) { mutableStateOf(InfoTab.entries.firstOrNull { it.name.equals(initialTab, ignoreCase = true) } ?: InfoTab.Overview) }
     Column(Modifier.fillMaxSize().background(cs.surface).testTag("applet_info_$name")) {
         // The top: back on a phone; the crumb on a desktop.
-        Row(Modifier.fillMaxWidth().height(if (phone) 52.dp else 40.dp).padding(horizontal = if (phone) 4.dp else 16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().height(if (phone) 52.dp else 40.dp).padding(start = if (phone) 4.dp else 8.dp, end = if (phone) 4.dp else 16.dp), verticalAlignment = Alignment.CenterVertically) {
             if (phone) {
                 Box(Modifier.size(44.dp).clip(CircleShape).clickable(onClick = onBack).testTag("applet_info_back"), contentAlignment = Alignment.Center) {
                     Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = localized(Str.shell_back), tint = cs.onSurface)
                 }
             } else {
+                Box(
+                    Modifier.size(28.dp).clip(RoundedCornerShape(6.dp)).clickable(onClick = onBack).testTag("applet_info_back"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = localized(Str.shell_back), tint = cs.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                }
+                Spacer(Modifier.width(6.dp))
                 Text(localized(Str.sessions_applets_title), fontSize = 13.sp, color = cs.onSurfaceVariant, modifier = Modifier.clickable(onClick = onBack))
                 Text("  /  ", fontSize = 13.sp, color = cs.onSurfaceVariant) // i18n-ok: a crumb separator
                 Text(detail?.title ?: name, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -173,7 +180,7 @@ fun AppletInfoScreen(name: String, actions: AppletInfoActions, phone: Boolean, o
             return@Column
         }
         Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), contentAlignment = Alignment.TopCenter) {
-            Column(Modifier.widthIn(max = 760.dp).fillMaxWidth().padding(horizontal = if (phone) 14.dp else 32.dp, vertical = if (phone) 10.dp else 22.dp)) {
+            Column(Modifier.widthIn(max = if (phone) 760.dp else 980.dp).fillMaxWidth().padding(horizontal = if (phone) 14.dp else 32.dp, vertical = if (phone) 10.dp else 22.dp)) {
                 // The head: icon, title, when it changed and who; Open and Install beside it (under it on a phone).
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     AppletIcon(d.asApplet(), if (phone) 60.dp else 72.dp, actions.loadIcon)

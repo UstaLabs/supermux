@@ -497,7 +497,15 @@ fun AppletsScreen(actions: AppletsActions, phone: Boolean, onBack: () -> Unit) {
                 Text(localized(Str.sessions_applets_title), fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface)
             }
         } else {
-            Row(Modifier.fillMaxWidth().height(40.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().height(40.dp).padding(start = 8.dp, end = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                // Back, as every full-pane page has at every width (Escape works too).
+                Box(
+                    Modifier.size(28.dp).clip(RoundedCornerShape(6.dp)).clickable(onClick = onBack).testTag("applets_back"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = localized(Str.shell_back), tint = cs.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                }
+                Spacer(Modifier.width(6.dp))
                 Text(localized(Str.sessions_applets_title), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface)
                 Spacer(Modifier.weight(1f))
                 if (actions.hostName.isNotBlank()) Text(localized(Str.applets_page_host, actions.hostName), fontSize = 12.sp, color = cs.onSurfaceVariant)
