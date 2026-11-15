@@ -5,6 +5,7 @@ import androidx.compose.ui.window.MenuScope
 import dev.supermux.host.HostView
 import dev.supermux.proto.SessionInfo
 import dev.supermux.state.FleetStore
+import dev.supermux.ui.i18n.localizedHost
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -57,7 +58,7 @@ fun fleetFacts(
     val remote = hosts.firstOrNull { it.recordId != localRecordId && it.recordId !in loopbackRecordIds }
     return FleetFacts(
         localSessions = count,
-        remoteName = remote?.displayLabel,
+        remoteName = remote?.displayLabel.localizedHost(),
         remoteReachable = remote?.online ?: true,
     )
 }

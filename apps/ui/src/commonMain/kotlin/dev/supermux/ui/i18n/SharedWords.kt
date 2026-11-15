@@ -5,6 +5,7 @@
 package dev.supermux.ui.i18n
 
 import dev.supermux.chat.ChatTime
+import dev.supermux.host.HOST_FALLBACK
 import dev.supermux.proto.ViewDto
 import dev.supermux.util.TimeAgo
 import dev.supermux.workspace.ViewTitle
@@ -44,3 +45,7 @@ fun viewTitle(view: ViewDto, sessionName: (String) -> String? = { null }): Strin
             },
         )
     }
+
+/** A host's label as shown: the unnamed host's stored fallback ([HOST_FALLBACK]) in the app's language, any real name as is. */
+fun String.localizedHost(): String = if (this == HOST_FALLBACK) localized(Str.words_host_unnamed) else this
+

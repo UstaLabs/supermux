@@ -149,6 +149,7 @@ import dev.supermux.ui.i18n.Plurals
 import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.StringKey
 import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.localizedHost
 import dev.supermux.ui.i18n.localizedPlural
 import dev.supermux.ui.i18n.uppercaseInAppLanguage
 import dev.supermux.ui.panes.PaneDragController
@@ -2145,7 +2146,7 @@ private fun OfflineHostHeader(host: HostView) {
         ) {
             HostDot(host.colorIndex, size = 8.dp)
             Text(
-                host.displayLabel,
+                host.displayLabel.localizedHost(),
                 color = cs.onSurfaceVariant,
                 fontFamily = MonoFontFamily,
                 fontSize = 11.sp,
@@ -2187,8 +2188,8 @@ private fun SingleHostOfflineNotice(host: HostView) {
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Text(
-            if (lastSeen.isNotEmpty()) localized(Str.sessions_list_cant_reach_seen, host.displayLabel, lastSeen)
-            else localized(Str.sessions_list_cant_reach, host.displayLabel),
+            if (lastSeen.isNotEmpty()) localized(Str.sessions_list_cant_reach_seen, host.displayLabel.localizedHost(), lastSeen)
+            else localized(Str.sessions_list_cant_reach, host.displayLabel.localizedHost()),
             color = cs.onSurface,
             fontSize = 13.sp,
             fontWeight = FontWeight.Medium,

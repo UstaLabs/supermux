@@ -161,6 +161,7 @@ import dev.supermux.ui.chat.PermissionControl
 import dev.supermux.ui.chat.PickerSheet
 import dev.supermux.ui.chat.RunSettingsControl
 import dev.supermux.ui.host.HostDot
+import dev.supermux.ui.i18n.localizedHost
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.MicCapture
 import dev.supermux.ui.resources.Res
@@ -1558,7 +1559,7 @@ private fun LauncherHostPill(
                 Box(Modifier.testTag("launcher_host_${h.recordId}")) {
                     DropdownMenuItem(
                         leadingIcon = { HostDot(h.colorIndex, size = if (pointer) 9.dp else 10.dp) },
-                        text = { Text(if (h.online) h.displayLabel else localized(Str.project_host_offline, h.displayLabel)) },
+                        text = { Text(if (h.online) h.displayLabel.localizedHost() else localized(Str.project_host_offline, h.displayLabel.localizedHost())) },
                         onClick = { onSelect(h.recordId); expanded = false },
                         modifier = Modifier.fillMaxWidth().testTag("launcher_host_item_${h.recordId}"),
                     )

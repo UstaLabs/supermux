@@ -133,4 +133,17 @@ class CatalogTest {
         assertTrue(versionedResourcePath("files/i18n/tr.txt").startsWith("files/i18n/tr.txt?v="))
         assertEquals("font/geist.ttf", versionedResourcePath("font/geist.ttf"))
     }
+
+    /** An unnamed host's stored fallback is worded in the shown language; a real name never is. */
+    @Test fun an_unnamed_host_reads_in_the_shown_language() {
+        assertEquals("Host", dev.supermux.host.HOST_FALLBACK.localizedHost())
+        assertEquals("Work Mac", "Work Mac".localizedHost())
+        try {
+            showForTest(LoadedLanguage("tr", Catalogs.now("tr"), Catalogs.now("en")))
+            assertEquals("Makine", dev.supermux.host.HOST_FALLBACK.localizedHost())
+            assertEquals("Host Box", "Host Box".localizedHost())
+        } finally {
+            showForTest(null)
+        }
+    }
 }
