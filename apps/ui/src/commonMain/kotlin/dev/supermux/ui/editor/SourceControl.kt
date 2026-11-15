@@ -173,7 +173,9 @@ fun SourceControlPane(
             }
         }
     }
-    Column(modifier.fillMaxSize().background(cs.surfaceContainer).testTag("scm_pane")) {
+    // The host's tag and this pane's on separate nodes: Compose merges two tags on one chain, hiding one (as DiffPane says).
+    Box(modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize().background(cs.surfaceContainer).testTag("scm_pane")) {
         Row(
             Modifier.fillMaxWidth().heightIn(min = 34.dp).padding(start = Space.md, end = Space.xs),
             verticalAlignment = Alignment.CenterVertically,
@@ -210,6 +212,7 @@ fun SourceControlPane(
                 }
             }
         }
+    }
     }
 }
 
