@@ -265,3 +265,19 @@ test("holders on macOS asks lsof for the pids, and an lsof that fails or is miss
   expect(proc.holders("/s/db.sqlite3", { platform: "darwin", run: () => ({ exitCode: 1, stdout: "" }) })).toEqual([])
   expect(proc.holders("/s/db.sqlite3", { platform: "darwin", run: () => { throw new Error("ENOENT") } })).toEqual([])
 })
+
+test("shellLine: sh -c elsewhere, cmd.exe verbatim on Windows (#117)", () => {
+  expect(proc.shellLine("bun server.ts --port $PORT", { platform: "linux" })).toEqual({ command: "/bin/sh", args: ["-c", "bun server.ts --port $PORT"] })
+  expect(proc.shellLine("python app.py", { platform: "win32", env: { ComSpec: "C:\\Windows\\system32\\cmd.exe" } })).toEqual({
+    command: "C:\\Windows\\system32\\cmd.exe", args: ["/d", "/s", "/c", '"python app.py"'], windowsVerbatimArguments: true,
+  })
+})
+
+test("startToken: Linux reads field 22 after the last ')', macOS asks ps, Windows has none (#117)", () => {
+  const stat = "4242 (a (weird) name) S 1 4242 4242 0 -1 4194560 100 0 0 0 1 2 0 0 20 0 1 0 987654 1000 10"
+  expect(proc.startToken(4242, { platform: "linux", readFile: () => stat })).toBe("987654")
+  expect(proc.startToken(4242, { platform: "darwin", run: () => ({ exitCode: 0, stdout: "Sun Nov 15 10:00:00 2026\n" }) })).toBe("Sun Nov 15 10:00:00 2026")
+  expect(proc.startToken(4242, { platform: "darwin", run: () => ({ exitCode: 1, stdout: "" }) })).toBeNull()
+  expect(proc.startToken(4242, { platform: "win32" })).toBeNull()
+  expect(proc.startToken(4242, { platform: "linux", readFile: () => { throw new Error("gone") } })).toBeNull()
+})

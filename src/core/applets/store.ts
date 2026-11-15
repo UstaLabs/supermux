@@ -1,0 +1,81 @@
+import type { Database } from "bun:sqlite"
+import { randomUUID } from "crypto"
+
+/**
+ * #117: an applet as the broker lists it. `id` is stable; `name` is the folder and the /a/<name>/ route. `status`:
+ *   ok        the folder and its applet.json are fine
+ *   invalid   applet.json is missing or wrong (the reason is in the supervisor's state, not here)
+ *   missing   the folder is gone (kept: only deleting an applet removes it)
+ * There is no session id: an applet belongs to the host.
+ */
+export interface AppletRow {
+  id: string
+  name: string
+  title: string
+  icon: string | null
+  status: string
+  updatedBy: string | null
+  updatedAt: string
+  createdAt: string
+  deletedAt: string | null
+}
+
+type Raw = {
+  id: string; name: string; title: string; icon: string | null; status: string
+  updated_by: string | null; updated_at: string; created_at: string; deleted_at: string | null
+}
+
+const fromRaw = (r: Raw): AppletRow => ({
+  id: r.id, name: r.name, title: r.title, icon: r.icon, status: r.status,
+  updatedBy: r.updated_by, updatedAt: r.updated_at, createdAt: r.created_at, deletedAt: r.deleted_at,
+})
+
+/** Write-through storage for the `applets` table. Rules (names, scanning) live in the registrar; this is pure storage. */
+export class AppletStore {
+  constructor(private readonly db: Database, private readonly now: () => Date = () => new Date()) {}
+
+  /** Every applet that is not deleted, by name. */
+  list(): AppletRow[] {
+    return (this.db.query("SELECT * FROM applets WHERE deleted_at IS NULL ORDER BY name").all() as Raw[]).map(fromRaw)
+  }
+
+  byName(name: string): AppletRow | undefined {
+    const r = this.db.query("SELECT * FROM applets WHERE name = ? AND deleted_at IS NULL").get(name) as Raw | null
+    return r ? fromRaw(r) : undefined
+  }
+
+  byId(id: string): AppletRow | undefined {
+    const r = this.db.query("SELECT * FROM applets WHERE id = ?").get(id) as Raw | null
+    return r ? fromRaw(r) : undefined
+  }
+
+  insert(a: { name: string; title: string; icon?: string | null; status?: string; updatedBy?: string | null }): AppletRow {
+    const ts = this.now().toISOString()
+    const id = randomUUID()
+    this.db.query(
+      "INSERT INTO applets (id, name, title, icon, status, updated_by, updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(id, a.name, a.title, a.icon ?? null, a.status ?? "ok", a.updatedBy ?? null, ts, ts)
+    return this.byId(id)!
+  }
+
+  /** Changes what the folder says (title, icon, status). Returns whether anything changed; unchanged rows keep updatedAt. */
+  update(id: string, p: { title?: string; icon?: string | null; status?: string; updatedBy?: string | null }): boolean {
+    const cur = this.byId(id)
+    if (!cur) return false
+    const next = { title: p.title ?? cur.title, icon: p.icon !== undefined ? p.icon : cur.icon, status: p.status ?? cur.status }
+    if (next.title === cur.title && next.icon === cur.icon && next.status === cur.status) return false
+    this.db.query("UPDATE applets SET title = ?, icon = ?, status = ?, updated_by = ?, updated_at = ? WHERE id = ?")
+      .run(next.title, next.icon, next.status, p.updatedBy !== undefined ? p.updatedBy : cur.updatedBy, this.now().toISOString(), id)
+    return true
+  }
+
+  rename(id: string, name: string, updatedBy: string | null): void {
+    this.db.query("UPDATE applets SET name = ?, updated_by = ?, updated_at = ? WHERE id = ?").run(name, updatedBy, this.now().toISOString(), id)
+  }
+
+  /** Soft delete: the row (and the folder) are kept; the 30-day purge is A2's. */
+  softDelete(id: string, updatedBy: string | null): void {
+    const ts = this.now().toISOString()
+    this.db.query("UPDATE applets SET deleted_at = ?, updated_by = ?, updated_at = ? WHERE id = ?").run(ts, updatedBy, ts, id)
+  }
+}
