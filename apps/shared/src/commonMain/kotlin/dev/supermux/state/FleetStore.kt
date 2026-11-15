@@ -1405,6 +1405,7 @@ class FleetStore(
     fun closeTerminal(sessionId: String, terminalId: String) { appFor(sessionId)?.closeTerminal(sessionId, terminalId) }
 
     suspend fun gitFetch(id: String): GitOpResult? = appFor(id)?.gitFetch(id)
+    suspend fun gitPr(id: String): dev.supermux.net.PrRead? = appFor(id)?.gitPr(id)
     suspend fun gitPull(id: String): GitOpResult? = appFor(id)?.gitPull(id)
     suspend fun gitPush(id: String): GitOpResult? = appFor(id)?.gitPush(id)
     suspend fun gitPublish(id: String): GitOpResult? = appFor(id)?.gitPublish(id)

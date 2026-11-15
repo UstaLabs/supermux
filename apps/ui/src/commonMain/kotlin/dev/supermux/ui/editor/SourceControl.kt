@@ -35,6 +35,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.filled.CallMerge
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.RemoveCircleOutline
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Sync
@@ -109,6 +114,9 @@ fun scmDiffTab(repo: String, f: ChangedFile, group: ScmGroup): ScmDiffTab = when
     ScmGroup.Staged -> ScmDiffTab(repo, f.path, "index", base = null, work = f.indexBlob)
     else -> ScmDiffTab(repo, f.path, "worktree", base = if (f.staged == "partial") f.indexBlob else null, work = null)
 }
+
+/** The Create Pull Request form: target (the base by default), the agent's title and description, draft. */
+data class PrForm(val target: String, val title: String = "", val body: String = "", val draft: Boolean = false, val by: String? = null, val loading: Boolean = true)
 
 /** VS Code's groups, in its order. */
 enum class ScmGroup { Merge, Staged, Changes }
@@ -189,6 +197,12 @@ class SourceControlState(val api: SourceControlApi) {
     /** The Graph (U6): this chat's commits, the base's, and what the base has that this chat doesn't. */
     var history by mutableStateOf<dev.supermux.net.GitHistory?>(null)
     var graphOpen by mutableStateOf(true)
+    // ── the pull / merge request (U7) ──
+    var pr by mutableStateOf<dev.supermux.net.PrRead?>(null)
+    var prOpen by mutableStateOf(true)
+    var prForm by mutableStateOf<PrForm?>(null)
+    /** Comments already sent to the agent (by their text), so each says "Sent". */
+    val sentComments = mutableStateMapOf<String, Boolean>()
     /** The last clean Get latest, for "Undo Get latest" right after it. */
     var latest by mutableStateOf<dev.supermux.net.LatestResult?>(null)
     // ── the branch picker (U5) ──
@@ -219,6 +233,7 @@ class SourceControlState(val api: SourceControlApi) {
         last = h?.chat?.firstOrNull()
         base = h?.base
         ownCommits = h?.chat?.size ?: 0
+        api.pr()?.let { pr = it }
         if (!prefsRead) api.prefs()?.let { (p, s) -> prefsRead = true; post = ScmPost.of(p); smart = s ?: "ask" }
         if (amend && (last == null || lastPushed)) amend = false
     }
@@ -367,6 +382,63 @@ class SourceControlState(val api: SourceControlApi) {
         refresh()
     }
 
+    suspend fun openPrForm() {
+        val target = base ?: "main"
+        prForm = PrForm(target = target)
+        val t = api.prText(base?.let { null } ?: target)
+        prForm = prForm?.copy(title = t?.title.orEmpty(), body = t?.body.orEmpty(), by = t?.by, loading = false)
+    }
+
+    suspend fun rewritePr() {
+        val f = prForm ?: return
+        prForm = f.copy(loading = true)
+        val t = api.prText(f.target)
+        prForm = prForm?.copy(title = t?.title ?: f.title, body = t?.body ?: f.body, by = t?.by, loading = false)
+    }
+
+    suspend fun createPr() {
+        val f = prForm ?: return
+        if (f.title.isBlank()) return
+        busy = true
+        val r = api.createPr(f.title.trim(), f.body, f.target, f.draft)
+        busy = false
+        when (r?.status) {
+            null -> problem = localized(Str.scm_offline)
+            "opened", "exists" -> { prForm = null; problem = null; pr = api.pr(fresh = true) ?: pr }
+            "publish_failed" -> problem = localized(Str.scm_failed, r.message ?: localized(Str.scm_publish_branch))
+            else -> problem = prUnavailable(r.reason, r.message)
+        }
+        refresh()
+    }
+
+    suspend fun prReady(number: Int) {
+        val r = api.prReady(number)
+        problem = if (r?.ok == true) null else localized(Str.scm_failed, r?.message ?: "")
+        pr = api.pr(fresh = true) ?: pr
+    }
+
+    /** "Ask the agent to fix": the check's name and the end of its log, sent to this chat. */
+    suspend fun askFix(check: dev.supermux.net.PrCheck) {
+        val log = check.url?.let { api.checkLog(it) }?.log.orEmpty()
+        val url = pr?.pr?.url.orEmpty()
+        val text = localized(Str.scm_fix_check_message, check.name, url) + if (log.isNotBlank()) "\n\n```\n${log.takeLast(8_000)}\n```" else ""
+        note = if (api.tellAgent(text)) localized(Str.scm_sent_fix, check.name) else localized(Str.scm_offline)
+    }
+
+    /** "Send to the agent": a review comment, its file and line, sent to this chat. */
+    suspend fun sendComment(c: dev.supermux.net.PrComment) {
+        val where = listOfNotNull(c.file, c.line?.toString()).joinToString(":")
+        val text = localized(Str.scm_comment_message, c.who, where.ifEmpty { pr?.pr?.url.orEmpty() }, c.body)
+        if (api.tellAgent(text)) sentComments[c.body] = true else problem = localized(Str.scm_offline)
+    }
+
+    private fun prUnavailable(reason: String?, message: String?): String = when (reason) {
+        "no_cli" -> localized(Str.scm_pr_no_cli)
+        "not_authed" -> localized(Str.scm_pr_not_authed)
+        "no_branch" -> localized(Str.scm_pr_no_branch)
+        else -> localized(Str.scm_failed, message ?: reason ?: "")
+    }
+
     suspend fun undoLastCommit() {
         val r = api.uncommit(repo)
         when {
@@ -484,6 +556,7 @@ fun SourceControlPane(
                         }
                     }
                 }
+                item(key = "pr") { PrSection(state, scope) }
                 item(key = "graph") { Graph(state, scope) }
             }
         }
@@ -793,6 +866,196 @@ private fun PickRow(name: String, detail: String?, openChat: (() -> Unit)?, tag:
             modifier = Modifier.padding(start = 10.dp).weight(1f, fill = false))
         if (openChat != null) Text(localized(Str.scm_open_that_chat), fontSize = 11.sp, color = cs.primary, maxLines = 1,
             modifier = Modifier.padding(start = 8.dp).clickable(onClick = openChat))
+    }
+}
+
+/** The GitHub Pull Requests extension's flow (GitLab: merge request), Basics: create, then status, checks, comments. */
+@Composable
+private fun PrSection(state: SourceControlState, scope: kotlinx.coroutines.CoroutineScope) {
+    val cs = MaterialTheme.colorScheme
+    val platform = LocalPlatform.current
+    val read = state.pr ?: return
+    if (read.status == "unavailable" && read.reason in setOf("no_remote", "no_branch")) return
+    val gitlab = read.forge == "gitlab" || read.pr?.forge == "gitlab"
+    val host = if (gitlab) "GitLab" else "GitHub" // i18n-ok: product names
+    val sign = if (gitlab) "!" else "#" // i18n-ok: GitHub's and GitLab's own number signs
+    val pr = read.pr
+    Column(Modifier.fillMaxWidth().padding(top = 10.dp).testTag("scm_pr")) {
+        androidx.compose.material3.HorizontalDivider(color = cs.outlineVariant)
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 28.dp).clickable { state.prOpen = !state.prOpen }.padding(start = 4.dp, end = Space.xs),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(if (state.prOpen) Icons.Filled.KeyboardArrowDown else Icons.Filled.KeyboardArrowRight, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
+            Text(localized(if (gitlab) Str.scm_mr_title else Str.scm_pr_title), fontSize = 11.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.44.sp, color = cs.onSurfaceVariant, modifier = Modifier.weight(1f).padding(start = 2.dp))
+            if (pr != null) ScmIcon(Icons.AutoMirrored.Filled.OpenInNew, localized(Str.scm_open_on, host), "scm_pr_open", hint = localized(Str.scm_hint_open_on, host)) { platform.openUrl(pr.url) }
+        }
+        if (!state.prOpen) return@Column
+        val pad = Modifier.padding(horizontal = 14.dp)
+        val form = state.prForm
+        when {
+            read.status == "unavailable" -> Text(
+                when (read.reason) { "no_cli" -> localized(Str.scm_pr_no_cli); "not_authed" -> localized(Str.scm_pr_not_authed); else -> localized(Str.scm_failed, read.message ?: "") },
+                fontSize = 12.5.sp, color = cs.onSurfaceVariant, modifier = pad.padding(vertical = 6.dp),
+            )
+            form != null -> PrFormView(state, scope, form, gitlab, host)
+            pr == null && state.last == null -> Text(localized(Str.scm_pr_commit_first, state.status?.branch ?: ""), fontSize = 12.5.sp, color = cs.onSurfaceVariant, modifier = pad.padding(vertical = 6.dp))
+            pr == null -> Column(pad.padding(vertical = 6.dp)) {
+                Text(localized(if (gitlab) Str.scm_mr_none else Str.scm_pr_none, state.status?.branch ?: ""), fontSize = 12.5.sp, color = cs.onSurfaceVariant)
+                Row(
+                    Modifier.padding(top = 8.dp).fillMaxWidth().height(30.dp).clip(RoundedCornerShape(6.dp)).border(1.dp, cs.outlineVariant, RoundedCornerShape(6.dp))
+                        .clickable { scope.launch { state.openPrForm() } }.testTag("scm_pr_create"),
+                    horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.CallMerge, null, tint = cs.onSurface, modifier = Modifier.size(15.dp))
+                    Text(localized(if (gitlab) Str.scm_mr_create else Str.scm_pr_create), fontSize = 12.5.sp, color = cs.onSurface, modifier = Modifier.padding(start = 6.dp))
+                }
+            }
+            else -> Column(pad.padding(vertical = 4.dp)) {
+                Text(buildString { append(pr.title); append("  "); append(sign); append(pr.number) }, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface)
+                Row(Modifier.padding(top = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                    val (word, color) = when {
+                        pr.state == "merged" -> localized(Str.scm_pr_merged) to Color(0xFFB48EF0)
+                        pr.state == "closed" -> localized(Str.scm_pr_closed) to cs.error
+                        pr.draft -> localized(Str.scm_pr_draft) to cs.onSurfaceVariant
+                        else -> localized(Str.scm_pr_open) to LocalSemantics.current.success
+                    }
+                    Text(word, fontSize = 11.sp, fontWeight = FontWeight.Medium, color = color, modifier = Modifier.clip(RoundedCornerShape(9.dp)).background(color.copy(alpha = 0.18f)).padding(horizontal = 7.dp, vertical = 1.dp))
+                    Text("${pr.head} → ${pr.target}", fontFamily = MonoFontFamily, fontSize = 11.5.sp, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 8.dp).weight(1f))
+                    Text("$host ↗", fontSize = 12.sp, color = cs.primary, modifier = Modifier.clickable { platform.openUrl(pr.url) })
+                }
+                ReviewLine(pr.review, gitlab)
+                if (pr.state == "open") {
+                    val bad = pr.checks.count { it.state == "bad" }
+                    val run = pr.checks.count { it.state == "run" }
+                    Text(
+                        localized(Str.scm_checks) + " · " + when { bad > 0 -> localizedPlural(Plurals.scm_checks_failing, bad, bad); run > 0 -> localized(Str.scm_checks_running); pr.checks.isEmpty() -> localized(Str.scm_checks_none); else -> localized(Str.scm_checks_passing) },
+                        fontSize = 11.sp, color = if (bad > 0) cs.error else cs.onSurfaceVariant, modifier = Modifier.padding(top = 10.dp, bottom = 2.dp),
+                    )
+                    pr.checks.forEach { k -> CheckRow(k, onFix = { scope.launch { state.askFix(k) } }, onLog = { k.url?.let(platform::openUrl) }) }
+                    if (pr.comments.isNotEmpty()) {
+                        Text(localizedPlural(Plurals.scm_review_comments, pr.comments.size, pr.comments.size), fontSize = 11.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 10.dp, bottom = 4.dp))
+                        pr.comments.forEach { c -> CommentCard(c, sent = state.sentComments[c.body] == true, onSend = { scope.launch { state.sendComment(c) } }, onOpen = { (c.url ?: pr.url).let(platform::openUrl) }) }
+                    }
+                    Row(Modifier.padding(top = 12.dp, bottom = 4.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        if (pr.draft) Text(localized(if (gitlab) Str.scm_mr_mark_ready else Str.scm_pr_ready), fontSize = 12.5.sp, color = cs.onSurface,
+                            modifier = Modifier.clip(RoundedCornerShape(6.dp)).border(1.dp, cs.outlineVariant, RoundedCornerShape(6.dp)).clickable { scope.launch { state.prReady(pr.number) } }
+                                .padding(horizontal = 12.dp, vertical = 5.dp).testTag("scm_pr_ready"))
+                        Spacer(Modifier.weight(1f))
+                        Text(localized(Str.scm_merge_on, host) + " ↗", fontSize = 12.5.sp, color = cs.primary, modifier = Modifier.clickable { platform.openUrl(pr.url) }.testTag("scm_pr_merge_on"))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PrFormView(state: SourceControlState, scope: kotlinx.coroutines.CoroutineScope, f: PrForm, gitlab: Boolean, host: String) {
+    val cs = MaterialTheme.colorScheme
+    val field = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(cs.surfaceContainerLow).border(1.dp, cs.outlineVariant, RoundedCornerShape(6.dp))
+    Column(
+        Modifier.padding(horizontal = 12.dp, vertical = 6.dp).fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(cs.surfaceContainerHighest)
+            .border(1.dp, cs.outlineVariant, RoundedCornerShape(8.dp)).padding(10.dp).testTag("scm_pr_form"),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(localized(Str.scm_pr_merge_word), fontSize = 12.sp, color = cs.onSurfaceVariant)
+            Text(state.status?.branch ?: "", fontFamily = MonoFontFamily, fontSize = 12.sp, color = cs.onSurface, modifier = Modifier.padding(horizontal = 6.dp))
+            Text(localized(Str.scm_pr_into_word), fontSize = 12.sp, color = cs.onSurfaceVariant)
+            Text(f.target, fontFamily = MonoFontFamily, fontSize = 12.sp, color = cs.onSurface, modifier = Modifier.padding(start = 6.dp).testTag("scm_pr_target"))
+        }
+        Text(localized(Str.scm_pr_title_label), fontSize = 12.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
+        Box(field) {
+            androidx.compose.foundation.text.BasicTextField(
+                value = f.title, onValueChange = { state.prForm = f.copy(title = it) }, singleLine = true,
+                textStyle = androidx.compose.ui.text.TextStyle(color = cs.onSurface, fontSize = 12.5.sp), cursorBrush = androidx.compose.ui.graphics.SolidColor(cs.primary),
+                modifier = Modifier.fillMaxWidth().padding(start = 8.dp, end = 32.dp, top = 6.dp, bottom = 6.dp).testTag("scm_pr_title_input"),
+            )
+            Box(Modifier.align(Alignment.CenterEnd)) {
+                ScmIcon(Icons.Filled.AutoAwesome, localized(Str.scm_pr_rewrite), "scm_pr_rewrite", hint = localized(Str.scm_hint_pr_rewrite), main = true) { scope.launch { state.rewritePr() } }
+            }
+        }
+        Text(localized(Str.scm_pr_body_label), fontSize = 12.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
+        androidx.compose.foundation.text.BasicTextField(
+            value = f.body, onValueChange = { state.prForm = f.copy(body = it) },
+            textStyle = androidx.compose.ui.text.TextStyle(color = cs.onSurface, fontSize = 12.sp, fontFamily = MonoFontFamily, lineHeight = 17.sp),
+            cursorBrush = androidx.compose.ui.graphics.SolidColor(cs.primary),
+            modifier = field.heightIn(min = 110.dp).padding(8.dp).testTag("scm_pr_body_input"),
+        )
+        Text(
+            if (f.loading) localized(Str.scm_pr_writing) else localized(if (f.by == "agent") Str.scm_pr_by_agent else Str.scm_pr_by_commits),
+            fontSize = 11.5.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp),
+        )
+        Row(Modifier.padding(top = 8.dp).clickable { state.prForm = f.copy(draft = !f.draft) }.testTag("scm_pr_draft"), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(15.dp).clip(RoundedCornerShape(3.dp)).background(if (f.draft) cs.primary else Color.Transparent)
+                    .border(1.5.dp, if (f.draft) cs.primary else cs.onSurfaceVariant, RoundedCornerShape(3.dp)),
+                contentAlignment = Alignment.Center,
+            ) { if (f.draft) Icon(Icons.Filled.Check, null, tint = cs.onPrimary, modifier = Modifier.size(12.dp)) }
+            Text(localized(Str.scm_pr_draft_check), fontSize = 12.5.sp, color = cs.onSurface, modifier = Modifier.padding(start = 8.dp))
+        }
+        val publishFirst = state.status?.upstream == null
+        Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            val go = localized(if (publishFirst) Str.scm_pr_publish_create else Str.scm_pr_create_go) + if (f.draft) " " + localized(Str.scm_pr_draft) else ""
+            Text(go, fontSize = 12.5.sp, fontWeight = FontWeight.Medium, color = cs.onPrimary,
+                modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(if (f.title.isNotBlank() && !state.busy) cs.primary else cs.primary.copy(alpha = 0.5f))
+                    .clickable(enabled = f.title.isNotBlank() && !state.busy) { scope.launch { state.createPr() } }.padding(horizontal = 12.dp, vertical = 5.dp).testTag("scm_pr_create_go"))
+            Text(localized(Str.scm_cancel), fontSize = 12.5.sp, color = cs.onSurfaceVariant,
+                modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable { state.prForm = null }.padding(horizontal = 12.dp, vertical = 5.dp))
+        }
+        Text(localized(Str.scm_pr_as_you, host) + if (publishFirst) " · " + localized(Str.scm_pr_publishes_first, state.status?.branch ?: "") else "",
+            fontSize = 11.5.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
+    }
+}
+
+@Composable
+private fun ReviewLine(r: dev.supermux.net.PrReview, gitlab: Boolean) {
+    val cs = MaterialTheme.colorScheme
+    val sem = LocalSemantics.current
+    val who = r.by.joinToString(", ")
+    val (text, color) = when (r.state) {
+        "approved" -> localized(Str.scm_review_approved, who) to sem.success
+        "changes" -> localized(Str.scm_review_changes, who) to cs.error
+        "required" -> { val need = r.need; (if (gitlab && need != null) localized(Str.scm_review_approvals, r.got ?: 0, need) else localized(Str.scm_review_required)) to sem.warning }
+        else -> return
+    }
+    Text(text, fontSize = 12.sp, color = color, modifier = Modifier.padding(top = 6.dp).testTag("scm_pr_review"))
+}
+
+@Composable
+private fun CheckRow(k: dev.supermux.net.PrCheck, onFix: () -> Unit, onLog: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val sem = LocalSemantics.current
+    Row(Modifier.fillMaxWidth().heightIn(min = 26.dp), verticalAlignment = Alignment.CenterVertically) {
+        val (icon, color) = when (k.state) {
+            "ok" -> Icons.Filled.CheckCircle to sem.success
+            "bad" -> Icons.Filled.Cancel to cs.error
+            "skip" -> Icons.Filled.RemoveCircleOutline to cs.onSurfaceVariant
+            else -> Icons.Filled.Sync to sem.warning
+        }
+        Icon(icon, null, tint = color, modifier = Modifier.size(15.dp))
+        Text(k.name, fontSize = 12.5.sp, color = cs.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 8.dp).weight(1f))
+        if (k.state == "bad") ScmHint(localized(Str.scm_ask_fix), localized(Str.scm_hint_ask_fix)) {
+            Text(localized(Str.scm_ask_fix), fontSize = 12.sp, color = cs.primary, modifier = Modifier.clickable(onClick = onFix).padding(horizontal = 4.dp).testTag("scm_ask_fix_${k.name}"))
+        }
+        if (k.url != null) Text(localized(Str.scm_log), fontSize = 12.sp, color = cs.onSurfaceVariant, modifier = Modifier.clickable(onClick = onLog).padding(start = 8.dp))
+    }
+}
+
+@Composable
+private fun CommentCard(c: dev.supermux.net.PrComment, sent: Boolean, onSend: () -> Unit, onOpen: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Column(Modifier.padding(bottom = 6.dp).fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(cs.surfaceContainerHigh).padding(horizontal = 10.dp, vertical = 8.dp)) {
+        Text(c.who + (c.file?.let { f -> " · $f" + (c.line?.let { ":$it" } ?: "") } ?: ""), fontSize = 11.5.sp, color = cs.onSurfaceVariant, fontFamily = MonoFontFamily, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(c.body, fontSize = 12.5.sp, color = cs.onSurface, maxLines = 6, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 3.dp))
+        Row(Modifier.padding(top = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (sent) Text(localized(Str.scm_sent_to_agent), fontSize = 12.sp, color = cs.onSurfaceVariant)
+            else ScmHint(localized(Str.scm_send_to_agent), localized(Str.scm_hint_send_to_agent)) {
+                Text("➤ " + localized(Str.scm_send_to_agent), fontSize = 12.sp, color = cs.primary, modifier = Modifier.clickable(onClick = onSend).testTag("scm_send_comment"))
+            }
+            Spacer(Modifier.width(14.dp))
+            Text(localized(Str.scm_view_comment), fontSize = 12.sp, color = cs.onSurfaceVariant, modifier = Modifier.clickable(onClick = onOpen))
+        }
     }
 }
 

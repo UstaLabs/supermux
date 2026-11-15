@@ -1362,6 +1362,9 @@ class HostStore(
     // apply here; the real BrokerApi has ONE flat result shape for all four ops.
 
     /** POST /sessions/<id>/git/fetch. Null on any failure. */
+    /** #72: the chat's branch's pull / merge request (the footer's #12 ✓ / ✗). */
+    suspend fun gitPr(id: String): dev.supermux.net.PrRead? = runApi("gitPr") { api.gitPr("sessions", id) }
+
     suspend fun gitFetch(id: String): GitOpResult? =
         runApi("gitFetch") { api.gitFetch(id) }
 

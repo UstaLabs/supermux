@@ -67,6 +67,7 @@ private val NoLiveReplies: StateFlow<Map<String, List<LiveReply>>> = MutableStat
 fun rememberChatActions(fleet: FleetStore, sessionId: String): ChatActions =
     remember(fleet, sessionId) {
         ChatActions(
+            gitPr = { fleet.gitPr(sessionId) },
             gitSync = { op -> when (op) { "pull" -> fleet.gitPull(sessionId); "push" -> fleet.gitPush(sessionId); "publish" -> fleet.gitPublish(sessionId); else -> fleet.gitFetch(sessionId) } },
             send = { text, atts -> fleet.sendWith(sessionId, text, atts) },
             interrupt = { fleet.interrupt(sessionId) },

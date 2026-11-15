@@ -14,6 +14,8 @@
 // the tree holds nothing. It opens Changes; Fetch/Pull/Push are in the chat's ⋮ menu.
 package dev.supermux.ui.chat
 
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.material.icons.automirrored.filled.CallMerge
 import dev.supermux.ui.i18n.Plurals
 import dev.supermux.ui.i18n.localizedPlural
 import androidx.compose.material.icons.filled.CloudUpload
@@ -76,6 +78,8 @@ fun ComposerFooter(
     onOpenChanges: (() -> Unit)? = null,
     /** #72: the ⟳ / ☁ item: sync (pull, then push) or publish this chat's branch; null = only a caption. */
     onGitSync: (suspend (op: String) -> dev.supermux.net.GitOpResult?)? = null,
+    /** #72: the branch's PR / MR (#12 ✓ / ✗ next to the branch); null = none shown. */
+    onGitPr: (suspend () -> dev.supermux.net.PrRead?)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -186,6 +190,24 @@ fun ComposerFooter(
                                 syncing = false
                             }
                         },
+                    )
+                }
+                // The branch's pull / merge request, as the GitHub Pull Requests extension puts it in the status bar.
+                var pr by remember(session.id) { mutableStateOf<dev.supermux.net.PrInfo?>(null) }
+                if (onGitPr != null && branch != null) LaunchedEffect(session.id, branch) {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                        while (true) { pr = onGitPr()?.pr?.takeIf { it.state == "open" }; kotlinx.coroutines.delay(30_000) }
+                    }
+                }
+                pr?.let { p ->
+                    val bad = p.checks.count { it.state == "bad" }
+                    val run = p.checks.count { it.state == "run" }
+                    FooterChip(
+                        icon = { tint -> Icon(Icons.AutoMirrored.Filled.CallMerge, null, tint = tint, modifier = Modifier.size(12.dp)) },
+                        label = (if (p.forge == "gitlab") "!" else "#") + p.number + when { bad > 0 -> " ✗$bad"; run > 0 -> " ⟳"; p.checks.isNotEmpty() -> " ✓"; else -> "" }, // i18n-ok: GitHub's / GitLab's number signs and status marks
+                        trailingChevron = false,
+                        tag = "footer_git_pr",
+                        onClick = onOpenChanges,
                     )
                 }
                 if (git.dirty > 0) FooterChip(
