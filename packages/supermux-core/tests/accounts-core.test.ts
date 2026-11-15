@@ -266,7 +266,7 @@ test("auto-switch: a full window switches after the turn ends, reason limit", as
   const receipt = await session.send({ content: text(`usage:${rejected}`), whenBusy: "queue" })
   expect((await receipt.completed).status).toBe("completed")
   const switched = await waitFor(events, e => e.type === "account.switched" ? e : undefined)
-  expect(switched).toEqual({ type: "account.switched", sessionId: id, from: "a", to: "claude:system", reason: "limit" })
+  expect(switched).toEqual({ type: "account.switched", sessionId: id, from: "a", to: "claude:system", reason: "limit", why: "most_room" })
   const reopened = agents[0]!.contexts.at(-1)!
   expect(reopened.resumeId).toBe("native-1")
   expect(reopened.account).toBe("claude:system")
@@ -291,6 +291,31 @@ test("auto-switch prefers the account with the best score; none left → account
   await (await live.send({ content: text(`usage:${full}`), whenBusy: "queue" })).completed
   expect(await waitFor(events, e => e.type === "account.exhausted" && e.sessionId === sid ? e : undefined)).toEqual({ type: "account.exhausted", sessionId: sid, agent: "claude", account: "b", reason: "limit" })
   expect(agents[0]!.contexts.at(-1)!.account).toBe("b")
+})
+
+test("auto-switch (#159): a seat in the session's own org is preferred over more room elsewhere, and the event says why", async () => {
+  const { core, events } = await setup({ autoSwitch: true })
+  const cwd = await scratch()
+  await core.accounts.add({ id: "a", agent: "claude", method: "token", secret: "t-a", identity: { org: "org-1" } })
+  await core.accounts.add({ id: "other", agent: "claude", method: "token", secret: "t-o", identity: { org: "org-2" } })
+  await core.accounts.add({ id: "seat", agent: "claude", method: "token", secret: "t-s", identity: { org: "org-1" } })
+  const usage = (u: number) => JSON.stringify({ status: "allowed", unifiedWindows: { five_hour: { utilization: u, resetsAt: future() } } })
+  const full = JSON.stringify({ status: "rejected", rateLimitType: "five_hour", resetsAt: future() })
+  // Usage for "other" (lots of room) and "seat" (some room), recorded from their own sessions.
+  for (const [account, used] of [["other", 0.1], ["seat", 0.7]] as const) {
+    const s = await core.sessions.create({ id: nextId(), agent: "claude", cwd, account })
+    await (await s.send({ content: text(`usage:${usage(used)}`), whenBusy: "queue" })).completed
+  }
+  const sid = nextId()
+  const s = await core.sessions.create({ id: sid, agent: "claude", cwd, account: "a" })
+  await (await s.send({ content: text(`usage:${full}`), whenBusy: "queue" })).completed
+  expect(await waitFor(events, e => e.type === "account.switched" && e.sessionId === sid ? e : undefined))
+    .toEqual({ type: "account.switched", sessionId: sid, from: "a", to: "seat", reason: "limit", why: "same_org" })
+  // The org's seat fills too: the most room anywhere (claude:system has no data, "other" has).
+  const live = await core.sessions.resume(sid)
+  await (await live.send({ content: text(`usage:${full}`), whenBusy: "queue" })).completed
+  expect(await waitFor(events, e => e.type === "account.switched" && e.sessionId === sid && e.from === "seat" ? e : undefined))
+    .toEqual({ type: "account.switched", sessionId: sid, from: "seat", to: "other", reason: "limit", why: "most_room" })
 })
 
 test("without autoSwitch a full window only records usage", async () => {
@@ -523,7 +548,7 @@ test("unavailable: a refused account is marked, the session moves to a healthy a
   expect(await waitFor(events, e => e.type === "account.unavailable" ? e : undefined))
     .toEqual({ type: "account.unavailable", sessionId: id, agent: "claude", account: "claude:system", reason: REFUSED })
   expect(await waitFor(events, e => e.type === "account.switched" ? e : undefined))
-    .toEqual({ type: "account.switched", sessionId: id, from: "claude:system", to: "b", reason: "unavailable" })
+    .toEqual({ type: "account.switched", sessionId: id, from: "claude:system", to: "b", reason: "unavailable", why: "most_room" })
   expect(core.accounts.unavailable("claude:system")).toEqual({ reason: REFUSED, since: expect.any(Date) })
   const deadline = Date.now() + 3000
   while (agents[0]!.prompts.length < 2 && Date.now() < deadline) await settle(10)
@@ -677,7 +702,7 @@ test("HTTP 402 on a failed Grok turn: the account counts as full, the switch mov
   const atTurnEnd = willSwitchAtIdle(core, id)
   expect((await (await session.send({ content: text("http:402"), whenBusy: "queue" })).completed).status).toBe("failed")
   expect(await waitFor(events, e => e.type === "account.switched" && e.sessionId === id ? e : undefined))
-    .toEqual({ type: "account.switched", sessionId: id, from: "grok:system", to: "b", reason: "limit" })
+    .toEqual({ type: "account.switched", sessionId: id, from: "grok:system", to: "b", reason: "limit", why: "most_room" })
   // The broker's failed-turn notice reads willSwitch when the turn ends: it must see this switch coming.
   expect(await atTurnEnd()).toBe(true)
   expect(core.accounts.usage("grok:system")).toEqual([{ name: "balance", usedPercent: 100, resetsAt: expect.any(Date) }])
@@ -715,7 +740,7 @@ test("HTTP 401/403 on a failed Grok turn marks the account unavailable and the s
   expect(await waitFor(events, e => e.type === "account.unavailable" ? e : undefined))
     .toEqual({ type: "account.unavailable", sessionId: id, agent: "grok", account: "grok:system", reason: "API error (status 403)" })
   expect(await waitFor(events, e => e.type === "account.switched" ? e : undefined))
-    .toEqual({ type: "account.switched", sessionId: id, from: "grok:system", to: "b", reason: "unavailable" })
+    .toEqual({ type: "account.switched", sessionId: id, from: "grok:system", to: "b", reason: "unavailable", why: "most_room" })
 })
 
 test("OpenCode's HTTP 401/402/403 is not about its whole login", () => {
@@ -751,7 +776,7 @@ test("HTTP 401 is a refused login, not an empty balance: no balance window, an u
   const session = await core.sessions.create({ id, agent: "grok", cwd })
   await (await session.send({ content: text("http:401"), whenBusy: "queue" })).completed
   expect(await waitFor(events, e => e.type === "account.switched" ? e : undefined))
-    .toEqual({ type: "account.switched", sessionId: id, from: "grok:system", to: "b", reason: "unavailable" })
+    .toEqual({ type: "account.switched", sessionId: id, from: "grok:system", to: "b", reason: "unavailable", why: "most_room" })
   expect(core.accounts.unavailable("grok:system")).toEqual({ reason: "API error (status 401)", since: expect.any(Date) })
   expect(core.accounts.usage("grok:system")).toBeUndefined()
 })
@@ -778,7 +803,7 @@ test("an HTTP 402 at the end of a turn whose account was refused keeps the unava
   const session = await core.sessions.create({ id, agent: "grok", cwd })
   expect((await (await session.send({ content: text(`refuse402:${REFUSED}`), whenBusy: "queue" })).completed).status).toBe("failed")
   expect(await waitFor(events, e => e.type === "account.switched" ? e : undefined))
-    .toEqual({ type: "account.switched", sessionId: id, from: "grok:system", to: "b", reason: "unavailable" })
+    .toEqual({ type: "account.switched", sessionId: id, from: "grok:system", to: "b", reason: "unavailable", why: "most_room" })
 })
 
 test("a session whose account was removed reopens on the account it is moved to, the system login included (#106)", async () => {
@@ -807,7 +832,7 @@ test("a turn refused as not signed in marks its account signed out (account_expi
     .toEqual({ type: "account.unavailable", sessionId: id, agent: "claude", account: "a", reason: EXPIRED })
   expect(core.accounts.unavailable("a")).toEqual({ reason: EXPIRED, since: expect.any(Date), code: "account_expired" })
   expect(await waitFor(events, e => e.type === "account.switched" ? e : undefined))
-    .toEqual({ type: "account.switched", sessionId: id, from: "a", to: "claude:system", reason: "unavailable" })
+    .toEqual({ type: "account.switched", sessionId: id, from: "a", to: "claude:system", reason: "unavailable", why: "most_room" })
   expect((await core.accounts.pick("claude"))?.id).toBe("claude:system")
   const deadline = Date.now() + 3000
   while (agents[0]!.prompts.length < 2 && Date.now() < deadline) await settle(10)
@@ -878,5 +903,5 @@ test("a session whose account was removed still switches to a registered one (#1
   await core.accounts.remove("gone")
   await (await s.send({ content: text(`usage:${rejectedAt(future())}`), whenBusy: "queue" })).completed
   expect(await waitFor(events, e => e.type === "account.switched" && e.sessionId === sid ? e : undefined))
-    .toEqual({ type: "account.switched", sessionId: sid, from: "gone", to: "claude:system", reason: "limit" })
+    .toEqual({ type: "account.switched", sessionId: sid, from: "gone", to: "claude:system", reason: "limit", why: "most_room" })
 })

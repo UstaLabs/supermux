@@ -388,6 +388,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
         this.emit("models-update", { kind: "models-update" })
       },
       onCompaction: (compaction) => { this.emit("compaction", { kind: "compaction", ...compaction }) },
+      onCacheTtl: (ttl) => { this.emit("cache-ttl", ttl) },
       onToolUsed: (name) => { this.toolUses.set(name, (this.toolUses.get(name) ?? 0) + 1) },
       onContext: (context) => {
         if (this.contextUsage?.used === context.used && this.contextUsage.size === context.size) return
@@ -1320,7 +1321,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       // A Core-internal reopen (limit switch, token refresh) replaced the Session object.
       const live = this.core.sessions.live(this.id)
       if (live && !this.restarting) this.session = live
-      if (event.type === "account.switched") this.emit("account", { kind: "account", event: "switched", from: event.from, to: event.to, reason: event.reason })
+      if (event.type === "account.switched") this.emit("account", { kind: "account", event: "switched", from: event.from, to: event.to, reason: event.reason, ...(event.why ? { why: event.why } : {}) })
       else this.emit("account", { kind: "account", event: "refreshed", account: event.account })
       return
     }

@@ -315,6 +315,17 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
    * frames of one request report once.
    */
   const context: { used?: number; size?: number; model?: string; reported?: number } = {}
+  /** #146: the cache life the main thread's requests last wrote at, so it is reported once per change. */
+  let cacheTtl: "1h" | "5m" | undefined
+  function cacheTtlUpdate(message: Record<string, unknown>): NormalizedBody[] {
+    const cc = rec(rec(message.usage)?.cache_creation)
+    if (!cc) return []
+    const hour = num(cc.ephemeral_1h_input_tokens) ?? 0, five = num(cc.ephemeral_5m_input_tokens) ?? 0
+    const next = hour > 0 ? "1h" as const : five > 0 ? "5m" as const : undefined
+    if (!next || next === cacheTtl) return []
+    cacheTtl = next
+    return [{ kind: "usage", cacheTtl: next }]
+  }
   /**
    * A compaction under way (#144): "compacting" opens it, compact_boundary gives its sizes, and Claude's summary (a
    * synthetic replayed user frame) or the turn's result completes it.
@@ -894,7 +905,7 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
         context.used = used
         if (typeof message.model === "string") context.model = message.model
       }
-      return [...mapAssistantContent(message), ...contextUpdate()]
+      return [...mapAssistantContent(message), ...contextUpdate(), ...(message.model === "<synthetic>" ? [] : cacheTtlUpdate(message))]
     }
     if (type === "user") {
       const message = rec(frame.message)

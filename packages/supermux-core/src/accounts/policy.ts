@@ -82,6 +82,37 @@ export function pickAccount(
   return best?.account ?? fallback
 }
 
+/**
+ * The organization an account belongs to, as data from its identity (Claude: `oauthAccount.organizationUuid` in its
+ * `.claude.json`, read by the registry). Undefined when unknown (API keys, tokens added without an identity). Seats of
+ * one org share the prompt cache (#61: a chat continued on another seat of the same org stayed warm 83 of 112 times),
+ * so the auto-switch (#159) and the compact advice (#146) both ask it; the one place the org is read.
+ */
+export function accountOrg(account: Account): string | undefined {
+  return account.identity?.org
+}
+
+/** Why the switch policy picked its target: a seat in the session's own org with room, or the most room anywhere. */
+export type SwitchWhy = "same_org" | "most_room"
+
+/**
+ * The auto-switch's target (#159): the prompt cache is per organization, so a seat in the current account's org
+ * (`org`) that has room keeps the chat warm and wins, ranked among the org's seats as pickAccount ranks; "room" is
+ * what pickAccount already requires (not full, not refused, switchable). Without one: pickAccount over all.
+ */
+export function pickSwitchTarget(
+  candidates: readonly Account[],
+  usage: (id: string) => readonly UsageWindow[] | undefined,
+  org: string | undefined,
+  now = Date.now(),
+  unavailable: (id: string) => boolean = () => false,
+): { account: Account; why: SwitchWhy } | undefined {
+  const sameOrg = org === undefined ? undefined : pickAccount(candidates.filter(account => accountOrg(account) === org), usage, now, unavailable)
+  if (sameOrg) return { account: sameOrg, why: "same_org" }
+  const best = pickAccount(candidates, usage, now, unavailable)
+  return best && { account: best, why: "most_room" }
+}
+
 /** When full windows free up again: the latest reset among them. Undefined when none is full or one has no reset time. */
 export function freesAt(windows: readonly UsageWindow[], now = Date.now()): Date | undefined {
   const full = windows.filter(window => effectiveUsed(window, now) >= 100)

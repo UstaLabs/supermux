@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { earliestReset, limited, pickAccount, score } from "../src/accounts/index.js"
+import { accountOrg, earliestReset, limited, pickAccount, pickSwitchTarget, score } from "../src/accounts/index.js"
 import type { Account, UsageWindow } from "../src/accounts/index.js"
 
 const now = Date.parse("2026-10-04T12:00:00Z")
@@ -33,6 +33,38 @@ test("pick: highest score wins, no-data after data, limited/isolated/cursor skip
   expect(pickAccount([acct("nodata"), acct("full")], get, now)?.id).toBe("nodata")
   expect(pickAccount([acct("full"), acct("iso", { isolated: true }), acct("cur", { agent: "cursor" })], get, now)).toBeUndefined()
   expect(pickAccount([acct("first"), acct("second")], get, now)?.id).toBe("first")
+})
+
+test("accountOrg: the organization from the account's identity (Claude's oauthAccount.organizationUuid), else undefined", () => {
+  expect(accountOrg(acct("a", { identity: { email: "a@x.io", org: "org-1" } }))).toBe("org-1")
+  expect(accountOrg(acct("b", { identity: { email: "b@x.io" } }))).toBeUndefined()
+  expect(accountOrg(acct("c"))).toBeUndefined()
+})
+
+test("switch target (#159): a seat in the current org with room wins over more room elsewhere; else the most room", () => {
+  const usage: Record<string, UsageWindow[]> = {
+    sameLow: [{ name: "5h", usedPercent: 80, resetsAt: inHours(4) }],
+    sameMid: [{ name: "5h", usedPercent: 50, resetsAt: inHours(4) }],
+    sameFull: [{ name: "5h", usedPercent: 100, resetsAt: inHours(1) }],
+    otherHigh: [{ name: "5h", usedPercent: 10, resetsAt: inHours(4) }],
+  }
+  const get = (id: string) => usage[id]
+  const org = (id: string, o: string, extra: Partial<Account> = {}) => acct(id, { identity: { org: o }, ...extra })
+  const pick = (candidates: Account[], current?: string, unavailable: (id: string) => boolean = () => false) =>
+    pickSwitchTarget(candidates, get, current, now, unavailable)
+  const r = (p: ReturnType<typeof pick>) => p && { id: p.account.id, why: p.why }
+  // Among the org's seats the policy's own order applies: the best score first.
+  expect(r(pick([org("otherHigh", "o2"), org("sameLow", "o1"), org("sameMid", "o1")], "o1"))).toEqual({ id: "sameMid", why: "same_org" })
+  // A same-org seat with no usage data is not known to be full: it still keeps the cache warm.
+  expect(r(pick([org("otherHigh", "o2"), org("nodata", "o1")], "o1"))).toEqual({ id: "nodata", why: "same_org" })
+  // No same-org seat with room (full, refused, isolated): the most room anywhere, as before.
+  const noRoom = [org("sameFull", "o1"), org("refused", "o1"), org("iso", "o1", { isolated: true }), org("otherHigh", "o2"), org("sameLow", "o3")]
+  expect(r(pick(noRoom, "o1", id => id === "refused"))).toEqual({ id: "otherHigh", why: "most_room" })
+  // Unknown current org (API key, token without identity): the most room.
+  expect(r(pick([org("sameLow", "o1"), org("otherHigh", "o2")], undefined))).toEqual({ id: "otherHigh", why: "most_room" })
+  // Candidates without an org never count as the same org.
+  expect(r(pick([acct("sameMid"), org("otherHigh", "o2")], "o1"))).toEqual({ id: "otherHigh", why: "most_room" })
+  expect(pick([org("sameFull", "o1")], "o1")).toBeUndefined()
 })
 
 test("earliestReset: the account that frees up first, once ALL of its full windows reset", () => {
