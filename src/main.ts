@@ -234,6 +234,7 @@ import { SearchStore } from "./core/search/store"
 import { ForgeStore } from "./core/forge/store"
 import { ForgeService } from "./core/forge/service"
 import { detectForgeClis, importCliToken } from "./core/forge/cli-import"
+import { installSupermuxLauncher } from "./cli/launcher"
 import { installCredentialLauncher } from "./core/forge/launcher"
 import { SETTINGS_KEY_CURATOR, parseCuratorConfig, type CuratorConfig } from "./core/settings/curator-config"
 import { listLspServerSettingsRows } from "./core/lsp/editor-settings"
@@ -629,6 +630,9 @@ const wakeDetector = new WakeDetector({ log: (event, data) => log.info(event, da
 const credentialHelperPath = join(STATE_DIR, "bin", "mux-credential")
 try { installCredentialLauncher(join(STATE_DIR, "bin"), join(import.meta.dir, "..")) }
 catch (err) { log.error("forge_credential_launcher_failed", { err: String(err) }) }
+// #156: the `supermux` CLI agents run from their shell (session-cli-env.ts puts this bin dir first on their PATH).
+try { installSupermuxLauncher(join(STATE_DIR, "bin"), join(import.meta.dir, "..")) }
+catch (err) { log.error("supermux_launcher_failed", { err: String(err) }) }
 const forgeStore = new ForgeStore(db)
 const forgeService = new ForgeService(forgeStore, {
   projectsRoot: join(STATE_DIR, "projects"),

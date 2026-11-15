@@ -7,6 +7,7 @@ import { cursorContext } from "../../../../packages/supermux-core/src/context/ag
 import { sessionInstructions } from "../instructions"
 import { sessionPlugins } from "../../plugins"
 import { muxShimContextServer } from "../mux-shim-server"
+import { sessionCliEnv } from "../session-cli-env"
 import { MUX_HOST_SERVERS } from "../../mux-tools/server"
 import { makeLogger } from "../../../shared/log"
 import { resolveCommand, type FileExists } from "../../process/launcher"
@@ -210,7 +211,7 @@ export function createCursorCoreHost(options: CursorCoreHostOptions): CursorCore
       // Smoke is content: fail early on a broken install, after the environment is written.
       await smoke({ home: extra.sessionHome, authEnv: prepared.env })
       return {
-        env: prepared.env,
+        env: { ...prepared.env, ...sessionCliEnv(prepared.env, "cursor", extra.sessionId, extra.sessionName) },
         context: {
           instructions: sessionInstructions({ agent: "cursor", sessionName: extra.sessionName, workdir: extra.workdir, sessionId: registration.id }),
           plugins: sessionPlugins("cursor", registration.id, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),

@@ -15,6 +15,8 @@
 //   supermux __core-bridge → supermux-core's host-MCP bridge (spawned by an agent from its MCP config)
 //     A compiled binary has no keeper.js/bridge.js on disk, so the core launches these as
 //     `<binary> <subcommand>` (packages/supermux-core/src/self-entry.ts CORE_SUBCOMMANDS).
+//   supermux help | session | msg | delegate | council | card | attach | file | port | memory | comments | display |
+//     device | docs | api  → the agent/human CLI over the session socket (src/cli/agent.ts, #156)
 //   supermux __speech-models-check → load the dictation stream's speech models in their workers
 //     and score one stretch of audio (scripts/smoke-binary.sh check 6)
 //
@@ -78,10 +80,21 @@ switch (sub) {
     const { runSpeechModelsCheck } = await import("./core/transcription/stream/check")
     process.exit(await runSpeechModelsCheck())
   }
+  case "help": case "--help": case "-h":
+  case "session": case "s": case "msg": case "delegate": case "council": case "card": case "attach": case "file":
+  case "port": case "memory": case "comments": case "display": case "device": case "docs": case "api": {
+    const { runAgentCli } = await import("./cli/agent")
+    const { readFileSync } = await import("node:fs")
+    process.exit(await runAgentCli(process.argv.slice(2), {
+      env: process.env, cwd: process.cwd(),
+      out: (s) => process.stdout.write(s + "\n"), err: (s) => process.stderr.write(s + "\n"),
+      stdin: () => readFileSync(0, "utf8"),
+    }))
+  }
   default:
     console.error(`supermux: unknown subcommand '${sub}'`)
     console.error(
-      "usage: supermux [shim|pair <device>|revoke <device>|version|setup|connect|update|rollback|credential]",
+      "usage: supermux [shim|pair <device>|revoke <device>|version|setup|connect|update|rollback|credential] · in a session: supermux help",
     )
     process.exit(2)
 }

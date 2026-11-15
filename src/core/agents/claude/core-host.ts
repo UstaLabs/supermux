@@ -1,4 +1,5 @@
 import { readFileSync } from "fs"
+import { sessionCliEnv } from "../session-cli-env"
 import { join } from "path"
 import { createHost, type AccountsOptions, type CoreLimits, type Host, type HostRegistration } from "../../../../packages/supermux-core/src/index.js"
 import { claude, type ClaudeOptions } from "../../../../packages/supermux-core/src/claude/index.js"
@@ -7,7 +8,7 @@ import { prepareClaudeEnvironment } from "../../../../packages/supermux-core/src
 import { CLAUDE_CONTEXT } from "../../../../packages/supermux-core/src/context/agents.js"
 import { sessionInstructions } from "../instructions"
 import { sessionPlugins } from "../../plugins"
-import { SESSION_INBOX_DIR, SOCKETS_DIR, STATE_DIR, homeDirName, inboxFilePath } from "../../../shared/paths"
+import { SESSION_INBOX_DIR, STATE_DIR, homeDirName, inboxFilePath } from "../../../shared/paths"
 import { shellReadsFor } from "../shell-reads"
 import { makeLogger } from "../../../shared/log"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
@@ -252,12 +253,8 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
       // reads the session identity from the PROCESS env (the tmux-era spawn set
       // it the same way); without these the shim registers as a random id on
       // the default sockets dir and the session's tools never connect.
-      const identity = {
-        MUX_SESSION_ID: extra.sessionId,
-        MUX_DISPLAY_NAME: extra.sessionName,
-        MUX_AGENT_KIND: "claude",
-        MUX_SOCKETS_DIR: SOCKETS_DIR,
-      }
+      // The same identity (plus the `supermux` launcher first on PATH) is what the CLI runs on (#156).
+      const identity = sessionCliEnv(prepared.env, "claude", extra.sessionId, extra.sessionName)
       return {
         env: { ...prepared.env, ...identity },
         args,

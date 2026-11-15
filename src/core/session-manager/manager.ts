@@ -676,7 +676,7 @@ export class SessionManager {
     // The ops listed here are open to every session. Any other op needs can_orchestrate, which
     // personal assistants have: today that leaves mute_session, set_active and get_active (spec §4).
     // A new tool meant for every session must be added here.
-    const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment", "browser_comments", "resolve_browser_comment", "reply_browser_comment", "dismiss_browser_comment", "message_session", "list_models", "spawn_session", "kill_session", "list_sessions", "delegate", "council", "council_round", "council_add", "council_remove", "council_end", "council_report", "preview_avatar", "set_avatar"])
+    const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment", "browser_comments", "resolve_browser_comment", "reply_browser_comment", "dismiss_browser_comment", "message_session", "list_models", "spawn_session", "kill_session", "list_sessions", "delegate", "council", "council_round", "council_add", "council_remove", "council_end", "council_report", "preview_avatar", "set_avatar", "list_proxies"])
     if (!s?.can_orchestrate && !NO_ORCHESTRATE_REQUIRED.has(op.name)) {
       return { ok: false, error: "permission denied (can_orchestrate=false)" }
     }
@@ -989,6 +989,13 @@ export class SessionManager {
         } catch (err: any) {
           return { ok: false, error: err?.message ?? String(err) }
         }
+      }
+      // #156: the CLI's `supermux port ls`. No MCP tool lists links, so an agent asked to change "the fold preview
+      // link" had no way to find its name (0/3 with MCP in the eval, 3/3 with this).
+      case "list_proxies": {
+        if (!s) return { ok: false, error: "unknown session" }
+        const base = { baseDomain: process.env.MUX_PROXY_BASE_DOMAIN, publicUrl: this.ports.orchestration.exposedProxyLinksBaseUrl() }
+        return { ok: true, value: this.registry.listProxies().map((p) => ({ domain: p.domain, port: p.port, isPublic: p.isPublic, sessionName: p.sessionName, mine: p.sessionId === s.id, createdAt: p.createdAt, url: buildProxyPublicUrl(p.domain, base) })) }
       }
       case "unexpose_port": {
         if (!s) return { ok: false, error: "unknown session" }
