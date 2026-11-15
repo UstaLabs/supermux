@@ -289,3 +289,25 @@ export function writeExecutable(path: string, data: string | NodeJS.ArrayBufferV
 export function makeExecutable(path: string, options: { platform?: NodeJS.Platform } = {}): void {
   if ((options.platform ?? process.platform) !== "win32") chmodSync(path, 0o755)
 }
+
+function chmodTree(path: string, file: number, dir: number, chmod: (p: string, mode: number) => void, dirsFirst: boolean): void {
+  const st = lstatSync(path)
+  if (st.isSymbolicLink()) return
+  if (!st.isDirectory()) { chmod(path, file); return }
+  if (dirsFirst) chmod(path, dir)
+  for (const name of readdirSync(path)) chmodTree(join(path, name), file, dir, chmod, dirsFirst)
+  if (!dirsFirst) chmod(path, dir)
+}
+
+/**
+ * Make the tree at [path] read-only (#117's backups): files 0o444 and folders 0o555 on POSIX. On Windows a file gets
+ * the read-only attribute (Node maps a mode without the write bit to it) and folders have none to set.
+ */
+export function makeReadOnlyTree(path: string, options: { chmod?: (p: string, mode: number) => void } = {}): void {
+  chmodTree(path, 0o444, 0o555, options.chmod ?? chmodSync, false)
+}
+
+/** Undo [makeReadOnlyTree] (owner may write again), so the tree can be deleted. */
+export function makeWritableTree(path: string, options: { chmod?: (p: string, mode: number) => void } = {}): void {
+  chmodTree(path, 0o644, 0o755, options.chmod ?? chmodSync, true)
+}

@@ -17,7 +17,7 @@ function setup() {
   const db = openDb(":memory:")
   runMigrations(db, MIGRATIONS)
   const appletsDir = join(root, "applets")
-  const svc = new AppletService({ db, appletsDir, stateDir: join(root, "state") })
+  const svc = new AppletService({ db, appletsDir, stateDir: join(root, "state"), backupsDir: join(root, "backups") })
   cleanups.push(() => { svc.shutdown(); for (const v of svc.list()) svc.supervisor.stop(v.row.id); rmSync(root, { recursive: true, force: true }) })
   const make = (name: string, manifest: object, files: Record<string, string> = {}) => {
     const dir = join(appletsDir, name)
@@ -153,7 +153,7 @@ test("a new broker adopts the server the last one left running, and starts over 
   const first = svc.supervisor.state(id)!
   svc.shutdown() // the broker goes; the server stays
 
-  const svc2 = new AppletService({ db, appletsDir: join(root, "applets"), stateDir: join(root, "state") })
+  const svc2 = new AppletService({ db, appletsDir: join(root, "applets"), stateDir: join(root, "state"), backupsDir: join(root, "backups") })
   cleanups.push(() => { svc2.shutdown(); svc2.supervisor.stop(id) })
   await svc2.scan()
   expect(svc2.supervisor.state(id)).toMatchObject({ state: "running", pid: first.pid, port: first.port })
@@ -163,7 +163,7 @@ test("a new broker adopts the server the last one left running, and starts over 
   svc2.shutdown()
   process.kill(-first.pid!, "SIGKILL")
   await Bun.sleep(100)
-  const svc3 = new AppletService({ db, appletsDir: join(root, "applets"), stateDir: join(root, "state") })
+  const svc3 = new AppletService({ db, appletsDir: join(root, "applets"), stateDir: join(root, "state"), backupsDir: join(root, "backups") })
   cleanups.push(() => { svc3.shutdown(); svc3.supervisor.stop(id) })
   await svc3.scan()
   expect(svc3.supervisor.state(id)!.pid).not.toBe(first.pid)
