@@ -57,4 +57,6 @@
     <string name="scm_failed">That didn't work: %1$s</string>
     <string name="scm_offline">The host can't be reached.</string>
     <string name="scm_back">Back to Source Control</string>
+    <string name="scm_review">Review</string>
+    <string name="scm_review_hint">Review everything that changed since the chat started, with comments and the agent's walkthrough</string>
 </resources>

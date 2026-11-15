@@ -800,8 +800,13 @@ private fun DiffPaneForWorkspace(
     // #72 v4: the workspace's Changes view IS VS Code's Source Control; a file's diff opens in it, with a way back.
     val sourceControl = remember(workspaceId, reviewSessionId) { actions.sourceControl(workspaceId, reviewSessionId)?.let { SourceControlState(it) } }
     var openFile by remember(workspaceId) { mutableStateOf<ScmOpenFile?>(null) }
-    if (sourceControl != null && openFile == null) {
+    // The review of everything since the chat started (comments, the base menu, the agent's walkthrough) stays one
+    // click away, and opens by itself when a chat opens its walkthrough. Kept through a rotation like the base (#89).
+    val scmMode = rememberRetained("scm:$workspaceId:$viewId") { ScmMode() }
+    val reviewing = scmMode.review || walkthroughSessionId != null
+    if (sourceControl != null && openFile == null && !reviewing) {
         SourceControlPane(
+            onReview = { scmMode.review = true },
             state = sourceControl,
             onOpenDiff = { repo, path, group ->
                 val f = sourceControl.repos?.firstOrNull { it.repo == repo }?.files?.firstOrNull { it.path == path }
@@ -823,6 +828,10 @@ private fun DiffPaneForWorkspace(
     Column(modifier.fillMaxSize()) {
     // platform-ok: a git path, repo-relative, always / on every OS
     if (sourceControl != null && shown != null) ScmBackRow(shown.path.substringAfterLast('/')) { openFile = null }
+    else if (sourceControl != null && reviewing) ScmBackRow(localized(Str.scm_review)) {
+        scmMode.review = false
+        if (walkthroughSessionId != null) onWalkthroughClosed()
+    }
     DiffPane(
         diff = diff,
         walkthrough = walkthrough,
@@ -864,6 +873,11 @@ private fun DiffPaneForWorkspace(
         modifier = Modifier.weight(1f).fillMaxSize(),
     )
     }
+}
+
+/** #72: whether the Changes view shows the review instead of Source Control (retained through a rotation). */
+private class ScmMode {
+    var review by mutableStateOf(false)
 }
 
 /** #72: the Source Control file whose diff is open in its pane, and the blob it is compared from (null: HEAD's). */

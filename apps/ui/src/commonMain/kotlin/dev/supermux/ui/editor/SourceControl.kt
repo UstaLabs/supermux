@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.FileOpen
+import androidx.compose.material.icons.outlined.RateReview
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.PlainTooltip
@@ -72,7 +73,9 @@ import dev.supermux.ui.i18n.localizedPlural
 import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 
 /** VS Code's groups, in its order. */
@@ -154,15 +157,20 @@ fun SourceControlPane(
     /** The file itself, in the editor. */
     onOpenFile: (repo: String, path: String) -> Unit,
     modifier: Modifier = Modifier,
+    /** The review of everything since the chat started (comments, base, walkthrough); null: none. */
+    onReview: (() -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val cs = MaterialTheme.colorScheme
     // A phone has no hover: every row action stays shown.
     val touch = LocalWindowWidthClass.current == WindowWidthClass.Compact
+    // Real time, off the UI's frame clock: a poll on it would keep a UI test from ever going idle.
     LaunchedEffect(state) {
-        while (true) {
-            state.refresh()
-            delay(SCM_POLL_MS)
+        withContext(Dispatchers.Default) {
+            while (true) {
+                state.refresh()
+                delay(SCM_POLL_MS)
+            }
         }
     }
     Column(modifier.fillMaxSize().background(cs.surfaceContainer).testTag("scm_pane")) {
@@ -171,6 +179,7 @@ fun SourceControlPane(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(localized(Str.scm_title), fontSize = 11.sp, fontWeight = FontWeight.Medium, color = cs.onSurfaceVariant, modifier = Modifier.weight(1f))
+            if (onReview != null) ScmIcon(Icons.Outlined.RateReview, localized(Str.scm_review_hint), "scm_review", onClick = onReview)
             ScmIcon(Icons.Filled.Refresh, localized(Str.scm_refresh), "scm_refresh") { scope.launch { state.refresh() } }
         }
         state.problem?.let { p ->

@@ -57,4 +57,6 @@
     <string name="scm_failed">İşlem başarısız: %1$s</string>
     <string name="scm_offline">Makineye ulaşılamıyor.</string>
     <string name="scm_back">Kaynak Denetimi'ne dön</string>
+    <string name="scm_review">İnceleme</string>
+    <string name="scm_review_hint">Sohbet başladığından beri değişen her şeyi yorumlarla ve ajanın anlatımıyla incele</string>
 </resources>

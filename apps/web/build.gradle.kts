@@ -315,7 +315,11 @@ val distDir = layout.buildDirectory.dir("dist/wasmJs/productionExecutable")
 // 3 DTOs, 14 strings × 2).
 // 2026-11-15 (#152 spacing, Tally/Ahmet): +1 KiB, measured 9130 KiB on train6 43753321986: the launcher row's spacing
 // as the prototype's (the row's own layout under the composer, the summary's 16 dp icon column).
-val maxGzipBytes = 9131L * 1024
+// 2026-11-15 (#72 U1, Tally's rule): the Changes view becomes VS Code's Source Control (groups, + / −, in-pane
+// confirms, M3 TooltipBox hover hints). CI counted 9089 KiB on train5 43663554920 (+18 over dev's 9071); the review
+// button adds a little. Raised by that measured +21 KiB over #143's 9076: 9097 KiB.
+// #72 on dev's 9131: + its measured 21 = 9152 KiB (CI re-measures it).
+val maxGzipBytes = 9152L * 1024
 
 // THE NATIVE EDITOR'S SYNTAX MODULE IS OUTSIDE THAT CEILING, with a ceiling of its own (M5).
 // `supermux-syntax.wasm` is 7.45 MB raw / 2.69 MB gzipped (editor-syntax/native/README.md): counted

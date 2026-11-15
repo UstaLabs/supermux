@@ -206,13 +206,20 @@ class ViewHostTest {
     }
 
     @Test
-    fun modeDiffDrawsTheDiffPane() = runComposeUiTest {
+    fun modeDiffDrawsSourceControlAndItsReview() = runComposeUiTest {
         val app = fakeApp()
         setPlatformContent(platform()) {
             host(app, view("editor", mapOf("mode" to "diff")), workdir = "/some/dir")
         }
+        // #72 v4: the Changes view is Source Control; the review of everything since the chat started is one click away.
+        onNodeWithTag("scm_pane").assertIsDisplayed()
+        onNodeWithTag("scm_review").performClick()
+        waitForIdle()
         onNodeWithTag("editor_diff_pane").assertIsDisplayed()
         onNodeWithTag("diff_view").assertIsDisplayed()
+        onNodeWithTag("scm_back").performClick()
+        waitForIdle()
+        onNodeWithTag("scm_pane").assertIsDisplayed()
     }
 
     /** A workspace with no chat has no LSP — the FILE pane says so, quietly. */
@@ -490,7 +497,7 @@ class ViewHostTest {
         val kinds = listOf(
             view("terminal", mapOf("scope" to "workspace", "terminalId" to "main")) to "terminal-w1-main",
             view("editor", mapOf("mode" to "tree")) to "editor_explorer_pane",
-            view("editor", mapOf("mode" to "diff")) to "editor_diff_pane",
+            view("editor", mapOf("mode" to "diff")) to "scm_pane",
             view("display", mapOf("displayId" to "d1")) to "view_display_pending",
             view("hologram", emptyMap()) to "view-unknown",
         )
