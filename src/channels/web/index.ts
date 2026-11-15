@@ -51,7 +51,7 @@ import { worktreesRoot } from "../../core/worktree/manager"
 
 import { getRepoInfo } from "../../core/git/repo-info"
 import { remoteStatus, fetchRemote, publishBranch, pushBranch, pullBranch } from "../../core/git/remote"
-import { branchList, liveBranch, realPath, samePath, switchBranch, type BranchOwner } from "../../core/git/branches"
+import { branchList, folderState, liveBranch, realPath, repoToplevel, samePath, switchBranch, type BranchOwner, type OpenIn, type SwitchResult } from "../../core/git/branches"
 import { addRemote, checkLog, createPr, markReady, prBase, publishBase, publishNew, readPr, type PrBase, type PrRead } from "../../core/git/forge"
 import { prInput, writePrText, type PrTextWriter } from "../../core/git/pr-text"
 import type { AgentKind } from "../../core/agents/types"
@@ -2401,9 +2401,16 @@ export class WebChannel implements Channel {
    * resolve {path, side: mine|theirs|both} settles one conflicted file; abort cancels the merge;
    * revert {sha} adds a commit that undoes one; branch|tag {sha, name} names one, moving nothing.
    */
-  /** #72: the other sessions, as owners of the copies their branches are open in. */
-  private branchOwners(except: string): BranchOwner[] {
+  /** #72: the other sessions, as owners of the copies their branches are open in (#152's project folder: all of them). */
+  private branchOwners(except?: string): BranchOwner[] {
     return this.opts.getSessionsSnapshot().flatMap((s) => (s.id && s.id !== except && s.workdir ? [{ id: s.id, name: s.name, workdir: s.workdir }] : []))
+  }
+
+  /** A switch git refused because another copy has the branch: which session's, when a session has it. */
+  private withOpenIn(r: SwitchResult, owners: BranchOwner[]): SwitchResult & { openIn?: OpenIn } {
+    if (r.status !== "checked_out_elsewhere") return r
+    const at = realPath(r.path), owner = owners.find((o) => samePath(realPath(o.workdir), at))
+    return owner ? { ...r, openIn: { kind: "session", id: owner.id, name: owner.name } } : r
   }
 
   /** #72: a branch's PR/MR as last read, per checkout and branch (GET …/git/pr). */
@@ -4331,9 +4338,24 @@ export class WebChannel implements Channel {
       const name = String(body.name ?? "").trim()
       if (!name) return this.json({ error: "name required" }, 400)
       const r = switchBranch(workdir, name, { create: body.create === true, requireClean: body.requireClean === true })
-      if (r.status !== "checked_out_elsewhere") return this.json(r)
-      const at = realPath(r.path), owner = this.branchOwners(id).find((o) => samePath(realPath(o.workdir), at))
-      return this.json(owner ? { ...r, openIn: { kind: "session", id: owner.id, name: owner.name } } : r)
+      return this.json(this.withOpenIn(r, this.branchOwners(id)))
+    }
+    // #152: the launcher reads and switches the project folder itself, every session an owner. Local mode switches
+    // a folder only when it is clean (VS Code's rule): changes git could carry over are refused too.
+    const projectGit = path.match(/^\/projects\/(branches|folder-state|switch)$/)
+    if (projectGit && method === (projectGit[1] === "switch" ? "POST" : "GET")) {
+      const op = projectGit[1]
+      const body = op === "switch" ? await req.json().catch(() => ({})) as Record<string, unknown> : {}
+      const raw = op === "switch" ? body.dir : url.searchParams.get("dir")
+      if (typeof raw !== "string" || !raw.trim()) return this.json({ error: "dir required" }, 400)
+      let dir: string
+      try { dir = normalizeExistingWorkdir(raw, home()) } catch (err: any) { return this.json({ error: err?.message ?? String(err) }, 400) }
+      if (!repoToplevel(dir)) return this.json({ error: "not a git repository" }, 409)
+      if (op === "branches") return this.json(branchList(dir, this.branchOwners()))
+      if (op === "folder-state") return this.json(folderState(dir))
+      const name = String(body.name ?? "").trim()
+      if (!name) return this.json({ error: "name required" }, 400)
+      return this.json(this.withOpenIn(switchBranch(dir, name, { requireClean: true }), this.branchOwners()))
     }
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/message$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)

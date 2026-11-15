@@ -148,12 +148,14 @@ export type OpenIn =
   | { kind: "session"; id: string; name: string }
   | { kind: "external"; path: string }
 
-export interface BranchInfo { name: string; isDefault: boolean; upstream: string | null; ahead: number; behind: number; openIn: OpenIn | null }
+/** A branch's last commit: its author's name and the commit time in ms (#152's "who · ago"). */
+export interface LastCommit { author: string; at: number }
+export interface BranchInfo extends LastCommit { name: string; isDefault: boolean; upstream: string | null; ahead: number; behind: number; openIn: OpenIn | null }
 export interface BranchListing {
   current: string | null
   detachedSha: string | null
   local: BranchInfo[]
-  remote: Array<{ name: string; isDefault: boolean }>
+  remote: Array<{ name: string; isDefault: boolean } & LastCommit>
 }
 
 /** The main worktree (the folder the repo was cloned into), from `git worktree list --porcelain`. */
@@ -180,13 +182,16 @@ function track(t: string): { ahead: number; behind: number } {
 /** Every local and remote branch: the default, its upstream and ↑↓, and where it is open. Local refs only, no network. */
 export function branchList(cwd: string, owners: BranchOwner[]): BranchListing {
   const base = listBranches(cwd)
-  const fmt = "%(refname:short)%09%(upstream:short)%09%(upstream:track,nobracket)"
-  const refs = git(cwd, ["for-each-ref", `--format=${fmt}`, "refs/heads"])
+  const fmt = "%(refname)%09%(upstream:short)%09%(upstream:track,nobracket)%09%(authorname)%09%(committerdate:unix)"
+  const refs = git(cwd, ["for-each-ref", `--format=${fmt}`, "refs/heads", "refs/remotes"])
   const up = new Map<string, { upstream: string | null; ahead: number; behind: number }>()
+  const last = new Map<string, LastCommit>() // by full ref name
   for (const line of refs.ok ? refs.out.split("\n").filter(Boolean) : []) {
-    const [name, upstream, t] = line.split("\t")
-    up.set(name!, { upstream: upstream || null, ...track(t ?? "") })
+    const [ref, upstream, t, author, at] = line.split("\t")
+    last.set(ref!, { author: author ?? "", at: Number(at) * 1000 || 0 })
+    if (ref!.startsWith("refs/heads/")) up.set(ref!.slice(11), { upstream: upstream || null, ...track(t ?? "") })
   }
+  const lastOf = (ref: string): LastCommit => last.get(ref) ?? { author: "", at: 0 }
   const here = realPath(base.repoRoot ?? cwd), main = mainWorktree(cwd)
   const ownersAt = owners.map((o) => ({ ...o, at: realPath(o.workdir) }))
   const where = (checkedOutAt: string | null): OpenIn | null => {
@@ -202,8 +207,8 @@ export function branchList(cwd: string, owners: BranchOwner[]): BranchListing {
   return {
     current: base.current,
     detachedSha: base.detachedSha,
-    local: base.local.map((b) => ({ name: b.name, isDefault: b.name === def, ...(up.get(b.name) ?? { upstream: null, ahead: 0, behind: 0 }), openIn: where(b.checkedOutAt) })),
-    remote: base.remote.map((name) => ({ name, isDefault: !!def && name === `origin/${def}` })),
+    local: base.local.map((b) => ({ name: b.name, isDefault: b.name === def, ...(up.get(b.name) ?? { upstream: null, ahead: 0, behind: 0 }), openIn: where(b.checkedOutAt), ...lastOf(`refs/heads/${b.name}`) })),
+    remote: base.remote.map((name) => ({ name, isDefault: !!def && name === `origin/${def}`, ...lastOf(`refs/remotes/${name}`) })),
   }
 }
 
