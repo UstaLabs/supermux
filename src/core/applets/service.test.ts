@@ -209,3 +209,63 @@ posix("_supermux: the page API script, and notify through the applet's own route
   expect((await get(svc, "/a/mail/_supermux/notify", agent, { method: "POST", body: "{}" })).status).toBe(403)
   expect(sent).toEqual(["Mail|Hi|there"])
 })
+
+posix("widget summaries: a static applet's file, a server's route, trimmed to fit, refreshed on request", async () => {
+  let changes = 0
+  const root = mkdtempSync(join(tmpdir(), "applets-"))
+  const db = openDb(":memory:")
+  runMigrations(db, MIGRATIONS)
+  const appletsDir = join(root, "applets")
+  const svc = new AppletService({ db, appletsDir, stateDir: join(root, "state"), backupsDir: join(root, "backups"), onChange: () => { changes++ } })
+  cleanups.push(() => { svc.shutdown(); for (const v of svc.list()) svc.supervisor.stop(v.row.id); rmSync(root, { recursive: true, force: true }) })
+  const write = (name: string, manifest: object, files: Record<string, string>) => {
+    const dir = join(appletsDir, name)
+    for (const [f, body] of Object.entries({ "applet.json": JSON.stringify(manifest), ...files })) {
+      mkdirSync(join(dir, f, ".."), { recursive: true })
+      writeFileSync(join(dir, f), body)
+    }
+    return dir
+  }
+  const issues = write("issues", { title: "Issues", widget: "/widget.json" }, {
+    "public/widget.json": JSON.stringify({ value: 31, label: "open", lines: ["2 waiting for testing", "", 5, "a", "b"] }),
+  })
+  write("plain", { title: "Plain" }, { "public/index.html": "hi" })
+  write("jobs", { title: "Jobs", run: `${process.execPath} server.ts`, widget: "/widget.json" }, {
+    "server.ts": `Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch: (r) => new URL(r.url).pathname === "/widget.json"
+      ? Response.json({ value: "1", label: "interview", via: r.headers.get("x-mux-via") }) : new Response("no", { status: 404 }) })`,
+  })
+  await svc.scan()
+  const { waitForPort } = await import("../../channels/web/applet-route")
+  expect(await waitForPort(svc.supervisor.port(svc.get("jobs")!.row.id)!, 5_000)).toBe(true)
+  for (let i = 0; i < 50 && svc.get("jobs")!.process?.state !== "running"; i++) await Bun.sleep(100)
+
+  changes = 0
+  await svc.refreshWidgets()
+  expect(changes).toBe(1)
+  expect(svc.widgetSummary(svc.get("issues")!.row.id)).toEqual({ value: "31", label: "open", lines: ["2 waiting for testing", "5", "a"] })
+  expect(svc.widgetSummary(svc.get("jobs")!.row.id)).toEqual({ value: "1", label: "interview" })
+  expect(svc.widgetSummary(svc.get("plain")!.row.id)).toBeUndefined()
+
+  // Nothing moved: no change notice. The applet changes its file and asks: one.
+  await svc.refreshWidgets()
+  expect(changes).toBe(1)
+  writeFileSync(join(issues, "public/widget.json"), JSON.stringify({ value: 30, label: "open" }))
+  const r = await svc.refreshWidget("issues")
+  expect(r).toEqual({ ok: true, summary: { value: "30", label: "open" } })
+  expect(changes).toBe(2)
+
+  // Gone or broken: no summary (the widget shows just the icon and name).
+  writeFileSync(join(issues, "public/widget.json"), "{not json")
+  await svc.refreshWidget("issues")
+  expect(svc.widgetSummary(svc.get("issues")!.row.id)).toBeUndefined()
+  expect(await svc.refreshWidget("nope")).toEqual({ ok: false, error: `no applet named "nope"` })
+})
+
+test("parseWidgetSummary keeps what fits a widget and drops the rest", async () => {
+  const { parseWidgetSummary } = await import("./service")
+  expect(parseWidgetSummary(null)).toBeNull()
+  expect(parseWidgetSummary([1])).toBeNull()
+  expect(parseWidgetSummary({ other: 1 })).toBeNull()
+  expect(parseWidgetSummary({ value: "1234567890123456", label: "x".repeat(50) })).toEqual({ value: "123456789012", label: "x".repeat(40) })
+  expect(parseWidgetSummary({ lines: ["a", { b: 1 }, "c"] })).toEqual({ lines: ["a", "c"] })
+})

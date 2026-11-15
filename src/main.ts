@@ -2423,7 +2423,7 @@ const proxyLivenessMonitor = new ProxyLivenessMonitor({
 // Started after webChannel.start(); servers outlive a broker restart and are adopted by the next one.
 const appletService = new AppletService({
   db, appletsDir: join(MUX_HOME, "applets"), stateDir: join(STATE_DIR, "applets"), backupsDir: join(MUX_HOME, "backups", "applets"),
-  rescanMs: 15_000, jobTickMs: 30_000, maintenanceMs: 10 * 60_000, settings,
+  rescanMs: 15_000, jobTickMs: 30_000, maintenanceMs: 10 * 60_000, widgetMs: 15 * 60_000, settings,
   brokerUrl: () => (webChannel?.boundPort ? `http://127.0.0.1:${webChannel.boundPort}` : undefined),
   actorName: (by) => by.startsWith("agent:") ? registry.get(by.slice("agent:".length))?.name : undefined,
   // supermux.agent.ask: the applet's own chat (a visible session in its folder), or the named Agent's.
@@ -2446,7 +2446,7 @@ const appletService = new AppletService({
     await firePushToAll({
       sender: pushSender, nativeSender, nativeDevices,
       devices: () => pushStore.all().map((s) => s.device),
-      payload: { session: applet.title, text: body ? `${title}: ${body}` : title, ts: new Date().toISOString() },
+      payload: { session: applet.title, text: body ? `${title}: ${body}` : title, ts: new Date().toISOString(), applet: applet.name },
       trigger: "applet_notify",
     })
   },

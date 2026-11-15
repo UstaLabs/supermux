@@ -111,7 +111,8 @@ applet.json:
     "run": "python3 server.py",          # how to start its server, any language; omit for a static applet
     "jobs": [{ "name": "sync", "every": "30m", "run": "python3 jobs/sync.py" }],
     "secrets": ["SOME_API_KEY"],         # names only (or {"name": "…", "label": "Gmail sign-in"})
-    "ownerOnly": ["/api/settings"] }     # paths only the user's own devices may open
+    "ownerOnly": ["/api/settings"],      # paths only the user's own devices may open
+    "widget": "/widget.json" }           # optional: what its phone widget shows (see below)
   supermux gives the server $PORT and the applet's data dir as $DATA_DIR (= <folder>/data). A static applet's
   public/ is served at its link, and it keeps data with the built-in data API, relative to its page:
   fetch("api/collections/books/records") (GET ?field=value&sort=-created, POST, and records/ID for GET, PATCH,
@@ -130,6 +131,9 @@ their devices), supermux.agent.ask(text) and supermux.save(blob, name) (these tw
 window, after a click). Each returns a promise of {ok, reason}.
 Notify the user from a server or job: POST $SUPERMUX_URL/applet-api/notify with header
 X-Supermux-Applet-Token: $SUPERMUX_APPLET_TOKEN and {"title": "…", "body": "…"} (a push to their devices).
+Phone widget: the "widget" path (a file in public/, or your server's route) answers
+{"value": "3", "label": "open", "lines": ["2 waiting for testing"]}; supermux re-reads it every 15 minutes.
+After a change, POST $SUPERMUX_URL/applet-api/widget with the same header so widgets update now.
 
 Secrets: only the user can set secret values, on the applet's page. Declare the name in applet.json "secrets"
 and ask them to fill it in. You cannot read or set values.

@@ -33,7 +33,7 @@ function detail(applets: AppletService, v: AppletView) {
   const m = v.manifest
   const settingsValues = applets.secrets.settings(v.row.id)
   return {
-    ...appletPayload(v, applets.needsYou(v), applets.pinnedIds().includes(v.row.id) ? applets.pinnedIds().indexOf(v.row.id) : null),
+    ...appletPayload(v, applets.needsYou(v), applets.pinnedIds().includes(v.row.id) ? applets.pinnedIds().indexOf(v.row.id) : null, applets.widgetSummary(v.row.id)),
     secrets: applets.secrets.status(v.row.id, m?.secrets ?? []).map((s) => ({ ...s, wanted: (m?.secrets ?? []).includes(s.name), label: m?.secretLabels?.[s.name] ?? null })),
     jobs: (m?.jobs ?? []).map((j) => {
       const last = applets.jobs.lastRun(v.row.id, j.name)
@@ -68,7 +68,7 @@ export async function handleAppletApi(req: Request, opts: { applets: AppletServi
   if (parts.length === 0 || (parts.length === 1 && parts[0] === "")) {
     if (method === "GET") {
       const pins = applets.pinnedIds()
-      return json(applets.list().map((v) => appletPayload(v, applets.needsYou(v), pins.includes(v.row.id) ? pins.indexOf(v.row.id) : null)))
+      return json(applets.list().map((v) => appletPayload(v, applets.needsYou(v), pins.includes(v.row.id) ? pins.indexOf(v.row.id) : null, applets.widgetSummary(v.row.id))))
     }
     return json({ error: "not found" }, 404)
   }

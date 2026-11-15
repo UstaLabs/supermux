@@ -158,4 +158,18 @@
     <string name="applets_install_failed">Couldn't install it.</string>
     <string name="applets_install_dev_build">This build of supermux can't install applets (it isn't an installed copy).</string>
     <string name="applets_install_comment">A supermux applet</string>
+    <!-- #117 W1: Home screen widgets. -->
+    <string name="applets_menu_add_widget">Add widget</string>
+    <string name="applets_widget_empty">Pin applets in supermux to see them here.</string>
+    <string name="applets_widget_signed_out">Open supermux to see your applets.</string>
+    <string name="applets_widget_choose">Choose an applet</string>
+    <string name="applets_widget_gone">This applet is gone. Choose another.</string>
+    <string name="applets_widget_needs_you">Needs you</string>
+    <string name="applets_widget_no_home">This Home screen doesn't take widgets from apps.</string>
+    <string name="applets_widget_none">No applets on this computer yet.</string>
+    <string name="applets_widget_ios_title">Add the Applets widget</string>
+    <string name="applets_widget_ios_step1">Touch and hold an empty spot on your Home Screen</string>
+    <string name="applets_widget_ios_step2">Tap Edit, then Add Widget</string>
+    <string name="applets_widget_ios_step3">Find supermux and pick “Applets”, or “Applet” for one</string>
+    <string name="applets_widget_ios_note">iOS only lets you add widgets yourself; supermux can’t place one for you.</string>
 </resources>

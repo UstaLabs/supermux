@@ -26,10 +26,16 @@ data class AppletDto(
     /** Its place in the sidebar grid, or null when it isn't pinned. */
     val pin: Int? = null,
     val process: AppletProcessDto? = null,
+    /** What its phone widget shows (its applet.json "widget" path), or null: the widget shows just its icon and name. */
+    val summary: AppletSummaryDto? = null,
     val updatedBy: String? = null,
     val updatedAt: String = "",
     val createdAt: String = "",
 )
+
+/** A widget's glance: "31" · "open" · up to three short lines. */
+@Serializable
+data class AppletSummaryDto(val value: String? = null, val label: String? = null, val lines: List<String> = emptyList())
 
 @Serializable
 data class AppletNeedDto(val secret: String, val state: String, val label: String? = null)
