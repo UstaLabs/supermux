@@ -32,7 +32,7 @@ function setup() {
   return { root, db, svc, make, appletsDir }
 }
 
-const device: AppletCaller = { kind: "device", name: "laptop" }
+const device: AppletCaller = { kind: "device", id: "0123456789abcdef", name: "laptop" }
 const agent: AppletCaller = { kind: "agent", session: "s1" }
 const get = (svc: AppletService, path: string, caller: AppletCaller | null = device, init: RequestInit = {}) =>
   handleAppletRequest(new Request(`http://broker${path}`, init), { applets: svc, caller: () => caller ?? undefined, own: { cookies: ["cmux_token", "cmux_preview"] } })
@@ -111,12 +111,13 @@ test("a server applet gets $PORT and $DATA_DIR, a clean env, and a signed X-Mux-
   expect(body.dataDir).toBe(join(dir, "data"))
   expect(existsSync(join(dir, "data"))).toBe(true)
   expect(body.telegram).toBeNull()
-  expect(body.headers["x-mux-via"]).toBe("device:laptop")
+  expect(body.headers["x-mux-via"]).toBe("device:0123456789abcdef")
+  expect(body.headers["x-mux-device-name"]).toBe("laptop")
   expect(body.headers["x-mux-other"]).toBeUndefined()
   expect(body.headers["cookie"]).toBe("mine=1")
   expect(body.headers["x-forwarded-prefix"]).toBe("/a/echo")
   const id = svc.get("echo")!.row.id
-  expect(body.headers["x-mux-via-sig"]).toBe(createHmac("sha256", svc.viaKey(id)).update("device:laptop").digest("hex"))
+  expect(body.headers["x-mux-via-sig"]).toBe(createHmac("sha256", svc.viaKey(id)).update("device:0123456789abcdef").digest("hex"))
 })
 
 test("ownerOnly paths answer 403 to an agent and pass for a device", async () => {
