@@ -12,40 +12,21 @@ import androidx.glance.appwidget.updateAll
 import dev.supermux.android.host.HostStores
 import dev.supermux.auth.SecureTokenStoreContext
 import dev.supermux.net.AppletDto
-import dev.supermux.net.AppletSummaryDto
 import dev.supermux.net.BrokerApi
+import dev.supermux.net.WidgetHost
+import dev.supermux.net.toWidgetApplets
+import dev.supermux.net.widgetFileKey
+import dev.supermux.net.widgetHostFile
 import dev.supermux.state.FleetStore
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import java.io.File
-import java.security.MessageDigest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-
-/** One applet as a widget shows it. */
-@Serializable
-internal data class WidgetApplet(
-    val name: String,
-    val title: String,
-    /** A secret to fill in or renew: the red dot. */
-    val needs: Boolean = false,
-    val pin: Int? = null,
-    val summary: AppletSummaryDto? = null,
-    /** When its icon file was drawn ([AppletDto.updatedAt]); a newer applet draws it again. */
-    val iconAt: String = "",
-)
-
-/** One host's applets, as last seen. */
-@Serializable
-internal data class WidgetHost(val hostId: String, val at: Long, val applets: List<WidgetApplet>) {
-    /** The grid's applets: the pinned ones by their place, as the app's sidebar on a phone (the first 8). */
-    fun pinned(): List<WidgetApplet> = applets.filter { it.pin != null }.sortedBy { it.pin }.take(8)
-}
 
 internal object AppletWidgetStore {
     private const val TAG = "AppletWidgets"
@@ -54,12 +35,9 @@ internal object AppletWidgetStore {
     private val lock = Mutex()
 
     private fun dir(context: Context) = File(context.filesDir, "applet-widgets").also { it.mkdirs() }
-    private fun hostFile(context: Context, hostId: String) = File(dir(context), "host-${key(hostId)}.json")
+    private fun hostFile(context: Context, hostId: String) = File(dir(context), widgetHostFile(hostId))
     private fun activeFile(context: Context) = File(dir(context), "active")
-    private fun iconFile(context: Context, hostId: String, name: String) = File(dir(context), "icon-${key("$hostId/$name")}.png")
-
-    private fun key(s: String): String =
-        MessageDigest.getInstance("SHA-1").digest(s.toByteArray()).joinToString("") { "%02x".format(it) }.take(16)
+    private fun iconFile(context: Context, hostId: String, name: String) = File(dir(context), "icon-${widgetFileKey("$hostId/$name")}.png")
 
     /** The host the grid shows: the app's active one, else any host seen. */
     fun active(context: Context): WidgetHost? {
@@ -87,19 +65,18 @@ internal object AppletWidgetStore {
             withContext(Dispatchers.IO) {
                 val before = host(context, hostId)
                 val drawn = before?.applets?.associate { it.name to it.iconAt }.orEmpty()
-                val next = applets.filter { it.status != "missing" }.map { a ->
-                    val title = a.title.ifBlank { a.name }
-                    val file = iconFile(context, hostId, a.name)
-                    val iconAt = a.updatedAt + "|" + (a.iconUrl ?: "") + "|" + title
-                    if (drawn[a.name] != iconAt || !file.exists()) {
-                        val bytes = if (a.iconUrl != null) runCatching { icon(a) }.getOrNull() else null
-                        runCatching {
-                            val bmp = AppletIcons.bitmap(bytes, title, 144, inset = 0f, circle = true, letter = 0.42f)
-                            file.outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
-                            bmp.recycle()
-                        }
+                val byName = applets.associateBy { it.name }
+                val next = applets.toWidgetApplets(hostId)
+                for (w in next) {
+                    val file = File(dir(context), w.iconFile)
+                    if (drawn[w.name] == w.iconAt && file.exists()) continue
+                    val a = byName.getValue(w.name)
+                    val bytes = if (a.iconUrl != null) runCatching { icon(a) }.getOrNull() else null
+                    runCatching {
+                        val bmp = AppletIcons.bitmap(bytes, w.title, 144, inset = 0f, circle = true, letter = 0.42f)
+                        file.outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                        bmp.recycle()
                     }
-                    WidgetApplet(a.name, title, a.needsYou.isNotEmpty(), a.pin, a.summary, iconAt)
                 }
                 val host = WidgetHost(hostId, System.currentTimeMillis(), next)
                 hostFile(context, hostId).writeText(json.encodeToString(WidgetHost.serializer(), host))

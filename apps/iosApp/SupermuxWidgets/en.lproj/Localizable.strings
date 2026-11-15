@@ -1,0 +1,17 @@
+/* #117 W1: the widgets, English. Keys are the English text, as SwiftUI looks them up. */
+
+/* #117 W1: the applet widgets and intents. */
+"Applets" = "Applets";
+"Applet" = "Applet";
+"Your pinned applets. Tap one to open it." = "Your pinned applets. Tap one to open it.";
+"One applet and what it has to say, like how many are open." = "One applet and what it has to say, like how many are open.";
+"Open supermux to see your applets." = "Open supermux to see your applets.";
+"Pin applets in supermux to see them here." = "Pin applets in supermux to see them here.";
+"Needs you" = "Needs you";
+"This applet is gone. Choose another." = "This applet is gone. Choose another.";
+"Touch and hold to choose an applet." = "Touch and hold to choose an applet.";
+"Open applet" = "Open applet";
+"Opens an applet in supermux, full screen." = "Opens an applet in supermux, full screen.";
+"Opens an applet in supermux." = "Opens an applet in supermux.";
+"Choose an applet" = "Choose an applet";
+"The applet this widget shows." = "The applet this widget shows.";

@@ -53,6 +53,7 @@ import androidx.glance.text.TextStyle
 import dev.supermux.android.MainActivity
 import dev.supermux.android.R
 import dev.supermux.net.AppletDto
+import dev.supermux.net.WidgetApplet
 import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.session.AppletWidgets
