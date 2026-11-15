@@ -138,4 +138,5 @@
     <string name="applets_hint_phone">To make a new one, ask any session: “make this an applet”. Long-press an applet for more.</string>
     <string name="applets_window_no_host">This applet's machine isn't paired with this device any more. Pair the machine again, then open the applet from supermux.</string>
     <string name="applets_window_no_key">This applet can't open: its machine didn't give this device a key for it. Check that the machine is online, then open the applet again.</string>
+    <string name="applets_menu_info">Applet info</string>
 </resources>

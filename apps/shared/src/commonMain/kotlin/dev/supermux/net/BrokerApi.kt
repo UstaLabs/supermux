@@ -3400,6 +3400,70 @@ class BrokerApi(
         }
     }
 
+    /** GET /applets/<name>: Applet info. */
+    suspend fun appletDetail(name: String): AppletDetailDto =
+        getJson("$httpBase/applets/${urlEncode(name)}")
+
+    /** One owner call on an applet; the broker's reason when it refuses is the exception's message. */
+    private suspend fun appletCall(resp: HttpResponse): String {
+        val body = resp.bodyAsText()
+        if (!resp.status.isSuccess()) {
+            throw IllegalStateException(
+                runCatching { json.parseToJsonElement(body).jsonObject["error"]?.jsonPrimitive?.contentOrNull }.getOrNull() ?: "HTTP ${resp.status.value}",
+            )
+        }
+        return body
+    }
+
+    /** POST /applets/<name>/jobs/<job>/run: runs it now and waits for its end. */
+    suspend fun runAppletJob(name: String, job: String): AppletJobRunDto =
+        json.decodeFromString(AppletJobRunDto.serializer(), appletCall(http.post("$httpBase/applets/${urlEncode(name)}/jobs/${urlEncode(job)}/run") { authHeader() }))
+
+    /** GET /applets/<name>/jobs/<job>/runs: its last runs, newest first. */
+    suspend fun appletJobRuns(name: String, job: String): List<AppletJobRunDto> =
+        getJson("$httpBase/applets/${urlEncode(name)}/jobs/${urlEncode(job)}/runs")
+
+    /** PUT /applets/<name>/secrets/<secret> (owner only): the value goes to the applet's server and jobs, never back here. */
+    suspend fun setAppletSecret(name: String, secret: String, value: String, expiresAt: String? = null) {
+        appletCall(http.put("$httpBase/applets/${urlEncode(name)}/secrets/${urlEncode(secret)}") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(AppletValueBody.serializer(), AppletValueBody(value, expiresAt)))
+        })
+    }
+
+    suspend fun removeAppletSecret(name: String, secret: String) {
+        appletCall(http.delete("$httpBase/applets/${urlEncode(name)}/secrets/${urlEncode(secret)}") { authHeader() })
+    }
+
+    /** PUT /applets/<name>/settings/<key>: a value for one of the applet's own options. */
+    suspend fun setAppletSetting(name: String, key: String, value: String) {
+        appletCall(http.put("$httpBase/applets/${urlEncode(name)}/settings/${urlEncode(key)}") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(AppletValueBody.serializer(), AppletValueBody(value)))
+        })
+    }
+
+    /** PATCH /applets/<name> {title}: Settings ▸ Name. */
+    suspend fun setAppletTitle(name: String, title: String) {
+        appletCall(http.patch("$httpBase/applets/${urlEncode(name)}") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(AppletTitleBody.serializer(), AppletTitleBody(title)))
+        })
+    }
+
+    /** POST /applets/<name>/stop or /start. */
+    suspend fun setAppletStopped(name: String, stopped: Boolean) {
+        appletCall(http.post("$httpBase/applets/${urlEncode(name)}/${if (stopped) "stop" else "start"}") { authHeader() })
+    }
+
+    /** DELETE /applets/<name> (owner only): gone from every device, kept 30 days. */
+    suspend fun deleteApplet(name: String) {
+        appletCall(http.delete("$httpBase/applets/${urlEncode(name)}") { authHeader() })
+    }
+
     /** GET /proxies */
     suspend fun proxies(): List<ProxyDto> =
         getJson("$httpBase/proxies")

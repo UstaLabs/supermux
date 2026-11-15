@@ -968,7 +968,9 @@ fun SupermuxApp(
                     // #117: the host picker's host's applets (null: none, or this platform can't open them).
                     val appletsHostName = hostViews.firstOrNull { it.recordId == activeHostId }?.displayLabel.orEmpty()
                     val appletsActions = dev.supermux.ui.session.rememberAppletsActions(
-                        fleet, activeHostId, appletsHostName, showAll = remember(ui) { { ui.openApplets() } },
+                        fleet, activeHostId, appletsHostName,
+                        showAll = remember(ui) { { ui.openApplets() } },
+                        info = remember(ui) { { a, tab -> ui.openAppletInfo(a.name, tab) } },
                     )
 
                     // The sidebar, drawn by Home on a wide host and by the Compact list layer.
@@ -1420,6 +1422,24 @@ fun SupermuxApp(
                                                 dev.supermux.ui.session.AppletsScreen(actions, phone = compact, onBack = { ui.goBack() })
                                             } else {
                                                 // The host can't have applets (or isn't connected yet): back to where he was.
+                                                LaunchedEffect(Unit) { ui.goBack() }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            entry<Route.AppletInfo>(
+                                metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
+                            ) { route ->
+                                EscapeBox("applet_info_overlay", onEscape = { ui.goBack() }) {
+                                    HostScopedPage(hostViews, activeHostId, fleet::setActiveHost) {
+                                        key(activeHostId) {
+                                            val actions = appletsActions
+                                            if (actions != null) {
+                                                val info = remember(fleet, actions) { dev.supermux.ui.applets.appletInfoActions(fleet, actions.hostName, actions.open) }
+                                                dev.supermux.ui.applets.AppletInfoScreen(route.name, info, phone = compact, onBack = { ui.goBack() }, initialTab = route.tab)
+                                            } else {
                                                 LaunchedEffect(Unit) { ui.goBack() }
                                             }
                                         }
