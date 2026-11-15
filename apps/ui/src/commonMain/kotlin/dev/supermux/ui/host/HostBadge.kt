@@ -251,7 +251,7 @@ fun HostSwitcher(
             ) {
                 Icon(
                     Icons.Filled.Dns,
-                    contentDescription = current?.displayLabel.localizedHost() ?: allHosts,
+                    contentDescription = current?.displayLabel?.localizedHost() ?: allHosts,
                     tint = cs.onSurfaceVariant,
                     modifier = Modifier.size(16.dp),
                 )
@@ -283,7 +283,7 @@ fun HostSwitcher(
                 Icon(Icons.Filled.Dns, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(14.dp))
             }
             Text(
-                current?.displayLabel.localizedHost() ?: allHosts,
+                current?.displayLabel?.localizedHost() ?: allHosts,
                 modifier = Modifier.weight(1f, fill = false),
                 color = if (current == null || current.online) cs.onSurface else cs.onSurfaceVariant.copy(alpha = 0.7f),
                 fontSize = 12.sp,

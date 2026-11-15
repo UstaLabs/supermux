@@ -58,7 +58,7 @@ fun fleetFacts(
     val remote = hosts.firstOrNull { it.recordId != localRecordId && it.recordId !in loopbackRecordIds }
     return FleetFacts(
         localSessions = count,
-        remoteName = remote?.displayLabel.localizedHost(),
+        remoteName = remote?.displayLabel?.localizedHost(),
         remoteReachable = remote?.online ?: true,
     )
 }
