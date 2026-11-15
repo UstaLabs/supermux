@@ -1517,6 +1517,15 @@ data class PrCreateResult(val status: String = "unavailable", val url: String? =
 @Serializable
 data class PrText(val title: String = "", val body: String = "", val by: String = "commits")
 
+/** POST …/git/publish-new: the new repo's URL, or why not (bad | no_cli | not_authed | error). */
+@Serializable
+data class PublishNewResult(val ok: Boolean = false, val url: String? = null, val reason: String? = null, val message: String? = null)
+
+@Serializable
+internal data class RemoteBody(val name: String, val url: String)
+@Serializable
+internal data class PublishNewBody(val forge: String, val visibility: String, val name: String? = null)
+
 @Serializable
 data class PrCheckLog(val ok: Boolean = false, val log: String? = null, val reason: String? = null, val message: String? = null)
 
@@ -3458,6 +3467,14 @@ class BrokerApi(
     /** POST /<sessions|workspaces>/<id>/git/pr/text: the title and description for the Create form. */
     suspend fun gitPrText(scope: String, id: String, target: String?): PrText =
         answer("$httpBase/$scope/$id/git/pr/text", json.encodeToString(PrTextBody(target))) { PrText() }
+
+    /** POST /<sessions|workspaces>/<id>/git/remote: add a remote (reason exists | bad on a refusal). */
+    suspend fun gitAddRemote(scope: String, id: String, name: String, url: String): GitWriteResult =
+        answer("$httpBase/$scope/$id/git/remote", json.encodeToString(RemoteBody(name, url))) { GitWriteResult(reason = "failed", message = it) }
+
+    /** POST /<sessions|workspaces>/<id>/git/publish-new: create the repo on GitHub / GitLab from this folder and push. */
+    suspend fun gitPublishNew(scope: String, id: String, forge: String, visibility: String, name: String? = null): PublishNewResult =
+        answer("$httpBase/$scope/$id/git/publish-new", json.encodeToString(PublishNewBody(forge, visibility, name))) { PublishNewResult(message = it) }
 
     /** GET /<sessions|workspaces>/<id>/git/pr/check-log?url=: a failing check's log tail. */
     suspend fun gitPrCheckLog(scope: String, id: String, checkUrl: String): PrCheckLog =

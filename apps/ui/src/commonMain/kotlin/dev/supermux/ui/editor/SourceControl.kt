@@ -52,6 +52,7 @@ import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Refresh
@@ -151,8 +152,8 @@ sealed interface ScmAsk {
     data object MergeInto : ScmAsk
     /** Switch this chat to [branch]? (what moves with it is said) */
     data class Switch(val branch: String) : ScmAsk
-    /** + Create new branch: its name. */
-    data object NewBranch : ScmAsk
+    /** VS Code's Publish Branch with no remote: Publish to GitHub (private / public), GitLab, or Add Remote…. */
+    data object NoRemote : ScmAsk
 }
 
 /** VS Code's Commit ▾: what the button does after committing (postCommitCommands). */
@@ -209,7 +210,6 @@ class SourceControlState(val api: SourceControlApi) {
     var picking by mutableStateOf(false)
     var pickFilter by mutableStateOf("")
     var branches by mutableStateOf<dev.supermux.net.GitBranches?>(null)
-    var newBranch by mutableStateOf("")
     /** A switch refused because another chat has the branch: that chat (id, name), for "Open that chat". */
     var heldBy by mutableStateOf<Pair<String, String>?>(null)
     private var prefsRead = false
@@ -281,8 +281,9 @@ class SourceControlState(val api: SourceControlApi) {
         refresh()
     }
 
-    /** Pull / push / publish / fetch, with VS Code's outcome in the note line. */
+    /** Pull / push / publish / fetch, with VS Code's outcome in the note line. With no remote, Publish asks where to. */
     suspend fun sync(op: String) {
+        if ((op == "publish" || op == "push") && status?.hasRemote == false) { ask = ScmAsk.NoRemote; return }
         busy = true
         val r = api.sync(op)
         busy = false
@@ -292,6 +293,37 @@ class SourceControlState(val api: SourceControlApi) {
             r.status == "conflict" -> localized(Str.scm_conflict_first, r.files.joinToString(", "))
             else -> localized(Str.scm_failed, r.message ?: r.status)
         }
+    }
+
+    /** VS Code's "Publish to GitHub": the repo is made from this folder (named after it) and the branch pushed. */
+    suspend fun publishTo(forge: String, visibility: String) {
+        busy = true; note = null
+        val r = api.publishNew(forge, visibility)
+        busy = false
+        when {
+            r == null -> problem = localized(Str.scm_offline)
+            r.ok -> { ask = null; problem = null; note = localized(Str.scm_published_to, r.url.orEmpty()) }
+            r.reason == "no_cli" -> problem = localized(Str.scm_pr_no_cli)
+            r.reason == "not_authed" -> problem = localized(Str.scm_pr_not_authed)
+            else -> problem = localized(Str.scm_failed, r.message ?: r.reason ?: "")
+        }
+        refresh()
+    }
+
+    var remoteUrl by mutableStateOf("")
+
+    /** Add Remote…: origin at the URL given; then Publish pushes there. */
+    suspend fun addRemote() {
+        val url = remoteUrl.trim()
+        if (url.isEmpty()) return
+        val r = api.addRemote("origin", url)
+        when {
+            r == null -> problem = localized(Str.scm_offline)
+            r.ok -> { ask = null; problem = null; remoteUrl = ""; refresh(); sync("publish") }
+            r.reason == "exists" -> problem = localized(Str.scm_remote_exists)
+            else -> problem = localized(Str.scm_failed, r.message ?: r.reason ?: "")
+        }
+        refresh()
     }
 
     suspend fun answerSmart(choice: String) {
@@ -632,7 +664,7 @@ private fun CommitBox(state: SourceControlState, scope: kotlinx.coroutines.Corou
         // Nothing to commit: the button publishes or syncs instead, as VS Code's does.
         val st = state.status
         val idle = !state.merging && !state.amend && state.changedCount == 0
-        val publish = idle && st != null && st.hasRemote && st.upstream == null && state.last != null
+        val publish = idle && st != null && st.upstream == null && state.last != null
         val syncN = idle && st != null && st.upstream != null && (st.ahead > 0 || st.behind > 0)
         val label = when {
             state.merging -> localized(Str.scm_continue)
@@ -709,7 +741,7 @@ private fun WhereLine(state: SourceControlState, scope: kotlinx.coroutines.Corou
         }
         Text(" · ", fontSize = 12.sp, color = cs.onSurfaceVariant)
         val (text, op) = when {
-            !st.hasRemote -> localized(Str.scm_sync_local) to null
+            !st.hasRemote -> localized(Str.scm_sync_local_publish) to "publish"
             st.upstream == null -> localized(Str.scm_sync_unpublished) to "publish"
             st.ahead > 0 || st.behind > 0 -> localized(Str.scm_sync_counts, listOfNotNull(st.ahead.takeIf { it > 0 }?.let { "$it↑" }, st.behind.takeIf { it > 0 }?.let { "$it↓" }).joinToString(" ")) to "sync"
             else -> localized(Str.scm_sync_in) to null
@@ -760,6 +792,7 @@ private fun Banners(state: SourceControlState, scope: kotlinx.coroutines.Corouti
             Text(text, fontSize = 12.sp, color = if (o?.status == "integrated" || job.status == "running") cs.onSurfaceVariant else cs.error, modifier = Modifier.padding(bottom = 8.dp).testTag("scm_merge_job"))
             if (o?.status == "non_ff") Text(localized(Str.scm_get_latest, state.base ?: ""), fontSize = 12.sp, color = cs.primary, modifier = Modifier.padding(bottom = 8.dp).clickable { scope.launch { state.getLatest() } })
         }
+        if (state.ask == ScmAsk.NoRemote) NoRemoteBox(state, scope)
         if (state.ask == ScmAsk.MergeInto) {
             AskBox(
                 question = localizedPlural(Plurals.scm_merge_into_q, state.ownCommits, state.ownCommits, state.base ?: ""),
@@ -782,15 +815,37 @@ private fun BranchPicker(state: SourceControlState, scope: kotlinx.coroutines.Co
         Modifier.padding(horizontal = 12.dp).padding(bottom = 10.dp).fillMaxWidth().clip(RoundedCornerShape(8.dp))
             .background(cs.surfaceContainerHighest).border(1.dp, cs.outlineVariant, RoundedCornerShape(8.dp)).padding(8.dp).testTag("scm_picker"),
     ) {
+        // The filter is also the new branch's name: typed text that matches no branch offers to create it (VS Code).
+        val typed = state.pickFilter.trim().replace(' ', '-')
+        val exists = b != null && (b.local.any { it.name == typed } || b.remote.any { it.name == typed })
+        val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+        LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
         androidx.compose.foundation.text.BasicTextField(
             value = state.pickFilter, onValueChange = { state.pickFilter = it },
             textStyle = androidx.compose.ui.text.TextStyle(color = cs.onSurface, fontSize = 12.5.sp, fontFamily = MonoFontFamily),
             cursorBrush = androidx.compose.ui.graphics.SolidColor(cs.primary), singleLine = true,
             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(cs.surfaceContainerLow)
-                .border(1.dp, cs.primary, RoundedCornerShape(6.dp)).padding(horizontal = 8.dp, vertical = 6.dp).testTag("scm_picker_filter"),
+                .border(1.dp, cs.primary, RoundedCornerShape(6.dp)).padding(horizontal = 8.dp, vertical = 6.dp)
+                .focusRequester(focus)
+                .onPreviewKeyEvent { e ->
+                    if (e.type != androidx.compose.ui.input.key.KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                    when (e.key) {
+                        androidx.compose.ui.input.key.Key.Enter -> {
+                            if (typed.isNotEmpty()) { if (exists) state.ask = ScmAsk.Switch(typed) else scope.launch { state.switchTo(typed, create = true) } }
+                            true
+                        }
+                        androidx.compose.ui.input.key.Key.Escape -> { state.picking = false; true }
+                        else -> false
+                    }
+                }
+                .testTag("scm_picker_filter"),
             decorationBox = { inner -> if (state.pickFilter.isEmpty()) Text(localized(Str.scm_picker_placeholder), fontSize = 12.5.sp, color = cs.onSurfaceVariant); inner() },
         )
-        PickRow(localized(Str.scm_create_branch), null, null, "scm_pick_create") { state.newBranch = ""; state.ask = ScmAsk.NewBranch }
+        if (typed.isNotEmpty() && !exists) {
+            PickRow(localized(Str.scm_create_branch_named, typed), null, null, "scm_pick_create") { scope.launch { state.switchTo(typed, create = true) } }
+        } else if (typed.isEmpty()) {
+            PickRow(localized(Str.scm_create_branch), null, null, "scm_pick_create") { runCatching { focus.requestFocus() } }
+        }
         androidx.compose.material3.HorizontalDivider(Modifier.padding(vertical = 3.dp))
         if (b == null) { Text(localized(Str.scm_loading), fontSize = 12.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(8.dp)); return@Column }
         b.local.filter { q.isEmpty() || it.name.lowercase().contains(q) }.forEach { br ->
@@ -818,30 +873,6 @@ private fun BranchPicker(state: SourceControlState, scope: kotlinx.coroutines.Co
             confirm = localized(Str.scm_switch_go, a.branch), onConfirm = { scope.launch { state.switchTo(a.branch, create = false) } },
             onCancel = { state.ask = null }, tag = "scm_ask_switch", danger = false, start = 12.dp,
         )
-        ScmAsk.NewBranch -> Column(
-            Modifier.padding(horizontal = 12.dp).padding(bottom = 10.dp).fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                .background(cs.surfaceContainerHighest).border(1.dp, cs.outlineVariant, RoundedCornerShape(8.dp)).padding(10.dp).testTag("scm_new_branch"),
-        ) {
-            Text(localized(Str.scm_create_branch_title), fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface)
-            androidx.compose.foundation.text.BasicTextField(
-                value = state.newBranch, onValueChange = { state.newBranch = it.replace(' ', '-') }, singleLine = true,
-                textStyle = androidx.compose.ui.text.TextStyle(color = cs.onSurface, fontSize = 12.5.sp, fontFamily = MonoFontFamily),
-                cursorBrush = androidx.compose.ui.graphics.SolidColor(cs.primary),
-                modifier = Modifier.padding(top = 7.dp).fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(cs.surfaceContainerLow)
-                    .border(1.dp, cs.primary, RoundedCornerShape(6.dp)).padding(horizontal = 8.dp, vertical = 6.dp)
-                    .onPreviewKeyEvent { e -> if (e.type == androidx.compose.ui.input.key.KeyEventType.KeyDown && e.key == androidx.compose.ui.input.key.Key.Enter && state.newBranch.isNotBlank()) { scope.launch { state.switchTo(state.newBranch.trim(), create = true) }; true } else false }
-                    .testTag("scm_new_branch_name"),
-                decorationBox = { inner -> if (state.newBranch.isEmpty()) Text(localized(Str.scm_branch_name), fontSize = 12.5.sp, color = cs.onSurfaceVariant); inner() },
-            )
-            Text(localized(Str.scm_new_branch_body, state.base ?: ""), fontSize = 12.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
-            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(localized(Str.scm_create_branch_go), fontSize = 12.5.sp, fontWeight = FontWeight.Medium, color = cs.onPrimary,
-                    modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(cs.primary).clickable(enabled = state.newBranch.isNotBlank()) { scope.launch { state.switchTo(state.newBranch.trim(), create = true) } }
-                        .padding(horizontal = 12.dp, vertical = 4.dp).testTag("scm_new_branch_go"))
-                Text(localized(Str.scm_cancel), fontSize = 12.5.sp, color = cs.onSurfaceVariant,
-                    modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable { state.ask = null }.padding(horizontal = 12.dp, vertical = 4.dp))
-            }
-        }
         else -> Unit
     }
     state.heldBy?.let { (id, name) ->
@@ -1132,6 +1163,47 @@ private fun Lane(color: Color, filled: Boolean) {
         Box(Modifier.align(Alignment.Center).width(2.dp).fillMaxHeight().background(line))
         Box(Modifier.align(Alignment.Center).size(9.dp).clip(androidx.compose.foundation.shape.CircleShape).background(if (filled) color else MaterialTheme.colorScheme.surfaceContainer)
             .border(2.dp, color, androidx.compose.foundation.shape.CircleShape))
+    }
+}
+
+/** VS Code's Publish Branch for a project with no remote: GitHub (private / public), GitLab, or a remote by its URL. */
+@Composable
+private fun NoRemoteBox(state: SourceControlState, scope: kotlinx.coroutines.CoroutineScope) {
+    val cs = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(8.dp)
+    Row(Modifier.padding(bottom = 8.dp).fillMaxWidth().clip(shape).background(cs.surfaceContainerHighest).border(1.dp, cs.outlineVariant, shape).height(IntrinsicSize.Min).testTag("scm_no_remote")) {
+        Box(Modifier.width(2.dp).fillMaxHeight().background(cs.primary))
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 9.dp)) {
+            Text(localized(Str.scm_no_remote_q), fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface)
+            Text(localized(Str.scm_no_remote_body), fontSize = 12.5.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
+            val btn = { label: String, primary: Boolean, tag: String, on: () -> Unit ->
+                @Composable {
+                    Text(label, fontSize = 12.5.sp, fontWeight = if (primary) FontWeight.Medium else null, color = if (primary) cs.onPrimary else cs.onSurface,
+                        modifier = Modifier.padding(top = 6.dp).clip(RoundedCornerShape(6.dp)).background(if (primary) cs.primary else cs.surfaceContainerHigh)
+                            .border(1.dp, if (primary) cs.primary else cs.outlineVariant, RoundedCornerShape(6.dp)).clickable(enabled = !state.busy, onClick = on)
+                            .padding(horizontal = 12.dp, vertical = 4.dp).testTag(tag))
+                }
+            }
+            Column(Modifier.padding(top = 4.dp)) {
+                btn(localized(Str.scm_publish_github_private), true, "scm_publish_github_private") { scope.launch { state.publishTo("github", "private") } }()
+                btn(localized(Str.scm_publish_github_public), false, "scm_publish_github_public") { scope.launch { state.publishTo("github", "public") } }()
+                btn(localized(Str.scm_publish_gitlab), false, "scm_publish_gitlab") { scope.launch { state.publishTo("gitlab", "private") } }()
+            }
+            Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                androidx.compose.foundation.text.BasicTextField(
+                    value = state.remoteUrl, onValueChange = { state.remoteUrl = it }, singleLine = true,
+                    textStyle = androidx.compose.ui.text.TextStyle(color = cs.onSurface, fontSize = 12.sp, fontFamily = MonoFontFamily),
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(cs.primary),
+                    modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(cs.surfaceContainerLow).border(1.dp, cs.outlineVariant, RoundedCornerShape(6.dp))
+                        .padding(horizontal = 8.dp, vertical = 5.dp).testTag("scm_remote_url"),
+                    decorationBox = { inner -> if (state.remoteUrl.isEmpty()) Text(localized(Str.scm_remote_url), fontSize = 12.sp, color = cs.onSurfaceVariant, maxLines = 1); inner() },
+                )
+                Text(localized(Str.scm_add_remote), fontSize = 12.5.sp, color = cs.onSurface,
+                    modifier = Modifier.padding(start = 6.dp).clip(RoundedCornerShape(6.dp)).background(cs.surfaceContainerHigh).border(1.dp, cs.outlineVariant, RoundedCornerShape(6.dp))
+                        .clickable(enabled = state.remoteUrl.isNotBlank()) { scope.launch { state.addRemote() } }.padding(horizontal = 12.dp, vertical = 4.dp).testTag("scm_add_remote"))
+            }
+            Text(localized(Str.scm_cancel), fontSize = 12.5.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp).clickable { state.ask = null })
+        }
     }
 }
 

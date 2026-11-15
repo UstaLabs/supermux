@@ -171,20 +171,16 @@
         <item quantity="one">%1$d commit %2$s dalına birleştirilsin mi?</item>
         <item quantity="other">%1$d commit %2$s dalına birleştirilsin mi?</item>
     </plurals>
-    <string name="scm_branch_name">Dal adı</string>
     <string name="scm_create_branch">+ Yeni dal oluştur…</string>
-    <string name="scm_create_branch_go">Dal Oluştur</string>
-    <string name="scm_create_branch_title">Dal Oluştur</string>
     <string name="scm_default_branch">varsayılan dal</string>
     <string name="scm_loading">Yükleniyor…</string>
     <string name="scm_local_branch">yerel dal</string>
-    <string name="scm_new_branch_body">Bu sohbet yeni dala geçer; ajan ve %1$s dalına birleştirme bundan sonra onu kullanır.</string>
     <string name="scm_open_elsewhere">başka bir klasörde açık</string>
     <string name="scm_open_in_chat">“%1$s” sohbetinde açık</string>
     <string name="scm_open_in_folder">klasörünüzde açık</string>
     <string name="scm_open_that_chat">O sohbeti aç</string>
     <string name="scm_open_this_chat">bu sohbet</string>
-    <string name="scm_picker_placeholder">Kullanıma alınacak dalı seçin</string>
+    <string name="scm_picker_placeholder">Bir dal seçin ya da yenisinin adını yazın</string>
     <string name="scm_remote_branch">uzak dal</string>
     <string name="scm_switch_body">Bundan sonra ajan %1$s üzerinde çalışır ve %2$s dalına birleştirme %1$s dalını birleştirir.</string>
     <string name="scm_switch_carry">Commit edilmemiş değişiklikleriniz de gelir.</string>
@@ -266,4 +262,16 @@
         <item quantity="one">İnceleme yorumları · %1$d</item>
         <item quantity="other">İnceleme yorumları · %1$d</item>
     </plurals>
+    <string name="scm_create_branch_named">+ '%1$s' dalını oluştur</string>
+    <string name="scm_published_to">%1$s adresine yayımlandı.</string>
+    <string name="scm_remote_exists">Bu projenin zaten origin adlı bir uzak deposu var.</string>
+    <string name="scm_sync_local_publish">yalnızca yerel · Yayımla…</string>
+    <string name="scm_no_remote_q">Bu projeyi yayımla</string>
+    <string name="scm_no_remote_body">Henüz bir uzak deposu yok. GitHub ya da GitLab üzerinde (klasörünün adıyla) yayımlayın veya adresiyle bir tane ekleyin.</string>
+    <string name="scm_publish_github_private">GitHub'da yayımla (özel)</string>
+    <string name="scm_publish_github_public">GitHub'da yayımla (herkese açık)</string>
+    <string name="scm_publish_gitlab">GitLab'da yayımla (özel)</string>
+    <string name="scm_add_remote">Uzak Depo Ekle</string>
+    <string name="scm_remote_url">Uzak depo adresi, örn. git@github.com:siz/depo.git</string>
+    <string name="scm_sync_failed_short">Eşitleme olmadı</string>
 </resources>

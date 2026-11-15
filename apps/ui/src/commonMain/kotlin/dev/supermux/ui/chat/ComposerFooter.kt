@@ -14,6 +14,8 @@
 // the tree holds nothing. It opens Changes; Fetch/Pull/Push are in the chat's ⋮ menu.
 package dev.supermux.ui.chat
 
+import androidx.compose.material3.PlainTooltip
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material.icons.automirrored.filled.CallMerge
 import dev.supermux.ui.i18n.Plurals
@@ -156,6 +158,8 @@ fun ComposerFooter(
         val git = session.git
         if (git != null) {
             var syncing by remember { mutableStateOf(false) }
+            // A failed sync is never silent: the chip says so (hover: why) until the next try.
+            var failed by remember(session.id) { mutableStateOf<String?>(null) }
             // An older broker sends no branch: a plain checkout's compareRef is its upstream ("origin/main") once published.
             val branch = git.branch ?: session.session_branch
                 ?: git.compareRef.takeIf { git.mode == "remote" }?.let { if (git.unpublished == true) it else it.substringAfter('/') } // platform-ok: a git ref name
@@ -180,16 +184,26 @@ fun ComposerFooter(
                         icon = { tint -> Icon(if (published) Icons.Filled.Sync else Icons.Filled.CloudUpload, null, tint = tint, modifier = Modifier.size(12.dp)) },
                         label = when {
                             syncing -> "…"
+                            failed != null -> localized(Str.scm_sync_failed_short)
                             !published -> localized(Str.scm_publish_short)
                             else -> listOfNotNull(behind.takeIf { it > 0 }?.let { "$it↓" }, ahead.takeIf { it > 0 }?.let { "$it↑" }).joinToString(" ")
                         },
                         trailingChevron = false,
                         tag = "footer_git_sync",
+                        hint = failed,
+                        error = failed != null,
                         onClick = {
-                            if (!syncing) scope.launch {
-                                syncing = true
-                                if (!published) onGitSync("publish") else { onGitSync("pull"); onGitSync("push") }
-                                syncing = false
+                            when {
+                                syncing -> Unit
+                                // No remote: Source Control asks where to publish (GitHub, GitLab, a URL), as VS Code does.
+                                failed != null || git.hasRemote == false -> { failed = null; onOpenChanges?.invoke() }
+                                else -> scope.launch {
+                                    syncing = true
+                                    val ok = { r: dev.supermux.net.GitOpResult? -> r != null && r.status in setOf("pushed", "up_to_date", "clean", "ok", "") }
+                                    val r = if (!published) onGitSync("publish") else onGitSync("pull").takeIf { !ok(it) } ?: onGitSync("push")
+                                    failed = if (ok(r)) null else localized(Str.scm_failed, r?.message ?: r?.status ?: localized(Str.scm_offline))
+                                    syncing = false
+                                }
                             }
                         },
                     )
@@ -240,9 +254,14 @@ private fun FooterChip(
     trailingChevron: Boolean,
     tag: String,
     onClick: (() -> Unit)?,
+    /** #72: shown on hover (why a sync failed). */
+    hint: String? = null,
+    /** #72: the chip says something went wrong. */
+    error: Boolean = false,
 ) {
     val cs = MaterialTheme.colorScheme
-    Row(
+    val tone = if (error) cs.error else cs.onSurfaceVariant
+    val chip: @Composable () -> Unit = { Row(
         Modifier
             .clip(RoundedCornerShape(Radii.pill))
             .then(
@@ -254,11 +273,11 @@ private fun FooterChip(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
-        icon(cs.onSurfaceVariant)
+        icon(tone)
         Text(
             label,
             fontSize = 11.sp,
-            color = cs.onSurfaceVariant,
+            color = tone,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f, fill = false),
@@ -271,5 +290,18 @@ private fun FooterChip(
                 modifier = Modifier.size(12.dp),
             )
         }
-    }
+    } }
+    if (hint == null) chip() else FooterHint(hint, chip)
+}
+
+/** #72: why a footer chip says something went wrong, on hover. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun FooterHint(text: String, content: @Composable () -> Unit) {
+    androidx.compose.material3.TooltipBox(
+        positionProvider = androidx.compose.material3.TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        tooltip = { PlainTooltip(modifier = Modifier.widthIn(max = 320.dp)) { Text(text, fontSize = 12.sp) } },
+        state = androidx.compose.material3.rememberTooltipState(),
+        content = content,
+    )
 }

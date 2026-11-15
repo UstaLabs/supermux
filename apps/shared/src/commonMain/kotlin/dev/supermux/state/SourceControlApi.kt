@@ -109,6 +109,11 @@ class SourceControlApi(
     suspend fun savePrefs(postCommit: String? = null, smartCommit: String? = null): Boolean =
         call("savePrefs") { api.saveGitPrefs(postCommit, smartCommit); true } ?: false
 
+    suspend fun addRemote(name: String, url: String): GitWriteResult? = call("addRemote") { api.gitAddRemote(ws, workspaceId, name, url) }
+
+    suspend fun publishNew(forge: String, visibility: String, name: String? = null): dev.supermux.net.PublishNewResult? =
+        call("publishNew") { api.gitPublishNew(ws, workspaceId, forge, visibility, name) }
+
     /** "Ask the agent to fix" / "Send to the agent": a message to the chat's agent. */
     suspend fun tellAgent(text: String): Boolean = sessionId?.let { s -> call("tellAgent") { api.sendMessage(s, text); true } } ?: false
 }

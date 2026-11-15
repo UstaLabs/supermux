@@ -171,20 +171,16 @@
         <item quantity="one">Merge %1$d commit into %2$s?</item>
         <item quantity="other">Merge %1$d commits into %2$s?</item>
     </plurals>
-    <string name="scm_branch_name">Branch name</string>
     <string name="scm_create_branch">+ Create new branch…</string>
-    <string name="scm_create_branch_go">Create Branch</string>
-    <string name="scm_create_branch_title">Create Branch</string>
     <string name="scm_default_branch">default branch</string>
     <string name="scm_loading">Loading…</string>
     <string name="scm_local_branch">local branch</string>
-    <string name="scm_new_branch_body">This chat moves to the new branch; the agent and Merge into %1$s then use it.</string>
     <string name="scm_open_elsewhere">open in another folder</string>
     <string name="scm_open_in_chat">open in chat “%1$s”</string>
     <string name="scm_open_in_folder">open in your folder</string>
     <string name="scm_open_that_chat">Open that chat</string>
     <string name="scm_open_this_chat">this chat</string>
-    <string name="scm_picker_placeholder">Select a branch to checkout</string>
+    <string name="scm_picker_placeholder">Select a branch, or type a new one</string>
     <string name="scm_remote_branch">remote branch</string>
     <string name="scm_switch_body">From now on the agent works on %1$s, and Merge into %2$s merges %1$s.</string>
     <string name="scm_switch_carry">Your uncommitted changes come along.</string>
@@ -266,4 +262,16 @@
         <item quantity="one">Review comments · %1$d</item>
         <item quantity="other">Review comments · %1$d</item>
     </plurals>
+    <string name="scm_create_branch_named">+ Create branch '%1$s'</string>
+    <string name="scm_published_to">Published to %1$s.</string>
+    <string name="scm_remote_exists">This project already has a remote named origin.</string>
+    <string name="scm_sync_local_publish">local only · Publish…</string>
+    <string name="scm_no_remote_q">Publish this project</string>
+    <string name="scm_no_remote_body">It has no remote yet. Publish it to GitHub or GitLab (named after its folder), or add one by its URL.</string>
+    <string name="scm_publish_github_private">Publish to GitHub (private)</string>
+    <string name="scm_publish_github_public">Publish to GitHub (public)</string>
+    <string name="scm_publish_gitlab">Publish to GitLab (private)</string>
+    <string name="scm_add_remote">Add Remote</string>
+    <string name="scm_remote_url">Remote URL, e.g. git@github.com:you/repo.git</string>
+    <string name="scm_sync_failed_short">Sync didn't work</string>
 </resources>
