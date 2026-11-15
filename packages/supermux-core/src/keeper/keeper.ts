@@ -70,6 +70,15 @@ function deadlineReply(shape: FrameShape, id: string | number): string {
 /** Whether [pid] is a live process: the platform's rule, where EPERM (someone else's live process) is alive. */
 const alive = (pid: number): boolean => proc.isAlive(pid)
 
+/** The slice of bun:ffi the subreaper uses (typed here: Node's types, which this package checks with, lack it). */
+type BunFfi = {
+  dlopen: (lib: string, symbols: Record<string, { args: unknown[]; returns: unknown }>) => {
+    symbols: { prctl: (option: number, a2: number, a3: number, a4: number, a5: number) => number; waitpid: (pid: number, status: unknown, options: number) => number }
+  }
+  FFIType: Record<'i32' | 'u64' | 'ptr', unknown>
+  ptr: (view: ArrayBufferView) => unknown
+}
+
 /**
  * prctl(PR_SET_CHILD_SUBREAPER, 1) on Linux, and the reaping that comes with it: orphans re-parented here must be
  * waited for when they exit, or they stay zombies for the keeper's whole life. Bun waits only for children it spawned
@@ -80,7 +89,9 @@ const alive = (pid: number): boolean => proc.isAlive(pid)
 export async function becomeChildSubreaper(isAgent: (pid: number) => boolean, everyMs = 60_000): Promise<() => number> {
   if (host.os() !== 'linux') return () => 0
   try {
-    const { dlopen, FFIType, ptr } = await import('bun:ffi')
+    // Through a variable: this package typechecks with Node's types only, which have no 'bun:ffi' (a Bun builtin).
+    const ffiModule = 'bun:ffi'
+    const { dlopen, FFIType, ptr } = (await import(ffiModule)) as BunFfi
     const libc = dlopen('libc.so.6', {
       prctl: { args: [FFIType.i32, FFIType.u64, FFIType.u64, FFIType.u64, FFIType.u64], returns: FFIType.i32 },
       waitpid: { args: [FFIType.i32, FFIType.ptr, FFIType.i32], returns: FFIType.i32 },
