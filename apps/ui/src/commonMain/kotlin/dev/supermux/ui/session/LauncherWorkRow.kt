@@ -1004,8 +1004,9 @@ private class ArgStyles(val code: SpanStyle, val bold: SpanStyle, val tag: SpanS
 private fun argStyles(): ArgStyles {
     val cs = MaterialTheme.colorScheme
     return ArgStyles(
-        // The prototype's <code>: mono in the words' own colour; only <b><code> is the brighter, heavier one.
-        code = SpanStyle(fontFamily = MonoFontFamily, fontSize = 12.5.sp),
+        // The prototype's <code> (launcher.css: `font: 400 12.5px mono`): regular weight even in bold words, in the
+        // words' own colour; <b><code> only takes the brighter colour.
+        code = SpanStyle(fontFamily = MonoFontFamily, fontSize = 12.5.sp, fontWeight = FontWeight.Normal),
         bold = SpanStyle(color = cs.onSurface, fontWeight = FontWeight.Medium),
         tag = SpanStyle(fontSize = 10.5.sp, color = cs.onSurfaceVariant, background = cs.surfaceContainerHighest),
         link = SpanStyle(color = cs.primary),
@@ -1030,7 +1031,7 @@ private fun styledText(st: ArgStyles, template: String, vararg args: Arg): Annot
                 is Arg.Link -> withStyle(st.link) { append(a.text) }
                 is Arg.Bold -> withStyle(st.bold) { append(a.text) }
                 is Arg.Code -> withStyle(code) { append(a.text) }
-                is Arg.CodeBold -> withStyle(code.merge(st.bold)) { append(a.text) }
+                is Arg.CodeBold -> withStyle(code.copy(color = st.bold.color)) { append(a.text) }
                 is Arg.CodeTagged -> {
                     withStyle(code) { append(a.text) }
                     append(" ")
