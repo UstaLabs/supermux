@@ -2,6 +2,14 @@ package dev.supermux.ui.session
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.test.click
+import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assert
@@ -1208,6 +1216,49 @@ class SessionLauncherScreenTest {
         onNodeWithTag("launcher_submit").performClick()
         waitForIdle()
         assertEquals(listOf<SessionSourceBody?>(SessionSourceBody(kind = "pr", number = 123)), sent)
+    }
+
+    // ── #152: the row under the composer, measured against the prototype's launcher.css ──────────────────
+
+    /** The prototype's tokens: `.ln-where` 12 px under the card, flush with it; `.ln-sum` 10 px under the pills, 2 px in,
+     *  a 16 px icon column and an 8 px gap before the words, 18 px lines 4 px apart. */
+    private fun ComposeUiTest.rowSitsAsThePrototype(pillHeight: Float) {
+        val card = onNodeWithTag("launcher_composer_card").getUnclippedBoundsInRoot()
+        val pill = onNodeWithTag(WorkRowTags.WORK_IN).getUnclippedBoundsInRoot()
+        val sum = onNodeWithTag(WorkRowTags.SUMMARY).getUnclippedBoundsInRoot()
+        val lines = onAllNodes(
+            hasAnyAncestor(hasTestTag(WorkRowTags.SUMMARY)) and SemanticsMatcher.keyIsDefined(SemanticsProperties.Text),
+            useUnmergedTree = true,
+        ).fetchSemanticsNodes().map { it.boundsInRoot }
+        fun near(expected: Float, actual: Float, what: String) =
+            kotlin.test.assertTrue(kotlin.math.abs(expected - actual) <= 0.5f, "$what: expected $expected dp, was $actual dp")
+        val d = density.density
+        near(0f, (pill.left - card.left).value, "pills flush with the card")
+        near(12f, (pill.top - card.bottom).value, "card → pills")
+        near(pillHeight, (pill.bottom - pill.top).value, "pill height")
+        near(10f, (sum.top - pill.bottom).value, "pills → summary")
+        near(26f, lines[0].left / d - card.left.value, "summary words from the card's edge")
+        near(22f, (lines[1].top - lines[0].top) / d, "summary line pitch")
+    }
+
+    @Test fun the_row_and_its_lines_sit_where_the_prototype_puts_them() = runComposeUiTest {
+        pointerContent {
+            Harness(draft = LauncherDraft(workdir = "/proj/x"), repoInfo = repo, projectPrefs = ProjectPrefs("local", "ahmet/"), branches = storefront, folder = clean)
+        }
+        waitForIdle()
+        rowSitsAsThePrototype(pillHeight = 34f)
+        // The row is drawn 4 dp above its slot in the column; a click on the pill's top edge still opens its menu.
+        onNodeWithTag(WorkRowTags.WORK_IN).performMouseInput { click(Offset(width / 2f, 2f)) }
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.POPOVER).assertExists()
+    }
+
+    @Test fun on_a_phone_the_row_sits_the_same_with_taller_pills() = runComposeUiTest {
+        touchContent {
+            Harness(draft = LauncherDraft(workdir = "/proj/x"), repoInfo = repo, projectPrefs = ProjectPrefs("local", "ahmet/"), branches = storefront, folder = clean)
+        }
+        waitForIdle()
+        rowSitsAsThePrototype(pillHeight = 40f)
     }
 
     // ── #152 C4: #72's "Check Out Pull Request…" opens the launcher on a project with a PR's number ────────

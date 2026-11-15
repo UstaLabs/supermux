@@ -102,6 +102,7 @@ import dev.supermux.ui.retain.rememberRetainedScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.key.key
@@ -201,6 +202,17 @@ fun shouldResetModelOnAgentChange(lastSeen: String?, current: String, restoring:
  * pane doesn't leave a thin ribbon of fields on ultra-wide layouts (a no-op on a phone).
  */
 private val LAUNCHER_MAX_WIDTH = 720.dp
+
+/**
+ * #152: the row under the composer sits 12 dp under the card, as the prototype's `.ln-where`. The launcher's column
+ * spaces its children by [Space.lg], so the row takes the difference back, in its layout as well as its drawing.
+ * Nothing clips there, so the part above its slot still takes clicks.
+ */
+private fun Modifier.underTheComposer(): Modifier = layout { measurable, constraints ->
+    val placeable = measurable.measure(constraints)
+    val back = (Space.lg - Space.md).roundToPx()
+    layout(placeable.width, (placeable.height - back).coerceAtLeast(0)) { placeable.place(0, -back) }
+}
 
 /**
  * The New-Session launcher. Broker access is injected through [actions] (cluster F1) — no store ref
@@ -1159,7 +1171,8 @@ fun SessionLauncherScreen(
                         // The install panel brings its own heading; the project name alone stays.
                         if (!needsAgentInstall) {
                             Text(localized(Str.launch_title), color = cs.onSurface, fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
-                            Spacer(Modifier.height(Space.xs))
+                            // #152's prototype: 26 dp from the title's baseline to the project's capitals.
+                            Spacer(Modifier.height(11.dp))
                         }
                         // Project name IS the dropdown (iOS projectPicker / web heading-variant
                         // parity). The Box is the ANCHOR: where a pointer drives, the shared picker
@@ -1519,7 +1532,7 @@ fun SessionLauncherScreen(
                             },
                             onWorkIn = { pickWorkIn(it) },
                             onOpenBranches = { refreshBranches() },
-                            modifier = Modifier.padding(top = 12.dp),
+                            modifier = Modifier.underTheComposer(),
                             notRemembered = workInNotSaved == rowWorkdir,
                             prs = projectPrs,
                             lookupPr = { ref -> actions.projectPr(rowWorkdir, ref) },
@@ -1527,7 +1540,7 @@ fun SessionLauncherScreen(
                             prLink = prLinkFailed,
                         )
                     } else if (notGit && rowWorkdir != null) {
-                        NotGitSummary(formatWorkdir(rowWorkdir, home), Modifier.padding(top = 12.dp))
+                        NotGitSummary(formatWorkdir(rowWorkdir, home), Modifier.underTheComposer())
                     }
 
                     // Folder caption — a calm restatement of the resolved workdir (none yet → none), where the row

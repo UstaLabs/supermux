@@ -296,7 +296,7 @@ private fun WorkPill(pointer: Boolean, open: Boolean, modifier: Modifier = Modif
         horizontalArrangement = Arrangement.spacedBy(7.dp),
     ) {
         content()
-        Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
+        Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(15.dp))
     }
 }
 
@@ -964,7 +964,10 @@ private fun WorkSummary(
     Column(modifier.testTag(WorkRowTags.SUMMARY).semantics(mergeDescendants = true) {}, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         lines.forEach { (icon, text) ->
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp).size(14.dp))
+                // The prototype's 16 px icon column, a 14 px icon at its start, centred on the first 18 px line.
+                Box(Modifier.width(16.dp)) {
+                    Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp).size(14.dp))
+                }
                 Text(text, fontSize = 12.5.sp, lineHeight = 18.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
@@ -975,7 +978,9 @@ private fun WorkSummary(
 @Composable
 internal fun NotGitSummary(projectPath: String, modifier: Modifier = Modifier) {
     Row(modifier.testTag(WorkRowTags.SUMMARY).semantics(mergeDescendants = true) {}, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Icon(Icons.Outlined.Info, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp).size(14.dp))
+        Box(Modifier.width(16.dp)) {
+            Icon(Icons.Outlined.Info, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp).size(14.dp))
+        }
         Text(styled(argStyles(), Str.launch_sum_not_git, Arg.Bold(projectPath)), fontSize = 12.5.sp, lineHeight = 18.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
