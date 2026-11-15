@@ -20,6 +20,9 @@ export const GIT_POST_COMMIT = ["commit", "push", "sync"] as const
 export type GitPostCommit = (typeof GIT_POST_COMMIT)[number]
 export const GIT_SMART_COMMIT = ["ask", "always", "never"] as const
 export type GitSmartCommit = (typeof GIT_SMART_COMMIT)[number]
+/** #72: Create Pull Request with unpushed commits (the GitHub Pull Requests extension's question): ask, or always push. */
+export const GIT_PR_PUSH = ["ask", "always"] as const
+export type GitPrPush = (typeof GIT_PR_PUSH)[number]
 
 export interface AppConfig {
   telegramBotToken: string // "" when unset
@@ -52,6 +55,8 @@ export interface AppConfig {
   gitPostCommit?: GitPostCommit
   /** #72: the answer to "no staged changes: stage all and commit?" — ask each time, always, or never. */
   gitSmartCommit?: GitSmartCommit
+  /** #72: Create Pull Request with an unpublished branch or unpushed commits: ask each time, or always push first. */
+  gitPrPush?: GitPrPush
   whisperModel?: string // path or name of the Whisper model file
   whisperLang?: string // language code (e.g. "tr", "en") or "auto"
   voiceLanguages?: string[] // ISO-639-1 codes the user dictates in (e.g. ["tr", "en"]); empty/absent = auto-detect
@@ -182,6 +187,7 @@ export function resolveAppConfig(stored: Partial<AppConfig>, env: AppConfigEnv):
     ...(stored.voiceTtsEngine !== undefined ? { voiceTtsEngine: stored.voiceTtsEngine } : {}),
     ...(stored.gitPostCommit !== undefined ? { gitPostCommit: stored.gitPostCommit } : {}),
     ...(stored.gitSmartCommit !== undefined ? { gitSmartCommit: stored.gitSmartCommit } : {}),
+    ...(stored.gitPrPush !== undefined ? { gitPrPush: stored.gitPrPush } : {}),
     ...(stored.whisperModel !== undefined ? { whisperModel: stored.whisperModel } : {}),
     ...(stored.whisperLang !== undefined ? { whisperLang: stored.whisperLang } : {}),
     ...(Array.isArray(stored.voiceLanguages) ? { voiceLanguages: stored.voiceLanguages } : {}),
@@ -218,6 +224,7 @@ export function sanitizeAppConfigPatch(input: unknown): Partial<AppConfig> {
   if (typeof o.voiceTtsEngine === "string" && (TTS_ENGINES as readonly string[]).includes(o.voiceTtsEngine)) out.voiceTtsEngine = o.voiceTtsEngine
   if (typeof o.gitPostCommit === "string" && (GIT_POST_COMMIT as readonly string[]).includes(o.gitPostCommit)) out.gitPostCommit = o.gitPostCommit as GitPostCommit
   if (typeof o.gitSmartCommit === "string" && (GIT_SMART_COMMIT as readonly string[]).includes(o.gitSmartCommit)) out.gitSmartCommit = o.gitSmartCommit as GitSmartCommit
+  if (typeof o.gitPrPush === "string" && (GIT_PR_PUSH as readonly string[]).includes(o.gitPrPush)) out.gitPrPush = o.gitPrPush as GitPrPush
   // "" is a reset sentinel: it maps to undefined so the sparse merge in
   // SettingsStore.setAppConfig CLEARS a previously-stored model (reverting to the
   // engine's own default) instead of persisting an empty, broken model id. This is

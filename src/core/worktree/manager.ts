@@ -62,6 +62,7 @@ export async function createWorktree(opts: {
   await mkdir(dirname(worktreeDir), { recursive: true })
   const start = await freshBase(opts.repoRoot, opts.baseBranch)
   await gitAsync(opts.repoRoot, ["worktree", "add", "--no-track", "-b", sessionBranch, worktreeDir, start])
+  await recordBase(opts.repoRoot, sessionBranch, opts.baseBranch)
   phase?.("add", { ms: msSince(t), branch: sessionBranch })
   t = performance.now()
   const copied = await copyWorktreeIncludes(opts.repoRoot, worktreeDir)
@@ -114,7 +115,22 @@ export async function freshBase(repoRoot: string, base: string): Promise<string>
 
 /** Card #75: a session born asleep gets its branch at Send (so two quick Sends can't pick one name); the checkout waits for its wake. */
 export async function createSessionBranch(repoRoot: string, branch: string, base: string): Promise<void> {
-  await gitAsync(repoRoot, ["branch", branch, base])
+  // --no-track, as VS Code, Orca, Superset and Emdash make a task's branch: from origin/<base> git would make the base
+  // its upstream, and its pull / push (↓↑) would be the base's. It gets its own upstream when it is published.
+  await gitAsync(repoRoot, ["branch", "--no-track", branch, base])
+  await recordBase(repoRoot, branch, base)
+}
+
+/**
+ * The branch it was made from, in git's own config (`branch.<name>.base`, as Orca and Superset keep it): Create
+ * Pull Request targets it (the GitHub Pull Requests extension's default), and any other tool can read it.
+ * Stored by its branch name: "origin/main" is kept as "main".
+ */
+export async function recordBase(repoRoot: string, branch: string, base: string): Promise<void> {
+  if (!base || base === "HEAD") return
+  const remoteRef = await gitAsync(repoRoot, ["rev-parse", "--verify", "--quiet", `refs/remotes/${base}`]).then(() => true, () => false)
+  const name = remoteRef ? base.slice(base.indexOf("/") + 1) : base
+  await gitAsync(repoRoot, ["config", `branch.${branch}.base`, name]).catch(() => {})
 }
 
 /** #152: a branch picked that is only on a remote gets a local branch tracking it, made at Send like a new one. */
@@ -157,6 +173,7 @@ export async function ensureWorktreeAt(opts: {
     // Branch was deleted (e.g., after merge) — recreate it from the base so work can continue.
     const start = await freshBase(opts.repoRoot, opts.baseBranch)
     await gitAsync(opts.repoRoot, ["worktree", "add", "--no-track", "-b", opts.sessionBranch, opts.workdir, start], { timeoutMs: CHECKOUT_TIMEOUT_MS })
+    await recordBase(opts.repoRoot, opts.sessionBranch, opts.baseBranch)
   }
   opts.onCheckedOut?.()
   await copyWorktreeIncludes(opts.repoRoot, opts.workdir)
