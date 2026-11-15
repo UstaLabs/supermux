@@ -348,3 +348,21 @@ test("history lists commits; revert/branch/tag refuse bad input", async () => {
   expect((await post(token, "/workspaces/ws-1/git/branch", { repo: "", sha: h.chat[0].sha, name: "-bad" })).status).toBe(400)
   expect((await post(token, "/workspaces/ws-1/git/tag", { repo: "", sha: h.chat[0].sha, name: "v1" })).status).toBe(200)
 })
+
+// #72 v5: Create Pull Request asks first, as the GitHub Pull Requests extension does; nothing is pushed unasked.
+test("Create Pull Request asks to publish an unpublished branch, then to push unpushed commits", async () => {
+  const { dir, token } = await setup()
+  const origin = mkdtempSync(join(tmpdir(), "mux-origin-"))
+  git(origin, "init", "-q", "--bare")
+  git(dir, "remote", "add", "origin", origin)
+  git(dir, "commit", "-qam", "local work")
+  const pr = { title: "Add search", target: "main" }
+  let r = await post(token, "/workspaces/ws-1/git/pr", pr)
+  expect(r.status).toBe(409)
+  expect(await r.json()).toEqual({ status: "ask", ask: "publish" })
+  expect(git(origin, "branch", "--format=%(refname:short)")).toBe("")      // nothing went up unasked
+  expect(((await (await post(token, "/workspaces/ws-1/git/publish", {})).json()) as any).status).toBe("pushed")
+  writeFileSync(join(dir, "a.txt"), "four\n"); git(dir, "commit", "-qam", "more")
+  r = await post(token, "/workspaces/ws-1/git/pr", pr)
+  expect(await r.json()).toEqual({ status: "ask", ask: "push", count: 1 })
+})
