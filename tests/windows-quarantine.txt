@@ -131,7 +131,6 @@ tests/search-store.test.ts | 8.3 short name vs long name (tmpdir() vs realpath);
 tests/session-born-asleep-e2e.test.ts | a POSIX-only e2e harness: #!/bin/sh stubs for claude and tmux, chmod, and a PATH joined with ":", so `bun` is not found | #75
 tests/session-store.test.ts | file locked or denied (EBUSY); first: "register > creates session with UUID, active status, correct" | #29
 tests/session-tools.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "find_sessions returns a matching session with a transcript p" | #29
-tests/socket-transport.test.ts | runs a POSIX command Windows lacks; first: "shim connects through an explicit local endpoint" | #29
 tests/spawn-codex-attachments.test.ts | file locked or denied (EBUSY); first: "fresh codex spawn wires attachment resolver into registered " | #29
 tests/spawn-opencode.test.ts | file locked or denied (EBUSY); first: "opencode spawn threads ONE uuid through registry, socket bin" | #29
 tests/spawn-pa.test.ts | file locked or denied (EBUSY); first: "spawns a Claude PA and registers it as personal_assistant" | #29
