@@ -14,6 +14,10 @@ export class UserPrefs {
     return row?.value
   }
 
+  delete(user: string, scope: string, key: string): void {
+    this.db.run("DELETE FROM user_prefs WHERE user_id = ? AND scope = ? AND key = ?", [user, scope, key])
+  }
+
   set(user: string, scope: string, key: string, value: string): void {
     this.db.run(
       "INSERT INTO user_prefs (user_id, scope, key, value, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (user_id, scope, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
@@ -66,4 +70,15 @@ export async function setLauncherPrefs(prefs: UserPrefs, user: string, dir: stri
 /** Whether git takes [name] as a branch name. */
 export async function refFormatOk(dir: string, name: string): Promise<boolean> {
   return gitAsync(dir, ["check-ref-format", "--branch", name], { timeoutMs: 5_000 }).then(() => true, () => false)
+}
+
+/** Settings › Worktrees: the user's prefix as kept (null = automatic, "" = none), and what automatic gives outside a project. */
+export async function branchPrefixSetting(prefs: UserPrefs, user: string, homeDir: string): Promise<{ branchPrefix: string | null; automatic: string }> {
+  return { branchPrefix: prefs.get(user, "", "branchPrefix") ?? null, automatic: await defaultBranchPrefix(homeDir) }
+}
+
+/** Keeps the prefix (null: back to automatic). Throws on one git wouldn't accept. */
+export async function setBranchPrefixSetting(prefs: UserPrefs, user: string, homeDir: string, prefix: string | null): Promise<void> {
+  if (prefix === null) return prefs.delete(user, "", "branchPrefix")
+  await setLauncherPrefs(prefs, user, homeDir, { branchPrefix: prefix })
 }
