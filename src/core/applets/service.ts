@@ -46,8 +46,14 @@ export interface AppletServiceDeps {
   /** How often the nightly backups and the 30-day purge are checked. 0 = never. */
   maintenanceMs?: number
   now?: () => Date
+  /** Where the pins live (the broker's settings table); an in-memory map when absent (tests). */
+  settings?: { get<T>(key: string): T | undefined; set(key: string, value: unknown): void }
   onChange?: () => void
 }
+
+/** How many applets the sidebar grid holds (3×3); a phone shows the first 8. */
+export const MAX_PINS = 9
+const PINS_KEY = "applets.pins"
 
 export type Result<T> = ({ ok: true } & T) | { ok: false; error: string }
 
@@ -66,8 +72,11 @@ export class AppletService {
   private timers: ReturnType<typeof setInterval>[] = []
   private hostKey: Buffer
   private readonly now: () => Date
+  private readonly settings: NonNullable<AppletServiceDeps["settings"]>
 
   constructor(private readonly deps: AppletServiceDeps) {
+    const mem = new Map<string, unknown>()
+    this.settings = deps.settings ?? { get: <T>(k: string) => mem.get(k) as T | undefined, set: (k, v) => { mem.set(k, v) } }
     this.now = deps.now ?? (() => new Date())
     this.store = new AppletStore(deps.db, this.now)
     mkdirSync(deps.stateDir, { recursive: true })
@@ -301,6 +310,36 @@ export class AppletService {
     return { ok: true, view: this.get(name)! }
   }
 
+  /**
+   * The sidebar's pinned applets, in order (per host, one list for every device). Before anything is pinned: the
+   * [MAX_PINS] most recently updated. Ids of applets that are gone drop out.
+   */
+  pinnedIds(): string[] {
+    const live = this.list().filter((v) => !v.row.deletedAt)
+    const explicit = this.settings.get<string[]>(PINS_KEY)
+    if (Array.isArray(explicit)) return explicit.filter((id) => live.some((v) => v.row.id === id)).slice(0, MAX_PINS)
+    return [...live].sort((a, b) => b.row.updatedAt.localeCompare(a.row.updatedAt)).slice(0, MAX_PINS).map((v) => v.row.id)
+  }
+
+  pin(name: string): Result<{}> {
+    const v = this.get(name)
+    if (!v) return { ok: false, error: `no applet named "${name}"` }
+    const ids = this.pinnedIds()
+    if (ids.includes(v.row.id)) return { ok: true }
+    if (ids.length >= MAX_PINS) return { ok: false, error: `the sidebar holds ${MAX_PINS} applets: unpin one first` }
+    this.settings.set(PINS_KEY, [...ids, v.row.id])
+    this.deps.onChange?.()
+    return { ok: true }
+  }
+
+  unpin(name: string): Result<{}> {
+    const v = this.get(name)
+    if (!v) return { ok: false, error: `no applet named "${name}"` }
+    this.settings.set(PINS_KEY, this.pinnedIds().filter((id) => id !== v.row.id))
+    this.deps.onChange?.()
+    return { ok: true }
+  }
+
   /** Records that [by] changed the applet (a restart, a backup) without changing what its folder says. */
   touchBy(id: string, by: string): void {
     this.store.touch(id, by)
@@ -466,7 +505,7 @@ export class AppletService {
 }
 
 /** What a device sees of one applet (GET /applets): no paths on the host, no keys. */
-export function appletPayload(v: AppletView, needsYou: SecretStatus[] = []) {
+export function appletPayload(v: AppletView, needsYou: SecretStatus[] = [], pin: number | null = null) {
   const m = v.manifest
   return {
     id: v.row.id,
@@ -478,6 +517,8 @@ export function appletPayload(v: AppletView, needsYou: SecretStatus[] = []) {
     kind: m?.run ? "server" : "static",
     ...(v.error ? { error: v.error } : {}),
     needsYou: needsYou.map((s) => ({ secret: s.name, state: s.state })),
+    /** Its place in the sidebar grid, or null when it isn't pinned. */
+    pin,
     ...(m ? { jobs: m.jobs.map((j) => ({ name: j.name, every: j.every })), secrets: m.secrets, widget: m.widget ?? null } : {}),
     ...(v.process ? {
       process: {
