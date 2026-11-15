@@ -33,8 +33,10 @@ import { checkSessionRename, createAgentFromTool, type CreateAgentDeps } from ".
 import { buildProxyPublicUrl } from "../../channels/web/proxy"
 import { listDevices } from "../display/scrcpy/adb"
 import { host } from "@supermux/platform"
-import { INBOX_DIR, SOCKETS_DIR } from "../../shared/paths"
-import { cliAdoption, withCliNote } from "../cli/adoption"
+import { join } from "path"
+import { INBOX_DIR, SOCKETS_DIR, STATE_DIR } from "../../shared/paths"
+import { cliAdoption, processHasCli, sessionKnowsCli, withCliNote } from "../cli/adoption"
+import { agentPidOf } from "../../../packages/supermux-core/src/keeper/index.js"
 import { SUPERMUX_BIN_DIR } from "../agents/session-cli-env"
 import type { RegisterReply, OpResult } from "./socket-server"
 import type { RegisterFrame, OutboundFrame, OrchestrationFrame, ToolOperation } from "../../shared/socket-frames"
@@ -293,6 +295,12 @@ export class SessionManager {
     return phase === "thinking" || phase === "running" ? "working" : "idle"
   }
 
+  /** Whether session `s`'s running agent process has the CLI in its env (undefined: unknown). See processHasCli. */
+  private agentHasCli(s: Session): boolean | undefined {
+    const pid = isPersistentRuntimeSession(s) ? (s.pid || undefined) : agentPidOf(join(STATE_DIR, "core", s.agent), s.id)
+    return pid ? processHasCli(pid, SUPERMUX_BIN_DIR) : undefined
+  }
+
   /**
    * THE one inbound door: adapter.send() for every agent (all run through supermux-core). Every
    * broker-side sender (channels, curator, agent-rpc, reviews) must call this.
@@ -300,7 +308,7 @@ export class SessionManager {
   deliver(sessionId: string, text: string, meta: any): Promise<InboundDeliveryResult> {
     // #156: a session whose agent process started before the CLI gets one note about it, on a turn it gets anyway.
     const s = this.registry.get(sessionId)
-    if (s) text = withCliNote(sessionId, !!s.internal, text, { binDir: SUPERMUX_BIN_DIR, socketsDir: SOCKETS_DIR, platform: host.os() })
+    if (s) text = withCliNote(sessionId, !!s.internal, text, { binDir: SUPERMUX_BIN_DIR, socketsDir: SOCKETS_DIR, platform: host.os(), hasCli: () => this.agentHasCli(s) })
     // Record where this session is talking, for the reply that comes back. This
     // is the one place every inbound turn passes through — including the ones
     // that never reach the message log (curator wakes, agent-rpc calls).
@@ -1019,7 +1027,7 @@ export class SessionManager {
       // #156: who knows the CLI yet, and is any moved MCP tool still in use (`supermux api cli_adoption`).
       case "cli_adoption": {
         const live = this.registry.list().filter((x) => !x.internal && !isDraftSession(x) && x.status !== "archived")
-        const rows = live.map((x) => ({ id: x.id, name: x.name, agent: x.agent, state: this.sessionState(x), knows: cliAdoption().knows(x.id), ...(cliAdoption().get(x.id) ?? { cliCalls: 0, mcpMovedCalls: 0 }) }))
+        const rows = live.map((x) => ({ id: x.id, name: x.name, agent: x.agent, state: this.sessionState(x), knows: sessionKnowsCli(x.id, () => this.agentHasCli(x)), processHasCli: this.agentHasCli(x) ?? null, ...(cliAdoption().get(x.id) ?? { cliCalls: 0, mcpMovedCalls: 0 }) }))
         const lastMcpMoved = Object.values(cliAdoption().all()).map((r) => r.lastMcpMovedAt).filter(Boolean).sort().pop() ?? null
         return { ok: true, value: { live: rows.length, know: rows.filter((r) => r.knows).length, lastMcpMovedAt: lastMcpMoved, notYet: rows.filter((r) => !r.knows).map((r) => r.name), sessions: rows } }
       }

@@ -103,6 +103,8 @@ export function curatorPromptPath(stateDir: string): string {
 // collapses to whichever resolves first. One importer, one attribute;
 // readFileSync of a $bunfs path works in-process in compiled mode.
 export function environmentMdContent(): string {
-  return readFileSync(environmentMdEmbedded, "utf8")
+  // LF, whatever the checkout (a Windows one, or a Windows release built from one, has CRLF): this text goes into every
+  // agent's instructions and the #156 CLI note, which quote it line by line.
+  return readFileSync(environmentMdEmbedded, "utf8").replace(/\r\n?/g, "\n")
 }
 
