@@ -84,4 +84,13 @@
     <string name="applet_info_on_devices">Cihazlarınızda</string>
     <string name="applet_info_open_full">Tam ekran aç</string>
     <string name="applet_info_via">şunun üzerinden:</string>
+    <string name="applet_info_own_settings_sub">Appletin sunduğu seçenekler.</string>
+    <string name="applet_info_job_last_run">son çalışma</string>
+    <string name="applet_info_job_failed_word">başarısız (çıkış %1$s)</string>
+    <string name="applet_info_every_min">%1$d dk</string>
+    <string name="applet_info_every_hour1">saat</string>
+    <string name="applet_info_every_hours">%1$d saat</string>
+    <string name="applet_info_every_day1">gün</string>
+    <string name="applet_info_every_days">%1$d gün</string>
+    <string name="applet_info_secret_sign_in_expired">oturumun süresi doldu</string>
 </resources>

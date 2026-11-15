@@ -2,7 +2,7 @@
 // lives here (in git): how to start it, its jobs, which secrets it needs, the shape of its settings. Host state (the
 // id, status, secret values, settings values) lives in the broker's database, never in this file.
 
-export interface AppletJob { name: string; every: string; run: string }
+export interface AppletJob { name: string; every: string; run: string; /** What it does, as the Jobs tab names it. */ label?: string }
 
 export interface AppletConfigField {
   key: string
@@ -23,6 +23,8 @@ export interface AppletManifest {
   jobs: AppletJob[]
   /** Names only; the values are stored by the broker. */
   secrets: string[]
+  /** Words for a secret's name, where applet.json gives them. */
+  secretLabels?: Record<string, string>
   bin: string[]
   config: AppletConfigField[]
   /** Paths (prefixes) only the owner's devices may reach: an agent gets 403. */
@@ -90,7 +92,21 @@ export function parseManifest(text: string): ManifestResult {
     if (typeof o[k] === "string" && !(o[k] as string).startsWith("/")) return { ok: false, error: `"${k}" must be a path starting with /` } // platform-ok: URL paths
   }
 
-  const secrets = strings(o.secrets, "secrets")
+  // A secret is its environment variable's name, or {name, label} with words for the owner ("Gmail sign-in").
+  const secretLabels: Record<string, string> = {}
+  let secretList: unknown = o.secrets
+  if (Array.isArray(o.secrets)) {
+    secretList = o.secrets.map((x: unknown) => {
+      if (x && typeof x === "object" && !Array.isArray(x) && typeof (x as Record<string, unknown>).name === "string") {
+        const n = String((x as Record<string, unknown>).name).trim()
+        const l = (x as Record<string, unknown>).label
+        if (typeof l === "string" && l.trim()) secretLabels[n] = l.trim()
+        return n
+      }
+      return x
+    })
+  }
+  const secrets = strings(secretList, "secrets")
   if (typeof secrets === "string") return { ok: false, error: secrets }
   const bad = secrets.find((s) => !/^[A-Z_][A-Z0-9_]*$/.test(s))
   if (bad) return { ok: false, error: `secret "${bad}" must be an environment variable name (A-Z, 0-9, _)` }
@@ -112,7 +128,7 @@ export function parseManifest(text: string): ManifestResult {
       const name = typeof job.name === "string" && job.name.trim() ? job.name.trim() : `job${i + 1}`
       if (!/^[a-z0-9][a-z0-9_-]*$/i.test(name)) return { ok: false, error: `jobs[${i}].name must be letters, digits, - or _` }
       if (jobs.some((x) => x.name === name)) return { ok: false, error: `two jobs are named "${name}"` }
-      jobs.push({ name, every: job.every.trim(), run: job.run.trim() })
+      jobs.push({ name, every: job.every.trim(), run: job.run.trim(), ...(typeof job.label === "string" && job.label.trim() ? { label: job.label.trim() } : {}) })
     }
   }
 
@@ -142,6 +158,7 @@ export function parseManifest(text: string): ManifestResult {
       ...(typeof o.widget === "string" ? { widget: o.widget } : {}),
       ...(typeof o.data === "string" ? { data: o.data.trim() } : {}),
       jobs, secrets, bin, config, ownerOnly,
+      ...(Object.keys(secretLabels).length ? { secretLabels } : {}),
     },
   }
 }
