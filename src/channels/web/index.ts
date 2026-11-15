@@ -17,7 +17,7 @@ import { CardSendGuard } from "../../core/show-html/card-send"
 import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
 import { PayloadTooLargeError, EmptyUploadError, OffsetConflictError, UploadOverflowError, UploadNotFoundError } from "../../core/files/store"
 import { buildProxyPublicUrl, extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie, portFromSlug } from "./proxy"
-import { handleAppletRequest, matchAppletPath, type AppletCaller } from "./applet-route"
+import { deviceViaId, handleAppletRequest, matchAppletPath, type AppletCaller } from "./applet-route"
 import { handleAppletApi } from "./applet-api"
 import { isOwnerOnly } from "../../core/applets/manifest"
 import { AUTH_COOKIE, PREVIEW_COOKIE, authToken, authedViaBearer, bearerToken, buildAuthCookie, buildClearCookie, crossSiteRefusal, previewCookieSpec, previewCookieToken, sameOriginOk } from "./cookies"
@@ -2730,14 +2730,18 @@ export class WebChannel implements Channel {
     return { port, sessionName: `port ${port}`, isPublic: false }
   }
 
-  /** Who asks for an applet: a paired device by its token (cookie or bearer) or its preview-only cookie. */
+  /**
+   * Who asks for an applet: a native client's bearer device token, or the preview-only cookie (#105) the native applet
+   * window sets for /a/. NEVER the device cookie: in path mode the applet shares the app's origin, so a page that got
+   * the cookie would hold the owner's whole API. The web client hides applets until #114 gives them their own origins.
+   */
   private appletCaller(req: Request): AppletCaller | undefined {
-    const token = authToken(req)
-    const dev = token ? this.store.verify(token) : undefined
-    if (dev) return { kind: "device", name: dev.name }
+    const bearer = bearerToken(req)
+    const dev = bearer ? this.store.verify(bearer) : undefined
+    if (dev) return { kind: "device", id: deviceViaId(dev.token_hash), name: dev.name }
     const preview = previewCookieToken(req)
     const pdev = preview ? this.store.verifyPreview(preview) : undefined
-    return pdev ? { kind: "device", name: pdev.name } : undefined
+    return pdev ? { kind: "device", id: deviceViaId(pdev.token_hash), name: pdev.name } : undefined
   }
 
   private async handleAppletRoute(req: Request, server: import("bun").Server<WSData>): Promise<Response | undefined> {
