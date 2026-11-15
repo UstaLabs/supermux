@@ -17,6 +17,9 @@ import { CardSendGuard } from "../../core/show-html/card-send"
 import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
 import { PayloadTooLargeError, EmptyUploadError, OffsetConflictError, UploadOverflowError, UploadNotFoundError } from "../../core/files/store"
 import { buildProxyPublicUrl, extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie, portFromSlug } from "./proxy"
+import { handleAppletRequest, matchAppletPath, resolveStaticFile, type AppletCaller } from "./applet-route"
+import { appletPayload } from "../../core/applets/service"
+import { isOwnerOnly } from "../../core/applets/manifest"
 import { AUTH_COOKIE, PREVIEW_COOKIE, authToken, authedViaBearer, bearerToken, buildAuthCookie, buildClearCookie, crossSiteRefusal, previewCookieSpec, previewCookieToken, sameOriginOk } from "./cookies"
 import { browserStateError } from "../../core/workspace/browser-state"
 
@@ -575,6 +578,8 @@ export interface WebChannelOpts {
   proxyMainHost?: string
   proxyLookup?: (domain: string) => { port: number; sessionName: string; isPublic: boolean } | undefined
   proxyAuth?: (token: string) => boolean
+  /** #117: the host's applets, served at /a/<name>/. */
+  applets?: import("../../core/applets/service").AppletService
   /** The base URL named proxies' links are built on (main.ts: the relay's, else MUX_WEB_PUBLIC_URL); GET /proxies/by-port builds on it too. Defaults to [publicUrl]. */
   proxyLinksBaseUrl?: () => string | undefined
   internalSecret?: string
@@ -1195,11 +1200,14 @@ export class WebChannel implements Channel {
     // Path-based proxy (active only when no base domain is configured). A digits slug is a port and needs no lookup.
     const pathMatch = !this.opts.proxyBaseDomain ? matchProxyPath(url.pathname) : null
     const pm = pathMatch && (this.opts.proxyLookup || portFromSlug(pathMatch.slug) !== undefined) ? pathMatch : undefined
+    // #117: /a/<name>/ on the app's own host, in both proxy modes (per-applet origins come with #114).
+    const am = this.opts.applets && !sub ? matchAppletPath(url.pathname) : null
     // Before any route, so a new route can't miss it (cookies.ts explains the rules).
     const appOrigins = [this.opts.publicUrl, this.getRelayUrl?.(), hostOrigin(req)]
-    if (crossSiteRefusal(req, { appOrigins, proxied: Boolean(sub || pm) })) {
+    if (crossSiteRefusal(req, { appOrigins, proxied: Boolean(sub || pm || am) })) {
       return new Response("bad origin", { status: 403 })
     }
+    if (am) return this.handleAppletRoute(req, server)
     if (sub) {
       return this.handleProxyRoute(req, sub, server)
     }
@@ -2720,6 +2728,43 @@ export class WebChannel implements Channel {
     if (port === undefined) return this.opts.proxyLookup?.(slug)
     if (port === null || port === this.boundPort || port === this.opts.port) return undefined
     return { port, sessionName: `port ${port}`, isPublic: false }
+  }
+
+  /** Who asks for an applet: a paired device by its token (cookie or bearer) or its preview-only cookie. */
+  private appletCaller(req: Request): AppletCaller | undefined {
+    const token = authToken(req)
+    const dev = token ? this.store.verify(token) : undefined
+    if (dev) return { kind: "device", name: dev.name }
+    const preview = previewCookieToken(req)
+    const pdev = preview ? this.store.verifyPreview(preview) : undefined
+    return pdev ? { kind: "device", name: pdev.name } : undefined
+  }
+
+  private async handleAppletRoute(req: Request, server: import("bun").Server<WSData>): Promise<Response | undefined> {
+    const applets = this.opts.applets!
+    if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+      // A server applet's own socket: same checks as its pages, then the proxy's websocket bridge.
+      const url = new URL(req.url)
+      const m = matchAppletPath(url.pathname)
+      const v = m?.rest ? applets.get(m.name) : undefined
+      const caller = this.appletCaller(req)
+      if (!m || !m.rest || !v?.manifest?.run || !caller) return new Response("not found", { status: 404 })
+      if (caller.kind !== "device" && isOwnerOnly(m.rest, v.manifest.ownerOnly)) return new Response("forbidden", { status: 403 })
+      const port = applets.supervisor.port(v.row.id)
+      if (!port) return new Response("applet not running", { status: 503 })
+      const wsProtocol = req.headers.get("sec-websocket-protocol")
+      const selectedProtocol = wsProtocol?.split(",")[0]?.trim()
+      const upgraded = server.upgrade(req, {
+        data: { proxyUpstream: { port, sessionName: `applet ${m.name}` }, proxyPath: m.rest + url.search, proxyWsProtocol: wsProtocol } as any,
+        ...(selectedProtocol ? { headers: { "Sec-WebSocket-Protocol": selectedProtocol } } : {}),
+      })
+      return upgraded ? undefined : new Response("ws upgrade failed", { status: 500 })
+    }
+    return handleAppletRequest(req, {
+      applets,
+      caller: (r) => this.appletCaller(r),
+      own: { cookies: [AUTH_COOKIE, PREVIEW_COOKIE], isOwnBearer: (t) => !!this.store.verify(t) },
+    })
   }
 
   private async handleProxyRoute(
@@ -5328,6 +5373,31 @@ export class WebChannel implements Channel {
           publicUrl: previewLinksBase(this.opts, req),
         }),
       })
+    }
+    // #117: the host's applets, for this device's Applets grid. Agents use `supermux applet …` instead.
+    if (path === "/applets" || path.startsWith("/applets/")) {
+      const applets = this.opts.applets
+      if (!applets) return this.json({ error: "applets are not available on this host" }, 404)
+      if (method === "GET" && path === "/applets") return this.json(applets.list().map(appletPayload))
+      const m = /^\/applets\/([^/]+)(?:\/(icon|logs|restart))?$/.exec(path)
+      const v = m ? applets.get(decodeURIComponent(m[1]!)) : undefined
+      if (!m || !v) return this.json({ error: "no such applet" }, 404)
+      if (method === "GET" && !m[2]) return this.json(appletPayload(v))
+      if (method === "GET" && m[2] === "icon") {
+        const file = v.row.icon ? resolveStaticFile(v.folder, v.row.icon) : null
+        if (!file) return new Response("not found", { status: 404 })
+        const f = Bun.file(file)
+        return new Response(f, { headers: { "content-type": f.type || "application/octet-stream", "cache-control": "no-cache" } })
+      }
+      if (method === "GET" && m[2] === "logs") {
+        const lines = Math.min(2000, Math.max(1, Number(url.searchParams.get("lines")) || 200))
+        return this.json({ logs: applets.supervisor.logs(v.row.id, lines) })
+      }
+      if (method === "POST" && m[2] === "restart") {
+        const r = await applets.restart(v.row.name)
+        return r.ok ? this.json(r) : this.json({ error: r.error }, 409)
+      }
+      return this.json({ error: "not found" }, 404)
     }
     if (method === "GET" && path === "/proxies") {
       const proxies = this.opts.listProxies?.() ?? []
