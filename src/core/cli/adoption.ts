@@ -77,7 +77,8 @@ export function cliAdoption(): CliAdoption { return current }
  * things are a CLI in your shell"): read from there, so the note can never drift from what new sessions are told.
  */
 export function cliHintFromEnvironment(env: string = readEnvironmentMd()): string | undefined {
-  return env.split(/\n\s*\n/).map((p) => p.trim()).find((p) => p.startsWith("The same things are a CLI in your shell"))
+  // A Windows checkout has CRLF: the note is LF like the rest of the turn.
+  return env.replace(/\r\n?/g, "\n").split(/\n\s*\n/).map((p) => p.trim()).find((p) => p.startsWith("The same things are a CLI in your shell"))
 }
 
 /**

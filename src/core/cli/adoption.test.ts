@@ -82,7 +82,9 @@ test("the note carries the very hint new sessions get: environment.md's CLI para
   const { cliHintFromEnvironment } = await import("./adoption")
   const hint = cliHintFromEnvironment()!
   expect(hint).toStartWith("The same things are a CLI in your shell")
-  expect(readEnvironmentMd()).toContain(hint)
+  expect(readEnvironmentMd().replace(/\r\n?/g, "\n")).toContain(hint)
+  expect(hint).not.toContain("\r")
+  expect(cliHintFromEnvironment("x\r\n\r\nThe same things are a CLI in your shell: a\r\nb\r\n\r\nnext")).toBe("The same things are a CLI in your shell: a\nb")
   expect(cliNoteFor("s", opts)).toContain(hint)
   for (const cmd of ["supermux help", "supermux session ls", "supermux msg <session>", "supermux card show", "supermux port ls"]) expect(hint).toContain(cmd)
 })
