@@ -85,7 +85,7 @@ export async function handleAppletOp(svc: AppletService, name: string, args: Rec
       const r = await svc.create(n, { ...(from ? { from } : {}), ...(str(args, "title") ? { title: str(args, "title") } : {}) }, by)
       if (!r.ok) return { ok: false, error: r.error }
       const v = r.view
-      return { ok: true, value: { name: v.row.name, title: v.row.title, folder: v.folder, url: link(ctx, v.row.name), state: stateOf(v), error: v.error ?? null } }
+      return { ok: true, value: { name: v.row.name, title: v.row.title, folder: v.folder, url: link(ctx, v.row.name), state: stateOf(v), error: v.error ?? null, warnings: r.warnings } }
     }
     case "applet_restart": {
       const n = need(); if (typeof n !== "string") return n
