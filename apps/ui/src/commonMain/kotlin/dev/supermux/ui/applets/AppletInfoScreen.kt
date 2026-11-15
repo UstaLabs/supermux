@@ -481,9 +481,10 @@ private fun ByLine(d: AppletDetailDto, actions: AppletInfoActions) {
         dev.supermux.ui.session.appletUpdatedText(d.updatedAt)?.let { Text(it, fontSize = 13.sp, color = cs.onSurfaceVariant) }
         val by = d.updatedBy
         val chat = by?.takeIf { it.startsWith("agent:") }?.removePrefix("agent:")
-        if (chat != null && d.updatedByName != null) {
+        val byName = d.updatedByName
+        if (chat != null && byName != null) {
             Text(" " + localized(Str.applet_info_via) + " ", fontSize = 13.sp, color = cs.onSurfaceVariant)
-            Text(d.updatedByName, fontSize = 13.sp, color = cs.onSurface, modifier = Modifier.clickable { actions.openChat(chat) }.testTag("applet_info_via"))
+            Text(byName, fontSize = 13.sp, color = cs.onSurface, modifier = Modifier.clickable { actions.openChat(chat) }.testTag("applet_info_via"))
         } else if (by != null && by.startsWith("device:")) {
             Text(" " + localized(Str.applet_info_by_you_line), fontSize = 13.sp, color = cs.onSurfaceVariant)
         }
