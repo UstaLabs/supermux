@@ -2421,9 +2421,10 @@ const appletService = new AppletService({
       target = registry.get(made.id)
       if (!target) throw new Error("the chat could not be made")
     }
-    const sent = await deliverUserMessage(target.id, text)
-    if (!sent.ok) throw new Error(sent.reason ?? "the chat didn't take the message")
-    return { sessionId: target.id, name: target.name }
+    // Answered as soon as the message is in the chat: waking the agent can take a while, and the page is waiting.
+    const chat = target
+    void deliverUserMessage(chat.id, text).then((sent) => { if (!sent.ok) log.warn("applet_ask_not_delivered", { session: chat.name, reason: sent.reason }) })
+    return { sessionId: chat.id, name: chat.name }
   },
   // supermux.notify: every device, like a broker notice; the applet's title is the sender.
   notify: async (applet, title, body) => {

@@ -1,3 +1,5 @@
+import { readFileSync } from "fs"
+import { Resvg } from "@resvg/resvg-js"
 import { appletPayload, type AppletService, type AppletView } from "../../core/applets/service"
 import { resolveStaticFile } from "./applet-route"
 
@@ -93,6 +95,13 @@ export async function handleAppletApi(req: Request, opts: { applets: AppletServi
   if (a === "icon" && !b && method === "GET") {
     const file = v.row.icon ? resolveStaticFile(v.folder, v.row.icon) : null
     if (!file) return new Response("not found", { status: 404 })
+    // An SVG icon goes out as a 256 px PNG: every app draws a PNG, not every app has an SVG decoder.
+    if (/\.svg$/i.test(file)) {
+      try {
+        const png = new Resvg(readFileSync(file, "utf8"), { fitTo: { mode: "width", value: 256 } }).render().asPng()
+        return new Response(png, { headers: { "content-type": "image/png", "cache-control": "no-cache" } })
+      } catch { /* not a drawable SVG: sent as it is */ }
+    }
     const f = Bun.file(file)
     return new Response(f, { headers: { "content-type": f.type || "application/octet-stream", "cache-control": "no-cache" } })
   }
