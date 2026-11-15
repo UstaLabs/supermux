@@ -154,8 +154,8 @@
     <string name="scm_sub_pullpush">Çek, Gönder</string>
     <string name="scm_sync">Eşitle</string>
     <string name="scm_sync_changes">Değişiklikleri Eşitle</string>
-    <string name="scm_sync_counts">origin'e göre %1$s</string>
-    <string name="scm_sync_in">origin ile eşit</string>
+    <string name="scm_sync_counts">%2$s karşısında %1$s</string>
+    <string name="scm_sync_in">%1$s ile eşit</string>
     <string name="scm_sync_local">yalnızca yerel</string>
     <string name="scm_sync_unpublished">yayımlanmadı</string>
     <string name="scm_undo_last">Son Commit'i Geri Al</string>
@@ -290,32 +290,48 @@
     <string name="scm_failed_plain">Olmadı.</string>
     <string name="scm_details">Ayrıntılar</string>
     <string name="scm_details_hide">Ayrıntıları gizle</string>
-    <string name="scm_published_to_with_base">%1$s adresine yayımlandı; varsayılan dalı %2$s.</string>
     <string name="scm_publish_name_taken">%1$s'da %2$s adlı bir depo zaten var. Başka bir ad yazıp yeniden deneyin.</string>
     <string name="scm_publish_partial">%1$s oluşturuldu ama gönderme olmadı. Dalı Yayımla'yı yeniden deneyin ya da ayrıntılara bakın.</string>
     <string name="scm_publish_failed_plain">%1$s'da yayımlanamadı.</string>
     <string name="scm_remote_failed_plain">Uzak depo eklenemedi.</string>
     <string name="scm_pr_publish_failed">%1$s yayımlanamadı, bu yüzden pull request açılmadı.</string>
-    <string name="scm_base_published">%1$s yayımlandı.</string>
-    <string name="scm_base_publish_failed">%1$s yayımlanamadı.</string>
-    <string name="scm_pr_target_missing_short">%1$s uzak depoda yok, hedef olamaz. Onu yayımlayın ya da başka bir hedef seçin.</string>
-    <string name="scm_pr_nothing_short">Önerilecek bir şey yok: bu dalda %1$s dalında olmayan commit yok.</string>
     <string name="scm_pr_create_failed">Pull request açılamadı.</string>
     <string name="scm_mr_create_failed">Merge request açılamadı.</string>
     <string name="scm_pr_read_failed">%1$s'dan pull request okunamadı.</string>
-    <string name="scm_pr_target_local">%1$s henüz %2$s'da yok, bu yüzden bir pull request onu hedefleyemez. Önce %1$s dalını yayımlayın ya da başka bir hedef seçin.</string>
-    <string name="scm_mr_target_local">%1$s henüz %2$s'da yok, bu yüzden bir merge request onu hedefleyemez. Önce %1$s dalını yayımlayın ya da başka bir hedef seçin.</string>
-    <string name="scm_pr_target_absent">%1$s %2$s'da yok, bu yüzden bir pull request onu hedefleyemez. Orada olan bir hedef dal seçin.</string>
-    <string name="scm_mr_target_absent">%1$s %2$s'da yok, bu yüzden bir merge request onu hedefleyemez. Orada olan bir hedef dal seçin.</string>
-    <string name="scm_pr_target_local_short">%1$s henüz %2$s'da yok.</string>
-    <string name="scm_pr_target_absent_short">%1$s %2$s'da yok.</string>
-    <string name="scm_publish_named">%1$s dalını yayımla</string>
-    <string name="scm_pr_other_target">Başka bir hedef seç…</string>
-    <string name="scm_pr_nothing_ahead">%1$s dalında %2$s dalında olmayan bir commit henüz yok, önerilecek bir şey yok.</string>
-    <string name="scm_pr_pick_target">Birleştirilecek dalı seçin.</string>
-    <string name="scm_pr_target_self">%1$s kendi hedefi olamaz. Başka bir dal seçin.</string>
-    <string name="scm_pr_checking_target">%1$s denetleniyor…</string>
-    <string name="scm_pr_no_target">%1$s dalını önerecek başka bir dal henüz yok. Bir hedef seçin ya da önce birini yayımlayın.</string>
     <string name="scm_pr_unrelated">%1$s ile %2$s dallarının ortak geçmişi yok (her biri kendi ilk commit'iyle başladı), bu yüzden bir pull request ile birleştirilemezler. Başka bir hedef seçin.</string>
     <string name="scm_pr_push_failed">Son commit'leriniz gönderilemedi, bu yüzden pull request açılmadı.</string>
+    <string name="scm_pr_choose_base">Bir taban dal seçin.</string>
+    <string name="scm_pr_base_not_on_remote">%1$s dalı %2$s üzerinde yok.</string>
+    <string name="scm_pr_no_commits_between">Taban %1$s dalı ile karşılaştırılan %2$s dalı arasında commit yok.</string>
+    <string name="scm_pr_always_publish">Dalı Her Zaman Yayımla</string>
+    <string name="scm_pr_always_push">Her Zaman Gönder</string>
+    <string name="scm_pr_continue_without">Göndermeden Devam Et</string>
+    <string name="scm_pr_ask_publish_q">%2$s üzerinde %1$s için uzak dal yok.</string>
+    <string name="scm_pr_ask_publish_body">Önce yayımlayıp sonra pull request oluşturulsun mu?</string>
+    <string name="scm_pr_ask_push_body">Pull request oluşturmadan önce gönderilsinler mi?</string>
+    <string name="scm_pr_push_commits">Commit'leri Gönder</string>
+    <string name="scm_pick_remote_title">%1$s dalının yayımlanacağı uzak depoyu seçin:</string>
+    <string name="scm_get_latest_short">En sonunu al</string>
+    <string name="scm_tt_pull_push">%3$s ile %1$d commit çek, %2$d commit gönder</string>
+    <string name="scm_tt_sync">Değişiklikleri Eşitle</string>
+    <plurals name="scm_pr_ask_push_q">
+        <item quantity="one">%2$s dalında gönderilmemiş %1$d commit var.</item>
+        <item quantity="other">%2$s dalında gönderilmemiş %1$d commit var.</item>
+    </plurals>
+    <plurals name="scm_base_ahead">
+        <item quantity="one">%1$d ileride</item>
+        <item quantity="other">%1$d ileride</item>
+    </plurals>
+    <plurals name="scm_base_has_new">
+        <item quantity="one">%1$s dalında %2$d yeni</item>
+        <item quantity="other">%1$s dalında %2$d yeni</item>
+    </plurals>
+    <plurals name="scm_tt_pull">
+        <item quantity="one">%2$s üzerinden %1$d commit çek</item>
+        <item quantity="other">%2$s üzerinden %1$d commit çek</item>
+    </plurals>
+    <plurals name="scm_tt_push">
+        <item quantity="one">%2$s üzerine %1$d commit gönder</item>
+        <item quantity="other">%2$s üzerine %1$d commit gönder</item>
+    </plurals>
 </resources>

@@ -366,3 +366,17 @@ test("Create Pull Request asks to publish an unpublished branch, then to push un
   r = await post(token, "/workspaces/ws-1/git/pr", pr)
   expect(await r.json()).toEqual({ status: "ask", ask: "push", count: 1 })
 })
+
+test("Continue Without Pushing: the PR is asked for from what is on the remote already (no push)", async () => {
+  const { dir, token } = await setup()
+  const origin = mkdtempSync(join(tmpdir(), "mux-origin-"))
+  git(origin, "init", "-q", "--bare")
+  git(dir, "remote", "add", "origin", origin)
+  git(dir, "commit", "-qam", "local work")
+  await post(token, "/workspaces/ws-1/git/publish", {})
+  writeFileSync(join(dir, "a.txt"), "five\n"); git(dir, "commit", "-qam", "unpushed")
+  const before = git(origin, "rev-parse", "main")
+  const r = (await (await post(token, "/workspaces/ws-1/git/pr", { title: "t", target: "main", skipPush: true })).json()) as any
+  expect(r.status).not.toBe("ask")                                     // went on to create (gh decides from here)
+  expect(git(origin, "rev-parse", "main")).toBe(before)                 // and pushed nothing
+})

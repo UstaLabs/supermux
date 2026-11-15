@@ -247,6 +247,8 @@ data class AppConfigDto(
     /** #72: Source Control's Commit ▾ pick (commit | push | sync) and its "no staged changes" answer (ask | always | never). */
     val gitPostCommit: String? = null,
     val gitSmartCommit: String? = null,
+    /** #72 v5: Create Pull Request with unpushed commits: "ask" (default) or "always" push first. */
+    val gitPrPush: String? = null,
     val voiceTtsEngine: String? = null,
     /** ISO-639-1 codes the user dictates in (e.g. ["tr", "en"]). null/empty = auto-detect. */
     val voiceLanguages: List<String>? = null,
@@ -959,6 +961,8 @@ data class ClaudeResetResult(
 data class GitRemoteStatus(
     val isRepo: Boolean = false,
     val hasRemote: Boolean = false,
+    /** #72 v5: the remotes by name: Publish asks which when there are several (VS Code). Empty: an older broker. */
+    val remotes: List<String> = emptyList(),
     val branch: String? = null,
     val detachedSha: String? = null,
     val upstream: String? = null,
@@ -1515,11 +1519,17 @@ data class PrCheck(val name: String, val state: String = "run", val url: String?
 data class PrComment(val who: String = "", val body: String = "", val file: String? = null, val line: Int? = null, val url: String? = null)
 
 @Serializable
-data class PrCreateRequest(val title: String, val body: String, val target: String, val draft: Boolean)
+data class PrCreateRequest(val title: String, val body: String, val target: String, val draft: Boolean,
+    /** The answers to the extension's questions: publish the branch / push its commits first. */
+    val publish: Boolean = false, val push: Boolean = false,
+    /** "Continue Without Pushing": made from what the remote already has. */
+    val skipPush: Boolean = false)
 
 /** opened | exists | publish_failed | unavailable ([reason]) */
 @Serializable
-data class PrCreateResult(val status: String = "unavailable", val url: String? = null, val number: Int? = null, val reason: String? = null, val message: String? = null)
+data class PrCreateResult(val status: String = "unavailable", val url: String? = null, val number: Int? = null, val reason: String? = null, val message: String? = null,
+    /** status "ask": the extension's question first ("publish" | "push"), and how many commits to push. */
+    val ask: String? = null, val count: Int = 0)
 
 /** The Create form's start: by: agent | commits */
 @Serializable
@@ -1527,18 +1537,19 @@ data class PrText(val title: String = "", val body: String = "", val by: String 
 
 /** POST …/git/publish-new: the new repo's URL, or why not (bad | no_cli | not_authed | error). */
 @Serializable
-data class PublishNewResult(val ok: Boolean = false, val url: String? = null, val reason: String? = null, val message: String? = null, val base: String? = null)
+data class PublishNewResult(val ok: Boolean = false, val url: String? = null, val reason: String? = null, val message: String? = null)
 
 /** #72 GET …/git/pr/base: can a PR/MR into [target] be opened (on origin? here? how far ahead?). */
 @Serializable
-data class PrBaseCheck(val target: String = "", val onRemote: Boolean = false, val local: Boolean = false, val ahead: Int? = null,
-    /** false: no commit in common with the branch (each began with its own first commit); null: a broker that doesn't say. */
-    val related: Boolean? = null)
+data class PrBaseCheck(val target: String = "", val onRemote: Boolean = false, val ahead: Int? = null)
 
 @Serializable
 internal data class RemoteBody(val name: String, val url: String)
+
 @Serializable
-internal data class PublishNewBody(val forge: String, val visibility: String, val name: String? = null, val base: String? = null)
+internal data class PublishToBody(val remote: String)
+@Serializable
+internal data class PublishNewBody(val forge: String, val visibility: String, val name: String? = null)
 
 @Serializable
 data class PrCheckLog(val ok: Boolean = false, val log: String? = null, val reason: String? = null, val message: String? = null)
@@ -2095,7 +2106,7 @@ private data class OpenCodeOAuthStartBody(val providerId: String, val method: In
 private data class OpenCodeOAuthFinishBody(val providerId: String, val method: Int, val code: String)
 
 @Serializable
-private data class GitPrefsBody(val gitPostCommit: String? = null, val gitSmartCommit: String? = null)
+private data class GitPrefsBody(val gitPostCommit: String? = null, val gitSmartCommit: String? = null, val gitPrPush: String? = null)
 
 /** Partial PUT /settings/config body. explicitNulls=false omits unset fields, so
  *  this never clobbers config the caller didn't touch. */
@@ -2833,8 +2844,8 @@ class BrokerApi(
     }
 
     /** PUT /settings/config with only #72's git preferences (null: unchanged). */
-    suspend fun saveGitPrefs(postCommit: String? = null, smartCommit: String? = null) =
-        putJson("$httpBase/settings/config", GitPrefsBody(postCommit, smartCommit))
+    suspend fun saveGitPrefs(postCommit: String? = null, smartCommit: String? = null, prPush: String? = null) =
+        putJson("$httpBase/settings/config", GitPrefsBody(postCommit, smartCommit, prPush))
 
     /** GET /settings/config */
     suspend fun getConfig(): AppConfigDto =
@@ -3372,6 +3383,14 @@ class BrokerApi(
         decode(http.post("$httpBase/$scope/$id/git/$op") {
             authHeader()
         })
+
+    /** POST …/git/publish to a remote picked (VS Code's Publish Branch with several remotes). */
+    suspend fun gitPublishTo(scope: String, id: String, remote: String): GitOpResult =
+        decode(http.post("$httpBase/$scope/$id/git/publish") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(PublishToBody(remote)))
+        })
     suspend fun gitFetch(id: String): GitOpResult = gitOp("sessions", id, "fetch")
     suspend fun gitPublish(id: String): GitOpResult = gitOp("sessions", id, "publish")
     suspend fun gitPush(id: String): GitOpResult = gitOp("sessions", id, "push")
@@ -3489,16 +3508,12 @@ class BrokerApi(
         answer("$httpBase/$scope/$id/git/remote", json.encodeToString(RemoteBody(name, url))) { GitWriteResult(reason = "failed", message = it) }
 
     /** POST /<sessions|workspaces>/<id>/git/publish-new: create the repo on GitHub / GitLab from this folder and push. */
-    suspend fun gitPublishNew(scope: String, id: String, forge: String, visibility: String, name: String? = null, base: String? = null): PublishNewResult =
-        answer("$httpBase/$scope/$id/git/publish-new", json.encodeToString(PublishNewBody(forge, visibility, name, base))) { PublishNewResult(message = it) }
+    suspend fun gitPublishNew(scope: String, id: String, forge: String, visibility: String, name: String? = null): PublishNewResult =
+        answer("$httpBase/$scope/$id/git/publish-new", json.encodeToString(PublishNewBody(forge, visibility, name))) { PublishNewResult(message = it) }
 
-    /** GET /<sessions|workspaces>/<id>/git/pr/base?target=: whether a PR/MR into it can be opened; no target: origin's default. */
+    /** GET /<sessions|workspaces>/<id>/git/pr/base?target=: the extension's two checks; no target: the default one. */
     suspend fun gitPrBase(scope: String, id: String, target: String?, fresh: Boolean = false): PrBaseCheck =
         getJson("$httpBase/$scope/$id/git/pr/base?target=${urlEncode(target.orEmpty())}" + if (fresh) "&fresh=1" else "")
-
-    /** POST /<sessions|workspaces>/<id>/git/pr/publish-base: put that local branch (the chat's base) on origin. */
-    suspend fun gitPrPublishBase(scope: String, id: String, target: String): GitWriteResult =
-        answer("$httpBase/$scope/$id/git/pr/publish-base", json.encodeToString(PrTextBody(target))) { GitWriteResult(reason = "failed", message = it) }
 
     /** GET /<sessions|workspaces>/<id>/git/pr/check-log?url=: a failing check's log tail. */
     suspend fun gitPrCheckLog(scope: String, id: String, checkUrl: String): PrCheckLog =

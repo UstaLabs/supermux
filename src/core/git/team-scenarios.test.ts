@@ -90,7 +90,7 @@ test("a chat's footer never counts the base: main moving on is not 'pull'", asyn
   const grace = teammate(remote); commit(grace, "m.txt", "m\n", "Main moves on"); git(grace, "push", "-q")
   git(me, "fetch", "-q", "origin")
   const lite = await computeLiteStatus({ workdir: h.worktreeDir, repo_root: me, base_branch: "main", session_branch: h.sessionBranch })
-  expect(lite?.sync).toEqual({ ahead: 0, behind: 0 })
+  expect(lite?.sync).toMatchObject({ ahead: 0, behind: 0, upstream: `origin/${h.sessionBranch}` })
 }, REAL_GIT_MS)
 
 // ── a protected base ──

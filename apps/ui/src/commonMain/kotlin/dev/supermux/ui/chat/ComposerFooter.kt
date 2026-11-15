@@ -190,14 +190,22 @@ fun ComposerFooter(
                         },
                         trailingChevron = false,
                         tag = "footer_git_sync",
-                        hint = failed,
+                        // VS Code's tooltips: what a click does, against which upstream.
+                        hint = failed ?: when {
+                            !published -> localized(Str.scm_publish_branch)
+                            sync?.upstream == null -> null
+                            behind > 0 && ahead > 0 -> localized(Str.scm_tt_pull_push, behind, ahead, sync.upstream!!)
+                            behind > 0 -> localizedPlural(Plurals.scm_tt_pull, behind, behind, sync.upstream!!)
+                            ahead > 0 -> localizedPlural(Plurals.scm_tt_push, ahead, ahead, sync.upstream!!)
+                            else -> localized(Str.scm_tt_sync)
+                        },
                         error = failed != null,
                         onClick = {
                             when {
                                 syncing -> Unit
-                                // No remote: Source Control opens on its Publish pick (GitHub, GitLab, a URL), as VS Code's quick pick does.
-                                // (A broker before hasRemote: unpublished goes the same way; the pane knows if there is a remote.)
-                                git.hasRemote == false || (git.hasRemote == null && !published) -> { failed = null; dev.supermux.ui.editor.ScmRequests.askPublish(session.id); onOpenChanges?.invoke() }
+                                // Publish goes through Source Control: it asks where when it must (no remote: GitHub / GitLab / a URL;
+                                // several remotes: which), as VS Code's quick picks do; one remote: straight there.
+                                git.hasRemote == false || !published -> { failed = null; dev.supermux.ui.editor.ScmRequests.askPublish(session.id); onOpenChanges?.invoke() }
                                 failed != null -> { failed = null; onOpenChanges?.invoke() }
                                 else -> scope.launch {
                                     syncing = true

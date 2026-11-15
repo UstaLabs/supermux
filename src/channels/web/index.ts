@@ -4282,9 +4282,12 @@ export class WebChannel implements Channel {
         const pub = publishBranch(workdir)
         if (pub.status !== "pushed" && pub.status !== "up_to_date") return this.json({ status: "publish_failed", publish: pub }, 409)
       } else if (pre.ask === "push") {
-        if (body.push !== true) return this.json({ status: "ask", ask: "push", count: pre.count }, 409)
-        const push = pushBranch(workdir)
-        if (push.status !== "pushed" && push.status !== "up_to_date") return this.json({ status: "push_failed", publish: push }, 409)
+        // "Continue Without Pushing" (skipPush): the PR is made from what is on the remote already.
+        if (body.push !== true && body.skipPush !== true) return this.json({ status: "ask", ask: "push", count: pre.count }, 409)
+        if (body.push === true) {
+          const push = pushBranch(workdir)
+          if (push.status !== "pushed" && push.status !== "up_to_date") return this.json({ status: "push_failed", publish: push }, 409)
+        }
       }
       const r = await createPr(workdir, branch, { title, body: (body.body as string | undefined) ?? "", target, draft: body.draft === true })
       this.prCache.clear()

@@ -90,8 +90,8 @@ class SourceControlApi(
 
     suspend fun pr(fresh: Boolean = false): PrRead? = call("pr") { api.gitPr(ws, workspaceId, fresh) }
 
-    suspend fun createPr(title: String, body: String, target: String, draft: Boolean): PrCreateResult? =
-        call("createPr") { api.gitPrCreate(ws, workspaceId, PrCreateRequest(title, body, target, draft)) }
+    suspend fun createPr(title: String, body: String, target: String, draft: Boolean, publish: Boolean = false, push: Boolean = false, skipPush: Boolean = false): PrCreateResult? =
+        call("createPr") { api.gitPrCreate(ws, workspaceId, PrCreateRequest(title, body, target, draft, publish, push, skipPush)) }
 
     suspend fun prReady(number: Int): GitWriteResult? = call("prReady") { api.gitPrReady(ws, workspaceId, number) }
 
@@ -104,20 +104,22 @@ class SourceControlApi(
     suspend fun mergeIntoBase(): Boolean = sessionId?.let { s -> call("mergeIntoBase") { api.finish(s, "merge", keep = true); true } } ?: false
 
     /** The Commit ▾ pick and the "no staged changes" answer, kept on the broker (the owner's, until users exist). */
-    suspend fun prefs(): Pair<String?, String?>? = call("prefs") { api.getConfig().let { it.gitPostCommit to it.gitSmartCommit } }
+    suspend fun prefs(): Triple<String?, String?, String?>? = call("prefs") { api.getConfig().let { Triple(it.gitPostCommit, it.gitSmartCommit, it.gitPrPush) } }
 
-    suspend fun savePrefs(postCommit: String? = null, smartCommit: String? = null): Boolean =
-        call("savePrefs") { api.saveGitPrefs(postCommit, smartCommit); true } ?: false
+    suspend fun savePrefs(postCommit: String? = null, smartCommit: String? = null, prPush: String? = null): Boolean =
+        call("savePrefs") { api.saveGitPrefs(postCommit, smartCommit, prPush); true } ?: false
 
     suspend fun addRemote(name: String, url: String): GitWriteResult? = call("addRemote") { api.gitAddRemote(ws, workspaceId, name, url) }
 
-    suspend fun publishNew(forge: String, visibility: String, name: String? = null, base: String? = null): dev.supermux.net.PublishNewResult? =
-        call("publishNew") { api.gitPublishNew(ws, workspaceId, forge, visibility, name, base) }
+    suspend fun publishNew(forge: String, visibility: String, name: String? = null): dev.supermux.net.PublishNewResult? =
+        call("publishNew") { api.gitPublishNew(ws, workspaceId, forge, visibility, name) }
+
+    /** Publish Branch to a remote picked (several remotes). */
+    suspend fun publishTo(remote: String): GitOpResult? = call("publishTo") { api.gitPublishTo(ws, workspaceId, remote) }
 
     /** Can a PR/MR into [target] be opened; null target: origin's default branch. */
     suspend fun prBase(target: String?, fresh: Boolean = false): dev.supermux.net.PrBaseCheck? = call("prBase") { api.gitPrBase(ws, workspaceId, target, fresh) }
 
-    suspend fun publishBase(target: String): GitWriteResult? = call("publishBase") { api.gitPrPublishBase(ws, workspaceId, target) }
 
     /** "Ask the agent to fix" / "Send to the agent": a message to the chat's agent. */
     suspend fun tellAgent(text: String): Boolean = sessionId?.let { s -> call("tellAgent") { api.sendMessage(s, text); true } } ?: false

@@ -70,9 +70,7 @@ class SourceControlShots {
         val publishNew: Pair<HttpStatusCode, String> = HttpStatusCode.OK to "{}",
         val typed: String? = null,
         /** GET …/git/pr/base: can a PR into the target be opened. */
-        val prBase: String = """{"target":"dev","onRemote":true,"local":true,"ahead":1}""",
-        /** Per target, when it matters ("" = origin's default). */
-        val prBaseBy: Map<String, String> = emptyMap(),
+        val prBase: String = """{"target":"dev","onRemote":true,"ahead":1}""",
         val prCreate: Pair<HttpStatusCode, String> = HttpStatusCode.OK to """{"status":"opened","url":"u","number":1}""",
     )
 
@@ -84,7 +82,7 @@ class SourceControlShots {
                 p.endsWith("/git/status") -> s.status
                 p.endsWith("/git/history") -> """{"branch":"product-search-box","base":"dev","chat":${s.commits},"baseCommits":${s.baseCommits},"incoming":${s.incoming}}"""
                 p.endsWith("/git/publish-new") -> return@MockEngine respond(ByteReadChannel(s.publishNew.second), s.publishNew.first, headersOf(HttpHeaders.ContentType, "text/plain"))
-                p.endsWith("/git/pr/base") -> s.prBaseBy[req.url.parameters["target"].orEmpty()] ?: s.prBase
+                p.endsWith("/git/pr/base") -> s.prBase
                 p.endsWith("/git/pr") && req.method.value == "POST" -> return@MockEngine respond(ByteReadChannel(s.prCreate.second), s.prCreate.first, headersOf(HttpHeaders.ContentType, "application/json"))
                 p.endsWith("/git/pr") -> s.pr
                 p.endsWith("/git/branches") -> """{"current":"product-search-box","local":[{"name":"product-search-box","openIn":{"kind":"this"}},{"name":"feature/payments"},{"name":"dev","isDefault":true,"openIn":{"kind":"folder"}},{"name":"mux/refunds-endpoint","openIn":{"kind":"session","id":"s2","name":"Refunds endpoint"}}],"remote":[{"name":"origin/feature/checkout-v2"}]}"""
@@ -123,20 +121,22 @@ class SourceControlShots {
             Scene("15-incoming", incoming = 5, files = """[{"path":"src/debug.js","status":"added","staged":"none"}]"""),
             Scene("16-conflict", files = conflict, merging = true),
             Scene("17-pr-none"),
-            Scene("17b-pr-target-not-published", status = unpublishedNo, prBase = """{"target":"dev","onRemote":false,"local":true,"ahead":1}"""),
-            Scene("17c-pr-nothing-ahead", prBase = """{"target":"dev","onRemote":true,"local":true,"ahead":0}"""),
-            Scene("17d-pr-form-target-missing", prBase = """{"target":"dev","onRemote":false,"local":true,"ahead":1}""",
+            Scene("17d-pr-form-target-not-on-github", prBase = """{"target":"dev","onRemote":false}""",
                 set = { prForm = PrForm(target = "dev", title = "Add a product search box above the grid", body = "## What", by = "agent", loading = false, textFor = "dev") }),
             Scene("17e-pr-create-failed-details", set = { prForm = PrForm(target = "dev", title = "Add a product search box above the grid", body = "## What", by = "agent", loading = false, textFor = "dev") },
                 prCreate = HttpStatusCode.Conflict to """{"status":"unavailable","forge":"github","reason":"error","message":"pull request create failed: GraphQL: Something unexpected happened (createPullRequest)"}""",
                 click = listOf("scm_pr_create_go", "scm_pr_problem_details")),
-            // Ahmet's repo: published from the chat's branch, so origin's default IS it; main only here.
-            Scene("17f-pr-default-is-head", status = unpublishedNo, prBaseBy = mapOf(
-                "" to """{"target":"product-search-box","onRemote":true,"local":true,"ahead":0}""",
-                "dev" to """{"target":"dev","onRemote":false,"local":true,"ahead":1}""",
-            )),
-            Scene("17g-pr-form-self-target", set = { prForm = PrForm(target = "product-search-box", title = "Add a product search box above the grid", body = "## What", by = "agent", loading = false, textFor = "product-search-box") }),
-            Scene("17h-pr-unrelated", prBase = """{"target":"dev","onRemote":true,"local":true,"ahead":3,"related":false}"""),
+            Scene("17f-pr-form-no-commits", prBase = """{"target":"dev","onRemote":true,"ahead":0}""",
+                set = { prForm = PrForm(target = "dev", title = "Add a product search box above the grid", body = "## What", by = "agent", loading = false, textFor = "dev") }),
+            Scene("17g-pr-ask-push", set = {
+                prForm = PrForm(target = "dev", title = "Add a product search box above the grid", body = "## What", by = "agent", loading = false, textFor = "dev")
+                prAsk = dev.supermux.net.PrCreateResult(status = "ask", ask = "push", count = 2)
+            }),
+            Scene("17h-pr-ask-publish", status = """{"isRepo":true,"hasRemote":true,"remotes":["origin"],"branch":"product-search-box","upstream":null}""", set = {
+                prForm = PrForm(target = "dev", title = "Add a product search box above the grid", body = "## What", by = "agent", loading = false, textFor = "dev")
+                prAsk = dev.supermux.net.PrCreateResult(status = "ask", ask = "publish")
+            }),
+            Scene("13b-publish-pick-remote", status = """{"isRepo":true,"hasRemote":true,"remotes":["fork","origin"],"branch":"product-search-box","upstream":null}""", set = { pickingRemote = true }),
             Scene("18-pr-form", set = { prForm = PrForm(target = "dev", title = "Add a product search box above the grid", body = "## What\n- Add a product search box above the grid", by = "agent", loading = false, textFor = "dev") }),
             Scene("19-pr-open", pr = pr),
             Scene("20-clean", commits = "[]"),
@@ -155,7 +155,8 @@ class SourceControlShots {
             state.apply(s.set)
             if (state.picking) state.branches = kotlinx.coroutines.runBlocking { state.api.branches() }
             waitForIdle()
-            s.click.forEach { tag -> waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty() }; onNodeWithTag(tag).performClick(); waitForIdle() }
+            // Wait for the node, and for it to be enabled (Create waits for its target check).
+            s.click.forEach { tag -> waitUntil(timeoutMillis = 5_000) { onAllNodes(androidx.compose.ui.test.hasTestTag(tag) and androidx.compose.ui.test.isEnabled()).fetchSemanticsNodes().isNotEmpty() }; onNodeWithTag(tag).performClick(); waitForIdle() }
             if (s.click.any { it.startsWith("scm_publish_") }) { waitUntil(timeoutMillis = 5_000) { state.publishError != null || state.note != null }; waitForIdle() }
             save(dir, s.name, this, s.popup)
         }

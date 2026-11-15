@@ -154,8 +154,8 @@
     <string name="scm_sub_pullpush">Pull, Push</string>
     <string name="scm_sync">Sync</string>
     <string name="scm_sync_changes">Sync Changes</string>
-    <string name="scm_sync_counts">%1$s vs origin</string>
-    <string name="scm_sync_in">in sync with origin</string>
+    <string name="scm_sync_counts">%1$s vs %2$s</string>
+    <string name="scm_sync_in">in sync with %1$s</string>
     <string name="scm_sync_local">local only</string>
     <string name="scm_sync_unpublished">not published</string>
     <string name="scm_undo_last">Undo Last Commit</string>
@@ -290,32 +290,48 @@
     <string name="scm_failed_plain">That didn't work.</string>
     <string name="scm_details">Details</string>
     <string name="scm_details_hide">Hide details</string>
-    <string name="scm_published_to_with_base">Published to %1$s, with %2$s as its default branch.</string>
     <string name="scm_publish_name_taken">%1$s already has a repository named %2$s. Type another name, then try again.</string>
     <string name="scm_publish_partial">Created %1$s, but pushing to it didn't work. Try Publish Branch again, or see the details.</string>
     <string name="scm_publish_failed_plain">Couldn't publish to %1$s.</string>
     <string name="scm_remote_failed_plain">Couldn't add the remote.</string>
     <string name="scm_pr_publish_failed">Couldn't publish %1$s, so the pull request wasn't opened.</string>
-    <string name="scm_base_published">Published %1$s.</string>
-    <string name="scm_base_publish_failed">Couldn't publish %1$s.</string>
-    <string name="scm_pr_target_missing_short">%1$s isn't on the remote, so it can't be the target. Publish it, or pick another target.</string>
-    <string name="scm_pr_nothing_short">There is nothing to propose: this branch has no commits that %1$s doesn't have.</string>
     <string name="scm_pr_create_failed">Couldn't open the pull request.</string>
     <string name="scm_mr_create_failed">Couldn't open the merge request.</string>
     <string name="scm_pr_read_failed">Couldn't read the pull request from %1$s.</string>
-    <string name="scm_pr_target_local">%1$s isn't on %2$s yet, so a pull request can't target it. Publish %1$s first, or pick another target.</string>
-    <string name="scm_mr_target_local">%1$s isn't on %2$s yet, so a merge request can't target it. Publish %1$s first, or pick another target.</string>
-    <string name="scm_pr_target_absent">%1$s isn't on %2$s, so a pull request can't target it. Pick a target branch that is.</string>
-    <string name="scm_mr_target_absent">%1$s isn't on %2$s, so a merge request can't target it. Pick a target branch that is.</string>
-    <string name="scm_pr_target_local_short">%1$s isn't on %2$s yet.</string>
-    <string name="scm_pr_target_absent_short">%1$s isn't on %2$s.</string>
-    <string name="scm_publish_named">Publish %1$s</string>
-    <string name="scm_pr_other_target">Pick another target…</string>
-    <string name="scm_pr_nothing_ahead">%1$s has no commits that %2$s doesn't have yet, so there is nothing to propose.</string>
-    <string name="scm_pr_pick_target">Pick the branch to merge into.</string>
-    <string name="scm_pr_target_self">%1$s can't be its own target. Pick another branch.</string>
-    <string name="scm_pr_checking_target">Checking %1$s…</string>
-    <string name="scm_pr_no_target">There's no other branch to propose %1$s into yet. Pick a target, or publish one first.</string>
     <string name="scm_pr_unrelated">%1$s and %2$s have no history in common (each began with its own first commit), so they can't be merged with a pull request. Pick another target.</string>
     <string name="scm_pr_push_failed">Couldn't push your latest commits, so the pull request wasn't opened.</string>
+    <string name="scm_pr_choose_base">Choose a base branch.</string>
+    <string name="scm_pr_base_not_on_remote">The upstream branch %1$s does not exist on %2$s.</string>
+    <string name="scm_pr_no_commits_between">There are no commits between the base %1$s branch and the comparing %2$s branch.</string>
+    <string name="scm_pr_always_publish">Always Publish Branch</string>
+    <string name="scm_pr_always_push">Always Push</string>
+    <string name="scm_pr_continue_without">Continue Without Pushing</string>
+    <string name="scm_pr_ask_publish_q">There is no remote branch for %1$s on %2$s.</string>
+    <string name="scm_pr_ask_publish_body">Do you want to publish it and then create the pull request?</string>
+    <string name="scm_pr_ask_push_body">Do you want to push them before creating the pull request?</string>
+    <string name="scm_pr_push_commits">Push Commits</string>
+    <string name="scm_pick_remote_title">Pick a remote to publish the branch %1$s to:</string>
+    <string name="scm_get_latest_short">Get latest</string>
+    <string name="scm_tt_pull_push">Pull %1$d and push %2$d commits between %3$s</string>
+    <string name="scm_tt_sync">Synchronize Changes</string>
+    <plurals name="scm_pr_ask_push_q">
+        <item quantity="one">You have %1$d unpushed commit on %2$s.</item>
+        <item quantity="other">You have %1$d unpushed commits on %2$s.</item>
+    </plurals>
+    <plurals name="scm_base_ahead">
+        <item quantity="one">%1$d ahead</item>
+        <item quantity="other">%1$d ahead</item>
+    </plurals>
+    <plurals name="scm_base_has_new">
+        <item quantity="one">%1$s has %2$d new</item>
+        <item quantity="other">%1$s has %2$d new</item>
+    </plurals>
+    <plurals name="scm_tt_pull">
+        <item quantity="one">Pull %1$d commit from %2$s</item>
+        <item quantity="other">Pull %1$d commits from %2$s</item>
+    </plurals>
+    <plurals name="scm_tt_push">
+        <item quantity="one">Push %1$d commit to %2$s</item>
+        <item quantity="other">Push %1$d commits to %2$s</item>
+    </plurals>
 </resources>

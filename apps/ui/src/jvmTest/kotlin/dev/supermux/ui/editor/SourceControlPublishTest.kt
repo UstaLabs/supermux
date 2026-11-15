@@ -91,12 +91,12 @@ class SourceControlPublishTest {
         assertEquals(localized(Str.scm_remote_exists), s.publishError)
     }
 
-    @Test fun publish_from_a_chat_sends_its_base_and_says_it_became_the_default() {
+    @Test fun publish_to_github_sends_only_the_branch_never_a_base() {
         val bodies = mutableListOf<String>()
         val engine = MockEngine { req ->
             val p = req.url.encodedPath
             val b = when {
-                p.endsWith("/git/publish-new") -> { bodies += String((req.body as io.ktor.http.content.TextContent).bytes()); """{"ok":true,"url":"https://github.com/me/shop","base":"main"}""" }
+                p.endsWith("/git/publish-new") -> { bodies += String((req.body as io.ktor.http.content.TextContent).bytes()); """{"ok":true,"url":"https://github.com/me/shop"}""" }
                 p.endsWith("/git/status") -> noRemote
                 p.endsWith("/changes") -> """{"repos":[{"repo":"","baseSha":"h","files":[]}]}"""
                 p.endsWith("/git/history") -> """{"branch":"fix","base":"main","chat":[{"sha":"c41e9d2","subject":"x"}],"baseCommits":[]}"""
@@ -106,8 +106,8 @@ class SourceControlPublishTest {
         }
         val s = SourceControlState(SourceControlApi(BrokerApi("http://h", "t", HttpClient(engine)), "w1", "s1"))
         runBlocking { s.refresh(); s.sync("publish"); s.publishTo("github", "private") }
-        assertTrue(bodies.single().contains("\"base\":\"main\""), bodies.single())
-        assertEquals(localized(Str.scm_published_to_with_base, "https://github.com/me/shop", "main"), s.note)
+        assertFalse(bodies.single().contains("base"), bodies.single())
+        assertEquals(localized(Str.scm_published_to, "https://github.com/me/shop"), s.note)
     }
 
     @Test fun a_failure_says_it_plainly_and_keeps_the_tools_words_for_details() {
@@ -117,67 +117,83 @@ class SourceControlPublishTest {
         assertEquals("GraphQL: Something unexpected happened (createRepository)", s.publishDetails)
     }
 
-    /**
-     * Ahmet's repo: published from the chat's branch (qweqweqweqw), so GitHub's default IS that branch, and main is only
-     * here. The PR's target is never the branch itself: main, and since it isn't on GitHub, "Publish main", no form.
-     */
-    private fun prState(baseChecks: Map<String, String>, history: String = """{"branch":"qweqweqweqw","base":null,"chat":[{"sha":"c41e9d2","subject":"x"}],"baseCommits":[]}"""): Pair<SourceControlState, MutableList<String>> {
+    /** A chat on `fix` whose host answers the PR calls as given; [create] answers POST …/git/pr in turn. */
+    private fun prState(
+        defaultCheck: String,
+        create: List<Pair<HttpStatusCode, String>> = emptyList(),
+        status: String = """{"isRepo":true,"hasRemote":true,"remotes":["origin"],"branch":"fix","upstream":"origin/fix"}""",
+    ): Triple<SourceControlState, MutableList<String>, MutableList<String>> {
         val calls = mutableListOf<String>()
+        val posted = mutableListOf<String>()
+        var n = 0
         val engine = MockEngine { req ->
             val p = req.url.encodedPath
             calls += p + "?" + req.url.encodedQuery
-            val b = when {
-                p.endsWith("/git/pr/base") -> baseChecks[req.url.parameters["target"].orEmpty()] ?: "{}"
-                p.endsWith("/git/pr/text") -> """{"title":"Add the search box","body":"## What","by":"agent"}"""
-                p.endsWith("/git/pr") -> """{"status":"none","forge":"github"}"""
-                p.endsWith("/git/status") -> """{"isRepo":true,"hasRemote":true,"branch":"qweqweqweqw","upstream":"origin/qweqweqweqw"}"""
-                p.endsWith("/changes") -> """{"repos":[{"repo":"","baseSha":"h","files":[]}]}"""
-                p.endsWith("/git/history") -> history
-                p.endsWith("/git/branches") -> """{"current":"qweqweqweqw","local":[{"name":"qweqweqweqw"},{"name":"main"}],"remote":[]}"""
-                else -> "{}"
+            val body = (req.body as? io.ktor.http.content.TextContent)?.let { String(it.bytes()) }
+            if (req.method.value != "GET" && body != null) posted += "$p $body"
+            val (code, b) = when {
+                p.endsWith("/git/pr") && req.method.value == "POST" -> create.getOrElse(n++) { HttpStatusCode.OK to """{"status":"opened","url":"u","number":1}""" }
+                p.endsWith("/git/pr/base") -> HttpStatusCode.OK to defaultCheck
+                p.endsWith("/git/pr/text") -> HttpStatusCode.OK to """{"title":"Add the search box","body":"- a box","by":"agent"}"""
+                p.endsWith("/git/pr") -> HttpStatusCode.OK to """{"status":"none","forge":"github"}"""
+                p.endsWith("/git/status") -> HttpStatusCode.OK to status
+                p.endsWith("/changes") -> HttpStatusCode.OK to """{"repos":[{"repo":"","baseSha":"h","files":[]}]}"""
+                p.endsWith("/git/history") -> HttpStatusCode.OK to """{"branch":"fix","base":"main","chat":[{"sha":"c41e9d2","subject":"x"}],"baseCommits":[]}"""
+                else -> HttpStatusCode.OK to "{}"
             }
-            respond(ByteReadChannel(b), HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+            respond(ByteReadChannel(b), code, headersOf(HttpHeaders.ContentType, "application/json"))
         }
         val s = SourceControlState(SourceControlApi(BrokerApi("http://h", "t", HttpClient(engine)), "w1", "s1"))
         runBlocking { s.refresh() }
-        return s to calls
+        return Triple(s, calls, posted)
     }
 
-    private val originDefaultIsHead = """{"target":"qweqweqweqw","onRemote":true,"local":true,"ahead":0}"""
-
-    @Test fun the_target_is_never_the_branch_itself_and_a_base_not_on_github_offers_publish_not_the_form() {
-        val (s, _) = prState(mapOf("" to originDefaultIsHead, "main" to """{"target":"main","onRemote":false,"local":true,"ahead":1}"""))
-        assertEquals("main", s.prTarget?.target)
-        assertFalse(s.prTarget!!.onRemote)
-        runBlocking { s.openPrForm() }
-        assertNull(s.prForm, "no form that can only fail")
-    }
-
-    @Test fun once_the_target_is_on_github_the_form_opens_on_it_with_the_agents_text() {
-        val (s, calls) = prState(mapOf("" to originDefaultIsHead, "main" to """{"target":"main","onRemote":true,"local":true,"ahead":1}"""))
+    @Test fun the_form_opens_on_the_hosts_default_target_with_the_agents_text() {
+        val (s, calls, _) = prState("""{"target":"main","onRemote":true,"ahead":1}""")
         runBlocking { s.openPrForm() }
         assertEquals("main", s.prForm?.target)
         assertEquals("Add the search box", s.prForm?.title)
-        assertEquals("## What", s.prForm?.body)
-        assertTrue(calls.any { it.endsWith("/git/pr/text?") }, "the text is written for main")
+        assertEquals(1, s.prFormCheck?.ahead)
+        assertTrue(calls.any { it.contains("/git/pr/base?target=") }, "the host works out the default")
     }
 
-    @Test fun a_base_equal_to_the_branch_is_skipped_and_nothing_ahead_opens_no_form() {
-        val (s, _) = prState(
-            mapOf("" to originDefaultIsHead, "main" to """{"target":"main","onRemote":true,"local":true,"ahead":0}"""),
-            history = """{"branch":"qweqweqweqw","base":"qweqweqweqw","chat":[{"sha":"c41e9d2","subject":"x"}],"baseCommits":[]}""",
-        )
-        assertEquals("main", s.prTarget?.target)
+    @Test fun a_target_not_on_github_still_opens_the_form_with_the_extensions_check() {
+        val (s, _, _) = prState("""{"target":"main","onRemote":false}""")
         runBlocking { s.openPrForm() }
-        assertNull(s.prForm)
+        assertEquals("main", s.prForm?.target)
+        assertFalse(s.prFormCheck!!.onRemote)
     }
 
-    @Test fun the_forms_check_survives_the_poll_and_a_self_target_is_never_checked() {
-        val (s, _) = prState(mapOf("" to originDefaultIsHead, "main" to """{"target":"main","onRemote":true,"local":true,"ahead":2}"""))
-        runBlocking { s.openPrForm(); s.refresh() }
-        assertEquals(2, s.prFormCheck?.ahead)
-        runBlocking { s.checkPrTarget("qweqweqweqw") }
-        assertNull(s.prFormCheck, "the branch itself: Create stays off")
+    @Test fun unpushed_commits_are_asked_about_and_push_is_sent_only_when_answered() {
+        val (s, _, posted) = prState("""{"target":"main","onRemote":true,"ahead":3}""",
+            create = listOf(HttpStatusCode.Conflict to """{"status":"ask","ask":"push","count":2}"""))
+        runBlocking { s.openPrForm(); s.createPr() }
+        assertEquals("push", s.prAsk?.ask)
+        assertEquals(2, s.prAsk?.count)
+        assertTrue(posted.last().contains("\"push\":false"), posted.last())
+        runBlocking { s.createPr(push = true) }
+        assertTrue(posted.last().contains("\"push\":true"), posted.last())
+        assertNull(s.prForm, "opened")
+    }
+
+    @Test fun continue_without_pushing_and_always_are_sent_as_such_and_always_is_remembered() {
+        val (s, _, posted) = prState("""{"target":"main","onRemote":true,"ahead":3}""",
+            create = listOf(HttpStatusCode.Conflict to """{"status":"ask","ask":"push","count":1}""", HttpStatusCode.Conflict to """{"status":"ask","ask":"push","count":1}"""))
+        runBlocking { s.openPrForm(); s.createPr(); s.createPr(skipPush = true) }
+        assertTrue(posted.last().contains("\"skipPush\":true"), posted.last())
+        runBlocking { s.openPrForm(); s.alwaysPushForPr() }
+        assertEquals("always", s.prPush)
+        assertTrue(posted.any { it.contains("/settings/config") && it.contains("\"gitPrPush\":\"always\"") }, posted.joinToString())
+        assertTrue(posted.last().contains("\"publish\":true") && posted.last().contains("\"push\":true"), posted.last())
+    }
+
+    @Test fun publish_with_several_remotes_asks_which_and_publishes_there() {
+        val (s, _, posted) = prState("{}", status = """{"isRepo":true,"hasRemote":true,"remotes":["fork","origin"],"branch":"fix","upstream":null}""")
+        runBlocking { s.sync("publish") }
+        assertTrue(s.pickingRemote)
+        runBlocking { s.publishToRemote("fork") }
+        assertFalse(s.pickingRemote)
+        assertTrue(posted.any { it.endsWith("/git/publish {\"remote\":\"fork\"}") }, posted.joinToString())
     }
 
     /** Ahmet's asdasdwqe: master and qweqweqweqw began with their own first commits; GitHub refuses the PR. */
@@ -202,7 +218,5 @@ class SourceControlPublishTest {
         val said = localized(Str.scm_pr_unrelated, "qweqweqweqw", "master")
         assertEquals(said, s.prProblem)
         assertEquals(said to gh, s.details)
-        // A broker that says so up front: no form at all.
-        assertFalse(gh.contains("Couldn't"))
     }
 }

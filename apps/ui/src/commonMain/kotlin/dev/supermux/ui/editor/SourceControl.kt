@@ -10,6 +10,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -267,12 +268,8 @@ class SourceControlState(val api: SourceControlApi) {
         base = h?.base
         ownCommits = h?.chat?.size ?: 0
         api.pr()?.let { pr = it }
-        // No PR yet: can one be opened into the target? (Only then is Create offered.)
-        val wantTarget = pr?.status == "none" && last != null && status?.hasRemote == true
-        prTarget = if (wantTarget) resolvePrTarget() else null
-        prTargetKnown = wantTarget
         prForm?.target?.takeIf { it.isNotEmpty() }?.let { t -> api.prBase(t)?.let { prFormCheck = it } }
-        if (!prefsRead) api.prefs()?.let { (p, s) -> prefsRead = true; post = ScmPost.of(p); smart = s ?: "ask" }
+        if (!prefsRead) api.prefs()?.let { (p, s, push) -> prefsRead = true; post = ScmPost.of(p); smart = s ?: "ask"; prPush = push ?: "ask" }
         if (amend && (last == null || lastPushed)) amend = false
     }
 
@@ -330,6 +327,8 @@ class SourceControlState(val api: SourceControlApi) {
     /** Pull / push / publish / fetch, with VS Code's outcome in the note line. With no remote, Publish asks where to. */
     suspend fun sync(op: String) {
         if ((op == "publish" || op == "push") && status?.hasRemote == false) { openPublish(); return }
+        // Several remotes: which one (VS Code's quick pick); one: straight there.
+        if (op == "publish" && status?.upstream == null && (status?.remotes?.size ?: 0) > 1) { picking = false; closePublish(); pickingRemote = true; return }
         busy = true
         val r = api.sync(op)
         busy = false
@@ -351,12 +350,14 @@ class SourceControlState(val api: SourceControlApi) {
     var publishRunning by mutableStateOf<String?>(null)
     var publishError by mutableStateOf<String?>(null)
     var publishDetails by mutableStateOf<String?>(null)
-    /** Can a PR/MR into the target be opened (the form's, else the base, else origin's default); null: not known. */
-    var prTarget by mutableStateOf<dev.supermux.net.PrBaseCheck?>(null)
     /** The open form's target, checked (its own: the pane's poll never clears it); null: not checked yet, so Create is off. */
     var prFormCheck by mutableStateOf<dev.supermux.net.PrBaseCheck?>(null)
-    /** [prTarget] was worked out (null then means: no other branch to propose into). */
-    var prTargetKnown by mutableStateOf(false)
+    /** Before Create, the extension's question ("publish" or "push", with how many commits); null: none open. */
+    var prAsk by mutableStateOf<dev.supermux.net.PrCreateResult?>(null)
+    /** "Always" to that question, remembered on the host (the owner's, until users exist). */
+    var prPush by mutableStateOf("ask")
+    /** Publish Branch with several remotes: the pick of which (VS Code's "Pick a remote to publish the branch … to"). */
+    var pickingRemote by mutableStateOf(false)
     /** A PR action's failure, said in the PR section where it was clicked (its tool text under Details). */
     var prProblem by mutableStateOf<String?>(null)
 
@@ -374,19 +375,32 @@ class SourceControlState(val api: SourceControlApi) {
         publishInput = if (on) "" else status?.project.orEmpty()
     }
 
+    /** Publish Branch to the remote picked. */
+    suspend fun publishToRemote(remote: String) {
+        pickingRemote = false
+        busy = true
+        val r = api.publishTo(remote)
+        busy = false
+        problem = when {
+            r == null -> localized(Str.scm_offline)
+            r.status in setOf("pushed", "up_to_date") -> null
+            else -> failed(r.message ?: r.status)
+        }
+        refresh()
+    }
+
     /** VS Code's "Publish to GitHub": a new repository on the forge, made from this folder, and the branch pushed to it. */
     suspend fun publishTo(forge: String, visibility: String) {
         val name = publishInput.trim()
         val host = if (forge == "gitlab") "GitLab" else "GitHub" // i18n-ok: product names
         if (name.isNotEmpty() && !SCM_REPO_NAME.matches(name)) { publishError = localized(Str.scm_publish_bad_name); return }
         publishRunning = "$forge:$visibility"; publishError = null; publishDetails = null; note = null
-        // A chat's branch takes its base along (pushed first: the new repo's default), so a PR into it works at once.
-        val r = api.publishNew(forge, visibility, name.ifEmpty { null }, base = base)
+        val r = api.publishNew(forge, visibility, name.ifEmpty { null })
         publishRunning = null
         val cli = if (forge == "gitlab") "glab" else "gh" // i18n-ok: command names
         when {
             r == null -> publishError = localized(Str.scm_offline)
-            r.ok -> { closePublish(); problem = null; note = r.base?.let { b -> localized(Str.scm_published_to_with_base, r.url.orEmpty(), b) } ?: localized(Str.scm_published_to, r.url.orEmpty()) }
+            r.ok -> { closePublish(); problem = null; note = localized(Str.scm_published_to, r.url.orEmpty()) }
             r.message == ROUTE_MISSING -> publishError = localized(Str.scm_needs_newer_host)
             r.reason == "no_cli" -> publishError = localized(Str.scm_publish_no_cli, host, cli)
             r.reason == "not_authed" -> publishError = localized(Str.scm_publish_not_authed, host, cli)
@@ -507,29 +521,14 @@ class SourceControlState(val api: SourceControlApi) {
     }
 
     /**
-     * Where a PR/MR from this branch goes: the chat's base, else origin's default branch, else a local main / master /
-     * trunk / develop. Never the branch itself (a repo published from a chat's branch has that branch as its default).
-     * null: no other branch to propose into.
+     * Create Pull Request, as the GitHub Pull Requests extension opens it: on the default target (the branch this one
+     * was made from, else the remote's default; the host works it out), changeable. Its two checks show in the form.
      */
-    suspend fun resolvePrTarget(): dev.supermux.net.PrBaseCheck? {
-        val head = status?.branch
-        base?.takeIf { it != head }?.let { return api.prBase(it) }
-        api.prBase(null)?.takeIf { it.target != head }?.let { return it }
-        val local = (branches ?: api.branches()?.also { branches = it })?.local?.map { it.name }.orEmpty()
-        return listOf("main", "master", "trunk", "develop").firstOrNull { it != head && it in local }?.let { api.prBase(it) }
-    }
-
-    /**
-     * Create Pull Request: the form opens only when it can work (a target on the forge, commits to propose); else the
-     * section says why. [anyTarget] ("Pick another target…"): the form opens to choose one.
-     */
-    suspend fun openPrForm(anyTarget: Boolean = false) {
-        prProblem = null
-        val t = resolvePrTarget()
-        prTarget = t; prTargetKnown = true
-        if (!anyTarget && (t == null || !t.onRemote || t.ahead == 0 || t.related == false)) return
-        val target = t?.takeIf { it.onRemote && it.ahead != 0 && it.related != false }?.target.orEmpty()
-        prFormCheck = t?.takeIf { it.target == target }
+    suspend fun openPrForm() {
+        prProblem = null; prAsk = null
+        val t = api.prBase(null)
+        prFormCheck = t
+        val target = t?.target.orEmpty()
         prForm = PrForm(target = target, loading = target.isNotEmpty(), textFor = target.ifEmpty { null })
         if (target.isNotEmpty()) writePrText(target)
     }
@@ -547,14 +546,20 @@ class SourceControlState(val api: SourceControlApi) {
         writePrText(f.target)
     }
 
-    suspend fun createPr() {
+    /**
+     * Create. The host asks the extension's questions first (publish the branch / push N commits): shown by Create;
+     * [publish] / [push] / [skipPush] are the answers, "Always" ([prPush]) answers them for good.
+     */
+    suspend fun createPr(publish: Boolean = false, push: Boolean = false, skipPush: Boolean = false) {
         val f = prForm ?: return
         if (f.title.isBlank()) return
-        busy = true; prProblem = null
-        val r = api.createPr(f.title.trim(), f.body, f.target, f.draft)
+        val always = prPush == "always"
+        busy = true; prProblem = null; prAsk = null
+        val r = api.createPr(f.title.trim(), f.body, f.target, f.draft, publish = publish || always, push = push || always, skipPush = skipPush)
         busy = false
         when (r?.status) {
             null -> prProblem = localized(Str.scm_offline)
+            "ask" -> prAsk = r
             "opened", "exists" -> { prForm = null; prProblem = null; pr = api.pr(fresh = true) ?: pr }
             "publish_failed" -> prProblem = failed(r.message ?: "", localized(Str.scm_pr_publish_failed, status?.branch.orEmpty()))
             "push_failed" -> prProblem = failed(r.message ?: "", localized(Str.scm_pr_push_failed))
@@ -563,21 +568,11 @@ class SourceControlState(val api: SourceControlApi) {
         refresh()
     }
 
-    /** "Publish <target>": the base put on origin, so a PR/MR can target it. */
-    suspend fun publishPrTarget(target: String) {
-        busy = true; note = null
-        val r = api.publishBase(target)
-        busy = false
-        when {
-            r == null -> prProblem = localized(Str.scm_offline)
-            r.ok -> {
-                prProblem = null; note = localized(Str.scm_base_published, target)
-                val c = api.prBase(target, fresh = true)
-                prTarget = c
-                if (prForm?.target == target) { prFormCheck = c; checkPrTarget(target) }
-            }
-            else -> prProblem = failed(r.message ?: r.reason ?: "", localized(Str.scm_base_publish_failed, target))
-        }
+    /** "Always Publish Branch" / "Always Push": remembered, then Create goes on. */
+    suspend fun alwaysPushForPr() {
+        prPush = "always"
+        api.savePrefs(prPush = "always")
+        createPr()
     }
 
     /** The form's target changed: check it, and write the text for it (unless typed in). */
@@ -586,7 +581,7 @@ class SourceControlState(val api: SourceControlApi) {
         if (target.isEmpty() || target == status?.branch) return
         prFormCheck = api.prBase(target)
         val f = prForm ?: return
-        if (!f.edited && f.textFor != target && prFormCheck?.let { it.onRemote && it.ahead != 0 && it.related != false } == true) {
+        if (!f.edited && f.textFor != target && prFormCheck?.let { it.onRemote && it.ahead != 0 } == true) {
             prForm = f.copy(loading = true); writePrText(target)
         }
     }
@@ -616,19 +611,19 @@ class SourceControlState(val api: SourceControlApi) {
         "no_cli" -> localized(Str.scm_pr_no_cli)
         "not_authed" -> localized(Str.scm_pr_not_authed)
         "no_branch" -> localized(Str.scm_pr_no_branch)
-        "base_missing" -> { details = message?.let { localized(Str.scm_pr_target_missing_short, prForm?.target.orEmpty()) to it }; localized(Str.scm_pr_target_missing_short, prForm?.target.orEmpty()) }
+        "base_missing" -> withDetails(localized(Str.scm_pr_base_not_on_remote, prForm?.target.orEmpty(), forgeName()), message)
         // (A broker before "unrelated" sends it as an error: its words say so.)
         "unrelated" -> unrelated(message)
         "error" -> if (message != null && UNRELATED.containsMatchIn(message)) unrelated(message) else failed(message.orEmpty(), localized(if (pr?.forge == "gitlab") Str.scm_mr_create_failed else Str.scm_pr_create_failed))
-        "no_commits" -> { details = message?.let { localized(Str.scm_pr_nothing_short, prForm?.target.orEmpty()) to it }; localized(Str.scm_pr_nothing_short, prForm?.target.orEmpty()) }
+        "no_commits" -> withDetails(localized(Str.scm_pr_no_commits_between, prForm?.target.orEmpty(), status?.branch.orEmpty()), message)
         else -> failed(message ?: reason ?: "", localized(if (pr?.forge == "gitlab") Str.scm_mr_create_failed else Str.scm_pr_create_failed))
     }
 
-    private fun unrelated(message: String?): String {
-        val p = localized(Str.scm_pr_unrelated, status?.branch.orEmpty(), prForm?.target.orEmpty())
-        details = message?.let { p to it }
-        return p
-    }
+    private fun unrelated(message: String?): String = withDetails(localized(Str.scm_pr_unrelated, status?.branch.orEmpty(), prForm?.target.orEmpty()), message)
+
+    private fun withDetails(plain: String, raw: String?): String { details = raw?.let { plain to it }; return plain }
+
+    private fun forgeName(): String = if (pr?.forge == "gitlab" || pr?.pr?.forge == "gitlab") "GitLab" else "GitHub" // i18n-ok: product names
 
     suspend fun undoLastCommit() {
         val r = api.uncommit(repo)
@@ -725,6 +720,7 @@ fun SourceControlPane(
         WhereLine(state, scope, onBranches)
         if (state.picking) BranchPicker(state, scope, onOpenChat)
         if (state.publishing) PublishPicker(state, scope)
+        if (state.pickingRemote) RemotePicker(state, scope)
         state.problem?.let { p ->
             FailText(p, state.details?.takeIf { it.first == p }?.second, Modifier.padding(horizontal = Space.md, vertical = Space.xs), "scm_problem")
         }
@@ -901,30 +897,44 @@ private fun WhereLine(state: SourceControlState, scope: kotlinx.coroutines.Corou
     val cs = MaterialTheme.colorScheme
     val st = state.status ?: return
     val branch = st.branch ?: st.detachedSha?.let { localized(Str.scm_detached, it) } ?: return
-    Row(Modifier.fillMaxWidth().padding(start = Space.md, end = Space.md, bottom = 8.dp).testTag("scm_where"), verticalAlignment = Alignment.CenterVertically) {
+    // The branch and its OWN upstream: what pull / push / sync mean (VS Code's status bar). Never the base.
+    Row(Modifier.fillMaxWidth().padding(start = Space.md, end = Space.md, bottom = 4.dp).testTag("scm_where"), verticalAlignment = Alignment.CenterVertically) {
         Icon(Icons.AutoMirrored.Filled.CallSplit, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(14.dp))
         Text(localized(Str.scm_where_on), fontSize = 12.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(start = 6.dp))
         ScmHint(localized(Str.scm_branch_hint_title), localized(Str.scm_branch_hint)) {
             Text(branch, fontFamily = MonoFontFamily, fontSize = 11.5.sp, color = cs.primary, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(start = 4.dp).clickable(onClick = onBranches).testTag("scm_where_branch"))
         }
-        state.base?.let { b ->
-            Text(" · " + localized(Str.scm_where_from) + " ", fontSize = 12.sp, color = cs.onSurfaceVariant)
-            Text(b, fontFamily = MonoFontFamily, fontSize = 11.5.sp, color = cs.onSurface, maxLines = 1)
-        }
         Text(" · ", fontSize = 12.sp, color = cs.onSurfaceVariant)
+        val up = st.upstream.orEmpty()
         val (text, op) = when {
             !st.hasRemote -> localized(Str.scm_sync_local_publish) to "publish"
             st.upstream == null -> localized(Str.scm_sync_unpublished) to "publish"
-            st.ahead > 0 || st.behind > 0 -> localized(Str.scm_sync_counts, listOfNotNull(st.ahead.takeIf { it > 0 }?.let { "$it↑" }, st.behind.takeIf { it > 0 }?.let { "$it↓" }).joinToString(" ")) to "sync"
-            else -> localized(Str.scm_sync_in) to null
+            st.ahead > 0 || st.behind > 0 -> localized(Str.scm_sync_counts, listOfNotNull(st.behind.takeIf { it > 0 }?.let { "$it↓" }, st.ahead.takeIf { it > 0 }?.let { "$it↑" }).joinToString(" "), up) to "sync"
+            else -> localized(Str.scm_sync_in, up) to null
         }
         Text(
-            text, fontSize = 12.sp, color = if (op != null) cs.primary else cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            mono(text, up), fontSize = 12.sp, color = if (op != null) cs.primary else cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f, fill = false).then(
                 if (op == null) Modifier else Modifier.clickable { scope.launch { if (op == "publish") state.sync("publish") else { state.sync("pull"); state.sync("push") }; state.refresh() } },
             ).testTag("scm_where_sync"),
         )
+    }
+    // The base, on its own labelled line: what the chat has that it doesn't, what it has that the chat doesn't, and the
+    // explicit action for that. Never ↓↑ (those are the upstream's).
+    val base = state.base ?: return
+    val incoming = state.history?.incoming ?: 0
+    Row(Modifier.fillMaxWidth().padding(start = Space.md + 20.dp, end = Space.md, bottom = 8.dp).testTag("scm_base_line"), verticalAlignment = Alignment.CenterVertically) {
+        Text(localized(Str.scm_where_from) + " ", fontSize = 12.sp, color = cs.onSurfaceVariant)
+        Text(base, fontFamily = MonoFontFamily, fontSize = 11.5.sp, color = cs.onSurface, maxLines = 1)
+        Text(" · " + localizedPlural(Plurals.scm_base_ahead, state.ownCommits, state.ownCommits), fontSize = 12.sp, color = cs.onSurfaceVariant, maxLines = 1)
+        if (incoming > 0) {
+            Text(" · ", fontSize = 12.sp, color = cs.onSurfaceVariant)
+            Text(mono(localizedPlural(Plurals.scm_base_has_new, incoming, base, incoming), base), fontSize = 12.sp, color = cs.onSurfaceVariant, maxLines = 1)
+            Text(" · ", fontSize = 12.sp, color = cs.onSurfaceVariant)
+            Text(localized(Str.scm_get_latest_short), fontSize = 12.sp, color = cs.primary, maxLines = 1,
+                modifier = Modifier.clickable { scope.launch { state.getLatest() } }.testTag("scm_base_get_latest"))
+        }
     }
 }
 
@@ -1113,35 +1123,6 @@ private fun PrSection(state: SourceControlState, scope: kotlinx.coroutines.Corou
             read.status == "unavailable" -> FailText(localized(Str.scm_pr_read_failed, host), read.message, pad.padding(vertical = 6.dp), "scm_pr_read_failed", muted = true)
             form != null -> PrFormView(state, scope, form, gitlab, host)
             pr == null && state.last == null -> Text(mono(localized(Str.scm_pr_commit_first, state.status?.branch ?: ""), state.status?.branch ?: ""), fontSize = 12.5.sp, color = cs.onSurfaceVariant, modifier = pad.padding(vertical = 6.dp))
-            pr == null && state.prTarget?.let { !it.onRemote } == true -> Column(pad.padding(vertical = 6.dp).testTag("scm_pr_target_missing")) {
-                // The target isn't on the forge: a PR into it can't be opened. Publish it (it is here), or pick another.
-                val t = state.prTarget!!
-                Text(mono(localized(if (t.local) (if (gitlab) Str.scm_mr_target_local else Str.scm_pr_target_local) else (if (gitlab) Str.scm_mr_target_absent else Str.scm_pr_target_absent), t.target, host), t.target),
-                    fontSize = 12.5.sp, color = cs.onSurfaceVariant)
-                Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (t.local) Text(localized(Str.scm_publish_named, t.target), fontSize = 12.5.sp, fontWeight = FontWeight.Medium, color = cs.onPrimary,
-                        modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(if (state.busy) cs.primary.copy(alpha = 0.5f) else cs.primary)
-                            .clickable(enabled = !state.busy) { scope.launch { state.publishPrTarget(t.target) } }.padding(horizontal = 12.dp, vertical = 5.dp).testTag("scm_pr_publish_target"))
-                    Text(localized(Str.scm_pr_other_target), fontSize = 12.5.sp, color = cs.onSurface,
-                        modifier = Modifier.clip(RoundedCornerShape(6.dp)).border(1.dp, cs.outlineVariant, RoundedCornerShape(6.dp))
-                            .clickable { scope.launch { state.openPrForm(anyTarget = true) } }.padding(horizontal = 12.dp, vertical = 5.dp).testTag("scm_pr_other_target"))
-                }
-            }
-            pr == null && (state.prTarget?.ahead == 0 || state.prTarget?.related == false || (state.prTargetKnown && state.prTarget == null)) -> Column(pad.padding(vertical = 6.dp)) {
-                val head = state.status?.branch.orEmpty()
-                val t = state.prTarget
-                Text(
-                    when {
-                        t == null -> mono(localized(Str.scm_pr_no_target, head), head)
-                        t.related == false -> mono(localized(Str.scm_pr_unrelated, head, t.target), head, t.target)
-                        else -> mono(localized(Str.scm_pr_nothing_ahead, head, t.target), head, t.target)
-                    },
-                    fontSize = 12.5.sp, color = cs.onSurfaceVariant, modifier = Modifier.testTag(if (t != null) "scm_pr_nothing_ahead" else "scm_pr_no_target"),
-                )
-                Text(localized(Str.scm_pr_other_target), fontSize = 12.5.sp, color = cs.onSurface,
-                    modifier = Modifier.padding(top = 8.dp).clip(RoundedCornerShape(6.dp)).border(1.dp, cs.outlineVariant, RoundedCornerShape(6.dp))
-                        .clickable { scope.launch { state.openPrForm(anyTarget = true) } }.padding(horizontal = 12.dp, vertical = 5.dp).testTag("scm_pr_other_target"))
-            }
             pr == null -> Column(pad.padding(vertical = 6.dp)) {
                 Text(mono(localized(if (gitlab) Str.scm_mr_none else Str.scm_pr_none, state.status?.branch ?: ""), state.status?.branch ?: ""), fontSize = 12.5.sp, color = cs.onSurfaceVariant)
                 Row(
@@ -1210,9 +1191,14 @@ private fun TargetPicker(state: SourceControlState, scope: kotlinx.coroutines.Co
             Icon(Icons.Filled.KeyboardArrowDown, localized(Str.scm_pr_target_pick), tint = cs.onSurfaceVariant, modifier = Modifier.size(14.dp))
         }
         ScmMenu(expanded = open, onDismiss = { open = false }, tag = "scm_pr_target_menu") {
+            // The extension's base picker lists the base repository's branches: the remote's (upstream before origin),
+            // never this branch.
             val head = state.status?.branch
-            val names = state.branches?.local?.map { it.name }?.filter { it != head }.orEmpty()
-            (listOfNotNull(state.base) + names).distinct().forEach { n ->
+            val remotes = state.status?.remotes.orEmpty()
+            val from = when { "upstream" in remotes -> "upstream"; "origin" in remotes -> "origin"; else -> remotes.firstOrNull() }
+            val names = state.branches?.remote?.map { it.name }?.filter { from != null && it.startsWith("$from/") }
+                ?.map { it.removePrefix("$from/") }?.filter { it != head && it != "HEAD" }.orEmpty()
+            names.distinct().forEach { n ->
                 ScmMenuItem(n, onClick = { open = false; state.prForm = state.prForm?.copy(target = n) }, strong = n == f.target)
             }
         }
@@ -1265,27 +1251,23 @@ private fun PrFormView(state: SourceControlState, scope: kotlinx.coroutines.Coro
         }
         val publishFirst = state.status?.upstream == null
         LaunchedEffect(f.target) { state.checkPrTarget(f.target) }
-        // The target can't take a PR (none picked, the branch itself, not on the forge, nothing to propose): say why;
-        // Create stays off until the target is checked.
+        // The extension's two checks ("The upstream branch … does not exist on GitHub", "There are no commits
+        // between …"); Create waits for them.
         val head = state.status?.branch.orEmpty()
         val t = state.prFormCheck?.takeIf { it.target == f.target }
         val why = when {
-            f.target.isEmpty() -> localized(Str.scm_pr_pick_target)
-            f.target == head -> localized(Str.scm_pr_target_self, head)
-            t == null -> localized(Str.scm_pr_checking_target, f.target)
-            !t.onRemote -> localized(if (t.local) Str.scm_pr_target_local_short else Str.scm_pr_target_absent_short, t.target, host)
-            t.related == false -> localized(Str.scm_pr_unrelated, head, t.target)
-            t.ahead == 0 -> localized(Str.scm_pr_nothing_ahead, state.status?.branch.orEmpty(), t.target)
+            f.target.isEmpty() -> localized(Str.scm_pr_choose_base)
+            t == null -> null
+            !t.onRemote -> localized(Str.scm_pr_base_not_on_remote, t.target, host)
+            t.ahead == 0 -> localized(Str.scm_pr_no_commits_between, t.target, head)
             else -> null
         }
         // A failed Create says why right here, by the button it came from.
         state.prProblem?.let { p -> FailText(p, state.details?.takeIf { it.first == p }?.second, Modifier.padding(top = 8.dp), "scm_pr_problem") }
-        if (why != null) Row(Modifier.padding(top = 8.dp).testTag("scm_pr_form_why"), verticalAlignment = Alignment.CenterVertically) {
-            Text(mono(why, f.target), fontSize = 12.sp, color = if (t == null && f.target.isNotEmpty() && f.target != head) cs.onSurfaceVariant else LocalSemantics.current.warning, modifier = Modifier.weight(1f, fill = false))
-            if (t != null && !t.onRemote && t.local) Text(localized(Str.scm_publish_named, t.target), fontSize = 12.sp, color = cs.primary,
-                modifier = Modifier.padding(start = 8.dp).clickable(enabled = !state.busy) { scope.launch { state.publishPrTarget(t.target) } }.testTag("scm_pr_form_publish_target"))
-        }
-        val can = f.title.isNotBlank() && !state.busy && why == null && !f.loading
+        if (why != null) Text(mono(why, f.target, head), fontSize = 12.sp, color = LocalSemantics.current.warning, modifier = Modifier.padding(top = 8.dp).testTag("scm_pr_form_why"))
+        // The extension's questions before Create, in the pane.
+        state.prAsk?.let { a -> PrAskBox(state, scope, a, host) }
+        val can = f.title.isNotBlank() && !state.busy && why == null && t != null && !f.loading && state.prAsk == null
         Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
             val go = localized(if (publishFirst) Str.scm_pr_publish_create else Str.scm_pr_create_go) + if (f.draft) " " + localized(Str.scm_pr_draft) else ""
             Text(go, fontSize = 12.5.sp, fontWeight = FontWeight.Medium, color = cs.onPrimary,
@@ -1523,6 +1505,60 @@ private fun PublishPicker(state: SourceControlState, scope: kotlinx.coroutines.C
             }
         }
         state.publishError?.let { FailText(it, state.publishDetails, Modifier.padding(start = 2.dp, top = 6.dp), "scm_publish_error") }
+    }
+}
+
+/**
+ * The GitHub Pull Requests extension's questions before Create, inside the form: "There is no remote branch … publish
+ * it and then create?" (Publish Branch · Always Publish Branch) and "You have N unpushed commit(s) … push them before
+ * creating?" (Push Commits · Always Push · Continue Without Pushing). Always is remembered.
+ */
+@Composable
+private fun PrAskBox(state: SourceControlState, scope: kotlinx.coroutines.CoroutineScope, a: dev.supermux.net.PrCreateResult, host: String) {
+    val branch = state.status?.branch.orEmpty()
+    val publish = a.ask == "publish"
+    val extra = if (publish) listOf(localized(Str.scm_pr_always_publish) to { scope.launch { state.alwaysPushForPr() }; Unit })
+    else listOf(localized(Str.scm_pr_always_push) to { scope.launch { state.alwaysPushForPr() }; Unit },
+        localized(Str.scm_pr_continue_without) to { scope.launch { state.createPr(skipPush = true) }; Unit })
+    AskBox(
+        question = if (publish) localized(Str.scm_pr_ask_publish_q, branch, host) else localizedPlural(Plurals.scm_pr_ask_push_q, a.count, a.count, branch),
+        body = localized(if (publish) Str.scm_pr_ask_publish_body else Str.scm_pr_ask_push_body),
+        confirm = localized(if (publish) Str.scm_publish_branch else Str.scm_pr_push_commits),
+        onConfirm = { scope.launch { if (publish) state.createPr(publish = true) else state.createPr(push = true) } },
+        onCancel = { state.prAsk = null }, tag = "scm_pr_ask", danger = false, start = 0.dp, extra = extra,
+    )
+}
+
+/** VS Code's "Pick a remote to publish the branch … to:", for a repo with several remotes. */
+@Composable
+private fun RemotePicker(state: SourceControlState, scope: kotlinx.coroutines.CoroutineScope) {
+    val cs = MaterialTheme.colorScheme
+    val remotes = state.status?.remotes.orEmpty()
+    val branch = state.status?.branch.orEmpty()
+    var sel by remember { mutableStateOf(maxOf(0, remotes.indexOf("origin"))) }
+    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    Column(
+        Modifier.padding(horizontal = 12.dp).padding(bottom = 10.dp).fillMaxWidth().clip(RoundedCornerShape(8.dp))
+            .background(cs.surfaceContainerHighest).border(1.dp, cs.outlineVariant, RoundedCornerShape(8.dp)).padding(8.dp)
+            .focusRequester(focus).focusable()
+            .onPreviewKeyEvent { e ->
+                if (e.type != androidx.compose.ui.input.key.KeyEventType.KeyDown || remotes.isEmpty()) return@onPreviewKeyEvent false
+                when (e.key) {
+                    androidx.compose.ui.input.key.Key.DirectionDown -> { sel = (sel + 1) % remotes.size; true }
+                    androidx.compose.ui.input.key.Key.DirectionUp -> { sel = (sel - 1 + remotes.size) % remotes.size; true }
+                    androidx.compose.ui.input.key.Key.Enter -> { remotes.getOrNull(sel)?.let { scope.launch { state.publishToRemote(it) } }; true }
+                    androidx.compose.ui.input.key.Key.Escape -> { state.pickingRemote = false; true }
+                    else -> false
+                }
+            }
+            .testTag("scm_remote_pick"),
+    ) {
+        Text(mono(localized(Str.scm_pick_remote_title, branch), branch), fontSize = 11.5.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(start = 2.dp, bottom = 6.dp))
+        remotes.forEachIndexed { i, r ->
+            QuickRow(Icons.Filled.CloudUpload, r, null, selected = i == sel, enabled = !state.busy, tag = "scm_remote_$r",
+                onHover = { sel = i }, onClick = { scope.launch { state.publishToRemote(r) } })
+        }
     }
 }
 
