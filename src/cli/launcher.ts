@@ -4,14 +4,16 @@
 import { writeFileSync } from "fs"
 import { join } from "path"
 import { IS_COMPILED } from "../shared/build-info"
-import { files, host } from "@supermux/platform"
+import { files, host, paths } from "@supermux/platform"
 
 export function installSupermuxLauncher(binDir: string, brokerRoot: string, opts: { execPath?: string; compiled?: boolean; platform?: NodeJS.Platform } = {}): string {
   files.mkdirPrivate(binDir)
   const execPath = opts.execPath ?? process.execPath
   const compiled = opts.compiled ?? IS_COMPILED
-  const cli = join(brokerRoot, "src", "cli.ts")
-  if ((opts.platform ?? host.os()) === "win32") {
+  const platform = opts.platform ?? host.os()
+  // The checkout path in the launcher's own OS's spelling (a POSIX script never gets backslashes).
+  const cli = paths.flavor(platform).join(brokerRoot, "src", "cli.ts")
+  if (platform === "win32") {
     const launcher = join(binDir, "supermux.cmd")
     writeFileSync(launcher, compiled ? `@"${execPath}" %*\r\n` : `@"${execPath}" "${cli}" %*\r\n`)
     return launcher
