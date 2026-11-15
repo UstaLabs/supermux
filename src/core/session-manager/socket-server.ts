@@ -69,10 +69,20 @@ export class ShimLiveness {
   }
 }
 
+/**
+ * #156: is the process on a new connection part of the socket's session (peer-identity.ts)? "log" (the rollout default)
+ * only records a would-be denial; "enforce" answers its ops "not allowed: …" and closes a register; "off" skips it.
+ */
+export type PeerAuth = {
+  mode: "off" | "log" | "enforce"
+  check: (session_id: string, socket: Socket) => Promise<{ ok: boolean; why?: string; peer?: { pid: number; uid: number | null } | null }>
+}
+
 export async function startSocketServer(opts: {
   socketsDir: string
   handler: ServerHandler
   onStatusChange?: (session_id: string, connected: boolean, last_pong_at?: number) => void
+  peerAuth?: PeerAuth
 }): Promise<SocketServer> {
   const usesFilesystem = usesFilesystemEndpoint()
   if (usesFilesystem) {
@@ -120,16 +130,31 @@ export async function startSocketServer(opts: {
     if (!set) { set = new Set(); conns.set(session_id, set) }
     set.add(socket)
     let buf: Buffer = Buffer.alloc(0)
+    // Checked once per connection, before its first frame is handled.
+    const auth = opts.peerAuth
+    const verdict = auth && auth.mode !== "off"
+      ? auth.check(session_id, socket).then((v) => {
+          if (!v.ok) log.warn(auth.mode === "enforce" ? "peer_denied" : "peer_would_deny", { session_id, pid: v.peer?.pid, uid: v.peer?.uid, why: v.why })
+          return auth.mode === "enforce" ? v : { ok: true as const }
+        }, (err: unknown) => { log.warn("peer_check_failed", { session_id, err: String(err) }); return { ok: true as const } })
+      : Promise.resolve({ ok: true as const })
     socket.on("data", async (chunk: Buffer) => {
       buf = Buffer.concat([buf, chunk])
       const { messages, rest } = decodeFrames(buf)
       buf = rest
+      const v = await verdict
       for (const raw of messages) {
         let m: SocketFrame
         try {
           m = parseSocketFrame(raw)
         } catch (err) {
           log.warn("socket_frame_invalid", { session_id, err: err instanceof Error ? err.message : String(err) })
+          continue
+        }
+        if (!v.ok) {
+          // Not this session's process: no liveness, no registration, every op refused with the reason.
+          if (m.kind === "outbound" || m.kind === "orchestration") socket.write(encodeFrame({ kind: "result", call_id: m.call_id, ok: false, error: `not allowed: ${"why" in v ? v.why : "not part of this session"}. Run supermux from your own session's shell.` }))
+          else if (m.kind === "register") socket.end()
           continue
         }
         markAlive(session_id)

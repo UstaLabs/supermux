@@ -202,7 +202,8 @@ import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discov
 import { followAdapterModels, LearnedModels } from "./core/models/learned"
 import { discoverGrokModels } from "./core/agents/grok/model-discovery"
 import { grokHasScheduledTasks } from "./core/agents/grok/scheduled-tasks"
-import { keeperAgentRunning } from "../packages/supermux-core/src/keeper/index.js"
+import { keeperAgentRunning, keeperPidOf } from "../packages/supermux-core/src/keeper/index.js"
+import { checkPeer } from "./core/session-manager/peer-identity"
 import { discoverAntigravityModels } from "./core/agents/antigravity/model-discovery"
 import { refreshModelCache, seedModelCache, SharedRefreshes, type ModelDiscoverers } from "./core/models/refresh"
 import { listOpenCodeProviders, setOpenCodeApiKey, startOpenCodeOAuth, finishOpenCodeOAuth } from "./core/agents/opencode/auth-ops"
@@ -4025,6 +4026,16 @@ const server = await startSocketServer({
     onRegister: (m) => sessionManager.handleRegister(m),
     onOutbound: (m) => sessionManager.handleOutbound(m),
     onOrchestration: (m) => sessionManager.handleOrchestration(m),
+  },
+  // #156: is a connection's process part of the socket's session? Its root is the session's keeper (a persistent-runtime
+  // session's own pid). MUX_PEER_AUTH: "log" (default while it beds in: would-be denials are only logged) | "enforce" | "off".
+  peerAuth: {
+    mode: (["off", "log", "enforce"] as const).find((m) => m === process.env.MUX_PEER_AUTH) ?? "log",
+    check: async (session_id, socket) => {
+      const s = registry.get(session_id)
+      const root = !s ? undefined : isPersistentRuntimeSession(s) ? (s.pid || undefined) : await keeperPidOf(join(STATE_DIR, "core", s.agent), s.id)
+      return checkPeer(socket, root)
+    },
   },
 })
 
