@@ -36,6 +36,8 @@ fun viewTitleOf(view: ViewDto, sessionName: (String) -> String? = { null }): Vie
         "editor" -> when (view.stateString("mode")) {
             "file" -> view.stateString("path")?.let(::pathLeaf)?.ifBlank { null }?.let { ViewTitle.Name(it) } ?: ViewTitle.Word.FILE
             "diff" -> ViewTitle.Word.CHANGES
+            // #72: one Source Control file's diff, named after the file as VS Code's editor tab is.
+            "scmdiff" -> view.stateString("path")?.let(::pathLeaf)?.ifBlank { null }?.let { ViewTitle.Name(it) } ?: ViewTitle.Word.CHANGES
             // "Files", not "Explorer": the tab says what it holds, the way Changes does.
             else -> ViewTitle.Word.FILES
         }

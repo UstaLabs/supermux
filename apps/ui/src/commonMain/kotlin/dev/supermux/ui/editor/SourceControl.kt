@@ -22,6 +22,12 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.border
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -42,7 +48,6 @@ import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.rememberTooltipState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -180,9 +185,9 @@ fun SourceControlPane(
             Modifier.fillMaxWidth().heightIn(min = 34.dp).padding(start = Space.md, end = Space.xs),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(localized(Str.scm_title), fontSize = 11.sp, fontWeight = FontWeight.Medium, color = cs.onSurfaceVariant, modifier = Modifier.weight(1f))
-            if (onReview != null) ScmIcon(Icons.Outlined.RateReview, localized(Str.scm_review_hint), "scm_review", onClick = onReview)
-            ScmIcon(Icons.Filled.Refresh, localized(Str.scm_refresh), "scm_refresh") { scope.launch { state.refresh() } }
+            Text(localized(Str.scm_title_caps), fontSize = 11.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.44.sp, color = cs.onSurfaceVariant, modifier = Modifier.weight(1f))
+            if (onReview != null) ScmIcon(Icons.Outlined.RateReview, localized(Str.scm_review), "scm_review", hint = localized(Str.scm_review_hint), onClick = onReview)
+            ScmIcon(Icons.Filled.Refresh, localized(Str.scm_refresh), "scm_refresh", hint = localized(Str.scm_hint_refresh)) { scope.launch { state.refresh() } }
         }
         state.problem?.let { p ->
             Text(p, fontSize = 12.sp, color = cs.error, modifier = Modifier.padding(horizontal = Space.md, vertical = Space.xs).testTag("scm_problem"))
@@ -252,13 +257,13 @@ private fun GroupHeader(
                 fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface, modifier = Modifier.weight(1f).padding(start = 2.dp),
             )
             if (group == ScmGroup.Changes && (hovered || touch)) {
-                ScmIcon(Icons.AutoMirrored.Filled.Undo, localized(Str.scm_discard_all), "scm_discard_all") { state.ask = ScmAsk.DiscardAll(repo, files.size) }
+                ScmIcon(Icons.AutoMirrored.Filled.Undo, localized(Str.scm_discard_all), "scm_discard_all", hint = localized(Str.scm_hint_discard_all)) { state.ask = ScmAsk.DiscardAll(repo, files.size) }
             }
             // Labelled and always there, like the + on each row.
             val all = files.map { it.path }
             when (group) {
-                ScmGroup.Staged -> GroupAction(Icons.Filled.Remove, localized(Str.scm_unstage_all), "scm_unstage_all") { scope.launch { state.stage(repo, all, false) } }
-                else -> GroupAction(Icons.Filled.Add, localized(Str.scm_stage_all), "scm_stage_all_${group.name.lowercase()}") { scope.launch { state.stage(repo, all, true) } }
+                ScmGroup.Staged -> GroupAction(Icons.Filled.Remove, localized(Str.scm_unstage_all), localized(Str.scm_hint_unstage_all), "scm_unstage_all") { scope.launch { state.stage(repo, all, false) } }
+                else -> GroupAction(Icons.Filled.Add, localized(Str.scm_stage_all), localized(Str.scm_hint_stage_all), "scm_stage_all_${group.name.lowercase()}") { scope.launch { state.stage(repo, all, true) } }
             }
             Text(
                 "${files.size}", fontSize = 11.sp, color = cs.onSurface,
@@ -305,17 +310,17 @@ private fun FileRow(
             )
             Text(dir, fontSize = 11.5.sp, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(start = 6.dp))
             if (hovered || touch) {
-                ScmIcon(Icons.Outlined.FileOpen, localized(Str.scm_open_file), "scm_open_${f.path}") { onOpenFile(repo, f.path) }
+                ScmIcon(Icons.Outlined.FileOpen, localized(Str.scm_open_file), "scm_open_${f.path}", hint = localized(Str.scm_hint_open_file)) { onOpenFile(repo, f.path) }
                 if (group == ScmGroup.Changes) {
-                    ScmIcon(Icons.AutoMirrored.Filled.Undo, localized(Str.scm_discard), "scm_discard_${f.path}") {
+                    ScmIcon(Icons.AutoMirrored.Filled.Undo, localized(Str.scm_discard), "scm_discard_${f.path}", hint = localized(Str.scm_hint_discard)) {
                         state.ask = if (state.ask == ScmAsk.Discard(repo, f.path)) null else ScmAsk.Discard(repo, f.path)
                     }
                 }
             }
             // The row's + or −: never hidden.
             when (group) {
-                ScmGroup.Staged -> ScmIcon(Icons.Filled.Remove, localized(Str.scm_unstage), "scm_unstage_${f.path}", main = true) { scope.launch { state.stage(repo, listOf(f.path), false) } }
-                else -> ScmIcon(Icons.Filled.Add, localized(Str.scm_stage), "scm_stage_${f.path}", main = true) { scope.launch { state.stage(repo, listOf(f.path), true) } }
+                ScmGroup.Staged -> ScmIcon(Icons.Filled.Remove, localized(Str.scm_unstage), "scm_unstage_${f.path}", main = true, hint = localized(Str.scm_hint_unstage)) { scope.launch { state.stage(repo, listOf(f.path), false) } }
+                else -> ScmIcon(Icons.Filled.Add, localized(Str.scm_stage), "scm_stage_${f.path}", main = true, hint = localized(Str.scm_hint_stage)) { scope.launch { state.stage(repo, listOf(f.path), true) } }
             }
             Text(letter, fontFamily = MonoFontFamily, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = letterColor(letter), modifier = Modifier.width(16.dp).padding(start = 4.dp))
         }
@@ -346,30 +351,39 @@ private fun letterColor(letter: String): Color {
 @Composable
 private fun AskBox(question: String, body: String, confirm: String, onConfirm: () -> Unit, onCancel: () -> Unit, tag: String) {
     val cs = MaterialTheme.colorScheme
-    Column(
+    val shape = RoundedCornerShape(8.dp)
+    Row(
         Modifier.padding(start = 24.dp, end = Space.sm, top = 2.dp, bottom = 6.dp).fillMaxWidth()
-            .background(cs.surfaceContainerHighest, RoundedCornerShape(8.dp)).padding(horizontal = 10.dp, vertical = 9.dp).testTag(tag),
+            .clip(shape).background(cs.surfaceContainerHighest).border(1.dp, cs.outlineVariant, shape).height(IntrinsicSize.Min).testTag(tag),
     ) {
-        Text(question, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface)
-        Text(body, fontSize = 12.5.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
-        Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            TextButton(onClick = onConfirm, modifier = Modifier.testTag("${tag}_confirm")) { Text(confirm, color = cs.error, fontSize = 12.5.sp) }
-            TextButton(onClick = onCancel, modifier = Modifier.testTag("${tag}_cancel")) { Text(localized(Str.scm_cancel), fontSize = 12.5.sp) }
+        // The red left edge: a question about throwing work away.
+        Box(Modifier.width(2.dp).fillMaxHeight().background(cs.error))
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 9.dp)) {
+            Text(question, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface)
+            Text(body, fontSize = 12.5.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
+            Row(Modifier.padding(top = 9.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    confirm, fontSize = 12.5.sp, fontWeight = FontWeight.Medium, color = cs.error,
+                    modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(cs.error.copy(alpha = 0.18f))
+                        .border(1.dp, cs.error.copy(alpha = 0.5f), RoundedCornerShape(6.dp)).clickable(onClick = onConfirm)
+                        .padding(horizontal = 12.dp, vertical = 4.dp).testTag("${tag}_confirm"),
+                )
+                Text(
+                    localized(Str.scm_cancel), fontSize = 12.5.sp, color = cs.onSurfaceVariant,
+                    modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onCancel)
+                        .padding(horizontal = 12.dp, vertical = 4.dp).testTag("${tag}_cancel"),
+                )
+            }
         }
     }
 }
 
 /** An icon button with its name for the hover tooltip and for screen readers; [main] = the row's + / −, in the accent. */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ScmIcon(icon: ImageVector, label: String, tag: String, main: Boolean = false, onClick: () -> Unit) {
+private fun ScmIcon(icon: ImageVector, label: String, tag: String, main: Boolean = false, hint: String? = null, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val touch = LocalWindowWidthClass.current == WindowWidthClass.Compact
-    TooltipBox(
-        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
-        tooltip = { PlainTooltip { Text(label) } },
-        state = rememberTooltipState(),
-    ) {
+    ScmHint(label, hint) {
         Box(
             Modifier.size(if (touch) 34.dp else 24.dp).clickable(onClick = onClick).testTag(tag),
             contentAlignment = Alignment.Center,
@@ -379,10 +393,30 @@ private fun ScmIcon(icon: ImageVector, label: String, tag: String, main: Boolean
     }
 }
 
+/** The hover hint: the button's name, then what it does in one line (the button guide's words). */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ScmHint(label: String, hint: String?, content: @Composable () -> Unit) {
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        tooltip = {
+            PlainTooltip(modifier = Modifier.widthIn(max = 300.dp)) {
+                Column {
+                    Text(label, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                    if (hint != null) Text(hint, fontSize = 12.sp)
+                }
+            }
+        },
+        state = rememberTooltipState(),
+        content = content,
+    )
+}
+
 /** "+ Stage All" / "− Unstage All": labelled, always shown, in the accent. */
 @Composable
-private fun GroupAction(icon: ImageVector, label: String, tag: String, onClick: () -> Unit) {
+private fun GroupAction(icon: ImageVector, label: String, hint: String, tag: String, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
+    ScmHint(label, hint) {
     Row(
         Modifier.padding(start = 2.dp).background(cs.primary.copy(alpha = 0.12f), RoundedCornerShape(5.dp)).clickable(onClick = onClick)
             .padding(start = 4.dp, end = 7.dp, top = 2.dp, bottom = 2.dp).testTag(tag),
@@ -391,5 +425,6 @@ private fun GroupAction(icon: ImageVector, label: String, tag: String, onClick: 
         Icon(icon, null, tint = cs.primary, modifier = Modifier.size(14.dp))
         Spacer(Modifier.width(3.dp))
         Text(label, fontSize = 11.5.sp, fontWeight = FontWeight.Medium, color = cs.primary)
+    }
     }
 }

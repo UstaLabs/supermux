@@ -37,7 +37,8 @@ fun viewTitle(view: ViewDto, sessionName: (String) -> String? = { null }): Strin
                 ViewTitle.Word.CHAT -> Str.shell_kind_chat
                 ViewTitle.Word.TERMINAL -> Str.shell_kind_terminal
                 ViewTitle.Word.FILE -> Str.notify_file
-                ViewTitle.Word.CHANGES -> Str.shell_kind_changes
+                // #72 v4: the Changes view is VS Code's Source Control, and its tab says so.
+                ViewTitle.Word.CHANGES -> Str.scm_title
                 ViewTitle.Word.FILES -> Str.shell_kind_files
                 ViewTitle.Word.DISPLAY -> Str.shell_kind_display
                 ViewTitle.Word.PAGE -> Str.words_view_page

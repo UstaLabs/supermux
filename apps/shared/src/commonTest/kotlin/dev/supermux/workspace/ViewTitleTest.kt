@@ -18,6 +18,8 @@ class ViewTitleTest {
         assertEquals(ViewTitle.Word.FILES, viewTitleOf(view("editor", mapOf("mode" to "tree"))))
         assertEquals(ViewTitle.Word.FILES, viewTitleOf(view("editor", emptyMap())))
         assertEquals(ViewTitle.Word.CHANGES, viewTitleOf(view("editor", mapOf("mode" to "diff"))))
+        // #72: one Source Control file's diff is named after its file.
+        assertEquals(ViewTitle.Name("App.jsx"), viewTitleOf(view("editor", mapOf("mode" to "scmdiff", "path" to "src/App.jsx"))))
     }
 
     @Test

@@ -59,4 +59,13 @@
     <string name="scm_back">Kaynak Denetimi'ne dön</string>
     <string name="scm_review">İnceleme</string>
     <string name="scm_review_hint">Sohbet başladığından beri değişen her şeyi yorumlarla ve ajanın anlatımıyla incele</string>
+    <string name="scm_title_caps">KAYNAK DENETİMİ</string>
+    <string name="scm_hint_stage">Bu dosyayı bir sonraki commit'e koyar. Henüz bir şey commit edilmez; − geri çıkarır.</string>
+    <string name="scm_hint_unstage">Bu dosyayı bir sonraki commit'ten çıkarır. Dosyadaki düzenlemeleriniz kalır.</string>
+    <string name="scm_hint_stage_all">Buradaki her dosyayı bir sonraki commit'e koyar.</string>
+    <string name="scm_hint_unstage_all">Her dosyayı bir sonraki commit'ten çıkarır. Düzenlemeleriniz kalır.</string>
+    <string name="scm_hint_discard">Bu dosyanın bu sohbetteki commit edilmemiş düzenlemelerini atar (yeni dosyalar silinir). Geri alınamaz.</string>
+    <string name="scm_hint_discard_all">Buradaki commit edilmemiş tüm düzenlemeleri atar (yeni dosyalar silinir). Geri alınamaz.</string>
+    <string name="scm_hint_open_file">Dosyanın kendisini düzenleyicide açar.</string>
+    <string name="scm_hint_refresh">Değişen dosyaların listesini yeniden okur. Hiçbir şeyi değiştirmez.</string>
 </resources>

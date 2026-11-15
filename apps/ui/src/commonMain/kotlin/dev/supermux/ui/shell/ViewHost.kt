@@ -180,6 +180,11 @@ fun ViewHost(
      */
     onOpenFile: (path: String, line: Int?, endLine: Int?) -> Unit = { _, _, _ -> },
     /**
+     * #72: open a Source Control file's diff (repo, path, the blob it is compared from; null: HEAD's) as a tab next to
+     * the chat, as VS Code does. Null (a phone: no panes): the diff opens inside the Source Control pane.
+     */
+    onOpenScmDiff: ((repo: String, path: String, base: String?) -> Unit)? = null,
+    /**
      * A Files pane renamed (`old → new`) or deleted (`old → null`) an entry; ABSOLUTE host paths.
      * The workspace retargets or flags the file tabs open under it (WorkspaceSession.applyEntryMoved).
      */
@@ -328,6 +333,22 @@ fun ViewHost(
                     onWalkthroughClosed = onWalkthroughClosed,
                     onClose = onCloseView,
                     onOpenFile = onOpenFile,
+                    onOpenScmDiff = onOpenScmDiff,
+                    modifier = modifier.testTag("editor-$workdir"),
+                )
+                // #72: one Source Control file's diff, as a tab next to the chat.
+                "scmdiff" -> DiffPaneForWorkspace(
+                    actions = actions,
+                    documents = documents,
+                    workspaceId = workspaceId,
+                    viewId = view.id,
+                    base = "head",
+                    lspSessionId = primarySessionId,
+                    walkthroughSessionId = null,
+                    onWalkthroughClosed = {},
+                    onClose = onCloseView,
+                    onOpenFile = onOpenFile,
+                    file = ScmOpenFile(view.stateString("repo").orEmpty(), view.stateString("path").orEmpty(), view.stateString("base")),
                     modifier = modifier.testTag("editor-$workdir"),
                 )
                 else -> ExplorerPaneForWorkspace(
@@ -781,6 +802,10 @@ private fun DiffPaneForWorkspace(
     onClose: () -> Unit,
     onOpenFile: (path: String, line: Int?, endLine: Int?) -> Unit,
     modifier: Modifier,
+    /** #72: a Source Control file's diff as a tab next to the chat; null: inside the pane. */
+    onOpenScmDiff: ((repo: String, path: String, base: String?) -> Unit)? = null,
+    /** #72: this view IS one file's diff (a "scmdiff" tab): no Source Control list, no way back. */
+    file: ScmOpenFile? = null,
 ) {
     // Same resolution rule as the file pane: review and walkthrough are session-keyed, and a
     // stale id would offer comment/submit affordances that can only no-op.
@@ -798,7 +823,7 @@ private fun DiffPaneForWorkspace(
     val walkthrough = selectedWalkthroughId?.let { actions.walkthroughState(it) }
     val reviewWalkthrough = reviewSessionId?.let { actions.walkthroughState(it) }
     // #72 v4: the workspace's Changes view IS VS Code's Source Control; a file's diff opens in it, with a way back.
-    val sourceControl = remember(workspaceId, reviewSessionId) { actions.sourceControl(workspaceId, reviewSessionId)?.let { SourceControlState(it) } }
+    val sourceControl = if (file != null) null else remember(workspaceId, reviewSessionId) { actions.sourceControl(workspaceId, reviewSessionId)?.let { SourceControlState(it) } }
     var openFile by remember(workspaceId) { mutableStateOf<ScmOpenFile?>(null) }
     // The review of everything since the chat started (comments, the base menu, the agent's walkthrough) stays one
     // click away, and opens by itself when a chat opens its walkthrough. Kept through a rotation like the base (#89).
@@ -811,15 +836,16 @@ private fun DiffPaneForWorkspace(
             onOpenDiff = { repo, path, group ->
                 val f = sourceControl.repos?.firstOrNull { it.repo == repo }?.files?.firstOrNull { it.path == path }
                 // "(Working Tree)": a partly staged file's unstaged part is its staged version → the file.
-                openFile = ScmOpenFile(repo, path, if (group == ScmGroup.Changes && f?.staged == "partial") f.indexBlob else null)
+                val base = if (group == ScmGroup.Changes && f?.staged == "partial") f.indexBlob else null
+                if (onOpenScmDiff != null) onOpenScmDiff(repo, path, base) else openFile = ScmOpenFile(repo, path, base)
             },
             onOpenFile = { repo, path -> onOpenFile(repoPath(repo, path), null, null) },
             modifier = modifier.fillMaxSize(),
         )
         return
     }
-    val shown = openFile
-    if (sourceControl != null && shown != null) {
+    val shown = file ?: openFile
+    if ((sourceControl != null || file != null) && shown != null) {
         LaunchedEffect(shown) {
             diff.diffBase = "head"
             diff.reloadDiff { spec -> actions.workspaceFsDiff(workspaceId, spec) }

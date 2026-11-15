@@ -59,4 +59,13 @@
     <string name="scm_back">Back to Source Control</string>
     <string name="scm_review">Review</string>
     <string name="scm_review_hint">Review everything that changed since the chat started, with comments and the agent's walkthrough</string>
+    <string name="scm_title_caps">SOURCE CONTROL</string>
+    <string name="scm_hint_stage">Puts this file in the next commit. Nothing is committed yet; − takes it back out.</string>
+    <string name="scm_hint_unstage">Takes this file out of the next commit. Your edits stay in the file.</string>
+    <string name="scm_hint_stage_all">Puts every file here in the next commit.</string>
+    <string name="scm_hint_unstage_all">Takes every file out of the next commit. Your edits stay.</string>
+    <string name="scm_hint_discard">Throws away this file's uncommitted edits in this chat (new files are deleted). Cannot be undone.</string>
+    <string name="scm_hint_discard_all">Throws away every uncommitted edit here (new files are deleted). Cannot be undone.</string>
+    <string name="scm_hint_open_file">Opens the file itself in the editor.</string>
+    <string name="scm_hint_refresh">Reloads the list of changed files. Changes nothing.</string>
 </resources>
