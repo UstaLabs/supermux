@@ -194,3 +194,53 @@ test("switchBranch: branch held by another worktree → checked_out_elsewhere", 
   expect(r.status).toBe("checked_out_elsewhere")
   if (r.status === "checked_out_elsewhere") expect(r.path).toContain("/w")
 })
+
+// ---- #72 G9: one git-branch service for a session's copy (G4) and the main folder (#152) ----
+import { branchList, folderState } from "./branches"
+
+/** Real git, many spawns: slow on Windows (CI), so a longer limit than bun's 5 s. */
+const G9_MS = 30_000
+
+test("branchList: default, upstream with ahead/behind, and where each branch is open", () => {
+  const { work } = repo()
+  const root = realpathSync(work)
+  g(work, "branch", "--set-upstream-to=origin/main", "main")
+  writeFileSync(join(work, "f.txt"), "2\n"); g(work, "commit", "-qam", "ahead")
+  const wtS = join(realpathSync(mkdtempSync(join(tmpdir(), "mux-br-wt-"))), "s")
+  g(work, "worktree", "add", "-q", "-b", "mux/s", wtS, "main")
+  const wtX = join(realpathSync(mkdtempSync(join(tmpdir(), "mux-br-wt-"))), "x")
+  g(work, "worktree", "add", "-q", wtX, "dev")
+  const owners = [{ id: "s-1", name: "Search", workdir: wtS }]
+  const fromFolder = branchList(work, owners)
+  const by = Object.fromEntries(fromFolder.local.map((b) => [b.name, b]))
+  expect(by["main"]).toMatchObject({ isDefault: true, upstream: "origin/main", ahead: 1, behind: 0, openIn: { kind: "this" } })
+  expect(by["mux/s"]!.openIn).toEqual({ kind: "session", id: "s-1", name: "Search" })
+  expect(by["dev"]!.openIn).toEqual({ kind: "external", path: realpathSync(wtX) })
+  expect(fromFolder.remote).toContainEqual({ name: "origin/main", isDefault: true })
+  expect(fromFolder.remote).toContainEqual({ name: "origin/remote-only", isDefault: false })
+  // from the session's copy, the main folder's branch reads as the folder
+  expect(Object.fromEntries(branchList(wtS, owners).local.map((b) => [b.name, b.openIn]))["main"]).toEqual({ kind: "folder" })
+  expect(fromFolder.current).toBe("main")
+  expect(root).toBe(realpathSync(work))
+}, G9_MS)
+
+test("branchList: no origin/HEAD falls back to init.defaultBranch, then main / master", () => {
+  const { work } = repo()
+  g(work, "remote", "set-head", "origin", "-d")
+  expect(branchList(work, []).local.find((b) => b.isDefault)?.name).toBe("main")
+}, G9_MS)
+
+test("folderState: clean, or how many files changed (new ones too), and the branch", () => {
+  const { work } = repo()
+  expect(folderState(work)).toEqual({ branch: "main", detachedSha: null, clean: true, changed: 0 })
+  writeFileSync(join(work, "f.txt"), "x\n"); writeFileSync(join(work, "new.txt"), "n\n")
+  expect(folderState(work)).toEqual({ branch: "main", detachedSha: null, clean: false, changed: 2 })
+}, G9_MS)
+
+test("switchBranch requireClean: a folder with changes is refused before git runs; a clean one switches", () => {
+  const { work } = repo()
+  writeFileSync(join(work, "new.txt"), "n\n")
+  expect(switchBranch(work, "dev", { requireClean: true })).toEqual({ status: "dirty", changed: 1 })
+  expect(g(work, "symbolic-ref", "--short", "HEAD")).toBe("main")
+  expect(switchBranch(work, "dev")).toEqual({ status: "switched", branch: "dev" })   // without the rule, git's own
+}, G9_MS)

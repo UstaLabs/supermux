@@ -51,8 +51,9 @@ test("the list names the chat or the folder that has each branch open", async ()
   const r = (await (await call(token, "/sessions/s-1/git/branches")).json()) as any
   expect(r.current).toBe("mux/one")
   const by = Object.fromEntries(r.local.map((b: any) => [b.name, b.openIn]))
+  expect(r.local.find((b: any) => b.name === "dev").isDefault).toBe(true)
   expect(by["mux/one"]).toEqual({ kind: "this" })
-  expect(by["mux/two"]).toEqual({ kind: "chat", id: "s-2", name: "Two" })
+  expect(by["mux/two"]).toEqual({ kind: "session", id: "s-2", name: "Two" })
   expect(by["dev"]).toEqual({ kind: "folder" })
   expect(by["feature/payments"]).toBeNull()
 }, REAL_GIT_MS)
@@ -69,6 +70,7 @@ test("a branch open in another chat or in the folder is refused by git, and noth
   const { one, token } = await setup()
   const r = (await (await call(token, "/sessions/s-1/git/switch", { name: "mux/two" })).json()) as any
   expect(r.status).toBe("checked_out_elsewhere")
+  expect(r.openIn).toEqual({ kind: "session", id: "s-2", name: "Two" })
   expect(((await (await call(token, "/sessions/s-1/git/switch", { name: "dev" })).json()) as any).status).toBe("checked_out_elsewhere")
   expect(liveBranch(one)).toBe("mux/one")
 }, REAL_GIT_MS)
