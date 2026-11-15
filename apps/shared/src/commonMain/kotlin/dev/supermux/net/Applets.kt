@@ -49,3 +49,92 @@ fun List<AppletDto>.pinned(): List<AppletDto> = filter { it.pin != null }.sorted
 /** How many applets the sidebar grid holds (desktop 3×3); a phone shows the first [PHONE_PINS]. */
 const val MAX_APPLET_PINS = 9
 const val PHONE_PINS = 8
+
+/** GET /applets/<name>: everything Applet info shows. */
+@Serializable
+data class AppletDetailDto(
+    val id: String,
+    val name: String,
+    val title: String = "",
+    val url: String = "",
+    val iconUrl: String? = null,
+    val status: String = "ok",
+    val kind: String = "static",
+    val stopped: Boolean = false,
+    val error: String? = null,
+    val needsYou: List<AppletNeedDto> = emptyList(),
+    val pin: Int? = null,
+    val process: AppletProcessDto? = null,
+    val secrets: List<AppletSecretDto> = emptyList(),
+    val jobs: List<AppletJobDto> = emptyList(),
+    val settings: List<AppletSettingDto> = emptyList(),
+    val backups: List<AppletBackupDto> = emptyList(),
+    val data: AppletDataDto? = null,
+    /** Its start command, from applet.json; null for a static applet. */
+    val run: String? = null,
+    /** Its folder on the host. */
+    val folder: String = "",
+    val updatedBy: String? = null,
+    val updatedAt: String = "",
+    val createdAt: String = "",
+)
+
+@Serializable
+data class AppletSecretDto(
+    val name: String,
+    /** set · missing · expired */
+    val state: String,
+    val expiresAt: String? = null,
+    val updatedAt: String? = null,
+    val updatedBy: String? = null,
+    /** applet.json asks for it (false: a value kept for a name it no longer asks for). */
+    val wanted: Boolean = true,
+)
+
+@Serializable
+data class AppletJobDto(val name: String, val every: String = "", val running: Boolean = false, val lastRun: AppletJobRunSummaryDto? = null)
+
+@Serializable
+data class AppletJobRunSummaryDto(val startedAt: String = "", val finishedAt: String? = null, val exitCode: Int? = null, val trigger: String = "")
+
+/** One run of a job, with the tail of what it printed. */
+@Serializable
+data class AppletJobRunDto(
+    val id: Long = 0,
+    val job: String = "",
+    val trigger: String = "",
+    val startedAt: String = "",
+    val finishedAt: String? = null,
+    val exitCode: Int? = null,
+    val output: String = "",
+)
+
+@Serializable
+data class AppletSettingDto(
+    val key: String,
+    val label: String = "",
+    val type: String = "text",
+    val options: List<String>? = null,
+    val value: String? = null,
+)
+
+@Serializable
+data class AppletBackupDto(val id: String, val kind: String = "nightly", val createdAt: String = "", val why: String? = null, val bytes: Long = 0)
+
+@Serializable
+data class AppletDataDto(
+    val dir: String = "",
+    val tables: List<AppletTableDto> = emptyList(),
+    val files: Int = 0,
+    val bytes: Long = 0,
+    val databaseBytes: Long = 0,
+)
+
+@Serializable
+data class AppletTableDto(val name: String, val rows: Long = 0, val file: String = "")
+
+@Serializable
+internal data class AppletValueBody(val value: String, val expiresAt: String? = null)
+
+@Serializable
+internal data class AppletTitleBody(val title: String)

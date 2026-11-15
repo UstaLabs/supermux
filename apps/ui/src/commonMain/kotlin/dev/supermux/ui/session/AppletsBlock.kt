@@ -38,6 +38,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.GridView
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -96,6 +97,8 @@ class AppletsActions(
     val open: (AppletDto) -> Unit,
     /** Shows the All applets page. */
     val showAll: () -> Unit,
+    /** Shows Applet info, at a tab ("secrets" for what he must fix; blank = Overview). */
+    val info: (AppletDto, String) -> Unit,
     /** Pins or unpins; null on success, else the reason, shown where he clicked. */
     val pin: suspend (AppletDto, Boolean) -> String?,
     /** The icon's bytes, null when it has none (the tile is lettered). */
@@ -334,10 +337,11 @@ private fun AppletMenu(a: AppletDto, actions: AppletsActions, anchor: Offset, sh
         add(AppletMenuItem(Icons.AutoMirrored.Outlined.OpenInNew, localized(Str.applets_menu_open), tag = "open") { actions.open(a); null })
         if (pinned) add(AppletMenuItem(Icons.Outlined.GridView, localized(Str.applets_menu_unpin), tag = "unpin") { actions.pin(a, false) })
         else if (!full) add(AppletMenuItem(Icons.Outlined.GridView, localized(Str.applets_menu_pin), tag = "pin") { actions.pin(a, true) })
+        add(AppletMenuItem(Icons.Outlined.Info, localized(Str.applets_menu_info), tag = "info") { actions.info(a, ""); null })
     }
     val needs = a.needsYou
     val body: @Composable () -> Unit = {
-        AppletMenuBody(a, actions, needs.map { n -> localized(if (n.state == "expired") Str.applets_menu_expired else Str.applets_menu_needed, n.secret) }, items, error, sheet) { item ->
+        AppletMenuBody(a, actions, needs.map { n -> localized(if (n.state == "expired") Str.applets_menu_expired else Str.applets_menu_needed, n.secret) }, items, error, sheet, onFix = { onDismiss(); actions.info(a, "secrets") }) { item ->
             scope.launch {
                 val why = item.run()
                 if (why == null) onDismiss() else error = why
@@ -387,6 +391,7 @@ private fun AppletMenuBody(
     items: List<AppletMenuItem>,
     error: String?,
     sheet: Boolean,
+    onFix: () -> Unit,
     onPick: (AppletMenuItem) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -403,8 +408,8 @@ private fun AppletMenuBody(
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(cs.outlineVariant))
         Spacer(Modifier.height(4.dp))
-        // What he needs to fix comes first (opens Applet info once it exists; until then it says what is wrong).
-        needLines.forEach { line -> AppletMenuLine(Icons.Outlined.Key, line, warn = true, sheet = sheet, tag = "applet_menu_need", onClick = null) }
+        // What he needs to fix comes first: it opens Applet info at Secrets.
+        needLines.forEach { line -> AppletMenuLine(Icons.Outlined.Key, line, warn = true, sheet = sheet, tag = "applet_menu_need") { onFix() } }
         items.forEach { item -> AppletMenuLine(item.icon, item.label, warn = item.warn, sheet = sheet, tag = "applet_menu_${item.tag}") { onPick(item) } }
         if (error != null) {
             Text(
