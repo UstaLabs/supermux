@@ -52,7 +52,7 @@ import { worktreesRoot } from "../../core/worktree/manager"
 import { getRepoInfo } from "../../core/git/repo-info"
 import { remoteStatus, fetchRemote, publishBranch, pushBranch, pullBranch } from "../../core/git/remote"
 import { branchList, liveBranch, realPath, samePath, switchBranch, type BranchOwner } from "../../core/git/branches"
-import { addRemote, checkLog, createPr, markReady, publishNew, readPr, type PrRead } from "../../core/git/forge"
+import { addRemote, checkLog, createPr, markReady, prBase, publishBase, publishNew, readPr, type PrBase, type PrRead } from "../../core/git/forge"
 import { prInput, writePrText, type PrTextWriter } from "../../core/git/pr-text"
 import type { AgentKind } from "../../core/agents/types"
 import { AGENT_KINDS, isAgentKind } from "../../shared/agents"
@@ -2408,6 +2408,8 @@ export class WebChannel implements Channel {
 
   /** #72: a branch's PR/MR as last read, per checkout and branch (GET …/git/pr). */
   private readonly prCache = new Map<string, { at: number; r: PrRead }>()
+  /** #72: whether a PR/MR into a target can be opened (GET …/git/pr/base), per checkout, target and branch. */
+  private readonly prBaseCache = new Map<string, { at: number; r: PrBase }>()
 
   private async gitWrite(workdir: string, op: string, req: Request): Promise<Response> {
     let body: { repo?: unknown; paths?: unknown; staged?: unknown; message?: unknown; all?: unknown; amend?: unknown; path?: unknown; side?: unknown; sha?: unknown; name?: unknown }
@@ -4203,11 +4205,23 @@ export class WebChannel implements Channel {
     }
     // #72: open a PR/MR from the branch the chat is on (published first when it isn't yet), mark one ready,
     // and read a failing check's log for "Ask the agent to fix".
-    const prWrite = path.match(/^\/(sessions|workspaces)\/([^/]+)\/git\/pr(\/ready|\/check-log|\/text)?$/)
-    if (prWrite && (method === "POST" || (method === "GET" && prWrite[3] === "/check-log"))) {
+    const prWrite = path.match(/^\/(sessions|workspaces)\/([^/]+)\/git\/pr(\/ready|\/check-log|\/text|\/base|\/publish-base)?$/)
+    if (prWrite && (method === "POST" || (method === "GET" && (prWrite[3] === "/check-log" || prWrite[3] === "/base")))) {
       const [, scope, rawId, sub] = prWrite
       const id = decodeURIComponent(rawId!)
       const workdir = scope === "sessions" ? this.opts.getSessionWorkdir?.(id) : this.opts.getWorkspaceWorkdir?.(id)
+      // Can a PR/MR into ?target= be opened: is it on origin (else: here, to publish), and is this branch ahead of it?
+      if (sub === "/base" && method === "GET") {
+        if (!workdir) return this.json({ error: `${scope === "sessions" ? "session" : "workspace"} not found` }, 404)
+        const target = (url.searchParams.get("target") ?? "").trim()
+        const key = `${workdir}\0base\0${target}\0${liveBranch(workdir)}`
+        const hit = this.prBaseCache.get(key)
+        if (hit && url.searchParams.get("fresh") !== "1" && Date.now() - hit.at < PR_CACHE_MS) return this.json(hit.r)
+        const r = await prBase(workdir, target)
+        if (!r) return target ? this.json({ error: "bad request" }, 400) : this.json({ error: "no default branch on origin" }, 409)
+        this.prBaseCache.set(key, { at: Date.now(), r })
+        return this.json(r)
+      }
       if (sub === "/check-log") {
         const checkUrl = url.searchParams.get("url") ?? ""
         if (!/^https?:\/\/\S+$/.test(checkUrl)) return this.json({ error: "bad request" }, 400)
@@ -4224,6 +4238,12 @@ export class WebChannel implements Channel {
         const branch = liveBranch(workdir)
         if (!branch) return this.json({ status: "unavailable", reason: "no_branch" }, 409)
         return this.json(await writePrText(await prInput(workdir, target, branch), this.opts.writePrText))
+      }
+      if (sub === "/publish-base") {
+        if (!workdir) return this.json({ error: `${scope === "sessions" ? "session" : "workspace"} not found` }, 404)
+        const r = await publishBase(workdir, typeof body.target === "string" ? body.target.trim() : "")
+        this.prBaseCache.clear(); this.prCache.clear()
+        return this.json(r, r.ok ? 200 : r.reason === "bad" ? 400 : 409)
       }
       if (sub === "/ready") {
         if (typeof body.number !== "number" || !Number.isInteger(body.number) || body.number <= 0) return this.json({ error: "bad request" }, 400)
@@ -4267,7 +4287,9 @@ export class WebChannel implements Channel {
       const given = typeof body.name === "string" ? body.name.trim() : ""
       const name = given || (await projectFolderName(workdir)).replace(/[^A-Za-z0-9._-]+/g, "-")
       if (!forge || !visibility || !/^[A-Za-z0-9._-]+$/.test(name)) return this.json({ error: "bad request" }, 400)
-      const r = await publishNew(workdir, { forge, name, visibility, branch: liveBranch(workdir) ?? undefined })
+      const base = typeof body.base === "string" && body.base.trim() ? body.base.trim() : undefined
+      const r = await publishNew(workdir, { forge, name, visibility, branch: liveBranch(workdir) ?? undefined, base })
+      this.prBaseCache.clear()
       this.prCache.clear()
       return this.json(r, r.ok ? 200 : 409)
     }

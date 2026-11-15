@@ -183,7 +183,7 @@ test("a failing check's log: GitHub job from its URL, GitLab job trace; the tail
 
 
 // ---- #72 G10: publishing a project that has no remote yet (VS Code's "Publish to GitHub") ----
-import { addRemote, publishNew } from "./forge"
+import { addRemote, prBase, publishNew } from "./forge"
 
 test("add a remote: a name and a URL git accepts; a taken name is said", async () => {
   const ok = fake([[/^git -C \/r remote add origin git@github.com:a\/b.git$/, { ok: true, out: "" }]])
@@ -220,4 +220,64 @@ test("publish to GitLab: glab creates it, then origin is added and the branch pu
     [/^git -C \/r push -u origin HEAD$/, { ok: true, out: "" }],
   ])
   expect(await publishNew("/r", { forge: "gitlab", name: "shop", visibility: "private", branch: "main" }, ex)).toEqual({ ok: true, url: "https://gitlab.com/acme/shop" })
+})
+
+test("publish from a chat's branch puts its base on first, so the new repo's default is the base", async () => {
+  const ex = fake([
+    [/^git check-ref-format --branch main$/, { ok: true, out: "main" }],
+    [/^git -C \/r rev-parse --verify --quiet refs\/heads\/main$/, { ok: true, out: "abc" }],
+    [/^gh repo create shop --private$/, { ok: true, out: "https://github.com/acme/shop\n" }],
+    [/^gh config get git_protocol/, { ok: true, out: "https" }],
+    [/^git -C \/r remote add origin/, { ok: true, out: "" }],
+    [/^git -C \/r push -u origin refs\/heads\/main:refs\/heads\/main$/, { ok: true, out: "" }],
+    [/^git -C \/r push -u origin HEAD$/, { ok: true, out: "" }],
+  ])
+  expect(await publishNew("/r", { forge: "github", name: "shop", visibility: "private", branch: "fix-search", base: "main" }, ex)).toEqual({ ok: true, url: "https://github.com/acme/shop", base: "main" })
+  const pushes = ex.calls.filter((c) => c.includes(" push "))
+  expect(pushes).toEqual(["git -C /r push -u origin refs/heads/main:refs/heads/main", "git -C /r push -u origin HEAD"])
+  // On the base itself (or none): just the branch.
+  const one = fake([[/^gh repo create/, { ok: true, out: "https://github.com/acme/shop" }], [/^gh config/, { ok: true, out: "https" }], [/^git -C \/r (remote add|push -u origin HEAD)/, { ok: true, out: "" }]])
+  expect(await publishNew("/r", { forge: "github", name: "shop", visibility: "private", branch: "main", base: "main" }, one)).toEqual({ ok: true, url: "https://github.com/acme/shop" })
+  const taken = fake([[/^gh repo create/, { ok: false, out: "GraphQL: Name already exists on this account (createRepository)" }]])
+  expect(await publishNew("/r", { forge: "github", name: "shop", visibility: "private" }, taken)).toMatchObject({ ok: false, reason: "name_taken" })
+})
+
+test("a PR the forge refuses is said by its reason: nothing to propose, or a target it doesn't have", async () => {
+  const gh = (out: string) => fake([[/^git -C \/r remote get-url origin$/, { ok: true, out: "https://github.com/acme/shop.git" }], [/^gh pr create/, { ok: false, out }]])
+  const o = { title: "t", body: "", target: "main", draft: false }
+  expect(await createPr("/r", "fix", o, gh("pull request create failed: GraphQL: Head sha can't be blank, Base sha can't be blank, No commits between main and fix, Base ref must be a branch (createPullRequest)")))
+    .toMatchObject({ status: "unavailable", reason: "base_missing" })
+  expect(await createPr("/r", "fix", o, gh("pull request create failed: GraphQL: No commits between main and fix (createPullRequest)"))).toMatchObject({ status: "unavailable", reason: "no_commits" })
+})
+
+test("can a PR into the target be opened: on origin or only here, and how far ahead", async () => {
+  const sha = "a".repeat(40)
+  const onOrigin = fake([
+    [/^git check-ref-format --branch main$/, { ok: true, out: "main" }],
+    [/^git -C \/r ls-remote --heads origin refs\/heads\/main$/, { ok: true, out: `${sha}\trefs/heads/main` }],
+    [/^git -C \/r rev-parse --verify --quiet refs\/heads\/main$/, { ok: true, out: sha }],
+    [/^git -C \/r cat-file -e/, { ok: true, out: "" }],
+    [/^git -C \/r rev-list --count a+\.\.HEAD$/, { ok: true, out: "2" }],
+  ])
+  expect(await prBase("/r", "main", onOrigin)).toEqual({ target: "main", onRemote: true, local: true, ahead: 2 })
+  const onlyHere = fake([
+    [/^git check-ref-format/, { ok: true, out: "main" }],
+    [/^git -C \/r ls-remote/, { ok: true, out: "" }],
+    [/^git -C \/r rev-parse --verify --quiet refs\/heads\/main$/, { ok: true, out: "b".repeat(40) }],
+    [/^git -C \/r rev-list --count/, { ok: true, out: "1" }],
+  ])
+  expect(await prBase("/r", "main", onlyHere)).toEqual({ target: "main", onRemote: false, local: true, ahead: 1 })
+  expect(await prBase("/r", "-x", onlyHere)).toBeNull()
+})
+
+test("no target (a chat in a folder): origin's own default branch", async () => {
+  const ex = fake([
+    [/^git -C \/r ls-remote --symref origin HEAD$/, { ok: true, out: "ref: refs/heads/trunk\tHEAD\n" + "c".repeat(40) + "\tHEAD" }],
+    [/^git check-ref-format --branch trunk$/, { ok: true, out: "trunk" }],
+    [/^git -C \/r ls-remote --heads origin refs\/heads\/trunk$/, { ok: true, out: "c".repeat(40) + "\trefs/heads/trunk" }],
+    [/^git -C \/r rev-parse --verify --quiet refs\/heads\/trunk$/, { ok: false, out: "" }],
+    [/^git -C \/r cat-file -e/, { ok: true, out: "" }],
+    [/^git -C \/r rev-list --count/, { ok: true, out: "0" }],
+  ])
+  expect(await prBase("/r", "", ex)).toEqual({ target: "trunk", onRemote: true, local: false, ahead: 0 })
 })
