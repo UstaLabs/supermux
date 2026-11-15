@@ -111,6 +111,58 @@ export interface AppletRouteDeps {
   startGraceMs?: number
 }
 
+/**
+ * The page API an applet includes with `<script src="_supermux/api.js"></script>` (relative to its page). It defines
+ * `window.supermux`:
+ *   notify(title, body)      a push to his devices; plain fetch, so it works in any browser on a paired device
+ *   agent.ask(text, {agent}) a message to an agent about this applet; only in supermux's applet window, after a click
+ *   save(blob | url, name)   saves a file through supermux's downloads; only in supermux's applet window
+ * Each returns a promise of {ok: true, …} or {ok: false, reason}.
+ */
+export const SUPERMUX_API_JS = `(function () {
+  if (window.supermux) return;
+  var bridge = window.hostBridge;
+  function fail(reason) { return Promise.resolve({ ok: false, reason: reason }); }
+  function answer(r) { return r && r.ok === true ? r : { ok: false, reason: String((r && r.reason) || 'refused') }; }
+  function err(e) { return { ok: false, reason: String((e && e.message) || e) }; }
+  function notify(title, body) {
+    return fetch('_supermux/notify', { method: 'POST', headers: { 'content-type': 'application/json' }, credentials: 'same-origin',
+      body: JSON.stringify({ title: String(title || ''), body: body == null ? '' : String(body) }) })
+      .then(function (r) { return r.json().then(function (j) { return r.ok ? { ok: true } : { ok: false, reason: String(j.error || r.status) }; }); }, err);
+  }
+  function ask(text, opts) {
+    if (!bridge) return fail('only in the supermux app');
+    return bridge.callAfterClick('ask', { text: String(text || ''), agent: opts && opts.agent ? String(opts.agent) : null }).then(answer, err);
+  }
+  function save(data, name) {
+    if (!bridge) return fail('only in the supermux app');
+    var send = function (url) { return bridge.callAfterClick('save', { url: url, name: String(name || 'download') }).then(answer, err); };
+    if (typeof data === 'string') return send(data);
+    return new Promise(function (resolve) {
+      var r = new FileReader();
+      r.onload = function () { resolve(send(String(r.result))); };
+      r.onerror = function () { resolve({ ok: false, reason: 'could not read the file' }); };
+      r.readAsDataURL(data);
+    });
+  }
+  window.supermux = { notify: notify, agent: { ask: ask }, save: save, inApp: !!bridge };
+})();
+`
+
+async function supermuxApi(req: Request, rest: string, name: string, caller: AppletCaller, deps: AppletRouteDeps): Promise<Response> {
+  const method = req.method.toUpperCase()
+  if (rest === "/api.js" && (method === "GET" || method === "HEAD")) {
+    return new Response(method === "HEAD" ? null : SUPERMUX_API_JS, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-cache" } })
+  }
+  if (rest === "/notify" && method === "POST") {
+    if (caller.kind !== "device") return new Response(JSON.stringify({ error: "only the owner's devices can notify from a page" }), { status: 403, headers: { "content-type": "application/json" } })
+    const b = await req.json().catch(() => ({})) as Record<string, unknown>
+    const r = await deps.applets.notify(name, b.title, b.body)
+    return new Response(JSON.stringify(r.ok ? { ok: true } : { error: r.error }), { status: r.ok ? 200 : 400, headers: { "content-type": "application/json" } })
+  }
+  return new Response(JSON.stringify({ error: "no such supermux call" }), { status: 404, headers: { "content-type": "application/json" } })
+}
+
 export async function handleAppletRequest(req: Request, deps: AppletRouteDeps): Promise<Response> {
   const url = new URL(req.url)
   const m = matchAppletPath(url.pathname)
@@ -124,6 +176,8 @@ export async function handleAppletRequest(req: Request, deps: AppletRouteDeps): 
   const v = deps.applets.get(m.name)
   if (!v) return page(404, "Not found", `There is no applet named “${esc(m.name)}” on this host.`)
   if (!v.manifest) return page(503, "This applet can’t open", `${esc(v.error ?? "Its applet.json can’t be read.")} Ask an agent to fix it.`)
+  // supermux's own page API, for every applet: the script and what it calls without the native bridge.
+  if (m.rest === "/_supermux" || m.rest.startsWith("/_supermux/")) return supermuxApi(req, m.rest.slice("/_supermux".length), v.row.name, caller, deps)
   if (caller.kind !== "device" && isOwnerOnly(m.rest, v.manifest.ownerOnly)) {
     return page(403, "Only the owner can open this", "This part of the applet is reserved for your own devices.")
   }

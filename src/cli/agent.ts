@@ -125,6 +125,9 @@ Backups: nightly automatic (about two weeks kept), plus \`backup\`. They are pla
 \`info\`. To get data back, copy back only what is missing from a backup into data/; never overwrite live data
 with a whole backup (everything added since would be lost), and never edit a backup.
 
+From the applet's page: <script src="_supermux/api.js"></script>, then supermux.notify(title, body) (a push to
+their devices), supermux.agent.ask(text) and supermux.save(blob, name) (these two only in supermux's applet
+window, after a click). Each returns a promise of {ok, reason}.
 Notify the user from a server or job: POST $SUPERMUX_URL/applet-api/notify with header
 X-Supermux-Applet-Token: $SUPERMUX_APPLET_TOKEN and {"title": "…", "body": "…"} (a push to their devices).
 
