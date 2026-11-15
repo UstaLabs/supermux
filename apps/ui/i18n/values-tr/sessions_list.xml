@@ -141,4 +141,10 @@
     <string name="applets_menu_info">Applet bilgisi</string>
     <string name="applets_cover_done">Bitti</string>
     <string name="applets_save_not_yet">Appletten dosya kaydetmek bu sürümde henüz yok.</string>
+    <string name="applets_menu_add_home">Ana ekrana ekle</string>
+    <string name="applets_menu_on_home">Ana ekranda</string>
+    <string name="applets_menu_install">Bu bilgisayara yükle</string>
+    <string name="applets_menu_installed">Yüklü</string>
+    <string name="applets_install_no_home">Bu telefonun ana ekranı uygulamalardan kısayol almıyor.</string>
+    <string name="applets_install_refused">Ana ekran kısayolu almadı.</string>
 </resources>
