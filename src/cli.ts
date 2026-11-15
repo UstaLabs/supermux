@@ -82,13 +82,16 @@ switch (sub) {
   }
   case "help": case "--help": case "-h":
   case "session": case "s": case "msg": case "delegate": case "council": case "card": case "attach": case "file":
-  case "port": case "memory": case "comments": case "display": case "device": case "docs": case "api": {
+  case "port": case "memory": case "comments": case "display": case "device": case "docs": case "api": case "applet": {
     const { runAgentCli } = await import("./cli/agent")
     const { readFileSync } = await import("node:fs")
+    const { spawnProcessSync } = await import("./core/process/launcher")
     process.exit(await runAgentCli(process.argv.slice(2), {
       env: process.env, cwd: process.cwd(),
       out: (s) => process.stdout.write(s + "\n"), err: (s) => process.stderr.write(s + "\n"),
       stdin: () => readFileSync(0, "utf8"),
+      // `supermux applet APPLET CMD …` (#117): the applet's own command, in this terminal.
+      exec: (file, args, opts) => spawnProcessSync([file, ...args], { cwd: opts.cwd, env: opts.env, stdin: "inherit", stdout: "inherit", stderr: "inherit" }).exitCode ?? 1,
     }))
   }
   default:
