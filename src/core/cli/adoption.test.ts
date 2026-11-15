@@ -52,3 +52,27 @@ test("on Windows the note's command is PowerShell", () => {
 test("unbound (tests, scripts) the store is off: no note is ever added", () => {
   expect(withCliNote("x", false, "hi", opts, cliAdoption())).toBe("hi")
 })
+
+test("a broker restart re-attaches running agents: the launch mark alone doesn't spare a process that lacks the CLI", () => {
+  const a = new CliAdoption()
+  a.markLaunch("old")                                   // prepared at the restart, but the agent process is days old
+  expect(withCliNote("old", false, "hi", { ...opts, hasCli: () => false }, a)).toContain("[supermux note, shown once]")
+  expect(withCliNote("old", false, "again", { ...opts, hasCli: () => false }, a)).toBe("again")  // told once
+  a.markLaunch("new")
+  expect(withCliNote("new", false, "hi", { ...opts, hasCli: () => true }, a)).toBe("hi")
+  // the OS can't tell (Windows): the launch mark decides
+  expect(withCliNote("new", false, "hi", { ...opts, hasCli: () => undefined }, a)).toBe("hi")
+})
+
+test.if(process.platform === "linux")("processHasCli reads a process's own PATH", async () => {
+  const { spawn } = await import("node:child_process")
+  const { processHasCli } = await import("./adoption")
+  const p = spawn("sleep", ["2"], { env: { PATH: "/state/bin:/usr/bin:/bin" } })
+  const q = spawn("sleep", ["2"], { env: { PATH: "/usr/bin:/bin" } })
+  try {
+    await new Promise((r) => setTimeout(r, 100))
+    expect(processHasCli(p.pid!, "/state/bin")).toBe(true)
+    expect(processHasCli(q.pid!, "/state/bin")).toBe(false)
+    expect(processHasCli(999999, "/state/bin")).toBeUndefined()
+  } finally { p.kill(); q.kill() }
+})

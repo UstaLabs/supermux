@@ -8,6 +8,8 @@
 //   lastMcpMovedAt / mcpMovedCalls calls of an MCP tool the CLI also does (CLI_EQUIVALENT).
 // It persists in a small JSON file, so the record spans broker restarts (the decision spans days).
 import { existsSync, readFileSync, renameSync, writeFileSync } from "fs"
+import { host } from "@supermux/platform"
+import { spawnCommandSync } from "../process/launcher"
 import { CLI_EQUIVALENT } from "../../shim/cli-equivalents"
 
 export interface AdoptionRow {
@@ -33,6 +35,7 @@ export class CliAdoption {
   get(id: string): AdoptionRow | undefined { return this.rows[id] }
   all(): Record<string, AdoptionRow> { return this.rows }
   /** It has the CLI: launched with it, or told about it. */
+  isOff(): boolean { return this.off }
   knows(id: string): boolean { if (this.off) return true; const r = this.rows[id]; return !!(r?.launchedWithCliAt || r?.noteAt) }
 
   markLaunch(id: string): void { this.row(id).launchedWithCliAt = this.stamp() ; this.save() }
@@ -85,9 +88,41 @@ export function cliNoteFor(sessionId: string, opts: { binDir: string; socketsDir
   ].join("\n")
 }
 
+/**
+ * Does agent process `pid` have the CLI: the launcher dir on its PATH? Read from the process's own environment (Linux
+ * /proc/<pid>/environ, macOS `ps -E`), which a same-user process may read. undefined when this OS can't tell (Windows) or
+ * the process is gone. This, not the launch mark, decides the note: a broker restart RE-ATTACHES to running agents (their
+ * keepers outlive it), so preparing a launch does not mean a new process with the new env started (seen 2026-11-16: every
+ * resumed session was marked, but their processes were days old).
+ */
+export function processHasCli(pid: number, binDir: string, platform: NodeJS.Platform = host.os()): boolean | undefined {
+  try {
+    let env: string
+    if (platform === "linux") env = readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").join("\n")
+    else if (platform === "darwin") {
+      const r = spawnCommandSync("ps", ["-E", "-ww", "-p", String(pid), "-o", "command="], { encoding: "utf8", timeout: 2000 })
+      if (r.error || r.status !== 0) return undefined
+      env = r.stdout.toString().split(" ").join("\n")
+    } else return undefined
+    const path = env.split("\n").find((l) => l.startsWith("PATH="))
+    return path === undefined ? undefined : path.slice(5).split(":").includes(binDir)
+  } catch { return undefined }
+}
+
+/**
+ * Does session `id` know the CLI? Told by the note; else its agent process's own env says (when the OS can tell);
+ * else the launch mark.
+ */
+export function sessionKnowsCli(id: string, hasCli: () => boolean | undefined, a: CliAdoption = current): boolean {
+  if (a.isOff()) return true
+  if (a.get(id)?.noteAt) return true
+  const seen = hasCli()
+  return seen ?? a.knows(id)
+}
+
 /** `text` for a turn of session `id`, with the one-time note in front when its process predates the CLI (then marked). */
-export function withCliNote(id: string, internal: boolean, text: string, opts: { binDir: string; socketsDir: string; platform?: NodeJS.Platform }, a: CliAdoption = current): string {
-  if (internal || a.knows(id)) return text
+export function withCliNote(id: string, internal: boolean, text: string, opts: { binDir: string; socketsDir: string; platform?: NodeJS.Platform; hasCli?: () => boolean | undefined }, a: CliAdoption = current): string {
+  if (internal || sessionKnowsCli(id, opts.hasCli ?? (() => undefined), a)) return text
   a.markNote(id)
   return `${cliNoteFor(id, opts)}\n\n${text}`
 }
