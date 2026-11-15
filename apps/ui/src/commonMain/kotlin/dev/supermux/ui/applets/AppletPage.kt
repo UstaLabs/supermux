@@ -8,6 +8,8 @@
 package dev.supermux.ui.applets
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -146,5 +148,45 @@ private fun AppletMessage(text: String, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
     Box(modifier.fillMaxSize().padding(24.dp).testTag("applet_page_message"), contentAlignment = Alignment.Center) {
         Text(text, color = cs.onSurfaceVariant, fontSize = 14.sp, textAlign = TextAlign.Center, modifier = Modifier.widthIn(max = 420.dp))
+    }
+}
+
+/**
+ * Where a host with one window (iOS) shows an applet: full screen over the app, the page and a Done to leave it — an
+ * iPhone's idiom for a full-screen cover. [AppletCover] draws it; the host's [AppletOpener] fills [open].
+ */
+class AppletCoverState {
+    var open by mutableStateOf<Pair<String, String>?>(null)
+        private set
+
+    val opener = dev.supermux.ui.session.AppletOpener { hostId, applet -> open = hostId to applet.name }
+
+    fun close() { open = null }
+}
+
+@Composable
+fun AppletCover(state: AppletCoverState, fleet: FleetStore) {
+    val (hostId, name) = state.open ?: return
+    val cs = MaterialTheme.colorScheme
+    androidx.compose.foundation.layout.Column(
+        Modifier
+            .fillMaxSize()
+            .background(cs.background)
+            .windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.safeDrawing)
+            .testTag("applet_cover"),
+    ) {
+        androidx.compose.foundation.layout.Row(
+            Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                localized(Str.applets_cover_done),
+                color = cs.primary,
+                fontSize = 17.sp,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                modifier = Modifier.clickable { state.close() }.padding(vertical = 6.dp).testTag("applet_cover_done"),
+            )
+        }
+        AppletPage(fleet, hostId, name, Modifier.weight(1f))
     }
 }

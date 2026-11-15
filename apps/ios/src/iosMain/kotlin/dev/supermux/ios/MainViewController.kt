@@ -341,6 +341,10 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
                 }
             }
 
+            // #117: an applet opens full screen over the app, with a Done to leave it.
+            val appletCover = remember { dev.supermux.ui.applets.AppletCoverState() }
+            androidx.compose.runtime.CompositionLocalProvider(dev.supermux.ui.session.LocalAppletOpener provides appletCover.opener) {
+            androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) {
             SupermuxApp(
                 fleet = fleet,
                 ui = ui,
@@ -379,6 +383,9 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
                 // No `chatFallback`: that slot IS the host-specific escape hatch, and iOS has no
                 // screen to put in it. `UnavailableSessionPane` (H3.7) is what covers its absence.
             )
+            dev.supermux.ui.applets.AppletCover(appletCover, fleet)
+            }
+            }
         }
     }
 }
