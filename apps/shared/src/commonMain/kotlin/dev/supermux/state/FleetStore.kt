@@ -484,6 +484,14 @@ class FleetStore(
 
     suspend fun appletIconBytes(applet: dev.supermux.net.AppletDto): ByteArray? = activeApp()?.appletIconBytes(applet)
 
+    suspend fun appletDetail(name: String): dev.supermux.net.AppletDetailDto? = activeApp()?.appletDetail(name)
+
+    suspend fun appletJobRuns(name: String, job: String): List<dev.supermux.net.AppletJobRunDto>? = activeApp()?.appletJobRuns(name, job)
+
+    /** An owner action on one of the active host's applets ([HostStore.appletAction]). */
+    suspend fun <T> appletAction(block: suspend (dev.supermux.net.BrokerApi) -> T): Result<T> =
+        activeApp()?.appletAction(block) ?: Result.failure(IllegalStateException("not connected to this machine"))
+
     /** The ACTIVE host's accounts auto-switch setting ([HostStore.accountsAutoSwitch]). */
     @OptIn(ExperimentalCoroutinesApi::class)
     val activeAccountsAutoSwitch: StateFlow<Boolean?> =
