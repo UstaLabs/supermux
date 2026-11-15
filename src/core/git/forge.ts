@@ -225,16 +225,20 @@ export async function publishNew(
     const f = failure(o.forge, out)
     return f.status === "unavailable" && (f.reason === "no_cli" || f.reason === "not_authed") ? { ok: false, reason: f.reason } : { ok: false, reason: "error", message: out.slice(0, 500) }
   }
-  if (o.forge === "github") {
-    const r = await exec("gh", ["repo", "create", o.name, `--${o.visibility}`, "--source", cwd, "--remote", "origin", "--push"], cwd)
-    return r.ok ? { ok: true, url: firstUrl(r.out) } : fail(r.out)
-  }
-  const r = await exec("glab", ["repo", "create", o.name, `--${o.visibility}`, "--defaultBranch", o.branch ?? "main"], cwd)
-  if (!r.ok) return fail(r.out)
-  const url = firstUrl(r.out)
-  if (!url) return { ok: false, reason: "error", message: r.out.slice(0, 500) }
-  const add = await exec("git", ["-C", cwd, "remote", "add", "origin", `${url}.git`], cwd)
-  if (!add.ok) return { ok: false, reason: "error", message: add.out.slice(0, 500) }
+  // The repo is made empty, then origin is added and the branch pushed from here. Never gh's `--source`: it refuses a
+  // linked worktree (a chat's own copy, whose .git is a file) as "not a git repository". origin lands in the project's
+  // shared config, so every copy of the project sees it.
+  const created = o.forge === "github"
+    ? await exec("gh", ["repo", "create", o.name, `--${o.visibility}`], cwd)
+    : await exec("glab", ["repo", "create", o.name, `--${o.visibility}`, "--defaultBranch", o.branch ?? "main"], cwd)
+  if (!created.ok) return fail(created.out)
+  const url = firstUrl(created.out)
+  if (!url) return { ok: false, reason: "error", message: created.out.slice(0, 500) }
+  // gh's own choice of protocol (ssh or https), so the push uses the credentials gh set up.
+  const proto = o.forge === "github" ? await exec("gh", ["config", "get", "git_protocol", "-h", new URL(url).host], cwd) : { ok: false, out: "" }
+  const remote = proto.ok && proto.out.trim() === "ssh" ? `git@${new URL(url).host}:${new URL(url).pathname.slice(1)}.git` : `${url}.git`
+  const add = await exec("git", ["-C", cwd, "remote", "add", "origin", remote], cwd)
+  if (!add.ok) return { ok: false, reason: "error", message: `Created ${url}, but adding it as origin failed: ${add.out.slice(0, 400)}` }
   const push = await exec("git", ["-C", cwd, "push", "-u", "origin", "HEAD"], cwd)
-  return push.ok ? { ok: true, url } : { ok: false, reason: "error", message: push.out.slice(0, 500) }
+  return push.ok ? { ok: true, url } : { ok: false, reason: "error", message: `Created ${url} and added it as origin, but the push failed: ${push.out.slice(0, 400)}` }
 }

@@ -194,9 +194,21 @@ test("add a remote: a name and a URL git accepts; a taken name is said", async (
   expect(await addRemote("/r", "origin", "", ok)).toEqual({ ok: false, reason: "bad" })
 })
 
-test("publish to GitHub: gh creates the repo from this folder, adds origin and pushes", async () => {
-  const ex = fake([[/^gh repo create shop --private --source \/r --remote origin --push$/, { ok: true, out: "https://github.com/acme/shop\n" }]])
+test("publish to GitHub: gh creates an empty repo (never --source: it refuses a worktree), then origin is added and pushed", async () => {
+  const ex = fake([
+    [/^gh repo create shop --private$/, { ok: true, out: "https://github.com/acme/shop\n" }],
+    [/^gh config get git_protocol -h github.com$/, { ok: true, out: "https\n" }],
+    [/^git -C \/r remote add origin https:\/\/github.com\/acme\/shop.git$/, { ok: true, out: "" }],
+    [/^git -C \/r push -u origin HEAD$/, { ok: true, out: "" }],
+  ])
   expect(await publishNew("/r", { forge: "github", name: "shop", visibility: "private" }, ex)).toEqual({ ok: true, url: "https://github.com/acme/shop" })
+  const ssh = fake([
+    [/^gh repo create shop --public$/, { ok: true, out: "https://github.com/acme/shop\n" }],
+    [/^gh config get git_protocol/, { ok: true, out: "ssh\n" }],
+    [/^git -C \/r remote add origin git@github.com:acme\/shop.git$/, { ok: true, out: "" }],
+    [/^git -C \/r push -u origin HEAD$/, { ok: false, out: "Permission denied (publickey)." }],
+  ])
+  expect(await publishNew("/r", { forge: "github", name: "shop", visibility: "public" }, ssh)).toMatchObject({ ok: false, reason: "error", message: expect.stringContaining("Created https://github.com/acme/shop and added it as origin, but the push failed: Permission denied") })
   const nocli = fake([[/^gh repo create/, { ok: false, out: "spawn gh ENOENT" }]])
   expect(await publishNew("/r", { forge: "github", name: "shop", visibility: "public" }, nocli)).toMatchObject({ ok: false, reason: "no_cli" })
 })
