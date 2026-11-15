@@ -183,6 +183,18 @@ export function withoutCookies(header: string, names: string[]): string | null {
 /** What the proxied app must never see: supermux's own cookies, and a bearer that is one of its device tokens. */
 export interface OwnCredentials { cookies: string[]; isOwnBearer?: (token: string) => boolean }
 
+/** The applet route's differences (#117). */
+export interface ProxyExtras {
+  /** Upstream time limit; null = none, the call lives as long as the client's request (SSE, long polls). 30 s by default. */
+  timeoutMs?: number | null
+  /** Request headers whose name starts with one of these are dropped first (a caller can't forge X-Mux-*). */
+  stripRequestPrefixes?: string[]
+  /** Set on the forwarded request after stripping (the signed X-Mux-Via). */
+  setHeaders?: Record<string, string>
+  /** Who the error pages name ("The applet notes"); "App on port <n>" by default. */
+  label?: string
+}
+
 // --- Proxy handler ---
 
 export async function handleProxyRequest(
@@ -190,6 +202,7 @@ export async function handleProxyRequest(
   upstream: { port: number; sessionName: string },
   pathOpts?: { prefix: string; upstreamPath: string },
   own?: OwnCredentials,
+  extras?: ProxyExtras,
 ): Promise<Response> {
   const url = new URL(req.url)
   const pathAndQuery = pathOpts ? pathOpts.upstreamPath : url.pathname + (url.search || "")
@@ -212,6 +225,14 @@ export async function handleProxyRequest(
     const bearer = /^Bearer\s+(.+)$/i.exec(forwardedHeaders.get("authorization")?.trim() ?? "")?.[1]?.trim()
     if (bearer && own.isOwnBearer?.(bearer)) forwardedHeaders.delete("authorization")
   }
+  if (extras?.stripRequestPrefixes?.length) {
+    const prefixes = extras.stripRequestPrefixes.map((p) => p.toLowerCase())
+    for (const name of [...forwardedHeaders.keys()]) {
+      if (prefixes.some((p) => name.toLowerCase().startsWith(p))) forwardedHeaders.delete(name)
+    }
+  }
+  for (const [k, v] of Object.entries(extras?.setHeaders ?? {})) forwardedHeaders.set(k, v)
+  const timeoutMs = extras?.timeoutMs === undefined ? 30_000 : extras.timeoutMs
 
   log.debug("proxy.forward", {
     session: upstream.sessionName,
@@ -234,7 +255,7 @@ export async function handleProxyRequest(
       // try to inflate plain bytes and render a blank page.
       decompress: false,
       // @ts-ignore — Bun supports signal-based timeout via AbortSignal.timeout
-      signal: AbortSignal.timeout(30_000),
+      signal: timeoutMs === null ? req.signal : AbortSignal.timeout(timeoutMs),
     })
   } catch (err: any) {
     const isTimeout =
@@ -245,7 +266,7 @@ export async function handleProxyRequest(
     if (isTimeout) {
       log.warn("proxy.timeout", { session: upstream.sessionName, port: upstream.port })
       return new Response(
-        `<html><body><h1>504 Gateway Timeout</h1><p>App on port ${upstream.port} timed out.</p></body></html>`,
+        `<html><body><h1>504 Gateway Timeout</h1><p>${extras?.label ?? `App on port ${upstream.port}`} timed out.</p></body></html>`,
         { status: 504, headers: { "content-type": "text/html" } },
       )
     }
@@ -256,7 +277,7 @@ export async function handleProxyRequest(
       err: err?.message ?? String(err),
     })
     return new Response(
-      `<html><body><h1>502 Bad Gateway</h1><p>App on port ${upstream.port} is not responding.</p></body></html>`,
+      `<html><body><h1>502 Bad Gateway</h1><p>${extras?.label ?? `App on port ${upstream.port}`} is not responding.</p></body></html>`,
       { status: 502, headers: { "content-type": "text/html" } },
     )
   }

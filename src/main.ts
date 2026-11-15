@@ -26,6 +26,7 @@ import { ProjectService } from "./core/project/service"
 import { ProjectImages } from "./core/project/images"
 import { propagateSessionRename } from "./core/workspace/name"
 import { makeReadAdvancer } from "./core/session-manager/read-status"
+import { AppletService } from "./core/applets/service"
 import { ProxyLivenessMonitor, type ProxyStatus } from "./core/proxy/liveness"
 import { exposedLinksPublicUrl, hostRelayUrl } from "./core/relay/public-url"
 
@@ -2389,6 +2390,9 @@ const proxyLivenessMonitor = new ProxyLivenessMonitor({
   listTargets: () => registry.listProxies().map((p) => ({ domain: p.domain, port: p.port })),
   onChange: (domain, status) => webChannel?.broadcastToAll({ type: "proxy_status", domain, status }),
 })
+// #117: the host's applets (~/.mux/applets/<name>/), served at /a/<name>/ and kept running with no session involved.
+// Started after webChannel.start(); servers outlive a broker restart and are adopted by the next one.
+const appletService = new AppletService({ db, appletsDir: join(MUX_HOME, "applets"), stateDir: join(STATE_DIR, "applets"), rescanMs: 15_000 })
 // loginManager is declared here (before webChannel opts, which close over it) and
 // assigned after webChannel is constructed (so its onChange can reference webChannel).
 // Both closures are arrow functions that run at request/event time — well after both
@@ -3494,6 +3498,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       return { port: entry.port, sessionName: entry.sessionName, isPublic: entry.isPublic }
     },
     proxyAuth: (token: string) => !!proxyDeviceStore.verify(token),
+    applets: appletService,
     proxyLinksBaseUrl: exposedProxyLinksBaseUrl,
     listProxies: () => registry.listProxies().map((e) => proxyWsPayload(e, proxyLivenessMonitor.getStatus(e.domain))),
     createProxy: (args) => {
@@ -5171,6 +5176,7 @@ telemetry.start()
 // meaningful with a web channel, but harmless otherwise; onChange no-ops when
 // webChannel is undefined.
 proxyLivenessMonitor.start()
+void appletService.start().catch((err) => log.warn("applets_start_failed", { err: err?.message ?? String(err) }))
 worktreeService.start()
 if (!IS_TEST_BROKER) {
   // The lists learned last run answer GET /models at once; the refresh below replaces them.
@@ -5293,6 +5299,9 @@ async function gracefulShutdown(signal: string) {
   try {
     proxyLivenessMonitor.stop()
   } catch (err: any) { log.warn("proxy_liveness_stop_failed", { err: err?.message }) }
+  try {
+    appletService.shutdown()
+  } catch (err: any) { log.warn("applets_shutdown_failed", { err: err?.message }) }
   try {
     if (webChannel) await webChannel.stop()
   } catch (err: any) { log.warn("webChannel_stop_failed", { err: err?.message }) }
