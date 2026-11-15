@@ -2,6 +2,7 @@ import { join } from "path"
 import { host } from "@supermux/platform"
 import { SOCKETS_DIR, STATE_DIR } from "../../shared/paths"
 import { withDirFirst } from "./bin-dirs"
+import { cliAdoption } from "../cli/adoption"
 
 type Env = Record<string, string | undefined>
 
@@ -18,6 +19,8 @@ export function sessionCliEnv(base: Env, kind: string, sessionId: string, sessio
   const platform = opts.platform ?? host.os()
   const pathKey = Object.keys(base).find((k) => k.toLowerCase() === "path") ?? (platform === "win32" ? "Path" : "PATH")
   const path = base[pathKey] ?? process.env[pathKey] ?? process.env.PATH
+  // This process starts with the CLI: it needs no note (adoption tracking).
+  cliAdoption().markLaunch(sessionId)
   return {
     MUX_SESSION_ID: sessionId,
     MUX_DISPLAY_NAME: sessionName,

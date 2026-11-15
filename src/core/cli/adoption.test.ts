@@ -1,0 +1,54 @@
+import { expect, test } from "bun:test"
+import { mkdtempSync, readFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { CliAdoption, cliAdoption, cliNoteFor, withCliNote } from "./adoption"
+
+const opts = { binDir: "/state/bin", socketsDir: "/state/sockets" }
+
+test("a session knows the CLI once it was launched with it or told once", () => {
+  const a = new CliAdoption()
+  expect(a.knows("s1")).toBe(false)
+  a.markLaunch("s1")
+  expect(a.knows("s1")).toBe(true)
+  a.markNote("s2")
+  expect(a.knows("s2")).toBe(true)
+})
+
+test("calls: every CLI call counts; an MCP call counts only for a tool the CLI also does", () => {
+  const a = new CliAdoption(undefined, () => new Date("2026-11-15T20:00:00Z"))
+  a.recordCall("s", "cli", "list_sessions")
+  a.recordCall("s", "mcp", "list_sessions")
+  a.recordCall("s", "mcp", "message_session")   // kept on MCP: not a moved tool
+  expect(a.get("s")).toEqual({ cliCalls: 1, lastCliAt: "2026-11-15T20:00:00.000Z", mcpMovedCalls: 1, lastMcpMovedAt: "2026-11-15T20:00:00.000Z" })
+})
+
+test("the record survives a restart (a JSON file, written atomically)", () => {
+  const file = join(mkdtempSync(join(tmpdir(), "sm-adopt-")), "cli-adoption.json")
+  const a = new CliAdoption(file)
+  a.markLaunch("s1")
+  a.flush()
+  expect(JSON.parse(readFileSync(file, "utf8")).version).toBe(1)
+  expect(new CliAdoption(file).knows("s1")).toBe(true)
+})
+
+test("the note: once, only for a session whose process predates the CLI, never for an internal one", () => {
+  const a = new CliAdoption()
+  const first = withCliNote("old", false, "hello", opts, a)
+  expect(first.endsWith("\n\nhello")).toBe(true)
+  expect(first).toContain("MUX_SESSION_ID=old MUX_SOCKETS_DIR=/state/sockets /state/bin/supermux help")
+  expect(first).toContain("never wait or poll")
+  expect(withCliNote("old", false, "again", opts, a)).toBe("again")
+  a.markLaunch("new")
+  expect(withCliNote("new", false, "hi", opts, a)).toBe("hi")
+  expect(withCliNote("rpc", true, "task", opts, a)).toBe("task")
+})
+
+test("on Windows the note's command is PowerShell", () => {
+  expect(cliNoteFor("s", { binDir: "C:\\state\\bin", socketsDir: "C:\\state\\sockets", platform: "win32" }))
+    .toContain('$env:MUX_SESSION_ID="s"; $env:MUX_SOCKETS_DIR="C:\\state\\sockets"; & "C:\\state\\bin\\supermux.cmd" help')
+})
+
+test("unbound (tests, scripts) the store is off: no note is ever added", () => {
+  expect(withCliNote("x", false, "hi", opts, cliAdoption())).toBe("hi")
+})

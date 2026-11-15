@@ -237,6 +237,7 @@ import { ForgeStore } from "./core/forge/store"
 import { ForgeService } from "./core/forge/service"
 import { detectForgeClis, importCliToken } from "./core/forge/cli-import"
 import { installSupermuxLauncher } from "./cli/launcher"
+import { bindCliAdoption, CliAdoption } from "./core/cli/adoption"
 import { installCredentialLauncher } from "./core/forge/launcher"
 import { SETTINGS_KEY_CURATOR, parseCuratorConfig, type CuratorConfig } from "./core/settings/curator-config"
 import { listLspServerSettingsRows } from "./core/lsp/editor-settings"
@@ -635,6 +636,8 @@ catch (err) { log.error("forge_credential_launcher_failed", { err: String(err) }
 // #156: the `supermux` CLI agents run from their shell (session-cli-env.ts puts this bin dir first on their PATH).
 try { installSupermuxLauncher(join(STATE_DIR, "bin"), join(import.meta.dir, "..")) }
 catch (err) { log.error("supermux_launcher_failed", { err: String(err) }) }
+// #156: which sessions know the CLI (launched with it, or told once), and whether moved MCP tools are still used.
+bindCliAdoption(new CliAdoption(join(STATE_DIR, "cli-adoption.json")))
 const forgeStore = new ForgeStore(db)
 const forgeService = new ForgeService(forgeStore, {
   projectsRoot: join(STATE_DIR, "projects"),

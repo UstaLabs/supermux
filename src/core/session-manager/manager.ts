@@ -32,7 +32,10 @@ import { checkSessionRename, createAgentFromTool, type CreateAgentDeps } from ".
 
 import { buildProxyPublicUrl } from "../../channels/web/proxy"
 import { listDevices } from "../display/scrcpy/adb"
-import { INBOX_DIR } from "../../shared/paths"
+import { host } from "@supermux/platform"
+import { INBOX_DIR, SOCKETS_DIR } from "../../shared/paths"
+import { cliAdoption, withCliNote } from "../cli/adoption"
+import { SUPERMUX_BIN_DIR } from "../agents/session-cli-env"
 import type { RegisterReply, OpResult } from "./socket-server"
 import type { RegisterFrame, OutboundFrame, OrchestrationFrame, ToolOperation } from "../../shared/socket-frames"
 import { shimTools } from "../../shim/tools"
@@ -295,6 +298,9 @@ export class SessionManager {
    * broker-side sender (channels, curator, agent-rpc, reviews) must call this.
    */
   deliver(sessionId: string, text: string, meta: any): Promise<InboundDeliveryResult> {
+    // #156: a session whose agent process started before the CLI gets one note about it, on a turn it gets anyway.
+    const s = this.registry.get(sessionId)
+    if (s) text = withCliNote(sessionId, !!s.internal, text, { binDir: SUPERMUX_BIN_DIR, socketsDir: SOCKETS_DIR, platform: host.os() })
     // Record where this session is talking, for the reply that comes back. This
     // is the one place every inbound turn passes through — including the ones
     // that never reach the message log (curator wakes, agent-rpc calls).
@@ -531,6 +537,7 @@ export class SessionManager {
 
   /** The external shim's socket path (`outbound` frame): the socket's bound session id is the caller. */
   handleOutbound(msg: OutboundFrame & { session_id: string }): Promise<OpResult> {
+    cliAdoption().recordCall(msg.session_id, String(msg.call_id ?? "").startsWith("cli-") ? "cli" : "mcp", msg.op.name)
     return this.outbound(msg.session_id, msg.op)
   }
 
@@ -538,7 +545,9 @@ export class SessionManager {
   handleOrchestration(msg: OrchestrationFrame & { session_id: string }): Promise<OpResult> {
     // #156: a `supermux` CLI command is one explicit call from its own process (call ids "cli-…"), never a retry or a
     // second shim's copy, so it is not deduplicated: re-running a command must run it, and must read fresh state.
-    return this.orchestration(msg.session_id, msg.op, { dedup: !String(msg.call_id ?? "").startsWith("cli-") })
+    const fromCli = String(msg.call_id ?? "").startsWith("cli-")
+    cliAdoption().recordCall(msg.session_id, fromCli ? "cli" : "mcp", msg.op.name)
+    return this.orchestration(msg.session_id, msg.op, { dedup: !fromCli })
   }
 
   /**
@@ -686,7 +695,7 @@ export class SessionManager {
     // The ops listed here are open to every session. Any other op needs can_orchestrate, which
     // personal assistants have: today that leaves mute_session, set_active and get_active (spec §4).
     // A new tool meant for every session must be added here.
-    const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment", "browser_comments", "resolve_browser_comment", "reply_browser_comment", "dismiss_browser_comment", "message_session", "list_models", "spawn_session", "kill_session", "list_sessions", "delegate", "council", "council_round", "council_add", "council_remove", "council_end", "council_report", "preview_avatar", "set_avatar", "list_proxies"])
+    const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment", "browser_comments", "resolve_browser_comment", "reply_browser_comment", "dismiss_browser_comment", "message_session", "list_models", "spawn_session", "kill_session", "list_sessions", "delegate", "council", "council_round", "council_add", "council_remove", "council_end", "council_report", "preview_avatar", "set_avatar", "list_proxies", "cli_adoption"])
     if (!s?.can_orchestrate && !NO_ORCHESTRATE_REQUIRED.has(op.name)) {
       return { ok: false, error: "permission denied (can_orchestrate=false)" }
     }
@@ -1006,6 +1015,13 @@ export class SessionManager {
         if (!s) return { ok: false, error: "unknown session" }
         const base = { baseDomain: process.env.MUX_PROXY_BASE_DOMAIN, publicUrl: this.ports.orchestration.exposedProxyLinksBaseUrl() }
         return { ok: true, value: this.registry.listProxies().map((p) => ({ domain: p.domain, port: p.port, isPublic: p.isPublic, sessionName: p.sessionName, mine: p.sessionId === s.id, createdAt: p.createdAt, url: buildProxyPublicUrl(p.domain, base) })) }
+      }
+      // #156: who knows the CLI yet, and is any moved MCP tool still in use (`supermux api cli_adoption`).
+      case "cli_adoption": {
+        const live = this.registry.list().filter((x) => !x.internal && !isDraftSession(x) && x.status !== "archived")
+        const rows = live.map((x) => ({ id: x.id, name: x.name, agent: x.agent, state: this.sessionState(x), knows: cliAdoption().knows(x.id), ...(cliAdoption().get(x.id) ?? { cliCalls: 0, mcpMovedCalls: 0 }) }))
+        const lastMcpMoved = Object.values(cliAdoption().all()).map((r) => r.lastMcpMovedAt).filter(Boolean).sort().pop() ?? null
+        return { ok: true, value: { live: rows.length, know: rows.filter((r) => r.knows).length, lastMcpMovedAt: lastMcpMoved, notYet: rows.filter((r) => !r.knows).map((r) => r.name), sessions: rows } }
       }
       case "unexpose_port": {
         if (!s) return { ok: false, error: "unknown session" }
