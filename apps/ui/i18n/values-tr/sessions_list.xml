@@ -124,4 +124,16 @@
         <item quantity="one">%1$d ajan</item>
         <item quantity="other">%1$d ajan</item>
     </plurals>
+    <!-- #117: appletler — kenar çubuğundaki Appletler bölümü, menüsü ve Tüm appletler sayfası. -->
+    <string name="sessions_applets_title">Appletler</string>
+    <string name="sessions_applets_all">Tüm appletler</string>
+    <string name="applets_menu_open">Aç</string>
+    <string name="applets_menu_pin">Kenar çubuğuna sabitle</string>
+    <string name="applets_menu_unpin">Sabitlemeyi kaldır</string>
+    <string name="applets_menu_updated">%1$s güncellendi</string>
+    <string name="applets_menu_expired">%1$s süresi doldu</string>
+    <string name="applets_menu_needed">%1$s gerekli</string>
+    <string name="applets_page_host">%1$s üzerinde</string>
+    <string name="applets_hint_desktop">Yeni bir tane yapmak için herhangi bir oturuma “bunu applet yap” deyin. Diğer seçenekler için bir applete sağ tıklayın ya da ⋯ simgesine tıklayın.</string>
+    <string name="applets_hint_phone">Yeni bir tane yapmak için herhangi bir oturuma “bunu applet yap” deyin. Diğer seçenekler için bir applete basılı tutun.</string>
 </resources>

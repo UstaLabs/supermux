@@ -344,6 +344,7 @@ class ShellUiState {
     /** The sidebar card's Explore (#90): [version]'s edition. */
     fun openWhatsNew(version: String) = navigate(Route.WhatsNew(version))
     fun openDisplays() = navigate(Route.Displays)
+    fun openApplets() = navigate(Route.Applets)
     fun openAddHost() = navigate(Route.AddHost)
 
     /** Icon-anchored Usage card. Toggle when already open; otherwise open. */
