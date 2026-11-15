@@ -15,6 +15,10 @@ test("pr_text asks for a title and a body from the commits, without inventing", 
   expect(p).toContain("body")
   expect(p).toMatch(/invent/i)
   expect(p).not.toContain("text-cleanup")
+  // Ahmet: describe the change from the diff; never critique the commits or sign it.
+  expect(p).toMatch(/diff/)
+  expect(p).toMatch(/Never comment on the commits/)
+  expect(p).toMatch(/no signature, attribution or \\?"Generated with\\?" line/)
 })
 
 test("voice keeps its own fast-cleanup instruction", () => {

@@ -248,6 +248,7 @@ test("a PR the forge refuses is said by its reason: nothing to propose, or a tar
   expect(await createPr("/r", "fix", o, gh("pull request create failed: GraphQL: Head sha can't be blank, Base sha can't be blank, No commits between main and fix, Base ref must be a branch (createPullRequest)")))
     .toMatchObject({ status: "unavailable", reason: "base_missing" })
   expect(await createPr("/r", "fix", o, gh("pull request create failed: GraphQL: No commits between main and fix (createPullRequest)"))).toMatchObject({ status: "unavailable", reason: "no_commits" })
+  expect(await createPr("/r", "fix", o, gh("pull request create failed: GraphQL: The fix branch has no history in common with main (createPullRequest)"))).toMatchObject({ status: "unavailable", reason: "unrelated" })
 })
 
 test("can a PR into the target be opened: on origin or only here, and how far ahead", async () => {
@@ -259,14 +260,14 @@ test("can a PR into the target be opened: on origin or only here, and how far ah
     [/^git -C \/r cat-file -e/, { ok: true, out: "" }],
     [/^git -C \/r rev-list --count a+\.\.HEAD$/, { ok: true, out: "2" }],
   ])
-  expect(await prBase("/r", "main", onOrigin)).toEqual({ target: "main", onRemote: true, local: true, ahead: 2 })
+  expect(await prBase("/r", "main", onOrigin)).toEqual({ target: "main", onRemote: true, local: true, ahead: 2, related: false })
   const onlyHere = fake([
     [/^git check-ref-format/, { ok: true, out: "main" }],
     [/^git -C \/r ls-remote/, { ok: true, out: "" }],
     [/^git -C \/r rev-parse --verify --quiet refs\/heads\/main$/, { ok: true, out: "b".repeat(40) }],
     [/^git -C \/r rev-list --count/, { ok: true, out: "1" }],
   ])
-  expect(await prBase("/r", "main", onlyHere)).toEqual({ target: "main", onRemote: false, local: true, ahead: 1 })
+  expect(await prBase("/r", "main", onlyHere)).toEqual({ target: "main", onRemote: false, local: true, ahead: 1, related: false })
   expect(await prBase("/r", "-x", onlyHere)).toBeNull()
 })
 
@@ -278,6 +279,7 @@ test("no target (a chat in a folder): origin's own default branch", async () => 
     [/^git -C \/r rev-parse --verify --quiet refs\/heads\/trunk$/, { ok: false, out: "" }],
     [/^git -C \/r cat-file -e/, { ok: true, out: "" }],
     [/^git -C \/r rev-list --count/, { ok: true, out: "0" }],
+    [/^git -C \/r merge-base/, { ok: true, out: "c".repeat(40) }],
   ])
-  expect(await prBase("/r", "", ex)).toEqual({ target: "trunk", onRemote: true, local: false, ahead: 0 })
+  expect(await prBase("/r", "", ex)).toEqual({ target: "trunk", onRemote: true, local: false, ahead: 0, related: true })
 })

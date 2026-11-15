@@ -26,6 +26,15 @@ test("the input is the branch's commits (oldest first) and its files, against th
   expect(i).toMatchObject({ base: "dev", branch: "mux/search" })
   expect(i.commits).toEqual([{ subject: "Add a search box", body: "Filters by name." }, { subject: "Keep the filter on refresh", body: "" }])
   expect(i.files).toEqual([{ path: "App.jsx", added: 1, removed: 0 }, { path: "a.txt", added: 1, removed: 0 }])
+  // The description is read from the change itself.
+  expect(i.diff).toContain("diff --git a/App.jsx b/App.jsx")
+}, REAL_GIT_MS)
+
+test("an agent's own signature lines never reach the user's PR", async () => {
+  const d = repo()
+  const i = await prInput(d, "dev", "mux/search")
+  const r = await writePrText(i, async () => ({ title: "Add a search box", body: "- Filters products by name\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\nCo-Authored-By: Claude <noreply@anthropic.com>" }))
+  expect(r.body).toBe("- Filters products by name")
 }, REAL_GIT_MS)
 
 test("the agent's answer is used when it has a title; trimmed and capped", async () => {

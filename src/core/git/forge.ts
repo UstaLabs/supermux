@@ -168,10 +168,12 @@ const numberIn = (url: string) => Number((url.match(/\/(?:pull|merge_requests)\/
 export type CreatePrResult =
   | { status: "opened"; url: string; number: number }
   | { status: "exists"; url: string }
-  | { status: "unavailable"; forge?: Forge; reason: "no_remote" | "no_branch" | "no_cli" | "not_authed" | "no_commits" | "base_missing" | "error"; message?: string }
+  | { status: "unavailable"; forge?: Forge; reason: "no_remote" | "no_branch" | "no_cli" | "not_authed" | "no_commits" | "base_missing" | "unrelated" | "error"; message?: string }
 
 /** gh's / glab's refusals said in plain words by the app: nothing to propose, or a target the forge doesn't have. */
 function createFailure(forge: Forge, out: string): CreatePrResult {
+  // Two branches that share no commit (each began with its own first commit): no PR/MR can join them.
+  if (/no history in common|no common ancestor|unrelated histories/i.test(out)) return { status: "unavailable", forge, reason: "unrelated", message: out.slice(0, 500) }
   // A missing target first: GitHub then also says "no commits between", which is not the cause.
   if (/base ref must be a branch|base sha can't be blank|target branch .*(does not exist|not found)|couldn't find remote ref|invalid target branch/i.test(out))
     return { status: "unavailable", forge, reason: "base_missing", message: out.slice(0, 500) }
@@ -199,7 +201,7 @@ const validBranch = async (cwd: string, name: string, exec: Exec) =>
  * Can a PR/MR from HEAD into `target` be opened? The target must be a branch on origin, and HEAD must have commits it
  * doesn't. `local`: the target exists here, so "Publish <target>" can put it on origin.
  */
-export type PrBase = { target: string; onRemote: boolean; local: boolean; ahead: number | null }
+export type PrBase = { target: string; onRemote: boolean; local: boolean; ahead: number | null; related?: boolean }
 export async function prBase(cwd: string, target: string, exec: Exec = execCli): Promise<PrBase | null> {
   // No target (a chat in a folder has no base): origin's own default branch, asked from origin, never a guessed main.
   if (!target) {
@@ -219,8 +221,12 @@ export async function prBase(cwd: string, target: string, exec: Exec = execCli):
   if (!tip) return { target, onRemote, local, ahead: null }
   // The remote tip may not be here yet: fetch it, then count.
   if (onRemote && !(await exec("git", ["-C", cwd, "cat-file", "-e", `${tip}^{commit}`], cwd)).ok) await exec("git", ["-C", cwd, "fetch", "-q", "origin", target], cwd)
-  const n = await exec("git", ["-C", cwd, "rev-list", "--count", `${tip}..HEAD`], cwd)
-  return { target, onRemote, local, ahead: n.ok ? Number(n.out) || 0 : null }
+  // No commit in common (each began with its own first commit): GitHub / GitLab refuse a PR/MR between them.
+  const [n, mb] = await Promise.all([
+    exec("git", ["-C", cwd, "rev-list", "--count", `${tip}..HEAD`], cwd),
+    exec("git", ["-C", cwd, "merge-base", tip, "HEAD"], cwd),
+  ])
+  return { target, onRemote, local, ahead: n.ok ? Number(n.out) || 0 : null, related: mb.ok && !!mb.out.trim() }
 }
 
 /** "Publish <target>": a local branch (the chat's base) put on origin, tracking it, so a PR/MR can target it. */

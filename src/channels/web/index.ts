@@ -4263,6 +4263,10 @@ export class WebChannel implements Channel {
       if (!remote.upstream) {
         const pub = publishBranch(workdir)
         if (pub.status !== "pushed" && pub.status !== "up_to_date") return this.json({ status: "publish_failed", publish: pub }, 409)
+      } else if (remote.ahead > 0) {
+        // Commits not pushed yet would be missing from the PR/MR: push them first.
+        const push = pushBranch(workdir)
+        if (push.status !== "pushed" && push.status !== "up_to_date") return this.json({ status: "push_failed", publish: push }, 409)
       }
       const r = await createPr(workdir, branch, { title, body: (body.body as string | undefined) ?? "", target, draft: body.draft === true })
       this.prCache.clear()

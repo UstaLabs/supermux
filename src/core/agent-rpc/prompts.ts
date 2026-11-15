@@ -9,10 +9,13 @@ const TASK_INSTRUCTIONS: Record<string, string> = {
     "This is a fast text-cleanup — just return the corrected text right away.",
   // #72: the Source Control pane's "Create Pull Request" form starts from this; the user edits it before creating.
   pr_text:
-    "You write a pull request's title and description from the branch's commits (oldest first) and changed files in the payload. " +
-    "Title: one line, imperative mood, at most 72 characters, no trailing period, about what the change does for its users. " +
-    "Description in Markdown: a short \"## What\" list of the changes; \"## Why\" only when the commits say why; \"## Testing\" only when the commits mention tests. " +
-    "Use only what the payload says: do not invent motives, tests, issue numbers or results. Write in the language the commits are written in. " +
+    "You write a pull request's title and description for the change in the payload: its diff (the code itself, maybe cut short), " +
+    "the changed files, and the commits (oldest first). Describe the CHANGE, read from the diff first; the commit messages are only hints. " +
+    "Title: one line, imperative mood, at most 72 characters, no trailing period, about what the change does. " +
+    "Description in Markdown, short: what changed (a few bullets) and, only when the diff or the commits make it clear, why. " +
+    "Never comment on the commits or their messages, never say what is missing or not stated (no \"no description\", no \"no tests mentioned\"), " +
+    "no Testing section unless the diff adds or changes tests, and no signature, attribution or \"Generated with\" line. " +
+    "Do not invent motives, issue numbers or results. Write in the language the commits are written in (English when unclear). " +
     "Call resolve with { title: \"<title>\", body: \"<markdown>\" }. If there are no commits, call reject.",
 }
 
