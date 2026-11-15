@@ -223,7 +223,7 @@
     <string name="scm_open_on">Open on %1$s</string>
     <string name="scm_pr_as_you">as you, on %1$s</string>
     <string name="scm_pr_body_label">Description</string>
-    <string name="scm_pr_by_agent">Written by the agent from this branch's commits; edit freely.</string>
+    <string name="scm_pr_by_agent">Written by the agent from this branch's changes; edit freely.</string>
     <string name="scm_pr_by_commits">From this branch's commit messages; edit freely.</string>
     <string name="scm_pr_closed">Closed</string>
     <string name="scm_pr_commit_first">Commit something first; then you can open a pull request from %1$s.</string>
@@ -316,4 +316,6 @@
     <string name="scm_pr_target_self">%1$s can't be its own target. Pick another branch.</string>
     <string name="scm_pr_checking_target">Checking %1$s…</string>
     <string name="scm_pr_no_target">There's no other branch to propose %1$s into yet. Pick a target, or publish one first.</string>
+    <string name="scm_pr_unrelated">%1$s and %2$s have no history in common (each began with its own first commit), so they can't be merged with a pull request. Pick another target.</string>
+    <string name="scm_pr_push_failed">Couldn't push your latest commits, so the pull request wasn't opened.</string>
 </resources>

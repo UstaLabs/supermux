@@ -136,6 +136,7 @@ class SourceControlShots {
                 "dev" to """{"target":"dev","onRemote":false,"local":true,"ahead":1}""",
             )),
             Scene("17g-pr-form-self-target", set = { prForm = PrForm(target = "product-search-box", title = "Add a product search box above the grid", body = "## What", by = "agent", loading = false, textFor = "product-search-box") }),
+            Scene("17h-pr-unrelated", prBase = """{"target":"dev","onRemote":true,"local":true,"ahead":3,"related":false}"""),
             Scene("18-pr-form", set = { prForm = PrForm(target = "dev", title = "Add a product search box above the grid", body = "## What\n- Add a product search box above the grid", by = "agent", loading = false, textFor = "dev") }),
             Scene("19-pr-open", pr = pr),
             Scene("20-clean", commits = "[]"),

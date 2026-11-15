@@ -223,7 +223,7 @@
     <string name="scm_open_on">%1$s üzerinde aç</string>
     <string name="scm_pr_as_you">%1$s üzerinde sizin adınıza</string>
     <string name="scm_pr_body_label">Açıklama</string>
-    <string name="scm_pr_by_agent">Ajan bu dalın commit'lerinden yazdı; dilediğiniz gibi düzenleyin.</string>
+    <string name="scm_pr_by_agent">Ajan bu dalın değişikliklerinden yazdı; dilediğiniz gibi düzenleyin.</string>
     <string name="scm_pr_by_commits">Bu dalın commit iletilerinden; dilediğiniz gibi düzenleyin.</string>
     <string name="scm_pr_closed">Kapalı</string>
     <string name="scm_pr_commit_first">Önce bir şey commit edin; sonra %1$s dalından bir pull request açabilirsiniz.</string>
@@ -316,4 +316,6 @@
     <string name="scm_pr_target_self">%1$s kendi hedefi olamaz. Başka bir dal seçin.</string>
     <string name="scm_pr_checking_target">%1$s denetleniyor…</string>
     <string name="scm_pr_no_target">%1$s dalını önerecek başka bir dal henüz yok. Bir hedef seçin ya da önce birini yayımlayın.</string>
+    <string name="scm_pr_unrelated">%1$s ile %2$s dallarının ortak geçmişi yok (her biri kendi ilk commit'iyle başladı), bu yüzden bir pull request ile birleştirilemezler. Başka bir hedef seçin.</string>
+    <string name="scm_pr_push_failed">Son commit'leriniz gönderilemedi, bu yüzden pull request açılmadı.</string>
 </resources>

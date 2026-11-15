@@ -1531,7 +1531,9 @@ data class PublishNewResult(val ok: Boolean = false, val url: String? = null, va
 
 /** #72 GET …/git/pr/base: can a PR/MR into [target] be opened (on origin? here? how far ahead?). */
 @Serializable
-data class PrBaseCheck(val target: String = "", val onRemote: Boolean = false, val local: Boolean = false, val ahead: Int? = null)
+data class PrBaseCheck(val target: String = "", val onRemote: Boolean = false, val local: Boolean = false, val ahead: Int? = null,
+    /** false: no commit in common with the branch (each began with its own first commit); null: a broker that doesn't say. */
+    val related: Boolean? = null)
 
 @Serializable
 internal data class RemoteBody(val name: String, val url: String)

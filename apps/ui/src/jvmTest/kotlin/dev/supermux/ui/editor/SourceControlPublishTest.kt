@@ -179,4 +179,30 @@ class SourceControlPublishTest {
         runBlocking { s.checkPrTarget("qweqweqweqw") }
         assertNull(s.prFormCheck, "the branch itself: Create stays off")
     }
+
+    /** Ahmet's asdasdwqe: master and qweqweqweqw began with their own first commits; GitHub refuses the PR. */
+    @Test fun branches_with_no_history_in_common_are_said_plainly_with_gh_words_under_details() {
+        val gh = "pull request create failed: GraphQL: The qweqweqweqw branch has no history in common with master (createPullRequest)"
+        val engine = MockEngine { req ->
+            val p = req.url.encodedPath
+            val (code, b) = when {
+                p.endsWith("/git/pr") && req.method.value == "POST" -> HttpStatusCode.Conflict to """{"status":"unavailable","forge":"github","reason":"error","message":"$gh"}"""
+                p.endsWith("/git/pr/base") -> HttpStatusCode.OK to """{"target":"master","onRemote":true,"local":true,"ahead":3}"""
+                p.endsWith("/git/pr/text") -> HttpStatusCode.OK to """{"title":"Add test files","body":"- api.ts","by":"agent"}"""
+                p.endsWith("/git/pr") -> HttpStatusCode.OK to """{"status":"none","forge":"github"}"""
+                p.endsWith("/git/status") -> HttpStatusCode.OK to """{"isRepo":true,"hasRemote":true,"branch":"qweqweqweqw","upstream":"origin/qweqweqweqw"}"""
+                p.endsWith("/changes") -> HttpStatusCode.OK to """{"repos":[{"repo":"","baseSha":"h","files":[]}]}"""
+                p.endsWith("/git/history") -> HttpStatusCode.OK to """{"branch":"qweqweqweqw","base":"master","chat":[{"sha":"c41e9d2","subject":"x"}],"baseCommits":[]}"""
+                else -> HttpStatusCode.OK to "{}"
+            }
+            respond(ByteReadChannel(b), code, headersOf(HttpHeaders.ContentType, "application/json"))
+        }
+        val s = SourceControlState(SourceControlApi(BrokerApi("http://h", "t", HttpClient(engine)), "w1", "s1"))
+        runBlocking { s.refresh(); s.openPrForm(); s.createPr() }
+        val said = localized(Str.scm_pr_unrelated, "qweqweqweqw", "master")
+        assertEquals(said, s.prProblem)
+        assertEquals(said to gh, s.details)
+        // A broker that says so up front: no form at all.
+        assertFalse(gh.contains("Couldn't"))
+    }
 }

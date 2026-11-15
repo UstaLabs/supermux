@@ -170,6 +170,9 @@ enum class ScmPost(val wire: String) { Commit("commit"), Push("push"), Sync("syn
     companion object { fun of(w: String?) = entries.firstOrNull { it.wire == w } ?: Commit }
 }
 
+/** gh's / glab's words for two branches with no commit in common. */
+private val UNRELATED = Regex("no history in common|no common ancestor|unrelated histories", RegexOption.IGNORE_CASE)
+
 /** A repository name GitHub and GitLab both take (the broker checks the same). */
 private val SCM_REPO_NAME = Regex("^[A-Za-z0-9._-]+$")
 
@@ -524,8 +527,8 @@ class SourceControlState(val api: SourceControlApi) {
         prProblem = null
         val t = resolvePrTarget()
         prTarget = t; prTargetKnown = true
-        if (!anyTarget && (t == null || !t.onRemote || t.ahead == 0)) return
-        val target = t?.takeIf { it.onRemote && it.ahead != 0 }?.target.orEmpty()
+        if (!anyTarget && (t == null || !t.onRemote || t.ahead == 0 || t.related == false)) return
+        val target = t?.takeIf { it.onRemote && it.ahead != 0 && it.related != false }?.target.orEmpty()
         prFormCheck = t?.takeIf { it.target == target }
         prForm = PrForm(target = target, loading = target.isNotEmpty(), textFor = target.ifEmpty { null })
         if (target.isNotEmpty()) writePrText(target)
@@ -554,6 +557,7 @@ class SourceControlState(val api: SourceControlApi) {
             null -> prProblem = localized(Str.scm_offline)
             "opened", "exists" -> { prForm = null; prProblem = null; pr = api.pr(fresh = true) ?: pr }
             "publish_failed" -> prProblem = failed(r.message ?: "", localized(Str.scm_pr_publish_failed, status?.branch.orEmpty()))
+            "push_failed" -> prProblem = failed(r.message ?: "", localized(Str.scm_pr_push_failed))
             else -> prProblem = prUnavailable(r.reason, r.message)
         }
         refresh()
@@ -582,7 +586,7 @@ class SourceControlState(val api: SourceControlApi) {
         if (target.isEmpty() || target == status?.branch) return
         prFormCheck = api.prBase(target)
         val f = prForm ?: return
-        if (!f.edited && f.textFor != target && prFormCheck?.let { it.onRemote && it.ahead != 0 } == true) {
+        if (!f.edited && f.textFor != target && prFormCheck?.let { it.onRemote && it.ahead != 0 && it.related != false } == true) {
             prForm = f.copy(loading = true); writePrText(target)
         }
     }
@@ -613,8 +617,17 @@ class SourceControlState(val api: SourceControlApi) {
         "not_authed" -> localized(Str.scm_pr_not_authed)
         "no_branch" -> localized(Str.scm_pr_no_branch)
         "base_missing" -> { details = message?.let { localized(Str.scm_pr_target_missing_short, prForm?.target.orEmpty()) to it }; localized(Str.scm_pr_target_missing_short, prForm?.target.orEmpty()) }
+        // (A broker before "unrelated" sends it as an error: its words say so.)
+        "unrelated" -> unrelated(message)
+        "error" -> if (message != null && UNRELATED.containsMatchIn(message)) unrelated(message) else failed(message.orEmpty(), localized(if (pr?.forge == "gitlab") Str.scm_mr_create_failed else Str.scm_pr_create_failed))
         "no_commits" -> { details = message?.let { localized(Str.scm_pr_nothing_short, prForm?.target.orEmpty()) to it }; localized(Str.scm_pr_nothing_short, prForm?.target.orEmpty()) }
         else -> failed(message ?: reason ?: "", localized(if (pr?.forge == "gitlab") Str.scm_mr_create_failed else Str.scm_pr_create_failed))
+    }
+
+    private fun unrelated(message: String?): String {
+        val p = localized(Str.scm_pr_unrelated, status?.branch.orEmpty(), prForm?.target.orEmpty())
+        details = message?.let { p to it }
+        return p
     }
 
     suspend fun undoLastCommit() {
@@ -1090,7 +1103,7 @@ private fun PrSection(state: SourceControlState, scope: kotlinx.coroutines.Corou
         }
         if (!state.prOpen) return@Column
         val pad = Modifier.padding(horizontal = 14.dp)
-        state.prProblem?.let { p -> FailText(p, state.details?.takeIf { it.first == p }?.second, pad.padding(top = 4.dp), "scm_pr_problem") }
+        if (state.prForm == null) state.prProblem?.let { p -> FailText(p, state.details?.takeIf { it.first == p }?.second, pad.padding(top = 4.dp), "scm_pr_problem") }
         val form = state.prForm
         when {
             read.status == "unavailable" && read.reason in setOf("no_cli", "not_authed") -> Text(
@@ -1114,11 +1127,15 @@ private fun PrSection(state: SourceControlState, scope: kotlinx.coroutines.Corou
                             .clickable { scope.launch { state.openPrForm(anyTarget = true) } }.padding(horizontal = 12.dp, vertical = 5.dp).testTag("scm_pr_other_target"))
                 }
             }
-            pr == null && (state.prTarget?.ahead == 0 || (state.prTargetKnown && state.prTarget == null)) -> Column(pad.padding(vertical = 6.dp)) {
+            pr == null && (state.prTarget?.ahead == 0 || state.prTarget?.related == false || (state.prTargetKnown && state.prTarget == null)) -> Column(pad.padding(vertical = 6.dp)) {
                 val head = state.status?.branch.orEmpty()
                 val t = state.prTarget
                 Text(
-                    if (t != null) mono(localized(Str.scm_pr_nothing_ahead, head, t.target), head, t.target) else mono(localized(Str.scm_pr_no_target, head), head),
+                    when {
+                        t == null -> mono(localized(Str.scm_pr_no_target, head), head)
+                        t.related == false -> mono(localized(Str.scm_pr_unrelated, head, t.target), head, t.target)
+                        else -> mono(localized(Str.scm_pr_nothing_ahead, head, t.target), head, t.target)
+                    },
                     fontSize = 12.5.sp, color = cs.onSurfaceVariant, modifier = Modifier.testTag(if (t != null) "scm_pr_nothing_ahead" else "scm_pr_no_target"),
                 )
                 Text(localized(Str.scm_pr_other_target), fontSize = 12.5.sp, color = cs.onSurface,
@@ -1257,9 +1274,12 @@ private fun PrFormView(state: SourceControlState, scope: kotlinx.coroutines.Coro
             f.target == head -> localized(Str.scm_pr_target_self, head)
             t == null -> localized(Str.scm_pr_checking_target, f.target)
             !t.onRemote -> localized(if (t.local) Str.scm_pr_target_local_short else Str.scm_pr_target_absent_short, t.target, host)
+            t.related == false -> localized(Str.scm_pr_unrelated, head, t.target)
             t.ahead == 0 -> localized(Str.scm_pr_nothing_ahead, state.status?.branch.orEmpty(), t.target)
             else -> null
         }
+        // A failed Create says why right here, by the button it came from.
+        state.prProblem?.let { p -> FailText(p, state.details?.takeIf { it.first == p }?.second, Modifier.padding(top = 8.dp), "scm_pr_problem") }
         if (why != null) Row(Modifier.padding(top = 8.dp).testTag("scm_pr_form_why"), verticalAlignment = Alignment.CenterVertically) {
             Text(mono(why, f.target), fontSize = 12.sp, color = if (t == null && f.target.isNotEmpty() && f.target != head) cs.onSurfaceVariant else LocalSemantics.current.warning, modifier = Modifier.weight(1f, fill = false))
             if (t != null && !t.onRemote && t.local) Text(localized(Str.scm_publish_named, t.target), fontSize = 12.sp, color = cs.primary,
