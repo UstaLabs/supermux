@@ -65,6 +65,8 @@ export interface AppletServiceDeps {
    * Agent's; answers which session took it.
    */
   ask?: (applet: { name: string; title: string; folder: string }, text: string, opts: { agent?: string; chatId?: string }) => Promise<{ sessionId: string; name: string }>
+  /** A readable name for an actor (agent:<session id> → that session's name); undefined when unknown. */
+  actorName?: (by: string) => string | undefined
   /** Where the pins live (the broker's settings table); an in-memory map when absent (tests). */
   settings?: { get<T>(key: string): T | undefined; set(key: string, value: unknown): void }
   onChange?: () => void
@@ -162,10 +164,16 @@ export class AppletService {
   async ask(name: string, text: unknown, agent?: unknown): Promise<Result<{ sessionId: string; session: string }>> {
     const v = this.get(name)
     if (!v) return { ok: false, error: `no applet named "${name}"` }
-    if (typeof text !== "string" || !text.trim()) return { ok: false, error: "the message is empty" }
+    if (typeof text !== "string" || (!text.trim() && text !== "")) return { ok: false, error: "the message is empty" }
     if (agent !== undefined && agent !== null && typeof agent !== "string") return { ok: false, error: "agent must be an Agent's name" }
     if (!this.deps.ask) return { ok: false, error: "this machine can't start a chat" }
     const key = `applets.chat.${v.row.id}`
+    if (text === "" && !agent) {
+      // "Change it in a chat": the applet's own chat, made if needed, with no message.
+      const r = await this.deps.ask({ name: v.row.name, title: v.row.title, folder: v.folder }, "", { chatId: this.settings.get<string>(key) })
+      this.settings.set(key, r.sessionId)
+      return { ok: true, sessionId: r.sessionId, session: r.name }
+    }
     try {
       const r = await this.deps.ask(
         { name: v.row.name, title: v.row.title, folder: v.folder },
@@ -177,6 +185,26 @@ export class AppletService {
     } catch (err) {
       return { ok: false, error: (err as Error).message }
     }
+  }
+
+  /** Where this applet is installed: one entry per device and place, as the devices report them (On your devices). */
+  installs(id: string): { device: string; where: string; at: string }[] {
+    return this.settings.get<{ device: string; where: string; at: string }[]>(`applets.installs.${id}`) ?? []
+  }
+
+  /** A device reports it put the applet on its launcher ([where]: Home screen, Start menu, Applications…). */
+  addInstall(name: string, device: string, where: string): Result<{}> {
+    const v = this.get(name)
+    if (!v) return { ok: false, error: `no applet named "${name}"` }
+    const list = this.installs(v.row.id).filter((i) => !(i.device === device && i.where === where))
+    this.settings.set(`applets.installs.${v.row.id}`, [...list, { device, where: where.slice(0, 60), at: this.now().toISOString() }])
+    this.deps.onChange?.()
+    return { ok: true }
+  }
+
+  actorName(by: string | null): string | null {
+    if (!by) return null
+    return this.deps.actorName?.(by) ?? null
   }
 
   /** X-Mux-Via-Sig for [via] to applet [id]: hex HMAC-SHA256(viaKey(id), via). */

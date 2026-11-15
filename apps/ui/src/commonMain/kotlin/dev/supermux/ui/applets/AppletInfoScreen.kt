@@ -7,6 +7,7 @@ package dev.supermux.ui.applets
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -33,7 +34,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
+import androidx.compose.material.icons.outlined.AddBox
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Storage
@@ -75,6 +80,7 @@ import dev.supermux.net.BrokerApi
 import dev.supermux.state.FleetStore
 import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.uppercaseInAppLanguage
 import dev.supermux.ui.session.AppletIcon
 import dev.supermux.ui.session.archivedRelTime
 import dev.supermux.ui.theme.MonoFontFamily
@@ -89,9 +95,21 @@ class AppletInfoActions(
     val loadIcon: suspend (AppletDto) -> ByteArray?,
     val open: (AppletDto) -> Unit,
     val hostName: String,
+    /** Brings a chat up (the "via …" link, Change it in a chat). */
+    val openChat: (String) -> Unit = {},
+    /** The applet's live page, small, for Overview's preview. */
+    val preview: @Composable (name: String, modifier: Modifier) -> Unit = { _, _ -> },
+    /** Putting it on this device's launcher; null where it can't. */
+    val installer: dev.supermux.ui.session.AppletInstall? = null,
 )
 
-fun appletInfoActions(fleet: FleetStore, hostName: String, open: (AppletDto) -> Unit): AppletInfoActions = AppletInfoActions(
+fun appletInfoActions(
+    fleet: FleetStore,
+    hostName: String,
+    open: (AppletDto) -> Unit,
+    openChat: (String) -> Unit = {},
+    installer: dev.supermux.ui.session.AppletInstall? = null,
+): AppletInfoActions = AppletInfoActions(
     load = { fleet.appletDetail(it) },
     jobRuns = { name, job -> fleet.appletJobRuns(name, job) },
     act = { block -> fleet.appletAction { api -> block(api) }.exceptionOrNull()?.message },
@@ -99,6 +117,9 @@ fun appletInfoActions(fleet: FleetStore, hostName: String, open: (AppletDto) -> 
     loadIcon = { fleet.appletIconBytes(it) },
     open = open,
     hostName = hostName,
+    openChat = openChat,
+    installer = installer,
+    preview = { name, modifier -> fleet.activeApp()?.let { app -> AppletPage(app, name, modifier, onOpenChat = openChat) } },
 )
 
 private enum class InfoTab { Overview, Data, Jobs, Secrets, Settings }
@@ -135,10 +156,9 @@ fun AppletInfoScreen(name: String, actions: AppletInfoActions, phone: Boolean, o
                 Box(Modifier.size(44.dp).clip(CircleShape).clickable(onClick = onBack).testTag("applet_info_back"), contentAlignment = Alignment.Center) {
                     Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = localized(Str.shell_back), tint = cs.onSurface)
                 }
-                Text(detail?.title ?: name, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
             } else {
                 Text(localized(Str.sessions_applets_title), fontSize = 13.sp, color = cs.onSurfaceVariant, modifier = Modifier.clickable(onClick = onBack))
-                Text("  ›  ", fontSize = 13.sp, color = cs.onSurfaceVariant) // i18n-ok: a crumb separator
+                Text("  /  ", fontSize = 13.sp, color = cs.onSurfaceVariant) // i18n-ok: a crumb separator
                 Text(detail?.title ?: name, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.weight(1f))
                 if (actions.hostName.isNotBlank()) Text(localized(Str.applets_page_host, actions.hostName), fontSize = 12.sp, color = cs.onSurfaceVariant)
@@ -153,29 +173,24 @@ fun AppletInfoScreen(name: String, actions: AppletInfoActions, phone: Boolean, o
         }
         Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), contentAlignment = Alignment.TopCenter) {
             Column(Modifier.widthIn(max = 760.dp).fillMaxWidth().padding(horizontal = if (phone) 14.dp else 32.dp, vertical = if (phone) 10.dp else 22.dp)) {
-                // The head: icon, title, when it changed, Open.
+                // The head: icon, title, when it changed and who; Open and Install beside it (under it on a phone).
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     AppletIcon(d.asApplet(), if (phone) 60.dp else 72.dp, actions.loadIcon)
                     Spacer(Modifier.width(16.dp))
                     Column(Modifier.weight(1f)) {
                         Text(d.title.ifBlank { d.name }, fontSize = if (phone) 20.sp else 24.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface)
-                        val ago = archivedRelTime(d.updatedAt)
-                        Text(
-                            listOfNotNull(
-                                localized(if (d.kind == "server") Str.applet_info_kind_server else Str.applet_info_kind_static),
-                                ago.takeIf { it.isNotEmpty() }?.let { localized(Str.applets_menu_updated, it) },
-                                if (d.stopped) localized(Str.applet_info_stopped) else null,
-                            ).joinToString(" · "),
-                            fontSize = 13.sp,
-                            color = cs.onSurfaceVariant,
-                        )
+                        ByLine(d, actions)
                     }
-                    if (!d.stopped) InfoButton(Icons.AutoMirrored.Outlined.OpenInNew, localized(Str.applets_menu_open), primary = true, tag = "applet_info_open") { actions.open(d.asApplet()); null }
+                    if (!phone) HeadActions(d, actions, phone = false)
+                }
+                if (phone) {
+                    Spacer(Modifier.height(14.dp))
+                    HeadActions(d, actions, phone = true)
                 }
                 Spacer(Modifier.height(18.dp))
                 val tabs = InfoTab.entries.filter { (it != InfoTab.Jobs || d.jobs.isNotEmpty()) && (it != InfoTab.Secrets || d.secrets.isNotEmpty()) }
                 val shown = if (tab in tabs) tab else InfoTab.Overview
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                     tabs.forEach { t ->
                         val badge = (t == InfoTab.Secrets && d.secrets.any { it.state != "set" && it.wanted }) ||
                             (t == InfoTab.Jobs && d.jobs.any { (it.lastRun?.exitCode ?: 0) != 0 })
@@ -186,7 +201,7 @@ fun AppletInfoScreen(name: String, actions: AppletInfoActions, phone: Boolean, o
                 Spacer(Modifier.height(16.dp))
                 val refresh: () -> Unit = { reload++ }
                 when (shown) {
-                    InfoTab.Overview -> OverviewTab(d, actions, refresh) { tab = InfoTab.Secrets }
+                    InfoTab.Overview -> OverviewTab(d, actions, refresh, phone)
                     InfoTab.Data -> DataTab(d, actions)
                     InfoTab.Jobs -> JobsTab(d, actions, refresh)
                     InfoTab.Secrets -> SecretsTab(d, actions, refresh)
@@ -213,7 +228,7 @@ private fun InfoTabChip(label: String, selected: Boolean, badge: Boolean, tag: S
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Row(Modifier.padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(label, fontSize = 13.5.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium, color = if (selected) cs.onSurface else cs.onSurfaceVariant)
+            Text(label, fontSize = 13.5.sp, maxLines = 1, softWrap = false, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium, color = if (selected) cs.onSurface else cs.onSurfaceVariant)
             if (badge) {
                 Spacer(Modifier.width(6.dp))
                 Box(Modifier.size(7.dp).clip(CircleShape).background(cs.error))
@@ -278,17 +293,17 @@ private fun RowDivider() {
  * click and hover; the same button is a thumb-sized target on touch through its padding.
  */
 @Composable
-private fun InfoButton(icon: ImageVector?, label: String, primary: Boolean = false, danger: Boolean = false, tag: String, run: suspend () -> String?) {
+private fun InfoButton(icon: ImageVector?, label: String, primary: Boolean = false, danger: Boolean = false, tag: String, full: Boolean = false, run: suspend () -> String?) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
-    Column(horizontalAlignment = Alignment.End) {
+    Column(if (full) Modifier.fillMaxWidth() else Modifier, horizontalAlignment = if (full) Alignment.CenterHorizontally else Alignment.End) {
         Row(
-            Modifier
-                .height(32.dp)
+            (if (full) Modifier.fillMaxWidth() else Modifier)
+                .height(if (full) 40.dp else 32.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(
                     when {
@@ -309,6 +324,7 @@ private fun InfoButton(icon: ImageVector?, label: String, primary: Boolean = fal
                 .padding(horizontal = 12.dp)
                 .testTag(tag),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
         ) {
             val fg = when {
                 primary -> cs.onPrimary
@@ -328,33 +344,159 @@ private fun InfoButton(icon: ImageVector?, label: String, primary: Boolean = fal
 // ── Overview ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun OverviewTab(d: AppletDetailDto, actions: AppletInfoActions, refresh: () -> Unit, showSecrets: () -> Unit) {
+private fun OverviewTab(d: AppletDetailDto, actions: AppletInfoActions, refresh: () -> Unit, phone: Boolean) {
+    val cs = MaterialTheme.colorScheme
     val needs = d.secrets.filter { it.wanted && it.state != "set" }
     if (needs.isNotEmpty()) {
-        SectionTitle(localized(Str.applet_info_needs_you))
-        InfoBox {
-            needs.forEachIndexed { i, s ->
-                if (i > 0) RowDivider()
-                SecretRow(d, s, actions, refresh)
-            }
+        Text(localized(Str.applet_info_needs_you).uppercaseInAppLanguage(), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = cs.error, letterSpacing = 0.6.sp, modifier = Modifier.padding(bottom = 8.dp))
+        needs.forEach { s -> NeedCard(d, s, actions, refresh, phone); Spacer(Modifier.height(10.dp)) }
+        Spacer(Modifier.height(6.dp))
+    }
+    if (phone) {
+        PreviewCard(d, actions, Modifier.fillMaxWidth().height(300.dp))
+        Spacer(Modifier.height(16.dp))
+        SideColumn(d, actions)
+    } else {
+        Row(verticalAlignment = Alignment.Top) {
+            PreviewCard(d, actions, Modifier.weight(1.65f).height(450.dp))
+            Spacer(Modifier.width(18.dp))
+            Column(Modifier.weight(1f)) { SideColumn(d, actions) }
         }
     }
-    SectionTitle(localized(Str.applet_info_status))
-    InfoBox {
-        val p = d.process
-        val state = when {
-            d.stopped -> localized(Str.applet_info_stopped)
-            d.status == "invalid" -> d.error ?: localized(Str.applet_info_invalid)
-            d.status == "missing" -> localized(Str.applet_info_missing)
-            d.kind != "server" -> localized(Str.applet_info_static_running)
-            p?.state == "running" -> localized(Str.applet_info_server_running)
-            else -> p?.error ?: localized(Str.applet_info_server_down)
+}
+
+/** A secret he must fill in, red: what it is, and Set value (beside it on a desktop, under it on a phone). */
+@Composable
+private fun NeedCard(d: AppletDetailDto, s: AppletSecretDto, actions: AppletInfoActions, refresh: () -> Unit, phone: Boolean) {
+    val cs = MaterialTheme.colorScheme
+    var editing by remember(s.name) { mutableStateOf(false) }
+    val shape = RoundedCornerShape(12.dp)
+    val button: @Composable () -> Unit = {
+        InfoButton(null, localized(Str.applet_info_secret_set_value), primary = true, tag = "applet_need_${s.name}") { editing = true; null }
+    }
+    Column(
+        Modifier.fillMaxWidth().clip(shape).background(cs.error.copy(alpha = 0.07f)).border(1.dp, cs.error.copy(alpha = 0.3f), shape).padding(16.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Outlined.Key, contentDescription = null, tint = cs.error, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    s.name + " · " + localized(if (s.state == "expired") Str.applet_info_secret_expired else Str.applet_info_secret_missing),
+                    fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface, fontFamily = MonoFontFamily,
+                )
+                Text(localized(Str.applet_info_need_sub, d.title.ifBlank { d.name }), fontSize = 12.5.sp, color = cs.onSurfaceVariant)
+            }
+            if (!phone) { Spacer(Modifier.width(12.dp)); button() }
         }
-        val warn = !d.stopped && (d.status != "ok" || (d.kind == "server" && p?.state != "running"))
-        InfoRow(Icons.Outlined.History, state, sub = d.updatedBy?.let { localized(Str.applet_info_changed_by, whoChanged(it)) }, subWarn = false)
-        if (warn) {
-            RowDivider()
-            InfoRow(null, localized(Str.applet_info_ask_agent_hint))
+        if (phone) { Spacer(Modifier.height(12.dp)); button() }
+    }
+    if (editing) SecretDialog(d, s, actions, onDone = { editing = false; refresh() }, onCancel = { editing = false })
+}
+
+/** The applet live, small: its state, Open full screen, and the page itself. */
+@Composable
+private fun PreviewCard(d: AppletDetailDto, actions: AppletInfoActions, modifier: Modifier) {
+    val cs = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(12.dp)
+    Column(modifier.clip(shape).border(1.dp, cs.outlineVariant, shape).background(cs.surfaceContainerLow).testTag("applet_info_preview")) {
+        Row(Modifier.fillMaxWidth().background(cs.surface).padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+            val running = !d.stopped && d.status == "ok" && (d.kind != "server" || d.process?.state == "running")
+            Box(Modifier.size(7.dp).clip(CircleShape).background(if (running) dev.supermux.ui.theme.LocalSemantics.current.success else cs.onSurfaceVariant))
+            Spacer(Modifier.width(7.dp))
+            Text(localized(if (d.stopped) Str.applet_info_stopped else if (running) Str.applet_info_server_running else Str.applet_info_server_down), fontSize = 12.sp, color = cs.onSurfaceVariant)
+            Spacer(Modifier.weight(1f))
+            if (!d.stopped) Text(localized(Str.applet_info_open_full), fontSize = 12.5.sp, color = cs.onSurface, modifier = Modifier.clickable { actions.open(d.asApplet()) }.testTag("applet_info_open_full"))
+        }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(cs.outlineVariant))
+        if (!d.stopped && d.status == "ok") actions.preview(d.name, Modifier.fillMaxSize())
+    }
+}
+
+/** On your devices, About, and Change it in a chat. */
+@Composable
+private fun SideColumn(d: AppletDetailDto, actions: AppletInfoActions) {
+    val cs = MaterialTheme.colorScheme
+    SideTitle(localized(Str.applet_info_on_devices))
+    InfoBox {
+        if (d.installs.isEmpty()) {
+            Text(
+                localized(if (actions.installer?.phone == true) Str.applet_info_no_devices_phone else Str.applet_info_no_devices_desktop),
+                fontSize = 12.5.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(14.dp),
+            )
+        }
+        d.installs.forEachIndexed { i, inst ->
+            if (i > 0) RowDivider()
+            InfoRow(null, inst.device, sub = inst.where, trailing = { Text(localized(Str.applet_info_added), fontSize = 12.sp, color = dev.supermux.ui.theme.LocalSemantics.current.success) })
+        }
+    }
+    SideTitle(localized(Str.applet_info_about))
+    InfoBox {
+        KeyValue(localized(Str.applet_info_last_change), d.updatedByName ?: d.updatedBy?.let { whoChanged(it) } ?: "—")
+        KeyValue(localized(Str.applet_info_folder), d.folder, mono = true)
+        if (actions.hostName.isNotBlank()) KeyValue(localized(Str.applet_info_host), actions.hostName)
+    }
+    Spacer(Modifier.height(12.dp))
+    Box(Modifier.fillMaxWidth()) {
+        InfoButton(Icons.Outlined.ChatBubbleOutline, localized(Str.applet_info_change_in_chat), tag = "applet_info_chat", full = true) {
+            actions.act { api -> api.appletChat(d.name).also { actions.openChat(it.sessionId) } }
+        }
+    }
+}
+
+@Composable
+private fun SideTitle(text: String) {
+    Text(text.uppercaseInAppLanguage(), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant, letterSpacing = 0.6.sp, modifier = Modifier.padding(top = 2.dp, bottom = 8.dp))
+}
+
+@Composable
+private fun KeyValue(key: String, value: String, mono: Boolean = false) {
+    val cs = MaterialTheme.colorScheme
+    Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(key, fontSize = 12.5.sp, color = cs.onSurfaceVariant, modifier = Modifier.weight(1f))
+        Text(value, fontSize = 12.5.sp, color = cs.onSurface, fontFamily = if (mono) MonoFontFamily else null, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1.6f, fill = false))
+    }
+}
+
+/** "Updated 2 h ago by you" / "… via <chat>" (a link to that chat). */
+@Composable
+private fun ByLine(d: AppletDetailDto, actions: AppletInfoActions) {
+    val cs = MaterialTheme.colorScheme
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        dev.supermux.ui.session.appletUpdatedText(d.updatedAt)?.let { Text(it, fontSize = 13.sp, color = cs.onSurfaceVariant) }
+        val by = d.updatedBy
+        val chat = by?.takeIf { it.startsWith("agent:") }?.removePrefix("agent:")
+        if (chat != null && d.updatedByName != null) {
+            Text(" " + localized(Str.applet_info_via) + " ", fontSize = 13.sp, color = cs.onSurfaceVariant)
+            Text(d.updatedByName, fontSize = 13.sp, color = cs.onSurface, modifier = Modifier.clickable { actions.openChat(chat) }.testTag("applet_info_via"))
+        } else if (by != null && by.startsWith("device:")) {
+            Text(" " + localized(Str.applet_info_by_you_line), fontSize = 13.sp, color = cs.onSurfaceVariant)
+        }
+        if (d.stopped) Text(" · " + localized(Str.applet_info_stopped), fontSize = 13.sp, color = cs.onSurfaceVariant) // i18n-ok: a separator
+    }
+}
+
+/** Open, and Install / Add to Home screen (or that it is there): beside the head on a desktop, a row under it on a phone. */
+@Composable
+private fun HeadActions(d: AppletDetailDto, actions: AppletInfoActions, phone: Boolean) {
+    val inst = actions.installer
+    var installed by remember(d.id) { mutableStateOf(inst?.isInstalled(d.asApplet()) == true) }
+    Row(if (phone) Modifier.fillMaxWidth() else Modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (!d.stopped) {
+            Box(if (phone) Modifier.weight(1f) else Modifier) {
+                InfoButton(Icons.AutoMirrored.Outlined.OpenInNew, localized(Str.applets_menu_open), primary = true, tag = "applet_info_open", full = phone) { actions.open(d.asApplet()); null }
+            }
+        }
+        if (inst != null) {
+            Box(if (phone) Modifier.weight(1f) else Modifier) {
+                if (installed) {
+                    InfoButton(Icons.Outlined.Check, localized(if (inst.phone) Str.applets_menu_on_home else Str.applets_menu_installed), tag = "applet_info_installed", full = phone) { null }
+                } else {
+                    InfoButton(if (inst.phone) Icons.Outlined.AddBox else Icons.Outlined.Download, localized(if (inst.phone) Str.applets_menu_add_home else Str.applet_info_install), tag = "applet_info_install", full = phone) {
+                        inst.install(d.asApplet()).also { if (it == null) installed = true }
+                    }
+                }
+            }
         }
     }
 }

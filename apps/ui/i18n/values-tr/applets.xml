@@ -71,4 +71,17 @@
     <string name="applet_info_delete_button">Sil</string>
     <string name="applet_info_delete_title">%1$s silinsin mi?</string>
     <string name="applet_info_delete_body">Her cihazdan kaldırılır. Dosyaları ve yedekleri 30 gün saklanır, böylece bir ajan geri getirebilir.</string>
+    <string name="applet_info_about">Hakkında</string>
+    <string name="applet_info_added">Eklendi</string>
+    <string name="applet_info_by_you_line">sizin tarafınızdan</string>
+    <string name="applet_info_change_in_chat">Bir sohbette değiştir</string>
+    <string name="applet_info_host">Makine</string>
+    <string name="applet_info_install">Yükle</string>
+    <string name="applet_info_last_change">Son değişiklik</string>
+    <string name="applet_info_need_sub">%1$s çalışmak için buna ihtiyaç duyuyor. Yalnızca siz girebilirsiniz ve kimse geri okuyamaz.</string>
+    <string name="applet_info_no_devices_desktop">Henüz hiçbir cihazda yok. Buraya yükleyin ya da bir telefondan ekleyin.</string>
+    <string name="applet_info_no_devices_phone">Henüz hiçbir cihazda yok. Buraya ekleyin ya da bir bilgisayardan yükleyin.</string>
+    <string name="applet_info_on_devices">Cihazlarınızda</string>
+    <string name="applet_info_open_full">Tam ekran aç</string>
+    <string name="applet_info_via">şunun üzerinden:</string>
 </resources>
