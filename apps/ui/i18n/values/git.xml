@@ -70,4 +70,35 @@
     <string name="scm_hint_refresh">Reloads the list of changed files. Changes nothing.</string>
     <string name="scm_side_worktree">Working Tree</string>
     <string name="scm_side_index">Index</string>
+    <string name="scm_message_placeholder">Message (%1$s to commit on &quot;%2$s&quot;)</string>
+    <string name="scm_generate">Generate Commit Message</string>
+    <string name="scm_hint_generate">Writes a commit message for you. Nothing is committed until you press Commit.</string>
+    <string name="scm_amend">Amend last commit</string>
+    <string name="scm_already_pushed">already pushed</string>
+    <string name="scm_amending">Amending %1$s “%2$s”</string>
+    <string name="scm_amend_message_only">Nothing staged: only the message changes.</string>
+    <string name="scm_continue">Continue</string>
+    <string name="scm_amend_commit">Amend Commit</string>
+    <string name="scm_commit">Commit</string>
+    <string name="scm_commit_push">Commit &amp; Push</string>
+    <string name="scm_commit_sync">Commit &amp; Sync</string>
+    <string name="scm_commit_amend">Commit (Amend)</string>
+    <string name="scm_commit_options">More Actions…</string>
+    <string name="scm_commit_menu_note">The one you pick becomes the button. Amend is the checkbox above.</string>
+    <string name="scm_committed">Committed: %1$s</string>
+    <string name="scm_amended">Amended: %1$s</string>
+    <string name="scm_undone">Undid “%1$s”: its changes are staged and its message is back in the box.</string>
+    <string name="scm_undo_pushed">That commit is already on origin: it can't be undone here.</string>
+    <string name="scm_nothing_staged">There are no staged changes to commit.</string>
+    <string name="scm_smart_q">There are no staged changes to commit.</string>
+    <string name="scm_smart_body">Would you like to stage all your changes and commit them directly?</string>
+    <string name="scm_yes">Yes</string>
+    <string name="scm_always">Always</string>
+    <string name="scm_never">Never</string>
+    <string name="scm_no_message_q">Please provide a commit message.</string>
+    <string name="scm_no_message_body">Type it in the box above, or press ✨ to have one written.</string>
+    <plurals name="scm_amend_adds">
+        <item quantity="one">%1$d staged file is added to it.</item>
+        <item quantity="other">%1$d staged files are added to it.</item>
+    </plurals>
 </resources>

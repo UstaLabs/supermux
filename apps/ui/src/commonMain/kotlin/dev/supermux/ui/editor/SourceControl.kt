@@ -34,6 +34,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Refresh
@@ -121,6 +128,26 @@ fun scmLetter(f: ChangedFile, group: ScmGroup): String = when {
 sealed interface ScmAsk {
     data class Discard(val repo: String, val path: String) : ScmAsk
     data class DiscardAll(val repo: String, val count: Int) : ScmAsk
+    /** VS Code's: nothing staged — stage all and commit? Yes / Always / Never / Cancel. */
+    data object Smart : ScmAsk
+    /** VS Code's: please provide a commit message. */
+    data object NoMessage : ScmAsk
+}
+
+/** VS Code's Commit ▾: what the button does after committing (postCommitCommands). */
+enum class ScmPost(val wire: String) { Commit("commit"), Push("push"), Sync("sync");
+    companion object { fun of(w: String?) = entries.firstOrNull { it.wire == w } ?: Commit }
+}
+
+/** "Update App.jsx", "Update App.jsx and server.ts", "Update App.jsx and 3 more files": the broker's own rule. */
+fun scmMessageFromFiles(paths: List<String>): String {
+    val names = paths.map { it.substringAfterLast('/') }.distinct() // platform-ok: a git path, repo-relative, always / on every OS
+    return when (names.size) {
+        0 -> "Update files" // i18n-ok: a commit message is git content, written as the broker writes it
+        1 -> "Update ${names[0]}" // i18n-ok: a commit message is git content, written as the broker writes it
+        2 -> "Update ${names[0]} and ${names[1]}" // i18n-ok: a commit message is git content, written as the broker writes it
+        else -> "Update ${names[0]} and ${names.size - 1} more files" // i18n-ok: a commit message is git content, written as the broker writes it
+    }
 }
 
 /** What the pane holds: the uncommitted files per repo, the open question, and the last thing that went wrong. */
@@ -131,10 +158,118 @@ class SourceControlState(val api: SourceControlApi) {
     var ask by mutableStateOf<ScmAsk?>(null)
     val collapsed = mutableStateMapOf<String, Boolean>()
 
+    // ── the commit box (U2) ──
+    var message by mutableStateOf("")
+    var amend by mutableStateOf(false)
+    var post by mutableStateOf(ScmPost.Commit)
+    var smart by mutableStateOf("ask")
+    var busy by mutableStateOf(false)
+    /** A short "Committed 2 files." under the button; cleared by the next action. */
+    var note by mutableStateOf<String?>(null)
+    var status by mutableStateOf<dev.supermux.net.GitRemoteStatus?>(null)
+    /** The last commit on this chat's branch (for Amend), and whether origin already has it. */
+    var last by mutableStateOf<dev.supermux.net.LogCommit?>(null)
+    private var prefsRead = false
+
+    /** The repo the commit box acts on: the chat's own (""), else the first with changes. */
+    val repo: String get() = repos?.firstOrNull { it.repo == "" }?.repo ?: repos?.firstOrNull { it.files.isNotEmpty() }?.repo ?: ""
+    private val files: List<ChangedFile> get() = repos?.firstOrNull { it.repo == repo }?.files.orEmpty()
+    val stagedCount: Int get() = files.count { it.staged == "all" || it.staged == "partial" }
+    val changedCount: Int get() = files.size
+    val merging: Boolean get() = repos?.firstOrNull { it.repo == repo }?.merging == true
+    val conflicts: Int get() = files.count { it.staged == "conflict" }
+    val lastPushed: Boolean get() = last?.pushed == true
+
     suspend fun refresh() {
         val r = api.changes()
         offline = r == null
         if (r != null) repos = r.repos
+        status = api.status() ?: status
+        last = api.history(repo)?.chat?.firstOrNull()
+        if (!prefsRead) api.prefs()?.let { (p, s) -> prefsRead = true; post = ScmPost.of(p); smart = s ?: "ask" }
+        if (amend && (last == null || lastPushed)) amend = false
+    }
+
+    /** ✨: the message written from what goes in (the staged files, else every changed file); amending, the commit's own. */
+    fun generate() {
+        message = if (amend) last?.subject.orEmpty()
+        else scmMessageFromFiles(files.filter { it.staged == "all" || it.staged == "partial" }.ifEmpty { files }.map { it.path })
+    }
+
+    fun toggleAmend() {
+        amend = !amend
+        if (amend && message.isBlank()) message = last?.subject.orEmpty()
+        else if (!amend && message == last?.subject) message = ""
+    }
+
+    /** The button: VS Code's rules. Nothing staged asks (or follows Always / Never); no message asks; then the ▾ pick. */
+    suspend fun commit(all: Boolean = false) {
+        note = null
+        if (!merging && !amend && stagedCount == 0 && !all) {
+            when (smart) {
+                "always" -> return commit(all = true)
+                "never" -> { problem = localized(Str.scm_nothing_staged); return }
+                else -> { ask = ScmAsk.Smart; return }
+            }
+        }
+        if (!merging && !amend && message.isBlank()) { ask = ScmAsk.NoMessage; return }
+        busy = true
+        val r = api.commit(repo, message.trim(), all = all, amend = amend)
+        busy = false
+        when {
+            r == null -> problem = localized(Str.scm_offline)
+            !r.ok -> problem = localized(Str.scm_failed, r.message ?: r.reason ?: "")
+            else -> {
+                problem = null; ask = null
+                note = localized(if (amend) Str.scm_amended else Str.scm_committed, r.subject ?: "")
+                message = ""; amend = false
+                when (post) {
+                    ScmPost.Push -> sync(if (status?.upstream == null) "publish" else "push")
+                    ScmPost.Sync -> { sync("pull"); sync(if (status?.upstream == null) "publish" else "push") }
+                    ScmPost.Commit -> Unit
+                }
+            }
+        }
+        refresh()
+    }
+
+    /** Pull / push / publish / fetch, with VS Code's outcome in the note line. */
+    suspend fun sync(op: String) {
+        busy = true
+        val r = api.sync(op)
+        busy = false
+        problem = when {
+            r == null -> localized(Str.scm_offline)
+            r.status in setOf("pushed", "up_to_date", "clean", "ok", "fetched", "") -> null
+            r.status == "conflict" -> localized(Str.scm_conflict_first, r.files.joinToString(", "))
+            else -> localized(Str.scm_failed, r.message ?: r.status)
+        }
+    }
+
+    suspend fun answerSmart(choice: String) {
+        ask = null
+        when (choice) {
+            "always" -> { smart = "always"; api.savePrefs(smartCommit = "always"); commit(all = true) }
+            "never" -> { smart = "never"; api.savePrefs(smartCommit = "never") }
+            "yes" -> commit(all = true)
+        }
+    }
+
+    suspend fun pick(p: ScmPost) {
+        post = p
+        api.savePrefs(postCommit = p.wire)
+        commit()
+    }
+
+    suspend fun undoLastCommit() {
+        val r = api.uncommit(repo)
+        when {
+            r == null -> problem = localized(Str.scm_offline)
+            r.ok -> { message = r.subject.orEmpty(); note = localized(Str.scm_undone, r.subject ?: "") }
+            r.reason == "pushed" -> problem = localized(Str.scm_undo_pushed)
+            else -> problem = localized(Str.scm_failed, r.message ?: r.reason ?: "")
+        }
+        refresh()
     }
 
     suspend fun stage(repo: String, paths: List<String>, staged: Boolean) {
@@ -209,8 +344,9 @@ fun SourceControlPane(
         when {
             repos == null && state.offline -> Note(localized(Str.scm_offline))
             repos == null -> Unit
-            repos.all { it.files.isEmpty() } -> Note(localized(Str.scm_no_changes))
             else -> LazyColumn(Modifier.fillMaxSize()) {
+                item(key = "commit") { CommitBox(state, scope) }
+                if (repos.all { it.files.isEmpty() }) item(key = "empty") { Note(localized(Str.scm_no_changes)) }
                 val multi = repos.count { it.files.isNotEmpty() } > 1
                 for (repo in repos) {
                     if (repo.files.isEmpty()) continue
@@ -232,6 +368,130 @@ fun SourceControlPane(
         }
     }
     }
+}
+
+/** VS Code's message box on top (⌘↵ / Ctrl+Enter commits), JetBrains' Amend checkbox, and one Commit button with its ▾. */
+@Composable
+private fun CommitBox(state: SourceControlState, scope: kotlinx.coroutines.CoroutineScope) {
+    val cs = MaterialTheme.colorScheme
+    val branch = state.status?.branch ?: state.status?.detachedSha ?: "HEAD"
+    val keys = if (dev.supermux.editor.compose.isApplePlatform) "⌘↵" else "Ctrl+Enter"
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(top = 2.dp, bottom = 4.dp)) {
+        // The message, with ✨ inside it.
+        Box(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(cs.surfaceContainerLow)
+                .border(1.dp, cs.outlineVariant, RoundedCornerShape(8.dp)),
+        ) {
+            androidx.compose.foundation.text.BasicTextField(
+                value = state.message,
+                onValueChange = { state.message = it; if (state.ask == ScmAsk.NoMessage) state.ask = null },
+                textStyle = androidx.compose.ui.text.TextStyle(color = cs.onSurface, fontSize = 13.sp, lineHeight = 18.sp),
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(cs.primary),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp).padding(start = 10.dp, end = 32.dp, top = 8.dp, bottom = 8.dp)
+                    .onPreviewKeyEvent { e ->
+                        val mod = if (dev.supermux.editor.compose.isApplePlatform) e.isMetaPressed else e.isCtrlPressed
+                        if (e.type == androidx.compose.ui.input.key.KeyEventType.KeyDown && e.key == androidx.compose.ui.input.key.Key.Enter && mod) {
+                            scope.launch { state.commit() }; true
+                        } else false
+                    }
+                    .testTag("scm_message"),
+                decorationBox = { inner ->
+                    if (state.message.isEmpty()) Text(localized(Str.scm_message_placeholder, keys, branch), fontSize = 13.sp, color = cs.onSurfaceVariant.copy(alpha = 0.75f))
+                    inner()
+                },
+            )
+            Box(Modifier.align(Alignment.TopEnd).padding(2.dp)) {
+                ScmIcon(Icons.Filled.AutoAwesome, localized(Str.scm_generate), "scm_generate", hint = localized(Str.scm_hint_generate), main = true) { state.generate() }
+            }
+        }
+        // JetBrains' Amend: always says which commit, and what goes into it.
+        val last = state.last
+        if (last != null && !state.merging) {
+            val off = state.lastPushed
+            Row(
+                Modifier.padding(top = 8.dp).then(if (off) Modifier else Modifier.clickable { state.toggleAmend() }).testTag("scm_amend"),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier.size(15.dp).clip(RoundedCornerShape(3.dp))
+                        .background(if (state.amend) cs.primary else Color.Transparent)
+                        .border(1.5.dp, if (state.amend) cs.primary else cs.onSurfaceVariant.copy(alpha = if (off) 0.45f else 1f), RoundedCornerShape(3.dp)),
+                    contentAlignment = Alignment.Center,
+                ) { if (state.amend) Icon(Icons.Filled.Check, null, tint = cs.onPrimary, modifier = Modifier.size(12.dp)) }
+                Text(localized(Str.scm_amend), fontSize = 12.5.sp, color = if (off) cs.onSurfaceVariant else cs.onSurface, modifier = Modifier.padding(start = 8.dp))
+                if (off) Text(" · " + localized(Str.scm_already_pushed), fontSize = 11.5.sp, color = cs.onSurfaceVariant)
+            }
+            if (state.amend) {
+                Column(
+                    Modifier.padding(top = 8.dp).fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(cs.primary.copy(alpha = 0.12f))
+                        .padding(horizontal = 10.dp, vertical = 8.dp).testTag("scm_amending"),
+                ) {
+                    Text(localized(Str.scm_amending, last.sha.take(7), last.subject), fontSize = 12.sp, color = cs.onSurface)
+                    Text(
+                        if (state.stagedCount > 0) localizedPlural(Plurals.scm_amend_adds, state.stagedCount, state.stagedCount) else localized(Str.scm_amend_message_only),
+                        fontSize = 12.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+            }
+        }
+        // One button whose label follows the state (actionButton.ts), and its ▾ (postCommitCommands).
+        val label = when {
+            state.merging -> localized(Str.scm_continue)
+            state.amend -> localized(Str.scm_amend_commit)
+            else -> localized(when (state.post) { ScmPost.Commit -> Str.scm_commit; ScmPost.Push -> Str.scm_commit_push; ScmPost.Sync -> Str.scm_commit_sync })
+        }
+        val enabled = !state.busy && !(state.merging && state.conflicts > 0)
+        var menu by remember { mutableStateOf(false) }
+        Row(
+            Modifier.padding(top = 10.dp).fillMaxWidth().height(30.dp).clip(RoundedCornerShape(6.dp))
+                .background(if (enabled) cs.primary else cs.primary.copy(alpha = 0.5f)),
+        ) {
+            Row(
+                Modifier.weight(1f).fillMaxHeight().then(if (enabled) Modifier.clickable { scope.launch { state.commit() } } else Modifier).testTag("scm_commit"),
+                horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Filled.Check, null, tint = cs.onPrimary, modifier = Modifier.size(16.dp))
+                Text(label, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = cs.onPrimary, modifier = Modifier.padding(start = 6.dp))
+            }
+            if (!state.merging) {
+                Box(Modifier.width(1.dp).fillMaxHeight().background(cs.onPrimary.copy(alpha = 0.25f)))
+                Box(Modifier.width(30.dp).fillMaxHeight().clickable { menu = true }.testTag("scm_commit_menu"), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Filled.KeyboardArrowDown, localized(Str.scm_commit_options), tint = cs.onPrimary, modifier = Modifier.size(16.dp))
+                    androidx.compose.material3.DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        PostItem(localized(Str.scm_commit), state.post == ScmPost.Commit) { menu = false; scope.launch { state.pick(ScmPost.Commit) } }
+                        PostItem(localized(Str.scm_commit_amend), false, enabled = state.last != null && !state.lastPushed) { menu = false; if (!state.amend) state.toggleAmend() }
+                        PostItem(localized(Str.scm_commit_push), state.post == ScmPost.Push) { menu = false; scope.launch { state.pick(ScmPost.Push) } }
+                        PostItem(localized(Str.scm_commit_sync), state.post == ScmPost.Sync) { menu = false; scope.launch { state.pick(ScmPost.Sync) } }
+                        Text(localized(Str.scm_commit_menu_note), fontSize = 11.sp, color = cs.onSurfaceVariant, modifier = Modifier.widthIn(max = 240.dp).padding(horizontal = 12.dp, vertical = 6.dp))
+                    }
+                }
+            }
+        }
+        state.note?.let { Text(it, fontSize = 12.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp).testTag("scm_note")) }
+        when (state.ask) {
+            ScmAsk.Smart -> AskBox(
+                question = localized(Str.scm_smart_q), body = localized(Str.scm_smart_body), confirm = localized(Str.scm_yes),
+                onConfirm = { scope.launch { state.answerSmart("yes") } }, onCancel = { state.ask = null }, tag = "scm_ask_smart",
+                danger = false, start = 0.dp,
+                extra = listOf(localized(Str.scm_always) to { scope.launch { state.answerSmart("always") } }, localized(Str.scm_never) to { scope.launch { state.answerSmart("never") } }),
+            )
+            ScmAsk.NoMessage -> AskBox(
+                question = localized(Str.scm_no_message_q), body = localized(Str.scm_no_message_body), confirm = null,
+                onConfirm = {}, onCancel = { state.ask = null }, tag = "scm_ask_no_message", danger = false, warn = true, start = 0.dp,
+            )
+            else -> Unit
+        }
+    }
+}
+
+@Composable
+private fun PostItem(label: String, picked: Boolean, enabled: Boolean = true, onClick: () -> Unit) {
+    androidx.compose.material3.DropdownMenuItem(
+        text = { Text(label, fontSize = 12.5.sp) },
+        trailingIcon = if (picked) { { Icon(Icons.Filled.Check, null, modifier = Modifier.size(14.dp)) } } else null,
+        enabled = enabled,
+        onClick = onClick,
+    )
 }
 
 @Composable
@@ -363,25 +623,38 @@ private fun letterColor(letter: String): Color {
 
 /** VS Code's confirm, in the pane, right under what it is about. */
 @Composable
-private fun AskBox(question: String, body: String, confirm: String, onConfirm: () -> Unit, onCancel: () -> Unit, tag: String) {
+private fun AskBox(
+    question: String, body: String, confirm: String?, onConfirm: () -> Unit, onCancel: () -> Unit, tag: String,
+    danger: Boolean = true, warn: Boolean = false, start: androidx.compose.ui.unit.Dp = 24.dp,
+    extra: List<Pair<String, () -> Unit>> = emptyList(),
+) {
     val cs = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(8.dp)
+    val accent = when { danger -> cs.error; warn -> LocalSemantics.current.warning; else -> cs.primary }
     Row(
-        Modifier.padding(start = 24.dp, end = Space.sm, top = 2.dp, bottom = 6.dp).fillMaxWidth()
+        Modifier.padding(start = start, end = if (start == 0.dp) 0.dp else Space.sm, top = if (start == 0.dp) 8.dp else 2.dp, bottom = 6.dp).fillMaxWidth()
             .clip(shape).background(cs.surfaceContainerHighest).border(1.dp, cs.outlineVariant, shape).height(IntrinsicSize.Min).testTag(tag),
     ) {
-        // The red left edge: a question about throwing work away.
-        Box(Modifier.width(2.dp).fillMaxHeight().background(cs.error))
+        // The left edge: red for throwing work away, amber for a missing message, the accent for a question.
+        Box(Modifier.width(2.dp).fillMaxHeight().background(accent))
         Column(Modifier.padding(horizontal = 10.dp, vertical = 9.dp)) {
             Text(question, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface)
             Text(body, fontSize = 12.5.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
             Row(Modifier.padding(top = 9.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    confirm, fontSize = 12.5.sp, fontWeight = FontWeight.Medium, color = cs.error,
-                    modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(cs.error.copy(alpha = 0.18f))
-                        .border(1.dp, cs.error.copy(alpha = 0.5f), RoundedCornerShape(6.dp)).clickable(onClick = onConfirm)
+                if (confirm != null) Text(
+                    confirm, fontSize = 12.5.sp, fontWeight = FontWeight.Medium, color = if (danger) cs.error else cs.onPrimary,
+                    modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(if (danger) cs.error.copy(alpha = 0.18f) else cs.primary)
+                        .border(1.dp, if (danger) cs.error.copy(alpha = 0.5f) else cs.primary, RoundedCornerShape(6.dp)).clickable(onClick = onConfirm)
                         .padding(horizontal = 12.dp, vertical = 4.dp).testTag("${tag}_confirm"),
                 )
+                extra.forEachIndexed { i, (label, act) ->
+                    Text(
+                        label, fontSize = 12.5.sp, color = cs.onSurface,
+                        modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(cs.surfaceContainerHigh)
+                            .border(1.dp, cs.outlineVariant, RoundedCornerShape(6.dp)).clickable(onClick = act)
+                            .padding(horizontal = 12.dp, vertical = 4.dp).testTag("${tag}_extra_$i"),
+                    )
+                }
                 Text(
                     localized(Str.scm_cancel), fontSize = 12.5.sp, color = cs.onSurfaceVariant,
                     modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onCancel)

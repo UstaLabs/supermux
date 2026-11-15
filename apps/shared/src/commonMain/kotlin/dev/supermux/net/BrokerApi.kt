@@ -244,6 +244,9 @@ data class AppConfigDto(
     /** Model the cleanup engine uses. null/empty = that engine's own default. */
     val voiceCleanupModel: String? = null,
     /** Read-aloud backend: platform (OS TTS) | codex (ChatGPT pronunciation). null = platform. */
+    /** #72: Source Control's Commit ▾ pick (commit | push | sync) and its "no staged changes" answer (ask | always | never). */
+    val gitPostCommit: String? = null,
+    val gitSmartCommit: String? = null,
     val voiceTtsEngine: String? = null,
     /** ISO-639-1 codes the user dictates in (e.g. ["tr", "en"]). null/empty = auto-detect. */
     val voiceLanguages: List<String>? = null,
@@ -2066,6 +2069,9 @@ private data class OpenCodeOAuthStartBody(val providerId: String, val method: In
 @Serializable
 private data class OpenCodeOAuthFinishBody(val providerId: String, val method: Int, val code: String)
 
+@Serializable
+private data class GitPrefsBody(val gitPostCommit: String? = null, val gitSmartCommit: String? = null)
+
 /** Partial PUT /settings/config body. explicitNulls=false omits unset fields, so
  *  this never clobbers config the caller didn't touch. */
 @Serializable
@@ -2800,6 +2806,10 @@ class BrokerApi(
             setBody(json.encodeToString(req))
         })
     }
+
+    /** PUT /settings/config with only #72's git preferences (null: unchanged). */
+    suspend fun saveGitPrefs(postCommit: String? = null, smartCommit: String? = null) =
+        putJson("$httpBase/settings/config", GitPrefsBody(postCommit, smartCommit))
 
     /** GET /settings/config */
     suspend fun getConfig(): AppConfigDto =

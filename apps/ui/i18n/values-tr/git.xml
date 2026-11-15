@@ -70,4 +70,35 @@
     <string name="scm_hint_refresh">Değişen dosyaların listesini yeniden okur. Hiçbir şeyi değiştirmez.</string>
     <string name="scm_side_worktree">Çalışma Ağacı</string>
     <string name="scm_side_index">Dizin</string>
+    <string name="scm_message_placeholder">İleti (&quot;%2$s&quot; üzerinde commit etmek için %1$s)</string>
+    <string name="scm_generate">Commit İletisi Oluştur</string>
+    <string name="scm_hint_generate">Sizin için bir commit iletisi yazar. Commit'e basana kadar hiçbir şey commit edilmez.</string>
+    <string name="scm_amend">Son commit'i değiştir</string>
+    <string name="scm_already_pushed">zaten gönderildi</string>
+    <string name="scm_amending">%1$s değiştiriliyor: “%2$s”</string>
+    <string name="scm_amend_message_only">Hazırlanmış bir şey yok: yalnızca ileti değişir.</string>
+    <string name="scm_continue">Devam</string>
+    <string name="scm_amend_commit">Commit'i Değiştir</string>
+    <string name="scm_commit">Commit</string>
+    <string name="scm_commit_push">Commit ve Gönder</string>
+    <string name="scm_commit_sync">Commit ve Eşitle</string>
+    <string name="scm_commit_amend">Commit (Değiştir)</string>
+    <string name="scm_commit_options">Diğer Eylemler…</string>
+    <string name="scm_commit_menu_note">Seçtiğiniz düğme olur. Değiştirme, yukarıdaki onay kutusudur.</string>
+    <string name="scm_committed">Commit edildi: %1$s</string>
+    <string name="scm_amended">Değiştirildi: %1$s</string>
+    <string name="scm_undone">“%1$s” geri alındı: değişiklikleri hazır, iletisi kutuya döndü.</string>
+    <string name="scm_undo_pushed">O commit zaten origin'de: burada geri alınamaz.</string>
+    <string name="scm_nothing_staged">Commit edilecek hazırlanmış değişiklik yok.</string>
+    <string name="scm_smart_q">Commit edilecek hazırlanmış değişiklik yok.</string>
+    <string name="scm_smart_body">Tüm değişikliklerinizi hazırlayıp doğrudan commit etmek ister misiniz?</string>
+    <string name="scm_yes">Evet</string>
+    <string name="scm_always">Her Zaman</string>
+    <string name="scm_never">Asla</string>
+    <string name="scm_no_message_q">Lütfen bir commit iletisi girin.</string>
+    <string name="scm_no_message_body">Yukarıdaki kutuya yazın ya da yazdırmak için ✨ düğmesine basın.</string>
+    <plurals name="scm_amend_adds">
+        <item quantity="one">%1$d hazırlanmış dosya ona eklenir.</item>
+        <item quantity="other">%1$d hazırlanmış dosya ona eklenir.</item>
+    </plurals>
 </resources>

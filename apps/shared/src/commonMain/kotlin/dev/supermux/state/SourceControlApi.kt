@@ -94,6 +94,12 @@ class SourceControlApi(private val api: BrokerApi, val workspaceId: String, val 
 
     suspend fun checkLog(checkUrl: String): PrCheckLog? = call("checkLog") { api.gitPrCheckLog(ws, workspaceId, checkUrl) }
 
+    /** The Commit ▾ pick and the "no staged changes" answer, kept on the broker (the owner's, until users exist). */
+    suspend fun prefs(): Pair<String?, String?>? = call("prefs") { api.getConfig().let { it.gitPostCommit to it.gitSmartCommit } }
+
+    suspend fun savePrefs(postCommit: String? = null, smartCommit: String? = null): Boolean =
+        call("savePrefs") { api.saveGitPrefs(postCommit, smartCommit); true } ?: false
+
     /** "Ask the agent to fix" / "Send to the agent": a message to the chat's agent. */
     suspend fun tellAgent(text: String): Boolean = sessionId?.let { s -> call("tellAgent") { api.sendMessage(s, text); true } } ?: false
 }
