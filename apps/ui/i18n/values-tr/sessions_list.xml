@@ -136,4 +136,6 @@
     <string name="applets_page_host">%1$s üzerinde</string>
     <string name="applets_hint_desktop">Yeni bir tane yapmak için herhangi bir oturuma “bunu applet yap” deyin. Diğer seçenekler için bir applete sağ tıklayın ya da ⋯ simgesine tıklayın.</string>
     <string name="applets_hint_phone">Yeni bir tane yapmak için herhangi bir oturuma “bunu applet yap” deyin. Diğer seçenekler için bir applete basılı tutun.</string>
+    <string name="applets_window_no_host">Bu appletin makinesi artık bu cihazla eşli değil. Makineyi yeniden eşleyin, sonra appleti supermux'tan açın.</string>
+    <string name="applets_window_no_key">Bu applet açılamıyor: makinesi bu cihaza onun için bir anahtar vermedi. Makinenin çevrimiçi olduğunu kontrol edip appleti yeniden açın.</string>
 </resources>

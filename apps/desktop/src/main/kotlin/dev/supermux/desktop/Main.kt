@@ -2030,6 +2030,8 @@ fun main() {
                         LocalHostingSessions provides fleetFacts.localSessions,
                         // Cards #108/#132: living avatars and decorative loops stand still while nobody can see them.
                         LocalAvatarsLive provides (windowVisible && !windowState.isMinimized && screenSeen && !windowCovered),
+                        // #117: applets open in their own windows here.
+                        dev.supermux.ui.session.LocalAppletOpener provides dev.supermux.desktop.applets.DesktopApplets.opener,
                     ) {
                         // Card #54: the Load Timings panel (View ▸ Load Timings) floats over the app.
                         androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) {
@@ -2220,6 +2222,13 @@ fun main() {
             if (mdImageSrc != null) {
                 MdImageVerifyOverlay(source = mdImageSrc)
             }
+
+        // #117: applet windows, each its own OS window with only the applet's page in it.
+        dev.supermux.desktop.applets.AppletWindows(pairedFleet) { content ->
+            ProvideDesktopAdaptiveLocals {
+                DesktopTheme(appearance = ui.appearance, textScale = appTextScale, uiPrefs = desktopUiPrefs) { content() }
+            }
+        }
 
         // Extra claimed layout windows. Close unclaims only — never exitApplication.
         // Each extra uses the bind for ITS workspace so switching sessions does not

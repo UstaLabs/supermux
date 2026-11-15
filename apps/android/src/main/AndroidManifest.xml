@@ -74,6 +74,20 @@
             android:taskAffinity="${applicationId}.window"
             android:autoRemoveFromRecents="true"
             android:windowSoftInputMode="adjustResize" />
+        <!-- #117: an applet in its own task (applets/AppletActivity.kt). documentLaunchMode="intoExisting" keys
+             the task on the intent's data, the applet's supermux://applet/<host>/<name>: opening it again
+             brings its Recents card back ("always" made a new card per tap, verified on the Fold). Not exported:
+             shortcuts and widgets (S1/W1) start it from inside the app's own package. -->
+        <activity
+            android:name=".applets.AppletActivity"
+            android:theme="@style/Theme.Supermux.Main"
+            android:exported="false"
+            android:hardwareAccelerated="true"
+            android:resizeableActivity="true"
+            android:documentLaunchMode="intoExisting"
+            android:taskAffinity="${applicationId}.applet"
+            android:autoRemoveFromRecents="true"
+            android:windowSoftInputMode="adjustResize" />
         <!-- Native push: receives FCM data-only messages (relay `data:{d:<ciphertext>}`). -->
         <service
             android:name=".push.SupermuxMessagingService"
