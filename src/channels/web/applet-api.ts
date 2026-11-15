@@ -11,7 +11,7 @@ import { resolveStaticFile } from "./applet-route"
  *   GET    /applets/<name>                  everything Applet info shows
  *   DELETE /applets/<name>
  *   GET    /applets/<name>/icon | logs[?lines=] | jobs/<job>/runs
- *   POST   /applets/<name>/restart | backup {why} | jobs/<job>/run
+ *   POST   /applets/<name>/restart | backup {why} | jobs/<job>/run | pin | unpin
  *   PUT    /applets/<name>/secrets/<NAME> {value, expiresAt?}   DELETE the same
  *   PUT    /applets/<name>/settings/<key> {value}
  */
@@ -22,7 +22,7 @@ function detail(applets: AppletService, v: AppletView) {
   const m = v.manifest
   const settingsValues = applets.secrets.settings(v.row.id)
   return {
-    ...appletPayload(v, applets.needsYou(v)),
+    ...appletPayload(v, applets.needsYou(v), applets.pinnedIds().includes(v.row.id) ? applets.pinnedIds().indexOf(v.row.id) : null),
     secrets: applets.secrets.status(v.row.id, m?.secrets ?? []).map((s) => ({ ...s, wanted: (m?.secrets ?? []).includes(s.name) })),
     jobs: (m?.jobs ?? []).map((j) => {
       const last = applets.jobs.lastRun(v.row.id, j.name)
@@ -50,7 +50,10 @@ export async function handleAppletApi(req: Request, opts: { applets: AppletServi
     .map((p) => { try { return decodeURIComponent(p) } catch { return "\u0000" } })
 
   if (parts.length === 0 || (parts.length === 1 && parts[0] === "")) {
-    if (method === "GET") return json(applets.list().map((v) => appletPayload(v, applets.needsYou(v))))
+    if (method === "GET") {
+      const pins = applets.pinnedIds()
+      return json(applets.list().map((v) => appletPayload(v, applets.needsYou(v), pins.includes(v.row.id) ? pins.indexOf(v.row.id) : null)))
+    }
     return json({ error: "not found" }, 404)
   }
 
@@ -86,6 +89,10 @@ export async function handleAppletApi(req: Request, opts: { applets: AppletServi
   if (a === "logs" && !b && method === "GET") {
     const lines = Math.min(2000, Math.max(1, Number(url.searchParams.get("lines")) || 200))
     return json({ logs: applets.supervisor.logs(v.row.id, lines) })
+  }
+  if ((a === "pin" || a === "unpin") && !b && method === "POST") {
+    const r = a === "pin" ? applets.pin(name) : applets.unpin(name)
+    return r.ok ? json({ ok: true, pins: applets.pinnedIds() }) : json({ error: r.error }, 409)
   }
   if (a === "restart" && !b && method === "POST") {
     const r = await applets.restart(name)

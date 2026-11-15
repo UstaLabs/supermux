@@ -2397,7 +2397,7 @@ const proxyLivenessMonitor = new ProxyLivenessMonitor({
 // Started after webChannel.start(); servers outlive a broker restart and are adopted by the next one.
 const appletService = new AppletService({
   db, appletsDir: join(MUX_HOME, "applets"), stateDir: join(STATE_DIR, "applets"), backupsDir: join(MUX_HOME, "backups", "applets"),
-  rescanMs: 15_000, jobTickMs: 30_000, maintenanceMs: 10 * 60_000,
+  rescanMs: 15_000, jobTickMs: 30_000, maintenanceMs: 10 * 60_000, settings,
   // No payload: a device showing applets reloads GET /applets (older apps skip the unknown frame).
   onChange: () => webChannel?.broadcastToAll({ type: "applets_changed" }),
 })
