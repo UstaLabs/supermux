@@ -239,8 +239,6 @@
     <string name="scm_pr_none">%1$s için henüz pull request yok.</string>
     <string name="scm_pr_not_authed">Pull request'leri burada görmek için bu makinede gh ya da glab ile oturum açın (gh auth login / glab auth login).</string>
     <string name="scm_pr_open">Açık</string>
-    <string name="scm_pr_publish_create">Yayımla ve Oluştur</string>
-    <string name="scm_pr_publishes_first">önce %1$s dalını yayımlar</string>
     <string name="scm_pr_ready">İncelemeye Hazır</string>
     <string name="scm_pr_rewrite">Yeniden yaz</string>
     <string name="scm_pr_title">PULL REQUEST</string>

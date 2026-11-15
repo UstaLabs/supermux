@@ -1249,7 +1249,6 @@ private fun PrFormView(state: SourceControlState, scope: kotlinx.coroutines.Coro
             ) { if (f.draft) Icon(Icons.Filled.Check, null, tint = cs.onPrimary, modifier = Modifier.size(12.dp)) }
             Text(localized(Str.scm_pr_draft_check), fontSize = 12.5.sp, color = cs.onSurface, modifier = Modifier.padding(start = 8.dp))
         }
-        val publishFirst = state.status?.upstream == null
         LaunchedEffect(f.target) { state.checkPrTarget(f.target) }
         // The extension's two checks ("The upstream branch … does not exist on GitHub", "There are no commits
         // between …"); Create waits for them.
@@ -1269,14 +1268,15 @@ private fun PrFormView(state: SourceControlState, scope: kotlinx.coroutines.Coro
         state.prAsk?.let { a -> PrAskBox(state, scope, a, host) }
         val can = f.title.isNotBlank() && !state.busy && why == null && t != null && !f.loading && state.prAsk == null
         Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-            val go = localized(if (publishFirst) Str.scm_pr_publish_create else Str.scm_pr_create_go) + if (f.draft) " " + localized(Str.scm_pr_draft) else ""
+            // Plain Create: publishing / pushing first is the extension's question, asked when it applies.
+            val go = localized(Str.scm_pr_create_go) + if (f.draft) " " + localized(Str.scm_pr_draft) else ""
             Text(go, fontSize = 12.5.sp, fontWeight = FontWeight.Medium, color = cs.onPrimary,
                 modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(if (can) cs.primary else cs.primary.copy(alpha = 0.5f))
                     .clickable(enabled = can) { scope.launch { state.createPr() } }.padding(horizontal = 12.dp, vertical = 5.dp).testTag("scm_pr_create_go"))
             Text(localized(Str.scm_cancel), fontSize = 12.5.sp, color = cs.onSurfaceVariant,
                 modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable { state.prForm = null }.padding(horizontal = 12.dp, vertical = 5.dp))
         }
-        Text(localized(Str.scm_pr_as_you, host) + if (publishFirst) " · " + localized(Str.scm_pr_publishes_first, state.status?.branch ?: "") else "",
+        Text(localized(Str.scm_pr_as_you, host),
             fontSize = 11.5.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
     }
 }
@@ -1895,13 +1895,14 @@ private fun AskBox(
     val accent = when { danger -> cs.error; warn -> LocalSemantics.current.warning; else -> cs.primary }
     Row(
         Modifier.padding(start = start, end = if (start == 0.dp) 0.dp else Space.sm, top = if (start == 0.dp) 8.dp else 2.dp, bottom = 6.dp).fillMaxWidth()
-            .clip(shape).background(cs.surfaceContainerHighest).leftEdge(accent).border(1.dp, cs.outlineVariant, shape).height(IntrinsicSize.Min).testTag(tag),
+            .clip(shape).background(cs.surfaceContainerHighest).leftEdge(accent).border(1.dp, cs.outlineVariant, shape).testTag(tag),
     ) {
         // The left edge (leftEdge): red for throwing work away, amber for a missing message, the accent for a question.
         Column(Modifier.padding(horizontal = 10.dp, vertical = 9.dp)) {
             Text(question, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface)
             Text(body, fontSize = 12.5.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
-            Row(Modifier.padding(top = 9.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            // Wraps when the buttons don't fit the pane (a narrow pane, longer labels such as "Continue Without Pushing").
+            androidx.compose.foundation.layout.FlowRow(Modifier.padding(top = 9.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (confirm != null) Text(
                     confirm, fontSize = 12.5.sp, fontWeight = FontWeight.Medium, color = if (danger) cs.error else cs.onPrimary,
                     modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(if (danger) cs.error.copy(alpha = 0.18f) else cs.primary)

@@ -239,8 +239,6 @@
     <string name="scm_pr_none">No pull request for %1$s yet.</string>
     <string name="scm_pr_not_authed">Sign in to gh or glab on this machine (gh auth login / glab auth login) to see pull requests here.</string>
     <string name="scm_pr_open">Open</string>
-    <string name="scm_pr_publish_create">Publish &amp; Create</string>
-    <string name="scm_pr_publishes_first">publishes %1$s first</string>
     <string name="scm_pr_ready">Ready for Review</string>
     <string name="scm_pr_rewrite">Write it again</string>
     <string name="scm_pr_title">PULL REQUEST</string>
