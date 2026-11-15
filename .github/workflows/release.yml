@@ -1199,15 +1199,17 @@ jobs:
           codesign --verify --deep --strict "$(ls -d "$MNT"/*.app)" && echo "bundle signature valid"
           # -version maps the archive but never loads an app class, and rc.6 passed it yet died at launch (a sealing
           # violation through the archive). So launch the packaged app itself: it must reach a main window (not an
-          # error dialog) and print no exception. A crash or no window within 60 s fails the job; a window later than
-          # 20 s only warns, with the JVM's thread stacks at 20 s so the blocker is named (the 2026-11-15 dev dry run sat
-          # 12 s between host.init and ws.connecting with no window painted, on a slow runner).
+          # error dialog) within LAUNCH_WINDOW_LIMIT_S (20 s) and print no exception, or the job fails: a slow start is
+          # a regression to block, not to hide. It keeps watching up to 60 s anyway, so the log says WHEN the window came,
+          # and at the limit it prints the UI-thread stacks, naming the blocker (the 2026-11-15 dev dry run sat 12 s
+          # between host.init and ws.connecting with no window painted).
           # From a ditto copy, the way a user installs it (ditto keeps the mtimes the archive checks).
           LAUNCH_DIR="$RUNNER_TEMP/launch-check"; rm -rf "$LAUNCH_DIR"; mkdir -p "$LAUNCH_DIR"
           APP="$LAUNCH_DIR/Supermux Desktop.app"
           ditto "$(ls -d "$MNT"/*.app)" "$APP"
           "$APP/Contents/MacOS/Supermux Desktop" > "$RUNNER_TEMP/launch.txt" 2>&1 &
           APP_PID=$!
+          LIMIT="${LAUNCH_WINDOW_LIMIT_S:-20}"
           # rc.6's failure was an error dialog (740x173) and no main window, so "alive" alone is not enough.
           main_window() { osascript -l JavaScript -e "ObjC.import('CoreGraphics'); const w = ObjC.deepUnwrap(ObjC.castRefToObject(\$.CGWindowListCopyWindowInfo(1|16, 0))); w.some(x => x.kCGWindowOwnerPID == $APP_PID && x.kCGWindowBounds.Height > 300)" 2>&1; }
           WINDOW_AT=""
@@ -1215,8 +1217,8 @@ jobs:
             sleep 1
             kill -0 "$APP_PID" 2>/dev/null || break
             if [ "$(main_window)" = "true" ]; then WINDOW_AT=$second; break; fi
-            if [ "$second" = 20 ]; then
-              echo "::warning::no main window after 20 s: the JVM's threads at 20 s follow"
+            if [ "$second" = "$LIMIT" ]; then
+              echo "no main window after $LIMIT s: the JVM's threads at that moment follow"
               "$APP/Contents/runtime/Contents/Home/bin/jcmd" "$APP_PID" Thread.print > "$RUNNER_TEMP/threads-20s.txt" 2>&1 || true
               # The UI thread and anything blocked or waiting on a lock, in full; the rest stays in the file.
               awk '/^"AWT-EventQueue|^"main"|^"AppKit/{p=1} /^$/{if(p)print; p=0} p' "$RUNNER_TEMP/threads-20s.txt" | head -150
@@ -1224,13 +1226,13 @@ jobs:
           done
           echo "startup marks:"; grep -E "^\[startup\]" "$RUNNER_TEMP/launch.txt" | head -30 || true
           echo "main window up after: ${WINDOW_AT:-never} s"
-          if ! kill -0 "$APP_PID" 2>/dev/null || [ -z "$WINDOW_AT" ] || grep -Eq "SecurityException|sealing violation|Exception in thread \"main\"" "$RUNNER_TEMP/launch.txt"; then
+          if ! kill -0 "$APP_PID" 2>/dev/null || [ -z "$WINDOW_AT" ] || [ "$WINDOW_AT" -gt "$LIMIT" ] \
+            || grep -Eq "SecurityException|sealing violation|Exception in thread \"main\"" "$RUNNER_TEMP/launch.txt"; then
             cat "$RUNNER_TEMP/launch.txt"
-            echo "::error::the packaged app did not reach a main window within 60 s, or threw at launch"
+            echo "::error::the packaged app had no main window within $LIMIT s (it came after: ${WINDOW_AT:-never} s), or it threw at launch"
             kill "$APP_PID" 2>/dev/null; hdiutil detach "$MNT" -force -quiet; exit 1
           fi
-          [ "$WINDOW_AT" -gt 20 ] && echo "::warning::the main window took ${WINDOW_AT} s (over 20 s)"
-          echo "the packaged app is up (main window after ${WINDOW_AT} s)"
+          echo "the packaged app is up (main window after ${WINDOW_AT} s, limit $LIMIT s)"
           kill "$APP_PID"; sleep 5; pkill -f "$LAUNCH_DIR" || true
           hdiutil detach "$MNT" -quiet || hdiutil detach "$MNT" -force -quiet
       - name: Assert the packaged client engine
