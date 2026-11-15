@@ -14,6 +14,11 @@
 // the tree holds nothing. It opens Changes; Fetch/Pull/Push are in the chat's ⋮ menu.
 package dev.supermux.ui.chat
 
+import dev.supermux.ui.i18n.Plurals
+import dev.supermux.ui.i18n.localizedPlural
+import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -69,6 +74,8 @@ fun ComposerFooter(
     modifier: Modifier = Modifier,
     /** Opens the Changes view; null on a host that has none, where the sign is only a caption. */
     onOpenChanges: (() -> Unit)? = null,
+    /** #72: the ⟳ / ☁ item: sync (pull, then push) or publish this chat's branch; null = only a caption. */
+    onGitSync: (suspend (op: String) -> dev.supermux.net.GitOpResult?)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -140,18 +147,50 @@ fun ComposerFooter(
             }
         }
 
-        // Git: a quiet sign of what this session's work tree holds, only when it holds something
-        // (#72). Clicking it opens Changes; the git commands themselves live in the chat's ⋮ menu.
-        val sign = composerGitSign(session.git)
-        if (sign != null) {
+        // Git, as VS Code's status bar has it (#72 v4): the branch you are on (always, even with no changes), its
+        // ⟳ ↓↑ against origin (a click syncs) or ☁ Publish, and "N changed" (a click opens Source Control).
+        val git = session.git
+        if (git != null) {
+            var syncing by remember { mutableStateOf(false) }
+            val branch = git.branch ?: session.session_branch ?: git.compareRef.takeIf { git.mode == "remote" }
             Row(
                 Modifier.weight(1f).padding(start = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.End,
             ) {
-                FooterChip(
+                if (branch != null) FooterChip(
+                    icon = { tint -> Icon(Icons.AutoMirrored.Filled.CallSplit, null, tint = tint, modifier = Modifier.size(12.dp)) },
+                    label = branch,
+                    trailingChevron = false,
+                    tag = "footer_git_branch",
+                    onClick = onOpenChanges,
+                )
+                val sync = git.sync
+                val published = sync != null || (git.mode == "remote" && git.unpublished != true)
+                if (onGitSync != null && branch != null) {
+                    val ahead = sync?.ahead ?: git.ahead.takeIf { git.mode == "remote" } ?: 0
+                    val behind = sync?.behind ?: git.behind.takeIf { git.mode == "remote" } ?: 0
+                    FooterChip(
+                        icon = { tint -> Icon(if (published) Icons.Filled.Sync else Icons.Filled.CloudUpload, null, tint = tint, modifier = Modifier.size(12.dp)) },
+                        label = when {
+                            syncing -> "…"
+                            !published -> localized(Str.scm_publish_short)
+                            else -> listOfNotNull(behind.takeIf { it > 0 }?.let { "$it↓" }, ahead.takeIf { it > 0 }?.let { "$it↑" }).joinToString(" ")
+                        },
+                        trailingChevron = false,
+                        tag = "footer_git_sync",
+                        onClick = {
+                            if (!syncing) scope.launch {
+                                syncing = true
+                                if (!published) onGitSync("publish") else { onGitSync("pull"); onGitSync("push") }
+                                syncing = false
+                            }
+                        },
+                    )
+                }
+                if (git.dirty > 0) FooterChip(
                     icon = { tint -> Icon(NewTabGlyphs.Changes, null, tint = tint, modifier = Modifier.size(12.dp)) },
-                    label = sign.label(),
+                    label = localizedPlural(Plurals.git_sign_changed, git.dirty, git.dirty),
                     trailingChevron = false,
                     tag = "footer_git_sign",
                     onClick = onOpenChanges,

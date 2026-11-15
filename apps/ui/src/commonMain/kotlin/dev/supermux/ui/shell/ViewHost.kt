@@ -337,6 +337,7 @@ fun ViewHost(
                     onClose = onCloseView,
                     onOpenFile = onOpenFile,
                     onOpenScmDiff = onOpenScmDiff,
+                    onOpenChat = onSelectSession,
                     modifier = modifier.testTag("editor-$workdir"),
                 )
                 // #72: one Source Control file's diff, as a tab next to the chat.
@@ -809,6 +810,8 @@ private fun DiffPaneForWorkspace(
     onOpenScmDiff: ((tab: ScmDiffTab, keep: Boolean) -> Unit)? = null,
     /** #72: this view IS one file's diff (a "scmdiff" tab): no Source Control list, no way back. */
     file: ScmOpenFile? = null,
+    /** #72: another chat, by id ("Open that chat" in the branch picker). */
+    onOpenChat: (String) -> Unit = {},
 ) {
     // Same resolution rule as the file pane: review and walkthrough are session-keyed, and a
     // stale id would offer comment/submit affordances that can only no-op.
@@ -841,6 +844,7 @@ private fun DiffPaneForWorkspace(
                 if (onOpenScmDiff != null) onOpenScmDiff(tab, keep) else openFile = ScmOpenFile(repo, f.path, tab.base, tab.work)
             },
             onOpenFile = { repo, path -> onOpenFile(repoPath(repo, path), null, null) },
+            onOpenChat = onOpenChat,
             modifier = modifier.fillMaxSize(),
         )
         return

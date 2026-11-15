@@ -35,6 +35,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.automirrored.filled.CallSplit
+import androidx.compose.runtime.collectAsState
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isMetaPressed
@@ -132,6 +138,12 @@ sealed interface ScmAsk {
     data object Smart : ScmAsk
     /** VS Code's: please provide a commit message. */
     data object NoMessage : ScmAsk
+    /** Ours: Merge N commits into <base>? */
+    data object MergeInto : ScmAsk
+    /** Switch this chat to [branch]? (what moves with it is said) */
+    data class Switch(val branch: String) : ScmAsk
+    /** + Create new branch: its name. */
+    data object NewBranch : ScmAsk
 }
 
 /** VS Code's Commit ▾: what the button does after committing (postCommitCommands). */
@@ -169,6 +181,19 @@ class SourceControlState(val api: SourceControlApi) {
     var status by mutableStateOf<dev.supermux.net.GitRemoteStatus?>(null)
     /** The last commit on this chat's branch (for Amend), and whether origin already has it. */
     var last by mutableStateOf<dev.supermux.net.LogCommit?>(null)
+    /** The chat's base by its name (dev, main, …), never a guess; null: a folder chat has none. */
+    var base by mutableStateOf<String?>(null)
+    /** This chat's own commits (not in its base), for "Merge N commits into <base>". */
+    var ownCommits by mutableStateOf(0)
+    /** The last clean Get latest, for "Undo Get latest" right after it. */
+    var latest by mutableStateOf<dev.supermux.net.LatestResult?>(null)
+    // ── the branch picker (U5) ──
+    var picking by mutableStateOf(false)
+    var pickFilter by mutableStateOf("")
+    var branches by mutableStateOf<dev.supermux.net.GitBranches?>(null)
+    var newBranch by mutableStateOf("")
+    /** A switch refused because another chat has the branch: that chat (id, name), for "Open that chat". */
+    var heldBy by mutableStateOf<Pair<String, String>?>(null)
     private var prefsRead = false
 
     /** The repo the commit box acts on: the chat's own (""), else the first with changes. */
@@ -185,7 +210,10 @@ class SourceControlState(val api: SourceControlApi) {
         offline = r == null
         if (r != null) repos = r.repos
         status = api.status() ?: status
-        last = api.history(repo)?.chat?.firstOrNull()
+        val h = api.history(repo)
+        last = h?.chat?.firstOrNull()
+        base = h?.base
+        ownCommits = h?.chat?.size ?: 0
         if (!prefsRead) api.prefs()?.let { (p, s) -> prefsRead = true; post = ScmPost.of(p); smart = s ?: "ask" }
         if (amend && (last == null || lastPushed)) amend = false
     }
@@ -261,6 +289,79 @@ class SourceControlState(val api: SourceControlApi) {
         commit()
     }
 
+    // ── the base (U4): Get latest, its conflicts, Merge into the base ──
+
+    suspend fun getLatest() {
+        note = null; busy = true
+        val r = api.latest()
+        busy = false
+        latest = null
+        when {
+            r == null -> problem = localized(Str.scm_offline)
+            r.status == "clean" -> { problem = null; latest = r; note = localizedPlural(Plurals.scm_latest_got, r.commits, r.commits, base ?: r.from.orEmpty()) }
+            r.status == "up_to_date" -> { problem = null; note = localized(Str.scm_latest_none, base ?: r.from.orEmpty()) }
+            r.status == "conflict" -> problem = null
+            else -> problem = localized(Str.scm_failed, r.message ?: r.status)
+        }
+        refresh()
+    }
+
+    suspend fun undoLatest() {
+        val l = latest ?: return
+        val r = api.undoLatest(l.before ?: return, l.after ?: return)
+        latest = null
+        when {
+            r == null -> problem = localized(Str.scm_offline)
+            r.ok -> note = localized(Str.scm_latest_undone)
+            r.reason == "moved" -> problem = localized(Str.scm_latest_moved)
+            else -> problem = localized(Str.scm_failed, r.message ?: r.reason ?: "")
+        }
+        refresh()
+    }
+
+    /** VS Code's Accept Current / Incoming / Both, for the whole file (side: mine | theirs | both); then it is staged. */
+    suspend fun resolve(path: String, side: String) {
+        val r = api.resolve(repo, path, side)
+        problem = if (r == null) localized(Str.scm_offline) else if (r.ok) null else localized(Str.scm_failed, r.message ?: r.reason ?: "")
+        refresh()
+    }
+
+    suspend fun abortMerge() {
+        val r = api.abortMerge(repo)
+        problem = if (r == null) localized(Str.scm_offline) else if (r.ok) null else localized(Str.scm_failed, r.message ?: r.reason ?: "")
+        if (r?.ok == true) note = localized(Str.scm_merge_aborted)
+        refresh()
+    }
+
+    suspend fun mergeIntoBase() {
+        ask = null; note = null
+        if (!api.mergeIntoBase()) problem = localized(Str.scm_offline)
+    }
+
+    suspend fun openPicker() {
+        picking = !picking; pickFilter = ""; heldBy = null
+        if (picking) branches = api.branches()
+    }
+
+    /** Switch (or, [create], make and switch to) a branch; the chat follows it. Each refusal is said plainly. */
+    suspend fun switchTo(name: String, create: Boolean) {
+        ask = null; picking = false; heldBy = null; note = null
+        val r = api.switchBranch(name, create)
+        problem = when (r?.status) {
+            null -> localized(Str.scm_offline)
+            "switched" -> { note = localized(Str.scm_switched, r.branch ?: name); null }
+            "clobber" -> localized(Str.scm_switch_clobber, r.files.joinToString(", "))
+            "checked_out_elsewhere" -> {
+                r.openIn?.takeIf { it.kind == "session" }?.let { heldBy = (it.id ?: "") to (it.name ?: "") }
+                localized(Str.scm_switch_elsewhere, name, r.openIn?.name ?: r.path ?: "")
+            }
+            "merge_in_progress" -> localized(Str.scm_switch_merging)
+            "invalid_name" -> r.message ?: localized(Str.scm_failed, name)
+            else -> localized(Str.scm_failed, r.message ?: r.status)
+        }
+        refresh()
+    }
+
     suspend fun undoLastCommit() {
         val r = api.uncommit(repo)
         when {
@@ -312,8 +413,11 @@ fun SourceControlPane(
     modifier: Modifier = Modifier,
     /** The review of everything since the chat started (comments, base, walkthrough); null: none. */
     onReview: (() -> Unit)? = null,
+    /** Another chat (by id): "Open that chat" in the branch picker. */
+    onOpenChat: (String) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
+    val onBranches: () -> Unit = { scope.launch { state.openPicker() } }
     val cs = MaterialTheme.colorScheme
     // A phone has no hover: every row action stays shown.
     val touch = LocalWindowWidthClass.current == WindowWidthClass.Compact
@@ -334,9 +438,13 @@ fun SourceControlPane(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(localized(Str.scm_title_caps), fontSize = 11.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.44.sp, color = cs.onSurfaceVariant, modifier = Modifier.weight(1f))
+            ScmIcon(Icons.Filled.Check, localized(Str.scm_commit), "scm_title_commit", hint = localized(Str.scm_hint_commit)) { scope.launch { state.commit() } }
             if (onReview != null) ScmIcon(Icons.Outlined.RateReview, localized(Str.scm_review), "scm_review", hint = localized(Str.scm_review_hint), onClick = onReview)
             ScmIcon(Icons.Filled.Refresh, localized(Str.scm_refresh), "scm_refresh", hint = localized(Str.scm_hint_refresh)) { scope.launch { state.refresh() } }
+            MoreMenu(state, scope, onBranches)
         }
+        WhereLine(state, scope, onBranches)
+        if (state.picking) BranchPicker(state, scope, onOpenChat)
         state.problem?.let { p ->
             Text(p, fontSize = 12.sp, color = cs.error, modifier = Modifier.padding(horizontal = Space.md, vertical = Space.xs).testTag("scm_problem"))
         }
@@ -346,7 +454,14 @@ fun SourceControlPane(
             repos == null -> Unit
             else -> LazyColumn(Modifier.fillMaxSize()) {
                 item(key = "commit") { CommitBox(state, scope) }
-                if (repos.all { it.files.isEmpty() }) item(key = "empty") { Note(localized(Str.scm_no_changes)) }
+                item(key = "banners") { Banners(state, scope) }
+                if (repos.all { it.files.isEmpty() }) item(key = "empty") {
+                    val st = state.status
+                    Note(
+                        if (st?.upstream != null && st.ahead == 0 && st.behind == 0) localized(Str.scm_no_changes_synced, st.upstream!!)
+                        else localized(Str.scm_no_changes),
+                    )
+                }
                 val multi = repos.count { it.files.isNotEmpty() } > 1
                 for (repo in repos) {
                     if (repo.files.isEmpty()) continue
@@ -435,10 +550,22 @@ private fun CommitBox(state: SourceControlState, scope: kotlinx.coroutines.Corou
             }
         }
         // One button whose label follows the state (actionButton.ts), and its ▾ (postCommitCommands).
+        // Nothing to commit: the button publishes or syncs instead, as VS Code's does.
+        val st = state.status
+        val idle = !state.merging && !state.amend && state.changedCount == 0
+        val publish = idle && st != null && st.hasRemote && st.upstream == null && state.last != null
+        val syncN = idle && st != null && st.upstream != null && (st.ahead > 0 || st.behind > 0)
         val label = when {
             state.merging -> localized(Str.scm_continue)
             state.amend -> localized(Str.scm_amend_commit)
+            publish -> localized(Str.scm_publish_branch)
+            syncN -> localized(Str.scm_sync_changes) + listOfNotNull(st!!.behind.takeIf { it > 0 }?.let { " $it↓" }, st.ahead.takeIf { it > 0 }?.let { " $it↑" }).joinToString("")
             else -> localized(when (state.post) { ScmPost.Commit -> Str.scm_commit; ScmPost.Push -> Str.scm_commit_push; ScmPost.Sync -> Str.scm_commit_sync })
+        }
+        val act: suspend () -> Unit = when {
+            publish -> { -> state.sync("publish"); state.refresh() }
+            syncN -> { -> state.sync("pull"); state.sync("push"); state.refresh() }
+            else -> { -> state.commit() }
         }
         val enabled = !state.busy && !(state.merging && state.conflicts > 0)
         var menu by remember { mutableStateOf(false) }
@@ -447,13 +574,13 @@ private fun CommitBox(state: SourceControlState, scope: kotlinx.coroutines.Corou
                 .background(if (enabled) cs.primary else cs.primary.copy(alpha = 0.5f)),
         ) {
             Row(
-                Modifier.weight(1f).fillMaxHeight().then(if (enabled) Modifier.clickable { scope.launch { state.commit() } } else Modifier).testTag("scm_commit"),
+                Modifier.weight(1f).fillMaxHeight().then(if (enabled) Modifier.clickable { scope.launch { act() } } else Modifier).testTag("scm_commit"),
                 horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(Icons.Filled.Check, null, tint = cs.onPrimary, modifier = Modifier.size(16.dp))
+                Icon(if (publish) Icons.Filled.CloudUpload else if (syncN) Icons.Filled.Sync else Icons.Filled.Check, null, tint = cs.onPrimary, modifier = Modifier.size(16.dp))
                 Text(label, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = cs.onPrimary, modifier = Modifier.padding(start = 6.dp))
             }
-            if (!state.merging) {
+            if (!state.merging && !publish && !syncN) {
                 Box(Modifier.width(1.dp).fillMaxHeight().background(cs.onPrimary.copy(alpha = 0.25f)))
                 Box(Modifier.width(30.dp).fillMaxHeight().clickable { menu = true }.testTag("scm_commit_menu"), contentAlignment = Alignment.Center) {
                     Icon(Icons.Filled.KeyboardArrowDown, localized(Str.scm_commit_options), tint = cs.onPrimary, modifier = Modifier.size(16.dp))
@@ -482,6 +609,258 @@ private fun CommitBox(state: SourceControlState, scope: kotlinx.coroutines.Corou
             else -> Unit
         }
     }
+}
+
+/** "on <branch> · from <base> · <sync>": where you are, always (U3). The branch opens the picker; the sync state syncs. */
+@Composable
+private fun WhereLine(state: SourceControlState, scope: kotlinx.coroutines.CoroutineScope, onBranches: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val st = state.status ?: return
+    val branch = st.branch ?: st.detachedSha?.let { localized(Str.scm_detached, it) } ?: return
+    Row(Modifier.fillMaxWidth().padding(start = Space.md, end = Space.md, bottom = 8.dp).testTag("scm_where"), verticalAlignment = Alignment.CenterVertically) {
+        Icon(Icons.AutoMirrored.Filled.CallSplit, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(14.dp))
+        Text(localized(Str.scm_where_on), fontSize = 12.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(start = 6.dp))
+        ScmHint(localized(Str.scm_branch_hint_title), localized(Str.scm_branch_hint)) {
+            Text(branch, fontFamily = MonoFontFamily, fontSize = 11.5.sp, color = cs.primary, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = 4.dp).clickable(onClick = onBranches).testTag("scm_where_branch"))
+        }
+        state.base?.let { b ->
+            Text(" · " + localized(Str.scm_where_from) + " ", fontSize = 12.sp, color = cs.onSurfaceVariant)
+            Text(b, fontFamily = MonoFontFamily, fontSize = 11.5.sp, color = cs.onSurface, maxLines = 1)
+        }
+        Text(" · ", fontSize = 12.sp, color = cs.onSurfaceVariant)
+        val (text, op) = when {
+            !st.hasRemote -> localized(Str.scm_sync_local) to null
+            st.upstream == null -> localized(Str.scm_sync_unpublished) to "publish"
+            st.ahead > 0 || st.behind > 0 -> localized(Str.scm_sync_counts, listOfNotNull(st.ahead.takeIf { it > 0 }?.let { "$it↑" }, st.behind.takeIf { it > 0 }?.let { "$it↓" }).joinToString(" ")) to "sync"
+            else -> localized(Str.scm_sync_in) to null
+        }
+        Text(
+            text, fontSize = 12.sp, color = if (op != null) cs.primary else cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false).then(
+                if (op == null) Modifier else Modifier.clickable { scope.launch { if (op == "publish") state.sync("publish") else { state.sync("pull"); state.sync("push") }; state.refresh() } },
+            ).testTag("scm_where_sync"),
+        )
+    }
+}
+
+/** Under the commit box: a merge in progress (resolve, stage, Continue · Abort Merge), Undo Get latest, a merge into the base. */
+@Composable
+private fun Banners(state: SourceControlState, scope: kotlinx.coroutines.CoroutineScope) {
+    val cs = MaterialTheme.colorScheme
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+        if (state.merging) {
+            Row(
+                Modifier.padding(bottom = 8.dp).fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(cs.surfaceContainerHigh)
+                    .padding(horizontal = 10.dp, vertical = 8.dp).testTag("scm_merging"),
+            ) {
+                Icon(Icons.Filled.Warning, null, tint = LocalSemantics.current.warning, modifier = Modifier.size(15.dp))
+                Column(Modifier.padding(start = 8.dp)) {
+                    Text(localized(Str.scm_merging, state.base ?: "", state.status?.branch ?: ""), fontSize = 12.sp, color = cs.onSurface)
+                    Text(localized(Str.scm_abort_merge), fontSize = 12.sp, color = cs.primary, modifier = Modifier.padding(top = 4.dp).clickable { scope.launch { state.abortMerge() } }.testTag("scm_abort"))
+                }
+            }
+        }
+        if (state.latest != null) {
+            Text(localized(Str.scm_undo_latest), fontSize = 12.sp, color = cs.primary, modifier = Modifier.padding(bottom = 8.dp).clickable { scope.launch { state.undoLatest() } }.testTag("scm_undo_latest"))
+        }
+        val jobs = state.api.finishJobs?.collectAsState()?.value
+        val job = state.api.sessionId?.let { jobs?.get(it) }?.takeIf { it.action == "merge" }
+        if (job != null) {
+            val o = job.outcome
+            val text = when {
+                job.status == "running" -> job.stage ?: localized(Str.scm_merging_into, state.base ?: "")
+                o?.status == "integrated" -> localized(Str.scm_merged_into, o.base ?: state.base ?: "")
+                o?.status == "non_ff" -> localized(Str.scm_merge_base_moved, state.base ?: "")
+                o?.status == "dirty_overlap" -> localized(Str.scm_merge_dirty_overlap, o.files.joinToString(", "))
+                o?.status == "uncommitted" -> localized(Str.scm_merge_uncommitted)
+                o?.status == "nothing_to_do" -> localized(Str.scm_merge_nothing)
+                o?.status == "sync_conflict" -> localized(Str.scm_conflict_first, o.files.joinToString(", "))
+                else -> localized(Str.scm_failed, o?.message ?: o?.status ?: "")
+            }
+            Text(text, fontSize = 12.sp, color = if (o?.status == "integrated" || job.status == "running") cs.onSurfaceVariant else cs.error, modifier = Modifier.padding(bottom = 8.dp).testTag("scm_merge_job"))
+            if (o?.status == "non_ff") Text(localized(Str.scm_get_latest, state.base ?: ""), fontSize = 12.sp, color = cs.primary, modifier = Modifier.padding(bottom = 8.dp).clickable { scope.launch { state.getLatest() } })
+        }
+        if (state.ask == ScmAsk.MergeInto) {
+            AskBox(
+                question = localizedPlural(Plurals.scm_merge_into_q, state.ownCommits, state.ownCommits, state.base ?: ""),
+                body = localized(Str.scm_merge_into_body, state.base ?: ""),
+                confirm = localized(Str.scm_merge_into_go, state.base ?: ""),
+                onConfirm = { scope.launch { state.mergeIntoBase() } }, onCancel = { state.ask = null },
+                tag = "scm_ask_merge_into", danger = false, start = 0.dp,
+            )
+        }
+    }
+}
+
+/** VS Code's "Select a branch or tag to checkout", inside the pane: + Create new branch…, then local and remote branches. */
+@Composable
+private fun BranchPicker(state: SourceControlState, scope: kotlinx.coroutines.CoroutineScope, onOpenChat: (String) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val q = state.pickFilter.lowercase()
+    val b = state.branches
+    Column(
+        Modifier.padding(horizontal = 12.dp).padding(bottom = 10.dp).fillMaxWidth().clip(RoundedCornerShape(8.dp))
+            .background(cs.surfaceContainerHighest).border(1.dp, cs.outlineVariant, RoundedCornerShape(8.dp)).padding(8.dp).testTag("scm_picker"),
+    ) {
+        androidx.compose.foundation.text.BasicTextField(
+            value = state.pickFilter, onValueChange = { state.pickFilter = it },
+            textStyle = androidx.compose.ui.text.TextStyle(color = cs.onSurface, fontSize = 12.5.sp, fontFamily = MonoFontFamily),
+            cursorBrush = androidx.compose.ui.graphics.SolidColor(cs.primary), singleLine = true,
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(cs.surfaceContainerLow)
+                .border(1.dp, cs.primary, RoundedCornerShape(6.dp)).padding(horizontal = 8.dp, vertical = 6.dp).testTag("scm_picker_filter"),
+            decorationBox = { inner -> if (state.pickFilter.isEmpty()) Text(localized(Str.scm_picker_placeholder), fontSize = 12.5.sp, color = cs.onSurfaceVariant); inner() },
+        )
+        PickRow(localized(Str.scm_create_branch), null, null, "scm_pick_create") { state.newBranch = ""; state.ask = ScmAsk.NewBranch }
+        androidx.compose.material3.HorizontalDivider(Modifier.padding(vertical = 3.dp))
+        if (b == null) { Text(localized(Str.scm_loading), fontSize = 12.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(8.dp)); return@Column }
+        b.local.filter { q.isEmpty() || it.name.lowercase().contains(q) }.forEach { br ->
+            val where = br.openIn
+            val off = where != null && where.kind != "this"
+            val label = when (where?.kind) {
+                "this" -> "✓ " + localized(Str.scm_open_this_chat)
+                "folder" -> localized(Str.scm_open_in_folder)
+                "session" -> localized(Str.scm_open_in_chat, where.name ?: "")
+                "external" -> localized(Str.scm_open_elsewhere)
+                else -> localized(if (br.isDefault) Str.scm_default_branch else Str.scm_local_branch)
+            }
+            PickRow(br.name, label, if (where?.kind == "session") ({ onOpenChat(where.id ?: "") }) else null, "scm_pick_${br.name}", dim = off, current = where?.kind == "this") {
+                if (!off && where?.kind != "this") state.ask = ScmAsk.Switch(br.name)
+            }
+        }
+        b.remote.filter { q.isEmpty() || it.name.lowercase().contains(q) }.forEach { r ->
+            PickRow(r.name, localized(Str.scm_remote_branch), null, "scm_pick_${r.name}") { state.ask = ScmAsk.Switch(r.name) }
+        }
+    }
+    when (val a = state.ask) {
+        is ScmAsk.Switch -> AskBox(
+            question = localized(Str.scm_switch_q, a.branch), body = localized(Str.scm_switch_body, a.branch, state.base ?: "") +
+                (if (state.changedCount > 0) " " + localized(Str.scm_switch_carry) else ""),
+            confirm = localized(Str.scm_switch_go, a.branch), onConfirm = { scope.launch { state.switchTo(a.branch, create = false) } },
+            onCancel = { state.ask = null }, tag = "scm_ask_switch", danger = false, start = 12.dp,
+        )
+        ScmAsk.NewBranch -> Column(
+            Modifier.padding(horizontal = 12.dp).padding(bottom = 10.dp).fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                .background(cs.surfaceContainerHighest).border(1.dp, cs.outlineVariant, RoundedCornerShape(8.dp)).padding(10.dp).testTag("scm_new_branch"),
+        ) {
+            Text(localized(Str.scm_create_branch_title), fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface)
+            androidx.compose.foundation.text.BasicTextField(
+                value = state.newBranch, onValueChange = { state.newBranch = it.replace(' ', '-') }, singleLine = true,
+                textStyle = androidx.compose.ui.text.TextStyle(color = cs.onSurface, fontSize = 12.5.sp, fontFamily = MonoFontFamily),
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(cs.primary),
+                modifier = Modifier.padding(top = 7.dp).fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(cs.surfaceContainerLow)
+                    .border(1.dp, cs.primary, RoundedCornerShape(6.dp)).padding(horizontal = 8.dp, vertical = 6.dp)
+                    .onPreviewKeyEvent { e -> if (e.type == androidx.compose.ui.input.key.KeyEventType.KeyDown && e.key == androidx.compose.ui.input.key.Key.Enter && state.newBranch.isNotBlank()) { scope.launch { state.switchTo(state.newBranch.trim(), create = true) }; true } else false }
+                    .testTag("scm_new_branch_name"),
+                decorationBox = { inner -> if (state.newBranch.isEmpty()) Text(localized(Str.scm_branch_name), fontSize = 12.5.sp, color = cs.onSurfaceVariant); inner() },
+            )
+            Text(localized(Str.scm_new_branch_body, state.base ?: ""), fontSize = 12.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
+            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(localized(Str.scm_create_branch_go), fontSize = 12.5.sp, fontWeight = FontWeight.Medium, color = cs.onPrimary,
+                    modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(cs.primary).clickable(enabled = state.newBranch.isNotBlank()) { scope.launch { state.switchTo(state.newBranch.trim(), create = true) } }
+                        .padding(horizontal = 12.dp, vertical = 4.dp).testTag("scm_new_branch_go"))
+                Text(localized(Str.scm_cancel), fontSize = 12.5.sp, color = cs.onSurfaceVariant,
+                    modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable { state.ask = null }.padding(horizontal = 12.dp, vertical = 4.dp))
+            }
+        }
+        else -> Unit
+    }
+    state.heldBy?.let { (id, name) ->
+        Text(localized(Str.scm_open_that_chat) + " · " + name, fontSize = 12.sp, color = cs.primary,
+            modifier = Modifier.padding(horizontal = 12.dp).padding(bottom = 8.dp).clickable { onOpenChat(id) }.testTag("scm_open_that_chat"))
+    }
+}
+
+@Composable
+private fun PickRow(name: String, detail: String?, openChat: (() -> Unit)?, tag: String, dim: Boolean = false, current: Boolean = false, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 26.dp).clip(RoundedCornerShape(6.dp)).clickable(enabled = !dim && !current, onClick = onClick)
+            .padding(horizontal = 8.dp).testTag(tag),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (detail != null) Icon(Icons.AutoMirrored.Filled.CallSplit, null, tint = cs.onSurfaceVariant.copy(alpha = 0.7f), modifier = Modifier.size(13.dp))
+        Text(name, fontFamily = if (detail != null) MonoFontFamily else null, fontSize = 12.5.sp, color = if (dim) cs.onSurfaceVariant else cs.onSurface,
+            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false).padding(start = if (detail != null) 7.dp else 0.dp))
+        Spacer(Modifier.weight(1f))
+        if (detail != null) Text(detail, fontSize = 11.sp, color = if (current) cs.primary else cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(start = 10.dp).weight(1f, fill = false))
+        if (openChat != null) Text(localized(Str.scm_open_that_chat), fontSize = 11.sp, color = cs.primary, maxLines = 1,
+            modifier = Modifier.padding(start = 8.dp).clickable(onClick = openChat))
+    }
+}
+
+@Composable
+private fun ConflictLink(label: String, hint: String, tag: String, onClick: () -> Unit) {
+    ScmHint(label, hint) {
+        Text(label, fontSize = 11.5.sp, color = MaterialTheme.colorScheme.primary, maxLines = 1,
+            modifier = Modifier.padding(horizontal = 4.dp).clickable(onClick = onClick).testTag(tag))
+    }
+}
+
+/** VS Code's ⋯ (Basics): Pull, Push, Checkout to…, Fetch, then Get latest / Merge into the base, Commit ▸, Changes ▸, Pull, Push ▸. */
+@Composable
+private fun MoreMenu(state: SourceControlState, scope: kotlinx.coroutines.CoroutineScope, onBranches: () -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    var sub by remember { mutableStateOf<String?>(null) }
+    Box {
+        ScmIcon(Icons.Filled.MoreHoriz, localized(Str.scm_more), "scm_more", hint = localized(Str.scm_hint_more)) { open = true; sub = null }
+        androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.testTag("scm_more_menu")) {
+            val go = { f: suspend () -> Unit -> open = false; scope.launch { f() }; Unit }
+            MenuItem(localized(Str.scm_pull), Str.scm_hint_pull) { go { state.sync("pull"); state.refresh() } }
+            MenuItem(localized(Str.scm_push), Str.scm_hint_push) { go { state.sync(if (state.status?.upstream == null) "publish" else "push"); state.refresh() } }
+            MenuItem(localized(Str.scm_checkout_to), Str.scm_branch_hint) { open = false; onBranches() }
+            MenuItem(localized(Str.scm_fetch), Str.scm_hint_fetch) { go { state.sync("fetch"); state.refresh() } }
+            state.base?.let { b ->
+                androidx.compose.material3.HorizontalDivider()
+                MenuItem(localized(Str.scm_get_latest, b), Str.scm_hint_get_latest) { go { state.getLatest() } }
+                MenuItem(localized(Str.scm_merge_into, b), Str.scm_hint_merge_into, enabled = state.ownCommits > 0) { open = false; state.ask = ScmAsk.MergeInto }
+            }
+            androidx.compose.material3.HorizontalDivider()
+            SubHead(localized(Str.scm_sub_commit), sub == "commit") { sub = if (sub == "commit") null else "commit" }
+            if (sub == "commit") {
+                MenuItem(localized(Str.scm_commit), Str.scm_hint_commit, indent = true) { go { state.commit() } }
+                MenuItem(localized(Str.scm_commit_staged), Str.scm_hint_commit_staged, indent = true, enabled = state.stagedCount > 0) { go { state.commit() } }
+                MenuItem(localized(Str.scm_commit_all), Str.scm_hint_commit_all, indent = true, enabled = state.changedCount > 0) { go { state.commit(all = true) } }
+                MenuItem(localized(Str.scm_undo_last), Str.scm_hint_undo_last, indent = true, enabled = state.last != null && !state.lastPushed) { go { state.undoLastCommit() } }
+                MenuItem(localized(Str.scm_commit_amend), Str.scm_hint_amend, indent = true, enabled = state.last != null && !state.lastPushed) { open = false; if (!state.amend) state.toggleAmend() }
+            }
+            SubHead(localized(Str.scm_sub_changes), sub == "changes") { sub = if (sub == "changes") null else "changes" }
+            if (sub == "changes") {
+                val repo = state.repo
+                val files = state.repos?.firstOrNull { it.repo == repo }?.files.orEmpty()
+                MenuItem(localized(Str.scm_stage_all_changes), Str.scm_hint_stage_all, indent = true, enabled = files.any { it.staged != "all" }) { go { state.stage(repo, files.map { it.path }, true) } }
+                MenuItem(localized(Str.scm_unstage_all_changes), Str.scm_hint_unstage_all, indent = true, enabled = state.stagedCount > 0) { go { state.stage(repo, files.filter { it.staged == "all" || it.staged == "partial" }.map { it.path }, false) } }
+                MenuItem(localized(Str.scm_discard_all), Str.scm_hint_discard_all, indent = true, enabled = files.isNotEmpty()) { open = false; state.ask = ScmAsk.DiscardAll(repo, files.size) }
+            }
+            SubHead(localized(Str.scm_sub_pullpush), sub == "pullpush") { sub = if (sub == "pullpush") null else "pullpush" }
+            if (sub == "pullpush") {
+                MenuItem(localized(Str.scm_sync), Str.scm_hint_sync, indent = true) { go { state.sync("pull"); state.sync("push"); state.refresh() } }
+                MenuItem(localized(Str.scm_pull), Str.scm_hint_pull, indent = true) { go { state.sync("pull"); state.refresh() } }
+                MenuItem(localized(Str.scm_push), Str.scm_hint_push, indent = true) { go { state.sync(if (state.status?.upstream == null) "publish" else "push"); state.refresh() } }
+                MenuItem(localized(Str.scm_fetch), Str.scm_hint_fetch, indent = true) { go { state.sync("fetch"); state.refresh() } }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MenuItem(label: String, hint: dev.supermux.ui.i18n.StringKey, indent: Boolean = false, enabled: Boolean = true, onClick: () -> Unit) {
+    ScmHint(label, localized(hint)) {
+        androidx.compose.material3.DropdownMenuItem(
+            text = { Text(label, fontSize = 12.5.sp, modifier = Modifier.padding(start = if (indent) 12.dp else 0.dp)) },
+            enabled = enabled, onClick = onClick, modifier = Modifier.heightIn(min = 30.dp),
+        )
+    }
+}
+
+@Composable
+private fun SubHead(label: String, open: Boolean, onClick: () -> Unit) {
+    androidx.compose.material3.DropdownMenuItem(
+        text = { Text(label, fontSize = 12.5.sp, fontWeight = if (open) FontWeight.Medium else null) },
+        trailingIcon = { Icon(if (open) Icons.Filled.KeyboardArrowDown else Icons.Filled.KeyboardArrowRight, null, modifier = Modifier.size(14.dp)) },
+        onClick = onClick, modifier = Modifier.heightIn(min = 30.dp),
+    )
 }
 
 @Composable
@@ -583,6 +962,12 @@ private fun FileRow(
                 textDecoration = if (letter == "D") TextDecoration.LineThrough else null, modifier = Modifier.padding(start = 6.dp),
             )
             Text(dir, fontSize = 11.5.sp, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(start = 6.dp))
+            if (group == ScmGroup.Merge) {
+                // VS Code's CodeLens words, for the whole file: keep mine, theirs, or both.
+                ConflictLink(localized(Str.scm_accept_current), localized(Str.scm_hint_accept_current), "scm_accept_current_${f.path}") { scope.launch { state.resolve(f.path, "mine") } }
+                ConflictLink(localized(Str.scm_accept_incoming), localized(Str.scm_hint_accept_incoming), "scm_accept_incoming_${f.path}") { scope.launch { state.resolve(f.path, "theirs") } }
+                ConflictLink(localized(Str.scm_accept_both), localized(Str.scm_hint_accept_both), "scm_accept_both_${f.path}") { scope.launch { state.resolve(f.path, "both") } }
+            }
             if (hovered || touch) {
                 ScmIcon(Icons.Outlined.FileOpen, localized(Str.scm_open_file), "scm_open_${f.path}", hint = localized(Str.scm_hint_open_file)) { onOpenFile(repo, f.path) }
                 if (group == ScmGroup.Changes) {

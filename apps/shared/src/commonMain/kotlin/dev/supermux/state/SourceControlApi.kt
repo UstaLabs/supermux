@@ -26,7 +26,13 @@ import kotlinx.coroutines.ensureActive
  * twenty. Every call answers or returns null when the host could not be reached; a refusal is an answer
  * (its `reason`), never an exception.
  */
-class SourceControlApi(private val api: BrokerApi, val workspaceId: String, val sessionId: String?) {
+class SourceControlApi(
+    private val api: BrokerApi,
+    val workspaceId: String,
+    val sessionId: String?,
+    /** The host's finish jobs (Merge into the base runs as one; its outcome arrives on the socket). */
+    val finishJobs: kotlinx.coroutines.flow.StateFlow<Map<String, dev.supermux.proto.FinishJobDto>>? = null,
+) {
 
     private suspend fun <T> call(op: String, block: suspend () -> T): T? =
         try {
@@ -93,6 +99,9 @@ class SourceControlApi(private val api: BrokerApi, val workspaceId: String, val 
     suspend fun prText(target: String?): PrText? = call("prText") { api.gitPrText(ws, workspaceId, target) }
 
     suspend fun checkLog(checkUrl: String): PrCheckLog? = call("checkLog") { api.gitPrCheckLog(ws, workspaceId, checkUrl) }
+
+    /** Merge into the chat's base: fast-forward, in your folder; the chat stays (keep). Follow [finishJobs]. */
+    suspend fun mergeIntoBase(): Boolean = sessionId?.let { s -> call("mergeIntoBase") { api.finish(s, "merge", keep = true); true } } ?: false
 
     /** The Commit ▾ pick and the "no staged changes" answer, kept on the broker (the owner's, until users exist). */
     suspend fun prefs(): Pair<String?, String?>? = call("prefs") { api.getConfig().let { it.gitPostCommit to it.gitSmartCommit } }
