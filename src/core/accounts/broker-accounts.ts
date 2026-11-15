@@ -9,6 +9,7 @@ import { join } from "path"
 import { randomUUID } from "crypto"
 import { AccountRegistry, UsageStore, systemAccountId } from "../../../packages/supermux-core/src/accounts/index.js"
 import { pickAccount, switchable } from "../../../packages/supermux-core/src/accounts/policy.js"
+import { claudeAccountOrg } from "../../../packages/supermux-core/src/accounts/org.js"
 import type { Account, AccountsOptions, LoginHandle, LoginState } from "../../../packages/supermux-core/src/accounts/index.js"
 import type { Core } from "../../../packages/supermux-core/src/index.js"
 import { STATE_DIR } from "../../shared/paths"
@@ -460,6 +461,27 @@ export class BrokerAccounts {
       log.warn("auto_account_pick_failed", { agent, err: String(err) })
       return undefined
     }
+  }
+
+  /**
+   * #146 team seats: whether another Claude seat of `account`'s Anthropic org could take a chat over at its limit. The
+   * prompt cache is per org, so a move there keeps it warm (then compacting before the wait buys nothing). A seat
+   * counts when the policy could move a session to it, it isn't unavailable, its usage is KNOWN, and every window of
+   * it is below `belowPct`. Unknown org or usage: no.
+   */
+  async sameOrgSeatHasRoom(account: string, belowPct: number): Promise<boolean> {
+    const homes = this.deps.registry.homesDirectory
+    const org = claudeAccountOrg(homes, { id: account, agent: "claude" })
+    if (!org) return false
+    const now = this.deps.now?.() ?? Date.now()
+    const seats = (await this.deps.registry.list("claude")).filter((a) =>
+      a.id !== account && switchable(a) && sessionAccountSupported("claude", a) && this.deps.usage.unavailable(a.id) === undefined)
+    return seats.some((seat) => {
+      if (claudeAccountOrg(homes, seat) !== org) return false
+      const windows = this.deps.usage.get(seat.id)
+      if (!windows?.length) return false
+      return windows.every((w) => (w.resetsAt && w.resetsAt.getTime() <= now ? 0 : w.usedPercent) < belowPct)
+    })
   }
 
   /** The policy's pick among `accounts` (all of `agent`'s, listed), skipping those a broker session cannot run on. */

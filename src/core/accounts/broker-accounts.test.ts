@@ -1,8 +1,8 @@
 import { afterEach, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
-import { AccountRegistry, UsageStore, memoryVault } from "../../../packages/supermux-core/src/accounts/index.js"
+import { AccountRegistry, UsageStore, homePath, memoryVault } from "../../../packages/supermux-core/src/accounts/index.js"
 import { ACCOUNT_AGENTS, AccountsApiError, BrokerAccounts } from "./broker-accounts"
 
 const dirs: string[] = []
@@ -82,4 +82,31 @@ test("a removal tells onRemoved once the account is gone, not when it is refused
   await accounts.remove("a")
   await expect(accounts.remove("a")).rejects.toMatchObject({ status: 404 })
   expect(removed).toEqual(["a"])
+})
+
+// #146 team seats: a chat near its limit needn't compact when auto-switch would move it to another seat of the SAME
+// Anthropic org with room (the prompt cache is per org, so it stays warm there).
+function orgOf(registry: AccountRegistry, id: string, org: string) {
+  const home = homePath(registry.homesDirectory, { id, agent: "claude" })
+  mkdirSync(home, { recursive: true })
+  writeFileSync(join(home, ".claude.json"), JSON.stringify({ oauthAccount: { organizationUuid: org } }))
+}
+
+test("#146: a same-org seat below the threshold can take over; another org, a full seat or unknown usage cannot", async () => {
+  const { registry, usage, accounts } = setup([])
+  for (const id of ["a", "b", "c", "d"]) await registry.add({ id, agent: "claude", method: "token", secret: `t-${id}` })
+  orgOf(registry, "a", "org-team"); orgOf(registry, "b", "org-team"); orgOf(registry, "c", "org-other"); orgOf(registry, "d", "org-team")
+  usage.set("a", [{ name: "five_hour", usedPercent: 90, resetsAt: soon() }])
+  usage.set("c", [{ name: "five_hour", usedPercent: 5, resetsAt: soon() }])
+  // b (same org) has no usage known yet, d (same org) is full: nobody can take over.
+  usage.set("d", [{ name: "five_hour", usedPercent: 100, resetsAt: soon() }])
+  expect(await accounts.sameOrgSeatHasRoom("a", 85)).toBe(false)
+  // b now has room below a's threshold.
+  usage.set("b", [{ name: "five_hour", usedPercent: 40, resetsAt: soon() }, { name: "seven_day", usedPercent: 50, resetsAt: soon() }])
+  expect(await accounts.sameOrgSeatHasRoom("a", 85)).toBe(true)
+  // A seat whose WEEK is nearly gone has no room either.
+  usage.set("b", [{ name: "five_hour", usedPercent: 40, resetsAt: soon() }, { name: "seven_day", usedPercent: 92, resetsAt: soon() }])
+  expect(await accounts.sameOrgSeatHasRoom("a", 85)).toBe(false)
+  // An account with no known org (no .claude.json) never counts as a team.
+  expect(await accounts.sameOrgSeatHasRoom("claude:system", 85)).toBe(false)
 })

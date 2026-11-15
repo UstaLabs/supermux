@@ -1280,6 +1280,12 @@ const compactAdvisor = new CompactAdvisor({
   now: () => Date.now(),
   autoEnabled: () => accountsSettings().compactBeforeWait,
   onAdvice: (id, advice) => webChannel?.broadcastToAll({ type: "compact_advice", session: id, advice }),
+  // Team seats: auto-switch would carry the chat to another seat of the same Anthropic org (cache warm there).
+  teammateCanTakeOver: async (id, threshold) => {
+    const s = registry.get(id)
+    if (!s || s.agent !== "claude" || !accountsSettings().autoSwitch) return false
+    return brokerAccounts.sameOrgSeatHasRoom(sessionAccountFields(s).account, threshold)
+  },
   compact: (id) => {
     void compactSession(id, undefined, { kind: "supermux" }).then((r) => {
       if (!r.ok) log.warn("auto_compact_refused", { session: id, err: r.error })
@@ -2285,7 +2291,8 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   // #146: the agent's own limit readings, and at each turn's end whether to compact before the wall.
   adapter.on("rate-limits", (raw: unknown) => compactAdvisor.noteRateLimits(sessionId, adapter.kind, raw))
   adapter.on("turn-start", () => compactAdvisor.turnStarted(sessionId))
-  adapter.on("turn-complete", () => compactAdvisor.turnCompleted(sessionId, adapter.kind, contextUsage.get(sessionId)?.used))
+  adapter.on("cache-ttl", (ttl: "1h" | "5m") => compactAdvisor.noteCacheLife(sessionId, adapter.kind, ttl === "5m" ? 5 * 60_000 : 60 * 60_000))
+  adapter.on("turn-complete", () => { void compactAdvisor.turnCompleted(sessionId, adapter.kind, contextUsage.get(sessionId)?.used) })
   // #144: a compaction starts (every client shows it at once) and ends as a "Compacted" line kept in the chat.
   adapter.on("compaction", (c: { compactionId: string; status: "in_progress" | "completed" | "failed" | "cancelled"; before?: number; after?: number; trigger?: "manual" | "auto"; summary?: string; error?: string }) => {
     webChannel?.broadcastToAll({ type: "compaction", session: sessionId, id: c.compactionId, status: c.status })

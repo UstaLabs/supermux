@@ -1,10 +1,10 @@
 // #146: per session, the agent's latest in-stream limit reading, what each turn cost of the window, and the advice
 // at each turn's end ("compact before the wall"); with the opt-in setting on, the Compact itself at 95%+.
-import { adviseCompact, limitWindow, type LimitWindow } from "./compact-advice"
+import { DEFAULT_CACHE_LIFE_MS, adviseCompact, limitWindow, type LimitWindow } from "./compact-advice"
 
 export type CompactAdviceView = { usedPct: number; resetsAt: number; auto: boolean }
 
-type State = { agent: string; window?: LimitWindow; turnStartPct?: number; costs: number[]; advice?: CompactAdviceView; autoDone?: number }
+type State = { agent: string; window?: LimitWindow; turnStartPct?: number; costs: number[]; advice?: CompactAdviceView; autoDone?: number; cacheLifeMs?: number }
 
 export class CompactAdvisor {
   private readonly sessions = new Map<string, State>()
@@ -17,9 +17,19 @@ export class CompactAdvisor {
     onAdvice: (sessionId: string, advice: CompactAdviceView | null) => void
     /** Run a Compact (the automatic mode). */
     compact: (sessionId: string) => void
+    /**
+     * Team seats: whether auto-switch would carry this chat to another seat of its Anthropic org with room below
+     * `threshold`. The prompt cache is per org, so the chat would stay warm there: no compacting needed.
+     */
+    teammateCanTakeOver?: (sessionId: string, threshold: number) => Promise<boolean>
   }) {}
 
-  /** The agent's own rate-limit frame (Claude's rate_limit_event, Codex's rateLimits). */
+  /** How long this chat's prompt cache lives, as its latest request's cache writes said (1h, or 5m on overage). */
+  noteCacheLife(sessionId: string, agent: string, ms: number): void {
+    this.state(sessionId, agent).cacheLifeMs = ms
+  }
+
+  /** The agent's own rate-limit frame (Claude's rate_limit_event; other agents' frames give no window). */
   noteRateLimits(sessionId: string, agent: string, raw: unknown): void {
     const window = limitWindow(agent, raw)
     if (!window) return
@@ -33,7 +43,7 @@ export class CompactAdvisor {
   }
 
   /** At a turn's end: how much it cost, and whether to suggest (or, when allowed, run) a Compact. */
-  turnCompleted(sessionId: string, agent: string, contextUsed: number | undefined): void {
+  async turnCompleted(sessionId: string, agent: string, contextUsed: number | undefined): Promise<void> {
     const s = this.sessions.get(sessionId)
     if (!s) return
     if (s.turnStartPct != null && s.window && s.window.usedPct >= s.turnStartPct) {
@@ -41,8 +51,13 @@ export class CompactAdvisor {
       if (s.costs.length > 3) s.costs.shift()
     }
     s.turnStartPct = undefined
-    const advice = adviseCompact({ agent, contextUsed: contextUsed ?? 0, window: s.window, now: this.deps.now(), recentTurnCosts: s.costs })
-    const next = advice.suggest && s.window ? { usedPct: s.window.usedPct, resetsAt: s.window.resetsAt, auto: advice.auto } : undefined
+    const advice = adviseCompact({
+      agent, contextUsed: contextUsed ?? 0, window: s.window, now: this.deps.now(), recentTurnCosts: s.costs,
+      cacheLifeMs: s.cacheLifeMs ?? DEFAULT_CACHE_LIFE_MS,
+    })
+    // A teammate seat in the same org would take the chat over warm: then the wall costs nothing to wait out.
+    const covered = advice.suggest && (await this.deps.teammateCanTakeOver?.(sessionId, advice.threshold)) === true
+    const next = advice.suggest && !covered && s.window ? { usedPct: s.window.usedPct, resetsAt: s.window.resetsAt, auto: advice.auto } : undefined
     if (JSON.stringify(next) !== JSON.stringify(s.advice)) {
       s.advice = next
       this.deps.onAdvice(sessionId, next ?? null)

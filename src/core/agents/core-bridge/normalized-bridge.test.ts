@@ -359,3 +359,11 @@ test("the main thread's compactions reach onCompaction; a subagent's or a replay
     { compactionId: "c1", status: "completed", before: 262000, after: 20113, trigger: "manual", summary: "S" },
   ])
 })
+
+test("the main thread's cache life reaches onCacheTtl; a subagent's does not (#146)", () => {
+  const seen: unknown[] = []
+  const b = createNormalizedBridge({ agent: "claude", emit: () => {}, onCacheTtl: (t) => seen.push(t) })
+  b.handle(env({ kind: "usage", cacheTtl: "5m" }))
+  b.handle(env({ kind: "usage", cacheTtl: "1h", subagentId: "sub" }))
+  expect(seen).toEqual(["5m"])
+})

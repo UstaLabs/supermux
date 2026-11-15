@@ -388,6 +388,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
         this.emit("models-update", { kind: "models-update" })
       },
       onCompaction: (compaction) => { this.emit("compaction", { kind: "compaction", ...compaction }) },
+      onCacheTtl: (ttl) => { this.emit("cache-ttl", ttl) },
       onToolUsed: (name) => { this.toolUses.set(name, (this.toolUses.get(name) ?? 0) + 1) },
       onContext: (context) => {
         if (this.contextUsage?.used === context.used && this.contextUsage.size === context.size) return

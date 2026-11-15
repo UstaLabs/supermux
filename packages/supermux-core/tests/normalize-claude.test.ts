@@ -462,3 +462,17 @@ describe("compaction (#144)", () => {
     expect(summary).toEqual([{ kind: "compaction", compactionId: "b1", status: "completed", trigger: "auto", before: 967000, after: 20113, summary: "Summary:\n1. Primary Request: remember PELICAN-7731." }])
   })
 })
+
+test("cache life: each main request's cache writes say 1 hour or 5 minutes; reported when it changes (#146)", () => {
+  const n = createClaudeNormalizer()
+  const frame = (cc: Record<string, number>, id: string) => native({ type: "assistant", message: { id, model: "claude-opus-5-5", role: "assistant", content: [{ type: "text", text: "x" }],
+    usage: { input_tokens: 2, cache_read_input_tokens: 100_000, cache_creation_input_tokens: 500, cache_creation: cc, output_tokens: 1 } } })
+  const ttl = (bodies: ReturnType<typeof n>) => bodies.filter(b => b.kind === "usage" && "cacheTtl" in b).map(b => (b as { cacheTtl?: string }).cacheTtl)
+  // Real 2.1.308 usage: cache_creation splits the writes by lifetime.
+  expect(ttl(n(frame({ ephemeral_1h_input_tokens: 500, ephemeral_5m_input_tokens: 0 }, "m1")))).toEqual(["1h"])
+  expect(ttl(n(frame({ ephemeral_1h_input_tokens: 300, ephemeral_5m_input_tokens: 0 }, "m2")))).toEqual([])
+  // An account on overage drops to 5 minutes.
+  expect(ttl(n(frame({ ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 400 }, "m3")))).toEqual(["5m"])
+  // A request that wrote nothing says nothing.
+  expect(ttl(n(frame({ ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 }, "m4")))).toEqual([])
+})

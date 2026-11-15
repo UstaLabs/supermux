@@ -25,7 +25,7 @@
     <string name="providers_auto_switch_description">Bir sağlayıcı için iki girişiniz varsa, ilki tükendiğinde sohbet diğerine geçer. Cursor ve ayrı tutulan girişler için geçerli değildir.</string>
     <string name="providers_auto_resume">Limit sıfırlanınca devam et</string>
     <string name="providers_compact_before_wait">Sıfırlanmayı beklemeden önce sıkıştır</string>
-    <string name="providers_compact_before_wait_description">Bir sohbet kullanım sınırına dayanmak üzereyken önce sıkıştırılır; böylece sıfırlanmadan sonra her şeyi yeniden okumak yerine küçük ve ucuz başlar.</string>
+    <string name="providers_compact_before_wait_description">Bir Claude sohbeti kullanım sınırına dayanmak üzereyken önce sıkıştırılır; böylece sıfırlanmadan sonra her şeyi yeniden okumak yerine küçük ve ucuz başlar. Aynı ekibin başka bir koltuğu sohbeti devralabiliyorsa sıkıştırmaz.</string>
     <string name="providers_auto_resume_description">Tüm girişler tükendiğinde sohbet ilk sıfırlanmayı bekler ve sonra devam eder.</string>
 
     <string name="providers_not_on_machine">%1$s, %2$s üzerinde yok.</string>

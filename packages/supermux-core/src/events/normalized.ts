@@ -216,6 +216,8 @@ export type NormalizedBodyBase =
   | {
       kind: "usage"
       context?: { used: number; size: number }
+      /** #146: how long the agent's prompt cache lives, as its latest request's cache writes said (Claude: 1h or 5m). */
+      cacheTtl?: "1h" | "5m"
       tokens?: { input: number; output: number; total: number }
       cost?: { amount: number; currency: string }
       rateLimits?: unknown
