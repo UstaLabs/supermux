@@ -7,6 +7,7 @@ import { muxHomeNow } from "../../shared/paths"
 import { normalizeName } from "../../shared/slug"
 import { ensureUnique } from "../session-manager/naming"
 import { gitAsync, runAsync } from "../git/exec"
+import { stripRemote } from "../git/refs"
 import { makeLogger } from "../../shared/log"
 import { files, paths, proc } from "@supermux/platform"
 import { msSince } from "../perf/start-trace"
@@ -129,7 +130,7 @@ export async function createSessionBranch(repoRoot: string, branch: string, base
 export async function recordBase(repoRoot: string, branch: string, base: string): Promise<void> {
   if (!base || base === "HEAD") return
   const remoteRef = await gitAsync(repoRoot, ["rev-parse", "--verify", "--quiet", `refs/remotes/${base}`]).then(() => true, () => false)
-  const name = remoteRef ? base.slice(base.indexOf("/") + 1) : base // platform-ok: a git ref name ("origin/main"), not a path
+  const name = remoteRef ? stripRemote(base) : base
   await gitAsync(repoRoot, ["config", `branch.${branch}.base`, name]).catch(() => {})
 }
 

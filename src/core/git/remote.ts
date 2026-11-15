@@ -1,5 +1,6 @@
 // src/core/git/remote.ts
 import { gitSync } from "./exec-sync"
+import { branchOfRef } from "./refs"
 import { dirtyFiles, mergeInProgress, syncBaseIntoBranch } from "./integrate"
 
 function git(cwd: string, args: string[], timeout = 120_000): { ok: boolean; out: string } {
@@ -57,7 +58,7 @@ function upstreamOf(workdir: string): { remote: string; name: string } | null {
   const remote = git(workdir, ["config", `branch.${br.out}.remote`])
   const merge = git(workdir, ["config", `branch.${br.out}.merge`])
   if (!remote.ok || !merge.ok || !remote.out || remote.out === ".") return null
-  return { remote: remote.out, name: merge.out.replace(/^refs\/heads\//, "") }
+  return { remote: remote.out, name: branchOfRef(merge.out) }
 }
 
 /** Refresh remote-tracking refs (best-effort, timeboxed): the branch's own remote, else origin. */
