@@ -93,4 +93,6 @@
     <string name="applet_info_every_day1">gün</string>
     <string name="applet_info_every_days">%1$d gün</string>
     <string name="applet_info_secret_sign_in_expired">oturumun süresi doldu</string>
+    <string name="applet_info_files_db">Dosyalar: %1$s · veritabanı %2$s</string>
+    <string name="applet_info_ask_agent">Bir ajana sor</string>
 </resources>
