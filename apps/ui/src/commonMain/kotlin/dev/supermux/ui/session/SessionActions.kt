@@ -33,7 +33,14 @@ import dev.supermux.net.ForgeSearchResponse
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.PathValidation
 import dev.supermux.net.ReasoningResponse
+import dev.supermux.net.GitBranches
+import dev.supermux.net.GitSwitchResult
+import dev.supermux.net.OpenPrList
+import dev.supermux.net.OpenPrRead
+import dev.supermux.net.ProjectFolderState
+import dev.supermux.net.ProjectPrefs
 import dev.supermux.net.RepoInfo
+import dev.supermux.net.SessionSourceBody
 import dev.supermux.net.WorktreeDeleteResultDto
 import dev.supermux.net.WorktreeForWorkdirDto
 import dev.supermux.proto.PermissionModeInfo
@@ -108,6 +115,18 @@ class LauncherActions(
     val launcherReasoning: suspend (agent: String, model: String?) -> ReasoningResponse? = { _, _ -> null },
     /** `fetch=true` refreshes origin's remote-tracking refs (once per repo, on picker open). */
     val launcherRepoInfo: suspend (workdir: String, fetch: Boolean) -> RepoInfo? = { _, _ -> null },
+    /** #152: the project folder's branches, each with where it is open (null = couldn't list). */
+    val projectBranches: suspend (dir: String) -> GitBranches? = { null },
+    /** #152: the project folder's branch and whether it has changes. */
+    val folderState: suspend (dir: String) -> ProjectFolderState? = { null },
+    /** #152: the user's Local / Worktree pick for a project and their branch prefix, kept on the broker. */
+    val projectPrefs: suspend (dir: String) -> ProjectPrefs? = { null },
+    val setProjectPrefs: suspend (dir: String, workIn: String) -> ProjectPrefs? = { _, _ -> null },
+    /** #152: origin's open PRs / MRs (searched), and one by #N / !N / N / URL; null = couldn't ask. */
+    val projectPrs: suspend (dir: String, q: String) -> OpenPrList? = { _, _ -> null },
+    val projectPr: suspend (dir: String, ref: String) -> OpenPrRead? = { _, _ -> null },
+    /** #152: the project folder to a branch, only when it is clean ("Move the folder to main, then use it here"). */
+    val switchFolder: suspend (dir: String, name: String) -> GitSwitchResult? = { _, _ -> null },
     /** Agent slash commands for the composer's "/" menu — Android's `loadCommands`. */
     val launcherCommands: suspend (agent: String, workdir: String) -> List<SlashCommand> =
         { _, _ -> emptyList() },
@@ -170,7 +189,9 @@ class LauncherActions(
         replaceDraftId: String?,
         permissionMode: String?,
         account: String?,
-    ) -> String = { _, _, _, _, _, _, _, _, _, _, _ -> error("No host connected") },
+        /** #152: what the launcher picked (it wins over worktree / baseBranch). */
+        source: SessionSourceBody?,
+    ) -> String = { _, _, _, _, _, _, _, _, _, _, _, _ -> error("No host connected") },
     /** Save as a draft session (no agent process). Returns the draft's id, null on failure. */
     val createDraftSession: suspend (
         workdir: String,
@@ -233,6 +254,13 @@ fun rememberLauncherActions(
             launcherModels = { app.launcherModels(it) },
             launcherReasoning = { agent, model -> app.launcherReasoning(agent, model) },
             launcherRepoInfo = { workdir, fetch -> app.launcherRepoInfo(workdir, fetch) },
+            projectBranches = { app.launcherProjectBranches(it) },
+            folderState = { app.launcherFolderState(it) },
+            projectPrefs = { app.launcherProjectPrefs(it) },
+            setProjectPrefs = { dir, workIn -> app.setLauncherProjectPrefs(dir, workIn) },
+            projectPrs = { dir, q -> app.launcherProjectPrs(dir, q) },
+            projectPr = { dir, ref -> app.launcherProjectPr(dir, ref) },
+            switchFolder = { dir, name -> app.launcherSwitchFolder(dir, name) },
             launcherCommands = { agent, workdir -> app.launcherCommands(agent, workdir) },
             launcherAgents = { app.launcherAgents() },
             accounts = app.accounts,
@@ -253,10 +281,10 @@ fun rememberLauncherActions(
             checkEdit = { text, newWords -> app.transcribeEdit(text, newWords) },
             transcribeWarm = { id -> app.transcribeWarm(id) },
             openDictationStream = { id, session -> app.openDictationStream(null, id, session) },
-            createSessionWithFirstMessage = { wd, agent, model, level, text, staged, wt, base, replace, perm, acct ->
+            createSessionWithFirstMessage = { wd, agent, model, level, text, staged, wt, base, replace, perm, acct, source ->
                 app.createSessionWithFirstMessageOrThrow(
                     wd, agent, model, level, text, staged, wt, base, replaceDraftId = replace,
-                    permissionMode = perm, account = acct,
+                    permissionMode = perm, account = acct, source = source,
                 )
             },
             createDraftSession = { wd, agent, model, level, text, replace ->
@@ -299,6 +327,13 @@ fun rememberLauncherActions(
             launcherModels = { fleet.launcherModels(it) },
             launcherReasoning = { agent, model -> fleet.launcherReasoning(agent, model) },
             launcherRepoInfo = { workdir, fetch -> fleet.launcherRepoInfo(workdir, fetch) },
+            projectBranches = { fleet.launcherProjectBranches(it) },
+            folderState = { fleet.launcherFolderState(it) },
+            projectPrefs = { fleet.launcherProjectPrefs(it) },
+            setProjectPrefs = { dir, workIn -> fleet.setLauncherProjectPrefs(dir, workIn) },
+            projectPrs = { dir, q -> fleet.launcherProjectPrs(dir, q) },
+            projectPr = { dir, ref -> fleet.launcherProjectPr(dir, ref) },
+            switchFolder = { dir, name -> fleet.launcherSwitchFolder(dir, name) },
             launcherCommands = { agent, workdir -> fleet.launcherCommands(agent, workdir) },
             launcherAgents = { fleet.agentStatuses().orEmpty().filter { it.installed }.map { it.kind } },
             accounts = fleet.activeAccounts,
@@ -319,10 +354,10 @@ fun rememberLauncherActions(
             checkEdit = { text, newWords -> fleet.transcribeEdit(null, text, newWords) },
             transcribeWarm = { id -> fleet.transcribeWarm(null, id) },
             openDictationStream = { id, session -> fleet.openDictationStream(null, id, session) },
-            createSessionWithFirstMessage = { wd, agent, model, level, text, staged, wt, base, replace, perm, acct ->
+            createSessionWithFirstMessage = { wd, agent, model, level, text, staged, wt, base, replace, perm, acct, source ->
                 fleet.createSessionWithFirstMessageOrThrow(
                     wd, agent, model, level, text, staged, wt, base, replaceDraftId = replace,
-                    permissionMode = perm, account = acct,
+                    permissionMode = perm, account = acct, source = source,
                 )
             },
             createDraftSession = { wd, agent, model, level, text, replace ->

@@ -58,7 +58,9 @@ import dev.supermux.net.ForgeSearchResponse
 import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsRefsResult
 import dev.supermux.net.FsSearchResult
+import dev.supermux.net.GitBranches
 import dev.supermux.net.GitOpResult
+import dev.supermux.net.GitSwitchResult
 import dev.supermux.net.LspInstallResult
 import dev.supermux.net.LspMutationResult
 import dev.supermux.net.LspServer
@@ -73,6 +75,11 @@ import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.RemoteRepo
 import dev.supermux.net.RepoInfo
+import dev.supermux.net.OpenPrList
+import dev.supermux.net.OpenPrRead
+import dev.supermux.net.ProjectFolderState
+import dev.supermux.net.ProjectPrefs
+import dev.supermux.net.SessionSourceBody
 import dev.supermux.net.ClaudeResetResult
 import dev.supermux.net.CodexResetResult
 import dev.supermux.net.ReviewComment
@@ -2673,6 +2680,23 @@ class HostStore(
     suspend fun launcherRepoInfo(workdir: String, fetch: Boolean = false): RepoInfo? =
         runApi("launcherRepoInfo") { api.getRepoInfo(workdir, fetch) }
 
+    /** #152: the project folder's branches (where each is open), its state, and the user's Local / Worktree pick. Null on failure. */
+    suspend fun launcherProjectBranches(dir: String): GitBranches? =
+        runApi("launcherProjectBranches") { api.projectBranches(dir) }
+    suspend fun launcherFolderState(dir: String): ProjectFolderState? =
+        runApi("launcherFolderState") { api.projectFolderState(dir) }
+    suspend fun launcherProjectPrefs(dir: String): ProjectPrefs? =
+        runApi("launcherProjectPrefs") { api.projectPrefs(dir) }
+    suspend fun launcherProjectPrs(dir: String, q: String = ""): OpenPrList? =
+        runApi("launcherProjectPrs") { api.projectPrs(dir, q) }
+    suspend fun launcherProjectPr(dir: String, ref: String): OpenPrRead? =
+        runApi("launcherProjectPr") { api.projectPr(dir, ref) }
+    /** #152: the project folder to [name] (only when it is clean), for "Move the folder to main, then use it here". */
+    suspend fun launcherSwitchFolder(dir: String, name: String): GitSwitchResult? =
+        runApi("launcherSwitchFolder") { api.projectSwitch(dir, name) }
+    suspend fun setLauncherProjectPrefs(dir: String, workIn: String?, branchPrefix: String? = null): ProjectPrefs? =
+        runApi("setLauncherProjectPrefs") { api.setProjectPrefs(dir, workIn, branchPrefix) }
+
     /** GET /commands/preview?agent=&workdir= → the agent's slash commands for the launcher (no
      *  session yet). Empty on failure OR a blank workdir (AppViewModel.launcherCommands parity —
      *  a blank workdir would 4xx, so short-circuit it). */
@@ -2974,10 +2998,12 @@ class HostStore(
         permissionMode: String? = null,
         /** Account id for [agent] (GET /accounts); null = Auto (the broker picks the account with the most room left). */
         account: String? = null,
+        /** #152: what the launcher picked (it wins over [worktree] / [baseBranch]). */
+        source: SessionSourceBody? = null,
     ): String? = runApi("createSessionWithFirstMessage") {
         createSessionWithFirstMessageOrThrow(
             workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
-            replaceDraftId, workspaceId, name, inheritFrom, firstMessage, viewId, permissionMode, account,
+            replaceDraftId, workspaceId, name, inheritFrom, firstMessage, viewId, permissionMode, account, source,
         )
     }
 
@@ -3011,6 +3037,8 @@ class HostStore(
         permissionMode: String? = null,
         /** Account id for [agent] (GET /accounts); null = Auto (the broker picks the account with the most room left). */
         account: String? = null,
+        /** #152: what the launcher picked (it wins over [worktree] / [baseBranch]). */
+        source: SessionSourceBody? = null,
     ): String {
         // Card #75: the launcher's Send began a start trace; its requests and frames join it.
         val startTrace = PerfTrace.pendingStart()
@@ -3054,6 +3082,7 @@ class HostStore(
                     firstMessage = (firstMessage ?: text).ifBlank { null },
                     firstAttachments = attachmentIds.ifEmpty { null },
                     clientMessageId = if ((firstMessage ?: text).isNotBlank() || attachmentIds.isNotEmpty()) newClientMessageId() else null,
+                    source = source,
                 ),
                 trace = startTrace,
             )

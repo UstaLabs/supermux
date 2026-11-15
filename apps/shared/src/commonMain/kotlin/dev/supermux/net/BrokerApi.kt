@@ -442,6 +442,8 @@ data class SpawnRequest(
     val firstMessage: String? = null,
     /** Card #75: the app's own id for [firstMessage] (`web-<uuid>`), the one the broker logs it under. */
     @SerialName("client_message_id") val clientMessageId: String? = null,
+    /** #152: what the launcher picked; it wins over [worktree] and [baseBranch]. */
+    val source: SessionSourceBody? = null,
 )
 
 /** Draft composer payload on POST /sessions (mirrors web draftPayload). */
@@ -1372,10 +1374,77 @@ data class GitLocalBranch(
     val ahead: Int = 0,
     val behind: Int = 0,
     val openIn: GitOpenIn? = null,
+    /** #152: the last commit's author and time (epoch ms), the launcher's "who · ago". */
+    val author: String = "",
+    val at: Long = 0,
 )
 
 @Serializable
-data class GitRemoteBranch(val name: String, val isDefault: Boolean = false)
+data class GitRemoteBranch(val name: String, val isDefault: Boolean = false, val author: String = "", val at: Long = 0)
+
+/** GET /projects/folder-state?dir= (#152): the project folder's branch, and whether it has changes. */
+@Serializable
+data class ProjectFolderState(val branch: String? = null, val detachedSha: String? = null, val clean: Boolean = true, val changed: Int = 0)
+
+/** GET/PUT /projects/prefs (#152): the user's Local / Worktree pick for a project ("local" | "worktree"), and their branch prefix. */
+@Serializable
+data class ProjectPrefs(val workIn: String = "worktree", val branchPrefix: String = "")
+
+@Serializable
+data class ProjectPrefsPatch(val dir: String, val workIn: String? = null, val branchPrefix: String? = null)
+
+@Serializable
+data class ProjectSwitchBody(val dir: String, val name: String)
+
+/**
+ * POST /sessions `source` (#152): what the launcher picked. kind: new ([base], [name], [auto]) | existing ([branch]) |
+ * local ([switchTo]) | reuse ([sessionId]). A refused one answers 409 with `code` (held_elsewhere, dirty, branch_exists…).
+ */
+@Serializable
+data class SessionSourceBody(
+    val kind: String,
+    val base: String? = null,
+    val name: String? = null,
+    val auto: Boolean? = null,
+    val branch: String? = null,
+    val switchTo: String? = null,
+    val sessionId: String? = null,
+    /** pr: the pull / merge request, and whose version wins when the local branch has commits it lacks ("pr" | "mine"). */
+    val number: Int? = null,
+    val divergedPolicy: String? = null,
+)
+
+/**
+ * An open pull request (GitHub) / merge request (GitLab) as the launcher lists it (GET /projects/prs, /projects/pr,
+ * #152): its own [head] branch, the repo it lives in, whether it comes from a fork (and the author lets maintainers
+ * push to it), its [checks] rolled up (ok | bad | run | none), and how many commits a local branch of the same name
+ * has that it doesn't.
+ */
+@Serializable
+data class OpenPr(
+    val forge: String = "github",
+    val number: Int = 0,
+    val title: String = "",
+    val url: String = "",
+    val author: String = "",
+    val base: String = "",
+    val head: String = "",
+    val headRepo: String = "",
+    val isFork: Boolean = false,
+    val headOwner: String? = null,
+    val maintainerCanModify: Boolean = false,
+    val draft: Boolean = false,
+    val checks: String = "none",
+    val localAhead: Int? = null,
+)
+
+/** GET /projects/prs: status ok ([repo] "host/owner/repo", [prs]) | unavailable ([reason]: no_remote | no_cli | not_authed | error). */
+@Serializable
+data class OpenPrList(val status: String = "unavailable", val forge: String? = null, val repo: String? = null, val prs: List<OpenPr> = emptyList(), val reason: String? = null, val message: String? = null)
+
+/** GET /projects/pr: found ([pr]) | none | not_open ([state]) | other_repo | bad_ref | unavailable ([reason]). */
+@Serializable
+data class OpenPrRead(val status: String = "unavailable", val pr: OpenPr? = null, val forge: String? = null, val state: String? = null, val repo: String? = null, val reason: String? = null, val message: String? = null)
 
 /** kind: this | folder (the main folder) | session (with [id], [name]) | external (a worktree no session owns, at [path]) */
 @Serializable
@@ -3301,6 +3370,38 @@ class BrokerApi(
     /** GET /sessions/<id>/git/branches */
     suspend fun gitBranches(sessionId: String): GitBranches =
         getJson("$httpBase/sessions/$sessionId/git/branches")
+
+    /** GET /projects/branches?dir= (#152): the project folder's branches, each with where it is open. */
+    suspend fun projectBranches(dir: String): GitBranches =
+        getJson("$httpBase/projects/branches?dir=${urlEncode(dir)}")
+
+    /** GET /projects/folder-state?dir= (#152) */
+    suspend fun projectFolderState(dir: String): ProjectFolderState =
+        getJson("$httpBase/projects/folder-state?dir=${urlEncode(dir)}")
+
+    /** POST /projects/switch (#152): the project folder to [name], only when it is clean (else `dirty`). */
+    suspend fun projectSwitch(dir: String, name: String): GitSwitchResult =
+        answer("$httpBase/projects/switch", json.encodeToString(ProjectSwitchBody(dir, name))) { GitSwitchResult(message = it) }
+
+    /** GET /projects/prs?dir=&q= (#152): origin's open PRs / MRs, searched. */
+    suspend fun projectPrs(dir: String, q: String = ""): OpenPrList =
+        getJson("$httpBase/projects/prs?dir=${urlEncode(dir)}" + if (q.isBlank()) "" else "&q=${urlEncode(q.trim())}")
+
+    /** GET /projects/pr?dir=&ref= (#152): one by #N, !N, N or its URL. */
+    suspend fun projectPr(dir: String, ref: String): OpenPrRead =
+        getJson("$httpBase/projects/pr?dir=${urlEncode(dir)}&ref=${urlEncode(ref.trim())}")
+
+    /** GET /projects/prefs?dir= (#152) */
+    suspend fun projectPrefs(dir: String): ProjectPrefs =
+        getJson("$httpBase/projects/prefs?dir=${urlEncode(dir)}")
+
+    /** PUT /projects/prefs (#152): remembers the user's pick; answers the prefs as they now are. */
+    suspend fun setProjectPrefs(dir: String, workIn: String? = null, branchPrefix: String? = null): ProjectPrefs =
+        decode(http.put("$httpBase/projects/prefs") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(ProjectPrefsPatch(dir, workIn, branchPrefix)))
+        })
 
     /** POST /sessions/<id>/git/switch: to a branch, or a new one ([create]). */
     suspend fun gitSwitch(sessionId: String, name: String, create: Boolean): GitSwitchResult =

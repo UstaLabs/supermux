@@ -70,7 +70,7 @@ class FirstRunShots {
                                     isThisComputer = { pointer },
                                 ),
                                 loadDraft = { if (scene in setOf("agent", "installing", "failed")) LauncherDraft(workdir = "/Users/ahmet/code/my-app") else LauncherDraft() },
-                                onSubmit = { _, _, _, _, _, _, _, _, _, _, _ -> null },
+                                onSubmit = { _, _, _, _, _, _, _, _, _, _, _, _ -> null },
                             )
                         }
                     }
