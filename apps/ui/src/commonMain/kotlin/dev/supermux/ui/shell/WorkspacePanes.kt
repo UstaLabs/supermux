@@ -1602,7 +1602,8 @@ internal fun openTabNow(
     val id = ws.newId()
     val clicked = nowMillis()
     ws.provisionalViews[id] = ViewDto(id = id, workspaceId = workspaceId, kind = kind, state = state)
-    ws.layoutSync.edit { place(it, id) }
+    // Replayed onto every broker frame until the layout is saved: it must never put back a tab closed meanwhile.
+    ws.layoutSync.edit { t -> placeWhileOpening(t, id, opening = id in ws.provisionalViews, place) }
     ui.windows.expandClaim(hostId, setOf(id), ws.layoutSync.tree)
     app.addWorkspaceView(
         workspaceId, kind, state, id, groupId,
@@ -1684,14 +1685,28 @@ internal fun withoutClosing(tree: LayoutNode, closing: Set<String>): LayoutNode 
 internal fun closeTabNow(ws: WorkspaceSession, app: HostStore, view: ViewDto, onFailed: (ViewDto) -> Unit) {
     val clicked = Clock.System.now().toEpochMilliseconds()
     ws.closing[view.id] = clicked
+    // The close is an edit of its own too, so no earlier edit still being replayed (an open's) can put it back.
+    val group = groupIdOf(ws.layoutSync.tree, view.id)
+    ws.layoutSync.edit { t -> withoutTab(t, view.id) }
     app.closeWorkspaceView(
         view.workspaceId, view.id,
         onDone = { println("[close] ${view.kind} ${view.id}: broker answered after ${Clock.System.now().toEpochMilliseconds() - clicked} ms") },
     ) {
         ws.closing.remove(view.id)
+        if (group != null) ws.layoutSync.edit { t -> if (groupIdOf(t, view.id) == null) addViewToGroup(t, group, view.id) else t }
         onFailed(view)
     }
 }
+
+/**
+ * [place] of a tab opened at once ([id]), replayed onto broker frames until the layout is saved: only while it is
+ * still being [opening] (no broker answer yet) or the broker's frame has it. A tab closed meanwhile is not put back.
+ */
+internal fun placeWhileOpening(tree: LayoutNode, id: String, opening: Boolean, place: (LayoutNode, String) -> LayoutNode): LayoutNode =
+    if (opening || groupIdOf(tree, id) != null) place(tree, id) else tree
+
+/** [tree] without tab [id]; a workspace left with none keeps one empty pane. */
+internal fun withoutTab(tree: LayoutNode, id: String): LayoutNode = withoutClosing(tree, setOf(id))
 
 /** #151: a tab whose close the broker has made is gone from its tree too, so [WorkspaceSession.closing] lets it go. */
 @Composable
