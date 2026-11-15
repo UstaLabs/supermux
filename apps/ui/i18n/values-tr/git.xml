@@ -30,12 +30,12 @@
     <string name="scm_title">Kaynak Denetimi</string>
     <string name="scm_refresh">Yenile</string>
     <string name="scm_group_merge">Birleştirme Değişiklikleri</string>
-    <string name="scm_group_staged">Hazırlanan Değişiklikler</string>
+    <string name="scm_group_staged">Hazırlanmış Değişiklikler</string>
     <string name="scm_group_changes">Değişiklikler</string>
     <string name="scm_stage">Değişiklikleri Hazırla</string>
-    <string name="scm_unstage">Hazırlığı Geri Al</string>
+    <string name="scm_unstage">Hazırlıktan Çıkar</string>
     <string name="scm_stage_all">Tümünü Hazırla</string>
-    <string name="scm_unstage_all">Tüm Hazırlığı Geri Al</string>
+    <string name="scm_unstage_all">Tümünü Hazırlıktan Çıkar</string>
     <string name="scm_discard">Değişiklikleri At</string>
     <string name="scm_discard_all">Tüm Değişiklikleri At</string>
     <string name="scm_open_file">Dosyayı Aç</string>
@@ -49,12 +49,12 @@
     <string name="scm_discard_all_body">Bu GERİ ALINAMAZ! Üzerinde çalıştığınız değişiklikler SONSUZA DEK KAYBOLUR.</string>
     <plurals name="scm_discard_all_n">
         <item quantity="one">%1$d Dosyayı At</item>
-        <item quantity="other">%1$d Dosyanın Tümünü At</item>
+        <item quantity="other">%1$d Dosyanın Hepsini At</item>
     </plurals>
-    <string name="scm_cancel">Vazgeç</string>
+    <string name="scm_cancel">İptal</string>
     <string name="scm_no_changes">Değişiklik yok.</string>
-    <string name="scm_conflict_first">%1$s bir çakışmada: önce onu çözün.</string>
-    <string name="scm_failed">Olmadı: %1$s</string>
-    <string name="scm_offline">Bilgisayara ulaşılamıyor.</string>
-    <string name="scm_back">Kaynak Denetimine dön</string>
+    <string name="scm_conflict_first">%1$s dosyasında çakışma var: önce onu çözün.</string>
+    <string name="scm_failed">İşlem başarısız: %1$s</string>
+    <string name="scm_offline">Makineye ulaşılamıyor.</string>
+    <string name="scm_back">Kaynak Denetimi'ne dön</string>
 </resources>
