@@ -8,6 +8,7 @@ import { resolveCommand } from "../../process/launcher"
 import { sessionInstructions } from "../instructions"
 import { sessionPlugins } from "../../plugins"
 import { muxShimContextServer } from "../mux-shim-server"
+import { sessionCliEnv } from "../session-cli-env"
 import { MUX_HOST_SERVERS } from "../../mux-tools/server"
 import { makeLogger } from "../../../shared/log"
 import { SESSION_INBOX_DIR } from "../../../shared/paths"
@@ -116,7 +117,7 @@ export function createAntigravityCoreHost(options: AntigravityCoreHostOptions): 
         platform: host.os(),
       })
       return {
-        env: prepared.env,
+        env: { ...prepared.env, ...sessionCliEnv(prepared.env, "antigravity", extra.sessionId, extra.sessionName) },
         context: {
           instructions: sessionInstructions({ agent: "antigravity", sessionName: extra.sessionName, workdir: extra.workdir, sessionId: registration.id }),
           plugins: sessionPlugins("antigravity", registration.id, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),

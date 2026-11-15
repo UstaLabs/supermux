@@ -34,6 +34,15 @@ descriptions say what each does. Only agents may use `mute_session`,
 `set_active`, `get_active` and `create_agent`; every other tool is open to
 every session.
 
+The same things are a CLI in your shell: `supermux` (already signed in as this
+session). `supermux help` prints the whole reference on one page; add `--json`
+for JSON. Common: `supermux session ls`, `supermux msg <session> "text"`,
+`supermux session spawn <dir>`, `supermux card show page.html --title T`,
+`supermux attach FILE…`, `supermux memory search Q`, `supermux port ls`.
+Background work (delegate, council, replies) arrives in your inbox: never wait
+or poll for it. Exit codes: 0 ok, 1 failed, 2 usage, 3 not found, 4 denied,
+5 broker unreachable.
+
 ## Shared memory: ~/.mux
 
 A shared, file-based memory home at `~/.mux`, shared by every session:

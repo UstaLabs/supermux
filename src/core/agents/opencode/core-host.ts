@@ -7,6 +7,7 @@ import { opencodeContext } from "../../../../packages/supermux-core/src/context/
 import { sessionInstructions } from "../instructions"
 import { sessionPlugins } from "../../plugins"
 import { muxShimContextServer } from "../mux-shim-server"
+import { sessionCliEnv } from "../session-cli-env"
 import { MUX_HOST_SERVERS } from "../../mux-tools/server"
 import { makeLogger } from "../../../shared/log"
 import { SESSION_INBOX_DIR } from "../../../shared/paths"
@@ -150,7 +151,7 @@ export function createOpenCodeCoreHost(options: OpenCodeCoreHostOptions): OpenCo
         }
       }
       return {
-        env: prepared.env,
+        env: { ...prepared.env, ...sessionCliEnv(prepared.env, "opencode", extra.sessionId, extra.sessionName) },
         context: {
           instructions: sessionInstructions({ agent: "opencode", sessionName: extra.sessionName, workdir: extra.workdir, sessionId: registration.id }),
           plugins: sessionPlugins("opencode", registration.id, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),
