@@ -160,6 +160,14 @@ fun AppletPage(app: HostStore, name: String, modifier: Modifier = Modifier, onOp
             WebView(state, Modifier.fillMaxSize(), settings = settings, client = client, activation = Activation.Eager)
         }
         problem?.let { AppletMessage(it, Modifier.background(cs.background)) }
+        // No engine can show pages here (on Android: a System WebView too old for the engine's needs): say so, never a
+        // blank window. Why is the log's.
+        (state.phase as? WebViewPhase.Unavailable)?.let { unavailable ->
+            LaunchedEffect(unavailable) {
+                println("[AppletPage] no web engine: ${unavailable.reason}${unavailable.detail?.let { ": $it" }.orEmpty()}")
+            }
+            AppletMessage(localized(Str.applets_window_no_engine), Modifier.background(cs.background))
+        }
     }
 }
 
