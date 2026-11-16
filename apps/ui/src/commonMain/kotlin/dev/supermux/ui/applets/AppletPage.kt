@@ -164,8 +164,9 @@ fun AppletPage(app: HostStore, name: String, modifier: Modifier = Modifier, onOp
     // How long opening took, from this window to a live, loaded page, and whether a preload had it ready: the log's.
     LaunchedEffect(model) {
         val opened = kotlin.time.TimeSource.Monotonic.markNow()
-        val preloaded = state.phase == WebViewPhase.Live && state.url != null
-        androidx.compose.runtime.snapshotFlow { state.phase == WebViewPhase.Live && state.url != null && state.loading == dev.supermux.webview.LoadingState.Idle }
+        // A preload that loaded already holds the page (it never painted, hidden, so it is still activating).
+        val preloaded = state.content is WebContent.Url
+        androidx.compose.runtime.snapshotFlow { state.phase == WebViewPhase.Live && state.content is WebContent.Url && state.url?.startsWith("http") == true && state.loading == dev.supermux.webview.LoadingState.Idle }
             .first { it }
         println("[AppletPage] $name shown in ${opened.elapsedNow().inWholeMilliseconds} ms (${if (preloaded) "preloaded" else "cold"})")
     }
@@ -210,9 +211,10 @@ private fun AppletPageLoader(model: AppletPageModel, onOpenChat: (String) -> Uni
         val offSave = state.bridge.handleAfterButtonClick("save") { _, _ -> refusal(localized(Str.applets_save_not_yet)) }
         onDispose { offAsk(); offOpen(); offSave() }
     }
-    val live = state.phase == WebViewPhase.Live
-    LaunchedEffect(live, keeper) {
-        if (!live) return@LaunchedEffect
+    // An engine is bound (live, or activating: a hidden preload never paints, as WebKit draws no hidden view, but loads).
+    val bound = state.phase == WebViewPhase.Live || state.phase == WebViewPhase.Activating
+    LaunchedEffect(bound, keeper) {
+        if (!bound) return@LaunchedEffect
         val detach = keeper.attach(sink)
         try {
             // The key, renewed first when due; put in again here: a key the store already had may predate /a/.
