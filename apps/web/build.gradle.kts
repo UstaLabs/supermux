@@ -327,7 +327,8 @@ val distDir = layout.buildDirectory.dir("dist/wasmJs/productionExecutable")
 // library or icon set. The waste check before raising it removed #72's dead code (the include box, the composer git
 // sign, DiffView's stage plumbing). CI re-measures it on dev a204a08de.
 // 2026-11-16 (train13, Muxie): #146 + #117 + #72 car A together measured 9235 KiB on train13 43811939722 (9236: 9235.x rounds over 9235).
-val maxGzipBytes = 9236L * 1024
+// 2026-11-16 (#117 applets fixes, Muxie): +1 KiB for 2 strings × 2 (measured 9136 on its own base, +1 over 9135).
+val maxGzipBytes = 9237L * 1024
 
 // THE NATIVE EDITOR'S SYNTAX MODULE IS OUTSIDE THAT CEILING, with a ceiling of its own (M5).
 // `supermux-syntax.wasm` is 7.45 MB raw / 2.69 MB gzipped (editor-syntax/native/README.md): counted
