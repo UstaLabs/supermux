@@ -9,7 +9,7 @@ export interface GitLiteStatus {
   unpublished?: boolean     // mode:"remote" only — no upstream yet
   touched?: boolean        // base mode: worktree has commits since creation (rev-list base_commit..HEAD > 0)
   branch?: string | null   // #72: the branch checked out now (null: detached), for the footer
-  sync?: { ahead: number; behind: number } | null  // #72: ↑↓ against the branch's upstream; null: not published
+  sync?: { ahead: number; behind: number; upstream?: string } | null  // #72: ↑↓ against the branch's upstream (its name for the tooltip); null: not published
   hasRemote?: boolean      // #72: the repo has any remote (no remote: Publish offers GitHub / GitLab / Add Remote)
   computedAt: number        // epoch ms
 }
@@ -40,11 +40,13 @@ async function anyRemote(cwd: string): Promise<boolean> {
 }
 
 /** #72: ↑↓ of HEAD against its upstream, or null when the branch is not published. */
-async function upstreamSync(cwd: string): Promise<{ ahead: number; behind: number } | null> {
+async function upstreamSync(cwd: string): Promise<{ ahead: number; behind: number; upstream?: string } | null> {
   const counts = await runGit(cwd, ["rev-list", "--count", "--left-right", "@{upstream}...HEAD"])
   if (!counts.ok) return null
   const [b, a] = counts.out.split(/\s+/)
-  return { ahead: Number(a) || 0, behind: Number(b) || 0 }
+  // Its name too, for VS Code's tooltip ("Pull 2 commits from origin/feature").
+  const up = await runGit(cwd, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])
+  return { ahead: Number(a) || 0, behind: Number(b) || 0, ...(up.ok && up.out ? { upstream: up.out } : {}) }
 }
 
 /** Count of uncommitted + untracked files (excludes ignored — git's own rules). */
@@ -94,5 +96,5 @@ export async function computeLiteStatus(s: LiteStatusInput, now: number = Date.n
   const counts = await runGit(cwd, ["rev-list", "--count", "--left-right", "@{upstream}...HEAD"])
   let ahead = 0, behind = 0
   if (counts.ok) { const [b, a] = counts.out.split(/\s+/); behind = Number(b) || 0; ahead = Number(a) || 0 }
-  return { mode: "remote", compareRef: upstream, ahead, behind, dirty, branch, sync: { ahead, behind }, hasRemote: true, computedAt: now }
+  return { mode: "remote", compareRef: upstream, ahead, behind, dirty, branch, sync: { ahead, behind, upstream }, hasRemote: true, computedAt: now }
 }

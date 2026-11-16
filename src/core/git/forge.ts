@@ -4,6 +4,7 @@
 // user's own sign-in; nothing here stores a token. Parsing is pure so it is tested without either CLI.
 
 import { spawnCommand } from "../process/launcher"
+import { remoteStatus } from "./remote"
 
 export type Forge = "github" | "gitlab"
 export type Exec = (cmd: string, args: string[], cwd: string) => Promise<{ ok: boolean; out: string }>
@@ -204,42 +205,56 @@ const validBranch = async (cwd: string, name: string, exec: Exec) =>
   !!name && !name.startsWith("-") && (await exec("git", ["check-ref-format", "--branch", name], cwd)).ok
 
 /**
- * Can a PR/MR from HEAD into `target` be opened? The target must be a branch on origin, and HEAD must have commits it
- * doesn't. `local`: the target exists here, so "Publish <target>" can put it on origin.
+ * The remote a PR/MR goes to, as the GitHub Pull Requests extension picks it: the parent ("upstream") when the
+ * branch's repo is a fork of one, else origin, else the only / first remote.
  */
-export type PrBase = { target: string; onRemote: boolean; local: boolean; ahead: number | null; related?: boolean }
-export async function prBase(cwd: string, target: string, exec: Exec = execCli): Promise<PrBase | null> {
-  // No target (a chat in a folder has no base): origin's own default branch, asked from origin, never a guessed main.
-  if (!target) {
-    const head = await exec("git", ["-C", cwd, "ls-remote", "--symref", "origin", "HEAD"], cwd)
-    target = (head.ok ? head.out.match(/^ref: refs\/heads\/(\S+)\s+HEAD/m)?.[1] : undefined) ?? ""
-    if (!target) return null
-  }
-  if (!(await validBranch(cwd, target, exec))) return null
-  const [ls, here] = await Promise.all([
-    exec("git", ["-C", cwd, "ls-remote", "--heads", "origin", `refs/heads/${target}`], cwd),
-    exec("git", ["-C", cwd, "rev-parse", "--verify", "--quiet", `refs/heads/${target}`], cwd),
-  ])
-  const remoteSha = ls.ok ? ls.out.split(/\s+/)[0] ?? "" : ""
-  const onRemote = /^[0-9a-f]{40}$/.test(remoteSha)
-  const local = here.ok && !!here.out.trim()
-  const tip = onRemote ? remoteSha : local ? here.out.trim() : ""
-  if (!tip) return { target, onRemote, local, ahead: null }
-  // The remote tip may not be here yet: fetch it, then count.
-  if (onRemote && !(await exec("git", ["-C", cwd, "cat-file", "-e", `${tip}^{commit}`], cwd)).ok) await exec("git", ["-C", cwd, "fetch", "-q", "origin", target], cwd)
-  // No commit in common (each began with its own first commit): GitHub / GitLab refuse a PR/MR between them.
-  const [n, mb] = await Promise.all([
-    exec("git", ["-C", cwd, "rev-list", "--count", `${tip}..HEAD`], cwd),
-    exec("git", ["-C", cwd, "merge-base", tip, "HEAD"], cwd),
-  ])
-  return { target, onRemote, local, ahead: n.ok ? Number(n.out) || 0 : null, related: mb.ok && !!mb.out.trim() }
+async function baseRemote(cwd: string, exec: Exec): Promise<string | null> {
+  const list = await exec("git", ["-C", cwd, "remote"], cwd)
+  const remotes = list.ok ? list.out.split("\n").map((r) => r.trim()).filter(Boolean) : []
+  return remotes.includes("upstream") ? "upstream" : remotes.includes("origin") ? "origin" : remotes[0] ?? null
 }
 
-/** "Publish <target>": a local branch (the chat's base) put on origin, tracking it, so a PR/MR can target it. */
-export async function publishBase(cwd: string, target: string, exec: Exec = execCli): Promise<{ ok: true } | { ok: false; reason: "bad" | "failed"; message?: string }> {
-  if (!(await validBranch(cwd, target, exec))) return { ok: false, reason: "bad" }
-  const r = await exec("git", ["-C", cwd, "push", "-u", "origin", `refs/heads/${target}:refs/heads/${target}`], cwd)
-  return r.ok ? { ok: true } : { ok: false, reason: "failed", message: r.out.slice(0, 500) }
+/**
+ * Create Pull Request's default target (the extension's `createDefaultBaseBranch: auto`): the branch this one was
+ * made from (`branch.<name>.base`, else the chat's base), else the remote's default branch. Never the branch itself:
+ * null then, and the user picks one.
+ */
+export async function prDefaultTarget(cwd: string, branch: string, chatBase?: string, exec: Exec = execCli): Promise<string | null> {
+  const recorded = await exec("git", ["-C", cwd, "config", `branch.${branch}.base`], cwd)
+  for (const b of [recorded.ok ? recorded.out.trim() : "", chatBase ?? ""]) if (b && b !== "HEAD" && b !== branch) return b
+  const remote = await baseRemote(cwd, exec)
+  if (!remote) return null
+  const head = await exec("git", ["-C", cwd, "ls-remote", "--symref", remote, "HEAD"], cwd)
+  const def = head.ok ? head.out.match(/^ref: refs\/heads\/(\S+)\s+HEAD/m)?.[1] : undefined
+  return def && def !== branch ? def : null
+}
+
+/**
+ * What the extension's compare view says before Create: is the target on the remote, and has this branch commits it
+ * doesn't ("There are no commits between …", "The upstream branch … does not exist on GitHub").
+ */
+export type PrBase = { target: string; onRemote: boolean; ahead: number | null }
+export async function prBase(cwd: string, target: string, exec: Exec = execCli): Promise<PrBase | null> {
+  if (!(await validBranch(cwd, target, exec))) return null
+  const remote = await baseRemote(cwd, exec)
+  if (!remote) return { target, onRemote: false, ahead: null }
+  const ls = await exec("git", ["-C", cwd, "ls-remote", "--heads", remote, `refs/heads/${target}`], cwd)
+  const tip = ls.ok ? ls.out.split(/\s+/)[0] ?? "" : ""
+  if (!/^[0-9a-f]{40}$/.test(tip)) return { target, onRemote: false, ahead: null }
+  // The remote tip may not be here yet: fetch it, then count.
+  if (!(await exec("git", ["-C", cwd, "cat-file", "-e", `${tip}^{commit}`], cwd)).ok) await exec("git", ["-C", cwd, "fetch", "-q", remote, target], cwd)
+  const n = await exec("git", ["-C", cwd, "rev-list", "--count", `${tip}..HEAD`], cwd)
+  return { target, onRemote: true, ahead: n.ok ? Number(n.out) || 0 : null }
+}
+
+/**
+ * Before Create, the extension's two questions: an unpublished branch ("There is no remote branch … publish it and
+ * then create?") and unpushed commits ("You have N unpushed commit(s) … push them before creating?").
+ */
+export function prPreflight(cwd: string): { ask: null } | { ask: "publish" } | { ask: "push"; count: number } {
+  const st = remoteStatus(cwd)
+  if (!st.upstream) return { ask: "publish" }
+  return st.ahead > 0 ? { ask: "push", count: st.ahead } : { ask: null }
 }
 
 /** Draft → ready for review. */
@@ -271,19 +286,15 @@ export async function addRemote(cwd: string, name: string, url: string, exec: Ex
   return /already exists/i.test(r.out) ? { ok: false, reason: "exists" } : { ok: false, reason: "failed", message: r.out.slice(0, 500) }
 }
 
-export type PublishNewResult = { ok: true; url: string; base?: string } | { ok: false; reason: "bad" | "no_cli" | "not_authed" | "name_taken" | "error"; url?: string; message?: string }
+export type PublishNewResult = { ok: true; url: string } | { ok: false; reason: "bad" | "no_cli" | "not_authed" | "name_taken" | "error"; url?: string; message?: string }
 
 /** VS Code's "Publish to GitHub": create the repo on the forge from this folder, add it as origin and push the branch. */
 export async function publishNew(
   cwd: string,
-  o: { forge: Forge; name: string; visibility: "private" | "public"; branch?: string; base?: string },
+  o: { forge: Forge; name: string; visibility: "private" | "public"; branch?: string },
   exec: Exec = execCli,
 ): Promise<PublishNewResult> {
   if (!/^[A-Za-z0-9._-]+$/.test(o.name)) return { ok: false, reason: "bad" }
-  // A chat's branch publishes its base first (when it has one here): the new repo's default branch is the base, so a
-  // pull request into it can be opened straight away, as a developer expects.
-  const base = o.base && o.base !== o.branch && (await validBranch(cwd, o.base, exec))
-    && (await exec("git", ["-C", cwd, "rev-parse", "--verify", "--quiet", `refs/heads/${o.base}`], cwd)).ok ? o.base : undefined
   const fail = (out: string): PublishNewResult => {
     const f = failure(o.forge, out)
     return f.status === "unavailable" && (f.reason === "no_cli" || f.reason === "not_authed") ? { ok: false, reason: f.reason } : { ok: false, reason: "error", message: out.slice(0, 500) }
@@ -293,7 +304,7 @@ export async function publishNew(
   // shared config, so every copy of the project sees it.
   const created = o.forge === "github"
     ? await exec("gh", ["repo", "create", o.name, `--${o.visibility}`], cwd)
-    : await exec("glab", ["repo", "create", o.name, `--${o.visibility}`, "--defaultBranch", base ?? o.branch ?? "main"], cwd)
+    : await exec("glab", ["repo", "create", o.name, `--${o.visibility}`, "--defaultBranch", o.branch ?? "main"], cwd)
   if (!created.ok) return /name already exists|has already been taken|already exists/i.test(created.out) ? { ok: false, reason: "name_taken", message: created.out.slice(0, 500) } : fail(created.out)
   const url = firstUrl(created.out)
   if (!url) return { ok: false, reason: "error", message: created.out.slice(0, 500) }
@@ -302,13 +313,8 @@ export async function publishNew(
   const remote = proto.ok && proto.out.trim() === "ssh" ? `git@${new URL(url).host}:${new URL(url).pathname.slice(1)}.git` : `${url}.git`
   const add = await exec("git", ["-C", cwd, "remote", "add", "origin", remote], cwd)
   if (!add.ok) return { ok: false, reason: "error", url, message: `Created ${url}, but adding it as origin failed: ${add.out.slice(0, 400)}` }
-  // The base first: the first branch on an empty repo becomes its default.
-  if (base) {
-    const b = await exec("git", ["-C", cwd, "push", "-u", "origin", `refs/heads/${base}:refs/heads/${base}`], cwd)
-    if (!b.ok) return { ok: false, reason: "error", url, message: `Created ${url} and added it as origin, but pushing ${base} failed: ${b.out.slice(0, 400)}` }
-  }
   const push = await exec("git", ["-C", cwd, "push", "-u", "origin", "HEAD"], cwd)
-  return push.ok ? { ok: true, url, ...(base ? { base } : {}) } : { ok: false, reason: "error", url, message: `Created ${url} and added it as origin, but the push failed: ${push.out.slice(0, 400)}` }
+  return push.ok ? { ok: true, url } : { ok: false, reason: "error", url, message: `Created ${url} and added it as origin, but the push failed: ${push.out.slice(0, 400)}` }
 }
 
 // ---- #152: the launcher's Pull request tab ----
