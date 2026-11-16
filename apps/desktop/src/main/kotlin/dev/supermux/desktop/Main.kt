@@ -623,6 +623,7 @@ fun main(args: Array<String>) {
         }
         // #117: a second launch of the installed app (AppletHandOff) brings this window forward.
         LaunchedEffect(Unit) { dev.supermux.desktop.applets.DesktopApplets.activateRequests.collect { showWindow() } }
+
         // supervisor.quit() can block for the child's stop grace, so it runs off the UI thread.
         fun quitNow(lingerMs: Long = 0) {
             if (quitting) return
@@ -1029,6 +1030,15 @@ fun main(args: Array<String>) {
             // Every chrome's registry (macOS's too): the whole window's top band drags with it.
             val chromeRegions = chrome.regions
             if (isMacOs()) LaunchedEffect(window) { installMacTrackpadMagnify(window.rootPane) }
+            // Started from an applet's shortcut: this window comes up after the applet's and would cover it (seen on
+            // macOS). Once it is on screen, the applet goes back on top: what he clicked is what he sees.
+            if (appletLaunch != null) {
+                LaunchedEffect(window) {
+                    while (!window.isShowing) kotlinx.coroutines.delay(100)
+                    kotlinx.coroutines.delay(300)
+                    dev.supermux.desktop.applets.DesktopApplets.raiseAll()
+                }
+            }
             // Live tear-off: a tab dragged out of another window can land in this one.
             DisposableEffect(window) {
                 val mainHostId = desktopWindows.registry.main().id
