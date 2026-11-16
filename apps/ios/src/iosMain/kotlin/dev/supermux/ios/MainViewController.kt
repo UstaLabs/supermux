@@ -365,6 +365,7 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
             }
             androidx.compose.runtime.CompositionLocalProvider(
                 dev.supermux.ui.session.LocalAppletOpener provides appletCover.opener,
+                dev.supermux.ui.session.LocalAppletScreens provides dev.supermux.ui.session.NativeAppletScreens,
                 // The widget extension needs iOS 18 (its control and App Intents); before that there are none to add.
                 dev.supermux.ui.session.LocalAppletWidgets provides IosAppletWidgets.takeIf { iosMajorVersion() >= 18 },
             ) {

@@ -1420,7 +1420,7 @@ fun SupermuxApp(
                                         key(activeHostId) {
                                             val actions = appletsActions
                                             if (actions != null) {
-                                                dev.supermux.ui.session.AppletsScreen(actions, phone = compact, onBack = { ui.goBack() })
+                                                actions.screens.All(actions, phone = compact, onBack = { ui.goBack() })
                                             } else {
                                                 // The host can't have applets (or isn't connected yet): back to where he was.
                                                 LaunchedEffect(Unit) { ui.goBack() }
@@ -1438,14 +1438,11 @@ fun SupermuxApp(
                                         key(activeHostId) {
                                             val actions = appletsActions
                                             if (actions != null) {
-                                                val info = remember(fleet, actions) {
-                                                    dev.supermux.ui.applets.appletInfoActions(
-                                                        fleet, actions.hostName, actions.open,
-                                                        openChat = { id -> ui.goBack(); ui.selectSession(id) },
-                                                        installer = actions.installer,
-                                                    )
-                                                }
-                                                dev.supermux.ui.applets.AppletInfoScreen(route.name, info, phone = compact, onBack = { ui.goBack() }, initialTab = route.tab)
+                                                actions.screens.Info(
+                                                    fleet, actions, route.name, phone = compact, initialTab = route.tab,
+                                                    onBack = { ui.goBack() },
+                                                    openChat = { id -> ui.goBack(); ui.selectSession(id) },
+                                                )
                                             } else {
                                                 LaunchedEffect(Unit) { ui.goBack() }
                                             }
