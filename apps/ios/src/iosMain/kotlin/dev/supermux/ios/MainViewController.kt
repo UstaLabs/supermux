@@ -356,12 +356,10 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
                     if (ownWindows) bridge.openExtraWindow(dev.supermux.ui.applets.appletUri(h, n)) else outsideApplet = h to n
                 }
             }
-            // Gone once the app goes to the background, so a launch from the supermux icon shows supermux.
-            var wasForeground by remember { mutableStateOf(foreground) }
-            LaunchedEffect(foreground) {
-                if (wasForeground && !foreground) outsideApplet = null
-                wasForeground = foreground
-            }
+            // Gone once the app goes to the background, so a launch from the supermux icon shows supermux. Collected
+            // from the flow itself: a backgrounded app doesn't recompose, so an effect keyed on `foreground` would only
+            // see the change after the app is back in front (seen on the simulator: the applet stayed).
+            LaunchedEffect(Unit) { IosAppState.foreground.collect { if (!it) outsideApplet = null } }
             val appletOpener = remember(ui) { dev.supermux.ui.session.AppletOpener { h, a -> ui.openApplet(h, a.name) } }
             val appletWindowOpener = remember {
                 if (ownWindows) dev.supermux.ui.session.AppletOpener { h, a -> bridge.openExtraWindow(dev.supermux.ui.applets.appletUri(h, a.name)) } else null
