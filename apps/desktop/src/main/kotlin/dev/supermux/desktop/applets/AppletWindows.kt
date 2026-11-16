@@ -52,6 +52,14 @@ internal object DesktopApplets {
         if (open.none { it.key == a.key }) open += a
     }
 
+    /** Every open applet window to the front (a cold start from an applet's shortcut: above the main window). */
+    fun raiseAll() {
+        for (w in windows.values) {
+            w.toFront()
+            w.requestFocus()
+        }
+    }
+
     fun close(key: String) {
         open.removeAll { it.key == key }
     }
