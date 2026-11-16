@@ -315,7 +315,11 @@ val distDir = layout.buildDirectory.dir("dist/wasmJs/productionExecutable")
 // 3 DTOs, 14 strings × 2).
 // 2026-11-15 (#152 spacing, Tally/Ahmet): +1 KiB, measured 9130 KiB on train6 43753321986: the launcher row's spacing
 // as the prototype's (the row's own layout under the composer, the summary's 16 dp icon column).
-val maxGzipBytes = 9131L * 1024
+// 2026-11-16 (#117 applets, Tally): +5 KiB, measured 9135 KiB on run 43789955301: the applet DTOs and broker calls
+// (list, info, jobs, secrets, settings, data, pins, installs, widget summary, applets_changed) and ~140 strings × 2.
+// The applet SCREENS are not in it: web hides applets until #114, and they're reached only through LocalAppletScreens,
+// which only the native hosts provide, so dead-code elimination drops them (that took 9191 → 9135 KiB).
+val maxGzipBytes = 9136L * 1024
 
 // THE NATIVE EDITOR'S SYNTAX MODULE IS OUTSIDE THAT CEILING, with a ceiling of its own (M5).
 // `supermux-syntax.wasm` is 7.45 MB raw / 2.69 MB gzipped (editor-syntax/native/README.md): counted
