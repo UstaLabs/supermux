@@ -332,7 +332,7 @@ val distDir = layout.buildDirectory.dir("dist/wasmJs/productionExecutable")
 // (9136 against 9131): a page's downloads in the downloads list, its permission strip, Settings' site permissions,
 // the load-failure page (~520 lines of code, 1 DTO, ~40 strings × 2). Muxie re-measures it on the landing train.
 // 2026-11-16 (#157 landing, Muxie): +5 KiB for #157 on top of 9237 (measured 9240 KiB on train12 43830596937).
-// 2026-11-16 (#117 iOS model + offline cache, Muxie): +1 KiB placeholder ("Open in new window" × 2, cached applets); set to measured + 1 at landing.
+// 2026-11-16 (#117 iOS model + offline cache, Muxie): +1 KiB ("Open in new window" × 2, cached applets), measured 9241 KiB on train14 43836099208.
 val maxGzipBytes = 9242L * 1024
 
 // THE NATIVE EDITOR'S SYNTAX MODULE IS OUTSIDE THAT CEILING, with a ceiling of its own (M5).
