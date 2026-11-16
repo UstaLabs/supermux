@@ -24,6 +24,8 @@ export interface ChangedFile {
   size?: number | null
   /** #72: how much of it is in the next commit; absent when it holds nothing uncommitted. */
   staged?: Staged
+  /** #72: the staged version's blob (index), when part or all of it is staged: "(Index)" is HEAD → it, "(Working Tree)" it → the file. */
+  indexBlob?: string
 }
 
 const ZERO_SHA = /^0+$/
@@ -210,11 +212,25 @@ async function repoChanges(repoAbs: string, relPath: string, baseSha: string): P
       const st = index && stagedOf(f.path, index, untracked)
       return st ? { ...f, staged: st } : f
     }
-    const files = [...trackedSized.map((f) => withStage(f, false)), ...untracked.map((f) => withStage(f, true))]
+    const staged = [...trackedSized.map((f) => withStage(f, false)), ...untracked.map((f) => withStage(f, true))]
+    const files = await withIndexBlobs(repoAbs, staged)
     return { repo: relPath, baseSha, files, truncated: total > files.length, total, ...(merging ? { merging } : {}), ...(others.error ? { error: others.error } : {}) }
   } catch (err) {
     return { repo: relPath, baseSha, files: [], truncated: false, total: 0, error: err instanceof Error ? err.message : String(err) }
   }
+}
+
+/** Fills indexBlob for the files that are (partly) staged, from ONE `git ls-files --stage`. */
+async function withIndexBlobs(repoAbs: string, files: ChangedFile[]): Promise<ChangedFile[]> {
+  const want = files.filter((f) => f.staged === "all" || f.staged === "partial")
+  if (!want.length) return files
+  const out = await gitAsync(repoAbs, ["ls-files", "--stage", "-z", "--", ...want.map((f) => `:(literal)${f.path}`)], { trim: false }).catch(() => "")
+  const blobs = new Map<string, string>()
+  for (const rec of out.split("\0")) {
+    const m = rec.match(/^\d+ ([0-9a-f]{40}) 0\t(.+)$/s)
+    if (m) blobs.set(m[2]!, m[1]!)
+  }
+  return files.map((f) => (blobs.has(f.path) && (f.staged === "all" || f.staged === "partial") ? { ...f, indexBlob: blobs.get(f.path)! } : f))
 }
 
 export type RepoRef = { relPath: string; absPath: string }
@@ -262,7 +278,8 @@ export async function listChanges(
     const baseSha = await resolveSpecBase(r.absPath, spec, baseCommits[r.relPath], createdAt)
     return repoChanges(r.absPath, r.relPath, baseSha)
   })
-  return { repos: perRepo.filter((r) => r.files.length > 0 || r.error) }
+  // A repo mid-merge stays even with nothing left to show (its conflicts settled as HEAD's): its Continue must not vanish.
+  return { repos: perRepo.filter((r) => r.files.length > 0 || r.error || r.merging) }
 }
 
 export const BLOB_LIMIT = 1024 * 1024

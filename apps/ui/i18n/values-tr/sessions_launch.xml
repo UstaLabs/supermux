@@ -1,0 +1,263 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #123: the new-session launcher, in Turkish. Same keys and placeholders as values/sessions_launch.xml.
+     Terms: docs/i18n/glossary.md. -->
+<resources>
+    <!-- Launcher -->
+    <string name="launch_title">Hadi başlayalım</string>
+    <string name="launch_new_session">Yeni oturum</string>
+    <string name="launch_back">Geri</string>
+    <string name="launch_choose_project">Bir proje seçin</string>
+    <string name="launch_select_project">Proje seç</string>
+    <string name="launch_select_host">Makine seç</string>
+    <string name="launch_choose_folder_title">Bir proje klasörü seçin</string>
+    <string name="launch_choose_folder_for">Şu projeye eklenecek bir klasör seçin: %1$s</string>
+    <string name="launch_already_in_other">Zaten başka bir projede</string>
+    <string name="launch_add_folder_failed">Bu klasör şu projeye eklenemedi: %1$s</string>
+    <string name="launch_use_owner">Şunu kullan: %1$s</string>
+    <string name="launch_no_worktree">Worktree yok</string>
+    <string name="launch_save_draft">Taslağı kaydet</string>
+    <string name="launch_save_draft_failed">Taslak kaydedilemedi</string>
+    <string name="launch_placeholder">Ajan ne yapsın?</string>
+    <string name="launch_start_session">Oturumu başlat</string>
+    <string name="launch_create_session_failed">Oturum oluşturulamadı</string>
+    <!-- A failed host operation: "x oluşturulamadı — bağlantıyı kontrol edip tekrar deneyin." -->
+    <string name="launch_create_failed">%1$s oluşturulamadı</string>
+    <string name="launch_clone_failed">%1$s klonlanamadı</string>
+    <string name="launch_check_connection">bağlantıyı kontrol edip tekrar deneyin.</string>
+
+    <!-- Launcher › worktree picker -->
+    <string name="launch_worktree">Worktree</string>
+    <string name="launch_isolated">Ayrık worktree'de çalıştır</string>
+    <string name="launch_isolated_hint">Aşağıdaki temel daldan açılan yeni bir dalda çalışır; çalışma kopyanız olduğu gibi kalır.</string>
+    <string name="launch_base_branch">Temel dal</string>
+    <string name="launch_search_branches">Dallarda ara</string>
+    <string name="launch_fetching">Getiriliyor…</string>
+    <string name="launch_no_branches">Dal yok</string>
+    <string name="launch_no_match">Eşleşme yok</string>
+
+    <!-- #152 Başlatıcı › oturumun nerede çalıştığı ve hangi dalda (yazma kutusunun altındaki satır) -->
+    <string name="launch_work_local">Yerel</string>
+    <string name="launch_work_local_hint">Proje klasöründe çalışır: dosyalar ve dal ortaktır</string>
+    <string name="launch_work_worktree_hint">Dosyaların kendi kopyası, kendi dalında</string>
+    <string name="launch_work_remembered">%1$s için hatırlanır. Yeni projeler Worktree ile başlar.</string>
+    <string name="launch_work_not_remembered">%1$s için hatırlanamadı. Yalnızca bu oturum için geçerli.</string>
+    <string name="launch_branch_new_from">Yeni dal, kaynağı</string>
+    <string name="launch_branch_choose">Bir dal seçin</string>
+    <string name="launch_local_on">dal:</string>
+    <string name="launch_local_switch_to">geçilecek dal:</string>
+    <string name="launch_local_in_worktree_for">şunun worktree'sinde:</string>
+    <string name="launch_tab_new">Yeni dal</string>
+    <string name="launch_tab_existing">Var olan dal</string>
+    <string name="launch_base">Temel dal</string>
+    <string name="launch_branch_name">Dal adı</string>
+    <string name="launch_branch_name_auto">Otomatik: ilk mesajınızdan adlandırılır</string>
+    <string name="launch_base_fetched_hint">Temel dal önce %1$s deposundan getirilir; böylece dal, %2$s dalının en güncel hâlinden başlar.</string>
+    <string name="launch_prefix_where">%1$s öneki Ayarlar › Makine › Sohbet worktree'leri içinde ayarlanır.</string>
+    <string name="launch_prefix_off">Dal öneki Ayarlar › Makine › Sohbet worktree'leri içinde kapalı.</string>
+    <string name="launch_new_branch_from">%2$s dalından yeni dal %1$s</string>
+    <string name="launch_use_new_branch">Yeni dalı kullan</string>
+    <string name="launch_branches_local">Yerel</string>
+    <string name="launch_branches_remote">Uzak</string>
+    <string name="launch_existing_foot">Worktree dalın kendisini açar. Yeni commit'ler bu dala gider.</string>
+    <string name="launch_no_branch_match">“%1$s” ile eşleşen dal yok</string>
+    <string name="launch_tag_default">varsayılan</string>
+    <string name="launch_tag_in_folder">klasörünüzde</string>
+    <string name="launch_tag_in_session">bir oturumda</string>
+    <string name="launch_tag_in_worktree">bir worktree'de</string>
+    <string name="launch_tag_remote">uzak</string>
+    <string name="launch_tag_current">şu anki</string>
+    <string name="launch_tag_has_worktree">worktree'si var</string>
+    <!-- Bir dal satırının ikinci satırı: son commit'i kim yaptı ve ne zaman ("deniz · 2 sa önce"). -->
+    <string name="launch_branch_by">%1$s · %2$s</string>
+    <string name="launch_local_switch_folder_to">Klasörünüzü şu dala geçirin</string>
+    <string name="launch_local_works_in">“%1$s” içinde: oturum o worktree'de çalışır</string>
+    <string name="launch_local_dirty_why">Dal değiştirmek için önce commit'leyin ya da stash'leyin. Worktree'si olan dallar yine de kullanılabilir.</string>
+    <string name="launch_local_foot">Dal değişikliği oturum başlarken yapılır, daha önce değil.</string>
+    <plurals name="launch_local_dirty">
+        <item quantity="one">Klasörünüzde commit'lenmemiş %1$d değişiklik var.</item>
+        <item quantity="other">Klasörünüzde commit'lenmemiş %1$d değişiklik var.</item>
+    </plurals>
+    <string name="launch_sum_not_git">%1$s bir git deposu değil; ajan doğrudan bu klasörde çalışır.</string>
+    <string name="launch_sum_pick_branch">Üzerinde çalışılacak dalı seçin.</string>
+    <string name="launch_sum_reuse">%1$s dalının zaten açık olduğu worktree'de, “%2$s” oturumuyla birlikte çalışır. Klasörünüz %3$s dalında kalır.</string>
+    <string name="launch_sum_here">%1$s içinde, %2$s dalında çalışır. Siz ve ajan aynı dosyaları kullanırsınız.</string>
+    <string name="launch_sum_here_plain">%1$s içinde çalışır. Siz ve ajan aynı dosyaları kullanırsınız.</string>
+    <string name="launch_sum_switch">Oturum başlarken %1$s klasörünüzü %2$s dalından %3$s dalına geçirir, sonra orada çalışır. Siz ve ajan aynı dosyaları kullanırsınız.</string>
+    <string name="launch_sum_new">Yeni bir dalda (%1$s) bir worktree; başlangıç noktası %2$s.</string>
+    <string name="launch_sum_new_unnamed">Yeni bir dalda bir worktree; başlangıç noktası %1$s.</string>
+    <string name="launch_sum_named_tag">mesajınızdan adlandırıldı</string>
+    <string name="launch_sum_fetched">(az önce getirildi)</string>
+    <string name="launch_sum_existing">%1$s dalının kendisinde bir worktree. Yeni dal açılmaz.</string>
+    <string name="launch_sum_existing_track">%1$s dalının kendisinde bir worktree. Yeni dal açılmaz; %2$s dalını izleyen yerel bir %1$s dalı oluşturulur.</string>
+    <string name="launch_sum_push_to">Gönderilenler %1$s dalına gider.</string>
+    <string name="launch_sum_first_push">İlk gönderim %1$s dalını oluşturur.</string>
+    <string name="launch_sum_first_push_pr">İlk gönderim %1$s dalını oluşturur. Hazır olduğunuzda bir pull request açın.</string>
+    <string name="launch_sum_no_remote">Uzak depo yok: commit'ler bu makinede kalır.</string>
+
+    <!-- #152 Başlatıcı › Pull request sekmesi (GitLab: Merge request) ve git bir dalı başka yerde tuttuğunda çıkış yolları -->
+    <string name="launch_pr_noun">pull request</string>
+    <string name="launch_mr_noun">merge request</string>
+    <string name="launch_tab_pr">Pull request</string>
+    <string name="launch_tab_mr">Merge request</string>
+    <!-- "PR #123" / "MR !7": bir cümlede pull / merge request'in adı. -->
+    <string name="launch_pr_label">PR #%1$d</string>
+    <string name="launch_mr_label">MR !%1$d</string>
+    <string name="launch_pr_search">Bir PR adresi ya da numarası yapıştırın veya arayın</string>
+    <string name="launch_mr_search">Bir MR adresi ya da numarası yapıştırın veya arayın</string>
+    <string name="launch_pr_open_list">Açık pull request'ler</string>
+    <string name="launch_mr_open_list">Açık merge request'ler</string>
+    <string name="launch_pr_none">%3$s içinde açık bir %1$s %2$s yok.</string>
+    <string name="launch_pr_merged">%1$s zaten birleştirilmiş.</string>
+    <string name="launch_pr_closed">%1$s kapatılmış.</string>
+    <string name="launch_pr_other_repo">Bu %1$s deposuna ait, bu projeye değil.</string>
+    <string name="launch_pr_no_cli">%2$s'leri görmek için bu makineye %1$s kurun.</string>
+    <string name="launch_pr_not_authed">%2$s'leri görmek için bu makinede %1$s ile oturum açın.</string>
+    <!-- #152 C4: #72'nin "Pull Request'i Aç…" komutunun başlatıcıyı açtığı PR / MR okunamadığında. -->
+    <string name="launch_pr_link_unread">%1$s okunamadı: makine yanıt vermedi.</string>
+    <string name="launch_pr_link_failed">%1$s okunamadı: %2$s</string>
+    <string name="launch_pr_failed">%1$s'ler listelenemedi: %2$s</string>
+    <string name="launch_pr_foot">%1$s'in kendi dalında çalışır. Gönderilenler %1$s'i günceller.</string>
+    <!-- Bir pull request satırının ikinci satırı: dalı, birleşeceği dal, yazarı. -->
+    <string name="launch_pr_row">%1$s → %2$s · %3$s</string>
+    <string name="launch_tag_draft">Taslak</string>
+    <string name="launch_tag_fork">fork</string>
+    <string name="launch_tag_fork_review">fork · yalnızca inceleme</string>
+    <string name="launch_tag_local_differs">yerel farklı</string>
+    <string name="launch_tag_checks_ok">✓ kontroller</string>
+    <string name="launch_tag_checks_bad">✕ kontroller</string>
+    <string name="launch_tag_checks_run">● kontroller</string>
+    <string name="launch_sum_pr">%1$s'in kendi dalında (%2$s) bir worktree. Yeni dal açılmaz.</string>
+    <string name="launch_sum_pr_fork">%1$s'in %3$s üzerindeki kendi dalında (%2$s) bir worktree. Yeni dal açılmaz.</string>
+    <plurals name="launch_sum_pr_backup">
+        <item quantity="one">Yerel commit'iniz %2$s dalında saklanır.</item>
+        <item quantity="other">%1$d yerel commit'iniz %2$s dalında saklanır.</item>
+    </plurals>
+    <plurals name="launch_sum_pr_mine">
+        <item quantity="one">Yerel sürümünüz kullanılıyor (%1$d commit önde).</item>
+        <item quantity="other">Yerel sürümünüz kullanılıyor (%1$d commit önde).</item>
+    </plurals>
+    <string name="launch_sum_pr_push">Gönderilenler %1$s dalına gider ve %2$s'i günceller. Oturum ona bağlı kalır.</string>
+    <string name="launch_sum_pr_push_fork">Gönderilenler %1$s dalına gider ve %2$s'i günceller (yazar düzenlemeye izin verdi). Oturum ona bağlı kalır.</string>
+    <string name="launch_sum_review_only">Yalnızca inceleme.</string>
+    <string name="launch_sum_pr_review_only">%1$s bakımcıların düzenlemesine izin vermedi; gönderilenler %2$s'e ulaşamaz. Yine de çalıştırıp inceleyebilirsiniz; gönderim yeni bir %3$s açar.</string>
+    <string name="launch_sum_push_to_pr">Gönderilenler %1$s dalına gider ve %2$s'i günceller.</string>
+    <string name="launch_sum_push_to_open">Gönderilenler %1$s dalına gider · bu daldan açık %2$s var.</string>
+    <string name="launch_card_in_folder">%1$s klasörünüzde açık (%2$s).</string>
+    <string name="launch_card_one_place">Git bir dalı aynı anda tek bir yerde tutar; bu yüzden bir worktree de onu açamaz.</string>
+    <string name="launch_card_use_local">Yerel'i kullan</string>
+    <string name="launch_card_use_local_hint">Oturumu, zaten %2$s dalında olan %1$s içinde çalıştır.</string>
+    <string name="launch_card_move">Klasörü %1$s dalına geçir, sonra %2$s dalını burada kullan</string>
+    <string name="launch_card_move_hint">Klasörünüz temiz; hiçbir şey kaybolmaz.</string>
+    <string name="launch_card_move_dirty">Klasörünüzde değişiklik var; olduğu yerde kalır.</string>
+    <string name="launch_card_new_from">Onun yerine %1$s dalından yeni dal</string>
+    <string name="launch_card_new_from_hint">Gönderilenler yeni dala gider.</string>
+    <string name="launch_card_new_from_pr_hint">Gönderilenler yeni dala gider, %1$s'e değil.</string>
+    <string name="launch_card_in_session">%1$s başka bir oturumda açık: “%2$s”.</string>
+    <string name="launch_card_in_worktree">%1$s şu worktree'de açık: %2$s.</string>
+    <string name="launch_card_one_place_short">Git bir dalı aynı anda tek bir yerde tutar.</string>
+    <string name="launch_card_open">“%1$s” oturumunu aç</string>
+    <string name="launch_card_open_hint">O oturumun kendi worktree'sinde %1$s zaten var.</string>
+    <plurals name="launch_card_ahead">
+        <item quantity="one">Yerel %2$s dalınızda %3$s üzerinde olmayan %1$d commit var.</item>
+        <item quantity="other">Yerel %2$s dalınızda %3$s üzerinde olmayan %1$d commit var.</item>
+    </plurals>
+    <string name="launch_card_ahead_why">%1$s'i açmak onların yerini alır. Siz söylemedikçe hiçbir şeyin üzerine yazılmaz.</string>
+    <string name="launch_card_use_pr">%1$s'i olduğu gibi kullan</string>
+    <plurals name="launch_card_use_pr_hint">
+        <item quantity="one">Commit'iniz önce %2$s dalına taşınır; hiçbir şey kaybolmaz.</item>
+        <item quantity="other">%1$d commit'iniz önce %2$s dalına taşınır; hiçbir şey kaybolmaz.</item>
+    </plurals>
+    <string name="launch_card_keep_mine">Yerel dalımı koru</string>
+    <string name="launch_card_keep_mine_hint">Kendi sürümünüzde çalışın. Göndermeden önce %1$s'in değişikliklerini çekersiniz.</string>
+    <string name="launch_move_failed">Klasörünüz %1$s dalına geçirilemedi: %2$s</string>
+
+    <!-- First run: the project step -->
+    <string name="firstproject_title">Ajanlarınız nerede çalışsın?</string>
+    <string name="firstproject_subtitle">Ajanlar yalnızca seçtiğiniz klasördeki dosyaları okur ve değiştirir.</string>
+    <string name="firstproject_open_folder">Bir klasör açın</string>
+    <string name="firstproject_open_caption_local">Bu bilgisayarda bir klasör seçin</string>
+    <string name="firstproject_open_caption_remote">Var olan bir klasörü kullanın</string>
+    <string name="firstproject_create_title">Yeni bir proje oluşturun</string>
+    <string name="firstproject_create_caption">Boş bir klasörle başlayın</string>
+    <string name="firstproject_type_path">ya da bir klasör yolu yazın</string>
+    <string name="firstproject_folder_path">Klasör yolu</string>
+    <string name="firstproject_path_hint">Klasör makinede zaten var olmalı.</string>
+    <string name="firstproject_open_confirm">Klasörü aç</string>
+    <string name="firstproject_project_name">Proje adı</string>
+    <string name="firstproject_name_hint_empty">Supermux'ın projeler klasöründe boş bir klasör.</string>
+    <string name="firstproject_name_hint">Supermux'ın projeler klasöründe “%1$s” klasörünü oluşturur.</string>
+    <string name="firstproject_create_confirm">Proje oluştur</string>
+    <string name="firstproject_more_later">İstediğiniz zaman başka projeler ekleyebilirsiniz.</string>
+    <string name="firstproject_check_failed">Klasör denetlenemedi — bağlantıyı kontrol edip tekrar deneyin.</string>
+    <string name="firstproject_open_that_failed">Klasör açılamadı</string>
+    <string name="firstproject_open_failed">%1$s açılamadı</string>
+
+    <!-- Project picker -->
+    <string name="project_title">Proje</string>
+    <string name="project_search_placeholder">Proje, depo arayın ya da bir yol yazın</string>
+    <string name="project_choose_folder">Klasör seç</string>
+    <string name="project_invalid_path">Geçersiz yol</string>
+    <string name="project_search_failed">Depolar aranamadı — bağlantıyı kontrol edip tekrar deneyin.</string>
+    <string name="project_some_forges_failed">Bazı forge'lar yanıt vermedi: %1$s</string>
+    <string name="project_clone_continues">%1$s klonlaması makinede sürüyor…</string>
+    <string name="project_create_continues">%1$s oluşturma işlemi makinede sürüyor…</string>
+    <string name="project_op_continues">İşlem makinede sürüyor…</string>
+    <string name="project_ready">Hazır — %1$s</string>
+    <string name="project_use">Kullan</string>
+    <string name="project_no_match">"%1$s" ile eşleşen proje yok.</string>
+    <string name="project_empty_hint">Bir yol yazın ya da projelerinizde arayın.</string>
+    <string name="project_use_path">Bu yolu kullan</string>
+    <string name="project_recent">Kaldığınız yerden devam edin</string>
+    <string name="project_projects">Projeler</string>
+    <string name="project_everything_else">Diğerleri</string>
+    <string name="project_current">Geçerli proje</string>
+    <string name="project_clone_from">Klonlama kaynağı: %1$s · %2$s</string>
+    <string name="project_private">Özel</string>
+    <string name="project_clone">Klonla</string>
+    <string name="project_load_more">Daha fazla yükle (%1$d kaldı)</string>
+    <string name="project_searching">Depolar aranıyor…</string>
+    <string name="project_create_new">Yeni oluştur</string>
+    <string name="project_no_repos">"%1$s" ile eşleşen depo yok.</string>
+    <string name="project_cloning">%1$s klonlanıyor…</string>
+    <string name="project_creating">%1$s oluşturuluyor…</string>
+    <string name="project_working">Çalışıyor…</string>
+    <string name="project_hide_hint">Gizleseniz de makinede devam eder.</string>
+    <string name="project_hide">Gizle</string>
+
+    <!-- Project settings and "New project" -->
+    <string name="project_settings_title">Proje ayarları</string>
+    <string name="project_name">Ad</string>
+    <string name="project_save">Kaydet</string>
+    <string name="project_image">Görsel</string>
+    <string name="project_image_choose">Görsel seç…</string>
+    <string name="project_image_change">Değiştir…</string>
+    <string name="project_image_remove">Kaldır</string>
+    <string name="project_image_type">PNG, JPEG, WebP ya da GIF bir görsel seçin.</string>
+    <string name="project_image_too_big">Bu görsel 5 MB'tan büyük.</string>
+    <string name="project_image_upload_failed">Görsel yüklenemedi.</string>
+    <string name="project_image_remove_failed">Görsel kaldırılamadı.</string>
+    <string name="project_rename_failed">Projenin adı değiştirilemedi.</string>
+    <string name="project_locations">Konumlar</string>
+    <string name="project_no_locations">Henüz konum yok.</string>
+    <string name="project_add_location">Konum ekle</string>
+    <string name="project_already_in">Zaten şurada: %1$s</string>
+    <string name="project_move_here">Buraya taşı</string>
+    <string name="project_move_to">Taşı…</string>
+    <string name="project_location_other">Bu klasör zaten başka bir projeye ait.</string>
+    <string name="project_location_same">Bu klasör zaten bu projenin bir konumu.</string>
+    <string name="project_location_add_failed">Konum eklenemedi.</string>
+    <string name="project_location_not_found">Konum şu projede bulunamadı: %1$s.</string>
+    <string name="project_location_move_failed">Konum taşınamadı.</string>
+    <string name="project_done">Bitti</string>
+    <string name="project_cancel">İptal</string>
+    <string name="project_new">Yeni proje</string>
+    <string name="project_host">Makine</string>
+    <string name="project_host_offline">%1$s (çevrimdışı)</string>
+    <string name="project_create">Oluştur</string>
+    <string name="project_create_failed">Proje oluşturulamadı.</string>
+
+    <!-- Organize projects -->
+    <string name="organize_title">Projeleri düzenle</string>
+    <string name="organize_hint">Projelerin kenar çubuğundaki sırasını sürükleyerek değiştirin.</string>
+    <string name="organize_drag">Sıralamak için sürükleyin</string>
+</resources>

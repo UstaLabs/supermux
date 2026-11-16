@@ -1,5 +1,6 @@
 // src/core/git/branches.ts
 import { realpathSync } from "fs"
+import { paths } from "@supermux/platform"
 import { mergeInProgress } from "./integrate"
 import { gitSync } from "./exec-sync"
 
@@ -21,6 +22,12 @@ export function repoToplevel(workdir: string): string | null {
   const r = git(workdir, ["rev-parse", "--show-toplevel"])
   if (!r.ok || !r.out) return null
   try { return realpathSync(r.out) } catch { return r.out }
+}
+
+/** The branch a checkout is on now, or null when detached / not a repo (#72: a chat follows its copy's branch). */
+export function liveBranch(workdir: string): string | null {
+  const r = git(workdir, ["symbolic-ref", "--quiet", "--short", "HEAD"])
+  return r.ok && r.out ? r.out : null
 }
 
 /** List local + remote branches with worktree-occupancy info. Local refs only — no network. */
@@ -55,6 +62,7 @@ export function listBranches(workdir: string): BranchList {
 
 export type SwitchResult =
   | { status: "switched"; branch: string }
+  | { status: "dirty"; changed: number }                  // requireClean: the folder has changes (#72 G9)
   | { status: "clobber"; files: string[]; branch: string } // git refused: local changes would be overwritten
   | { status: "checked_out_elsewhere"; path: string }      // branch held by another worktree
   | { status: "merge_in_progress" }
@@ -86,10 +94,15 @@ function classifySwitchFailure(out: string, target: string): SwitchResult {
  *  name from the remote list (e.g. "origin/foo") checks out a local tracking
  *  branch. Plain `git switch` semantics otherwise: non-conflicting uncommitted
  *  changes carry over, clobbering ones make git refuse (→ `clobber`). */
-export function switchBranch(workdir: string, name: string, opts?: { create?: boolean }): SwitchResult {
+export function switchBranch(workdir: string, name: string, opts?: { create?: boolean; requireClean?: boolean }): SwitchResult {
   const target = name.trim()
   if (!target) return { status: "invalid_name", message: "branch name required" }
   if (mergeInProgress(workdir)) return { status: "merge_in_progress" }
+  // #152's Local mode, VS Code's rule: a folder with changes is not switched at all (git alone carries non-clashing ones).
+  if (opts?.requireClean) {
+    const st = folderState(workdir)
+    if (!st.clean) return { status: "dirty", changed: st.changed }
+  }
 
   if (opts?.create) {
     // Belt-and-suspenders: check-ref-format would also reject these, but the
@@ -115,4 +128,97 @@ export function switchBranch(workdir: string, name: string, opts?: { create?: bo
     return r.ok ? { status: "switched", branch: localName } : classifySwitchFailure(r.out, localName)
   }
   return { status: "error", message: `no such branch: ${target}` }
+}
+
+// ---- #72 G9: one git-branch service: a session's copy (G4) and the main folder (#152) call the same code ----
+
+/** A path on the host's rules after the native realpath (Windows: "D:/a" = "D:\\a", 8.3 short names expanded). */
+export function realPath(p: string): string {
+  try { return realpathSync.native(p) } catch { return p }
+}
+export function samePath(a: string, b: string): boolean {
+  return paths.isInside(a, b) && paths.isInside(b, a)
+}
+
+export interface BranchOwner { id: string; name: string; workdir: string }
+/** Where a branch is checked out, seen from [cwd]: here, the main folder, a session's copy, a worktree no session owns. */
+export type OpenIn =
+  | { kind: "this" }
+  | { kind: "folder" }
+  | { kind: "session"; id: string; name: string }
+  | { kind: "external"; path: string }
+
+/** A branch's last commit: its author's name and the commit time in ms (#152's "who · ago"). */
+export interface LastCommit { author: string; at: number }
+export interface BranchInfo extends LastCommit { name: string; isDefault: boolean; upstream: string | null; ahead: number; behind: number; openIn: OpenIn | null }
+export interface BranchListing {
+  current: string | null
+  detachedSha: string | null
+  local: BranchInfo[]
+  remote: Array<{ name: string; isDefault: boolean } & LastCommit>
+}
+
+/** The main worktree (the folder the repo was cloned into), from `git worktree list --porcelain`. */
+function mainWorktree(cwd: string): string | null {
+  const r = git(cwd, ["worktree", "list", "--porcelain"])
+  const m = r.ok ? r.out.match(/^worktree (.+)$/m) : null
+  return m ? realPath(m[1]!) : null
+}
+
+/** origin/HEAD's branch, else init.defaultBranch, else main / master, else the main folder's branch (a local-only repo). */
+function defaultBranch(cwd: string, locals: string[], mainBranch: string | null): string | null {
+  const head = git(cwd, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"])
+  if (head.ok && head.out.includes("/")) return head.out.slice(head.out.indexOf("/") + 1) // platform-ok: a git ref name
+  const cfg = git(cwd, ["config", "--get", "init.defaultBranch"])
+  if (cfg.ok && cfg.out && locals.includes(cfg.out)) return cfg.out
+  return ["main", "master"].find((n) => locals.includes(n)) ?? mainBranch
+}
+
+/** "ahead 1, behind 2" / "gone" / "" from %(upstream:track,nobracket). */
+function track(t: string): { ahead: number; behind: number } {
+  return { ahead: Number(t.match(/ahead (\d+)/)?.[1] ?? 0), behind: Number(t.match(/behind (\d+)/)?.[1] ?? 0) }
+}
+
+/** Every local and remote branch: the default, its upstream and ↑↓, and where it is open. Local refs only, no network. */
+export function branchList(cwd: string, owners: BranchOwner[]): BranchListing {
+  const base = listBranches(cwd)
+  const fmt = "%(refname)%09%(upstream:short)%09%(upstream:track,nobracket)%09%(authorname)%09%(committerdate:unix)"
+  const refs = git(cwd, ["for-each-ref", `--format=${fmt}`, "refs/heads", "refs/remotes"])
+  const up = new Map<string, { upstream: string | null; ahead: number; behind: number }>()
+  const last = new Map<string, LastCommit>() // by full ref name
+  for (const line of refs.ok ? refs.out.split("\n").filter(Boolean) : []) {
+    const [ref, upstream, t, author, at] = line.split("\t")
+    last.set(ref!, { author: author ?? "", at: Number(at) * 1000 || 0 })
+    if (ref!.startsWith("refs/heads/")) up.set(ref!.slice(11), { upstream: upstream || null, ...track(t ?? "") })
+  }
+  const lastOf = (ref: string): LastCommit => last.get(ref) ?? { author: "", at: 0 }
+  const here = realPath(base.repoRoot ?? cwd), main = mainWorktree(cwd)
+  const ownersAt = owners.map((o) => ({ ...o, at: realPath(o.workdir) }))
+  const where = (checkedOutAt: string | null): OpenIn | null => {
+    if (!checkedOutAt) return null
+    const at = realPath(checkedOutAt)
+    if (samePath(at, here)) return { kind: "this" }
+    if (main && samePath(at, main)) return { kind: "folder" }
+    const o = ownersAt.find((x) => samePath(x.at, at))
+    return o ? { kind: "session", id: o.id, name: o.name } : { kind: "external", path: at }
+  }
+  const mainBranch = main ? base.local.find((b) => b.checkedOutAt && samePath(realPath(b.checkedOutAt), main))?.name ?? null : null
+  const def = defaultBranch(cwd, base.local.map((b) => b.name), mainBranch)
+  return {
+    current: base.current,
+    detachedSha: base.detachedSha,
+    local: base.local.map((b) => ({ name: b.name, isDefault: b.name === def, ...(up.get(b.name) ?? { upstream: null, ahead: 0, behind: 0 }), openIn: where(b.checkedOutAt), ...lastOf(`refs/heads/${b.name}`) })),
+    remote: base.remote.map((name) => ({ name, isDefault: !!def && name === `origin/${def}`, ...lastOf(`refs/remotes/${name}`) })),
+  }
+}
+
+/** The folder's branch and whether it is clean (changed = files changed or new), from one `git status`. */
+export function folderState(cwd: string): { branch: string | null; detachedSha: string | null; clean: boolean; changed: number } {
+  const r = git(cwd, ["status", "--porcelain=v2", "--branch", "--untracked-files=normal"])
+  const lines = r.ok ? r.out.split("\n").filter(Boolean) : []
+  const head = lines.find((l) => l.startsWith("# branch.head "))?.slice(14) ?? null
+  const oid = lines.find((l) => l.startsWith("# branch.oid "))?.slice(13) ?? null
+  const changed = lines.filter((l) => !l.startsWith("#")).length
+  const branch = head && head !== "(detached)" ? head : null
+  return { branch, detachedSha: branch ? null : oid && oid !== "(initial)" ? oid.slice(0, 7) : null, clean: changed === 0, changed }
 }

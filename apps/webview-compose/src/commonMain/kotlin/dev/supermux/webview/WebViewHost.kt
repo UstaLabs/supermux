@@ -1904,7 +1904,7 @@ internal class WebViewHost(
 
         override suspend fun onPermission(request: PermissionRequest): Boolean = client.onPermission(request)
 
-        override suspend fun onDownload(request: DownloadRequest): Boolean = client.onDownload(request)
+        override suspend fun onDownload(request: DownloadRequest): DownloadTarget? = client.onDownload(request)
     }
 
     /**

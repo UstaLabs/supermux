@@ -19,7 +19,10 @@ export type TerminalViewState =
 /** Paths are relative to the workspace work directory. */
 export type EditorViewState = {
   path?: string
-  mode: "tree" | "file" | "diff"
+  /** scmdiff (#72): one Source Control file's diff, from `base` (a blob; absent: HEAD's) */
+  mode: "tree" | "file" | "diff" | "scmdiff"
+  repo?: string
+  base?: string
   line?: number
   diffBase?: string
 }

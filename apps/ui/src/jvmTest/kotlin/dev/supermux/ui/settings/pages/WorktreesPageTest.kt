@@ -4,21 +4,31 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextClearance
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
+import dev.supermux.net.BranchPrefixSetting
 import dev.supermux.net.WorktreeDeleteResultDto
 import dev.supermux.net.WorktreeListDto
 import dev.supermux.net.WorktreeOrphanPageDto
@@ -420,5 +430,115 @@ class WorktreesPageTest {
             listOf(w("a", repo = "app", root = "/home/x/one/app"), w("b", repo = "app", root = "/home/x/two/app"), w("c", repo = "web")),
         )
         assertEquals(listOf("app (/home/x/one)", "app (/home/x/two)", "web"), groups.map { it.first })
+    }
+
+    // ── #152: the prefix new branches get ──────────────────────────────────────────────────────────
+
+    private fun prefixed(
+        kept: String? = null,
+        saves: MutableList<String?> = mutableListOf(),
+        answer: (String?) -> BranchPrefixSetting? = { BranchPrefixSetting(it, "ahmet/") },
+    ) = WorktreesSettingsActions(
+        load = { WorktreeListDto("/wt", trees) },
+        branchPrefix = { BranchPrefixSetting(kept, "ahmet/") },
+        setBranchPrefix = { saves += it; answer(it) },
+    )
+
+    @Test fun the_prefix_is_automatic_until_one_is_typed_and_enter_keeps_it_as_a_folder() = runComposeUiTest {
+        val saves = mutableListOf<String?>()
+        page(prefixed(saves = saves))
+        await("wt_prefix_field")
+        has("worktrees_page", "Automatic: ahmet/")
+        has("worktrees_page", "A new branch from the launcher is named like ahmet/fix-login-redirect.")
+        onNodeWithTag("wt_prefix_field").performTextInput("team")
+        onNodeWithTag("wt_prefix_field").performImeAction()
+        waitUntil(timeoutMillis = 5_000) { saves.isNotEmpty() }
+        // A prefix that ends in a letter would run into the name: it gets the slash.
+        assertEquals(listOf<String?>("team/"), saves)
+        hasSoon("worktrees_page", "named like team/fix-login-redirect.")
+        onNodeWithTag("wt_prefix_field").assertTextContains("team/")
+        // The list is still there, under a head of its own.
+        await("wt_summary")
+        onAllNodes(hasContentDescription("Folders"), useUnmergedTree = true).assertCountEquals(1)
+    }
+
+    @Test fun a_prefix_that_ends_in_a_dash_is_kept_as_typed() = runComposeUiTest {
+        val saves = mutableListOf<String?>()
+        page(prefixed(saves = saves))
+        await("wt_prefix_field")
+        onNodeWithTag("wt_prefix_field").performTextInput("ahmet-")
+        onNodeWithTag("wt_prefix_field").performImeAction()
+        waitUntil(timeoutMillis = 5_000) { saves.isNotEmpty() }
+        assertEquals(listOf<String?>("ahmet-"), saves)
+    }
+
+    @Test fun no_prefix_is_a_switch_that_keeps_none_and_turning_it_off_is_automatic_again() = runComposeUiTest {
+        val saves = mutableListOf<String?>()
+        page(prefixed(saves = saves))
+        await("wt_prefix_none")
+        onNodeWithTag("wt_prefix_none").assertIsOff()
+        tap("wt_prefix_none")
+        waitUntil(timeoutMillis = 5_000) { saves.size == 1 }
+        assertEquals(listOf<String?>(""), saves)
+        onNodeWithTag("wt_prefix_none").assertIsOn()
+        onNodeWithTag("wt_prefix_field").assertIsNotEnabled()
+        hasSoon("worktrees_page", "A new branch from the launcher is named like fix-login-redirect.")
+        tap("wt_prefix_none")
+        waitUntil(timeoutMillis = 5_000) { saves.size == 2 }
+        assertEquals(listOf<String?>("", null), saves)
+        onNodeWithTag("wt_prefix_field").assertIsEnabled()
+    }
+
+    @Test fun a_kept_prefix_shows_in_the_field_and_emptying_it_is_automatic_again() = runComposeUiTest {
+        val saves = mutableListOf<String?>()
+        page(prefixed(kept = "feat/", saves = saves))
+        await("wt_prefix_field")
+        onNodeWithTag("wt_prefix_field").assertTextContains("feat/")
+        onNodeWithTag("wt_prefix_field").performTextClearance()
+        onNodeWithTag("wt_prefix_field").performImeAction()
+        waitUntil(timeoutMillis = 5_000) { saves.isNotEmpty() }
+        assertEquals(listOf<String?>(null), saves)
+    }
+
+    @Test fun a_prefix_git_refuses_says_so_on_the_field_and_keeps_what_was_typed() = runComposeUiTest {
+        val saves = mutableListOf<String?>()
+        page(prefixed(saves = saves, answer = { BranchPrefixSetting(refused = true) }))
+        await("wt_prefix_field")
+        onNodeWithTag("wt_prefix_field").performTextInput("a..b")
+        onNodeWithTag("wt_prefix_field").performImeAction()
+        val why = "Git doesn’t accept a..b/ as a branch prefix."
+        hasSoon("worktrees_page", why)
+        onNodeWithTag("wt_prefix_field").assert(SemanticsMatcher.expectValue(SemanticsProperties.Error, why))
+        onNodeWithTag("wt_prefix_field").assertTextContains("a..b/")
+        // Enter again sends nothing new: git would refuse it again.
+        onNodeWithTag("wt_prefix_field").performImeAction()
+        waitForIdle()
+        assertEquals(listOf<String?>("a..b/"), saves)
+        onNodeWithTag("wt_prefix_failed").assertDoesNotExist()
+    }
+
+    @Test fun a_save_that_does_not_reach_the_machine_says_so() = runComposeUiTest {
+        page(prefixed(answer = { null }))
+        await("wt_prefix_none")
+        tap("wt_prefix_none")
+        await("wt_prefix_failed")
+        has("wt_prefix_failed", "Couldn’t save the prefix. Check the connection and try again.")
+        onNodeWithTag("wt_prefix_none").assertIsOff()
+    }
+
+    @Test fun a_typed_prefix_is_trimmed_and_gets_its_slash() {
+        assertEquals("team/", typedPrefix(" team "))
+        assertEquals("my-team/", typedPrefix("my team"))
+        assertEquals("ahmet-", typedPrefix("ahmet-"))
+        assertEquals("feat/", typedPrefix("feat/"))
+        assertEquals("çağrı/", typedPrefix("çağrı"))
+        assertEquals(null, typedPrefix("  "))
+    }
+
+    @Test fun a_broker_without_the_setting_shows_just_the_list() = runComposeUiTest {
+        page(WorktreesSettingsActions(load = { WorktreeListDto("/wt", trees) }))
+        await("wt_summary")
+        onNodeWithTag("wt_prefix_field").assertDoesNotExist()
+        onAllNodes(hasContentDescription("Folders"), useUnmergedTree = true).assertCountEquals(0)
     }
 }

@@ -17,26 +17,25 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
-import dev.supermux.webview.DownloadRequest
 import dev.supermux.webview.DialogResult
+import dev.supermux.webview.DownloadRequest
 import dev.supermux.webview.FileChooserRequest
+import dev.supermux.webview.NavigationDecision
+import dev.supermux.webview.NavigationRequest
 import dev.supermux.webview.NewWindowDecision
 import dev.supermux.webview.NewWindowRequest
 import dev.supermux.webview.PermissionKind
 import dev.supermux.webview.PermissionRequest
-import dev.supermux.webview.WebDialog
-import java.io.File
-import java.net.URI
-import dev.supermux.webview.NavigationDecision
-import dev.supermux.webview.NavigationRequest
 import dev.supermux.webview.WebContent
-import dev.supermux.webview.bridge.InputStamp
-import dev.supermux.webview.bridge.UserInputSource
-import dev.supermux.webview.bridge.inputClock
+import dev.supermux.webview.WebCookie
+import dev.supermux.webview.WebDialog
 import dev.supermux.webview.WebError
 import dev.supermux.webview.WebOrigin
 import dev.supermux.webview.WebProfile
 import dev.supermux.webview.WebResource
+import dev.supermux.webview.bridge.InputStamp
+import dev.supermux.webview.bridge.UserInputSource
+import dev.supermux.webview.bridge.inputClock
 import dev.supermux.webview.engine.EmbeddingMode
 import dev.supermux.webview.engine.EngineClient
 import dev.supermux.webview.engine.EngineConfig
@@ -44,6 +43,7 @@ import dev.supermux.webview.engine.EngineEvent
 import dev.supermux.webview.engine.EngineEventQueue
 import dev.supermux.webview.engine.PageSetup
 import dev.supermux.webview.engine.WebEngine
+import dev.supermux.webview.engine.cookieHeader
 import dev.supermux.webview.engine.frames.FrameStore
 import dev.supermux.webview.engine.webkit.OwnNavigation
 import dev.supermux.webview.engine.webkit.RelayMessage
@@ -55,6 +55,8 @@ import dev.supermux.webview.engine.webkit.redirectOfOwn
 import dev.supermux.webview.normalizeBundlePath
 import dev.supermux.webview.originOf
 import dev.supermux.webview.runtime.OverlayCutouts
+import java.io.File
+import java.net.URI
 import java.awt.Cursor
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -179,7 +181,7 @@ internal class LinuxWebEngine(
     private var floorDone: CompletableDeferred<Boolean>? = null
     private var baseUserAgent: String? = null
 
-    /** Data wipes under way ([wipeData]), by request. */
+    /** Data wipes ([wipeData]) and cookie writes ([setCookie]) under way, by request. */
     private val clears = HashMap<Long, CompletableDeferred<Boolean>>()
 
     /** Bundle requests the provider hasn't answered: a reset or a release answers them 404, so the glue lets them go. */
@@ -519,6 +521,24 @@ internal class LinuxWebEngine(
         return shown && WebKitUrls.isFloor(committedUrl) && backList.isEmpty() && forwardList.all { WebKitUrls.isFloor(it) }
     }
 
+    /**
+     * Puts [cookie] in this engine's network session (#155): a Named profile's session is shared by its engines, so a
+     * Browser tab's preview key goes in through any of them. True once WebKit says it took it.
+     */
+    override suspend fun setCookie(cookie: WebCookie): Boolean {
+        if (released || crashed) return false
+        val header = cookieHeader(cookie) ?: return false
+        val request = nextRequest++
+        val done = CompletableDeferred<Boolean>()
+        clears[request] = done
+        view.setCookie(request, cookie.url, header)
+        return try {
+            withTimeoutOrNull(WIPE_MILLIS) { done.await() } ?: false
+        } finally {
+            clears.remove(request)
+        }
+    }
+
     /** Wipes this engine's own network session of every kind of website data (F20). True once WebKit says it did. */
     private suspend fun wipeData(): Boolean {
         if (released) return false
@@ -682,7 +702,11 @@ internal class LinuxWebEngine(
     // --- The glue's events ---
 
     internal fun onEvent(event: WpeEvent) {
-        if (released) return
+        if (released) {
+            // WebKit waits for a download's destination: one the view can't ask about anymore is dropped.
+            if (event is WpeEvent.Download) LinuxDownloads.answer(event.download, null)
+            return
+        }
         when (event) {
             is WpeEvent.Load -> onLoad(event)
             is WpeEvent.LoadFailed -> onFailed(event)
@@ -705,13 +729,15 @@ internal class LinuxWebEngine(
             // IME is deferred (F22): Compose's text input can't drive an editing state that lives in WebKit yet.
             is WpeEvent.ImeFocus, is WpeEvent.ImeCursor -> Unit
             is WpeEvent.DataCleared -> clears.remove(event.request)?.complete(event.ok)
+            is WpeEvent.CookieSet -> clears.remove(event.request)?.complete(event.ok)
             is WpeEvent.Dialog -> onDialog(event)
             is WpeEvent.Permission -> onPermission(event)
             is WpeEvent.FileChooser -> onFileChooser(event)
+            is WpeEvent.Download -> onDownload(event)
             is WpeEvent.NewWindow -> onNewWindow(event)
             is WpeEvent.Responsive -> onResponsive(event.responsive)
             // The process's, not a view's: WpeHost hands it to WpeClipboard.
-            is WpeEvent.Clipboard -> Unit
+            is WpeEvent.Clipboard, is WpeEvent.DownloadProgress, is WpeEvent.DownloadState -> Unit
             is WpeEvent.OptionMenu -> onOptionMenu(event)
             is WpeEvent.OptionMenuClosed -> if (optionMenu?.request == event.request) optionMenu = null
         }
@@ -1010,9 +1036,8 @@ internal class LinuxWebEngine(
         val url = event.url
         val verdict = navigation.atResponse(event, bundle)
         if (event.mainFrame && (event.attachment || !event.canShow)) {
-            // A download. The client hears of it; the engine saves nothing, either way (as Android's DownloadListener).
-            view.decide(event.decision, WpeNative.IGNORE)
-            if (url != null) askAboutDownload(DownloadRequest(WebKitUrls.toLibraryUrl(url, bundle), event.filename, event.mime, null))
+            // A download (#157): WebKit fetches it with the page's session, and asks where to save it (Download).
+            view.decide(event.decision, if (client != null && url != null) WpeNative.DOWNLOAD else WpeNative.IGNORE)
             return
         }
         val allowed = when (verdict) {
@@ -1190,17 +1215,15 @@ internal class LinuxWebEngine(
 
     // --- Client requests ---
 
-    /** Tells the client of a download, which the engine has already refused: nothing waits on the answer. */
-    private fun askAboutDownload(request: DownloadRequest) {
-        val asked = client ?: return
-        CoroutineScope(scope.coroutineContext + lease).launch {
-            try {
-                asked.onDownload(request)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                // A client that throws has said no.
-            }
+    /**
+     * WebKit has a download's response and waits to hear where to save it: the client says, or it is dropped (no
+     * client, one that throws or says no, a reset or release first).
+     */
+    private fun onDownload(event: WpeEvent.Download) {
+        val url = event.url ?: return LinuxDownloads.answer(event.download, null)
+        val request = DownloadRequest(WebKitUrls.toLibraryUrl(url, bundle), event.filename, event.mime, event.length)
+        ask({ LinuxDownloads.answer(event.download, null) }, { it.onDownload(request) }) { target ->
+            LinuxDownloads.start(event.download, request, target)
         }
     }
 
@@ -1287,7 +1310,7 @@ internal class LinuxWebEngine(
      */
     private fun <T : Any> ask(
         byDefault: () -> Unit,
-        question: suspend (EngineClient) -> T,
+        question: suspend (EngineClient) -> T?,
         holdsPage: Boolean = false,
         answer: (T) -> Unit,
     ) {

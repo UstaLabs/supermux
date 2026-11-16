@@ -14,6 +14,8 @@
 // to null, so the picker can say "A folder named x already exists" instead of "check the connection".
 package dev.supermux.ui.session
 
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -83,17 +85,17 @@ suspend fun <T> refusalOrNull(block: suspend () -> T): T? = try {
 }
 
 /**
- * What a failed host operation ([label]: "create my-app", "clone o/r") says: the broker's reason
- * when it gave one, its HTTP status when it gave only that, else — a network failure, or a null
- * result — the connection wording.
+ * What a failed host operation says: [failed] says the op failed ("Couldn't create x"), then the broker's reason
+ * when it gave one, its HTTP status when it gave only that, else — a network failure, or a null result — the
+ * connection advice.
  */
-fun hostOpFailureMessage(label: String, failure: Throwable?): String {
+fun hostOpFailure(failed: String, failure: Throwable?): String {
     val refusal = failure?.let(::brokerRefusal)
     return when {
-        refusal == null -> "Couldn't $label — check the connection and try again."
+        refusal == null -> "$failed — ${localized(Str.launch_check_connection)}"
         !refusal.message.isNullOrBlank() -> refusal.message!!
-        refusal.status != null -> "Couldn't $label (HTTP ${refusal.status})."
-        else -> "Couldn't $label."
+        refusal.status != null -> "$failed (HTTP ${refusal.status})." // i18n-ok: words come from failed
+        else -> "$failed."
     }
 }
 

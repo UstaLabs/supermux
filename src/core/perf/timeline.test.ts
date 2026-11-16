@@ -172,3 +172,23 @@ test("a start born asleep reads: the row, the answer, the app showing it startin
   expect(out).toContain("the app shows it starting")
   expect(out).toContain("worktree checked out at its first wake")
 })
+
+// #155: Browser tab opens, one row each, every step's ms since the pane opened.
+test("a Browser tab open is a row of its steps' ms", () => {
+  const { listTraces, renderBrowser } = require("./timeline")
+  const ev = (event: string, data: Record<string, unknown>) => ({ ts: 1, src: "client", event, trace: "Bab12cd-100", device: "macos-3", surface: "desktop", ...data })
+  const events = [
+    ev("browser.open", { ms: 0, runtime: "cold" }),
+    ev("browser.routes", { ms: 240, byPortMs: 120, proxiesMs: 118 }),
+    ev("browser.live", { ms: 610 }),
+    ev("browser.key", { ms: 700, keyMs: 90 }),
+    ev("browser.load", { ms: 701 }),
+    ev("browser.done", { ms: 1180 }),
+  ]
+  expect(listTraces(events).map((t: { kind: string }) => t.kind)).toEqual(["browser"])
+  const out = renderBrowser(events, ["Bab12cd-100"]).split("\n")
+  expect(out[0]).toContain("(1)")
+  const [head, row] = [out[1]!.trim().split(/\s+/), out[2]!.trim().split(/\s+/)]
+  expect(head).toEqual(["surface", "device", "runtime", "routes", "activating", "live", "key", "load", "loading", "commit", "done", "byPort", "proxies", "keyRtt"])
+  expect(row).toEqual(["desktop", "macos-3", "cold", "240", "610", "700", "701", "1180", "120", "118", "90"])
+})

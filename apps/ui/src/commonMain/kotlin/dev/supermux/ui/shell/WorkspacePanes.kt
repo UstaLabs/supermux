@@ -9,6 +9,7 @@
 // The pane CONTENT is one `ViewHost` call for every width; only the chrome around it differs.
 package dev.supermux.ui.shell
 
+import dev.supermux.ui.editor.ScmDiffTab
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.Animatable
@@ -149,6 +150,8 @@ import dev.supermux.workspace.NewViewKind
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.collectViewIds
 import dev.supermux.workspace.firstGroupId
+import dev.supermux.workspace.addViewToGroup
+import dev.supermux.workspace.removeViewFromLayout
 import dev.supermux.workspace.groupIdOf
 import dev.supermux.chat.parseChatTs
 import dev.supermux.net.ClosedSessionDto
@@ -157,6 +160,7 @@ import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 import dev.supermux.workspace.openSingletonView
 import dev.supermux.workspace.setActiveViewInGroup
+import dev.supermux.workspace.splitGroup
 import dev.supermux.ui.panes.PaneStripEnd
 import androidx.compose.material.icons.outlined.Tab
 import dev.supermux.ui.i18n.Str
@@ -168,8 +172,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
+import dev.supermux.ui.i18n.formatCatalogText
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.i18n.localizedLabels
+import dev.supermux.util.timeAgo
 
 
 /**
@@ -373,8 +378,9 @@ private fun WorkspacePanesBody(
     var walkthroughSessionId by kept::walkthroughSessionId
     val windowsSeam = LocalPlatform.current.windows
     val notices = LocalPlatform.current.notices
+    // #151: read while composing; a refused close's notice is shown later, outside composition.
+    val closeFailed = localized(Str.shell_close_failed)
     TrackFocusedFileView(ws)
-    val bulkLabels = localizedLabels(BulkClose.entries) { it.labelRes }
     val newTabWord = localized(Str.shell_new_tab)
     val closeTabWord = localized(Str.shell_close_tab)
     val viewWord = localized(Str.shell_view)
@@ -396,7 +402,7 @@ private fun WorkspacePanesBody(
     }
 
     fun bulkEntries(itemId: String): List<RowContextMenuEntry> =
-        bulkCloseEntries(groupViewIdsOf(layout, itemId), itemId, bulkLabels) { which, ids -> bulkClose(itemId, which, ids) }
+        bulkCloseEntries(groupViewIdsOf(layout, itemId), itemId) { which, ids -> bulkClose(itemId, which, ids) }
 
     val tearOff = remember(windowsSeam, hostId, ws, current.id) { windowsSeam?.tabTearOff(hostId, ws, current.id) }
     // The "+" and the split buttons open New tabs (#91): views of kind "new" that ask what to show. The split
@@ -404,23 +410,24 @@ private fun WorkspacePanesBody(
     // workspace). Theirs is made in that pane, then moved into a pane of its own at the workspace's edge.
     val mainWindow = hostId == ui.windows.mainHostId
     val topRight = topRightGroupId(layout)
+    ForgetClosedTabs(ws, current.views)
     val splitButtons = remember(mainWindow, topRight, layoutSync, app, current.id, hostId) {
         if (!mainWindow) {
             null
         } else {
             PaneStripEnd(topRight, WorkspaceSplitButtonsWidth) {
-                WorkspaceSplitButtons { direction -> splitWorkspace(direction, hostId, current, layoutSync, app, ui) }
+                WorkspaceSplitButtons { direction -> splitWorkspace(direction, hostId, current, ws, app, ui) }
             }
         }
     }
     val keyScope = LocalKeyScope.current?.root
     if (mainWindow) {
         RegisterCommand(AppCommands.SplitRight, enabled = !ui.overlayOpen, scope = keyScope) {
-            splitWorkspace("row", hostId, current, layoutSync, app, ui)
+            splitWorkspace("row", hostId, current, ws, app, ui)
             true
         }
         RegisterCommand(AppCommands.SplitDown, enabled = !ui.overlayOpen, scope = keyScope) {
-            splitWorkspace("column", hostId, current, layoutSync, app, ui)
+            splitWorkspace("column", hostId, current, ws, app, ui)
             true
         }
     }
@@ -443,14 +450,15 @@ private fun WorkspacePanesBody(
     }
 
     PaneHost(
-        layout = layout,
+        // #151: never a tab whose view is gone (the frame between a view_removed and its layout).
+        layout = withoutUnknownTabs(layout, viewsById.keys),
         tearOff = tearOff,
         titleFor = { vid -> viewsById[vid]?.let { if (it.isNewTab()) newTabWord else liveViewTitle(it, sessionNames::get) } ?: viewWord },
         onCloseView = { onCloseCandidate(viewsById[it]) },
         onEdit = { edit -> layoutSync.edit(edit) },
         addSlot = { groupId ->
             WorkspaceAddButton {
-                app.addNewTab(current.id, groupId) { id -> ui.windows.expandClaim(hostId, setOf(id), layoutSync.tree) }
+                openTabNow(ws, app, ui, hostId, current.id, NEW_TAB_KIND, EMPTY_STATE, groupId) { t, id -> addViewToGroup(t, groupId, id) }
             }
         },
         stripEnd = splitButtons,
@@ -519,6 +527,7 @@ private fun WorkspacePanesBody(
                             state = tabState,
                             dot = if (v.tabUnread(tabState.selected, unreadSessions)) LocalSemantics.current.success else null,
                             labelFont = GeistFontFamily,
+                            italic = v?.isScmDiffPreview() == true,
                             onClose = { _ -> onCloseCandidate(v) },
                             icon = {
                                 val agent = v?.chatSessionId()?.let { sid -> app.sessions.value.firstOrNull { it.id == sid }?.agent }
@@ -570,7 +579,7 @@ private fun WorkspacePanesBody(
     closeCandidate?.let { v ->
         if (!v.closeNeedsConfirmation()) {
             LaunchedEffect(v.id) {
-                runCatching { app.api.closeView(v.workspaceId, v.id) }
+                closeTabNow(ws, app, v) { notices.show(formatCatalogText(closeFailed, arrayOf(liveViewTitle(it, sessionNames::get)))) }
                 onCloseCandidate(null)
             }
         } else {
@@ -579,10 +588,8 @@ private fun WorkspacePanesBody(
                 sessionNames = sessionNames,
                 onDismiss = { onCloseCandidate(null) },
                 onConfirm = {
-                    overlayScope.launch {
-                        runCatching { app.api.closeView(v.workspaceId, v.id) }
-                        onCloseCandidate(null)
-                    }
+                    closeTabNow(ws, app, v) { notices.show(formatCatalogText(closeFailed, arrayOf(liveViewTitle(it, sessionNames::get)))) }
+                    onCloseCandidate(null)
                 },
                 chatWorkdir = v.chatSessionId()?.let { sid -> app.sessions.value.firstOrNull { it.id == sid }?.workdir },
                 worktreeForWorkdir = { app.worktreeForWorkdir(it) },
@@ -634,17 +641,19 @@ fun PhoneWorkspacePanes(
     // extra window, must not show those views twice.
     val windowsSeam = LocalPlatform.current.windows
     val notices = LocalPlatform.current.notices
+    // #151: read while composing; a refused close's notice is shown later, outside composition.
+    val closeFailed = localized(Str.shell_close_failed)
     val scope = rememberCoroutineScope()
-    val layout = ui.windows.layoutFor(
-        ui.windows.mainHostId,
-        current.layout.toDomainOrNull() ?: ws.layoutSync.tree,
+    val layout = withoutClosing(
+        ui.windows.layoutFor(ui.windows.mainHostId, current.layout.toDomainOrNull() ?: ws.layoutSync.tree),
+        ws.closing.keys,
     )
-    val tabs = phoneTabModel(layout, current.activeViewId)
+    val tabs = phoneTabModel(withoutUnknownTabs(layout, ws.viewsById.keys), current.activeViewId)
+    ForgetClosedTabs(ws, current.views)
     val viewsById = ws.viewsById
     // A Browser tab closed here or elsewhere lets its live page go (#105).
     dev.supermux.ui.browser.ReleaseClosedBrowserTabs(viewsById.values)
     val kept = rememberWorkspacePanesKept(current.id)
-    val bulkLabels = localizedLabels(BulkClose.entries) { it.labelRes }
     val viewWord = localized(Str.shell_view)
     var showAdd by kept::addViewOpen
     val closeCandidate = kept.closingViewId?.let { viewsById[it] }
@@ -652,7 +661,7 @@ fun PhoneWorkspacePanes(
 
     fun closeOrConfirm(view: ViewDto) {
         if (view.closeNeedsConfirmation()) kept.askToClose(view)
-        else app.closeWorkspaceView(current.id, view.id)
+        else closeTabNow(ws, app, view) { notices.show(formatCatalogText(closeFailed, arrayOf(liveViewTitle(it, sessionNames::get)))) }
     }
 
     // Same as the wide strip: a bulk close feeds each tab to its own close, one at a time.
@@ -663,7 +672,7 @@ fun PhoneWorkspacePanes(
     }
 
     fun bulkEntries(itemId: String): List<RowContextMenuEntry> =
-        bulkCloseEntries(tabs.viewIds, itemId, bulkLabels) { which, ids ->
+        bulkCloseEntries(tabs.viewIds, itemId) { which, ids ->
             if (which != BulkClose.ALL) app.setActiveView(current.id, itemId)
             bulkQueue.addAll(ids.filterNot { it in bulkQueue })
         }
@@ -1082,7 +1091,7 @@ fun PhoneWorkspacePanes(
             sessionNames = sessionNames,
             onDismiss = { kept.askToClose(null) },
             onConfirm = {
-                app.closeWorkspaceView(current.id, v.id)
+                closeTabNow(ws, app, v) { notices.show(formatCatalogText(closeFailed, arrayOf(liveViewTitle(it, sessionNames::get)))) }
                 kept.askToClose(null)
             },
             chatWorkdir = v.chatSessionId()?.let { sid -> app.sessions.value.firstOrNull { it.id == sid }?.workdir },
@@ -1267,14 +1276,20 @@ private fun WorkspacePaneContent(
                 val existing = openSingletonView(layout, viewsById, NewViewKind.DIFF)
                 if (existing != null) {
                     val (diffViewId, ownerGroup) = existing
-                    layoutSync.edit { setActiveViewInGroup(it, ownerGroup, diffViewId) }
+                    val chatGroup = groupIdOf(layout, viewId)
+                    // #72 v4: Source Control lives in its own pane to the chat's right. One already open as a tab in the
+                    // chat's own pane (opened before this rule) moves out beside it; one elsewhere is shown where it is.
+                    if (ownerGroup == chatGroup) {
+                        @OptIn(ExperimentalUuidApi::class)
+                        val pane = Uuid.random().toString()
+                        layoutSync.edit { splitGroup(it, ownerGroup, diffViewId, "row", pane) }
+                    } else layoutSync.edit { setActiveViewInGroup(it, ownerGroup, diffViewId) }
                     ui.windows.expandClaim(hostId, setOf(diffViewId), layoutSync.tree)
                 } else {
                     val groupId = groupIdOf(layout, viewId)
                     if (groupId != null) {
-                        app.addWorkspaceView(current.id, NewViewKind.DIFF, groupId) { newViewId ->
-                            ui.windows.expandClaim(hostId, setOf(newViewId), layoutSync.tree)
-                        }
+                        // #72 v4: Source Control beside the chat, not a tab over it (Ahmet).
+                        addChangesBeside(hostId, current, groupId, layoutSync, app, ui)
                     } else {
                         // A phone workspace has no groups to split: post the pane and let the
                         // broker's view order place it in the tab strip.
@@ -1286,8 +1301,26 @@ private fun WorkspacePaneContent(
                     }
                 }
             }
+            // #72: a Source Control file's diff opens as a tab in the chat's pane (VS Code's editor), reusing the tab
+            // already showing that file. A phone has no groups: the diff opens inside Source Control instead.
+            // VS Code's preview tab: a single click replaces the previous preview; a double click keeps the tab.
+            val openScmDiff: ((ScmDiffTab, Boolean) -> Unit)? = groupIdOf(layout, viewId)?.let { ownGroup ->
+                { tab, keep ->
+                    val open = viewsById.values.firstOrNull { it.isScmDiffOf(tab) }
+                    val openGroup = open?.let { groupIdOf(layout, it.id) }
+                    if (open != null && openGroup != null) {
+                        layoutSync.edit { setActiveViewInGroup(it, openGroup, open.id) }
+                        if (keep && open.isScmDiffPreview()) app.setWorkspaceViewState(current.id, open.id, scmDiffState(tab, preview = false))
+                    } else {
+                        if (!keep) viewsById.values.filter { it.isScmDiffPreview() }.forEach { app.closeWorkspaceView(current.id, it.id) }
+                        val chatGroup = viewsById.values.filter { it.kind == "chat" }.firstNotNullOfOrNull { groupIdOf(layout, it.id) }
+                        app.addWorkspaceView(current.id, "editor", scmDiffState(tab, preview = !keep), groupId = chatGroup ?: ownGroup)
+                    }
+                }
+            }
             ProvideKeyScope(paneScope) {
             ViewHost(
+                onOpenScmDiff = openScmDiff,
                 previewModeFor = { previewModes[it] == true },
                 view = v,
                 workspaceId = current.id,
@@ -1566,16 +1599,79 @@ private fun ViewTabIcon(v: ViewDto?, agent: String?, selected: Boolean) {
 }
 
 /**
+ * #72: the Changes view (Source Control) beside the chat: made in the chat's pane, then moved into a pane of its own to
+ * its right (the v4 design). A phone has no panes to split and keeps its own route.
+ */
+@OptIn(ExperimentalUuidApi::class)
+private fun addChangesBeside(hostId: String, current: WorkspaceDto, groupId: String, layoutSync: WorkspaceLayoutState, app: HostStore, ui: ShellUiState) {
+    val pane = Uuid.random().toString()
+    app.addWorkspaceView(current.id, NewViewKind.DIFF, groupId) { id ->
+        layoutSync.edit { splitGroup(it, groupId, id, "row", pane) }
+        ui.windows.expandClaim(hostId, setOf(id), layoutSync.tree)
+    }
+}
+
+/** #72: a "scmdiff" tab's state: one file's "(Working Tree)" or "(Index)" diff, and whether it is a preview. */
+private fun scmDiffState(tab: ScmDiffTab, preview: Boolean) = kotlinx.serialization.json.buildJsonObject {
+    put("mode", kotlinx.serialization.json.JsonPrimitive("scmdiff"))
+    put("repo", kotlinx.serialization.json.JsonPrimitive(tab.repo))
+    put("path", kotlinx.serialization.json.JsonPrimitive(tab.path))
+    put("side", kotlinx.serialization.json.JsonPrimitive(tab.side))
+    tab.base?.let { put("base", kotlinx.serialization.json.JsonPrimitive(it)) }
+    tab.work?.let { put("work", kotlinx.serialization.json.JsonPrimitive(it)) }
+    if (preview) put("preview", kotlinx.serialization.json.JsonPrimitive(true))
+}
+
+private fun ViewDto.isScmDiffOf(tab: ScmDiffTab): Boolean =
+    kind == "editor" && stateString("mode") == "scmdiff" && stateString("repo").orEmpty() == tab.repo &&
+        stateString("path") == tab.path && (stateString("side") ?: "worktree") == tab.side
+
+private fun ViewDto.isScmDiffPreview(): Boolean = kind == "editor" && stateString("mode") == "scmdiff" && stateString("preview") == "true"
+
+/**
  * The workspace's split buttons (and ⌘\ / ⌘⌥\): a New tab, made in the top-right pane, then moved into a pane of
  * its own at the workspace's edge: "row" a new rightmost column, "column" a new bottom row.
  */
 @OptIn(ExperimentalUuidApi::class)
-private fun splitWorkspace(direction: String, hostId: String, current: WorkspaceDto, layoutSync: WorkspaceLayoutState, app: HostStore, ui: ShellUiState) {
+private fun splitWorkspace(direction: String, hostId: String, current: WorkspaceDto, ws: WorkspaceSession, app: HostStore, ui: ShellUiState) {
     val pane = Uuid.random().toString()
-    app.addNewTab(current.id, topRightGroupId(layoutSync.tree)) { id ->
-        ui.windows.expandClaim(hostId, setOf(id), layoutSync.tree)
-        layoutSync.edit { newTabToEdge(it, id, direction, pane) }
-    }
+    val group = topRightGroupId(ws.layoutSync.tree)
+    openTabNow(ws, app, ui, hostId, current.id, NEW_TAB_KIND, EMPTY_STATE, group) { t, id -> newTabToEdge(t, id, direction, pane) }
+}
+
+private val EMPTY_STATE = kotlinx.serialization.json.JsonObject(emptyMap())
+
+/**
+ * #151: open a tab at once. Its id is minted here and its view drawn provisionally ([WorkspaceSession.provisionalViews]);
+ * [place] puts it in the layout, whose save waits for the broker to make it. A view the broker refuses goes again.
+ * Logs how long the broker took ("[open] …").
+ */
+internal fun openTabNow(
+    ws: WorkspaceSession,
+    app: HostStore,
+    ui: ShellUiState,
+    hostId: String,
+    workspaceId: String,
+    kind: String,
+    state: kotlinx.serialization.json.JsonObject,
+    groupId: String?,
+    place: (LayoutNode, String) -> LayoutNode,
+): String {
+    val id = ws.newId()
+    val clicked = nowMillis()
+    ws.provisionalViews[id] = ViewDto(id = id, workspaceId = workspaceId, kind = kind, state = state)
+    // Replayed onto every broker frame until the layout is saved: it must never put back a tab closed meanwhile.
+    ws.layoutSync.edit { t -> placeWhileOpening(t, id, opening = id in ws.provisionalViews, place) }
+    ui.windows.expandClaim(hostId, setOf(id), ws.layoutSync.tree)
+    app.addWorkspaceView(
+        workspaceId, kind, state, id, groupId,
+        onDone = { println("[open] $kind $id: broker made it after ${nowMillis() - clicked} ms") },
+        onFailed = {
+            ws.provisionalViews.remove(id)
+            ws.layoutSync.edit { t -> removeViewFromLayout(t, id) ?: t }
+        },
+    )
+    return id
 }
 
 /** The tab ⌘W closes: the one on show in the pane last worked in ([focusedViewId]'s), else in the first pane. */
@@ -1608,30 +1704,97 @@ private fun NewTabView(newTab: ViewDto, hostId: String, current: WorkspaceDto, w
             when (val pick = newTabPick(kind, tree, ws.viewsById)) {
                 is NewTabPick.SwitchTo -> {
                     layoutSync.edit { setActiveViewInGroup(it, pick.groupId, pick.viewId) }
-                    app.closeWorkspaceView(current.id, newTab.id)
+                    closeTabNow(ws, app, newTab) {}
                 }
+                // #151: the chosen view takes the New tab's place at once; the broker makes it after.
                 NewTabPick.Add -> groupIdOf(tree, newTab.id)?.let { group ->
-                    opening = kind
-                    app.addWorkspaceView(
-                        current.id, kind, group,
-                        onFailed = { opening = null },
-                        onCreated = { id ->
-                            ui.windows.expandClaim(hostId, setOf(id), layoutSync.tree)
-                            layoutSync.edit { pickedInPlace(it, newTab.id, id) }
-                            app.closeWorkspaceView(current.id, newTab.id)
-                        },
-                    )
+                    openTabNow(ws, app, ui, hostId, current.id, kind.wire, addViewState(kind, nowMillis()), group) { t, id -> pickedInPlace(t, newTab.id, id) }
+                    closeTabNow(ws, app, newTab) {}
                 }
             }
         },
-        onClose = { app.closeWorkspaceView(current.id, newTab.id) },
-        closed = closed.map { c -> ClosedSessionRow(c.id, c.name, c.agent, closedAgo(now, parseChatTs(c.closedAt) ?: now)) },
+        onClose = { closeTabNow(ws, app, newTab) {} },
+        closed = closed.map { c -> ClosedSessionRow(c.id, c.name, c.agent, timeAgo(now, parseChatTs(c.closedAt) ?: now)) },
         onReopen = { sessionId ->
             app.reopenClosedSession(current.id, sessionId, groupIdOf(layoutSync.tree, newTab.id)) { id ->
                 ui.windows.expandClaim(hostId, setOf(id), layoutSync.tree)
                 layoutSync.edit { pickedInPlace(it, newTab.id, id) }
-                app.closeWorkspaceView(current.id, newTab.id)
+                closeTabNow(ws, app, newTab) {}
             }
         },
     )
+}
+
+/**
+ * #151: [tree] without the tabs being closed ([closing]): a close leaves the screen at once, before the broker's frame
+ * drops it. A pane left with none goes; a workspace left with none keeps one empty pane.
+ */
+internal fun withoutClosing(tree: LayoutNode, closing: Set<String>): LayoutNode {
+    if (closing.isEmpty()) return tree
+    var out: LayoutNode? = tree
+    for (id in closing) out = out?.let { removeViewFromLayout(it, id) }
+    return out ?: LayoutNode.Group(firstGroupId(tree) ?: "", emptyList(), null)
+}
+
+/**
+ * #151: close [view] now: it leaves the screen at once ([WorkspaceSession.closing]) and the broker's work follows.
+ * A close the broker refuses brings the tab back, with a notice.
+ */
+internal fun closeTabNow(ws: WorkspaceSession, app: HostStore, view: ViewDto, onFailed: (ViewDto) -> Unit) {
+    val clicked = Clock.System.now().toEpochMilliseconds()
+    ws.closing[view.id] = clicked
+    // The close is an edit of its own too, so no earlier edit still being replayed (an open's) can put it back.
+    val group = groupIdOf(ws.layoutSync.tree, view.id)
+    ws.layoutSync.edit { t -> withoutTab(t, view.id) }
+    app.closeWorkspaceView(
+        view.workspaceId, view.id,
+        onDone = { println("[close] ${view.kind} ${view.id}: broker answered after ${Clock.System.now().toEpochMilliseconds() - clicked} ms") },
+    ) {
+        ws.closing.remove(view.id)
+        // Back where it was, or in the first pane if that one is gone: a view the broker kept must be in its layout.
+        ws.layoutSync.edit { t ->
+            if (groupIdOf(t, view.id) != null) t
+            else (group?.takeIf { hasGroup(t, it) } ?: firstGroupId(t))?.let { addViewToGroup(t, it, view.id) } ?: t
+        }
+        onFailed(view)
+    }
+}
+
+/**
+ * [place] of a tab opened at once ([id]), replayed onto broker frames until the layout is saved: only while it is
+ * still being [opening] (no broker answer yet) or the broker's frame has it. A tab closed meanwhile is not put back.
+ */
+internal fun placeWhileOpening(tree: LayoutNode, id: String, opening: Boolean, place: (LayoutNode, String) -> LayoutNode): LayoutNode =
+    if (opening || groupIdOf(tree, id) != null) place(tree, id) else tree
+
+/**
+ * [tree] without the tabs whose view is not [known]: a tab removed elsewhere is gone from the views a frame before
+ * its layout follows, and there is nothing to draw for it. Before any view is known, [tree] as it is.
+ */
+internal fun withoutUnknownTabs(tree: LayoutNode, known: Set<String>): LayoutNode {
+    if (known.isEmpty()) return tree
+    return withoutClosing(tree, collectViewIds(tree).filterNot { it in known }.toSet())
+}
+
+/** [tree] without tab [id]; a workspace left with none keeps one empty pane. */
+internal fun withoutTab(tree: LayoutNode, id: String): LayoutNode = withoutClosing(tree, setOf(id))
+
+/** #151: a tab whose close the broker has made is gone from its tree too, so [WorkspaceSession.closing] lets it go. */
+@Composable
+internal fun ForgetClosedTabs(ws: WorkspaceSession, serverViews: List<ViewDto>) {
+    // The broker's views, not the local tree: the close is a local edit too, so the tree drops the tab at once, and
+    // the phone, which draws the broker's layout, would show it again before the broker had closed it.
+    val present = serverViews.map { it.id }.toSet()
+    LaunchedEffect(present) {
+        val now = Clock.System.now().toEpochMilliseconds()
+        ws.closing.filterKeys { it !in present }.forEach { (id, clicked) ->
+            println("[close] $id: gone from the broker's views after ${now - clicked} ms")
+            ws.closing.remove(id)
+        }
+    }
+}
+
+private fun hasGroup(node: LayoutNode, groupId: String): Boolean = when (node) {
+    is LayoutNode.Group -> node.id == groupId
+    is LayoutNode.Split -> node.children.any { hasGroup(it, groupId) }
 }

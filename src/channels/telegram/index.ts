@@ -3,7 +3,8 @@ import { Bot } from "grammy"
 import type { Channel, ChannelCapabilities, InboundMessage, OutboundAction, OutboundResult } from "../channel"
 import { createBotApi } from "./bot-api"
 import { loadAccess, isAllowed } from "./access"
-import { setMenu } from "./menu"
+import { setMenu, type MenuEntry } from "./menu"
+import type { BrokerLang } from "../../core/i18n/messages"
 import { normalizeTelegramInbound } from "./inbound"
 import type { FileStore } from "../../core/files/store"
 import { telegramApiRoot } from "../../core/session-manager/download"
@@ -100,8 +101,9 @@ export class TelegramChannel implements Channel {
     }
   }
 
-  async refreshMenu(entries: Array<{ command: string; description: string }>): Promise<void> {
-    await setMenu(this.bot.api, entries)
+  /** [localized]: the same menu worded per language (#123), pushed with Telegram's language_code. */
+  async refreshMenu(entries: MenuEntry[], localized: Partial<Record<BrokerLang, MenuEntry[]>> = {}): Promise<void> {
+    await setMenu(this.bot.api, entries, localized)
   }
 
   async getFile(file_id: string): Promise<any> {

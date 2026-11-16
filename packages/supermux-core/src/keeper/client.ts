@@ -467,6 +467,27 @@ function connectSock(sockPath: string): Promise<Socket> {
   })
 }
 
+/**
+ * The pid of the session's live keeper (the root of the session's processes), or undefined (no keeper, or not a trusted
+ * live one). The broker checks a socket peer's ancestry against it (supermux #156).
+ */
+export async function keeperPidOf(stateDirectory: string, sessionId: string): Promise<number | undefined> {
+  const dir = keeperDirectory(stateDirectory, sessionId, false)
+  if (!dir) return undefined
+  const status = await readStatus(join(dir, 'status.json'))
+  return status && alive(status.keeperPid) && trustedSocket(dir, socketOf(dir, status)) ? status.keeperPid : undefined
+}
+
+/** The pid of the session's running agent, from its keeper's status (synchronous: a file read), or undefined. */
+export function agentPidOf(stateDirectory: string, sessionId: string): number | undefined {
+  const dir = keeperDirectory(stateDirectory, sessionId, false)
+  if (!dir) return undefined
+  const text = readPrivateFile(join(dir, 'status.json'))
+  let status: KeeperStatus | undefined
+  try { status = text === undefined ? undefined : JSON.parse(text) as KeeperStatus } catch { return undefined }
+  return status && status.agentExited === undefined && status.agentPid > 0 && alive(status.agentPid) ? status.agentPid : undefined
+}
+
 /** True when a keeper for the session is alive with its agent still running (no spawn, no connect). */
 export async function keeperAgentRunning(stateDirectory: string, sessionId: string): Promise<boolean> {
   const dir = keeperDirectory(stateDirectory, sessionId, false)

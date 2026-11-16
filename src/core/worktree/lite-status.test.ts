@@ -33,7 +33,7 @@ test("base mode: counts commits ahead of base and dirty files", async () => {
   writeFileSync(join(h.worktreeDir, "b.txt"), "y") // untracked → dirty
   const r = await computeLiteStatus(
     { workdir: h.worktreeDir, repo_root: repo, base_branch: "main", session_branch: h.sessionBranch }, 123)
-  expect(r).toEqual({ mode: "base", compareRef: "main", ahead: 1, behind: 0, dirty: 1, touched: true, computedAt: 123 })
+  expect(r).toEqual({ mode: "base", compareRef: "main", ahead: 1, behind: 0, dirty: 1, touched: true, branch: h.sessionBranch, sync: null, hasRemote: false, computedAt: 123 })
 })
 
 test("base mode: clean worktree reports zeros", async () => {
@@ -41,7 +41,7 @@ test("base mode: clean worktree reports zeros", async () => {
   const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
   const r = await computeLiteStatus(
     { workdir: h.worktreeDir, repo_root: repo, base_branch: "main", session_branch: h.sessionBranch }, 1)
-  expect(r).toEqual({ mode: "base", compareRef: "main", ahead: 0, behind: 0, dirty: 0, touched: false, computedAt: 1 })
+  expect(r).toEqual({ mode: "base", compareRef: "main", ahead: 0, behind: 0, dirty: 0, touched: false, branch: h.sessionBranch, sync: null, hasRemote: false, computedAt: 1 })
 })
 
 test("base mode: counts commits behind when base advances", async () => {
@@ -70,6 +70,23 @@ test("remote mode: ahead of upstream after a local commit", async () => {
   expect(r?.ahead).toBe(1)
   expect(r?.behind).toBe(0)
   expect(r?.unpublished).toBeUndefined()
+})
+
+// #72: the footer's branch and ⟳ ↓↑ against origin, for a chat with its own copy too.
+test("base mode: the branch, and ↑↓ against its upstream once published", async () => {
+  const { work } = repoWithRemote()
+  const h = await createWorktree({ repoRoot: work, baseBranch: "main", sessionName: "p" })
+  g(h.worktreeDir, "push", "-u", "origin", h.sessionBranch)
+  writeFileSync(join(h.worktreeDir, "d.txt"), "d"); g(h.worktreeDir, "add", "."); g(h.worktreeDir, "commit", "-m", "local")
+  const r = await computeLiteStatus({ workdir: h.worktreeDir, repo_root: work, base_branch: "main", session_branch: h.sessionBranch }, 3)
+  expect(r).toMatchObject({ mode: "base", branch: h.sessionBranch, sync: { ahead: 1, behind: 0 }, hasRemote: true })
+})
+
+test("remote mode: the branch and its sync ride along", async () => {
+  const { work } = repoWithRemote()
+  expect(await computeLiteStatus({ workdir: work }, 5)).toMatchObject({ branch: "mux/s", sync: null })
+  g(work, "push", "-u", "origin", "mux/s")
+  expect(await computeLiteStatus({ workdir: work }, 5)).toMatchObject({ branch: "mux/s", sync: { ahead: 0, behind: 0 } })
 })
 
 test("returns null for a non-repo directory", async () => {

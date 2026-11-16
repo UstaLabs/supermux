@@ -55,9 +55,7 @@ import dev.supermux.ui.settings.settingsTitle
 import dev.supermux.ui.settings.statusLabel
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.i18n.localizedPlural
-import dev.supermux.ui.settings.localizedInstallFailureMessage
 import dev.supermux.ui.settings.localizedSettingsTitle
-import dev.supermux.ui.settings.localizedStatusLabel
 import kotlinx.coroutines.launch
 
 /**
@@ -150,10 +148,10 @@ private fun ProviderItem(status: AgentInstallStatus, p: ProviderState, all: List
         installFailed -> when {
             p.installRequestFailed -> localized(Str.providers_install_start_failed)
             p.installTimedOut -> localized(Str.providers_install_timed_out)
-            else -> localizedInstallFailureMessage(p.install)
+            else -> installFailureMessage(p.install)
         }
         status.authed && email != null -> localized(Str.providers_your_login_email, email)
-        else -> localizedStatusLabel(status)
+        else -> statusLabel(status)
     }
     val line = if (added > 0 && status.installed) localizedPlural(Plurals.providers_line_more, added, base, added) else base
     // `agent_row_‹kind›` is the tag the shell's tests have always found a provider by.
@@ -186,8 +184,10 @@ private fun LimitRows(accounts: AccountsActions) {
     val scope = rememberCoroutineScope()
     val autoSwitch by accounts.autoSwitch.collectAsState(null)
     val autoResume by accounts.autoResume.collectAsState(null)
+    val compactBeforeWait by accounts.compactBeforeWait.collectAsState(null)
     var pendingSwitch by remember { mutableStateOf<Boolean?>(null) }
     var pendingResume by remember { mutableStateOf<Boolean?>(null) }
+    var pendingCompact by remember { mutableStateOf<Boolean?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     val saveFailed = localized(Str.providers_setting_save_failed)
 
@@ -215,6 +215,14 @@ private fun LimitRows(accounts: AccountsActions) {
         onCheckedChange = { save(it, { v -> pendingResume = v }, accounts.setAutoResume) },
         modifier = Modifier.kitAnchor("limit-resume").testTag("accounts-autoresume"),
         description = localized(Str.providers_auto_resume_description),
+    )
+    // #146: compact before the wait, while the cache is still warm (off unless turned on).
+    KitToggleRow(
+        localized(Str.providers_compact_before_wait),
+        checked = pendingCompact ?: compactBeforeWait ?: false,
+        onCheckedChange = { save(it, { v -> pendingCompact = v }, accounts.setCompactBeforeWait) },
+        modifier = Modifier.kitAnchor("compact-before-wait").testTag("accounts-compact-before-wait"),
+        description = localized(Str.providers_compact_before_wait_description),
     )
     error?.let {
         Text(it, fontSize = 12.sp, color = kitColors().warn, modifier = Modifier.padding(top = 6.dp).testTag("accounts-autoswitch-error"))

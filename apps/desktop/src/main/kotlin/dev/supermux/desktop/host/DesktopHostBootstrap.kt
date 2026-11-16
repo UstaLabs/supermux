@@ -323,25 +323,19 @@ object DesktopHostBootstrap {
 
     internal fun isReadOnly(s: HostingStatus): Boolean = s is HostingStatus.Running && s.readOnly
 
-    /**
-     * The hostname lookup, started once on a daemon thread ([prefetchHostName] at app start, else the first use):
-     * InetAddress.getLocalHost() resolves the name and can stall ~5 s on macOS, which must never be the UI thread's (#29).
-     */
-    private val hostNameLookup: Lazy<java.util.concurrent.CompletableFuture<String>> = lazy {
-        java.util.concurrent.CompletableFuture.supplyAsync(
-            { runCatching { java.net.InetAddress.getLocalHost().hostName }.getOrNull()?.takeIf { it.isNotBlank() } ?: "Desktop host" },
-            { task -> Thread(task, "host-name").apply { isDaemon = true }.start() },
-        )
-    }
-
-    /** Starts the hostname lookup off the UI thread: the app calls it first thing, so nothing later waits on it. */
+    /** Starts reading this computer's name off the UI thread ([HostName]): main() calls it first thing. */
     fun prefetchHostName() {
-        hostNameLookup.value
+        HostName.shared.refresh()
     }
 
-    /** The machine's actual hostname; fleet clients must not see every host as "This". "Desktop host" if it takes over 10 s. */
-    fun defaultHostName(): String =
-        runCatching { hostNameLookup.value.get(10, java.util.concurrent.TimeUnit.SECONDS) }.getOrNull() ?: "Desktop host"
+    /**
+     * This computer's name; fleet clients must not see every host as "This". Never blocks, so the UI may call it: the
+     * OS's name once read, else last launch's, else "Desktop host" (#133: it used to wait up to 10 s on a DNS lookup).
+     */
+    fun defaultHostName(): String = HostName.shared.now()
+
+    /** The name for the broker's MUX_HOST_NAME: waits up to 2 s for the OS read. Off the UI thread only. */
+    fun brokerHostName(): String = HostName.shared.awaitRead(2_000)
 
     @kotlinx.serialization.Serializable
     private data class ClaimBody(val deviceName: String)

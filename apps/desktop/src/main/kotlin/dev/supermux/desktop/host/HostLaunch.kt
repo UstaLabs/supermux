@@ -1,6 +1,8 @@
 package dev.supermux.desktop.host
 
 import dev.supermux.desktop.platform.DesktopOs
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -70,7 +72,7 @@ internal suspend fun HostSupervisor.launchLocked(
                 // systemd: `enable --now` failed, though the restart may still have started it.
                 mode = HostSupervisor.Mode.SERVICE
                 if (awaitHealthy(prefs.port, null, minOf(timing.systemdHealthMs, healthTimeoutMs)) == null) return null
-                "the service didn't start"
+                localized(Str.host_app_desktop_launch_service_didnt_start)
             }
         }
         is BrokerService.Result.Failed -> {
@@ -85,7 +87,7 @@ internal suspend fun HostSupervisor.launchLocked(
             }
             result.message
         }
-        BrokerService.Result.Unsupported -> "not supported on this system"
+        BrokerService.Result.Unsupported -> localized(Str.host_app_desktop_launch_unsupported)
         is BrokerService.Result.Removed -> result.toString()
         is BrokerService.Result.NotOurs -> HostSupervisor.ANOTHER_COPY
     }
@@ -95,7 +97,7 @@ internal suspend fun HostSupervisor.launchLocked(
     // a declined prompt isn't followed by a second one.
     if (withContext(io) { BrokerService.isOursInstalled(osEnv, me) }) removeServiceLocked(prefs.port)?.let { return it }
     mode = null
-    _backgroundError.value = "Couldn't keep supermux running in the background: $failure"
+    _backgroundError.value = localized(Str.host_app_desktop_launch_background_failed, failure)
     log(_backgroundError.value!!)
     log("falling back to running the broker as the app's child")
     val childWhy = launchChildLocked(prefs, bins, carried, healthTimeoutMs) ?: return null
@@ -112,8 +114,8 @@ internal suspend fun HostSupervisor.launchLocked(
             _backgroundError.value = null
             awaitHealthy(prefs.port, null, healthTimeoutMs)
         }
-        is BrokerService.Result.Failed -> "Couldn't restart the background service: ${again.message}"
-        else -> "Couldn't restart the background service: $failure"
+        is BrokerService.Result.Failed -> localized(Str.host_app_desktop_launch_restart_failed, again.message)
+        else -> localized(Str.host_app_desktop_launch_restart_failed, failure)
     }
 }
 
@@ -143,7 +145,7 @@ internal suspend fun HostSupervisor.removeServiceLocked(port: Int): String? {
     val me = me()
     val r = withContext(io) { BrokerService.remove(osEnv, me) }
     log("service remove: ${r.describe()}")
-    if (r is BrokerService.Result.Failed) return "Couldn't stop the background service: ${r.message}"
+    if (r is BrokerService.Result.Failed) return localized(Str.host_app_desktop_launch_stop_failed, r.message)
     if (!awaitPortFree(port)) {
         log("port $port still answers ${timing.portFreeMs / 1000} s after removing the service")
         freeStalePortLocked(port)
@@ -167,7 +169,7 @@ internal suspend fun HostSupervisor.removeOurDefinitionsLocked(port: Int): Strin
     }
     val r = withContext(io) { BrokerService.remove(osEnv, me) }
     log("login definition remove: ${r.describe()}")
-    return (r as? BrokerService.Result.Failed)?.let { "Couldn't remove the login autostart: ${it.message}" }
+    return (r as? BrokerService.Result.Failed)?.let { localized(Str.host_app_desktop_launch_autostart_failed, it.message) }
 }
 
 /**
@@ -241,7 +243,7 @@ internal suspend fun HostSupervisor.launchChildLocked(
     val repo = if (bins.brokerPath == null) repoDir() else null
     val argv = bins.brokerPath?.let { listOf(it.toString()) }
         ?: repo?.let { listOf(bunPath(), it.resolve("src/main.ts").toString()) }
-        ?: return "the supermux broker isn't bundled with this app"
+        ?: return localized(Str.host_app_desktop_launch_not_bundled)
     val env = childEnv(prefs, bins, carried)
     val me = me()
     log("starting the broker as a child${if (detached) " (detached)" else ""} on port ${prefs.port}${if (repo != null) " from the dev checkout" else ""}")
@@ -310,7 +312,7 @@ internal fun childEnvironment(base: Map<String, String>, ours: Map<String, Strin
 internal suspend fun HostSupervisor.awaitHealthy(port: Int, c: ChildHandle?, timeoutMs: Long): String? {
     val deadline = now() + timeoutMs
     while (true) {
-        if (c != null && !c.isAlive) return "supermux stopped while starting." + logTail()
+        if (c != null && !c.isAlive) return localized(Str.host_app_desktop_launch_stopped_starting) + logTail()
         val r = probe(port)
         if (r is HostProbeResult.Supermux && r.managedBy == "desktop") {
             _hostId.value = r.hostId
@@ -318,7 +320,7 @@ internal suspend fun HostSupervisor.awaitHealthy(port: Int, c: ChildHandle?, tim
             log("healthy on port $port: ${r.hostId}, build ${r.build ?: "?"}")
             return null
         }
-        if (now() >= deadline) return "supermux didn't answer on port $port." + portHeldBy(port) + logTail()
+        if (now() >= deadline) return localized(Str.host_app_desktop_launch_no_answer, port) + portHeldBy(port) + logTail()
         delay(timing.healthPollMs)
     }
 }
@@ -418,7 +420,7 @@ internal suspend fun HostSupervisor.secondBrokerCheck(port: Int, silentBefore: B
     }
     if (otherLiveBrokerPid() == null) return SecondBroker.None
     return SecondBroker.Refuse(
-        "supermux is already running on this computer (pid $pid) but isn't answering on port $port. Quit it, then try again.",
+        localized(Str.host_app_desktop_launch_running_not_answering, pid, port),
     )
 }
 
@@ -449,7 +451,7 @@ internal suspend fun HostSupervisor.launchGate(port: Int): LaunchGate = when (va
         childDetached = false
         LaunchGate.Adopted
     } else {
-        LaunchGate.Refuse(if (sb.found.isOurs()) HostSupervisor.ANOTHER_COPY_RUNNING else "Another supermux started on port $port meanwhile. Try again.")
+        LaunchGate.Refuse(if (sb.found.isOurs()) HostSupervisor.ANOTHER_COPY_RUNNING else localized(Str.host_app_desktop_launch_another_started, port))
     }
 }
 
@@ -463,14 +465,14 @@ internal suspend fun HostSupervisor.stopOrphanLocked(port: Int): String? {
     if (!ownsRunningBroker()) return HostSupervisor.ANOTHER_COPY_RUNNING
     val pid = otherLiveBrokerPid()
     val h = pid?.takeIf { processes.info(it)?.command?.let(::isBrokerCommand) == true }?.let { processes.handle(it) }
-        ?: return "supermux is still running from the background setup. Quit it, then try again."
+        ?: return localized(Str.host_app_desktop_launch_still_background)
     log("stopping the broker the background setup started (pid $pid)")
     h.destroy()
     if (!awaitExit(h, timing.stopGraceMs)) {
         h.destroyForcibly()
         awaitExit(h, 2_000)
     }
-    if (!awaitPortFree(port)) return "supermux still answers on port $port after stopping it. Try again."
+    if (!awaitPortFree(port)) return localized(Str.host_app_desktop_launch_still_answers, port)
     return null
 }
 

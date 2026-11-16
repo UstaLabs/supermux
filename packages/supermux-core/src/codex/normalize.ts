@@ -264,6 +264,8 @@ function childTerminal(status: unknown): "completed" | "failed" | "cancelled" {
 }
 
 export function createCodexNormalizer(): CodexNormalizer {
+  /** The window's size at the last real request (#144): what a compaction started from. */
+  let lastContext: number | undefined
   const assistant = new Map<string, string>()
   const reasoning = new Map<string, { text: string; summary: string[] }>()
   const plans = new Map<string, string>()
@@ -580,7 +582,7 @@ export function createCodexNormalizer(): CodexNormalizer {
     }
     if (type === "subAgentActivity" || type === "collabAgentToolCall") return mapCollab(item, started)
     if (type === "contextCompaction") {
-      return [{ kind: "compaction", compactionId: id, status: started ? "in_progress" : "completed" }]
+      return [{ kind: "compaction", compactionId: id, status: started ? "in_progress" : "completed", ...(!started && lastContext ? { before: lastContext } : {}) }]
     }
     if (NEVER_TOOL_ITEM_TYPES.has(type)) return []
     if (TOOL_ITEM_TYPES.has(type) || type === "functionCallOutput" || type === "sleep") {
@@ -740,7 +742,10 @@ export function createCodexNormalizer(): CodexNormalizer {
       const size = num(usage?.modelContextWindow)
       // `total` adds up the whole thread and never drops; `last` is the latest request, so what the window
       // holds now (all zeros right after a compaction).
-      const used = num(rec(usage?.last)?.totalTokens)
+      // All zeros right after a compaction: no request yet, so no size (the next one reports it).
+      const lastUsed = num(rec(usage?.last)?.totalTokens)
+      const used = lastUsed ? lastUsed : undefined
+      if (used) lastContext = used
       return [{
         kind: "usage",
         ...(tokens ? { tokens } : {}),

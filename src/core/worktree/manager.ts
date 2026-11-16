@@ -7,6 +7,7 @@ import { muxHomeNow } from "../../shared/paths"
 import { normalizeName } from "../../shared/slug"
 import { ensureUnique } from "../session-manager/naming"
 import { gitAsync, runAsync } from "../git/exec"
+import { stripRemote } from "../git/refs"
 import { makeLogger } from "../../shared/log"
 import { files, paths, proc } from "@supermux/platform"
 import { msSince } from "../perf/start-trace"
@@ -62,6 +63,7 @@ export async function createWorktree(opts: {
   await mkdir(dirname(worktreeDir), { recursive: true })
   const start = await freshBase(opts.repoRoot, opts.baseBranch)
   await gitAsync(opts.repoRoot, ["worktree", "add", "--no-track", "-b", sessionBranch, worktreeDir, start])
+  await recordBase(opts.repoRoot, sessionBranch, opts.baseBranch)
   phase?.("add", { ms: msSince(t), branch: sessionBranch })
   t = performance.now()
   const copied = await copyWorktreeIncludes(opts.repoRoot, worktreeDir)
@@ -114,7 +116,27 @@ export async function freshBase(repoRoot: string, base: string): Promise<string>
 
 /** Card #75: a session born asleep gets its branch at Send (so two quick Sends can't pick one name); the checkout waits for its wake. */
 export async function createSessionBranch(repoRoot: string, branch: string, base: string): Promise<void> {
-  await gitAsync(repoRoot, ["branch", branch, base])
+  // --no-track, as VS Code, Orca, Superset and Emdash make a task's branch: from origin/<base> git would make the base
+  // its upstream, and its pull / push (↓↑) would be the base's. It gets its own upstream when it is published.
+  await gitAsync(repoRoot, ["branch", "--no-track", branch, base])
+  await recordBase(repoRoot, branch, base)
+}
+
+/**
+ * The branch it was made from, in git's own config (`branch.<name>.base`, as Orca and Superset keep it): Create
+ * Pull Request targets it (the GitHub Pull Requests extension's default), and any other tool can read it.
+ * Stored by its branch name: "origin/main" is kept as "main".
+ */
+export async function recordBase(repoRoot: string, branch: string, base: string): Promise<void> {
+  if (!base || base === "HEAD") return
+  const remoteRef = await gitAsync(repoRoot, ["rev-parse", "--verify", "--quiet", `refs/remotes/${base}`]).then(() => true, () => false)
+  const name = remoteRef ? stripRemote(base) : base
+  await gitAsync(repoRoot, ["config", `branch.${branch}.base`, name]).catch(() => {})
+}
+
+/** #152: a branch picked that is only on a remote gets a local branch tracking it, made at Send like a new one. */
+export async function createTrackingBranch(repoRoot: string, branch: string, remoteRef: string): Promise<void> {
+  await gitAsync(repoRoot, ["branch", "--track", branch, remoteRef])
 }
 
 /** A large (or LFS) repo's checkout at a session's wake: as long as the setup hook may run. */
@@ -129,6 +151,8 @@ const CHECKOUT_TIMEOUT_MS = 600_000
  */
 export async function ensureWorktreeAt(opts: {
   repoRoot: string; workdir: string; sessionBranch: string; baseBranch: string
+  /** #152: a branch the user picked (an existing one, a pull request's): checked out as it is, never moved or remade. */
+  asIs?: boolean
   /** git has checked the files out (the includes and the setup hook come after). */
   onCheckedOut?: () => void
 }): Promise<{ created: boolean }> {
@@ -142,12 +166,15 @@ export async function ensureWorktreeAt(opts: {
   await gitAsync(opts.repoRoot, ["worktree", "prune"])
   if ((await existingBranchNames(opts.repoRoot)).has(opts.sessionBranch)) {
     // The branch exists (made at Send, or only the dir was removed): check it out at the same path.
-    await startFromFreshBase(opts.repoRoot, opts.sessionBranch, opts.baseBranch)
+    if (!opts.asIs) await startFromFreshBase(opts.repoRoot, opts.sessionBranch, opts.baseBranch)
     await gitAsync(opts.repoRoot, ["worktree", "add", opts.workdir, opts.sessionBranch], { timeoutMs: CHECKOUT_TIMEOUT_MS })
+  } else if (opts.asIs) {
+    throw new Error(`the branch ${opts.sessionBranch} no longer exists`)
   } else {
     // Branch was deleted (e.g., after merge) — recreate it from the base so work can continue.
     const start = await freshBase(opts.repoRoot, opts.baseBranch)
     await gitAsync(opts.repoRoot, ["worktree", "add", "--no-track", "-b", opts.sessionBranch, opts.workdir, start], { timeoutMs: CHECKOUT_TIMEOUT_MS })
+    await recordBase(opts.repoRoot, opts.sessionBranch, opts.baseBranch)
   }
   opts.onCheckedOut?.()
   await copyWorktreeIncludes(opts.repoRoot, opts.workdir)

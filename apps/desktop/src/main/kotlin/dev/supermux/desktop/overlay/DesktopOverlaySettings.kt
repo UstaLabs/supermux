@@ -17,6 +17,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.settings.kit.KitGhostButton
 import dev.supermux.ui.settings.kit.KitNote
@@ -47,9 +49,9 @@ internal fun DesktopOverlaySettings() {
     val under = Modifier.padding(start = 18.dp)
     Column(Modifier.fillMaxWidth()) {
         KitRow(
-            "Hold to talk from any app",
-            description = if (key.needsInputMonitoring) "Hold right ⌥ on its own and talk; let go to send. macOS asks for Input Monitoring first."
-            else "Hold $label and talk; let go to send. No permission needed.",
+            localized(Str.host_app_desktop_overlay_hold_to_talk),
+            description = if (key.needsInputMonitoring) localized(Str.host_app_desktop_overlay_hold_right_option)
+            else localized(Str.host_app_desktop_overlay_hold_key, label),
             indent = true,
         ) {
             Box {
@@ -58,7 +60,7 @@ internal fun DesktopOverlaySettings() {
                     for (k in TalkKey.offeredOn(desktopOs)) {
                         val name = k.on(desktopOs)?.label.orEmpty()
                         DropdownMenuItem(
-                            text = { Text(if (k.needsInputMonitoring) "$name · asks for Input Monitoring" else name) },
+                            text = { Text(if (k.needsInputMonitoring) localized(Str.host_app_desktop_overlay_asks_input_monitoring, name) else name) },
                             onClick = {
                                 open = false
                                 // The same key again sets it up anew: a desktop that declined it, or failed to, is asked again.
@@ -73,7 +75,7 @@ internal fun DesktopOverlaySettings() {
         waylandKeyNote(portal)?.let { KitNote(it, under) }
         refused?.let {
             Text(
-                "Another app already uses ${it.label}: pick another key here.",
+                localized(Str.host_app_desktop_overlay_key_taken, it.label),
                 fontSize = 12.sp,
                 lineHeight = 18.sp,
                 color = c.danger,
@@ -82,7 +84,7 @@ internal fun DesktopOverlaySettings() {
         }
         if (key.needsInputMonitoring && isMac && !MacOverlayNative.canListenToKeys()) {
             KitTextAction(
-                "Allow Input Monitoring",
+                localized(Str.host_app_desktop_overlay_allow_input_monitoring),
                 onClick = { if (!MacOverlayNative.askToListenToKeys()) MacOverlayNative.openPrivacySettings("ListenEvent") },
                 modifier = under.padding(top = 6.dp),
             )
@@ -92,11 +94,11 @@ internal fun DesktopOverlaySettings() {
 
 /** What Settings says about the Wayland key, as its portal answered: what the desktop can't do, and what instead. */
 internal fun waylandKeyNote(outcome: WaylandHotKey.Outcome?): String? = when (outcome) {
-    WaylandHotKey.Outcome.NO_PORTAL -> "Hold-to-talk from any app needs GNOME 48+ or KDE Plasma 5.27+; hold your Agent to talk."
+    WaylandHotKey.Outcome.NO_PORTAL -> localized(Str.host_app_desktop_overlay_wayland_no_portal)
     // Its dialog is up, for as long as the user takes: the key comes once they approve it.
-    WaylandHotKey.Outcome.ASKING -> "Waiting for you to approve the shortcut…"
-    WaylandHotKey.Outcome.DECLINED -> "The desktop wasn't allowed to give supermux this key. Pick it again here to be asked again."
+    WaylandHotKey.Outcome.ASKING -> localized(Str.host_app_desktop_overlay_wayland_asking)
+    WaylandHotKey.Outcome.DECLINED -> localized(Str.host_app_desktop_overlay_wayland_declined)
     // It answered but couldn't hand the key over: its backend failed.
-    WaylandHotKey.Outcome.FAILED -> "The desktop couldn't give supermux this key; hold your Agent to talk, or pick it again here to try again."
+    WaylandHotKey.Outcome.FAILED -> localized(Str.host_app_desktop_overlay_wayland_failed)
     WaylandHotKey.Outcome.BOUND, null -> null
 }

@@ -7,7 +7,7 @@
 import { afterAll, expect, test } from "bun:test"
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { delimiter, join } from "node:path"
 
 const root = mkdtempSync(join(tmpdir(), "c3b-launch-"))
 process.env.HOME = join(root, "home")
@@ -23,6 +23,20 @@ afterAll(() => setMuxShimMode("external"))
 /** Intended since C3a (2026-10-07): one shared instructions builder for every agent (new text);
  *  Claude no longer gets --add-dir <prompts> or MUX_CORE=1 (the retired reply hook's switch), nor MUX_SESSION_ROLE. */
 function sinceC3a(agent: string): string[] {
+  // 2026-11-15 (#156, the supermux CLI): every agent's own process gets its session identity and the `supermux` launcher
+  // first on PATH (src/core/agents/session-cli-env.ts); Claude already had the identity. Values pinned in cliEnvIsRight.
+  const cli = agent === "claude" ? ["env.PATH"] : ["env.MUX_AGENT_KIND", "env.MUX_DISPLAY_NAME", "env.MUX_SESSION_ID", "env.MUX_SOCKETS_DIR", "env.PATH"]
+  return [...new Set([...sinceC3aBefore156(agent), ...cli])].sort()
+}
+/** The CLI env's VALUES (the diff keys alone would pass any value): this session, the broker's sockets dir, the launcher first. */
+function cliEnvIsRight(agent: string, after: { env: Record<string, string> }): void {
+  expect(after.env.MUX_SESSION_ID).toBe("sess-c3")
+  expect(after.env.MUX_AGENT_KIND).toBe(agent)
+  expect(after.env.MUX_SOCKETS_DIR).toBe("<ROOT>/mux/state/sockets")
+  const pathKey = Object.keys(after.env).find((k) => k.toLowerCase() === "path")!
+  expect(after.env[pathKey]!.split(delimiter)[0]).toBe(join("<ROOT>", "mux", "state", "bin"))
+}
+function sinceC3aBefore156(agent: string): string[] {
   if (agent === "cursor") return CURSOR_C3
   // Session inbox: OpenCode's config allows its `external_directory` ask for ~/.mux/session_inboxes (a new
   // permission.external_directory in opencode.json), so reading an inbox never prompts.
@@ -58,6 +72,7 @@ for (const agent of AGENTS) for (const role of ["worker", "pa"] as const) {
     const after = await effectiveLaunch(agent, role, s)
     expect(diffKeys(c3a[`${agent}/${role}`], after)).toEqual(sinceC3a(agent))
     expect(after.mcpServers).toEqual(c3a[`${agent}/${role}`].mcpServers)
+    cliEnvIsRight(agent, after as any)
     if (agent === "opencode") expectOnlyInboxRuleAdded(c3a[`${agent}/${role}`], after)
     if (agent === "codex") expectOnlyInboxRulesFile(after)
   })

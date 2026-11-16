@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #123: the chat composer, in Turkish. Same keys and placeholders as values/chat_composer.xml
+     (tests/i18n-strings.test.ts). Terms: docs/i18n/glossary.md. -->
+<resources>
+    <!-- The composer card -->
+    <string name="composer_placeholder">Bir şey sorun · dosya eklemek için @ · komutlar için /</string>
+    <string name="composer_send">Gönder</string>
+    <string name="composer_stop">Durdur</string>
+    <string name="composer_attach">Ekle</string>
+    <string name="composer_attach_paste">Yapıştır</string>
+    <string name="composer_attach_photos">Fotoğraflar</string>
+    <string name="composer_attach_files">Dosyalar</string>
+    <string name="composer_attach_camera">Kamera</string>
+    <string name="composer_attach_record_video">Video kaydet</string>
+    <string name="composer_paste_image">Görüntüyü yapıştır</string>
+    <string name="composer_pasting_image">Görüntü yapıştırılıyor…</string>
+    <string name="composer_chip_uploading">%1$s · %%2$d</string>
+    <string name="composer_chip_retry">%1$s · Tekrar dene</string>
+    <string name="composer_remove">Kaldır</string>
+    <string name="composer_remove_named">%1$s öğesini kaldır</string>
+    <string name="composer_mention_open_folder">%1$s klasörünü aç</string>
+    <string name="composer_pill_model">model</string>
+    <string name="composer_pill_effort">çaba</string>
+    <string name="composer_cancel">İptal</string>
+    <string name="composer_ok">Tamam</string>
+    <string name="composer_dismiss">Kapat</string>
+
+    <!-- The detail chip under the card -->
+    <string name="composer_detail_chip">Ayrıntı: %1$s</string>
+    <string name="composer_detail_title">Ayrıntı</string>
+    <string name="composer_detail_low_hint">Yalnızca mesajlar · araçlar durum satırında</string>
+    <string name="composer_detail_medium_hint">Mesajlar + araç özetleri</string>
+    <string name="composer_detail_high_hint">Her şey, araç argümanları dahil</string>
+
+    <!-- The chat around the composer: header status, empty state, live rows -->
+    <string name="composer_search_chats">Sohbetlerde ara</string>
+    <string name="composer_not_responding">Yanıt vermiyor</string>
+    <!-- #152: bir pull / merge request'ten başlatılan oturumun sohbet başlığındaki çipi; %1$s "#123" ya da "!7". -->
+    <string name="chat_pr_crumb_pushes">%1$s · gönderilenler onu günceller</string>
+    <string name="chat_pr_crumb_review">%1$s · yalnızca inceleme</string>
+    <string name="composer_reveal_gone">Bu mesaj artık sohbette yok</string>
+    <string name="composer_start_conversation">Sohbeti başlatın</string>
+    <string name="composer_starter_state">Şu anki durum ne?</string>
+    <string name="composer_starter_tests">Testleri çalıştır</string>
+    <string name="composer_starter_summarize">Son değişiklikleri özetle</string>
+    <string name="composer_scroll_to_bottom">En alta kaydır</string>
+    <string name="composer_status_running">çalışıyor</string>
+    <string name="composer_status_starting">başlıyor</string>
+    <string name="composer_status_thinking">düşünüyor</string>
+    <string name="composer_status_working">çalışıyor</string>
+    <string name="composer_status_running_tool">%1$s çalışıyor…</string>
+    <string name="composer_status_tool">araç</string>
+    <string name="composer_status_starting_now">başlıyor…</string>
+    <string name="composer_status_thinking_now">düşünüyor…</string>
+    <string name="composer_status_sending_now">gönderiliyor…</string>
+    <string name="composer_status_sending">gönderiliyor</string>
+    <string name="composer_status_waiting_background">bekliyor (%1$d arka planda)</string>
+    <string name="composer_status_ellipsis">%1$s…</string>
+    <string name="composer_status_stop">durdur</string>
+
+    <!-- The / menu -->
+    <string name="composer_slash_loading">Komutlar yükleniyor…</string>
+    <string name="composer_slash_count_of">%1$d / %2$d</string>
+    <string name="composer_slash_key_move">gez</string>
+    <string name="composer_slash_key_run">çalıştır</string>
+    <string name="composer_slash_key_run_now">şimdi çalıştır</string>
+    <string name="composer_slash_key_insert">ekle</string>
+    <string name="composer_slash_key_close">kapat</string>
+    <string name="composer_slash_runs">çalışır</string>
+    <string name="composer_slash_also">Ayrıca</string>
+    <string name="composer_slash_agent">Ajan</string>
+    <string name="composer_slash_source_builtin">yerleşik</string>
+    <string name="composer_slash_source_project">bu proje</string>
+    <string name="composer_slash_source_user">beceriniz</string>
+    <string name="composer_slash_long_runs_now">supermux · hemen çalışır</string>
+    <string name="composer_slash_long_builtin">%1$s yerleşik</string>
+    <string name="composer_slash_long_plugin">%1$s eklentisi</string>
+    <string name="composer_slash_long_project">Bu proje</string>
+    <string name="composer_slash_long_user">Beceriniz</string>
+
+    <!-- Dictation -->
+    <string name="composer_dictation_failed">Yazıya dökme başarısız oldu</string>
+    <string name="composer_dictation_not_caught">Anlaşılamadı</string>
+    <string name="composer_dictation_mic_unavailable">Mikrofon kullanılamıyor</string>
+    <string name="composer_dictation_stop">Durdur ve yazıya dök</string>
+    <string name="composer_dictation_record">Ses kaydet</string>
+    <string name="composer_dictation_transcribing">Yazıya dökülüyor…</string>
+    <string name="composer_dictation_mic_denied_title">Mikrofon erişimi gerekiyor</string>
+    <string name="composer_dictation_mic_denied_body">Mesaj dikte etmek için Ayarlar'da mikrofon erişimini açın.</string>
+    <string name="composer_dictation_discard">Kaydı at</string>
+    <string name="composer_dictation_retry">Tekrar dene</string>
+    <string name="composer_dictation_send_audio">Ses olarak gönder</string>
+
+    <!-- Finish (land a worktree's branch) -->
+
+    <!-- Continue in a new conversation -->
+    <string name="composer_continue_title">Yeni sohbette devam et</string>
+    <string name="composer_continue_start_failed">Başlatılamadı. Ajanın kurulu ve giriş yapılmış olduğunu kontrol edin.</string>
+    <string name="composer_continue_body">%1$s ile aynı çalışma dizini. Yeni ajandan önce bu oturumu okuması istenir.</string>
+    <string name="composer_continue_body_edit">%1$s ile aynı çalışma dizini. Yeni ajandan önce bu oturumu okuması istenir. Başlatmadan önce dilediğiniz gibi düzenleyin.</string>
+    <string name="composer_continue_starting">Başlatılıyor…</string>
+    <string name="composer_continue_confirm">Devam et</string>
+    <string name="composer_continue_start">Başlat</string>
+    <string name="composer_continue_default">Varsayılan</string>
+    <string name="composer_continue_select_agent">Ajan seçin</string>
+    <string name="composer_continue_select_model">Model seçin</string>
+    <string name="composer_continue_thinking_level">Düşünme düzeyi</string>
+
+    <!-- The run-settings panel (model · effort · fast · account · mode) -->
+    <string name="composer_run_this_chat">bu sohbet</string>
+    <string name="composer_run_search_models">Model ara…</string>
+    <string name="composer_run_no_model_matches">“%1$s” ile eşleşen model yok</string>
+    <string name="composer_run_default_model">Varsayılan</string>
+    <string name="composer_run_default_model_detail">ajanın kendi seçimi</string>
+    <string name="composer_run_effort">Çaba</string>
+    <string name="composer_run_fast_mode">Hızlı mod</string>
+    <string name="composer_run_account">Hesap</string>
+    <string name="composer_run_mode">Mod</string>
+    <string name="composer_run_run_on">Bu sohbeti şurada çalıştır</string>
+    <string name="composer_run_start_on">Bu sohbeti şurada başlat</string>
+    <string name="composer_run_modes_title">Ajan sormadan neler yapabilir?</string>
+    <string name="composer_run_mode_default">%1$s  · varsayılan</string>
+    <string name="composer_run_back">Geri</string>
+    <string name="composer_run_auto">Otomatik</string>
+    <string name="composer_run_auto_now">Otomatik · %1$s</string>
+    <string name="composer_run_auto_detail_now">En çok yer kalan · şu an %1$s</string>
+    <string name="composer_run_auto_detail">En çok yeri kalan hesap</string>
+    <string name="composer_run_loading_accounts">Hesaplar yükleniyor…</string>
+    <string name="composer_run_isolated">Ayrık</string>
+    <string name="composer_run_unavailable">Kullanılamıyor</string>
+    <string name="composer_run_account_unavailable">%1$s kullanılamıyor</string>
+    <string name="composer_run_open_accounts">Hesapları aç</string>
+    <string name="composer_run_star">Yıldızla</string>
+    <string name="composer_run_unstar">Yıldızı kaldır</string>
+
+    <!-- Counts -->
+    <plurals name="composer_walkthrough_unread">
+        <item quantity="one">💬 Anlatımda %1$d yeni yanıt</item>
+        <item quantity="other">💬 Anlatımda %1$d yeni yanıt</item>
+    </plurals>
+    <plurals name="composer_status_waiting_tasks">
+        <item quantity="one">bekliyor · %1$d arka plan görevi</item>
+        <item quantity="other">bekliyor · %1$d arka plan görevi</item>
+    </plurals>
+    <plurals name="composer_status_agents_working">
+        <item quantity="one">%1$d ajan çalışıyor</item>
+        <item quantity="other">%1$d ajan çalışıyor</item>
+    </plurals>
+    <plurals name="composer_status_tools">
+        <item quantity="one">%1$d araç</item>
+        <item quantity="other">%1$d araç</item>
+    </plurals>
+    <plurals name="composer_duration_days">
+        <item quantity="one">%1$d gün</item>
+        <item quantity="other">%1$d gün</item>
+    </plurals>
+    <plurals name="composer_duration_hours">
+        <item quantity="one">%1$d saat</item>
+        <item quantity="other">%1$d saat</item>
+    </plurals>
+    <plurals name="composer_duration_minutes">
+        <item quantity="one">%1$d dakika</item>
+        <item quantity="other">%1$d dakika</item>
+    </plurals>
+    <plurals name="composer_duration_seconds">
+        <item quantity="one">%1$d saniye</item>
+        <item quantity="other">%1$d saniye</item>
+    </plurals>
+</resources>

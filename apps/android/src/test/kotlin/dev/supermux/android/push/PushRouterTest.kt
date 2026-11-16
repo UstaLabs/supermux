@@ -61,6 +61,12 @@ class PushRouterTest {
         assertEquals("flights booked", note?.text)
     }
 
+    @Test fun parseNotification_carries_the_applet_that_sent_it() {
+        val note = PushRouter.parseNotification("""{"session":"Issues","text":"2 waiting","ts":"t","applet":"issues"}""")
+        assertEquals("issues", note?.applet)
+        assertNull(PushRouter.parseNotification("""{"session":"chat","text":"hi","ts":"t"}""")?.applet)
+    }
+
     @Test fun parseNotification_allows_missing_sessionId() {
         val note = PushRouter.parseNotification("""{"session":"chat","text":"hi","ts":"t"}""")
         assertEquals("chat", note?.session)
@@ -86,5 +92,28 @@ class PushRouterTest {
         assertEquals("travel-assistant", note?.session)
         assertEquals("Agent finished: flights booked", note?.text)
         assertNull(note?.sessionId)
+    }
+
+    // #143: a permission prompt's push carries its request, so the notification can offer Allow / Deny.
+    @Test fun a_permission_prompt_parses_its_allow_and_reject_answers() {
+        val note = PushRouter.parseNotification(
+            """{"session":"Applets","sessionId":"s1","hostId":"h1","text":"Bash (Dangerous rm) rm -f ${'$'}S/*","ts":"t",
+               "request":{"requestId":"r1","kind":"permission","options":[
+                 {"id":"allow_once","label":"Allow once"},{"id":"allow_always","label":"Always"},{"id":"reject_once","label":"Reject"}]}}""",
+        )!!
+        assertEquals("h1", note.hostId)
+        val prompt = note.prompt!!
+        assertEquals("r1", prompt.requestId)
+        assertEquals("allow_once", prompt.allow!!.id)
+        assertEquals("Allow once", prompt.allow!!.label)
+        assertEquals("reject_once", prompt.reject!!.id)
+    }
+
+    @Test fun a_reply_has_no_prompt_and_a_question_gets_no_answers() {
+        assertNull(PushRouter.parseNotification("""{"session":"a","sessionId":"s1","text":"hi","ts":"t"}""")!!.prompt)
+        val question = PushRouter.parseNotification(
+            """{"session":"a","sessionId":"s1","text":"q","ts":"t","request":{"requestId":"r2","kind":"question","options":[{"id":"o1","label":"Blue"}]}}""",
+        )!!
+        assertNull(question.prompt)
     }
 }

@@ -1,5 +1,10 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.ui.i18n.Plurals
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.localizedPlural
+
 /** What the supervisor is doing right now (spec §States). */
 sealed interface HostingStatus {
     data object NotHosting : HostingStatus
@@ -18,7 +23,7 @@ enum class Dot { GREEN, YELLOW, RED, GREY }
  * tray header and Settings ▸ Hosting. Both are fed the same number, `FleetFacts.localSessions`
  * (Main.kt collects [hostingFacts] once and hands it to the tray and to `LocalHostingSessions`).
  */
-fun sessionCountText(sessions: Int): String = if (sessions == 1) "1 session" else "$sessions sessions"
+fun sessionCountText(sessions: Int): String = localizedPlural(Plurals.host_app_desktop_sessions, sessions, sessions)
 
 data class TrayModel(
     val dot: Dot,
@@ -32,7 +37,7 @@ data class TrayModel(
 ) {
     companion object {
         /** While the app's quit runs (the child's stop grace): just the header, Open and Quit. */
-        val QUITTING = TrayModel(Dot.YELLOW, "Quitting…", false, null, false, false, false)
+        val QUITTING get() = TrayModel(Dot.YELLOW, localized(Str.host_app_desktop_tray_quitting), false, null, false, false, false)
 
         /** [remoteReachable]: whether [remoteName]'s host is connected (spec state 9 when not). */
         fun of(
@@ -46,25 +51,25 @@ data class TrayModel(
             return when (s) {
                 HostingStatus.NotHosting -> when {
                     remoteName != null && !remoteReachable ->
-                        TrayModel(Dot.YELLOW, "Can't reach $remoteName · retrying", false, null, false, false, false)
+                        TrayModel(Dot.YELLOW, localized(Str.host_app_desktop_tray_cant_reach, remoteName), false, null, false, false, false)
                     else -> TrayModel(
-                        Dot.GREY, remoteName?.let { "Connected to $it" } ?: "Not hosting", false, null, false, false, false,
+                        Dot.GREY, remoteName?.let { localized(Str.host_app_desktop_tray_connected_to, it) } ?: localized(Str.shell_machine_not_hosting), false, null, false, false, false,
                     )
                 }
-                HostingStatus.Starting -> TrayModel(Dot.YELLOW, "Starting supermux…", false, "Restart", false, true, true)
+                HostingStatus.Starting -> TrayModel(Dot.YELLOW, localized(Str.host_app_desktop_tray_starting), false, localized(Str.host_app_desktop_restart), false, true, true)
                 is HostingStatus.Restarting -> TrayModel(
-                    Dot.YELLOW, "supermux stopped unexpectedly · restarting (attempt ${s.attempt})", true, "Restart", false, true, true,
+                    Dot.YELLOW, localized(Str.host_app_desktop_tray_restarting, s.attempt), true, localized(Str.host_app_desktop_restart), false, true, true,
                 )
-                is HostingStatus.CantStart -> TrayModel(Dot.RED, "supermux can't start", true, "Try again", true, true, true)
+                is HostingStatus.CantStart -> TrayModel(Dot.RED, localized(Str.host_app_desktop_tray_cant_start), true, localized(Str.accounts_try_again), true, true, true)
                 is HostingStatus.AskTakeover, is HostingStatus.AskDowngrade ->
-                    TrayModel(Dot.YELLOW, "supermux is waiting for you", false, null, false, false, false)
+                    TrayModel(Dot.YELLOW, localized(Str.host_app_desktop_tray_waiting), false, null, false, false, false)
                 is HostingStatus.Running -> when {
-                    s.readOnly -> TrayModel(Dot.GREEN, "supermux is running · $n · managed outside the app", false, "Restart", false, true, false)
+                    s.readOnly -> TrayModel(Dot.GREEN, localized(Str.host_app_desktop_tray_running_managed, n), false, localized(Str.host_app_desktop_restart), false, true, false)
                     // Moved off the default port (spec state 5). Not a problem worth a yellow dot, and
                     // the default may well be free again by now: just say which port.
                     s.port != HostingPrefs.DEFAULT_PORT ->
-                        TrayModel(Dot.GREEN, "supermux is running · $n · port ${s.port}", false, "Restart", true, true, true)
-                    else -> TrayModel(Dot.GREEN, "supermux is running · $n", false, "Restart", true, true, true)
+                        TrayModel(Dot.GREEN, localized(Str.host_app_desktop_tray_running_port, n, s.port), false, localized(Str.host_app_desktop_restart), true, true, true)
+                    else -> TrayModel(Dot.GREEN, localized(Str.host_app_desktop_tray_running, n), false, localized(Str.host_app_desktop_restart), true, true, true)
                 }
             }
         }
@@ -72,17 +77,15 @@ data class TrayModel(
 }
 
 object QuitText {
-    const val BACKGROUND = "supermux will keep running in the background."
+    val BACKGROUND get() = localized(Str.host_app_desktop_quit_background)
 
     /** Background on, and "Keep this computer awake" is on and holding: say that it stays awake. */
-    const val BACKGROUND_AWAKE =
-        "supermux keeps running in the background and keeps this computer awake. Turn off 'Keep this computer awake' to let it sleep."
+    val BACKGROUND_AWAKE get() = localized(Str.host_app_desktop_quit_background_awake)
 
     /** The confirm text: what stops. */
     fun stops(sessions: Int): String = when {
-        sessions <= 0 -> "This stops supermux."
-        sessions == 1 -> "This stops supermux and your 1 running session."
-        else -> "This stops supermux and your $sessions running sessions."
+        sessions <= 0 -> localized(Str.host_app_desktop_quit_stops)
+        else -> localizedPlural(Plurals.host_app_desktop_quit_stops_sessions, sessions, sessions)
     }
 
     /** null => quit without a prompt. */

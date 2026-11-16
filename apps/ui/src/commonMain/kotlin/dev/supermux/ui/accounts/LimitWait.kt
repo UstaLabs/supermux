@@ -35,7 +35,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.chat.chatTimeLabel
+import dev.supermux.chat.chatTime
+import dev.supermux.ui.i18n.chatTimeText
 import dev.supermux.chat.parseChatTs
 import dev.supermux.proto.LimitWaitDto
 import dev.supermux.ui.i18n.Str
@@ -47,50 +48,20 @@ import dev.supermux.ui.theme.Stroke
 import kotlinx.coroutines.delay
 import kotlin.time.Clock
 
-// The plain functions word in English: the tests' twins (#123). The strip and the session rows read the composable
-// twins (localizedLimitWaitRowText …), which word the same in the app's language.
-
-private fun at(wait: LimitWaitDto, nowMs: Long): String = chatTimeLabel(wait.resumeAt, nowMs) ?: "soon"
-
-@Composable
-private fun localizedAt(wait: LimitWaitDto, nowMs: Long): String =
-    chatTimeLabel(wait.resumeAt, nowMs) ?: localized(Str.limit_soon)
+private fun at(wait: LimitWaitDto, nowMs: Long): String = chatTime(wait.resumeAt, nowMs)?.let(::chatTimeText) ?: localized(Str.limit_soon)
 
 /** The session row's line: "Waiting · resumes 18:13". */
 fun limitWaitRowText(wait: LimitWaitDto, nowMs: Long): String =
-    if (wait.resetsAt != null) "Waiting · resumes ${at(wait, nowMs)}" else "Waiting · checks again ${at(wait, nowMs)}" // i18n-ok: test twin
-
-/** [limitWaitRowText] in the app's language. */
-@Composable
-fun localizedLimitWaitRowText(wait: LimitWaitDto, nowMs: Long): String =
-    localized(if (wait.resetsAt != null) Str.limit_row_resumes else Str.limit_row_checks, localizedAt(wait, nowMs))
+    localized(if (wait.resetsAt != null) Str.limit_row_resumes else Str.limit_row_checks, at(wait, nowMs))
 
 /** The strip's first line. */
 fun limitWaitTitle(wait: LimitWaitDto, nowMs: Long): String =
-    if (wait.resetsAt != null) "Usage limit reached. Resumes automatically at ${at(wait, nowMs)}"
-    else "Usage limit reached. Checks again at ${at(wait, nowMs)}" // i18n-ok: test twin
-
-/** [limitWaitTitle] in the app's language. */
-@Composable
-fun localizedLimitWaitTitle(wait: LimitWaitDto, nowMs: Long): String =
-    localized(if (wait.resetsAt != null) Str.limit_title_resumes else Str.limit_title_checks, localizedAt(wait, nowMs))
+    localized(if (wait.resetsAt != null) Str.limit_title_resumes else Str.limit_title_checks, at(wait, nowMs))
 
 private fun minutesLeft(wait: LimitWaitDto, nowMs: Long): Long = ((parseChatTs(wait.resumeAt) ?: nowMs) - nowMs) / 60_000L
 
 /** The strip's second line: "in 1 h 24 min · on Work Max". */
 fun limitWaitDetail(wait: LimitWaitDto, nowMs: Long): String {
-    val left = minutesLeft(wait, nowMs)
-    val whenText = when {
-        left <= 0 -> "any moment now"
-        left < 60 -> "in $left min"
-        else -> "in ${left / 60} h ${left % 60} min"
-    }
-    return if (wait.accountLabel.isBlank()) whenText else "$whenText · on ${wait.accountLabel}" // i18n-ok: test twin
-}
-
-/** [limitWaitDetail] in the app's language. */
-@Composable
-fun localizedLimitWaitDetail(wait: LimitWaitDto, nowMs: Long): String {
     val left = minutesLeft(wait, nowMs)
     val whenText = when {
         left <= 0 -> localized(Str.limit_any_moment)
@@ -142,8 +113,8 @@ fun LimitWaitStrip(
         ) {
             Icon(Icons.Outlined.HourglassBottom, contentDescription = null, tint = warning, modifier = Modifier.size(17.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                Text(localizedLimitWaitTitle(wait, now), color = cs.onSurface, fontWeight = FontWeight.Medium, fontSize = 13.sp)
-                Text(localizedLimitWaitDetail(wait, now), color = cs.onSurfaceVariant, fontSize = 12.sp)
+                Text(limitWaitTitle(wait, now), color = cs.onSurface, fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                Text(limitWaitDetail(wait, now), color = cs.onSurfaceVariant, fontSize = 12.sp)
             }
             StripAction(localized(Str.limit_cancel), cs.onSurfaceVariant, onCancel, "limit-wait-cancel")
             StripAction(localized(Str.limit_resume_now), cs.onSurface, onResumeNow, "limit-wait-resume")

@@ -183,7 +183,7 @@ export type NormalizedBodyBase =
         kind: "allow_once" | "allow_always" | "reject_once" | "reject_always"
         label: string
       }[]
-      detail?: { command?: string; cwd?: string; blockedPath?: string }
+      detail?: { command?: string; cwd?: string; blockedPath?: string; reason?: string }
     }
   | {
       kind: "request-resolved"
@@ -216,11 +216,17 @@ export type NormalizedBodyBase =
   | {
       kind: "usage"
       context?: { used: number; size: number }
+      /** #146: how long the agent's prompt cache lives, as its latest request's cache writes said (Claude: 1h or 5m). */
+      cacheTtl?: "1h" | "5m"
       tokens?: { input: number; output: number; total: number }
       cost?: { amount: number; currency: string }
       rateLimits?: unknown
     }
-  | { kind: "compaction"; compactionId: string; status: CompactionStatus; summary?: string; error?: string }
+  | {
+      kind: "compaction"; compactionId: string; status: CompactionStatus; summary?: string; error?: string
+      /** #144: who started it (the user's Compact, or the agent on its own), and the context before → after, when known. */
+      trigger?: "manual" | "auto"; before?: number; after?: number
+    }
   /** The agent started a new, empty conversation in place of the old one (Claude /clear); the session runs on in it. */
   | { kind: "conversation-reset"; agentSessionId: string; previousAgentSessionId: string; trigger?: string }
   /**

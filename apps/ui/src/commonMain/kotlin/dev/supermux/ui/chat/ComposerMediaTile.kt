@@ -38,6 +38,8 @@ import androidx.compose.ui.unit.dp
 import dev.supermux.net.ChunkSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 
 /** Photos and videos get a thumbnail tile; everything else stays a name chip. */
 internal fun isMediaMime(mime: String): Boolean = mime.startsWith("image/") || mime.startsWith("video/")
@@ -149,7 +151,7 @@ internal fun ComposerMediaTile(
                     .then(if (removeTestTag != null) Modifier.testTag(removeTestTag) else Modifier),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Filled.Close, contentDescription = "Remove $name", tint = Color.White, modifier = Modifier.size(14.dp))
+                Icon(Icons.Filled.Close, contentDescription = localized(Str.composer_remove_named, name), tint = Color.White, modifier = Modifier.size(14.dp))
             }
         }
     }

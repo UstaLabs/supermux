@@ -1,0 +1,8 @@
+/* #123: English, the source. Keys are the English text, as SwiftUI looks them up. */
+
+"Sent a photo" = "Sent a photo";
+"Sent a voice message" = "Sent a voice message";
+"Sent audio" = "Sent audio";
+"Sent a video note" = "Sent a video note";
+"Sent a document" = "Sent a document";
+"New message" = "New message";

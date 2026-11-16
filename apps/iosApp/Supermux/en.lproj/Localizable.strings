@@ -1,0 +1,21 @@
+/* #123: English, the source. Keys are the English text, as SwiftUI looks them up. */
+
+"Allow camera access to scan the pairing QR code." = "Allow camera access to scan the pairing QR code.";
+"Camera unavailable. Paste the pairing link instead." = "Camera unavailable. Paste the pairing link instead.";
+"QR scanning is unavailable. Paste the pairing link instead." = "QR scanning is unavailable. Paste the pairing link instead.";
+"Camera access is off. Enable it in Settings, or close the scanner and paste the pairing link." = "Camera access is off. Enable it in Settings, or close the scanner and paste the pairing link.";
+"Scan pairing code" = "Scan pairing code";
+
+/* #143: a permission prompt answered from its notification */
+"Deny" = "Deny";
+"Allow" = "Allow";
+"Allowed." = "Allowed.";
+"Denied." = "Denied.";
+"Couldn't answer (already answered, or the host is unreachable). Open Supermux." = "Couldn't answer (already answered, or the host is unreachable). Open Supermux.";
+
+/* #117 W1: the applet widgets and intents. */
+"Applet" = "Applet";
+"Open applet" = "Open applet";
+"Opens an applet in supermux." = "Opens an applet in supermux.";
+"Choose an applet" = "Choose an applet";
+"The applet this widget shows." = "The applet this widget shows.";

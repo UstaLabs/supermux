@@ -22,7 +22,7 @@ settings:
     TARGETED_DEVICE_FAMILY: "1,2"
     CODE_SIGN_STYLE: Automatic
     DEVELOPMENT_TEAM: "57L7J9XA89"
-    MARKETING_VERSION: "1.7"
+    MARKETING_VERSION: "1.8"
     CURRENT_PROJECT_VERSION: "88"
     # Gradle pre-build phase needs filesystem access outside the sandbox.
     ENABLE_USER_SCRIPT_SANDBOXING: "NO"
@@ -67,6 +67,10 @@ targets:
       # Notification Content Extension: the custom expanded (long-press) view. iOS-only.
       - target: SupermuxNotifContent
         embed: true
+      # #117 W1: the applet widgets (Home screen, Control Center, Lock Screen). release.yml drops these lines from a
+      # signed build until its App Store profile exists (IOS_PP_WIDGETS_BASE64).
+      - target: SupermuxWidgets
+        embed: true
     info:
       path: Supermux/Info.plist
       properties:
@@ -102,8 +106,9 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        NSCameraUsageDescription: supermux scans the pairing QR code printed by your broker.
-        NSMicrophoneUsageDescription: supermux records voice messages you send to your agents.
+        NSCameraUsageDescription: supermux scans the pairing QR code printed by your broker, and lets a website in a Browser tab use the camera when you allow it.
+        NSMicrophoneUsageDescription: supermux records voice messages you send to your agents, and lets a website in a Browser tab use the microphone when you allow it.
+        NSLocationWhenInUseUsageDescription: A website in a Browser tab can ask for your location; supermux shares it only with sites you allow.
         NSPhotoLibraryAddUsageDescription: supermux saves the pictures and videos you choose to save into Photos.
         NSSpeechRecognitionUsageDescription: supermux uses on-device speech recognition to turn your voice into editable text.
         NSLocalNetworkUsageDescription: Supermux connects to the broker server running on your own computer when you reach it by its LAN address (for example 192.168.1.50). It does not scan or collect information about other devices on your network.
@@ -118,6 +123,9 @@ targets:
         # :ui links :editor-syntax (api), so SupermuxKit carries the grammars' code and the app
         # bundle must carry their tables (see apps/editor-syntax/native/README.md).
         SUPERMUX_EDITOR_SYNTAX_TABLES: "YES"
+        # #117: AppletIntents.swift, compiled into the app and the widget extension, hands an opened applet straight
+        # to the shell when it runs in the app.
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) SUPERMUX_APP"
         # APNs (aps-environment) + shared Keychain access group so the NSE can read
         # the same push keypair this app generates.
         CODE_SIGN_ENTITLEMENTS: Supermux/Supermux.entitlements
@@ -227,6 +235,8 @@ targets:
     platform: iOS
     sources:
       - path: SupermuxPushNSE/NotificationService.swift
+      # #123: the notification bodies it words ("Sent a photo"), in English and Turkish.
+      - path: SupermuxPushNSE/Resources
       # Shared sources — compiled into BOTH the app and this extension. The NSE loads
       # the keypair from the shared Keychain group and opens the blob with the same code.
       - path: Supermux/Push/PushCrypto.swift
@@ -282,6 +292,38 @@ targets:
       configs:
         Release:
           PROVISIONING_PROFILE_SPECIFIER: "Supermux Notif Content App Store"
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+          "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Distribution"
+
+  SupermuxWidgets:
+    # #117 W1: the applet widgets — "Applets" (the pinned grid), "Applet" (one applet and its summary) and the
+    # "Open applet" control — drawn from the snapshot the app writes into the App Group. iOS 18: the control and
+    # its App Intent; the app hides "Add widget" below that (IosAppletWidgets.kt).
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: SupermuxWidgets
+      # Shared with the app: the snapshot reader and the applet App Intents (Spotlight lives in the app).
+      - path: Supermux/Applets/AppletSnapshot.swift
+      - path: Supermux/Applets/AppletIntents.swift
+    info:
+      path: SupermuxWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: supermux
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.supermux.app.widgets
+        IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+        CODE_SIGN_ENTITLEMENTS: SupermuxWidgets/SupermuxWidgets.entitlements
+        APPLICATION_EXTENSION_API_ONLY: "YES"
+      configs:
+        Release:
+          PROVISIONING_PROFILE_SPECIFIER: "Supermux Widgets App Store"
           CODE_SIGN_IDENTITY: "Apple Distribution"
           "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Distribution"
 

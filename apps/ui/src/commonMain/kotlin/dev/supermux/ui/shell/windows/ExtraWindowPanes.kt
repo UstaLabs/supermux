@@ -81,7 +81,7 @@ fun ExtraWindowPanes(
         ) {
         WorkspacePanes(
             hostId = hostId,
-            layout = hosted,
+            layout = dev.supermux.ui.shell.withoutClosing(hosted, ws.closing.keys),
             current = current,
             session = bind.session,
             ws = ws,

@@ -81,6 +81,8 @@ object AppFleet {
             },
         )
         fleet.bindMessageTts()
+        // A running download keeps the fleet, and the process, after the screen goes (#157).
+        dev.supermux.android.platform.DownloadKeepService.keepWhileRunning(appContext, fleet.downloads, scope)
         // Spec §5 + card #121: persist each host's last-known live screen (sessions, workspaces, recent
         // chats) so the next launch draws it at once, even offline, and the push service can name a
         // session for a host that is currently offline.

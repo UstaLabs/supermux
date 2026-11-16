@@ -123,5 +123,6 @@ export async function normalizeTelegramInbound(opts: Opts): Promise<InboundMessa
     text: m.text ?? m.caption ?? "",
     reply_to_message_id: m.reply_to_message ? String(m.reply_to_message.message_id) : undefined,
     attachments,
+    ...(typeof m.from?.language_code === "string" && m.from.language_code ? { lang: m.from.language_code } : {}),
   }
 }

@@ -26,6 +26,8 @@ import { ProjectService } from "./core/project/service"
 import { ProjectImages } from "./core/project/images"
 import { propagateSessionRename } from "./core/workspace/name"
 import { makeReadAdvancer } from "./core/session-manager/read-status"
+import { AppletService } from "./core/applets/service"
+import { handleAppletOp } from "./core/applets/ops"
 import { ProxyLivenessMonitor, type ProxyStatus } from "./core/proxy/liveness"
 import { exposedLinksPublicUrl, hostRelayUrl } from "./core/relay/public-url"
 
@@ -52,7 +54,9 @@ import { isProcessAlive, releasePidFile } from "./core/session-manager/pid-file"
 import { ensureWindowId } from "./core/session-manager/window-id"
 import { resumedSessionPid } from "./core/session-manager/resume-pid"
 import { captureBaseCommits, spawnSession as spawnSessionHelper, spawnPA } from "./core/session-manager/spawn-helper"
-import { createAsleep, type CreateAsleepDeps } from "./core/session-manager/born-asleep"
+import { createAsleep, type CreateAsleepDeps, type SessionSource } from "./core/session-manager/born-asleep"
+import { UserPrefs } from "./core/settings/user-prefs"
+import { sessionSourceFields } from "./core/session-manager/source-fields"
 import { folderReady } from "./core/session-manager/folder-ready"
 import { SessionChain, deliverOnChain, ensureLiveWith, isLiveWith, type ChainDelivery, type LivenessDeps } from "./core/session-manager/session-chain"
 import { SessionManager } from "./core/session-manager/manager"
@@ -81,6 +85,8 @@ import {
 } from "./core/accounts/broker-accounts"
 import { setSessionAccount as moveSessionAccount } from "./core/accounts/session-account"
 import { LimitWaits, clockTime, resumeAfterLimit, type LimitWait } from "./core/accounts/limit-wait"
+import { CompactAdvisor } from "./core/usage/compact-advisor"
+import type { CompactionActor } from "./core/session-manager/messages"
 import { getSessionBackend } from "./core/runtime"
 import { createAgentRpc } from "./core/agent-rpc"
 import { buildRpcPrompt } from "./core/agent-rpc/prompts"
@@ -130,12 +136,15 @@ import { buildMenuEntries, menuRefresher } from "./channels/telegram/menu"
 import { MessageStore } from "./core/session-manager/messages"
 import { openDb, runMigrations } from "./core/storage/db"
 import { MIGRATIONS } from "./core/storage/migrations"
+import { AnsweredBy } from "./core/agents/answered-by"
+import { initStorage } from "./core/storage/open"
 import { checkSchemaStamp, writeSchemaStamp } from "./core/storage/schema-stamp"
 import { sweepRuntimeAssets } from "./core/runtime-assets-gc"
 import { BUILD_VERSION, BUILD_COMMIT, IS_COMPILED, versionString } from "./shared/build-info"
 import { createCheckoutWatch } from "./core/checkout-watch"
 import { gitAsync } from "./core/git/exec"
 import { runSyncOrThrow } from "./core/git/exec-sync"
+import { liveBranch } from "./core/git/branches"
 import { agentsCloseMode, captureWindowsTaskFlag, expectRestart, restartService } from "./core/update/apply"
 import { installMinGit, realMinGitDeps } from "./core/git/mingit"
 import { loadOrCreateHostKey } from "./core/host-identity"
@@ -157,11 +166,11 @@ import { FileStore } from "./core/files/store"
 import { loadOrGenerateVapid } from "./core/push/vapid"
 import { PushSubscriptionStore } from "./core/push/subscriptions"
 import { createPushSender } from "./core/push/sender"
-import { firePushForReply, firePushToAll } from "./core/push/hook"
+import { firePushForReply, firePushForRequest, firePushToAll } from "./core/push/hook"
+import { brokerLang, t as brokerText, type MessageKey } from "./core/i18n/messages"
 import { DevicePushTokenStore } from "./core/push/device-tokens"
 import { createRelayClient } from "./core/push/relay-adapter"
 import { ViewingTracker } from "./core/push/viewing-tracker"
-import { usesFilesystemEndpoint } from "./core/local-endpoint"
 import {
   MUX_HOME, MUX_HOME_NOTE, STATE_DIR, PID_FILE, SOCKETS_DIR, ENV_FILE, INBOX_DIR, HTML_DIR, SESSION_INBOX_DIR, DEVICES_FILE, HOST_KEY_FILE,
 } from "./shared/paths"
@@ -194,7 +203,8 @@ import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discov
 import { followAdapterModels, LearnedModels } from "./core/models/learned"
 import { discoverGrokModels } from "./core/agents/grok/model-discovery"
 import { grokHasScheduledTasks } from "./core/agents/grok/scheduled-tasks"
-import { keeperAgentRunning } from "../packages/supermux-core/src/keeper/index.js"
+import { keeperAgentRunning, keeperPidOf } from "../packages/supermux-core/src/keeper/index.js"
+import { checkPeer } from "./core/session-manager/peer-identity"
 import { discoverAntigravityModels } from "./core/agents/antigravity/model-discovery"
 import { refreshModelCache, seedModelCache, SharedRefreshes, type ModelDiscoverers } from "./core/models/refresh"
 import { listOpenCodeProviders, setOpenCodeApiKey, startOpenCodeOAuth, finishOpenCodeOAuth } from "./core/agents/opencode/auth-ops"
@@ -228,6 +238,8 @@ import { SearchStore } from "./core/search/store"
 import { ForgeStore } from "./core/forge/store"
 import { ForgeService } from "./core/forge/service"
 import { detectForgeClis, importCliToken } from "./core/forge/cli-import"
+import { installSupermuxLauncher } from "./cli/launcher"
+import { bindCliAdoption, CliAdoption } from "./core/cli/adoption"
 import { installCredentialLauncher } from "./core/forge/launcher"
 import { SETTINGS_KEY_CURATOR, parseCuratorConfig, type CuratorConfig } from "./core/settings/curator-config"
 import { listLspServerSettingsRows } from "./core/lsp/editor-settings"
@@ -250,7 +262,6 @@ import { buildAgentModels } from "./core/models/agent-models"
 import { createSessionBranch, createWorktree, ensureWorktreeAt, existingBranchNames, removeWorktree, worktreesRoot, type WorktreeHandle } from "./core/worktree/manager"
 import { startFinishJob, getFinishJob, clearFinishJob, type FinishJob, type FinishJobOpts, type FinishAction } from "./core/worktree/finish-job"
 import { computeReadiness, type FinishReadiness } from "./core/worktree/readiness"
-import { suggestVerify } from "./core/worktree/verify-suggest"
 import { loadFinishConfig } from "./core/worktree/finish-config"
 import { computeLiteStatus } from "./core/worktree/lite-status"
 import { GitStatusService, type ServiceSession } from "./core/worktree/git-status-service"
@@ -386,7 +397,7 @@ const tighten = (dir: string): void => {
   }
 }
 tighten(STATE_DIR)
-if (usesFilesystemEndpoint()) tighten(SOCKETS_DIR)
+tighten(SOCKETS_DIR)
 
 // load .env
 try {
@@ -440,11 +451,23 @@ startTraces.setLog(perfLog)
 setPerfMarkSink((sessionId, event, fields) => startTraces.markSession(sessionId, event, fields, true))
 let db: ReturnType<typeof openDb>
 try {
-  db = openDb(dbPath)
-  runMigrations(db, MIGRATIONS)
+  // A lock still held after a crash (a credential helper, `supermux connect`, WAL recovery) is waited out, not fatal:
+  // under systemd or launchd an exit here would be a restart loop.
+  db = initStorage(() => {
+    const opened = openDb(dbPath)
+    try {
+      runMigrations(opened, MIGRATIONS)
+    } catch (err) {
+      opened.close()
+      throw err
+    }
+    return opened
+  }, {
+    onRetry: (attempt, waitMs, err) => log.warn("storage_locked_retry", { dbPath, attempt, wait_ms: waitMs, holders: proc.holders(dbPath), err: String((err as Error)?.message ?? err) }),
+  })
   writeSchemaStamp(STATE_DIR, MIGRATIONS.length)
 } catch (err: any) {
-  log.error("storage_init_failed", { dbPath, err: err?.message ?? String(err) })
+  log.error("storage_init_failed", { dbPath, err: err?.message ?? String(err), holders: proc.holders(dbPath) })
   process.exit(1)
 }
 
@@ -612,6 +635,11 @@ const wakeDetector = new WakeDetector({ log: (event, data) => log.info(event, da
 const credentialHelperPath = join(STATE_DIR, "bin", "mux-credential")
 try { installCredentialLauncher(join(STATE_DIR, "bin"), join(import.meta.dir, "..")) }
 catch (err) { log.error("forge_credential_launcher_failed", { err: String(err) }) }
+// #156: the `supermux` CLI agents run from their shell (session-cli-env.ts puts this bin dir first on their PATH).
+try { installSupermuxLauncher(join(STATE_DIR, "bin"), join(import.meta.dir, "..")) }
+catch (err) { log.error("supermux_launcher_failed", { err: String(err) }) }
+// #156: which sessions know the CLI (launched with it, or told once), and whether moved MCP tools are still used.
+bindCliAdoption(new CliAdoption(join(STATE_DIR, "cli-adoption.json")))
 const forgeStore = new ForgeStore(db)
 const forgeService = new ForgeService(forgeStore, {
   projectsRoot: join(STATE_DIR, "projects"),
@@ -1037,6 +1065,7 @@ function stopClaudeTailer(sessionUuid: string): void {
   subagentStore.clear(sessionUuid)
 }
 
+const answeredBy = new AnsweredBy()
 const modelCache = new ModelCache()
 /** Model lists an agent reported at a session start (#102: Cursor's ACP options), kept across restarts. */
 const learnedModels = new LearnedModels(join(STATE_DIR, "learned-models"))
@@ -1142,6 +1171,8 @@ const vapidSubject = process.env.MUX_WEB_VAPID_SUBJECT ?? (() => {
 const vapid = loadOrGenerateVapid(join(STATE_DIR, "push-keys.json"), vapidSubject)
 const pushStore = new PushSubscriptionStore(db)
 const pushSender = createPushSender({ vapid, store: pushStore })
+/** #123: a web device's language, as its app said when it subscribed (undefined = English). */
+const pushLangOf = (device: string): string | undefined => pushStore.get(device)?.lang
 const deviceTokenStore = new DevicePushTokenStore(db)
 const relayUrl = process.env.MUX_PUSH_RELAY_URL ?? "https://push.supermux.dev"
 const nativeSender = createRelayClient({ store: deviceTokenStore, relayUrl })
@@ -1188,7 +1219,7 @@ const telegram: TelegramChannel | undefined = hasTelegram
 // The Telegram /command menu (one entry per session). A session start refreshes it in the background
 // (card #75); a failure is logged once until a refresh succeeds.
 const telegramMenu = menuRefresher(
-  async () => { if (telegram) await telegram.refreshMenu(buildMenuEntries(registry)) },
+  async () => { if (telegram) await telegram.refreshMenu(buildMenuEntries(registry), { tr: buildMenuEntries(registry, "tr") }) },
   (err) => log.warn("refresh_telegram_menu_failed", { err }),
 )
 const WA_GOWA_URL = appConfig.whatsappGowaUrl || undefined
@@ -1241,6 +1272,71 @@ const doorStarts = new Set<string>()
 const checkoutsInFlight = new Set<string>()
 /** gracefulShutdown has begun (declared here: the session chain reads it). */
 let shuttingDown = false
+/** #144: a "Compacted" line in words, for an app that predates it. */
+function compactionText(c: { status: string; before?: number; after?: number; error?: string }): string {
+  const k = (n: number) => (n >= 1000 ? `${Math.round(n / 100) / 10}k`.replace(".0k", "k") : String(n))
+  if (c.status === "failed") return `Compaction failed${c.error ? `: ${c.error}` : ""}`
+  if (c.status === "cancelled") return "Compaction cancelled"
+  return c.before != null && c.after != null ? `Compacted · ${k(c.before)} → ${k(c.after)}` : c.before != null ? `Compacted · was ${k(c.before)}` : "Compacted"
+}
+
+/** #146: suggest compacting before a usage-limit wait (and, opted in, do it). */
+const compactAdvisor = new CompactAdvisor({
+  now: () => Date.now(),
+  autoEnabled: () => accountsSettings().compactBeforeWait,
+  onAdvice: (id, advice, change) => {
+    // Every set/clear is logged, so whether the advice reached a chat can be proven later (#146, 2026-11-16).
+    log.info(advice ? "compact_advice_set" : "compact_advice_clear", {
+      session: id, account: change.account, usedPct: change.usedPct, threshold: change.threshold, reason: change.reason,
+    })
+    webChannel?.broadcastToAll({ type: "compact_advice", session: id, advice })
+  },
+  // The 5-hour meter is the account's: a reading from one chat re-judges the advice shown in every chat on it.
+  accountOf: (id) => {
+    const s = registry.get(id)
+    return s?.agent === "claude" ? sessionAccountFields(s).account : undefined
+  },
+  sessionsOn: (account) => registry.list().filter((s) => s.agent === "claude" && sessionAccountFields(s).account === account).map((s) => s.id),
+  contextOf: (id) => contextUsage.get(id)?.used,
+  // Team seats: auto-switch would carry the chat to another seat of the same Anthropic org (cache warm there).
+  teammateCanTakeOver: async (id, threshold) => {
+    const s = registry.get(id)
+    if (!s || s.agent !== "claude" || !accountsSettings().autoSwitch) return false
+    return brokerAccounts.sameOrgSeatHasRoom(sessionAccountFields(s).account, threshold)
+  },
+  compact: (id) => {
+    void compactSession(id, undefined, { kind: "supermux" }).then((r) => {
+      if (!r.ok) log.warn("auto_compact_refused", { session: id, err: r.error })
+      else log.info("auto_compact_before_wait", { session: id })
+    })
+  },
+})
+
+/** #144: a Compact's note and who asked, until its compaction ends (both go on the "Compacted" line). */
+const pendingCompacts = new Map<string, { note?: string; actor: CompactionActor }>()
+
+/** #144 Compact: queued like a message; refused for an agent that can't, or a session that isn't running. */
+async function compactSession(id: string, note: string | undefined, actor: CompactionActor): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const s = registry.get(id)
+  if (!s) return { ok: false, status: 404, error: "unknown session" }
+  const caps = sessionCapabilities(s.agent)
+  if (!caps.compact) return { ok: false, status: 400, error: `${agentDisplayName(s.agent)} can't be asked to compact` }
+  const adapter = sessionManager.adapterFor(s.id) as unknown as { compact?: (note?: string) => Promise<void> } | undefined
+  if (!adapter?.compact) return { ok: false, status: 409, error: "the agent isn't running" }
+  const kept = caps.compactNote ? note?.trim() || undefined : undefined
+  pendingCompacts.set(s.id, { ...(kept ? { note: kept } : {}), actor })
+  try {
+    await adapter.compact(kept)
+    return { ok: true }
+  } catch (err) {
+    pendingCompacts.delete(s.id)
+    return { ok: false, status: 409, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/** Each session's context window, as its agent last reported it (#144). In memory: the next request reports again. */
+const contextUsage = new Map<string, { used: number; size: number }>()
+
 const sessionChain = new SessionChain({
   isLive: (id) => isLiveWith(liveness, id),
   ensureLive: (id) => ensureLiveWith(liveness, id),
@@ -1367,6 +1463,8 @@ const sessionManager = new SessionManager(registry, {
     telegramApi: telegram ? { token: TG_TOKEN!, getFile: (id: string) => telegram.getFile(id) } : undefined,
   },
   orchestration: {
+    // #117: `supermux applet …` from any session's shell.
+    appletOp: (sessionId, name, args) => handleAppletOp(appletService, name, args, { sessionId, publicUrl: exposedProxyLinksBaseUrl() }),
     // spawn_session: the app's create path, so the new session gets its workspace and the full frames.
     spawnSession: async (args) => {
       const trace = startTraces.begin()
@@ -1650,6 +1748,7 @@ async function onAssistantMessage(
         isMuted: () => !!registry.get(sessionId)?.mute,
         isInternal: () => !!registry.get(sessionId)?.internal,
         devices: () => pushStore.all().map((s) => s.device),
+        langOf: pushLangOf,
         presentOn: (sid) => viewingTracker.presentDevicesFor(sid),
         nativeSender,
         nativeDevices,
@@ -1772,7 +1871,7 @@ async function interruptSessionById(sessionId: string): Promise<{ ok: boolean; r
   return r
 }
 
-type FinishRequest = { action: FinishAction; skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string; /** #72: never archive the chat after a merge (the new UI's merge leaves it open). */ keep?: boolean }
+type FinishRequest = { action: FinishAction; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prTitle?: string; prBody?: string; /** #72: never archive the chat after a merge (the new UI's merge leaves it open). */ keep?: boolean }
 
 async function finishSessionById(sessionId: string, req: FinishRequest): Promise<FinishJob | { error: string }> {
   const s = registry.get(sessionId)
@@ -1782,9 +1881,12 @@ async function finishSessionById(sessionId: string, req: FinishRequest): Promise
   if (prev && prev.status !== "running") clearFinishJob(sessionId)
   // discard must stop the live agent BEFORE its worktree is force-removed
   if (req.action === "discard") await killSession(sessionId).catch(() => {})
-  const session = { id: sessionId, repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: s.session_branch, baseBranch: s.base_branch }
-  const cfg = loadFinishConfig(s.repo_root)
-  const opts: FinishJobOpts = { ...req, cleanup: false, prRequiresGreen: req.prRequiresGreen ?? cfg.prRequiresGreen }  // worktree removal handled by the archive path below
+  // #72: a chat follows its copy's branch (it can switch), so merge and PR use the branch checked out now. Discard
+  // removes the copy and only ever deletes the branch supermux made for it (session_branch), never one switched to.
+  const branch = req.action === "discard" ? s.session_branch : liveBranch(s.workdir)
+  if (!branch) return { error: "this chat isn't on a branch" }
+  const session = { id: sessionId, repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: branch, baseBranch: s.base_branch, keepBranch: s.source_kind === "existing" || s.source_kind === "pr" }
+  const opts: FinishJobOpts = { ...req, cleanup: false }  // worktree removal handled by the archive path below
   const sessionName = s.name
   return startFinishJob(session, opts, {
     onUpdate: (job) => webChannel?.broadcastToAll({ type: "finish_job", session: sessionId, job }),
@@ -1812,28 +1914,30 @@ async function onFinishTerminal(sessionId: string, sessionName: string, job: Fin
 function fireFinishPush(sessionName: string, sessionId: string, job: FinishJob): void {
   const o = job.outcome
   if (!o) return
-  let text: string | null = null
-  const br = sessionName
+  const vars: Record<string, string> = { branch: sessionName }
+  let key: MessageKey | null = null
   switch (o.status) {
-    case "integrated": text = `✅ Merged ${br} into ${o.base}`; break
-    case "pr_opened": text = `📤 PR opened for ${br}`; break
-    case "branch_published": text = `📤 Pushed ${br} — open the PR manually`; break
-    case "discarded": text = `🗑️ Discarded ${br}`; break
-    case "tests_failed": text = `❌ Tests failed in ${br}`; break
-    case "sync_conflict": case "dirty_overlap": text = `⚠️ Conflicts finishing ${br}`; break
-    case "push_auth_failed": text = `🔒 Push auth failed for ${br}`; break
-    case "push_rejected": text = `⚠️ Push rejected (diverged) for ${br}`; break
-    case "uncommitted": text = `⚠️ Uncommitted changes in ${br}`; break
-    case "no_verify": text = `⚠️ No verify configured for ${br}`; break
-    case "non_ff": text = `⚠️ ${br} — base moved, retry the merge`; break
-    case "error": text = `❌ Finish failed for ${br}`; break
+    case "integrated": key = "finish.integrated"; vars.base = o.base; break
+    case "pr_opened": key = "finish.pr_opened"; break
+    case "branch_published": key = "finish.branch_published"; break
+    case "discarded": key = "finish.discarded"; break
+    case "sync_conflict": case "dirty_overlap": key = "finish.conflicts"; break
+    case "push_auth_failed": key = "finish.push_auth_failed"; break
+    case "push_rejected": key = "finish.push_rejected"; break
+    case "uncommitted": key = "finish.uncommitted"; break
+    case "non_ff": key = "finish.non_ff"; break
+    case "error": key = "finish.error"; break
     // kept / nothing_to_do → no push
   }
-  if (!text) return
+  if (!key) return
+  const notice = key
+  // #123: each web device gets the notice in its language; native devices and the payload's own text are English.
   void firePushToAll({
     sender: pushSender, nativeSender, nativeDevices,
     devices: () => pushStore.all().map((s) => s.device),
-    payload: { session: sessionName, sessionId, text, ts: new Date().toISOString() },
+    langOf: pushLangOf,
+    textFor: (lang) => brokerText(lang, notice, vars),
+    payload: { session: sessionName, sessionId, text: brokerText("en", notice, vars), ts: new Date().toISOString() },
     trigger: "finish",
   }).catch((err) => log.warn("push_hook_failed", { err: err?.message ?? String(err) }))
 }
@@ -1843,7 +1947,7 @@ function finishReadinessById(sessionId: string): FinishReadiness | { error: stri
   if (!s) return { error: "no such session" }
   if (!s.repo_root || !s.session_branch || !s.base_branch) return { error: "session is not worktree-backed" }
   const cfg = loadFinishConfig(s.repo_root)
-  return computeReadiness({ repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: s.session_branch, baseBranch: s.base_branch, defaultAction: cfg.defaultAction, prRequiresGreen: cfg.prRequiresGreen })
+  return computeReadiness({ repoRoot: s.repo_root, worktreeDir: s.workdir, sessionBranch: liveBranch(s.workdir) ?? s.session_branch, baseBranch: s.base_branch, defaultAction: cfg.defaultAction })
 }
 
 const TASK_KIND: Record<TaskEvent["taskKind"], BgTaskKind> = {
@@ -2084,13 +2188,16 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   // pushed to every client and said in the chat; so is an account the API refused, and an
   // auto-switch that found no other account. A refused account's mark (set or cleared) reaches the
   // Accounts screens through accounts_changed.
-  adapter.on("account", (ev: { event: string; from?: string; to?: string; reason?: string; account?: string; resetsAt?: Date; background?: boolean }) => {
+  adapter.on("account", (ev: { event: string; from?: string; to?: string; reason?: string; why?: string; account?: string; resetsAt?: Date; background?: boolean }) => {
     if (ev.event === "switched" && ev.to) {
       applySessionAccount(sessionId, ev.to)
       const why = ev.reason === "limit" ? "usage limit reached"
         : ev.reason === "unavailable" ? `${brokerAccounts.label(ev.from)} is unavailable`
         : "switched manually"
-      void notifySession(sessionId, `Switched to ${brokerAccounts.label(ev.to)} — ${why}`)
+      // Why the auto-switch picked this account (#159): a seat in the same organization keeps the prompt cache warm.
+      const picked = ev.why === "same_org" ? "; same organization, so the prompt cache stays warm" : ev.why === "most_room" ? "; the account with the most room left" : ""
+      log.info("account_switched", { session: sessionId, from: ev.from, to: ev.to, reason: ev.reason, why: ev.why })
+      void notifySession(sessionId, `Switched to ${brokerAccounts.label(ev.to)} — ${why}${picked}`)
     } else if (ev.event === "exhausted") {
       // A limit with auto-resume on: the "waiting" event that follows says it, with the time.
       if (ev.reason === "limit" && accountsSettings().autoResume) return
@@ -2137,12 +2244,24 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
       options: ev.options,
       allowFreeText: ev.allowFreeText,
       blocking: ev.blocking,
+      ...(ev.reason ? { reason: ev.reason } : {}),
       ...(ev.subagentId ? { subagentId: ev.subagentId } : {}),
       ...(ev.subagentName ? { subagentName: ev.subagentName } : {}),
       ...(ev.subagentDescription ? { subagentDescription: ev.subagentDescription } : {}),
     }
     webChannel?.broadcastToAll({ type: "request_open", session: sessionId, request })
     const session = registry.get(sessionId)
+    // #143: a prompt blocks the agent until someone answers; a notification makes sure someone knows.
+    firePushForRequest({
+      sender: pushSender, sessionName: session?.name ?? sessionId, sessionId,
+      request: { requestId: ev.requestId, kind: ev.requestKind, title: ev.title, body: ev.body, options: ev.options, ...(ev.reason ? { reason: ev.reason } : {}) },
+      isInternal: () => !!registry.get(sessionId)?.internal,
+      devices: () => pushStore.all().map((s) => s.device),
+      presentOn: (sid) => viewingTracker.presentDevicesFor(sid),
+      nativeSender,
+      nativeDevices,
+      hostId: hostIdentity.hostId,
+    }).catch((err) => log.warn("push_hook_failed", { err: err?.message ?? String(err) }))
     const destination = resolveReplyTarget(sessionId)
     const addressed = parseAddress(destination)
     if (addressed?.channel === "telegram" && telegram) {
@@ -2160,12 +2279,16 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   })
   adapter.on("request-closed", (ev: { requestId: string; outcome: "answered" | "expired" | "cancelled"; answerLabel?: string }) => {
     childSettle.changed(sessionId)
+    // #143 (team rule): who answered, recorded with the close and logged.
+    const by = answeredBy.take(sessionId, ev.requestId)
+    log.info("request_closed", { session: sessionId, requestId: ev.requestId, outcome: ev.outcome, ...(ev.answerLabel ? { answer: ev.answerLabel } : {}), ...(by ? { answered_by: by } : {}) })
     webChannel?.broadcastToAll({
       type: "request_closed",
       session: sessionId,
       requestId: ev.requestId,
       outcome: ev.outcome,
       ...(ev.answerLabel ? { answerLabel: ev.answerLabel } : {}),
+      ...(by ? { answeredBy: by } : {}),
     })
     const destination = resolveReplyTarget(sessionId)
     const addressed = parseAddress(destination)
@@ -2187,6 +2310,51 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
       modelCache.set(agent, models)
       announceAgentModelsChanged([agent])
     },
+  })
+  // #146: the agent's own limit readings, and at each turn's end whether to compact before the wall.
+  adapter.on("rate-limits", (raw: unknown) => compactAdvisor.noteRateLimits(sessionId, adapter.kind, raw))
+  adapter.on("turn-start", () => compactAdvisor.turnStarted(sessionId))
+  adapter.on("cache-ttl", (ttl: "1h" | "5m") => compactAdvisor.noteCacheLife(sessionId, adapter.kind, ttl === "5m" ? 5 * 60_000 : 60 * 60_000))
+  adapter.on("turn-complete", () => { void compactAdvisor.turnCompleted(sessionId, adapter.kind, contextUsage.get(sessionId)?.used) })
+  // #144: a compaction starts (every client shows it at once) and ends as a "Compacted" line kept in the chat.
+  adapter.on("compaction", (c: { compactionId: string; status: "in_progress" | "completed" | "failed" | "cancelled"; before?: number; after?: number; trigger?: "manual" | "auto"; summary?: string; error?: string }) => {
+    webChannel?.broadcastToAll({ type: "compaction", session: sessionId, id: c.compactionId, status: c.status })
+    if (c.status === "in_progress") return
+    if (c.status === "completed") compactAdvisor.compacted(sessionId)
+    const pending = pendingCompacts.get(sessionId)
+    pendingCompacts.delete(sessionId)
+    const note = pending?.note
+    // Who started it: whoever asked through the Compact route (or #146's automatic mode); the agent on its own.
+    const actor: CompactionActor | undefined = pending?.actor ?? (c.trigger === "auto" ? { kind: "agent" } : undefined)
+    if (c.status === "completed" && c.after != null) {
+      // The window holds what the compaction left: the ring drops now, not at the next request.
+      const size = contextUsage.get(sessionId)?.size
+      if (size != null) {
+        contextUsage.set(sessionId, { used: c.after, size })
+        webChannel?.broadcastToAll({ type: "context_usage", session: sessionId, used: c.after, size })
+      }
+    }
+    const id = `compaction:${sessionId}:${c.compactionId}:${Date.now()}`
+    const entry = {
+      // The text is for apps that predate the line (they show it as a reply); new ones draw `compaction`.
+      id, ts: new Date().toISOString(), direction: "outbound" as const, channel: "web", chat_id: "web", op: "compaction" as const, text: compactionText(c),
+      compaction: {
+        status: c.status,
+        ...(c.before != null ? { before: c.before } : {}), ...(c.after != null ? { after: c.after } : {}),
+        ...(c.trigger ? { trigger: c.trigger } : {}), ...(note ? { note } : {}), ...(actor ? { actor } : {}),
+        ...(c.summary ? { summary: c.summary } : {}), ...(c.error ? { error: c.error } : {}),
+      },
+    }
+    try {
+      messageLog.append(sessionId, entry)
+      // An outbound web row is not mirrored by the log's listener (the web channel sends its own): send this one here.
+      webChannel?.broadcastToAll({ type: "message_append", session: sessionId, entry })
+    } catch (err: any) { log.error("compaction_line_failed", { session: sessionId, err: err?.message ?? String(err) }) }
+  })
+  // How full the agent's context window is (#144): kept for the snapshot, pushed to every client as it changes.
+  adapter.on("context-update", (ctx: { used: number; size: number }) => {
+    contextUsage.set(sessionId, { used: ctx.used, size: ctx.size })
+    webChannel?.broadcastToAll({ type: "context_usage", session: sessionId, used: ctx.used, size: ctx.size })
   })
   adapter.on("commands-update", () => {
     const name = registry.get(sessionId)?.name
@@ -2237,7 +2405,7 @@ try {
 const worktreeService = new WorktreeService({
   root: worktreesRoot(),
   owners: () => registry.db
-    .query("SELECT id, name, status, user_status, workdir, base_branch, session_branch FROM sessions")
+    .query("SELECT id, name, status, user_status, workdir, base_branch, session_branch, source_kind FROM sessions")
     .all() as OwnerRow[],
   broadcast: (frame) => webChannel?.broadcastToAll(frame),
   watch: (dir, onEvent) => watchDir(dir, onEvent),
@@ -2250,6 +2418,40 @@ const worktreeService = new WorktreeService({
 const proxyLivenessMonitor = new ProxyLivenessMonitor({
   listTargets: () => registry.listProxies().map((p) => ({ domain: p.domain, port: p.port })),
   onChange: (domain, status) => webChannel?.broadcastToAll({ type: "proxy_status", domain, status }),
+})
+// #117: the host's applets (~/.mux/applets/<name>/), served at /a/<name>/ and kept running with no session involved.
+// Started after webChannel.start(); servers outlive a broker restart and are adopted by the next one.
+const appletService = new AppletService({
+  db, appletsDir: join(MUX_HOME, "applets"), stateDir: join(STATE_DIR, "applets"), backupsDir: join(MUX_HOME, "backups", "applets"),
+  rescanMs: 15_000, jobTickMs: 30_000, maintenanceMs: 10 * 60_000, widgetMs: 15 * 60_000, settings,
+  brokerUrl: () => (webChannel?.boundPort ? `http://127.0.0.1:${webChannel.boundPort}` : undefined),
+  actorName: (by) => by.startsWith("agent:") ? registry.get(by.slice("agent:".length))?.name : undefined,
+  // supermux.agent.ask: the applet's own chat (a visible session in its folder), or the named Agent's.
+  ask: async (applet, text, opts) => {
+    let target = opts.agent ? registry.resolveName(opts.agent) : (opts.chatId ? registry.get(opts.chatId) : undefined)
+    if (opts.agent && (!target || target.role !== "personal_assistant")) throw new Error(`no Agent named "${opts.agent}"`)
+    if (!target) {
+      const made = await createSessionWithWorkspace({ workdir: applet.folder, name: `${applet.title} applet`, worktree: false, asleep: true })
+      target = registry.get(made.id)
+      if (!target) throw new Error("the chat could not be made")
+    }
+    // Answered as soon as the message is in the chat: waking the agent can take a while, and the page is waiting.
+    const chat = target
+    if (!text) return { sessionId: chat.id, name: chat.name }
+    void deliverUserMessage(chat.id, text).then((sent) => { if (!sent.ok) log.warn("applet_ask_not_delivered", { session: chat.name, reason: sent.reason }) })
+    return { sessionId: chat.id, name: chat.name }
+  },
+  // supermux.notify: every device, like a broker notice; the applet's title is the sender.
+  notify: async (applet, title, body) => {
+    await firePushToAll({
+      sender: pushSender, nativeSender, nativeDevices,
+      devices: () => pushStore.all().map((s) => s.device),
+      payload: { session: applet.title, text: body ? `${title}: ${body}` : title, ts: new Date().toISOString(), applet: applet.name },
+      trigger: "applet_notify",
+    })
+  },
+  // No payload: a device showing applets reloads GET /applets (older apps skip the unknown frame).
+  onChange: () => webChannel?.broadcastToAll({ type: "applets_changed" }),
 })
 // loginManager is declared here (before webChannel opts, which close over it) and
 // assigned after webChannel is constructed (so its onChange can reference webChannel).
@@ -2275,9 +2477,17 @@ const workspaceService = new WorkspaceService(
     archiveSession: async (id) => {
       const s = registry.get(id)
       if (!s) return
-      await killSession(s.id)
-      unregisterSession(s.id)
-      webChannel?.broadcastToAll({ type: "session_removed", id: s.id })
+      // #151: the tab is already gone, so the session is archived whatever the kill does: never left half-alive.
+      try {
+        await killSession(s.id)
+      } finally {
+        unregisterSession(s.id)
+        webChannel?.broadcastToAll({ type: "session_removed", id: s.id })
+      }
+    },
+    onViewClosed: (e) => {
+      if (e.ok) log.info("view_closed", e)
+      else log.error("view_closed", e)
     },
     resumeSession: async (id) => {
       const r = await resumeFromArchive(id)
@@ -2423,6 +2633,7 @@ function sessionAddedPayload(entry: Session) {
     limitWait: limitWaitFields(limitWaits.get(entry.id)),
     repo_root: entry.repo_root || undefined,
     session_branch: entry.session_branch || undefined,
+    ...sessionSourceFields(entry),
     finish_job: entry.finish_job,
     user_status: entry.user_status,
     sort_order: entry.sort_order,
@@ -2884,9 +3095,12 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         permissionMode: resolvePermissionMode(s.agent, s.permissionMode),
         ...sessionAccountFields(s),
         limitWait: limitWaitFields(limitWaits.get(s.id)),
+        context: contextUsage.get(s.id),
+        compactAdvice: compactAdvisor.current(s.id),
         status: s.status,
         session_branch: s.session_branch || undefined,
         repo_root: s.repo_root || undefined,
+        ...sessionSourceFields(s),
         git: gitStatusService.get(s.id),
         finish_job: s.finish_job,
         user_status: s.user_status,
@@ -2908,6 +3122,19 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     getSessionActivity: (id) => {
       const s = registry.get(id)
       return s ? activityStore.get(s.id) : []
+    },
+    compactSession: (id, note, actor) => compactSession(id, note, actor),
+    getSessionContext: async (id) => {
+      const s = registry.get(id)
+      if (!s) return undefined
+      // #144: the core adapter asks its agent what fills the window and counts the tools this chat started.
+      const adapter = sessionManager.adapterFor(s.id) as unknown as {
+        contextBreakdown?: () => Promise<import("../packages/supermux-core/src/types.js").ContextBreakdown | undefined>
+        toolUses?: Map<string, number>
+      } | undefined
+      const breakdown = await adapter?.contextBreakdown?.()
+      const used = [...(adapter?.toolUses ?? new Map<string, number>())].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count)
+      return { ...(contextUsage.has(s.id) ? { context: contextUsage.get(s.id) } : {}), ...(breakdown ? { breakdown } : {}), used }
     },
     getSessionAgentState: (id) => {
       const s = registry.get(id)
@@ -2958,6 +3185,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     },
     onSendFromWeb: () => {},                                // wired below via webChannel.on('inbound')
     fileStore,
+    userPrefs: new UserPrefs(db),
     htmlPages,
     findCard: (session, id) => messageLog.findCard(session, id),
     pushStore,
@@ -3011,11 +3239,12 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       const adapter = s ? sessionManager.adapterFor(s.id) : undefined
       return adapter?.openRequests?.() ?? []
     },
-    respondRequest: async (sessionId, requestId, answer) => {
+    respondRequest: async (sessionId, requestId, answer, who) => {
       const s = registry.get(sessionId)
       if (!s) return { ok: false, error: "session not found" }
       const adapter = sessionManager.adapterFor(s.id)
       if (!adapter?.respondRequest) return { ok: false, error: "session cannot answer requests" }
+      if (who?.by) answeredBy.note(s.id, requestId, who.by)
       try {
         await adapter.respondRequest(requestId, answer as import("./core/agents/types").RequestAnswerInput)
         return { ok: true }
@@ -3068,6 +3297,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         perfTrace: trace,
         // Card #75: answered as soon as the session exists; its agent starts on the wake below.
         asleep: true,
+        source: args.source,
+        createdBy: args.createdBy,
       }).catch((err) => {
         startTraces.mark(trace, "failed", { ms: msSince(t0), err: String(err).slice(0, 200) })
         throw err
@@ -3293,7 +3524,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       if (!v) throw new Error("view not found")
       return viewDto(v)
     },
-    closeWorkspaceView: async (viewId) => { await workspaceService.closeView(viewId) },
+    // #151: answer once the view is gone; ending its work (the agent's exit, a shell's) follows in the background.
+    closeWorkspaceView: async (viewId) => { workspaceService.beginClose(viewId) },
     moveWorkspaceView: (viewId, toWorkspaceId, toGroupId) =>
       registry.workspaces.moveView(viewId, toWorkspaceId, toGroupId),
     getWorkspaceWorkdir: (id) => registry.workspaces.getById(id)?.workdir,
@@ -3326,6 +3558,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       return { port: entry.port, sessionName: entry.sessionName, isPublic: entry.isPublic }
     },
     proxyAuth: (token: string) => !!proxyDeviceStore.verify(token),
+    applets: appletService,
     proxyLinksBaseUrl: exposedProxyLinksBaseUrl,
     listProxies: () => registry.listProxies().map((e) => proxyWsPayload(e, proxyLivenessMonitor.getStatus(e.domain))),
     createProxy: (args) => {
@@ -3369,6 +3602,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     startDisplay: (args) => displayManager.start({ sessionDisplayName: args.sessionName, provider: args.provider as any, device: args.device, width: args.width, height: args.height }),
     stopDisplay: (id) => displayManager.stop(id),
     getSessionWorkdir: (id) => registry.get(id)?.workdir,
+    // #72: a PR's title and description, by a one-shot agent worker (agent-rpc), like voice clean-up.
+    writePrText: (input) => agentRpc.callAgent({ key: "pr-text", taskType: "pr_text", payload: input, timeoutMs: 45_000 }),
     getSessionGitBase: (id) => {
       const s = registry.get(id)
       return s?.repo_root && s.base_branch && s.base_branch !== "HEAD" ? { repoRoot: s.repo_root, base: s.base_branch } : undefined
@@ -3449,15 +3684,17 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         const account = s.account || `${s.agent}:system`
         return !!limitWaits.wait(s.id, { account, resetsAt: new Date(Date.now() + minutes * 60_000), background: false })
       },
-      getSettings: () => ({ autoSwitch: accountsSettings().autoSwitch, autoResume: accountsSettings().autoResume }),
+      getSettings: () => ({ autoSwitch: accountsSettings().autoSwitch, autoResume: accountsSettings().autoResume, compactBeforeWait: accountsSettings().compactBeforeWait }),
       setSettings: (patch) => {
         if (patch.autoSwitch !== undefined && typeof patch.autoSwitch !== "boolean") throw new AccountsApiError(400, "autoSwitch must be a boolean", "invalid_input")
         if (patch.autoResume !== undefined && typeof patch.autoResume !== "boolean") throw new AccountsApiError(400, "autoResume must be a boolean", "invalid_input")
+        if (patch.compactBeforeWait !== undefined && typeof patch.compactBeforeWait !== "boolean") throw new AccountsApiError(400, "compactBeforeWait must be a boolean", "invalid_input")
+        if (typeof patch.compactBeforeWait === "boolean") settings.set(SETTINGS_KEY_ACCOUNTS, { ...accountsSettings(), compactBeforeWait: patch.compactBeforeWait })
         if (typeof patch.autoSwitch === "boolean") settings.set(SETTINGS_KEY_ACCOUNTS, { ...accountsSettings(), autoSwitch: patch.autoSwitch })
         if (typeof patch.autoResume === "boolean") settings.set(SETTINGS_KEY_ACCOUNTS, { ...accountsSettings(), autoResume: patch.autoResume })
         // Turned off: nothing that waits now resumes by itself.
         if (patch.autoResume === false) for (const wait of limitWaits.list()) limitWaits.cancel(wait.sessionId)
-        const next = { autoSwitch: accountsSettings().autoSwitch, autoResume: accountsSettings().autoResume }
+        const next = { autoSwitch: accountsSettings().autoSwitch, autoResume: accountsSettings().autoResume, compactBeforeWait: accountsSettings().compactBeforeWait }
         webChannel?.broadcastToAll({ type: "accounts_settings", ...next })
         return next
       },
@@ -3511,19 +3748,6 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     sendUserMessage: (id, text) => deliverUserMessage(id, text),
     getWalkthrough: (id) => walkthroughStore.getCurrent(id),
     reviewSession: (id) => { const s = registry.get(id); return s ? { workdir: s.workdir, repoRoot: s.repo_root ?? undefined, baseCommits: s.base_commits ?? undefined } : undefined },
-    verifySuggest: (id) => { const s = registry.get(id); return s?.repo_root && s.session_branch ? suggestVerify(s.workdir) : undefined },
-    verifySave: (id, content) => {
-      const s = registry.get(id)
-      if (!s?.repo_root || !s.session_branch) return { ok: false, reason: "session is not worktree-backed" }
-      try {
-        const dir = join(s.workdir, ".mux")
-        mkdirSync(dir, { recursive: true })
-        const p = join(dir, "verify.sh")
-        writeFileSync(p, content.endsWith("\n") ? content : content + "\n")
-        platformFiles.makeExecutable(p)
-        return { ok: true }
-      } catch (err: any) { return { ok: false, reason: err?.message ?? String(err) } }
-    },
     getForgeConnections: () => forgeService.connections(),
     getForgeCliStatus: () => detectForgeClis(),
     addForgeConnection: (o) => forgeService.addConnection(o as any),
@@ -3782,7 +4006,7 @@ const killSession = (id: string) => sessionManager.kill(id)
 // base commits review diffs against, and the git pane starts watching it. A checkout that fails fails
 // the start with git's reason; it never falls back to the main repo. No-op when the workdir is
 // healthy or the session isn't worktree-backed.
-async function ensureSessionWorktree(session: { id: string; name: string; workdir: string; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null }): Promise<void> {
+async function ensureSessionWorktree(session: { id: string; name: string; workdir: string; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null; source_kind?: string | null }): Promise<void> {
   if (!session.repo_root || !session.session_branch) return
   if (existsSync(session.workdir) && readdirSync(session.workdir).length > 0) return
   const t = performance.now()
@@ -3792,6 +4016,8 @@ async function ensureSessionWorktree(session: { id: string; name: string; workdi
     workdir: session.workdir,
     sessionBranch: session.session_branch,
     baseBranch: session.base_branch || "HEAD",
+    // #152: a branch the user picked is theirs, checked out as it is.
+    asIs: session.source_kind === "existing" || session.source_kind === "pr",
     onCheckedOut: () => { checkoutsInFlight.delete(session.workdir) },
   }).finally(() => { checkoutsInFlight.delete(session.workdir) })
   startTraces.markSession(session.id, "worktree", { ms: msSince(t), created })
@@ -3861,6 +4087,16 @@ const server = await startSocketServer({
     onRegister: (m) => sessionManager.handleRegister(m),
     onOutbound: (m) => sessionManager.handleOutbound(m),
     onOrchestration: (m) => sessionManager.handleOrchestration(m),
+  },
+  // #156: is a connection's process part of the socket's session? Its root is the session's keeper (a persistent-runtime
+  // session's own pid). MUX_PEER_AUTH: "log" (default while it beds in: would-be denials are only logged) | "enforce" | "off".
+  peerAuth: {
+    mode: (["off", "log", "enforce"] as const).find((m) => m === process.env.MUX_PEER_AUTH) ?? "log",
+    check: async (session_id, socket) => {
+      const s = registry.get(session_id)
+      const root = !s ? undefined : isPersistentRuntimeSession(s) ? (s.pid || undefined) : await keeperPidOf(join(STATE_DIR, "core", s.agent), s.id)
+      return checkPeer(socket, root)
+    },
   },
 })
 
@@ -3999,6 +4235,9 @@ async function spawnSessionDirect(args: {
   worktreeHandle?: WorktreeHandle
   /** Card #75: this start's trace id (StartTraces.begin), when tracing is on. */
   perfTrace?: string
+  /** #152: what the launcher picked, and who asked (JSON). */
+  source?: SessionSource
+  createdBy?: string
 }) {
   const agent = args.agent ?? AgentKind.Claude
   const trace = args.perfTrace
@@ -4231,6 +4470,8 @@ async function spawnSession(args: SpawnSessionArgs): Promise<{ name: string; ses
     workspaceId: args.workspaceId,
     id: args.id,
     worktreeHandle: args.worktreeHandle,
+    source: args.source,
+    createdBy: args.createdBy,
   }).catch((err) => {
     startTraces.mark(trace, "create_failed", { ms: msSince(t), err: String(err).slice(0, 200) })
     throw err
@@ -4240,7 +4481,8 @@ async function spawnSession(args: SpawnSessionArgs): Promise<{ name: string; ses
   startTraces.mark(trace, "row", { ms: msSince(t), session: row.id, worktree: !!row.session_branch })
   // What this start made, read now: the copy below writes a peer's worktree fields into the same row
   // object, and a failed start must remove only its own branch, never the peer's checkout.
-  const made = row.session_branch && row.repo_root && !args.worktreeHandle
+  // #152: a branch the user picked, or another session's copy, was not made by this start.
+  const made = row.session_branch && row.repo_root && !args.worktreeHandle && (!row.source_kind || row.source_kind === "new")
     ? { repoRoot: row.repo_root, workdir: row.workdir, branch: row.session_branch }
     : undefined
   if (!row.session_branch) {
@@ -4418,6 +4660,8 @@ ch.on("inbound", async (msg: InboundMessage) => {
     text: (msg.text ?? "").slice(0, 80),
     reply_to: msg.reply_to_message_id,
   })
+  // #123: this channel's replies are worded in the sender's language (Telegram's language_code), English otherwise.
+  const lang = brokerLang(msg.lang)
   const decision = classifyInbound(
     { chat_id: msg.chat_id, text: msg.text ?? "", reply_to: msg.reply_to_message_id },
     registry,
@@ -4439,6 +4683,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
       messageLog,
       chat_id: msg.chat_id,
       fromSession: undefined,
+      lang: msg.lang,
       spawnSession: async (workdir: string, name?: string, agent?: AgentKind, model?: string, reasoningLevel?: string, permissionMode?: string) => {
         const r = await spawnSession({ workdir, requestedName: name, agent, model, reasoningLevel, permissionMode })
         // The row exists when spawnSession resolves (all agents) — flip the
@@ -4480,8 +4725,8 @@ ch.on("inbound", async (msg: InboundMessage) => {
 
   if (decision.kind === "error") {
     const text = decision.reason === "no_active_session"
-      ? "No active session. Create one in the app, or use /spawn <workdir> [as name]."
-      : `routing error: ${decision.reason}`
+      ? brokerText(lang, "chat.no_active_session")
+      : brokerText(lang, "chat.routing_error", { reason: decision.reason })
     await ch.send({ op: "reply", chat_id: msg.chat_id, text, disable_notification: false })
     return
   }
@@ -4489,14 +4734,14 @@ ch.on("inbound", async (msg: InboundMessage) => {
   // session route
   const session = registry.get(decision.id)
   if (!session) {
-    await ch.send({ op: "reply", chat_id: msg.chat_id, text: `no such session: ${decision.name}`, disable_notification: false })
+    await ch.send({ op: "reply", chat_id: msg.chat_id, text: brokerText(lang, "cmd.no_such_session", { name: decision.name }), disable_notification: false })
     return
   }
 
   // A suspended session is woken by this message on its chain, after it is logged (below); a failed
   // wake is said in this chat once. Telegram shows no "starting", so it says so here.
   if (session.status === "suspended") {
-    await ch.send({ op: "reply", chat_id: msg.chat_id, text: `Resuming session "${session.name}"...`, disable_notification: true })
+    await ch.send({ op: "reply", chat_id: msg.chat_id, text: brokerText(lang, "chat.resuming", { name: session.name }), disable_notification: true })
   }
 
   const activeId = registry.getActive(msg.chat_id)
@@ -4512,7 +4757,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
           await adapter.respondRequest(open.requestId, answer)
           const label = open.options.find((o) => o.id === ("optionId" in answer ? answer.optionId : undefined))?.label
             ?? decision.text
-          await ch.send({ op: "reply", chat_id: msg.chat_id, text: `answered: ${label}`, disable_notification: true })
+          await ch.send({ op: "reply", chat_id: msg.chat_id, text: brokerText(lang, "chat.answered", { label }), disable_notification: true })
         } catch (err) {
           log.warn("request_respond_failed", { session: session.id, err: String(err) })
         }
@@ -4556,7 +4801,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
       log.warn("send_inbound.adapter_missing", { session: session.name, agent: session.agent ?? "claude" })
       await ch.send({
         op: "reply", chat_id: msg.chat_id,
-        text: `⚠ ${session.agent ?? "claude"} session "${session.name}" is not responding (adapter disconnected). Try /kill + re-spawn.`,
+        text: brokerText(lang, "chat.not_responding", { agent: session.agent ?? "claude", name: session.name }),
         disable_notification: false,
       })
     } else {
@@ -5001,6 +5246,7 @@ telemetry.start()
 // meaningful with a web channel, but harmless otherwise; onChange no-ops when
 // webChannel is undefined.
 proxyLivenessMonitor.start()
+void appletService.start().catch((err) => log.warn("applets_start_failed", { err: err?.message ?? String(err) }))
 worktreeService.start()
 if (!IS_TEST_BROKER) {
   // The lists learned last run answer GET /models at once; the refresh below replaces them.
@@ -5123,6 +5369,9 @@ async function gracefulShutdown(signal: string) {
   try {
     proxyLivenessMonitor.stop()
   } catch (err: any) { log.warn("proxy_liveness_stop_failed", { err: err?.message }) }
+  try {
+    appletService.shutdown()
+  } catch (err: any) { log.warn("applets_shutdown_failed", { err: err?.message }) }
   try {
     if (webChannel) await webChannel.stop()
   } catch (err: any) { log.warn("webChannel_stop_failed", { err: err?.message }) }

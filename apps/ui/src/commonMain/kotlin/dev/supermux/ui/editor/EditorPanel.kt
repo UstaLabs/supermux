@@ -13,6 +13,8 @@
 // shared [MarkdownBody] (cluster D2).
 package dev.supermux.ui.editor
 
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.Str
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
@@ -341,7 +343,7 @@ fun EditorPanel(
                 ) {
                     Icon(
                         imageVector = if (treeVisible) Icons.Filled.KeyboardArrowDown else Icons.Filled.FolderOpen,
-                        contentDescription = if (treeVisible) "Hide file tree" else "Show file tree",
+                        contentDescription = localized(if (treeVisible) Str.editor_hide_tree else Str.editor_show_tree),
                         tint = cs.onSurface,
                         modifier = Modifier.size(18.dp),
                     )
@@ -358,7 +360,7 @@ fun EditorPanel(
                     IconButton(onClick = { haptic.perform(HapticKind.Tick); editor.previewMode = !editor.previewMode }) {
                         Icon(
                             imageVector = if (editor.previewMode) Icons.Filled.Edit else Icons.Filled.Visibility,
-                            contentDescription = if (editor.previewMode) "Edit" else "Preview",
+                            contentDescription = localized(if (editor.previewMode) Str.editor_edit else Str.editor_preview),
                             tint = if (editor.previewMode) cs.primary else cs.onSurfaceVariant,
                             modifier = Modifier.size(18.dp),
                         )
@@ -384,7 +386,7 @@ fun EditorPanel(
                     ) {
                         Icon(
                             imageVector = Icons.Filled.Difference,
-                            contentDescription = "View changes",
+                            contentDescription = localized(Str.editor_view_changes),
                             tint = cs.onSurfaceVariant,
                             modifier = Modifier.size(18.dp),
                         )
@@ -408,7 +410,7 @@ fun EditorPanel(
                     ) {
                         Icon(
                             imageVector = Icons.Filled.Check,
-                            contentDescription = "Save",
+                            contentDescription = localized(Str.shell_save),
                             tint = if (editor.activeTab?.let { editor.isDirty(it.path) } == true) {
                                 cs.primary
                             } else {
@@ -477,7 +479,7 @@ fun EditorPanel(
                                     modifier = Modifier.size(16.dp),
                                 )
                                 Text(
-                                    "File changed on disk",
+                                    localized(Str.editor_changed_on_disk),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = cs.onErrorContainer,
                                     modifier = Modifier.weight(1f).padding(start = Space.sm),
@@ -486,7 +488,7 @@ fun EditorPanel(
                                     onClick = { scope.launch { editor.reload(activeTab.path, actions.fsRead) } },
                                     modifier = Modifier.heightIn(min = 36.dp).testTag("editor_reload"),
                                 ) {
-                                    Text("Reload", style = MaterialTheme.typography.labelLarge)
+                                    Text(localized(Str.editor_reload), style = MaterialTheme.typography.labelLarge)
                                 }
                             }
                         }
@@ -555,7 +557,7 @@ fun EditorPanel(
                                     contentAlignment = Alignment.Center,
                                 ) {
                                     Text(
-                                        "Open a file from the tree or search",
+                                        localized(Str.editor_empty),
                                         color = cs.onSurfaceVariant,
                                         fontSize = 13.sp,
                                     )
@@ -678,7 +680,7 @@ private fun EditorTreeSidebar(
     val cs = MaterialTheme.colorScheme
     if (fileSystem == null) {
         Box(Modifier.fillMaxSize().testTag("editor_tree"), contentAlignment = Alignment.Center) {
-            Text("Host offline", color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.testTag("editor_tree_offline"))
+            Text(localized(Str.editor_host_offline), color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.testTag("editor_tree_offline"))
         }
         return
     }

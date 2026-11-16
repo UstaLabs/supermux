@@ -26,5 +26,8 @@
     <true/>
     <key>com.apple.security.device.audio-input</key>
     <true/>
+    <!-- A website in a Browser tab may use the camera once the user allows it (#157). -->
+    <key>com.apple.security.device.camera</key>
+    <true/>
 </dict>
 </plist>

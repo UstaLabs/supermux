@@ -74,10 +74,10 @@ class LauncherFirstRunTest {
     }
 
     @Test fun failure_wording_prefers_the_broker_and_falls_back_only_for_the_network() {
-        assertEquals("A folder named x already exists", hostOpFailureMessage("create x", BrokerRefusal("A folder named x already exists")))
-        assertEquals("Couldn't create x (HTTP 500).", hostOpFailureMessage("create x", BrokerRefusal("", status = 500)))
-        assertEquals("Couldn't create x — check the connection and try again.", hostOpFailureMessage("create x", IOException("reset")))
-        assertEquals("Couldn't create x — check the connection and try again.", hostOpFailureMessage("create x", null))
+        assertEquals("A folder named x already exists", hostOpFailure("Couldn't create x", BrokerRefusal("A folder named x already exists")))
+        assertEquals("Couldn't create x (HTTP 500).", hostOpFailure("Couldn't create x", BrokerRefusal("", status = 500)))
+        assertEquals("Couldn't create x — check the connection and try again.", hostOpFailure("Couldn't create x", IOException("reset")))
+        assertEquals("Couldn't create x — check the connection and try again.", hostOpFailure("Couldn't create x", null))
     }
 
     @Test fun refusalOrNull_throws_the_refusal_and_nulls_a_network_failure() = runBlocking {
@@ -136,7 +136,7 @@ class LauncherFirstRunTest {
             isThisComputer = { thisComputer },
         ),
         loadDraft = { draft },
-        onSubmit = { w, a, _, _, _, _, _, _, _, _, _ -> onSubmit(w, a) },
+        onSubmit = { w, a, _, _, _, _, _, _, _, _, _, _ -> onSubmit(w, a) },
     )
 
     // ── first-project screen ────────────────────────────────────────────────────────────────────

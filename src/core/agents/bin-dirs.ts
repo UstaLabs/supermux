@@ -163,3 +163,8 @@ export function withNodeBinDirs(path: string | undefined, home: string, platform
   if (platform === "win32") return path ?? ""
   return prependDirs(path, nodeBinDirs(home), platform)
 }
+
+/** `path` with `dir` first (moved there if already present elsewhere it stays; deduped, order otherwise preserved). */
+export function withDirFirst(path: string | undefined, dir: string, platform: NodeJS.Platform = host.os()): string {
+  return prependDirs(path, [dir], platform)
+}

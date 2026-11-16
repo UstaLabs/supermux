@@ -1,0 +1,14 @@
+{
+  "type": "session_added",
+  "session": {
+    "id": "6f1c2a9e-3b7d-4e2a-9c1f-1d2e3f4a5b6c",
+    "name": "Fix login redirect loop",
+    "workdir": "/home/user/.mux/worktrees/storefront/feat-login-redirect",
+    "agent": "claude",
+    "repo_root": "/home/user/code/storefront",
+    "session_branch": "feat/login-redirect",
+    "source": "pr",
+    "pr": { "forge": "github", "number": 123, "url": "https://github.com/acme/storefront/pull/123" },
+    "push_remote": "origin"
+  }
+}

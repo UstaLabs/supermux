@@ -172,6 +172,19 @@ createInterface({input:process.stdin}).on('line',line=>{
   done(current)
   return
  }
+ if(m.method==='thread/compact/start'){
+  // Real 0.164: {} back, then the compaction runs as a turn of its own (item contextCompaction).
+  reply({})
+  const id='turn-'+(++turn)
+  running.add(id)
+  setTimeout(()=>{
+   send({method:'turn/started',params:{threadId:thread,turn:{id,status:'inProgress'}}})
+   send({method:'item/started',params:{threadId:thread,turnId:id,item:{type:'contextCompaction',id:'cc-'+id}}})
+   send({method:'item/completed',params:{threadId:thread,turnId:id,item:{type:'contextCompaction',id:'cc-'+id}}})
+   done(id)
+  },5)
+  return
+ }
  if(m.method==='turn/interrupt'){if(!running.has(m.params.turnId)||completed.has(m.params.turnId)){send({id:m.id,error:{code:-1,message:'no active turn to interrupt'}});return}reply({});done(m.params.turnId,'interrupted')}
  if(m.method==='turn/steer'){reply({turnId:m.params.expectedTurnId});done(m.params.expectedTurnId)}
 })

@@ -43,6 +43,8 @@ import dev.supermux.ui.DiffLineKind
 import dev.supermux.ui.editor.minimalChange
 import dev.supermux.ui.editor.rememberSyntaxBackend
 import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.theme.Space
 
 /** A tool pane shows this many lines before "Show all". */
@@ -75,9 +77,11 @@ internal fun ToolCodeEditor(
     tag: String = "tool_code_editor",
 ) {
     val syntax = LocalPlatform.current.editorSyntax
+    val addedWord = localized(Str.chatline_tool_line_added)
+    val removedWord = localized(Str.chatline_tool_line_removed)
     // A diff is rebuilt whole (its decorations are by line); plain text streams into one view.
-    val view = remember(language, lineKinds, if (lineKinds != null) text else null) {
-        val extensions = extensionOf(highlight(language), lineKinds?.let { diffLines(text, it) } ?: extensionOf())
+    val view = remember(language, lineKinds, if (lineKinds != null) text else null, addedWord, removedWord) {
+        val extensions = extensionOf(highlight(language), lineKinds?.let { diffLines(text, it, addedWord, removedWord) } ?: extensionOf())
         EditorView(EditorState.create(text, extensions = extensions))
     }
     LaunchedEffect(view, text) {
@@ -119,7 +123,7 @@ internal fun ToolCodeEditor(
         }
         if (lineCount > maxLines) {
             Text(
-                text = if (expanded) "Show less" else "Show all $lineCount lines",
+                text = if (expanded) localized(Str.chatline_tool_show_less) else localized(Str.chatline_tool_show_all_lines, lineCount),
                 color = toggleColor,
                 fontSize = 11.sp,
                 modifier = Modifier
@@ -132,7 +136,7 @@ internal fun ToolCodeEditor(
 }
 
 /** [text]'s lines tinted by [kinds]: added and removed lines (background and a gutter bar), headers. */
-private fun diffLines(text: String, kinds: List<DiffLineKind>): Extension {
+private fun diffLines(text: String, kinds: List<DiffLineKind>, added: String, removed: String): Extension {
     val lines = ArrayList<Ranged<Decoration>>()
     val marks = ArrayList<Ranged<Decoration>>()
     val bars = ArrayList<Ranged<GutterMarker>>()
@@ -143,11 +147,11 @@ private fun diffLines(text: String, kinds: List<DiffLineKind>): Extension {
         when (kind) {
             DiffLineKind.ADD -> {
                 lines += Ranged(start, start, Decoration.LineStyle(setOf("diff-add")))
-                bars += Ranged(start, start, GutterMarker("diff", "diff-add", "added"))
+                bars += Ranged(start, start, GutterMarker("diff", "diff-add", added))
             }
             DiffLineKind.REMOVE -> {
                 lines += Ranged(start, start, Decoration.LineStyle(setOf("diff-remove")))
-                bars += Ranged(start, start, GutterMarker("diff", "diff-remove", "removed"))
+                bars += Ranged(start, start, GutterMarker("diff", "diff-remove", removed))
             }
             DiffLineKind.META -> {
                 lines += Ranged(start, start, Decoration.LineStyle(setOf(TOOL_DIFF_META)))

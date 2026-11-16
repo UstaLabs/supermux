@@ -1,0 +1,196 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #123: the platform hosts — the desktop window's menus, tray, hosting wizard, dialogs and background-service notices,
+     the desktop overlay's hold-to-talk settings; Android's chat screen, overlay, push and update notifications (and
+     their channel names); the web pairing screen and push banner; iOS's second window. English, the source;
+     values-tr/hosts.xml has the same keys (tests/i18n-strings.test.ts). -->
+<resources>
+    <!-- Desktop: the main menu -->
+    <string name="host_app_desktop_menu_file">File</string>
+    <string name="host_app_desktop_menu_new_session">New Session</string>
+    <string name="host_app_desktop_menu_new_terminal">New Terminal</string>
+    <string name="host_app_desktop_menu_move_workspace">Move workspace to New Window</string>
+    <string name="host_app_desktop_menu_move_group">Move group to New Window</string>
+    <string name="host_app_desktop_menu_archived">Archived…</string>
+    <string name="host_app_desktop_menu_displays">Displays…</string>
+    <string name="host_app_desktop_menu_usage">Usage…</string>
+    <string name="host_app_desktop_menu_check_updates">Check for Updates…</string>
+    <string name="host_app_desktop_menu_unpair">Unpair…</string>
+    <string name="host_app_desktop_menu_view">View</string>
+    <string name="host_app_desktop_menu_show_sidebar">Show Sidebar</string>
+    <string name="host_app_desktop_menu_load_timings">Load Timings</string>
+    <string name="host_app_desktop_menu_edit">Edit</string>
+    <string name="host_app_desktop_menu_undo">Undo</string>
+    <string name="host_app_desktop_menu_redo">Redo</string>
+    <string name="host_app_desktop_menu_cut">Cut</string>
+    <string name="host_app_desktop_menu_copy">Copy</string>
+    <string name="host_app_desktop_menu_paste">Paste</string>
+    <string name="host_app_desktop_menu_select_all">Select All</string>
+    <string name="host_app_desktop_main_menu">Main menu</string>
+
+    <!-- Desktop: unpair -->
+    <string name="host_app_desktop_unpair_title">Unpair this device?</string>
+    <string name="host_app_desktop_unpair_text">This removes the saved pairing credentials and returns to the onboarding screen. Your sessions on the broker are untouched.</string>
+    <string name="host_app_desktop_unpair">Unpair</string>
+
+    <!-- Desktop: hosting dialogs -->
+    <string name="host_app_desktop_quit_title">Quit supermux?</string>
+    <string name="host_app_desktop_quit">Quit</string>
+    <string name="host_app_desktop_takeover_text">supermux is already running on this computer (set up outside the app). Let the app manage and update it?</string>
+    <string name="host_app_desktop_manage_it">Manage it</string>
+    <string name="host_app_desktop_leave_it">Leave it alone</string>
+    <string name="host_app_desktop_downgrade_text">A newer supermux is running. Keep it until the app catches up?</string>
+    <string name="host_app_desktop_keep_it">Keep it</string>
+    <string name="host_app_desktop_use_bundled">Use this app's version</string>
+
+    <!-- Desktop: the tray header and Settings › Hosting's status -->
+    <plurals name="host_app_desktop_sessions">
+        <item quantity="one">%1$d session</item>
+        <item quantity="other">%1$d sessions</item>
+    </plurals>
+    <string name="host_app_desktop_tray_quitting">Quitting…</string>
+    <string name="host_app_desktop_tray_cant_reach">Can't reach %1$s · retrying</string>
+    <string name="host_app_desktop_tray_connected_to">Connected to %1$s</string>
+    <string name="host_app_desktop_tray_starting">Starting supermux…</string>
+    <string name="host_app_desktop_restart">Restart</string>
+    <string name="host_app_desktop_tray_restarting">supermux stopped unexpectedly · restarting (attempt %1$d)</string>
+    <string name="host_app_desktop_tray_cant_start">supermux can't start</string>
+    <string name="host_app_desktop_tray_waiting">supermux is waiting for you</string>
+    <string name="host_app_desktop_tray_running_managed">supermux is running · %1$s · managed outside the app</string>
+    <string name="host_app_desktop_tray_running_port">supermux is running · %1$s · port %2$d</string>
+    <string name="host_app_desktop_tray_running">supermux is running · %1$s</string>
+    <string name="host_app_desktop_status_running_outside">Running · set up outside the app</string>
+    <string name="host_app_desktop_status_running">Running · %1$s</string>
+
+    <!-- Desktop: what quitting does -->
+    <string name="host_app_desktop_quit_background">supermux will keep running in the background.</string>
+    <string name="host_app_desktop_quit_background_awake">supermux keeps running in the background and keeps this computer awake. Turn off 'Keep this computer awake' to let it sleep.</string>
+    <string name="host_app_desktop_quit_stops">This stops supermux.</string>
+    <plurals name="host_app_desktop_quit_stops_sessions">
+        <item quantity="one">This stops supermux and your %1$d running session.</item>
+        <item quantity="other">This stops supermux and your %1$d running sessions.</item>
+    </plurals>
+
+    <!-- Desktop: the hosting wizard -->
+    <string name="host_app_desktop_wizard_error_start">Couldn't start the local host. Is the broker able to run on this machine?</string>
+    <string name="host_app_desktop_wizard_error_claim">Couldn't create a pairing code from the local host.</string>
+    <string name="host_app_desktop_wizard_headline">This computer is ready to host your agents. Scan the QR with your phone.</string>
+    <string name="host_app_desktop_wizard_keepalive_help">Your agents stay reachable after you quit, sign out or restart.</string>
+    <string name="host_app_desktop_wizard_set_up_elsewhere">A supermux host already runs on this computer, set up outside this app, and this app leaves it as it is. To use it here, connect to it instead.</string>
+    <string name="host_app_desktop_wizard_relay_on">Remote access is on through relay.supermux.dev.</string>
+    <string name="host_app_desktop_wizard_relay_off">Your phone reaches this computer directly on your local network. Turn on remote access later to reach it from anywhere through the supermux relay.</string>
+    <string name="host_app_desktop_wizard_preparing">Setting up this computer as a host…</string>
+    <string name="host_app_desktop_wizard_connect_instead">Connect to a different broker instead</string>
+    <string name="host_app_desktop_wizard_qr">Pairing QR code</string>
+    <string name="host_app_desktop_git_title_mac">Install Apple's developer tools — optional</string>
+    <string name="host_app_desktop_git_body_mac">Agents work without them; they enable git features (worktrees, diffs, change tracking).</string>
+    <string name="host_app_desktop_git_title">Install git — optional</string>
+    <string name="host_app_desktop_git_body">Agents work without it; it enables git features (worktrees, diffs, change tracking).</string>
+    <string name="host_app_desktop_git_skip">Skip</string>
+    <string name="host_app_desktop_git_failed">Couldn't start the installer.</string>
+    <string name="host_app_desktop_git_install_failed">Couldn't install: %1$s</string>
+
+    <!-- Desktop: starting and stopping the broker (shown in Settings › Hosting and as notifications) -->
+    <string name="host_app_desktop_launch_service_didnt_start">the service didn't start</string>
+    <string name="host_app_desktop_launch_unsupported">not supported on this system</string>
+    <string name="host_app_desktop_launch_background_failed">Couldn't keep supermux running in the background: %1$s</string>
+    <string name="host_app_desktop_launch_restart_failed">Couldn't restart the background service: %1$s</string>
+    <string name="host_app_desktop_launch_stop_failed">Couldn't stop the background service: %1$s</string>
+    <string name="host_app_desktop_launch_autostart_failed">Couldn't remove the login autostart: %1$s</string>
+    <string name="host_app_desktop_launch_not_bundled">the supermux broker isn't bundled with this app</string>
+    <string name="host_app_desktop_launch_stopped_starting">supermux stopped while starting.</string>
+    <string name="host_app_desktop_launch_no_answer">supermux didn't answer on port %1$d.</string>
+    <string name="host_app_desktop_launch_running_not_answering">supermux is already running on this computer (pid %1$d) but isn't answering on port %2$d. Quit it, then try again.</string>
+    <string name="host_app_desktop_launch_another_started">Another supermux started on port %1$d meanwhile. Try again.</string>
+    <string name="host_app_desktop_launch_still_background">supermux is still running from the background setup. Quit it, then try again.</string>
+    <string name="host_app_desktop_launch_still_answers">supermux still answers on port %1$d after stopping it. Try again.</string>
+    <string name="host_app_desktop_service_stop_failed">Couldn't stop the background service to update it; it keeps running the previous version.</string>
+    <string name="host_app_desktop_service_update_declined">Couldn't update the background service (permission declined); still running the previous version.</string>
+    <string name="host_app_desktop_port_held">Port %1$d is still held by %2$s.</string>
+    <string name="host_app_desktop_port_held_exited">a process that has exited (pid %1$d), through a handle another process kept</string>
+
+    <!-- Desktop: the overlay's hold-to-talk key -->
+    <string name="host_app_desktop_overlay_hold_to_talk">Hold to talk from any app</string>
+    <string name="host_app_desktop_overlay_hold_right_option">Hold right ⌥ on its own and talk; let go to send. macOS asks for Input Monitoring first.</string>
+    <string name="host_app_desktop_overlay_hold_key">Hold %1$s and talk; let go to send. No permission needed.</string>
+    <string name="host_app_desktop_overlay_asks_input_monitoring">%1$s · asks for Input Monitoring</string>
+    <string name="host_app_desktop_overlay_key_taken">Another app already uses %1$s: pick another key here.</string>
+    <string name="host_app_desktop_overlay_allow_input_monitoring">Allow Input Monitoring</string>
+    <string name="host_app_desktop_overlay_wayland_no_portal">Hold-to-talk from any app needs GNOME 48+ or KDE Plasma 5.27+; hold your Agent to talk.</string>
+    <string name="host_app_desktop_overlay_wayland_asking">Waiting for you to approve the shortcut…</string>
+    <string name="host_app_desktop_overlay_wayland_declined">The desktop wasn't allowed to give supermux this key. Pick it again here to be asked again.</string>
+    <string name="host_app_desktop_overlay_wayland_failed">The desktop couldn't give supermux this key; hold your Agent to talk, or pick it again here to try again.</string>
+
+    <!-- Android: the chat screen -->
+    <string name="host_app_android_folder_itself">That's the project folder itself</string>
+    <string name="host_app_android_not_responding">not responding</string>
+    <string name="host_app_android_panel_chat">Chat</string>
+    <string name="host_app_android_panel_editor">Editor</string>
+    <string name="host_app_android_panel_terminal">Terminal</string>
+    <string name="host_app_android_panel_display">Display</string>
+    <string name="host_app_android_terminal_unavailable">Terminal unavailable</string>
+    <string name="host_app_android_display_unavailable">Display unavailable</string>
+    <string name="host_app_android_kill_text">This will terminate "%1$s" immediately.</string>
+
+    <!-- Android: the assistant overlay's notification -->
+    <string name="host_app_android_overlay_channel">Assistant overlay</string>
+    <string name="host_app_android_overlay_channel_description">Keeps your assistant floating over other apps.</string>
+    <string name="host_app_android_overlay_your_assistant">Your assistant</string>
+    <string name="host_app_android_overlay_it">it</string>
+    <string name="host_app_android_overlay_resting">%1$s is resting</string>
+    <string name="host_app_android_overlay_in_corner">%1$s is in your corner</string>
+    <string name="host_app_android_overlay_sharing">%1$s sees your screen: it goes with what you say. Double-tap %1$s to stop.</string>
+    <string name="host_app_android_overlay_hidden_text">It comes back with its next reply.</string>
+    <string name="host_app_android_overlay_tap_screen">Tap it to chat, hold it to talk, double-tap it to show your screen.</string>
+    <string name="host_app_android_overlay_tap">Tap it to chat, hold it to talk.</string>
+    <string name="host_app_android_overlay_stop_sharing">Stop sharing</string>
+    <string name="host_app_android_overlay_show">Show</string>
+    <string name="host_app_android_overlay_couldnt_ask_share">Couldn't ask to share the screen.</string>
+    <string name="host_app_android_overlay_screen_off_in_settings">Showing your screen is off in Settings › Privacy &amp; labs.</string>
+    <string name="host_app_android_overlay_couldnt_share">Couldn't share the screen.</string>
+
+    <!-- Android: push notifications -->
+    <string name="host_app_android_push_photo">Sent a photo</string>
+    <string name="host_app_android_push_voice">Sent a voice message</string>
+    <string name="host_app_android_push_audio">Sent audio</string>
+    <string name="host_app_android_push_video_note">Sent a video note</string>
+    <string name="host_app_android_push_document">Sent a document</string>
+    <string name="host_app_android_channel_sessions">Sessions</string>
+    <string name="host_app_android_channel_sessions_description">Agent session updates</string>
+    <!-- #143: a permission prompt answered from its notification -->
+    <string name="host_app_android_prompt_answered">Answered: %1$s</string>
+    <string name="host_app_android_prompt_not_paired">Couldn't answer: this host isn't paired. Open Supermux.</string>
+    <string name="host_app_android_prompt_failed">Couldn't answer (already answered, or the host is unreachable). Open Supermux.</string>
+
+    <!-- Android: app update notifications -->
+    <string name="host_app_android_update_channel_progress">App update download</string>
+    <string name="host_app_android_update_channel_progress_description">Shows download progress when installing an app update</string>
+    <string name="host_app_android_update_channel_alerts">App update alerts</string>
+    <string name="host_app_android_update_channel_alerts_description">Alerts when an app update is ready to install, or fails</string>
+    <string name="host_app_android_update_progress">%1$d% · %2$s / %3$s</string>
+    <string name="host_app_android_update_starting">Starting download…</string>
+    <string name="host_app_android_update_downloading">Downloading update</string>
+    <string name="host_app_android_update_downloaded">Update downloaded</string>
+    <string name="host_app_android_update_tap_install">Tap to install</string>
+    <string name="host_app_android_update_failed_body">Download or install failed</string>
+    <string name="host_app_android_update_failed">Update failed</string>
+
+    <!-- Web: pairing and the push banner -->
+    <string name="host_app_web_not_pair_link">That does not look like a pairing link. It should end in /pair?t=&lt;token>.</string>
+    <string name="host_app_web_cant_reach">Can't reach the broker</string>
+    <string name="host_app_web_pair_title">Pair this browser</string>
+    <string name="host_app_web_offline_text">The broker did not answer (%1$s). It may be starting up, asleep or unreachable from this network — nothing is wrong with this browser.</string>
+    <string name="host_app_web_unpaired_text">This broker is already set up (%1$s). From a paired device open your machine's page in Settings (Devices), add a device, and open the link it shows here — or paste it below.</string>
+    <string name="host_app_web_open_link">Open link</string>
+    <string name="host_app_web_check_again">Check again</string>
+    <string name="host_app_web_push_banner">Enable notifications for agent replies</string>
+    <string name="host_app_web_push_failed">Couldn't enable notifications</string>
+    <string name="host_app_web_enable">Enable</string>
+    <string name="host_app_web_not_now">Not now</string>
+
+    <!-- iOS -->
+    <string name="host_app_ios_already_open">supermux is already open in another window.</string>
+    <!-- Android: the notification while a download runs with the app closed (#157) -->
+    <string name="host_app_android_downloads_channel">Downloads</string>
+    <string name="host_app_android_downloads_one">Downloading %1$s</string>
+    <string name="host_app_android_downloads_many">Downloading %1$d files</string>
+</resources>

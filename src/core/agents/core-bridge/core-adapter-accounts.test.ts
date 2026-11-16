@@ -68,7 +68,7 @@ function fakeDriver(kind: AgentKind) {
   return { driver, opens, holdNextPrompt() { holdNext = true }, limitNextPrompt(resetsAt: number) { limitNext = resetsAt }, release() { hold?.() } }
 }
 
-async function setup(kind: AgentKind) {
+async function setup(kind: AgentKind, options: { autoSwitch?: boolean } = {}) {
   const base = await tmp(`acct-${kind}-`)
   const registry = new AccountRegistry(join(base, "broker"), ["claude", "codex", "cursor", "grok", "opencode"], {
     vault: memoryVault(), homes: { claudeRoot: join(base, "claude-root"), codexRoot: join(base, "codex-root"), grokRoot: join(base, "grok-root"), cursorRoot: join(base, "cursor-root") },
@@ -81,7 +81,7 @@ async function setup(kind: AgentKind) {
     stateDirectory: join(base, "core"),
     driverFactory: () => fake.driver,
     limits: { interruptTimeoutMs: 40, maxPending: 128, outstandingActivity: 256 },
-    accounts: { registry, usage },
+    accounts: { registry, usage, ...(options.autoSwitch ? { autoSwitch: true } : {}) },
   }
   const host = kind === "claude" ? createClaudeCoreHost(opts) : kind === "codex" ? createCodexCoreHost(opts) : createGrokCoreHost(opts)
   hosts.push(host)
@@ -170,6 +170,21 @@ test("codex: a session on an api_key account gets no copy of the user's auth.jso
   expect(fake.opens[0]!.profile?.env).toEqual({ CODEX_API_KEY: "sk-codex", OPENAI_API_KEY: "sk-codex" })
   expect(existsSync(join(sessionHome, "auth.json"))).toBe(false)
   expect(existsSync(join(sessionHome, "config.toml"))).toBe(true)
+})
+
+test("claude: an auto-switch reaches the broker with why the target was picked, a seat in the same org first (#159)", async () => {
+  const { host, fake, workdir, registry } = await setup("claude", { autoSwitch: true })
+  await registry.add({ id: "a", agent: "claude", method: "token", secret: "t-a", identity: { org: "org-1" } })
+  await registry.add({ id: "other", agent: "claude", method: "token", secret: "t-o", identity: { org: "org-2" } })
+  await registry.add({ id: "seat", agent: "claude", method: "token", secret: "t-s", identity: { org: "org-1" } })
+  const adapter = makeAdapter("claude", host, workdir, await tmp("claude-home-"), "a")
+  const events: Array<Record<string, unknown>> = []
+  adapter.on("account", (e) => events.push(e))
+  await adapter.start()
+  fake.limitNextPrompt(Math.floor(Date.now() / 1000) + 3600)
+  await adapter.send("hit the limit")
+  for (let i = 0; i < 200 && !events.some((e) => e.event === "switched"); i++) await new Promise((r) => setTimeout(r, 5))
+  expect(events.find((e) => e.event === "switched")).toEqual({ kind: "account", event: "switched", from: "a", to: "seat", reason: "limit", why: "same_org" })
 })
 
 test("claude: a turn stopped on a limit with nowhere to go reaches the broker as account waiting (#92)", async () => {

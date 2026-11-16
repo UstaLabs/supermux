@@ -1,0 +1,180 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #123: the sidebar's session list — workspace and session rows, the Agents block, project headers, the status
+     rail, unread pills, search, the list's dialogs and footer. English, the source; values-tr/sessions_list.xml has
+     the same keys (tests/i18n-strings.test.ts). -->
+<resources>
+    <string name="sessions_list_no_workspaces">No workspaces yet</string>
+    <string name="sessions_list_drafts">Drafts</string>
+    <string name="sessions_list_in_progress">In progress</string>
+    <string name="sessions_list_active">Active</string>
+    <!-- #143: a session blocked on an open prompt or question: the sidebar section and its rows' chip -->
+    <string name="sessions_needs_you">Needs you</string>
+    <string name="sessions_list_everything_else">Everything else</string>
+    <string name="sessions_list_workspaces">Workspaces</string>
+    <string name="sessions_list_sessions">Sessions</string>
+    <string name="sessions_list_in_chat_history">In chat history</string>
+    <string name="sessions_list_no_matches">No matches</string>
+    <string name="sessions_list_history_failed">Couldn't search chat history</string>
+    <string name="sessions_list_history_searching">Searching chat history…</string>
+    <string name="sessions_list_history_none">No other chats mention it</string>
+    <string name="sessions_list_logo">Supermux logo</string>
+    <plurals name="sessions_list_archive_workspaces_title">
+        <item quantity="one">Archive %1$d workspace?</item>
+        <item quantity="other">Archive %1$d workspaces?</item>
+    </plurals>
+    <string name="sessions_list_archive_selected_text">This archives the selected workspaces and stops their sessions. Worktrees are kept. This can't be undone.</string>
+    <string name="sessions_list_archive_agents_skipped">Agents are skipped.</string>
+    <string name="sessions_list_rename_workspace">Rename workspace</string>
+    <string name="sessions_list_archive_workspace_title">Archive workspace?</string>
+    <string name="sessions_list_archive_workspace_text">This archives "%1$s" and stops its sessions. This can't be undone.</string>
+    <string name="sessions_list_archive_and_delete">Archive &amp; delete</string>
+    <string name="sessions_list_discard_draft_title">Discard draft?</string>
+    <string name="sessions_list_settle_title">Settle session?</string>
+    <string name="sessions_list_discard_draft_text">This permanently discards "%1$s". This can't be undone.</string>
+    <string name="sessions_list_settle_and_delete">Settle &amp; delete</string>
+    <string name="sessions_list_group_by_project">Group by project</string>
+    <string name="sessions_list_group_by_status">Group by status</string>
+    <string name="sessions_list_flat_list">Flat list</string>
+    <string name="sessions_list_on">On</string>
+    <string name="sessions_list_off">Off</string>
+    <string name="sessions_list_show_settled">Show %1$d settled</string>
+    <string name="sessions_list_hide_settled">Hide %1$d settled</string>
+    <string name="sessions_list_awake_hint">Is the computer awake and logged in?</string>
+    <string name="sessions_list_offline">· offline</string>
+    <string name="sessions_list_offline_seen">· offline · seen %1$s</string>
+    <string name="sessions_list_cant_reach">Can't reach %1$s</string>
+    <string name="sessions_list_cant_reach_seen">Can't reach %1$s · seen %2$s</string>
+    <string name="sessions_list_search">Search</string>
+    <string name="sessions_list_select_workspaces">Select workspaces</string>
+    <string name="sessions_list_cancel_selection">Cancel selection</string>
+    <string name="sessions_list_selected">%1$d selected</string>
+    <string name="sessions_list_select_all">All</string>
+    <string name="sessions_list_select_none">None</string>
+    <string name="sessions_list_actions">Actions</string>
+    <string name="sessions_list_new_project">New project</string>
+    <string name="sessions_list_organize_projects">Organize projects</string>
+    <string name="sessions_list_switch_light">Switch to light theme</string>
+    <string name="sessions_list_switch_dark">Switch to dark theme</string>
+    <string name="sessions_list_search_placeholder">Search workspaces and chats</string>
+    <string name="sessions_list_search_close">Close search</string>
+    <string name="sessions_list_project_options">%1$s options</string>
+    <string name="sessions_list_project_settings">Project settings…</string>
+    <string name="sessions_list_project_no_workspaces">No workspaces</string>
+    <string name="sessions_list_project_new_workspace">New workspace</string>
+    <plurals name="sessions_list_unread_count">
+        <item quantity="one">%1$d unread</item>
+        <item quantity="other">%1$d unread</item>
+    </plurals>
+    <plurals name="sessions_list_unread_above">
+        <item quantity="one">%1$d unread above, scroll to it</item>
+        <item quantity="other">%1$d unread above, scroll to it</item>
+    </plurals>
+    <plurals name="sessions_list_unread_below">
+        <item quantity="one">%1$d unread below, scroll to it</item>
+        <item quantity="other">%1$d unread below, scroll to it</item>
+    </plurals>
+    <string name="sessions_list_unread_dismiss">Dismiss</string>
+
+    <string name="sessions_row_another_session">Another session</string>
+    <string name="sessions_row_expand">Expand</string>
+    <string name="sessions_row_collapse">Collapse</string>
+    <string name="sessions_row_expand_named">Expand %1$s</string>
+    <string name="sessions_row_collapse_named">Collapse %1$s</string>
+    <string name="sessions_row_expanded">Expanded</string>
+    <string name="sessions_row_collapsed">Collapsed</string>
+    <string name="sessions_row_start_new">Start a new session</string>
+    <string name="sessions_row_start_new_hint">Pick a project and send your first message</string>
+    <string name="sessions_row_resume">Resume</string>
+    <string name="sessions_row_open_draft">Open draft</string>
+    <string name="sessions_row_discard">Discard</string>
+    <string name="sessions_row_move_up">Move up</string>
+    <string name="sessions_row_move_down">Move down</string>
+    <string name="sessions_row_settle">Settle</string>
+    <string name="sessions_row_status_starting">starting</string>
+    <string name="sessions_row_status_suspended">suspended</string>
+    <string name="sessions_row_mark_read">Mark as read</string>
+    <string name="sessions_row_select">Select</string>
+    <string name="sessions_row_archive">Archive</string>
+    <string name="sessions_row_new_chat_here">New chat here</string>
+    <string name="sessions_row_selected">Selected</string>
+    <string name="sessions_row_not_selected">Not selected</string>
+    <string name="sessions_row_archived">Archived</string>
+    <string name="sessions_row_hide_archived">Hide archived</string>
+    <string name="sessions_row_restore">Restore</string>
+
+    <string name="sessions_agents_title">Agents</string>
+    <plurals name="sessions_agents_waiting">
+        <item quantity="one">%1$d waiting</item>
+        <item quantity="other">%1$d waiting</item>
+    </plurals>
+    <string name="sessions_agents_new">New Agent</string>
+    <string name="sessions_agents_rename">Rename…</string>
+    <string name="sessions_agents_change_character">Change character…</string>
+    <string name="sessions_agents_make_default">Make default</string>
+    <string name="sessions_agents_archive">Archive…</string>
+    <string name="sessions_agents_restore_failed">Couldn't restore</string>
+    <string name="sessions_agents_archived_just_now">Archived just now</string>
+    <string name="sessions_agents_archived_ago">Archived %1$s ago</string>
+    <string name="sessions_agents_restoring">Restoring…</string>
+
+    <string name="sessions_rail_working">working</string>
+    <string name="sessions_rail_idle">idle</string>
+    <string name="sessions_rail_compact_advised">compact advised before the usage limit</string>
+    <string name="sessions_rail_unread">unread</string>
+    <plurals name="sessions_rail_agents">
+        <item quantity="one">%1$d agent</item>
+        <item quantity="other">%1$d agents</item>
+    </plurals>
+    <!-- #117: applets — the sidebar's Applets block, its menu, and the All applets page. -->
+    <string name="sessions_applets_title">Applets</string>
+    <string name="sessions_applets_all">All applets</string>
+    <string name="applets_menu_open">Open</string>
+    <string name="applets_menu_pin">Pin to sidebar</string>
+    <string name="applets_menu_unpin">Unpin</string>
+    <string name="applets_menu_updated">Updated %1$s ago</string>
+    <string name="applets_menu_expired">%1$s expired</string>
+    <string name="applets_menu_needed">%1$s needed</string>
+    <string name="applets_page_host">on %1$s</string>
+    <string name="applets_hint_desktop">To make a new one, ask any session: “make this an applet”. Right-click or ⋯ an applet for more.</string>
+    <string name="applets_hint_phone">To make a new one, ask any session: “make this an applet”. Long-press an applet for more.</string>
+    <string name="applets_window_no_host">This applet's machine isn't paired with this device any more. Pair the machine again, then open the applet from supermux.</string>
+    <string name="applets_window_no_key">This applet can't open: its machine didn't give this device a key for it. Check that the machine is online, then open the applet again.</string>
+    <string name="applets_menu_info">Applet info</string>
+    <string name="applets_cover_done">Done</string>
+    <string name="applets_save_not_yet">Saving files from an applet isn't available in this version yet.</string>
+    <string name="applets_menu_add_home">Add to Home screen</string>
+    <string name="applets_menu_on_home">On Home screen</string>
+    <string name="applets_menu_install">Install on this computer</string>
+    <string name="applets_menu_installed">Installed</string>
+    <string name="applets_install_no_home">This phone's Home screen doesn't take shortcuts from apps.</string>
+    <string name="applets_install_refused">The Home screen didn't take the shortcut.</string>
+    <string name="applets_where_home">Home screen</string>
+    <string name="applets_updated_just_now">Updated just now</string>
+    <string name="applets_where_applications">Applications</string>
+    <string name="applets_where_start_menu">Start menu</string>
+    <string name="applets_where_app_menu">App menu</string>
+    <string name="applets_menu_install_mac">Install on this Mac</string>
+    <string name="applets_menu_install_pc">Install on this PC</string>
+    <string name="applets_install_failed">Couldn't install it.</string>
+    <string name="applets_install_dev_build">This build of supermux can't install applets (it isn't an installed copy).</string>
+    <string name="applets_install_comment">A supermux applet</string>
+    <!-- #117 W1: Home screen widgets. -->
+    <string name="applets_menu_add_widget">Add widget</string>
+    <string name="applets_widget_empty">Pin applets in supermux to see them here.</string>
+    <string name="applets_widget_signed_out">Open supermux to see your applets.</string>
+    <string name="applets_widget_choose">Choose an applet</string>
+    <string name="applets_widget_gone">This applet is gone. Choose another.</string>
+    <string name="applets_widget_needs_you">Needs you</string>
+    <string name="applets_widget_no_home">This Home screen doesn't take widgets from apps.</string>
+    <string name="applets_widget_none">No applets on this machine yet.</string>
+    <string name="applets_widget_ios_title">Add the Applets widget</string>
+    <string name="applets_widget_ios_step1">Touch and hold an empty spot on your Home Screen</string>
+    <string name="applets_widget_ios_step2">Tap Edit, then Add Widget</string>
+    <string name="applets_widget_ios_step3">Find supermux and pick “Applets”, or “Applet” for one</string>
+    <string name="applets_widget_ios_note">iOS only lets you add widgets yourself; supermux can't place one for you.</string>
+    <string name="applets_window_no_engine">This device can't show applet pages: its web engine is missing or too old. Update it, then open the applet again.</string>
+    <string name="applets_window_no_engine_android">This phone can't show applet pages: its Android System WebView is too old. Update it from the Play Store, then open the applet again.</string>
+    <string name="applets_stub_not_running_title">supermux isn't running</string>
+    <string name="applets_stub_not_running_body">Open supermux, then open this applet again.</string>
+    <string name="applets_menu_open_window">Open in new window</string>
+</resources>

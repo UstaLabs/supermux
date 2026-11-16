@@ -73,6 +73,8 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.ui.adaptive.LocalHardwareKeyboard
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.platform.FileAction
 import dev.supermux.ui.theme.GeistFontFamily
 import dev.supermux.ui.theme.GeistMonoFontFamily
@@ -188,12 +190,12 @@ private fun Header(count: Int, clearable: Boolean, onClear: () -> Unit, popover:
             .padding(start = if (popover) 12.dp else 22.dp, end = if (popover) 6.dp else 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("Downloads", style = listText(size, FontWeight.Medium), color = cs.onSurface, modifier = Modifier.semantics { heading() })
+        Text(localized(Str.work_downloads), style = listText(size, FontWeight.Medium), color = cs.onSurface, modifier = Modifier.semantics { heading() })
         // Between the two, for the eye: nothing to read aloud.
         Text("·", style = listText(size), color = cs.faint, modifier = Modifier.padding(horizontal = 6.dp).clearAndSetSemantics {})
         Text("$count", style = listText(size), color = cs.onSurfaceVariant, modifier = Modifier.testTag("activity_count"))
         Spacer(Modifier.weight(1f))
-        if (clearable) QuietWord("Clear finished", "activity_clear", if (popover) WordSize.Popover else WordSize.SheetHeader, onClear)
+        if (clearable) QuietWord(localized(Str.work_clear_finished), "activity_clear", if (popover) WordSize.Popover else WordSize.SheetHeader, onClear)
     }
 }
 
@@ -258,7 +260,7 @@ private fun PopoverRow(
     val hovered by source.collectIsHoveredAsState()
     LaunchedEffect(hovered) { if (hovered) onHover() }
     // The one thing that eases: the glyph turning teal as the row is selected.
-    val tint by animateColorAsState(cs.popoverTint(item, selected), Motion.stateChange(), label = "download-glyph")
+    val tint by animateColorAsState(cs.popoverTint(item, selected), Motion.stateChange(), label = "download-glyph") // i18n-ok: an animation label, never shown
     Box(
         Modifier
             .fillMaxWidth()
@@ -296,7 +298,7 @@ private fun PopoverRow(
 @Composable
 private fun Hints(verb: String?) {
     Text(
-        listOfNotNull("↑↓ to move", verb?.let { "↵ to $it" }, "esc to close").joinToString("  ·  "),
+        listOfNotNull(localized(Str.work_hint_move), verb?.let { localized(Str.work_hint_enter, it) }, localized(Str.work_hint_close)).joinToString("  ·  "),
         style = listText(11.sp),
         color = MaterialTheme.colorScheme.faint,
         maxLines = 1,
@@ -330,7 +332,7 @@ private fun Modifier.opensSource(item: Download, onOpenSource: (Download) -> Uni
     if (item.origin == null) {
         this
     } else {
-        clickable(indication = null, interactionSource = null, onClickLabel = "Show in chat") { onOpenSource(item) }
+        clickable(indication = null, interactionSource = null, onClickLabel = localized(Str.work_show_in_chat)) { onOpenSource(item) }
             .pointerHoverIcon(PointerIcon.Hand)
     }
 
@@ -430,7 +432,7 @@ private fun wordsFor(
 ): List<Word> = when (item.state) {
     is DownloadState.Running, DownloadState.Cancelled, is DownloadState.Failed -> emptyList()
     is DownloadState.Done -> if (item.purpose == DownloadPurpose.Installer) {
-        listOf(Word("Install", "activity_install") { onInstall(item) })
+        listOf(Word(localized(Str.work_install), "activity_install") { onInstall(item) })
     } else {
         // One order everywhere, whatever order the host listed them in.
         FileAction.entries.filter { it in actions }.map { action ->
@@ -442,8 +444,8 @@ private fun wordsFor(
 /** What ↵ does on a row: what its ring's tap does once it stopped (resume, retry), a done row's first word — nothing on a running row. */
 private fun primaryOf(item: Download, words: List<Word>, onRetry: (Download) -> Unit): Word? = when (item.state) {
     is DownloadState.Running -> null
-    DownloadState.Cancelled -> Word("Resume", "activity_resume") { onRetry(item) }
-    is DownloadState.Failed -> Word("Retry", "activity_retry") { onRetry(item) }
+    DownloadState.Cancelled -> Word(localized(Str.work_resume), "activity_resume") { onRetry(item) }
+    is DownloadState.Failed -> Word(localized(Str.work_retry), "activity_retry") { onRetry(item) }
     is DownloadState.Done -> words.firstOrNull()
 }
 
@@ -471,7 +473,7 @@ private fun ColorScheme.popoverTint(item: Download, selected: Boolean): Color = 
 
 /** A phone row's figure after the name: how far it got, or the finished file's size. */
 private fun sheetFigure(item: Download): String? = when (val s = item.state) {
-    is DownloadState.Running -> s.percent()?.let { "$it%" }
+    is DownloadState.Running -> s.percent()?.let { localized(Str.work_percent, it) }
     is DownloadState.Done -> s.file.size.takeIf { it > 0 }?.let(::sizeText)
     else -> null
 }
@@ -479,26 +481,26 @@ private fun sheetFigure(item: Download): String? = when (val s = item.state) {
 /** A phone row's second line: what became of it, in words — "12 of 28 MB · about a minute left", "Downloaded". */
 private fun sheetDetail(item: Download, timeLeft: String?): String = when (val s = item.state) {
     is DownloadState.Running -> s.total?.takeIf { it > 0 }?.let { total -> listOfNotNull(bytesSoFar(s.received, total), timeLeft).joinToString(" · ") }
-        ?: "${sizeText(s.received)} so far"
-    is DownloadState.Done -> if (item.purpose == DownloadPurpose.Installer) "Ready to install" else "Downloaded"
-    is DownloadState.Failed -> failure("Failed", s.message)
-    DownloadState.Cancelled -> "Paused"
+        ?: localized(Str.work_so_far, sizeText(s.received))
+    is DownloadState.Done -> localized(if (item.purpose == DownloadPurpose.Installer) Str.work_ready_to_install else Str.work_downloaded)
+    is DownloadState.Failed -> failure(localized(Str.work_failed), s.message)
+    DownloadState.Cancelled -> localized(Str.work_paused)
 }
 
 /** A popover row's words after the name: "12 of 28 MB", "4.2 MB", "ready to install", "failed · connection lost". */
 private fun popoverDetail(item: Download): String = when (val s = item.state) {
-    is DownloadState.Running -> s.total?.takeIf { it > 0 }?.let { bytesSoFar(s.received, it) } ?: "${sizeText(s.received)} so far"
+    is DownloadState.Running -> s.total?.takeIf { it > 0 }?.let { bytesSoFar(s.received, it) } ?: localized(Str.work_so_far, sizeText(s.received))
     is DownloadState.Done -> when {
-        item.purpose == DownloadPurpose.Installer -> "ready to install"
+        item.purpose == DownloadPurpose.Installer -> localized(Str.work_state_ready_to_install)
         s.file.size > 0 -> sizeText(s.file.size)
-        else -> "downloaded"
+        else -> localized(Str.work_state_downloaded)
     }
-    is DownloadState.Failed -> failure("failed", s.message)
-    DownloadState.Cancelled -> "paused"
+    is DownloadState.Failed -> failure(localized(Str.work_state_failed), s.message)
+    DownloadState.Cancelled -> localized(Str.work_state_paused)
 }
 
 /** A popover row's figure, before its words: how far a running one got. */
-private fun popoverFigure(item: Download): String? = (item.state as? DownloadState.Running)?.percent()?.let { "$it%" }
+private fun popoverFigure(item: Download): String? = (item.state as? DownloadState.Running)?.percent()?.let { localized(Str.work_percent, it) }
 
 /** "Failed · connection lost". The center's own generic words add nothing to "Failed". */
 private fun failure(word: String, message: String): String =
@@ -510,7 +512,7 @@ private const val GENERIC_FAILURE = "Download failed"
 /** "12 of 28 MB": both in the total's unit, as the prototype writes them. */
 internal fun bytesSoFar(received: Long, total: Long): String {
     val unit = SizeUnit.of(total)
-    return "${unit.amount(received)} of ${unit.amount(total)} ${unit.label}"
+    return localized(Str.work_bytes_so_far, unit.amount(received), unit.amount(total), unit.label)
 }
 
 /** "4.2 MB", "96 MB", "512 KB". */
@@ -544,9 +546,9 @@ private enum class SizeUnit(val bytes: Long, val label: String) {
 internal fun etaText(remaining: Long, bytesPerSecond: Double): String {
     val s = remaining / bytesPerSecond
     return when {
-        s >= 90 -> "about ${(s / 60).roundToInt()} min left"
-        s >= 50 -> "about a minute left"
-        else -> "${maxOf(5, (ceil(s / 5) * 5).toInt())} s left"
+        s >= 90 -> localized(Str.work_eta_minutes, (s / 60).roundToInt())
+        s >= 50 -> localized(Str.work_eta_minute)
+        else -> localized(Str.work_eta_seconds, maxOf(5, (ceil(s / 5) * 5).toInt()))
     }
 }
 
@@ -591,9 +593,10 @@ internal fun DownloadState.Running.fraction(): Float? =
 
 private val FileAction.label: String
     get() = when (this) {
-        FileAction.Open -> "Open"
-        FileAction.Save -> "Save"
-        FileAction.Share -> "Share"
+        FileAction.Open -> localized(Str.work_open)
+        FileAction.Save -> localized(Str.work_save)
+        FileAction.Share -> localized(Str.work_share)
+
     }
 
 /** The hover/press wash of #91's palette: a breath of ink, a little more on a dark surface. */

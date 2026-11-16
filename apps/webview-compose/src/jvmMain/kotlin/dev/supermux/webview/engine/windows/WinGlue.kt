@@ -11,8 +11,8 @@ package dev.supermux.webview.engine.windows
  * - Lengths are pixels of the surface's canvas.
  */
 internal object WinGlue {
-    /** The ABI this library speaks: `WV_ABI_VERSION` in `native/windows/wv2.h`. Change both together. 2: [close]. */
-    const val ABI: Int = 2
+    /** The ABI this library speaks: `WV_ABI_VERSION` in `native/windows/wv2.h`. Change both together. 2: [close]. 3: downloads. */
+    const val ABI: Int = 3
 
     // Events (wv2.h Ev).
     const val CREATED = 1
@@ -41,6 +41,8 @@ internal object WinGlue {
     const val BROWSER_EXITED = 24
     const val SCRIPT_READY = 25
     const val LOG = 26
+    const val DOWNLOAD_PROGRESS = 27
+    const val DOWNLOAD_STATE = 28
 
     // configure's flags.
     const val CONF_SCRIPTS = 1
@@ -195,5 +197,14 @@ internal object WinGlue {
     @JvmStatic external fun frameTimes(kind: Int, out: LongArray): Int
     @JvmStatic external fun mouse(page: Long, kind: Int, keys: Int, data: Int, x: Int, y: Int)
     @JvmStatic external fun moveFocus(page: Long, reason: Int)
+    /**
+     * A question's answer. A download's (#157): [verdict] is the app's id for it, 0 to drop it, and [text] where to save
+     * it; WebView2 then saves it with the page's session and reports it by that id ([DOWNLOAD_PROGRESS], [DOWNLOAD_STATE]).
+     */
     @JvmStatic external fun answer(page: Long, question: Long, verdict: Int, text: String?)
+
+    // Downloads (#157): the process's, by the app's id; they outlive their page.
+    @JvmStatic external fun pauseDownload(download: Long)
+    @JvmStatic external fun resumeDownload(download: Long)
+    @JvmStatic external fun cancelDownload(download: Long)
 }

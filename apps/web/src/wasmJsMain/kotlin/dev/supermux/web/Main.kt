@@ -64,6 +64,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.configureWebResources
 import dev.supermux.ui.i18n.preloadCatalogs
+import dev.supermux.ui.i18n.shownLanguageTag
 import dev.supermux.ui.i18n.versionedResourcePath
 
 /**
@@ -100,7 +101,8 @@ fun main() {
     // stageForBroker puts the Compose resource tree under assets/ so it inherits the broker's
     // immutable cache rule; the runtime must look for it there. The two MUST agree.
     // The string catalogs (#123) carry their content version: one release's strings never come from another's cache.
-    configureWebResources { resourcePathMapping { path -> "assets/" + versionedResourcePath(path) } }
+    // JetBrains Mono ships once: the editor's faces are fetched from the terminal's copy (SharedResourcePath.kt).
+    configureWebResources { resourcePathMapping { path -> "assets/" + versionedResourcePath(sharedResourcePath(path)) } }
     WebAppState.install()
 
     val settings = LocalStorageSettingsStore()
@@ -235,7 +237,10 @@ fun main() {
                 // until the user has granted the permission — the banner below asks for that.
                 // Outside the branch: a subscription is worth having before the wizard is done
                 // (the Done step is the moment the user walks away to their phone).
-                LaunchedEffect(Unit) { platform.push?.registerIfPaired() }
+                // #123: and again when the shown language changes — the re-POST (an idempotent upsert) carries it, so the
+                // broker words this device's notifications in the new language.
+                val pushLanguage = shownLanguageTag()
+                LaunchedEffect(pushLanguage) { platform.push?.registerIfPaired() }
 
                 if (onboarded == null) {
                     // NOT the shell with an empty sidebar: the snapshot decides between two

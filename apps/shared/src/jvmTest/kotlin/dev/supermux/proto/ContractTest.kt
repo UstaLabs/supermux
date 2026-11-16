@@ -16,9 +16,9 @@ class ContractTest {
 
     @Test fun every_broker_fixture_parses_into_a_ServerFrame() {
         val names = listOf(
-            "snapshot", "session_added", "session_removed", "session_renamed", "session_state",
+            "snapshot", "session_added", "session_added_pr", "session_removed", "session_renamed", "session_state",
             "agent_state", "agent_error", "message_append", "activity_append", "bg_tasks",
-            "commands_changed", "finish_job", "session_git", "session_git_remote",
+            "commands_changed", "context_usage", "compaction", "compact_advice", "finish_job", "session_git", "session_git_remote",
             "sessions_reordered", "session_read",
             "walkthrough_updated", "review_comment", "browser_comment",
             "request_open", "request_closed", "error",
@@ -28,6 +28,7 @@ class ContractTest {
             "fs_dir", "fs_gone", "fs_err",
             "accounts_changed", "account_login_state", "agents_changed", "accounts_settings", "session_state_account", "limit_wait",
             "reply_stream", "reply_stream_thinking", "reply_stream_end", "message_append_live", "activity_append_live", "snapshot_live",
+            "proxy_created", "proxy_updated", "proxy_removed", "applets_changed",
         )
         for (n in names) {
             val frame = json.decodeFromString<ServerFrame>(load(n))
@@ -64,6 +65,9 @@ class ContractTest {
                     assertEquals("2026-10-30T12:36:00.000Z", frame.council.rounds[0].completedAt)
                 }
                 is ServerFrame.CommandsChanged -> {}
+                is ServerFrame.ContextUsage -> {}
+                is ServerFrame.Compaction -> {}
+                is ServerFrame.CompactAdvice -> {}
                 is ServerFrame.FsChanged -> {}
                 is ServerFrame.WalkthroughUpdated -> {}
                 is ServerFrame.ReviewCommentFrame -> {}
@@ -84,6 +88,10 @@ class ContractTest {
                 ServerFrame.AgentModelsChanged -> {}
                 ServerFrame.AccountsChanged -> {}
                 ServerFrame.AgentsChanged -> {}
+                is ServerFrame.ProxyCreated -> {}
+                is ServerFrame.ProxyUpdated -> {}
+                is ServerFrame.ProxyRemoved -> assertEquals("p-5173", frame.domain)
+                ServerFrame.AppletsChanged -> {}
                 is ServerFrame.AgentAvatarChanged -> {}
                 is ServerFrame.AccountLoginState -> {}
                 is ServerFrame.AccountsSettings -> assertEquals(true, frame.autoResume)
@@ -121,6 +129,12 @@ class ContractTest {
         assertEquals(thinking.stream, row.event.stream)
         val snapshot = json.decodeFromString<ServerFrame>(load("snapshot_live")) as ServerFrame.Snapshot
         assertEquals(listOf(reply.stream), snapshot.streams.values.single().map { it.stream })
+    }
+
+    // #143: the agent's own reason for asking reaches the card.
+    @Test fun request_reason_survives_the_wire() {
+        val ask = json.decodeFromString<ServerFrame>(load("request_open")) as ServerFrame.RequestOpen
+        assertEquals("Dangerous rm operation on possibly-empty variable path", ask.request.reason)
     }
 
     @Test fun subagent_fields_survive_the_wire() {

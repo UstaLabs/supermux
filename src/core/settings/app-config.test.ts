@@ -51,3 +51,20 @@ describe("voiceLanguages", () => {
     expect(resolveAppConfig({}, {}).voiceLanguages).toBeUndefined()
   })
 })
+
+// #72: Source Control's Commit ▾ pick and its "no staged changes" answer, kept on the broker (the owner's, until users exist).
+describe("git commit preferences", () => {
+  test("sanitize keeps only the known values", () => {
+    expect(sanitizeAppConfigPatch({ gitPostCommit: "push", gitSmartCommit: "always" })).toMatchObject({ gitPostCommit: "push", gitSmartCommit: "always" })
+    expect(sanitizeAppConfigPatch({ gitPrPush: "always" })).toMatchObject({ gitPrPush: "always" })
+    expect(sanitizeAppConfigPatch({ gitPrPush: "never" }).gitPrPush).toBeUndefined()
+    const junk = sanitizeAppConfigPatch({ gitPostCommit: "deploy", gitSmartCommit: 1 })
+    expect(junk.gitPostCommit).toBeUndefined()
+    expect(junk.gitSmartCommit).toBeUndefined()
+  })
+
+  test("resolve surfaces what is stored; absent stays absent", () => {
+    expect(resolveAppConfig({ gitPostCommit: "sync", gitSmartCommit: "never" }, {})).toMatchObject({ gitPostCommit: "sync", gitSmartCommit: "never" })
+    expect(resolveAppConfig({}, {}).gitPostCommit).toBeUndefined()
+  })
+})

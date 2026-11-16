@@ -7,6 +7,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- QR pairing scan (zxing-android-embedded also declares this; explicit here). -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- A web page in a Browser tab may ask for the location (#157); the user answers per site first. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <!-- The assistant overlay (#62, experimental, off by default): the default Agent as a chat head
          over other apps. "Display over other apps" is granted by the user on a system page, and the
          foreground service that owns the windows needs these types. -->
@@ -17,6 +20,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <!-- The audio player playing on in the background (#118 car 3a, platform/AudioPlaybackService.kt). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- Attachment camera capture is delegated to the system camera app (TakePicture);
          the camera is optional so non-camera devices can still install. -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
@@ -74,6 +78,54 @@
             android:taskAffinity="${applicationId}.window"
             android:autoRemoveFromRecents="true"
             android:windowSoftInputMode="adjustResize" />
+        <!-- #117: an applet in its own task (applets/AppletActivity.kt). documentLaunchMode="intoExisting" keys
+             the task on the intent's data, the applet's supermux://applet/<host>/<name>: opening it again
+             brings its Recents card back ("always" made a new card per tap, verified on the Fold). Not exported:
+             shortcuts and widgets (S1/W1) start it from inside the app's own package. -->
+        <activity
+            android:name=".applets.AppletActivity"
+            android:theme="@style/Theme.Supermux.Main"
+            android:exported="false"
+            android:hardwareAccelerated="true"
+            android:resizeableActivity="true"
+            android:documentLaunchMode="intoExisting"
+            android:taskAffinity="${applicationId}.applet"
+            android:autoRemoveFromRecents="true"
+            android:windowSoftInputMode="adjustResize" />
+        <!-- #117 W1: the Home screen widgets (applets/AppletWidgets.kt): "Applets", the pinned grid, and "Applet",
+             one applet with its summary. The one-applet widget's setup is optional: pinned from an applet's menu it
+             arrives set up; placed from the widget picker it asks which applet on its first tap. -->
+        <receiver
+            android:name=".applets.AppletsGridWidgetReceiver"
+            android:label="@string/widget_applets_label"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/applets_grid_widget" />
+        </receiver>
+        <receiver
+            android:name=".applets.AppletWidgetReceiver"
+            android:label="@string/widget_applet_label"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/applet_widget" />
+        </receiver>
+        <receiver
+            android:name=".applets.AppletWidgetPinnedReceiver"
+            android:exported="false" />
+        <activity
+            android:name=".applets.AppletWidgetConfigActivity"
+            android:theme="@style/Theme.Supermux.Main"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity="${applicationId}.widgetconfig">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
         <!-- Native push: receives FCM data-only messages (relay `data:{d:<ciphertext>}`). -->
         <service
             android:name=".push.SupermuxMessagingService"
@@ -82,6 +134,10 @@
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
             </intent-filter>
         </service>
+        <!-- #143: a permission prompt's Allow / Deny from its notification (push/PromptAnswerReceiver.kt). -->
+        <receiver
+            android:name=".push.PromptAnswerReceiver"
+            android:exported="false" />
         <!-- The assistant overlay's windows (overlay/AssistantOverlayService.kt). specialUse: a chat
              head the user turned on; microphone: hold-to-talk while another app is in front;
              mediaProjection: your screen with hold-to-talk, once Android has asked. -->
@@ -107,6 +163,11 @@
              plays on in the background with the media notification and the lock screen's controls. Exported, with
              the session intent filter, as Media3 requires: the system's controllers (the notification, a headset,
              a watch) bind it. -->
+        <!-- Keeps a running download (and the fleet that owns it) alive when the app's screen goes (#157). -->
+        <service
+            android:name=".platform.DownloadKeepService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
         <service
             android:name=".platform.AudioPlaybackService"
             android:exported="true"

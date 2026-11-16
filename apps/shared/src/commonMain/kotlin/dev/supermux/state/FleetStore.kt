@@ -59,7 +59,9 @@ import dev.supermux.net.BlobText
 import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsRefsResult
 import dev.supermux.net.FsSearchResult
+import dev.supermux.net.GitBranches
 import dev.supermux.net.GitOpResult
+import dev.supermux.net.GitSwitchResult
 import dev.supermux.net.LspInstallResult
 import dev.supermux.net.LspMutationResult
 import dev.supermux.net.LspServer
@@ -73,6 +75,12 @@ import dev.supermux.net.PathValidation
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.RepoInfo
+import dev.supermux.net.BranchPrefixSetting
+import dev.supermux.net.OpenPrList
+import dev.supermux.net.OpenPrRead
+import dev.supermux.net.ProjectFolderState
+import dev.supermux.net.ProjectPrefs
+import dev.supermux.net.SessionSourceBody
 import dev.supermux.net.ReviewComment
 import dev.supermux.net.Walkthrough
 import dev.supermux.net.ReviewSubmitResult
@@ -82,8 +90,6 @@ import dev.supermux.net.TerminalClient
 import dev.supermux.net.TerminalSummary
 import dev.supermux.net.UpdateStatus
 import dev.supermux.net.UsageResponse
-import dev.supermux.net.VerifySaveResult
-import dev.supermux.net.VerifySuggestResult
 import dev.supermux.net.VncClient
 import dev.supermux.host.workspaceForSession
 import dev.supermux.proto.ActivityEvent
@@ -339,9 +345,12 @@ class FleetStore(
     val agentErrors: StateFlow<Map<String, ServerFrame.AgentError>> = mergedMap { it.agentErrors }
     val bgTasks: StateFlow<Map<String, List<ServerFrame.BgTask>>> = mergedMap { it.bgTasks }
     val subagents: StateFlow<Map<String, List<dev.supermux.proto.Subagent>>> = mergedMap { it.subagents }
+    /** #143: every host's open prompts and questions, by session (ids are globally unique). */
+    val requests: StateFlow<Map<String, List<dev.supermux.proto.PromptRequest>>> = mergedMap { it.requests }
     val councils: StateFlow<Map<String, List<dev.supermux.proto.CouncilView>>> = mergedMap { it.councils }
     val commands: StateFlow<Map<String, List<SlashCommand>>> = mergedMap { it.commands }
     val commandsResolved: StateFlow<Map<String, Boolean>> = mergedMap { it.commandsResolved }
+    val compacting: StateFlow<Map<String, String>> = mergedMap { it.compacting }
     val finishJobs: StateFlow<Map<String, FinishJobDto>> = mergedMap { it.finishJobs }
     val lspStatus: StateFlow<Map<String, ServerFrame.LspStatus>> = mergedMap { it.lspStatus }
     val lspInstallLog: StateFlow<Map<String, List<String>>> = mergedMap { it.lspInstallLog }
@@ -459,6 +468,30 @@ class FleetStore(
             .flatMapLatest { app -> app?.accounts ?: flowOf(null) }
             .stateIn(fleetScope, SharingStarted.Eagerly, null)
 
+    /**
+     * #117: the ACTIVE host's applets ([HostStore.applets]): the list follows the host picker, one host at a time.
+     * Null while unknown, or when that host's broker has no applets (the app then shows no Applets section).
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val activeApplets: StateFlow<List<dev.supermux.net.AppletDto>?> =
+        combine(hostApps, _activeHost) { _, _ -> activeApp() }
+            .distinctUntilChanged()
+            .flatMapLatest { app -> app?.applets ?: flowOf(null) }
+            .stateIn(fleetScope, SharingStarted.Eagerly, null)
+
+    /** Pins or unpins one of the active host's applets; null on success, else the broker's reason. */
+    suspend fun pinApplet(name: String, pinned: Boolean): String? = activeApp()?.pinApplet(name, pinned) ?: "not connected to this host"
+
+    suspend fun appletIconBytes(applet: dev.supermux.net.AppletDto): ByteArray? = activeApp()?.appletIconBytes(applet)
+
+    suspend fun appletDetail(name: String): dev.supermux.net.AppletDetailDto? = activeApp()?.appletDetail(name)
+
+    suspend fun appletJobRuns(name: String, job: String): List<dev.supermux.net.AppletJobRunDto>? = activeApp()?.appletJobRuns(name, job)
+
+    /** An owner action on one of the active host's applets ([HostStore.appletAction]). */
+    suspend fun <T> appletAction(block: suspend (dev.supermux.net.BrokerApi) -> T): Result<T> =
+        activeApp()?.appletAction(block) ?: Result.failure(IllegalStateException("not connected to this machine"))
+
     /** The ACTIVE host's accounts auto-switch setting ([HostStore.accountsAutoSwitch]). */
     @OptIn(ExperimentalCoroutinesApi::class)
     val activeAccountsAutoSwitch: StateFlow<Boolean?> =
@@ -469,6 +502,11 @@ class FleetStore(
 
     /** The ACTIVE host's auto-resume setting ([HostStore.accountsAutoResume], #92). */
     @OptIn(ExperimentalCoroutinesApi::class)
+    val activeAccountsCompactBeforeWait: StateFlow<Boolean?> =
+        combine(hostApps, _activeHost) { _, _ -> activeApp() }
+            .distinctUntilChanged()
+            .flatMapLatest { app -> app?.accountsCompactBeforeWait ?: flowOf(null) }
+            .stateIn(fleetScope, SharingStarted.Eagerly, null)
     val activeAccountsAutoResume: StateFlow<Boolean?> =
         combine(hostApps, _activeHost) { _, _ -> activeApp() }
             .distinctUntilChanged()
@@ -720,7 +758,7 @@ class FleetStore(
      */
     @OptIn(kotlinx.coroutines.FlowPreview::class)
     suspend fun keepSnapshots(periodMs: Long = 20_000) {
-        combine(sessions, workspaces, projects, messages, lastRead) { _, _, _, _, _ -> }
+        combine(combine(sessions, workspaces, projects, messages, lastRead) { _, _, _, _, _ -> }, activeApplets) { _, _ -> }
             .sample(periodMs)
             .collect { writeSnapshots() }
     }
@@ -752,13 +790,16 @@ class FleetStore(
                     lastMessages = mine.mapNotNull { s -> logs[s.id]?.lastOrNull()?.let { s.id to it } }.toMap(),
                     recentLogs = recentLogs(mine, logs),
                     lastRead = lastReadByHost[host.recordId].orEmpty().filterKeys { id -> mine.any { it.id == id } },
+                    // #117: the applets as last listed, and their icons, keyed by this host and the applet's id.
+                    applets = conns[host.recordId]?.app?.applets?.value,
+                    appletIcons = conns[host.recordId]?.app?.cachedAppletIcons().orEmpty(),
                 )
             }
         }
         snapshotWrites.withLock {
             withContext(Dispatchers.Default) {
                 cache.retainOnly(records.map { it.recordId })
-                rows.forEach { cache.replace(it.recordId, it.sessions, it.fetchedAt, it.brokerVersion, it.workspaces, it.projects, it.lastMessages, it.recentLogs, it.lastRead) }
+                rows.forEach { cache.replace(it.recordId, it.sessions, it.fetchedAt, it.brokerVersion, it.workspaces, it.projects, it.lastMessages, it.recentLogs, it.lastRead, it.applets, it.appletIcons) }
             }
         }
     }
@@ -1008,6 +1049,11 @@ class FleetStore(
 
     /** The active host's app (host-global ops), falling back to the first connected host. */
     fun activeApp(): HostStore? = conns[_activeHost.value]?.app ?: conns.values.firstOrNull()?.app
+
+    /** The broker identity (`GET /host` hostId) of the host [sessionId] lives on, when its record knows it. */
+    fun hostIdOfSession(sessionId: String): String? = synchronized(lock) {
+        _sessionHost.value[sessionId]?.let { id -> store.list().firstOrNull { it.recordId == id }?.hostId }
+    }
 
     /** The broker identity (`GET /host` hostId) of the active host, when its record knows it. */
     fun activeHostId(): String? = synchronized(lock) {
@@ -1376,9 +1422,6 @@ class FleetStore(
     /** One-shot read of the persisted draft (the composer restores it on open). */
     suspend fun loadDraft(sessionId: String): String = draft(sessionId).first().orEmpty()
     fun draft(sessionId: String): Flow<String?> = deps.settings.string(SettingsKeys.draft(sessionId))
-    fun clearFinishJob(id: String) { appFor(id)?.clearFinishJob(id) }
-    fun ackFinish(id: String, startedAt: Double) { appFor(id)?.ackFinish(id, startedAt) }
-    fun isFinishAcked(id: String, startedAt: Double): Boolean = appFor(id)?.isFinishAcked(id, startedAt) == true
 
     fun connectTerminal(sessionId: String, terminalId: String = "main"): TerminalClient =
         requireHost(appFor(sessionId)).connectTerminal(sessionId, terminalId)
@@ -1389,6 +1432,7 @@ class FleetStore(
     fun closeTerminal(sessionId: String, terminalId: String) { appFor(sessionId)?.closeTerminal(sessionId, terminalId) }
 
     suspend fun gitFetch(id: String): GitOpResult? = appFor(id)?.gitFetch(id)
+    suspend fun gitPr(id: String): dev.supermux.net.PrRead? = appFor(id)?.gitPr(id)
     suspend fun gitPull(id: String): GitOpResult? = appFor(id)?.gitPull(id)
     suspend fun gitPush(id: String): GitOpResult? = appFor(id)?.gitPush(id)
     suspend fun gitPublish(id: String): GitOpResult? = appFor(id)?.gitPublish(id)
@@ -1399,31 +1443,12 @@ class FleetStore(
     fun gitPush(id: String, onResult: (GitOpResult?) -> Unit) { fleetScope.launch { onResult(gitPush(id)) } }
     fun gitPublish(id: String, onResult: (GitOpResult?) -> Unit) { fleetScope.launch { onResult(gitPublish(id)) } }
 
-    /** Kick off a finish job; [onKickoff] reports whether the POST was ACCEPTED (progress lands on
-     *  the finish_job frame). Fire-and-forget so the menu can call it outside a coroutine. */
-    fun finish(
-        id: String,
-        action: String? = null,
-        skipVerify: Boolean? = null,
-        commitFirst: Boolean? = null,
-        commitMessage: String? = null,
-        prTitle: String? = null,
-        prBody: String? = null,
-        draft: Boolean? = null,
-        prRequiresGreen: Boolean? = null,
-        onKickoff: (Boolean) -> Unit = {},
-    ) {
-        fleetScope.launch {
-            val ok = appFor(id)?.finish(
-                id, action.orEmpty(), skipVerify, commitFirst, commitMessage, prTitle, prBody, draft, prRequiresGreen,
-            ) == true
-            onKickoff(ok)
-        }
+    fun mergeIntoBase(id: String, onKickoff: (Boolean) -> Unit = {}) {
+        val app = appFor(id) ?: return onKickoff(false)
+        app.mergeIntoBase(id, onKickoff)
     }
 
     suspend fun finishReadiness(id: String): FinishReadiness? = appFor(id)?.finishReadiness(id)
-    suspend fun verifySuggest(id: String): VerifySuggestResult? = appFor(id)?.verifySuggest(id)
-    suspend fun verifySave(id: String, content: String): VerifySaveResult? = appFor(id)?.verifySave(id, content)
 
     suspend fun sessionModels(id: String): ModelsResponse? = appFor(id)?.sessionModels(id)
     suspend fun sessionReasoning(id: String): ReasoningResponse? = appFor(id)?.sessionReasoning(id)
@@ -1441,6 +1466,8 @@ class FleetStore(
         appFor(id)?.switchModel(id, model) == true
     suspend fun switchReasoning(id: String, level: String): Boolean =
         appFor(id)?.switchReasoning(id, level) == true
+    suspend fun sessionContext(id: String): dev.supermux.net.SessionContextDto? = appFor(id)?.sessionContext(id)
+    suspend fun compact(id: String, note: String?): Boolean = appFor(id)?.compact(id, note) == true
     suspend fun switchFastMode(id: String, fastMode: Boolean): Boolean =
         appFor(id)?.switchFastMode(id, fastMode) == true
     fun fastSupported(id: String, model: String?): Boolean {
@@ -1626,6 +1653,9 @@ class FleetStore(
             ?: Result.failure(IllegalStateException("host offline"))
     suspend fun workspaceFsWrite(workspaceId: String, path: String, content: String): Boolean =
         appForWorkspace(workspaceId)?.workspaceFsWrite(workspaceId, path, content) == true
+    /** #72: the Source Control seam of the host owning [workspaceId], or null when no host has it. */
+    fun sourceControl(workspaceId: String, sessionId: String?): SourceControlApi? = appForWorkspace(workspaceId)?.sourceControl(workspaceId, sessionId)
+
     suspend fun workspaceStage(workspaceId: String, repo: String, paths: List<String>, staged: Boolean): Boolean =
         appForWorkspace(workspaceId)?.workspaceStage(workspaceId, repo, paths, staged) == true
     suspend fun workspaceFsDiff(workspaceId: String, base: String? = null): FsDiffResult? =
@@ -1837,6 +1867,16 @@ class FleetStore(
         activeApp()?.launcherReasoning(agent, model)
     suspend fun launcherRepoInfo(workdir: String, fetch: Boolean = false): RepoInfo? =
         activeApp()?.launcherRepoInfo(workdir, fetch)
+    suspend fun launcherProjectBranches(dir: String): GitBranches? = activeApp()?.launcherProjectBranches(dir)
+    suspend fun launcherFolderState(dir: String): ProjectFolderState? = activeApp()?.launcherFolderState(dir)
+    suspend fun launcherProjectPrefs(dir: String): ProjectPrefs? = activeApp()?.launcherProjectPrefs(dir)
+    suspend fun launcherProjectPrs(dir: String, q: String = ""): OpenPrList? = activeApp()?.launcherProjectPrs(dir, q)
+    suspend fun branchPrefixSetting(): BranchPrefixSetting? = activeApp()?.branchPrefixSetting()
+    suspend fun setBranchPrefixSetting(prefix: String?): BranchPrefixSetting? = activeApp()?.setBranchPrefixSetting(prefix)
+    suspend fun launcherProjectPr(dir: String, ref: String): OpenPrRead? = activeApp()?.launcherProjectPr(dir, ref)
+    suspend fun launcherSwitchFolder(dir: String, name: String): GitSwitchResult? = activeApp()?.launcherSwitchFolder(dir, name)
+    suspend fun setLauncherProjectPrefs(dir: String, workIn: String?, branchPrefix: String? = null): ProjectPrefs? =
+        activeApp()?.setLauncherProjectPrefs(dir, workIn, branchPrefix)
     suspend fun launcherCommands(agent: String, workdir: String): List<SlashCommand> =
         activeApp()?.launcherCommands(agent, workdir).orEmpty()
 
@@ -1967,12 +2007,14 @@ class FleetStore(
         viewId: String? = null,
         permissionMode: String? = null,
         account: String? = null,
+        /** #152: what the launcher picked (it wins over [worktree] / [baseBranch]). */
+        source: SessionSourceBody? = null,
     ): String {
         val app = spawnTarget(hostRecordId, workspaceId)
             ?: throw IllegalStateException("No host connected")
         val newId = app.createSessionWithFirstMessageOrThrow(
             workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
-            replaceDraftId, workspaceId, name, inheritFrom, firstMessage, viewId, permissionMode, account,
+            replaceDraftId, workspaceId, name, inheritFrom, firstMessage, viewId, permissionMode, account, source,
         )
         return newId
     }

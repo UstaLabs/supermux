@@ -12,7 +12,12 @@ import type { Database as Db } from "bun:sqlite"
  * There is deliberately NO finish dependency. Spec §9.3: a close never opens
  * the Finish flow.
  */
+/** #151: how one close went — what the view was, how long ending its work took, and the whole close. */
+export type ViewClosed = { kind: string; killMs: number; totalMs: number; ok: boolean; error?: string }
+
 export type WorkspaceDeps = {
+  /** #151: a close's work ended (or failed), for the view_closed log. */
+  onViewClosed?: (e: ViewClosed) => void
   archiveSession: (sessionId: string) => Promise<void>
   /** Inverse of archiveSession: archived → live. */
   resumeSession: (sessionId: string) => Promise<void>
@@ -97,46 +102,63 @@ export class WorkspaceService {
   }
 
   /**
-   * Spec §9.3. Remove the view AND end the work behind it.
-   *
-   * Order matters: read the view first (removeView deletes the row), then run
-   * the side effect, then remove. A side effect that throws leaves the view in
-   * place, so the client can retry rather than losing the only handle to a
-   * running thing.
+   * Spec §9.3. Remove the view AND end the work behind it — and await both (tests, and callers that must know the
+   * work has ended). The app's close goes through [beginClose].
    */
   async closeView(viewId: string): Promise<void> {
+    await this.beginClose(viewId)?.work
+  }
+
+  /**
+   * #151: close a view the moment it is asked for. The view leaves the workspace (and its layout) now, so the
+   * client's answer and the workspace frame are not held up; the work behind it (archive the chat's session, kill
+   * the terminal, stop the display) follows in [work]. A slow or failing end is reported through `onViewClosed`
+   * (kind, killMs, totalMs, ok) and never brings the view back: the session's archive is kept whatever the kill did
+   * (main's archiveSession unregisters it even when the kill throws), and a workspace's terminals are reaped by
+   * scope when it is archived. Undefined when there is no such view.
+   */
+  beginClose(viewId: string): { work: Promise<void> } | undefined {
     const view = this.store.getView(viewId)
-    if (!view) return
+    if (!view) return undefined
+    const started = Date.now()
     const workspaceId = view.workspace_id
 
-    switch (view.kind) {
-      case "chat": {
-        await this.deps.archiveSession((view.state as ChatViewState).sessionId)
-        break
-      }
-      case "terminal": {
-        const st = view.state as TerminalViewState
-        const scope = st.scope === "workspace" ? workspaceScope(workspaceId) : st.sessionId
-        await this.deps.closeTerminal(scope, st.terminalId)
-        break
-      }
-      case "display": {
-        await this.deps.stopDisplay((view.state as DisplayViewState).displayId)
-        break
-      }
-      case "editor":
-      case "browser":
-      case "new":
-        break
-    }
-
     this.store.removeView(viewId)
-
     // Spec §9.5 rule 6: the pointer follows, the name does not.
     const ws = this.store.getById(workspaceId)
     if (view.kind === "chat" && ws?.primary_session_id === (view.state as ChatViewState).sessionId) {
       repointPrimarySession(this.store, workspaceId)
     }
+
+    const end = async (): Promise<void> => {
+      switch (view.kind) {
+        case "chat":
+          await this.deps.archiveSession((view.state as ChatViewState).sessionId)
+          break
+        case "terminal": {
+          const st = view.state as TerminalViewState
+          const scope = st.scope === "workspace" ? workspaceScope(workspaceId) : st.sessionId
+          await this.deps.closeTerminal(scope, st.terminalId)
+          break
+        }
+        case "display":
+          await this.deps.stopDisplay((view.state as DisplayViewState).displayId)
+          break
+        case "editor":
+        case "browser":
+        case "new":
+          break
+      }
+    }
+    const killStarted = Date.now()
+    const work = end().then(
+      () => ({ ok: true as const, error: undefined }),
+      (err: unknown) => ({ ok: false as const, error: err instanceof Error ? err.message : String(err) }),
+    ).then(({ ok, error }) => {
+      const now = Date.now()
+      this.deps.onViewClosed?.({ kind: view.kind, killMs: now - killStarted, totalMs: now - started, ok, ...(error ? { error } : {}) })
+    })
+    return { work }
   }
 
   /**

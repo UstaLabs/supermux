@@ -42,6 +42,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.rememberHaptics
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 
 /** Shared pill shape used by both ModelPill and EffortPill. */
 @Composable
@@ -56,7 +58,7 @@ private fun PillChip(
     val scale by animateFloatAsState(
         targetValue = if (pressed) 0.92f else 1f,
         animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioMediumBouncy),
-        label = "pill_scale",
+        label = "pill_scale", // i18n-ok: an animation label
     )
     Row(
         modifier = Modifier
@@ -99,13 +101,13 @@ private fun PillChip(
  */
 @Composable
 fun ModelPill(current: String?, onClick: () -> Unit) {
-    PillChip(label = current?.take(20) ?: "model", onClick = onClick)
+    PillChip(label = current?.take(20) ?: localized(Str.composer_pill_model), onClick = onClick)
 }
 
 /** Small rounded chip showing the current effort/reasoning level. Only shown when visible. */
 @Composable
 fun EffortPill(current: String?, onClick: () -> Unit) {
-    PillChip(label = current?.take(20) ?: "effort", onClick = onClick)
+    PillChip(label = current?.take(20) ?: localized(Str.composer_pill_effort), onClick = onClick)
 }
 
 /**

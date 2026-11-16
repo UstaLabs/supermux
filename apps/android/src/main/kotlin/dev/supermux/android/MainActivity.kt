@@ -345,6 +345,29 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                // #117: applets open in their own tasks.
+                val appletOpener = remember { dev.supermux.android.applets.AppletActivity.opener(this@MainActivity) }
+                val appletInstaller = remember { dev.supermux.android.applets.AndroidAppletInstaller(applicationContext) }
+                val appletWidgets = remember { dev.supermux.android.applets.AndroidAppletWidgets(applicationContext) }
+                // W1: the Home screen widgets follow the host picker's applets whenever the app sees them change.
+                LaunchedEffect(vm.fleet) {
+                    kotlinx.coroutines.flow.combine(vm.fleet.activeHost, vm.fleet.activeApplets) { h, a -> h to a }
+                        .collect { (hostId, applets) ->
+                            if (hostId != null && applets != null) {
+                                runCatching {
+                                    dev.supermux.android.applets.AppletWidgetStore.save(applicationContext, hostId, applets, active = true) {
+                                        vm.fleet.appForRecord(hostId)?.appletIconBytes(it)
+                                    }
+                                }
+                            }
+                        }
+                }
+                androidx.compose.runtime.CompositionLocalProvider(
+                    dev.supermux.ui.session.LocalAppletOpener provides appletOpener,
+                    dev.supermux.ui.session.LocalAppletScreens provides dev.supermux.ui.session.NativeAppletScreens,
+                    dev.supermux.ui.session.LocalAppletInstaller provides appletInstaller,
+                    dev.supermux.ui.session.LocalAppletWidgets provides appletWidgets,
+                ) {
                 SupermuxApp(
                     fleet = vm.fleet,
                     ui = ui,
@@ -381,6 +404,7 @@ class MainActivity : ComponentActivity() {
                     },
                     settingsSection = { place, scope -> FleetSettingsSection(place, scope, vm.fleet) },
                 )
+                }
             }
         }
     }

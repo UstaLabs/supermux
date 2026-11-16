@@ -15,7 +15,8 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.input.key.KeyEventType
 import dev.supermux.chat.TimelineItem
-import dev.supermux.chat.chatTimeLabel
+import dev.supermux.chat.chatTime
+import dev.supermux.ui.i18n.chatTimeText
 import dev.supermux.proto.Attachment
 import dev.supermux.proto.LogEntry
 import dev.supermux.ui.MdBlock
@@ -449,7 +450,7 @@ internal fun pictureFrame(pixelWidth: Int, pixelHeight: Int, maxWidth: Dp, maxHe
  * the message has no readable time.
  */
 internal fun mediaCaption(entry: LogEntry, agentName: String, nowMs: Long): String? {
-    val time = chatTimeLabel(entry.ts, nowMs) ?: return null
+    val time = chatTime(entry.ts, nowMs)?.let(::chatTimeText) ?: return null
     val who = when {
         entry.channel == "inbox" -> entry.from_session_name ?: agentName
         entry.direction == "inbound" -> "You"

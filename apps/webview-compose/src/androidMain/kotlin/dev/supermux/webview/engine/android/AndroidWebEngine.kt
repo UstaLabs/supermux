@@ -66,6 +66,8 @@ import androidx.webkit.WebViewFeature
 import androidx.webkit.WebViewRenderProcess
 import androidx.webkit.WebViewRenderProcessClient
 import dev.supermux.webview.ConsoleLevel
+import dev.supermux.webview.DownloadFailure
+import dev.supermux.webview.DownloadTarget
 import dev.supermux.webview.bridge.InputStamp
 import dev.supermux.webview.bridge.UserInputSource
 import dev.supermux.webview.bridge.inputClock
@@ -114,6 +116,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayInputStream
 import java.security.SecureRandom
@@ -124,6 +127,9 @@ import kotlin.math.roundToInt
 
 /** The engine's logcat tag. */
 internal const val TAG = "WebViewEngine"
+
+/** A form's download, which WebView can't hand over (see [DownloadFailure.FormPost]): the engine's words, in English. */
+private const val FORM_POST_MESSAGE = "A form's answer can't be saved here"
 
 /** How long a bundle's provider may take for one file before the request is a 404. */
 private const val BUNDLE_FILE_MILLIS = 10_000L
@@ -263,6 +269,7 @@ internal class AndroidWebEngine(
 
     /** The desktop site's viewport script (#122), while a lease asks for the desktop site. */
     private var desktopScript: ScriptHandler? = null
+    private var hintsScript: ScriptHandler? = null
 
     /**
      * The reply proxy of the last message the main frame's document sent, that document's origin and the token it signs
@@ -378,19 +385,35 @@ internal class AndroidWebEngine(
         view.visibility = View.INVISIBLE
         view.webViewClient = Client()
         view.webChromeClient = Chrome(view)
-        view.setDownloadListener { url, _, contentDisposition, mimeType, contentLength ->
+        view.setDownloadListener { url, userAgent, contentDisposition, mimeType, contentLength ->
             val asked = client
             if (view === webView && asked != null && hears(Delivery.Posted)) {
-                val request = DownloadRequest(
-                    url = url,
-                    suggestedFileName = URLUtil.guessFileName(url, contentDisposition, mimeType),
-                    mimeType = mimeType?.ifBlank { null },
-                    contentLength = contentLength.takeIf { it >= 0 },
-                )
-                // On Android the app downloads: WebView has nothing to proceed with, whatever the answer.
+                // WebView saves nothing: the library fetches it, with this page's session, read now.
+                val session = AndroidDownloads.Session(cookieManager(), userAgent?.ifBlank { null }, view.url)
                 scope.launch {
                     try {
-                        asked.onDownload(request)
+                        // What only the page knows: a blob's link name, and whether a form's POST sent it.
+                        val hint = if (setup?.javaScriptEnabled == true) {
+                            DownloadHint.parse(evaluate("window.__wvDl?window.__wvDl.hint(${jsString(url)}):null"))
+                        } else {
+                            DownloadHint.None
+                        }
+                        val request = DownloadRequest(
+                            url = url,
+                            // The page's or the server's own name first: guessFileName swaps its extension for the
+                            // MIME type's (a.txt sent as octet-stream becomes a.bin).
+                            suggestedFileName = hint.name ?: dispositionFileName(contentDisposition)
+                                ?: URLUtil.guessFileName(url, contentDisposition, mimeType),
+                            mimeType = mimeType?.ifBlank { null },
+                            contentLength = contentLength.takeIf { it >= 0 },
+                        )
+                        val target = asked.onDownload(request) ?: return@launch
+                        if (hint.post) {
+                            // WebView hands over a form's answer by URL only; asking again would send the form twice.
+                            target.onStarted(RefusedDownload(request, target.path, FORM_POST_MESSAGE, DownloadFailure.FormPost))
+                            return@launch
+                        }
+                        startDownload(request, target, session)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
@@ -406,6 +429,23 @@ internal class AndroidWebEngine(
         }
         container.addView(view, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         return view
+    }
+
+    /** Starts [request] to [target], and hands it to the app. `blob:` reads from this page, while it is there. */
+    private fun startDownload(request: DownloadRequest, target: DownloadTarget, session: AndroidDownloads.Session) {
+        val url = request.url
+        val download = when {
+            url.startsWith("http:", ignoreCase = true) || url.startsWith("https:", ignoreCase = true) ->
+                HttpDownload(request, target.path, session).also { it.start() }
+            url.startsWith("data:", ignoreCase = true) ->
+                BytesDownload(request, target.path) { _ -> dataUrlBytes(url) }.also { it.start() }
+            url.startsWith("blob:", ignoreCase = true) ->
+                BytesDownload(request, target.path) { progress ->
+                    readBlob(url, { script -> withContext(Dispatchers.Main) { evaluate(script) } }, progress)
+                }.also { it.start() }
+            else -> return
+        }
+        target.onStarted(download)
     }
 
     private fun usableNow(): Boolean = !released && !crashed && !resetting
@@ -428,6 +468,13 @@ internal class AndroidWebEngine(
         // "Desktop site" (#122): a wide layout viewport, the page overviewed to fit, its viewport tag made 1280 px.
         settings.useWideViewPort = setup.desktopSite
         settings.loadWithOverviewMode = setup.desktopSite
+        // The page's download hints (#157), where its scripts run.
+        if (setup.javaScriptEnabled != (hintsScript != null)) {
+            hintsScript?.remove()
+            hintsScript = if (setup.javaScriptEnabled) {
+                WebViewCompat.addDocumentStartJavaScript(webView, DOWNLOAD_HINTS_SCRIPT, setOf("*"))
+            } else null
+        }
         if (setup.desktopSite != (desktopScript != null)) {
             desktopScript?.remove()
             desktopScript = if (setup.desktopSite) {
@@ -858,6 +905,9 @@ internal class AndroidWebEngine(
         channels.clear()
         listening = false
         shim = null
+        // The old view's document-start scripts went with it: configure installs them on the new one.
+        desktopScript = null
+        hintsScript = null
         lastReply = null
         currentPage = null
         pageWithContent = null

@@ -176,7 +176,13 @@ public interface WebClient {
 
     public suspend fun onPermission(request: PermissionRequest): Boolean = false
 
-    public suspend fun onDownload(request: DownloadRequest): Boolean = false
+    /**
+     * A download the page started (a link with `download`, a response the engine can't show, `Content-Disposition:
+     * attachment`). Null, the default, drops it. A [DownloadTarget] has the engine save it to [DownloadTarget.path] with
+     * the page's own session (its cookies and login, a form's POST, a `blob:` URL), and hands the transfer to
+     * [DownloadTarget.onStarted]. It may take its time: the engine holds the transfer until it has the answer.
+     */
+    public suspend fun onDownload(request: DownloadRequest): DownloadTarget? = null
 
     /** A request for a new window. May run off the main thread: keep it fast, pure and thread-safe. */
     public fun onNewWindow(request: NewWindowRequest): NewWindowDecision = NewWindowDecision.Block

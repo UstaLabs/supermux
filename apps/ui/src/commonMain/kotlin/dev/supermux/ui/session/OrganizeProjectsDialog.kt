@@ -35,6 +35,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.host.HostView
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.theme.Space
 import dev.supermux.workspace.ProjectRef
@@ -109,12 +111,12 @@ fun OrganizeProjectsDialog(
     AdaptiveProjectContainer(tag = OrganizeProjectsTestIds.SHEET, onDismiss = close) {
         Column(Modifier.fillMaxWidth().padding(vertical = Space.md)) {
             Text(
-                "Organize projects",
+                localized(Str.organize_title),
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(horizontal = Space.lg),
             )
             Text(
-                "Drag to change the order projects appear in the sidebar.",
+                localized(Str.organize_hint),
                 color = cs.onSurfaceVariant,
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(horizontal = Space.lg, vertical = Space.xs),
@@ -152,7 +154,7 @@ fun OrganizeProjectsDialog(
                 horizontalArrangement = Arrangement.End,
             ) {
                 TextButton(onClick = close, modifier = Modifier.testTag(OrganizeProjectsTestIds.CANCEL)) {
-                    Text("Cancel")
+                    Text(localized(Str.project_cancel))
                 }
                 TextButton(
                     onClick = {
@@ -160,7 +162,7 @@ fun OrganizeProjectsDialog(
                         close()
                     },
                     modifier = Modifier.testTag(OrganizeProjectsTestIds.DONE),
-                ) { Text("Done") }
+                ) { Text(localized(Str.project_done)) }
             }
         }
     }
@@ -207,7 +209,7 @@ private fun OrganizeProjectRow(
     ) {
         Icon(
             Icons.Filled.DragIndicator,
-            contentDescription = "Drag to reorder",
+            contentDescription = localized(Str.organize_drag),
             tint = cs.onSurfaceVariant,
             modifier = Modifier.size(18.dp),
         )

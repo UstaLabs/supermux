@@ -31,7 +31,6 @@ import javax.sound.sampled.DataLine
 import javax.sound.sampled.TargetDataLine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.swing.Swing
 import kotlinx.coroutines.withContext
 import dev.supermux.fs.fileNameOf
 
@@ -141,10 +140,7 @@ internal class DesktopFileAccess : FileAccess {
     /** Where the user wants [name] saved; null when they cancelled, or there is no display to ask on (headless). */
     private suspend fun askWhereToSave(name: String): File? {
         if (GraphicsEnvironment.isHeadless()) return null
-        // The dialog is modal on the EDT by AWT contract.
-        return withContext(Dispatchers.Swing) {
-            runCatching { awtSaveFile(safeFileName(name)) }.getOrNull()
-        }
+        return runCatching { DesktopFileDialogs.save(safeFileName(name)) }.getOrNull()
     }
 }
 

@@ -105,6 +105,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -138,8 +139,6 @@ import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.countToolsSince
 import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.effectiveChatDetail
-import dev.supermux.ui.formatLowWorkingStatus
-import dev.supermux.ui.workingBaseLabel
 import dev.supermux.ui.keys.AppCommands
 import dev.supermux.ui.keys.LocalShortcutDispatcher
 import dev.supermux.ui.keys.RegisterCommand
@@ -152,7 +151,6 @@ import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.ui.turnBoundaryMs
-import dev.supermux.util.formatDuration
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
@@ -168,6 +166,8 @@ import kotlin.time.Clock
 import dev.supermux.ui.accounts.LimitWaitStrip
 import dev.supermux.ui.i18n.Plurals
 import dev.supermux.ui.i18n.localizedPlural
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 
 /** Reading-width cap for the composer so it lines up with the timeline's own cap. */
 private val CONTENT_MAX_WIDTH = 860.dp
@@ -288,6 +288,8 @@ data class ChatState(
      * the end.
      */
     val readMarkAtOpen: String? = null,
+    /** #144: this chat's agent is compacting the conversation now. */
+    val compacting: Boolean = false,
 )
 
 /**
@@ -341,11 +343,19 @@ class ChatActions(
         { dev.supermux.state.AccountResult.Failed(null, null, "Not available on this client") },
     /** Opens Settings ▸ Providers & accounts (the Account list's link when the session's account is unavailable); null = no link. */
     val openAccounts: (() -> Unit)? = null,
+    /** #72: the footer's ⟳ / ☁: fetch | pull | push | publish on this chat's branch; null = no sync here. */
+    val gitSync: (suspend (op: String) -> dev.supermux.net.GitOpResult?)? = null,
+    /** #72: the chat's branch's pull / merge request, for the footer's #12 ✓ / ✗; null = none here. */
+    val gitPr: (suspend () -> dev.supermux.net.PrRead?)? = null,
     /** Opens the agent's own sign-in, Settings ▸ Providers & accounts (the link when the system login's sign-in expired); null = none. */
     val openSignIn: (() -> Unit)? = null,
     /** #92: the wait for a usage-limit reset — drop it, or resume now. */
     val cancelLimitWait: suspend () -> Unit = {},
     val resumeLimitWait: suspend () -> Unit = {},
+    /** #144: what fills the context window and what this chat used (GET /sessions/<id>/context); null = can't say. */
+    val loadContext: suspend () -> dev.supermux.net.SessionContextDto? = { null },
+    /** #144 Compact, with a note on what to keep where the agent takes one. False when it was refused. */
+    val compact: suspend (note: String?) -> Boolean = { false },
 )
 
 /** [ChatActions] wired to a [HostStore] for one session — desktop's ergonomics, kept. */
@@ -381,6 +391,8 @@ fun rememberChatActions(
             pickReasoning = { level -> app.switchReasoning(session.id, level) },
             fastSupported = { model -> app.fastSupported(session.agent, model) },
             pickFast = { on -> app.switchFastMode(session.id, on) },
+            loadContext = { app.sessionContext(session.id) },
+            compact = { note -> app.compact(session.id, note) },
             ensureMessagesLoaded = { app.ensureMessagesLoaded(session.id) },
             loadProxies = loadProxies ?: { app.proxies() },
             respondRequest = { requestId, answer -> app.respondRequest(session.id, requestId, answer) },
@@ -393,6 +405,8 @@ fun rememberChatActions(
             setAccount = { id -> app.setSessionAccount(session.id, id) },
             openAccounts = openAccounts,
             openSignIn = openSignIn,
+            gitSync = { op -> when (op) { "pull" -> app.gitPull(session.id); "push" -> app.gitPush(session.id); "publish" -> app.gitPublish(session.id); else -> app.gitFetch(session.id) } },
+            gitPr = { app.gitPr(session.id) },
             cancelLimitWait = { app.cancelLimitWait(session.id) },
             resumeLimitWait = { app.resumeLimitWait(session.id) },
         )
@@ -409,6 +423,7 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
     val bgTasksMap by app.bgTasks.collectAsState()
     val commandsMap by app.commands.collectAsState()
     val commandsResolvedMap by app.commandsResolved.collectAsState()
+    val compactingMap by app.compacting.collectAsState()
     val walkthrough = app.walkthroughState<WalkthroughState>(sessionId)
     val requestsMap by app.requests.collectAsState()
     val closedRequestsMap by app.closedRequests.collectAsState()
@@ -431,6 +446,7 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
         sending = sessionId in pending,
         commands = commandsMap[sessionId].orEmpty(),
         commandsResolved = commandsResolvedMap[sessionId] ?: false,
+        compacting = sessionId in compactingMap,
         walkthroughUnread = walkthrough.unreadReplies,
         walkthroughUnreadStepId = walkthrough.unreadStepId,
         requests = requestsMap[sessionId].orEmpty(),
@@ -519,11 +535,6 @@ fun ChatPanel(
     onForceLinksMenuConsumed: () -> Unit = {},
     /** The globe/links affordance; receives the loaded proxies + the one-shot force-open flag. */
     headerLinks: @Composable RowScope.(List<ProxyDto>, Boolean, () -> Unit) -> Unit = { _, _, _ -> },
-    /**
-     * The Finish flow, in the chat header. NEW ON DESKTOP: desktop's `FinishDialog` was dead code
-     * (nothing ever opened it) — passing bindings here is what puts Finish on a desktop chat.
-     */
-    finish: FinishBindings? = null,
     /** The ⋮ overflow (rename/mute/kill/continue) — the host owns it; cluster G moves it here. */
     headerActions: @Composable RowScope.() -> Unit = {},
     /** Opens the workspace's singleton Changes pane in walkthrough mode. */
@@ -899,12 +910,13 @@ fun ChatPanel(
         }
         findQueryShown = find.query
     }
+    val revealGoneNotice = localized(Str.composer_reveal_gone)
     LaunchedEffect(revealTarget, timelineItems, state.historyLoaded) {
         val target = revealTarget ?: return@LaunchedEffect
         if (timelineItems.none { (it as? TimelineItem.Msg)?.entry?.id == target }) {
             if (state.historyLoaded) {
                 revealTarget = null
-                platform.notices.show("That message is no longer in the chat")
+                platform.notices.show(revealGoneNotice)
             }
             return@LaunchedEffect
         }
@@ -938,19 +950,23 @@ fun ChatPanel(
         dead -> null
         working && agent != null -> {
             if (hideTools) {
-                val base = when (agent.detail) { "running" -> "running"; "starting" -> "starting"; else -> "thinking" }
-                formatLowWorkingStatus(base, agent.detail, agent.tool, toolCountSinceTurn(), "")
+                val base = when (agent.detail) {
+                    "running" -> localized(Str.composer_status_running)
+                    "starting" -> localized(Str.composer_status_starting)
+                    else -> localized(Str.composer_status_thinking)
+                }
+                localizedLowWorkingStatus(base, agent.detail, agent.tool, toolCountSinceTurn(), "")
             } else {
                 when (agent.detail) {
-                    "running" -> "running ${agent.tool ?: "tool"}…"
-                    "starting" -> "starting…"
-                    else -> "thinking…"
+                    "running" -> localized(Str.composer_status_running_tool, agent.tool ?: localized(Str.composer_status_tool))
+                    "starting" -> localized(Str.composer_status_starting_now)
+                    else -> localized(Str.composer_status_thinking_now)
                 }
             }
         }
-        sending -> "sending…"
+        sending -> localized(Str.composer_status_sending_now)
         agent != null && agent.agentsRunning > 0 -> agentsWorkingLabel(agent.agentsRunning)
-        agent?.waiting == true -> "waiting (${agent.bgOpen} background)"
+        agent?.waiting == true -> localized(Str.composer_status_waiting_background, agent.bgOpen)
         else -> null
     }
     val statusColor = if (agent?.waiting == true && agent.agentsRunning == 0 && !working && !sending) sem.warning else cs.primary
@@ -997,7 +1013,7 @@ fun ChatPanel(
     val chromeFraction by animateFloatAsState(
         targetValue = if (chromeCollapsed) 0f else 1f,
         animationSpec = tween(200),
-        label = "chatChrome",
+        label = "chatChrome", // i18n-ok: an animation label
     )
     LaunchedEffect(chromeCollapsed) { onChromeHiddenChange(chromeCollapsed) }
     // The cards' cap ([chatViewportPx]): the transcript's height only while the chrome is shown and still. A wide view
@@ -1061,21 +1077,39 @@ fun ChatPanel(
                     // Breadcrumb, not a title: the PROJECT the session belongs to, then the session.
                     val projectName = projectLabel(session, inferHomeDir(session.workdir))
                     if (showProject && projectName.isNotEmpty()) {
-                        Icon(
-                            Icons.Outlined.FolderOpen,
-                            contentDescription = null,
-                            tint = cs.onSurfaceVariant,
-                            modifier = Modifier.size(14.dp),
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            text = projectName,
-                            fontSize = 13.sp,
-                            color = cs.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false),
-                        )
+                        // #149: on this computer the crumb opens the session's folder in Finder / Explorer.
+                        val openFolder = dev.supermux.ui.platform.rememberOpenFolder(session.id, session.workdir)
+                        Row(
+                            Modifier
+                                .weight(1f, fill = false)
+                                .then(
+                                    if (openFolder != null) {
+                                        Modifier
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .clickable(onClickLabel = openFolder.label) { openFolder.open() }
+                                            .pointerHoverIcon(androidx.compose.ui.input.pointer.PointerIcon.Hand)
+                                    } else {
+                                        Modifier
+                                    },
+                                )
+                                .testTag("chat_header_folder"),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                Icons.Outlined.FolderOpen,
+                                contentDescription = null,
+                                tint = cs.onSurfaceVariant,
+                                modifier = Modifier.size(14.dp),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = projectName,
+                                fontSize = 13.sp,
+                                color = cs.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                         Text(
                             text = "/",
                             fontSize = 13.sp,
@@ -1107,6 +1141,25 @@ fun ChatPanel(
                         )
                         }
                     }
+                    // #152 C4: a session started from a pull / merge request says so after the crumb, and whether
+                    // its pushes reach it ("#123 · pushes update it") or can't (a fork that allows no edits).
+                    val pr = session.pr
+                    if (pr != null && showStatusText) {
+                        val number = (if (pr.forge == "gitlab") "!" else "#") + pr.number // i18n-ok: GitHub's / GitLab's number signs
+                        Text(
+                            text = localized(if (session.push_remote != null) Str.chat_pr_crumb_pushes else Str.chat_pr_crumb_review, number),
+                            fontSize = 11.5.sp,
+                            color = cs.primary,
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier
+                                .padding(start = 8.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(cs.primary.copy(alpha = 0.12f))
+                                .padding(horizontal = 8.dp, vertical = 2.dp)
+                                .testTag("chat_header_pr"),
+                        )
+                    }
                 }
                 IconButton(
                     onClick = { find.show() },
@@ -1114,7 +1167,7 @@ fun ChatPanel(
                 ) {
                     Icon(
                         Icons.Filled.Search,
-                        contentDescription = "Search chats",
+                        contentDescription = localized(Str.composer_search_chats),
                         tint = cs.onSurfaceVariant,
                         modifier = Modifier.size(17.dp),
                     )
@@ -1134,7 +1187,7 @@ fun ChatPanel(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = "Not responding",
+                    text = localized(Str.composer_not_responding),
                     color = cs.onErrorContainer,
                     fontWeight = FontWeight.Medium,
                     fontSize = 13.sp,
@@ -1142,10 +1195,54 @@ fun ChatPanel(
             }
         }
 
+        // #144: the context ring, its panel and the near-autocompact line, per chat.
+        var contextOpen by remember(session.id) { mutableStateOf(false) }
+        var contextOnCompact by remember(session.id) { mutableStateOf(false) }
+        var contextThreshold by remember(session.id) { mutableStateOf<Long?>(null) }
+        var contextHintDismissed by remember(session.id) { mutableStateOf(false) }
+        // #146: "Not now" on the limit line holds for this window (a new reset time shows it again).
+        var limitHintDismissedFor by remember(session.id) { mutableStateOf<Long?>(null) }
+        val agentName = dev.supermux.ui.accounts.agentDisplayName(session.agent)
+        val lastCompaction = remember(state.messages) { state.messages.lastOrNull { it.compaction != null }?.compaction }
+        // #144/#146: one prompt to compact: a chip by the ring under a pointer, the composer's first line on touch.
+        val pointerHost = dev.supermux.ui.adaptive.LocalPointerAvailable.current
+        val nearPrompt = nearLimitPrompt(
+            session.context, contextThreshold, session.compactAdvice, state.compacting,
+            session.capabilities?.compact == true, contextHintDismissed, limitHintDismissedFor,
+        )
+        val openCompact: () -> Unit = { contextOnCompact = true; contextOpen = true }
+        val dismissPrompt: (NearLimitPrompt) -> Unit = { prompt ->
+            if (prompt is NearLimitPrompt.Limit) limitHintDismissedFor = prompt.resetsAt else contextHintDismissed = true
+        }
         val composer: @Composable () -> Unit = {
             Composer(
                 draft = draft,
                 onDraftChange = onDraftChange,
+                cardTopLine = if (!pointerHost && nearPrompt != null) {
+                    { NearLimitLine(nearPrompt, agentName, onCompact = openCompact, onDismiss = { dismissPrompt(nearPrompt) }) }
+                } else null,
+                contextControl = {
+                    if (pointerHost) nearPrompt?.let { prompt ->
+                        NearLimitChip(prompt, agentName, onCompact = openCompact, onDismiss = { dismissPrompt(prompt) })
+                    }
+                    ContextRingControl(
+                        alert = nearPrompt != null,
+                        agentName = agentName,
+                        context = session.context,
+                        canCompact = session.capabilities?.compact == true,
+                        compactNote = session.capabilities?.compactNote == true,
+                        compacting = state.compacting,
+                        lastCompaction = lastCompaction,
+                        actions = actions,
+                        pointer = pointerHost,
+                        open = contextOpen,
+                        onOpenChange = { contextOpen = it; if (!it) contextOnCompact = false },
+                        startOnCompact = contextOnCompact,
+                        onStartOnCompactConsumed = { contextOnCompact = false },
+                        threshold = contextThreshold,
+                        onThreshold = { contextThreshold = it },
+                    )
+                },
                 sending = sending,
                 // Stop lives in the composer's trailing slot on every host.
                 agentWorking = working,
@@ -1165,7 +1262,7 @@ fun ChatPanel(
                 onControl = onControl,
                 handledControlKinds = handledControls,
                 openModelPickerNonce = openModelPicker,
-                placeholder = DEFAULT_COMPOSER_PLACEHOLDER,
+                placeholder = defaultComposerPlaceholder(),
                 externalAttach = externalAttach,
                 onExternalAttachConsumed = onExternalAttachConsumed,
                 leadingChips = composerChips,
@@ -1209,7 +1306,7 @@ fun ChatPanel(
                     scope.launch { refreshCatalogs() }
                 },
                 tray = {
-                    ComposerFooter(session = session, onOpenChanges = onOpenChanges)
+                    ComposerFooter(session = session, onOpenChanges = onOpenChanges, onGitSync = actions.gitSync, onGitPr = actions.gitPr)
                 },
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -1277,6 +1374,7 @@ fun ChatPanel(
                             i in foldedRows -> Unit
                             else -> TimelineItemRow(
                                 item = item,
+                                agentName = dev.supermux.ui.accounts.agentDisplayName(session.agent),
                                 media = actions.media,
                                 onOpenFile = rowOpenFile,
                                 highDetail = highDetail,
@@ -1332,11 +1430,15 @@ fun ChatPanel(
                     modifier = Modifier.size(32.dp),
                 )
                 Text(
-                    "Start the conversation",
+                    localized(Str.composer_start_conversation),
                     style = MaterialTheme.typography.titleMedium,
                     color = cs.onSurface,
                 )
-                listOf("What's the current state?", "Run the tests", "Summarize recent changes")
+                listOf(
+                    localized(Str.composer_starter_state),
+                    localized(Str.composer_starter_tests),
+                    localized(Str.composer_starter_summarize),
+                )
                     .forEachIndexed { i, prompt ->
                         Surface(
                             onClick = {
@@ -1488,7 +1590,7 @@ private fun WalkthroughUnreadChip(
         onClick = { onOpenWalkthrough(state.walkthroughUnreadStepId) },
         modifier = modifier.testTag("walkthrough_unread_chip"),
     ) {
-        Text("💬 ${state.walkthroughUnread} new walkthrough replies")
+        Text(localizedPlural(Plurals.composer_walkthrough_unread, state.walkthroughUnread, state.walkthroughUnread))
     }
 }
 
@@ -1552,7 +1654,7 @@ private fun JumpToBottomButton(
                 .testTag("chat_jump_to_bottom"),
         ) {
             Box(contentAlignment = Alignment.Center) {
-                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Scroll to bottom", modifier = Modifier.size(22.dp))
+                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = localized(Str.composer_scroll_to_bottom), modifier = Modifier.size(22.dp))
             }
         }
         if (newCount > 0) {
@@ -1629,18 +1731,18 @@ private fun WorkingIndicator(
         }
     }
     val elapsed = agent.workingSince?.let { ((now - it).coerceAtLeast(0)) / 1000 }
-    val durationLabel = elapsed?.let { formatDuration(it) } ?: ""
+    val durationLabel = elapsed?.let { localizedDuration(it) } ?: ""
     // Medium: platform baseline (working/thinking + tool). Low: shared enrichment with tool count.
     val label = if (detailLow) {
-        formatLowWorkingStatus(
-            baseLabel = workingBaseLabel(agent.detail),
+        localizedLowWorkingStatus(
+            baseLabel = localizedWorkingBase(agent.detail),
             detail = agent.detail,
             tool = agent.tool,
             toolCount = toolCount,
             durationLabel = durationLabel,
         )
     } else {
-        val base = workingBaseLabel(agent.detail) +
+        val base = localizedWorkingBase(agent.detail) +
             (agent.tool?.takeIf { agent.detail == "running" }?.let { " · $it" } ?: "")
         base + (if (durationLabel.isNotEmpty()) " · $durationLabel" else "")
     }
@@ -1654,7 +1756,7 @@ private fun WorkingIndicator(
 @Composable
 private fun SendingIndicator(onStop: () -> Unit) {
     StatusRow(
-        label = "sending",
+        label = localized(Str.composer_status_sending),
         color = MaterialTheme.colorScheme.primary,
         stopTag = "sending_stop",
         onStop = onStop,
@@ -1668,14 +1770,58 @@ private fun SendingIndicator(onStop: () -> Unit) {
 @Composable
 private fun WaitingIndicator(bgOpen: Int) {
     StatusRow(
-        label = "waiting · " + if (bgOpen == 1) "1 background task" else "$bgOpen background tasks",
+        label = localizedPlural(Plurals.composer_status_waiting_tasks, bgOpen, bgOpen),
         color = LocalSemantics.current.warning,
         stopTag = null,
         onStop = {},
     )
 }
 
-private fun agentsWorkingLabel(n: Int) = if (n == 1) "1 agent working" else "$n agents working"
+private fun agentsWorkingLabel(n: Int): String = localizedPlural(Plurals.composer_status_agents_working, n, n)
+
+/**
+ * What a working session is doing, from its agent_state detail: "starting" while a session that was not up is being
+ * woken (card #75), "working" while it runs a tool, else "thinking".
+ */
+private fun localizedWorkingBase(detail: String?): String = when (detail) {
+    "starting" -> localized(Str.composer_status_starting)
+    "running" -> localized(Str.composer_status_working)
+    else -> localized(Str.composer_status_thinking)
+}
+
+/** Low-detail working status: [baseLabel] + the running tool + the tool count + [durationLabel], joined with " · ". */
+private fun localizedLowWorkingStatus(
+    baseLabel: String,
+    detail: String?,
+    tool: String?,
+    toolCount: Int,
+    durationLabel: String,
+): String {
+    val parts = mutableListOf(baseLabel)
+    if (detail == "running" && !tool.isNullOrBlank()) parts.add(tool)
+    if (toolCount > 0) parts.add(localizedPlural(Plurals.composer_status_tools, toolCount, toolCount))
+    if (durationLabel.isNotEmpty()) parts.add(durationLabel)
+    return parts.joinToString(" · ")
+}
+
+/** Elapsed time in its two largest units ("5 seconds", "3 minutes 5 seconds", "1 hour 2 minutes"). */
+private fun localizedDuration(totalSeconds: Long): String {
+    val s = maxOf(0L, totalSeconds)
+    val days = (s / 86400).toInt()
+    val hours = ((s % 86400) / 3600).toInt()
+    val minutes = ((s % 3600) / 60).toInt()
+    val seconds = (s % 60).toInt()
+    val d = localizedPlural(Plurals.composer_duration_days, days, days)
+    val h = localizedPlural(Plurals.composer_duration_hours, hours, hours)
+    val m = localizedPlural(Plurals.composer_duration_minutes, minutes, minutes)
+    val sec = localizedPlural(Plurals.composer_duration_seconds, seconds, seconds)
+    return when {
+        days > 0 -> if (hours > 0) "$d $h" else d
+        hours > 0 -> if (minutes > 0) "$h $m" else h
+        minutes > 0 -> if (seconds > 0) "$m $sec" else m
+        else -> sec
+    }
+}
 
 /**
  * The parent's turn is over but agents it started are still running: the session is working.
@@ -1684,7 +1830,7 @@ private fun agentsWorkingLabel(n: Int) = if (n == 1) "1 agent working" else "$n 
 @Composable
 private fun AgentsWorkingIndicator(agentsRunning: Int) {
     StatusRow(
-        label = agentsWorkingLabel(agentsRunning) + "…",
+        label = localized(Str.composer_status_ellipsis, agentsWorkingLabel(agentsRunning)),
         color = MaterialTheme.colorScheme.primary,
         stopTag = null,
         onStop = {},
@@ -1714,11 +1860,11 @@ private fun StatusRow(label: String, color: androidx.compose.ui.graphics.Color, 
             ) {
                 Icon(
                     Icons.Filled.Square,
-                    contentDescription = "Stop",
+                    contentDescription = localized(Str.composer_stop),
                     tint = cs.error,
                     modifier = Modifier.size(10.dp),
                 )
-                Text("stop", fontFamily = MonoFontFamily, fontSize = 11.sp, color = cs.error)
+                Text(localized(Str.composer_status_stop), fontFamily = MonoFontFamily, fontSize = 11.sp, color = cs.error)
             }
         }
     }

@@ -1,6 +1,5 @@
 package dev.supermux.webview.engine.linux
 
-import dev.supermux.webview.DownloadRequest
 import dev.supermux.webview.NavigationDecision
 import dev.supermux.webview.WebContent
 import dev.supermux.webview.WebError
@@ -181,10 +180,9 @@ class LinuxWebEngineFailedLoadTest {
         rig.engine.onEvent(WpeEvent.Policy(60, file.url, NavigationKind.Other, false, false, false))
         rig.engine.onEvent(WpeEvent.Load(WpeNative.LOAD_STARTED, file.url))
         rig.engine.onEvent(WpeEvent.Response(61, file.url, mainFrame = true, canShow = false, attachment = true, status = 200, mime = "application/zip", filename = "f.zip"))
-        assertEquals(WpeNative.IGNORE, rig.view.decisions[61])
+        assertEquals(WpeNative.DOWNLOAD, rig.view.decisions[61])
         rig.engine.onEvent(failed(file.url, policy = true))
         assertTrue(rig.events.none { it is EngineEvent.Error }, "${rig.events}")
-        assertContains(rig.client.asked, DownloadRequest(file.url, "f.zip", "application/zip", null))
         rig.close()
     }
 }

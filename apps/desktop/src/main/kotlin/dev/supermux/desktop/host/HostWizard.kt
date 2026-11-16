@@ -1,6 +1,8 @@
 package dev.supermux.desktop.host
 
 import androidx.compose.foundation.Image
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.widgets.qrBitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -139,12 +141,12 @@ class HostWizardModel(
         scope.launch {
             val id = runCatching { provideHostId() }.getOrNull()
             if (id.isNullOrBlank()) {
-                _state.value = HostWizardUiState.Error("Couldn't start the local host. Is the broker able to run on this machine?")
+                _state.value = HostWizardUiState.Error(localized(Str.host_app_desktop_wizard_error_start))
                 return@launch
             }
             val c = runCatching { mintClaim() }.getOrNull()
             if (c == null || c.claimSecret.isBlank()) {
-                _state.value = HostWizardUiState.Error(whyNoClaim() ?: "Couldn't create a pairing code from the local host.")
+                _state.value = HostWizardUiState.Error(whyNoClaim() ?: localized(Str.host_app_desktop_wizard_error_claim))
                 return@launch
             }
             val relay = c.relayUrl ?: provideRelayUrl()
@@ -169,16 +171,11 @@ class HostWizardModel(
 // ── Stateless content (Compose-UI tested) ──────────────────────────────────────────
 
 /** Spec §6 copy — kept as constants so the UI test asserts the exact strings. */
-const val HOST_WIZARD_HEADLINE = "This computer is ready to host your agents. Scan the QR with your phone."
-const val HOST_WIZARD_KEEPALIVE_LABEL = "Keep running in the background"
-const val HOST_WIZARD_KEEPALIVE_HELP = "Your agents stay reachable after you quit, sign out or restart."
+val HOST_WIZARD_HEADLINE get() = localized(Str.host_app_desktop_wizard_headline)
+val HOST_WIZARD_KEEPALIVE_LABEL get() = localized(Str.machine_background)
+val HOST_WIZARD_KEEPALIVE_HELP get() = localized(Str.host_app_desktop_wizard_keepalive_help)
 /** The local host is one this app doesn't manage (another copy of the app, `supermux setup`, left alone): #77. */
-const val HOST_WIZARD_SET_UP_ELSEWHERE =
-    "A supermux host already runs on this computer, set up outside this app, and this app leaves it as it is. To use it here, connect to it instead."
-private const val RELAY_ON_DISCLOSURE =
-    "Remote access is on through relay.supermux.dev."
-private const val RELAY_OFF_DISCLOSURE =
-    "Your phone reaches this computer directly on your local network. Turn on remote access later to reach it from anywhere through the supermux relay."
+val HOST_WIZARD_SET_UP_ELSEWHERE get() = localized(Str.host_app_desktop_wizard_set_up_elsewhere)
 
 /**
  * Pure render of the wizard for a resolved [state]. Stateless so the Compose test drives it with a
@@ -214,7 +211,7 @@ fun HostWizardContent(
             when (state) {
                 is HostWizardUiState.Preparing -> {
                     Text(
-                        "Setting up this computer as a host…",
+                        localized(Str.host_app_desktop_wizard_preparing),
                         style = MaterialTheme.typography.titleMedium,
                         color = cs.onSurface,
                         textAlign = TextAlign.Center,
@@ -230,9 +227,9 @@ fun HostWizardContent(
                         textAlign = TextAlign.Center,
                         modifier = Modifier.testTag("host_wizard_error"),
                     )
-                    Button(onClick = onRetry, modifier = Modifier.testTag("host_wizard_retry")) { Text("Try again") }
+                    Button(onClick = onRetry, modifier = Modifier.testTag("host_wizard_retry")) { Text(localized(Str.accounts_try_again)) }
                     TextButton(onClick = onConnectInstead, modifier = Modifier.testTag("host_wizard_connect_instead")) {
-                        Text("Connect to a different broker instead")
+                        Text(localized(Str.host_app_desktop_wizard_connect_instead))
                     }
                 }
 
@@ -247,7 +244,7 @@ fun HostWizardContent(
                     // The QR sits on a fixed white card so it scans in dark mode too.
                     Image(
                         bitmap = state.qr,
-                        contentDescription = "Pairing QR code",
+                        contentDescription = localized(Str.host_app_desktop_wizard_qr),
                         modifier = Modifier
                             .size(240.dp)
                             .clip(RoundedCornerShape(12.dp))
@@ -286,7 +283,7 @@ fun HostWizardContent(
                     }
 
                     Text(
-                        if (state.relayEnabled) RELAY_ON_DISCLOSURE else RELAY_OFF_DISCLOSURE,
+                        localized(if (state.relayEnabled) Str.host_app_desktop_wizard_relay_on else Str.host_app_desktop_wizard_relay_off),
                         style = MaterialTheme.typography.bodySmall,
                         color = cs.onSurfaceVariant,
                         textAlign = TextAlign.Center,
@@ -296,9 +293,9 @@ fun HostWizardContent(
                     Button(
                         onClick = onFinish,
                         modifier = Modifier.fillMaxWidth().testTag("host_wizard_done"),
-                    ) { Text("Done") }
+                    ) { Text(localized(Str.shell_done)) }
                     TextButton(onClick = onConnectInstead, modifier = Modifier.testTag("host_wizard_connect_instead")) {
-                        Text("Connect to a different broker instead")
+                        Text(localized(Str.host_app_desktop_wizard_connect_instead))
                     }
                 }
             }
@@ -310,17 +307,17 @@ fun HostWizardContent(
 
 /** The optional-git step's copy, as constants so the tests assert the exact strings. */
 object GitToolsCopy {
-    const val TITLE_MAC = "Install Apple's developer tools — optional"
-    const val BODY_MAC = "Agents work without them; they enable git features (worktrees, diffs, change tracking)."
-    const val TITLE = "Install git — optional"
-    const val BODY = "Agents work without it; it enables git features (worktrees, diffs, change tracking)."
-    const val INSTALL = "Install"
-    const val RETRY = "Retry"
-    const val SKIP = "Skip"
-    const val STARTING = "Starting…"
-    const val INSTALLING = "Installing…"
-    const val FAILED = "Couldn't start the installer."
-    fun installFailed(error: String) = "Couldn't install: $error"
+    val TITLE_MAC get() = localized(Str.host_app_desktop_git_title_mac)
+    val BODY_MAC get() = localized(Str.host_app_desktop_git_body_mac)
+    val TITLE get() = localized(Str.host_app_desktop_git_title)
+    val BODY get() = localized(Str.host_app_desktop_git_body)
+    val INSTALL get() = localized(Str.work_install)
+    val RETRY get() = localized(Str.work_retry)
+    val SKIP get() = localized(Str.host_app_desktop_git_skip)
+    val STARTING get() = localized(Str.host_git_starting)
+    val INSTALLING get() = localized(Str.machine_installing)
+    val FAILED get() = localized(Str.host_app_desktop_git_failed)
+    fun installFailed(error: String) = localized(Str.host_app_desktop_git_install_failed, error)
 }
 
 object GitToolsTags {

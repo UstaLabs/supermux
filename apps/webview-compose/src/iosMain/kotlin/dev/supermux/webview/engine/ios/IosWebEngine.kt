@@ -19,6 +19,7 @@ import dev.supermux.webview.FindResult
 import dev.supermux.webview.InspectorResult
 import dev.supermux.webview.WebCookie
 import dev.supermux.webview.DownloadRequest
+import dev.supermux.webview.DownloadTarget
 import dev.supermux.webview.NavigationDecision
 import dev.supermux.webview.NewWindowDecision
 import dev.supermux.webview.NewWindowRequest
@@ -907,8 +908,8 @@ internal class IosWebEngine private constructor(
         val target = action.targetFrame
         val isMainFrame = target?.isMainFrame ?: true
         if (action.shouldPerformDownload && url != null) {
-            askAboutDownload(DownloadRequest(WebKitUrls.toLibraryUrl(url, bundle), null, null, null))
-            return decisionHandler(cancel, preferences)
+            // WebKit fetches it, and asks where to save it once it has the response (IosDownloads): the client hears then.
+            return decisionHandler(if (client != null) WKNavigationActionPolicy.WKNavigationActionPolicyDownload else cancel, preferences)
         }
         val kind = navigationKindOf(action.navigationType)
         // A request WebKit has sent already: a server redirect's (I6).
@@ -986,13 +987,9 @@ internal class IosWebEngine private constructor(
             }
             return decisionHandler(allow)
         }
-        // A download. The client hears of it; the engine saves nothing, either way (as Android's DownloadListener).
-        val url = response.response.URL?.absoluteString
-        if (url != null) {
-            val length = response.response.expectedContentLength.takeIf { it >= 0 }
-            askAboutDownload(DownloadRequest(WebKitUrls.toLibraryUrl(url, bundle), response.response.suggestedFilename, response.response.MIMEType, length))
-        }
-        decisionHandler(WKNavigationResponsePolicy.WKNavigationResponsePolicyCancel)
+        // A download (#157): WebKit saves it with the page's session, where the client says (IosDownloads).
+        val download = client != null && response.response.URL != null
+        decisionHandler(if (download) WKNavigationResponsePolicy.WKNavigationResponsePolicyDownload else WKNavigationResponsePolicy.WKNavigationResponsePolicyCancel)
     }
 
     internal fun onStarted(navigation: Any?) {
@@ -1294,25 +1291,20 @@ internal class IosWebEngine private constructor(
             decisionHandler(if (it) WKPermissionDecision.WKPermissionDecisionGrant else WKPermissionDecision.WKPermissionDecisionDeny)
         }
 
-    /** Tells the client of a download, which the engine has already cancelled: nothing waits on the answer. */
-    private fun askAboutDownload(request: DownloadRequest) {
-        val asked = client ?: return
-        CoroutineScope(scope.coroutineContext + lease).launch {
-            try {
-                asked.onDownload(request)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                // A client that throws has said no.
-            }
-        }
+    /**
+     * WebKit has a download's response and asks where to save it ([IosDownloads]): the client says, or it is dropped (no
+     * client, a client that throws, a reset or release first). Exactly one [answer].
+     */
+    internal fun askDownload(url: String, suggestedFilename: String?, mimeType: String?, length: Long?, answer: (DownloadRequest, DownloadTarget?) -> Unit) {
+        val request = DownloadRequest(WebKitUrls.toLibraryUrl(url, bundle), suggestedFilename?.ifEmpty { null }, mimeType, length)
+        ask({ answer(request, null) }, { it.onDownload(request) }) { answer(request, it) }
     }
 
     /**
      * Asks the client [question] on main, and hands its answer to [answer]; with no client, or one that fails, or
      * when a reset or release comes first, WebKit gets [byDefault], the safe answer. Exactly one of them runs.
      */
-    private fun <T : Any> ask(byDefault: () -> Unit, question: suspend (EngineClient) -> T, answer: (T) -> Unit) {
+    private fun <T : Any> ask(byDefault: () -> Unit, question: suspend (EngineClient) -> T?, answer: (T) -> Unit) {
         val pending = Pending(byDefault)
         val asked = client
         if (asked == null || released || resetting) return pending.answerByDefault()

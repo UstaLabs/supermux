@@ -95,7 +95,8 @@ fun groupWorkspaces(
         result.add(
             WorkspaceGroup(
                 key = PA_GROUP_KEY,
-                label = "Agents",
+                // The UI names the pinned group in the app's language.
+                label = "",
                 workspaces = pas.sortedWith(rowOrder),
             ),
         )

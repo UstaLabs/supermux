@@ -7,7 +7,7 @@
 #include <jni.h>
 
 /** MacGlue.ABI; Gradle's stageMacGlue reads it from here. Change both together. */
-#define WV_ABI_VERSION 7
+#define WV_ABI_VERSION 8
 
 /**
  * The upcalls: MacGlue.onEvent's `type`, and what its fields hold (the plan's Task 3 table; GlueEvent.kt decodes it).
@@ -37,6 +37,10 @@ typedef NS_ENUM(int, WVEvent) {
     WVEventCrashed = 19,
     WVEventPointer = 20,   // x, y: points from the window content's top-left; -1, -1 for a key
     WVEventMemory = 21,
+    WVEventDownload = 22,         // page: the one it came from; id: download; x: length or -1; a URL, b MIME, c file name
+    WVEventDownloadProgress = 23, // page 0; id: download; x: received, y: total or -1
+    WVEventDownloadDone = 24,     // page 0; id: download; x: size
+    WVEventDownloadStopped = 25,  // page 0; id: download; flags: paused 1, failed 2, cancelled 4; x: received; a: message
 };
 
 /** Runs block on AppKit's main thread in AWT's run loop modes (M10), at once if already there; waits for it if wait. */
@@ -163,6 +167,12 @@ WVPageView *WVFocusedPageView(NSWindow *window);
 
 /** The page view a hit test of window at locationInWindow ends in, or nil. */
 WVPageView *WVPageViewAt(NSWindow *window, NSPoint locationInWindow);
+
+/**
+ * Takes a download WebKit started (WVDownloads.m): it asks the engine of page (its token; 0 when it is gone: the
+ * download is cancelled) where to save it with a DOWNLOAD upcall, then reports it on the process (page 0).
+ */
+void WVAdoptDownload(WKDownload *download, jlong page);
 
 /** Starts the memory-pressure source, once (WVMain.m). */
 void WVStartMemoryPressure(void);

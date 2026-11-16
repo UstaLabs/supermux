@@ -98,3 +98,21 @@ test("DELETE /push/subscribe is idempotent on missing row", async () => {
   })
   expect(res.status).toBe(200)
 })
+
+// #123: the web app says its language when it subscribes; previews and notices are worded in it.
+test("POST /push/subscribe records the device's language, ignoring one that is not a short tag", async () => {
+  const post = (body: unknown) => fetch(`http://127.0.0.1:${port}/push/subscribe`, {
+    method: "POST",
+    headers: { Cookie: `cmux_token=${token}`, "content-type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  const sub = { endpoint: "https://example.com/push/abc", keys: { p256dh: "pkey", auth: "secret" } }
+  expect((await post({ ...sub, lang: "tr" })).status).toBe(200)
+  expect(store.get("iphone")?.lang).toBe("tr")
+  expect((await post({ ...sub, lang: "x".repeat(64) })).status).toBe(200)
+  expect(store.get("iphone")?.lang).toBe("tr")
+  expect((await post({ ...sub, lang: 42 })).status).toBe(200)
+  expect(store.get("iphone")?.lang).toBe("tr")
+  expect((await post({ ...sub, lang: "en-US" })).status).toBe(200)
+  expect(store.get("iphone")?.lang).toBe("en-US")
+})

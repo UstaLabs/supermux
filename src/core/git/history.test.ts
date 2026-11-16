@@ -32,6 +32,15 @@ test("the chat's list is what its branch has that the base doesn't; the base's c
   expect(h.baseCommits.map((c) => c.subject)).toEqual(["Base two", "Base one"])
 }, REAL_GIT_MS)
 
+// #72: the Graph's "Incoming Changes from <base>": what the base has that this chat doesn't yet.
+test("incoming counts the base's commits this chat doesn't have yet", async () => {
+  const d = repo()
+  expect((await history(d, "dev")).incoming).toBe(0)
+  git(d, "switch", "-q", "dev"); commit(d, "c.txt", "c\n", "Base three"); commit(d, "c.txt", "cc\n", "Base four"); git(d, "switch", "-q", "mux/chat")
+  expect((await history(d, "dev")).incoming).toBe(2)
+  expect((await history(d, null)).incoming).toBe(0)
+}, REAL_GIT_MS)
+
 test("no base known: no guess, the chat's list is the branch's own recent commits", async () => {
   const d = repo()
   const h = await history(d, null)
@@ -39,6 +48,32 @@ test("no base known: no guess, the chat's list is the branch's own recent commit
   expect(h.baseCommits).toEqual([])
   expect(h.chat.map((c) => c.subject)).toEqual(["Base two", "Base one"])
   expect((await history(d, "no-such-branch")).base).toBeNull()
+}, REAL_GIT_MS)
+
+test("a base that is the branch itself is no base: the branch's own commits, not an empty list", async () => {
+  const d = repo()
+  commit(d, "b.txt", "b\n", "Add search box")
+  const h = await history(d, "mux/chat")
+  expect(h.base).toBeNull()
+  expect(h.chat.map((c) => c.subject)).toEqual(["Add search box", "Base two", "Base one"])
+  expect(h.incoming).toBe(0)
+}, REAL_GIT_MS)
+
+test("the base as last fetched: a teammate's push to origin/<base> is incoming, though the local base hasn't moved", async () => {
+  const d = repo()
+  const origin = mkdtempSync(join(tmpdir(), "mux-history-origin-"))
+  execFileSync("git", ["init", "-q", "--bare", "-b", "dev", origin])
+  git(d, "remote", "add", "origin", origin); git(d, "push", "-q", "-u", "origin", "dev")
+  commit(d, "b.txt", "b\n", "Add search box")
+  const mate = mkdtempSync(join(tmpdir(), "mux-history-mate-"))
+  execFileSync("git", ["clone", "-q", "-c", "core.autocrlf=false", origin, mate])
+  git(mate, "config", "user.email", "g@t"); git(mate, "config", "user.name", "Grace")
+  commit(mate, "m.txt", "m\n", "Main moves on"); git(mate, "push", "-q")
+  git(d, "fetch", "-q", "origin")
+  const h = await history(d, "dev")
+  expect(h.incoming).toBe(1)
+  expect(h.baseCommits[0]!.subject).toBe("Main moves on")
+  expect(h.chat.map((c) => c.subject)).toEqual(["Add search box"])
 }, REAL_GIT_MS)
 
 test("pushed commits say so", async () => {

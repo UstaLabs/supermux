@@ -2,6 +2,7 @@ package dev.supermux.webview.sample.checks
 
 import dev.supermux.webview.DialogResult
 import dev.supermux.webview.DownloadRequest
+import dev.supermux.webview.DownloadTarget
 import dev.supermux.webview.FileChooserRequest
 import dev.supermux.webview.NavigationDecision
 import dev.supermux.webview.NavigationRequest
@@ -145,7 +146,7 @@ class CheckClient(
     }
     override suspend fun onFileChooser(request: FileChooserRequest): List<String>? = null.also { asked += request }
     override suspend fun onPermission(request: PermissionRequest): Boolean = false.also { asked += request }
-    override suspend fun onDownload(request: DownloadRequest): Boolean = false.also { asked += request }
+    override suspend fun onDownload(request: DownloadRequest): DownloadTarget? = null.also { asked += request }
     override fun onNewWindow(request: NewWindowRequest): NewWindowDecision = newWindow.also { asked += request }
 }
 

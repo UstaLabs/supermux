@@ -2,6 +2,7 @@ import { EventEmitter } from "events"
 import { recordOpenCodeFreeLimit } from "../../usage/opencode-free"
 import type { AgentCommandEntry } from "../../slash-commands/types"
 import type { AgentModelEntry } from "../../../../packages/supermux-core/src/events/normalized.js"
+import type { ContextBreakdown } from "../../../../packages/supermux-core/src/types.js"
 import { readFile } from "node:fs/promises"
 import type { AgentAdapter, AgentKind, BrokerRequest, InboundMeta, RequestAnswerInput } from "../types"
 import { mapPendingRequest, toCoreAnswer } from "./request-map"
@@ -247,18 +248,22 @@ function guessImageMime(path: string, mime?: string): string {
 
 /** One broker-facing adapter for every Core-backed agent. Differences live in CoreAdapterProfile. */
 /**
- * #143: put before a message that ended a running turn (message_session interrupt=true). Claude Code reports a tool call
- * cut off that way as "The user doesn't want to proceed with this tool use… STOP" + "[Request interrupted by user for
- * tool use]", and the command itself may run on, so without this the agent stops and waits for a refusal nobody made.
+ * #143: put before the first input that runs after a message ended a running turn (message_session interrupt=true),
+ * whichever input that is: messages queued before it run first. Claude Code reports a tool call cut off that way as
+ * "The user doesn't want to proceed with this tool use… STOP" + "[Request interrupted by user for tool use]", and the
+ * command itself may run on, so without this the agent stops and waits for a refusal nobody made.
  */
-export const INBOX_INTERRUPT_NOTE =
-  "[supermux] The message below interrupted your turn. If a tool call came back as rejected (\"The user doesn't want to proceed…\" or \"[Request interrupted by user for tool use]\"), that was this interruption, not the user: nobody refused it. The command may still be running or already done, so check its state before you run it again."
+export function interruptNote(sender?: string): string {
+  return `[supermux] Your turn was just interrupted by a message from ${sender || "another session"} (it follows, after any messages queued before it). ` +
+    "If a tool call came back as rejected (\"The user doesn't want to proceed…\", \"Not answered…\" or \"[Request interrupted by user for tool use]\"), " +
+    "that was this interruption, not the user: nobody refused it. The command may still be running, already done, or never started " +
+    "(if it was waiting for a permission answer), so check before you run it again."
+}
 
-function withInterruptNote(content: ContentBlock[]): ContentBlock[] {
-  const i = content.findIndex((block) => block.type === "text")
-  if (i < 0) return [{ type: "text", text: INBOX_INTERRUPT_NOTE }, ...content]
-  const block = content[i] as ContentBlock & { type: "text"; text: string }
-  return content.map((b, j) => (j === i ? { ...block, text: `${INBOX_INTERRUPT_NOTE}\n\n${block.text}` } : b))
+/** #143: the answer an interrupt gives a permission prompt nobody answered, in place of "Permission denied". */
+export function interruptedPromptAnswer(sender?: string): string {
+  return `Not answered: a message from ${sender || "another session"} interrupted your turn before anyone answered this permission prompt. ` +
+    "Nobody refused it; ask again if you still need it."
 }
 
 export class CoreAdapter extends EventEmitter implements AgentAdapter {
@@ -273,6 +278,10 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   availableCommands?: AgentCommandEntry[]
   /** The models the agent offered at its last start (ACP options; Cursor's model list, #102). */
   offeredModels?: AgentModelEntry[]
+  /** How full the agent's context window is, as it last reported (#144); undefined until it reports. */
+  contextUsage?: { used: number; size: number }
+  /** Tools the main thread started, by name (#144 "used in this chat"); since this adapter started. */
+  readonly toolUses = new Map<string, number>()
 
   onUsageUpdate?: (data: CodexUsage) => void
   getPrevUsage?: () => CodexUsage | null
@@ -378,7 +387,17 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
         this.offeredModels = models
         this.emit("models-update", { kind: "models-update" })
       },
+      onCompaction: (compaction) => { this.emit("compaction", { kind: "compaction", ...compaction }) },
+      onCacheTtl: (ttl) => { this.emit("cache-ttl", ttl) },
+      onToolUsed: (name) => { this.toolUses.set(name, (this.toolUses.get(name) ?? 0) + 1) },
+      onContext: (context) => {
+        if (this.contextUsage?.used === context.used && this.contextUsage.size === context.size) return
+        this.contextUsage = { used: context.used, size: context.size }
+        this.emit("context-update", { kind: "context-update", ...this.contextUsage })
+      },
       onUsage: (rateLimits) => {
+        // #146: the raw reading too (Claude's five_hour utilization isn't a CodexUsage): the compact advisor reads it.
+        this.emit("rate-limits", rateLimits)
         const data = codexUsageFromRateLimits(rateLimits, this.getPrevUsage?.() ?? null)
         if (data) this.onUsageUpdate?.(data)
       },
@@ -390,6 +409,21 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   get effort(): string | undefined { return this._effort }
   get fast(): boolean { return this._fast }
   get permissionMode(): string | undefined { return this._permissionMode }
+
+  /**
+   * #144 Compact: queued like a message (it runs after the turn in progress). The note is kept only where the agent
+   * takes one. Throws when the agent can't compact or the session isn't running.
+   */
+  async compact(note?: string): Promise<void> {
+    const session = this.session
+    if (!session) throw new Error("The agent isn't running")
+    await session.compact({ ...(note ? { note } : {}), whenBusy: "queue" })
+  }
+
+  /** What fills the context window, asked of the agent now (#144); undefined when it can't say or isn't running. */
+  async contextBreakdown(): Promise<ContextBreakdown | undefined> {
+    try { return await this.session?.contextBreakdown() } catch { return undefined }
+  }
 
   /**
    * Switch this session to another account of its agent (manual). Core shuts the live process
@@ -817,11 +851,11 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       }
       await this.settleReopen()
       this.assertLive(epoch)
-      let content = await this.buildContent(text, meta, epoch)
+      const content = await this.buildContent(text, meta, epoch)
       this.assertLive(epoch)
       let session = this.requireSession()
       if (meta?.busy === "interrupt" || meta?.busy === "stop") {
-        if (await this.interruptKeepingQueue(session, handedOverDuring, meta.busy === "interrupt")) content = withInterruptNote(content)
+        const interrupted = await this.interruptKeepingQueue(session, handedOverDuring, meta.busy === "interrupt", meta.user)
         // The idle it waited for also wakes a core-side reopen that was waiting for the turn to end:
         // a context or tool reload takes the queue (still paused) to a new Session; an account switch
         // closes the old Session and cancels it. Either way, follow the new Session. No await from
@@ -831,6 +865,8 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
         // A Stop during the wait drops this input like the rest of the pending input.
         this.assertLive(epoch)
         session = this.requireSession()
+        // On whichever input the queue runs next: an older queued message runs before this one.
+        if (interrupted) session.pending.notice(interruptNote(meta.user))
       }
       if (this.continueAfterInterrupt) {
         session.pending.continue()
@@ -949,7 +985,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
    * failed) interrupt only makes that wait last until the turn ends on its own; it is logged. No
    * restart meanwhile (setConfiguration): it would close the session under the waiting input.
    */
-  private async interruptKeepingQueue(session: Session, handedOverDuring: RunningTurn | undefined, afterTools = false): Promise<boolean> {
+  private async interruptKeepingQueue(session: Session, handedOverDuring: RunningTurn | undefined, afterTools = false, sender?: string): Promise<boolean> {
     const stillRuns = () => !!handedOverDuring && handedOverDuring.session === session && session.snapshot().turnId === handedOverDuring.turnId
     if (!stillRuns()) return false
     const generation = this.startEpoch
@@ -968,7 +1004,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       let outcome: InterruptResult["status"] | "failed"
       let err: string | undefined
       try {
-        outcome = (await session.interrupt({ pending: "keep" })).status
+        outcome = (await session.interrupt({ pending: "keep", reason: interruptedPromptAnswer(sender) })).status
       } catch (error) {
         // A driver whose interrupt throws still ends the turn on its own; whenIdle() waits for that.
         outcome = "failed"
@@ -1285,7 +1321,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       // A Core-internal reopen (limit switch, token refresh) replaced the Session object.
       const live = this.core.sessions.live(this.id)
       if (live && !this.restarting) this.session = live
-      if (event.type === "account.switched") this.emit("account", { kind: "account", event: "switched", from: event.from, to: event.to, reason: event.reason })
+      if (event.type === "account.switched") this.emit("account", { kind: "account", event: "switched", from: event.from, to: event.to, reason: event.reason, ...(event.why ? { why: event.why } : {}) })
       else this.emit("account", { kind: "account", event: "refreshed", account: event.account })
       return
     }

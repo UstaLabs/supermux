@@ -26,6 +26,7 @@ fun rememberChatState(fleet: FleetStore, sessionId: String): ChatState {
     val pendingSend by fleet.pendingSend.collectAsState()
     val commands by fleet.commands.collectAsState()
     val commandsResolved by fleet.commandsResolved.collectAsState()
+    val compacting by fleet.compacting.collectAsState()
     val bgTasks by fleet.bgTasks.collectAsState()
     val subagents by fleet.subagents.collectAsState()
     val councils by fleet.councils.collectAsState()
@@ -47,6 +48,7 @@ fun rememberChatState(fleet: FleetStore, sessionId: String): ChatState {
         sending = sessionId in pendingSend,
         commands = commands[sessionId].orEmpty(),
         commandsResolved = commandsResolved[sessionId] ?: false,
+        compacting = sessionId in compacting,
         walkthroughUnread = walkthrough?.unreadReplies ?: 0,
         walkthroughUnreadStepId = walkthrough?.unreadStepId,
         subagents = subagents[sessionId].orEmpty(),
@@ -65,6 +67,8 @@ private val NoLiveReplies: StateFlow<Map<String, List<LiveReply>>> = MutableStat
 fun rememberChatActions(fleet: FleetStore, sessionId: String): ChatActions =
     remember(fleet, sessionId) {
         ChatActions(
+            gitPr = { fleet.gitPr(sessionId) },
+            gitSync = { op -> when (op) { "pull" -> fleet.gitPull(sessionId); "push" -> fleet.gitPush(sessionId); "publish" -> fleet.gitPublish(sessionId); else -> fleet.gitFetch(sessionId) } },
             send = { text, atts -> fleet.sendWith(sessionId, text, atts) },
             interrupt = { fleet.interrupt(sessionId) },
             upload = { source, name, mime, kind, onProgress ->
@@ -100,6 +104,8 @@ fun rememberChatActions(fleet: FleetStore, sessionId: String): ChatActions =
             pickReasoning = { fleet.switchReasoning(sessionId, it) },
             fastSupported = { model -> fleet.fastSupported(sessionId, model) },
             pickFast = { fleet.switchFastMode(sessionId, it) },
+            loadContext = { fleet.sessionContext(sessionId) },
+            compact = { note -> fleet.compact(sessionId, note) },
             ensureMessagesLoaded = { fleet.ensureMessagesLoaded(sessionId) },
             loadProxies = { fleet.proxies() },
             respondRequest = { requestId, answer -> fleet.respondRequest(sessionId, requestId, answer) },

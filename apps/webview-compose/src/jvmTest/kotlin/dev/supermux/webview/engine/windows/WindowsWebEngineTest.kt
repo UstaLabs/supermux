@@ -1,6 +1,7 @@
 package dev.supermux.webview.engine.windows
 
 import dev.supermux.webview.WebContent
+import dev.supermux.webview.LoadFailure
 import dev.supermux.webview.WebError
 import dev.supermux.webview.WebOrigin
 import dev.supermux.webview.WebProfile
@@ -222,7 +223,7 @@ class WindowsWebEngineTest {
         rig.engine.onEvent(WinEvent.Completed(rig.page.epoch, link, false, 13, 0, "https://a.example/gone"))
         rig.engine.onEvent(WinEvent.Message(rig.page.epoch, "fedcba9876543210 msg {\"t\":\"event\",\"n\":\"x\"}"))
         assertTrue(rig.events.none { it is EngineEvent.PageMessage }, "${rig.events}")
-        assertEquals(EngineEvent.Error(WebError.Network("https://a.example/gone", "load failed (WebView2 status 13)")), rig.events.last { it is EngineEvent.Error })
+        assertEquals(EngineEvent.Error(WebError.Network("https://a.example/gone", "load failed (WebView2 status 13)", LoadFailure.NameNotResolved)), rig.events.last { it is EngineEvent.Error })
         rig.close()
     }
 
@@ -338,6 +339,27 @@ class WindowsWebEngineTest {
         assertEquals("{\"userAgent\":\"Phone/1 demo/1\"}", overrides().last())
         rig.engine.configure(WebSettings(userAgentSuffix = "demo/1").pageSetup(dark = false, bridgeOrigins = emptySet()))
         assertEquals("{\"userAgent\":\"\"}", overrides().last(), "back to WebView2's own")
+        rig.close()
+    }
+
+    /** #155: a cookie goes into the page's profile through CDP's Network.setCookie, done when WebView2 says it took it. */
+    @Test fun aCookieGoesInThroughCdpAndIsDoneWhenWebView2Answers() = runTest {
+        val rig = WinRig(this, WebProfile.Named("supermux-browser"))
+        rig.warm()
+        val key = dev.supermux.webview.WebCookie("cmux_preview", "pv", "https://relay.test/p/", path = "/p/")
+        var result: Boolean? = null
+        rig.scope.launch { result = rig.engine.setCookie(key) }
+        val (request, _, params) = rig.page.devtools.last { it.second == "Network.setCookie" }
+        assertEquals(
+            "{\"name\":\"cmux_preview\",\"value\":\"pv\",\"url\":\"https://relay.test/p/\",\"path\":\"/p/\",\"secure\":true,\"httpOnly\":true,\"sameSite\":\"Lax\"}",
+            params,
+        )
+        rig.engine.onEvent(WinEvent.Result(request, true, "{}"))
+        assertEquals(true, result)
+        var refused: Boolean? = null
+        rig.scope.launch { refused = rig.engine.setCookie(key) }
+        rig.engine.onEvent(WinEvent.Result(rig.page.devtoolsRequest("Network.setCookie"), false, null))
+        assertEquals(false, refused)
         rig.close()
     }
 

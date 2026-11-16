@@ -28,10 +28,17 @@
     <string name="machine_kit_collapsed">Daraltıldı</string>
     <string name="machine_kit_offline">%1$s çevrimdışı.</string>
     <string name="machine_kit_offline_seen">%1$s çevrimdışı · son görülme %2$s.</string>
-    <!-- This computer's hosting (HostingCopy) -->
+    <!-- This computer's hosting -->
     <string name="machine_hosting_lid_waiting">Parolanız bekleniyor…</string>
     <string name="machine_hosting_lid_uninstall">Kapak yardımcısını kaldır</string>
     <string name="machine_hosting_auto_login">Klavye başında kimse yokken de başlaması için Sistem Ayarları ▸ Kullanıcılar ve Gruplar'da Otomatik Giriş'i açın.</string>
+    <string name="machine_hosting_paused_on_battery">Pildeyken duraklatıldı</string>
+    <string name="machine_hosting_app_held">supermux uygulaması açıkken bilgisayarı uyanık tutuyor.</string>
+    <string name="machine_hosting_waiting_for_login">Giriş yapmanız bekleniyor… Masaüstü oturumunuz başlayınca supermux bu bilgisayarı uyanık tutar.</string>
+    <string name="machine_hosting_lid_install">macOS parolanızı bir kez soracak.</string>
+    <string name="machine_hosting_lid_not_installed">Kapak yardımcısı yüklü değil. Yüklemek için işaretleyin; macOS parolanızı bir kez soracak.</string>
+    <string name="machine_hosting_lid_other_user">Kapak yardımcısı başka bir kullanıcı için yüklü. Sizin için yeniden yüklemek üzere işaretleyin.</string>
+    <string name="machine_hosting_lid_home_unsupported">Bu hesabın ana klasörü için kullanılamıyor.</string>
     <!-- Editor &amp; terminal -->
     <string name="editor_settings_wrap">Uzun satırları kaydır</string>
     <string name="editor_settings_wrap_description">Yana kaydırmak yerine satırı alta geçirir.</string>
@@ -270,6 +277,15 @@
     <string name="worktrees_chat_worktrees">Sohbet worktree'leri</string>
     <string name="worktrees_disk_note">Ajanların çalıştığı klasörler. Hiçbir şey kendiliğinden silinmez.</string>
     <string name="worktrees_none">Sohbet worktree'si yok</string>
+    <!-- #152: başlatıcıdan açılan yeni bir dalın aldığı önek (Ayarlar › Makine › Sohbet worktree'leri). -->
+    <string name="worktrees_prefix_head">Yeni dallar</string>
+    <string name="worktrees_prefix_label">Dal öneki</string>
+    <string name="worktrees_prefix_auto">Otomatik: %1$s</string>
+    <string name="worktrees_prefix_none">Önek yok</string>
+    <string name="worktrees_prefix_note">Başlatıcıdan açılan yeni bir dal %1$sfix-login-redirect gibi adlandırılır. Boş bırakılırsa önek, projeye bağlı forge hesabını, o yoksa adınızı izler.</string>
+    <string name="worktrees_prefix_failed">Önek kaydedilemedi. Bağlantıyı kontrol edip yeniden deneyin.</string>
+    <string name="worktrees_folders_head">Klasörler</string>
+    <string name="worktrees_prefix_refused">Git, %1$s önekini dal öneki olarak kabul etmiyor.</string>
     <string name="worktrees_counting">Sayılıyor…</string>
     <string name="worktrees_refresh">Yenile</string>
     <string name="worktrees_refreshing">Yenileniyor…</string>

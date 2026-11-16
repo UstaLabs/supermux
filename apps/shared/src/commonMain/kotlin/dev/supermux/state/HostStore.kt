@@ -4,9 +4,8 @@
 // BrokerApi (HTTP) and reduces inbound ServerFrames into StateFlows the Compose UI observes.
 // The Milestone-1 surface is ported here — sessions / messages / activity / agentState / bgTasks /
 // commands + the send/viewing/control paths — plus the M3 editor filesystem surface (fsList/fsRead/
-// fsWrite/fsSearch) and the M4b finish
-// surface (the finish_job + session_git reducer branches + finish/finishReadiness/verifySuggest/
-// verifySave/clearFinishJob). Still-out-of-scope frames (LSP, displays) and features (uploads beyond
+// fsWrite/fsSearch) and the finish job's surface (the finish_job + session_git reducer branches,
+// finishReadiness, and #72's mergeIntoBase). Still-out-of-scope frames (LSP, displays) and features (uploads beyond
 // Send args, dictation, models/reasoning, drafts, push, notifications) are deliberately no-op'd so the
 // reducer stays a faithful subset of AppViewModel's `when (frame)`.
 package dev.supermux.state
@@ -59,7 +58,9 @@ import dev.supermux.net.ForgeSearchResponse
 import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsRefsResult
 import dev.supermux.net.FsSearchResult
+import dev.supermux.net.GitBranches
 import dev.supermux.net.GitOpResult
+import dev.supermux.net.GitSwitchResult
 import dev.supermux.net.LspInstallResult
 import dev.supermux.net.LspMutationResult
 import dev.supermux.net.LspServer
@@ -70,10 +71,17 @@ import dev.supermux.net.OpenCodeProvider
 import dev.supermux.net.PADto
 import dev.supermux.net.PathValidation
 import dev.supermux.net.ProjectLocationConflict
+import dev.supermux.net.AppletDto
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.RemoteRepo
 import dev.supermux.net.RepoInfo
+import dev.supermux.net.BranchPrefixSetting
+import dev.supermux.net.OpenPrList
+import dev.supermux.net.OpenPrRead
+import dev.supermux.net.ProjectFolderState
+import dev.supermux.net.ProjectPrefs
+import dev.supermux.net.SessionSourceBody
 import dev.supermux.net.ClaudeResetResult
 import dev.supermux.net.CodexResetResult
 import dev.supermux.net.ReviewComment
@@ -89,8 +97,6 @@ import dev.supermux.net.UpdateCommentBody
 import dev.supermux.net.UpdateStatus
 import dev.supermux.net.Walkthrough
 import dev.supermux.net.UsageResponse
-import dev.supermux.net.VerifySaveResult
-import dev.supermux.net.VerifySuggestResult
 import dev.supermux.net.ScrcpyClient
 import dev.supermux.net.VncClient
 import dev.supermux.net.WorktreeChangesDto
@@ -137,6 +143,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
@@ -418,6 +426,13 @@ class HostStore(
     private var viewingOnList: Boolean = false
     private var viewingVisible: Boolean = false
     private var lastSentViewing: List<ClientFrame.Viewing>? = null
+    private val _chatsOnScreen = MutableStateFlow<Set<String>>(emptySet())
+
+    /**
+     * Card #154: the chats on screen with this app in front, as its viewing presence reports them (a desktop window
+     * counts only while focused). The assistant overlay stays quiet about a reply in one of these.
+     */
+    val chatsOnScreen: StateFlow<Set<String>> = _chatsOnScreen.asStateFlow()
     /** Card #62: chats whose live text this app wants without their being on screen ([pinLive]). */
     @Volatile private var livePinned: List<String> = emptyList()
     /** The optional frames the broker said it takes (its last snapshot's `accepts`): nothing until it says. */
@@ -483,6 +498,9 @@ class HostStore(
     /** Per-session resolution state of the slash-command set (true = fully resolved). */
     val commandsResolved: StateFlow<Map<String, Boolean>> =
         _state.map { it.commandsResolved }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
+    /** #144: sessions whose compaction is running (session id → compaction id). */
+    val compacting: StateFlow<Map<String, String>> =
+        _state.map { it.compacting }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     /** Per-session walkthrough holders. Created and updated by [walkthroughSeam] on first frame. */
     private val walkthroughs = mutableMapOf<String, Any>()
 
@@ -507,22 +525,13 @@ class HostStore(
     val lastRead: StateFlow<Map<String, String>> =
         _state.map { it.lastRead }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
 
-    // ── Finish flow (M4b) ──────────────────────────────────────────────────────────
-    // The last/in-flight finish job per session, keyed by session id (Android AppViewModel
-    // parity). Seeded from each SessionInfo.finish_job in the Snapshot and kept current by the
-    // FinishJobFrame reducer; the FinishDialog drives its 3-state machine (menu/running/outcome)
-    // off this flow. clearFinishJob drops an entry client-side once the user dismisses the outcome.
+    // ── The finish job ─────────────────────────────────────────────────────────────
+    // The last/in-flight finish job per session, keyed by session id. Seeded from each
+    // SessionInfo.finish_job in the Snapshot and kept current by the FinishJobFrame reducer;
+    // #72's "Merge into <base>" line reads it.
     val finishJobs: StateFlow<Map<String, FinishJobDto>> =
         _state.map { it.finishJobs }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
 
-    // Which finish result the user has "seen" (acked), per session id → the job's startedAt. The
-    // header's unacked dot derives from this vs the live finishJobs entry. It lives HERE (not as
-    // SessionDetail Compose state) because desktop reuses ONE SessionDetail across session
-    // selections (AppShell renders it without key(session.id)), so a switch A→B→A would reset
-    // per-composable ack state and wrongly re-show A's already-seen dot. Android sidesteps this via
-    // its NavHost backstack; on desktop the ack must survive the switch — so it's app state.
-    private val _ackedFinish = MutableStateFlow<Map<String, Double>>(emptyMap())
-    val ackedFinish: StateFlow<Map<String, Double>> = _ackedFinish
 
     // ── Notifications (M5-3) ────────────────────────────────────────────────────────
     // Raw agent-reply pulses (direction="outbound", op="reply" MessageAppend entries only),
@@ -622,6 +631,25 @@ class HostStore(
     private val _onboarded = MutableStateFlow<Boolean?>(null)
     val onboarded: StateFlow<Boolean?> = _onboarded.asStateFlow()
 
+    // ── Applets (#117): the host's applets and their pins, for the sidebar grid and All applets. Null = not loaded yet,
+    // or a broker without applets (its GET /applets fails): the app then shows no Applets section at all.
+    private val _applets = MutableStateFlow<List<AppletDto>?>(null)
+    val applets: StateFlow<List<AppletDto>?> = _applets.asStateFlow()
+    private var appletsJob: Job? = null
+    /**
+     * Each applet's icon as last fetched, by applet id, with the [AppletDto.updatedAt] it was fetched for: served while
+     * the host is out of reach, and written to the offline cache with the list (FleetStore.writeSnapshots).
+     */
+    private val appletIcons = mutableMapOf<String, Pair<String, ByteArray>>()
+    /** Guards [appletIcons] (a SynchronizedObject: Kotlin/Native's synchronized takes nothing else). */
+    private val appletIconsLock = SynchronizedObject()
+
+    /** The icons [appletIcons] holds, base64 by applet id, for the offline cache. */
+    @OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class)
+    fun cachedAppletIcons(): Map<String, String> = synchronized(appletIconsLock) {
+        appletIcons.mapValues { (_, v) -> kotlin.io.encoding.Base64.encode(v.second) }
+    }
+
     // ── Accounts state (slice A3b) — the calls live with the other settings calls below.
     private val _accounts = MutableStateFlow<List<AccountDto>?>(null)
     /** Every agent's accounts (system first per agent), live once [ensureAccounts] ran. */
@@ -635,6 +663,9 @@ class HostStore(
     private val _accountsAutoResume = MutableStateFlow<Boolean?>(null)
     /** #92: GET/PUT /settings/accounts `autoResume`, kept current by `accounts_settings`. */
     val accountsAutoResume: StateFlow<Boolean?> = _accountsAutoResume.asStateFlow()
+    private val _accountsCompactBeforeWait = MutableStateFlow<Boolean?>(null)
+    /** #146: GET/PUT /settings/accounts `compactBeforeWait`, kept current by `accounts_settings`. */
+    val accountsCompactBeforeWait: StateFlow<Boolean?> = _accountsCompactBeforeWait.asStateFlow()
 
     private val _accountLogins = MutableSharedFlow<AccountLoginStateDto>(extraBufferCapacity = 32)
     /** Every `account_login_state` frame (all logins; filter by `loginId`). */
@@ -838,6 +869,7 @@ class HostStore(
                 // The broker keeps live pins per socket: a new socket is told again (if it takes them at all).
                 if (livePinned.isNotEmpty()) sendLivePins()
                 refreshAgentModels()
+                refreshApplets()
                 if (accountsWanted) refreshAccounts()
                 if (!frame.partialLogs.isNullOrEmpty() || !frame.partialExtras.isNullOrEmpty()) prefetchRecentLogs()
                 // Anything may have been archived or resumed while we were away (card #54: this
@@ -846,6 +878,7 @@ class HostStore(
                 if (frame.archivedLazy) refreshArchivedWorkspaces()
                 fileSystem.onReconnect()
                 flushOutbox()
+                refreshPreviewRoutes()
                 _resynced.tryEmit(Unit)
             }
             is ServerFrame.FsDir, is ServerFrame.FsGone, is ServerFrame.FsErr -> fileSystem.onFrame(frame)
@@ -875,10 +908,13 @@ class HostStore(
             is ServerFrame.UsageUpdated -> holdUsage(frame.usage)
             ServerFrame.AccountsChanged -> if (accountsWanted) refreshAccounts()
             ServerFrame.AgentsChanged -> _agentsChanged.tryEmit(Unit)
+            is ServerFrame.ProxyCreated, is ServerFrame.ProxyUpdated, is ServerFrame.ProxyRemoved -> refreshPreviewRoutes()
+            ServerFrame.AppletsChanged -> refreshApplets()
             is ServerFrame.AccountLoginState -> _accountLogins.tryEmit(frame.toDto())
             is ServerFrame.AccountsSettings -> {
                 _accountsAutoSwitch.value = frame.autoSwitch
                 _accountsAutoResume.value = frame.autoResume
+                _accountsCompactBeforeWait.value = frame.compactBeforeWait
             }
             is ServerFrame.HostRequirementsChanged -> _hostRequirements.value = frame.requirements
             is ServerFrame.KeepAwakeChanged -> _keepAwake.value = frame.keepAwake
@@ -936,6 +972,7 @@ class HostStore(
         viewingSessionIds = if (visible && session != null) listOf(session) else emptyList()
         viewingOnList = visible && session == null
         viewingVisible = visible
+        _chatsOnScreen.value = viewingSessionIds.toSet()
         // Optimistic clear (web useUnread.markRead / Android parity). Server confirms via
         // session_read after the viewing frame advances the read pointer.
         if (visible && session != null) markRead(session)
@@ -954,6 +991,7 @@ class HostStore(
         viewingSessionIds = if (visible) sessionIds.distinct() else emptyList()
         viewingOnList = visible && viewingSessionIds.isEmpty()
         viewingVisible = visible
+        _chatsOnScreen.value = viewingSessionIds.toSet()
         if (visible) {
             for (id in viewingSessionIds) markRead(id)
         }
@@ -1346,6 +1384,9 @@ class HostStore(
     // apply here; the real BrokerApi has ONE flat result shape for all four ops.
 
     /** POST /sessions/<id>/git/fetch. Null on any failure. */
+    /** #72: the chat's branch's pull / merge request (the footer's #12 ✓ / ✗). */
+    suspend fun gitPr(id: String): dev.supermux.net.PrRead? = runApi("gitPr") { api.gitPr("sessions", id) }
+
     suspend fun gitFetch(id: String): GitOpResult? =
         runApi("gitFetch") { api.gitFetch(id) }
 
@@ -1366,6 +1407,39 @@ class HostStore(
     suspend fun proxies(): List<ProxyDto> =
         runApi("proxies") { api.proxies() } ?: emptyList()
 
+    // ── A Browser tab's routes (#155) ───────────────────────────────────────────────────────────
+    // Every tab used to ask for both, one after the other, before its first page: two broker round trips (~90 ms each
+    // over the relay). Now they are asked at the same time, once, and kept until a preview changes or the socket
+    // reconnects, when they are asked again behind the kept answer.
+
+    @Volatile private var previewRoutesKept: PreviewRoutes? = null
+    @Volatile private var previewRoutesLoad: Deferred<PreviewRoutes>? = null
+    @Volatile private var previewRoutesGeneration = 0
+
+    /** The host's by-port template and previews: the kept answer at once, else both asked at the same time. */
+    suspend fun previewRoutes(): PreviewRoutes = previewRoutesKept ?: loadPreviewRoutes().await()
+
+    /** A preview changed, or the socket reconnected: ask again, if a Browser tab has asked before, keeping the old answer meanwhile. */
+    private fun refreshPreviewRoutes() {
+        previewRoutesGeneration++
+        if (previewRoutesKept != null || previewRoutesLoad?.isActive == true) loadPreviewRoutes(force = true)
+    }
+
+    private fun loadPreviewRoutes(force: Boolean = false): Deferred<PreviewRoutes> {
+        previewRoutesLoad?.takeIf { it.isActive && !force }?.let { return it }
+        val generation = previewRoutesGeneration
+        return stateScope.async {
+            val routes = coroutineScope {
+                val byPort = async { runApi("byPortTemplate") { api.byPortTemplate() } }
+                val proxies = async { runApi("proxies") { api.proxies() } }
+                PreviewRoutes(byPort.await(), proxies.await())
+            }
+            // Kept only when both answered, and nothing changed while they were asked; a failed ask is asked again next time.
+            if (routes.proxies != null && generation == previewRoutesGeneration) previewRoutesKept = routes
+            routes
+        }.also { previewRoutesLoad = it }
+    }
+
     // ── Proxies management (desktop-parity Task 5) ─────────────────────────────────────────────
     // Session-links menu only *reads* proxies; the Settings Proxies section creates/toggles/removes.
     // [proxiesForSettings] returns null on failure so the UI can distinguish Error from Empty
@@ -1380,15 +1454,15 @@ class HostStore(
 
     /** POST /proxies {sessionName, port, domain?} — null on failure. */
     suspend fun createProxy(sessionName: String, port: Int, domain: String? = null): CreateProxyResponse? =
-        runApi("createProxy") { api.createProxy(sessionName, port, domain) }
+        runApi("createProxy") { api.createProxy(sessionName, port, domain) }?.also { refreshPreviewRoutes() }
 
     /** PATCH /proxies/<domain> {isPublic}. False on failure. */
     suspend fun setProxyPublic(domain: String, isPublic: Boolean): Boolean =
-        runApi("setProxyPublic") { api.setProxyPublic(domain, isPublic); true } ?: false
+        (runApi("setProxyPublic") { api.setProxyPublic(domain, isPublic); true } ?: false).also { if (it) refreshPreviewRoutes() }
 
     /** DELETE /proxies/<domain>. False on failure. */
     suspend fun removeProxy(domain: String): Boolean =
-        runApi("removeProxy") { api.removeProxy(domain); true } ?: false
+        (runApi("removeProxy") { api.removeProxy(domain); true } ?: false).also { if (it) refreshPreviewRoutes() }
 
     // ── Persistent project catalog ─────────────────────────────────────────────────────────────
     // Each mutation upserts the returned project at once; the broker's `projects_changed`
@@ -1570,79 +1644,18 @@ class HostStore(
     suspend fun updateGlossary(terms: List<String>): List<String>? =
         runApi("updateGlossary") { api.updateGlossary(terms) }
 
-    // ── Finish flow (M4b; mirrors AppViewModel.finish/finishReadiness/verifySuggest/verifySave) ──
-    // The FinishDialog drives the whole job lifecycle off the [finishJobs] StateFlow; [finish] only
-    // KICKS OFF the async job — its terminal outcome arrives on the WS finish_job frame ([reduce]).
-    // The readiness/verify helpers getOrNull-degrade through [runApi] like the launcher wrappers.
+    // ── #72 "Merge into <base>": the broker's merge job; its progress lands on the finish_job frame ──
 
-    /**
-     * Kick off a finish job for the session's branch. `action`: "merge" | "pr" | "keep" | "discard".
-     * Fire-and-forget: returns only whether the POST was ACCEPTED (the job's progress/outcome lands
-     * on the finish_job frame, not here). Mirrors Android's `runCatching{api.finish}.isSuccess` — a
-     * non-2xx makes BrokerApi.decode throw (SKIE-safe), so isSuccess is the kickoff-accepted signal.
-     */
-    suspend fun finish(
-        id: String,
-        action: String,
-        skipVerify: Boolean? = null,
-        commitFirst: Boolean? = null,
-        commitMessage: String? = null,
-        prTitle: String? = null,
-        prBody: String? = null,
-        draft: Boolean? = null,
-        prRequiresGreen: Boolean? = null,
-    ): Boolean =
-        runCatching {
-            api.finish(id, action, skipVerify, commitFirst, commitMessage, prTitle, prBody, draft, prRequiresGreen)
-        }.isSuccess
-
-    /**
-     * Fire-and-forget finish kickoff on the STORE's own scope, reporting acceptance through
-     * [onKickoff]. The shared Finish flow calls this rather than awaiting [finish] on the panel's
-     * `rememberCoroutineScope`, which a view/session switch mid-kickoff would cancel. Mirrors
-     * [FleetStore.finish].
-     */
-    fun kickoffFinish(
-        id: String,
-        action: String,
-        skipVerify: Boolean? = null,
-        commitFirst: Boolean? = null,
-        commitMessage: String? = null,
-        onKickoff: (Boolean) -> Unit = {},
-    ) {
-        stateScope.launch {
-            onKickoff(finish(id, action, skipVerify, commitFirst, commitMessage))
-        }
+    /** #72: "Merge into <base>" — the merge job, never archiving the chat; [onKickoff] says whether
+     *  the broker ACCEPTED it (progress and outcome arrive on the finish_job frame, [finishJobs]). */
+    fun mergeIntoBase(id: String, onKickoff: (Boolean) -> Unit = {}) {
+        stateScope.launch { onKickoff(runCatching { api.finish(id, "merge", keep = true) }.isSuccess) }
     }
 
     /** Preflight snapshot for the finish menu (branch sync / diff / conflict / dirty). Null on failure. */
     suspend fun finishReadiness(id: String): FinishReadiness? =
         runApi("finishReadiness") { api.finishReadiness(id) }
 
-    /** Suggest a `.mux/verify.sh` for the no_verify recovery path. Null on failure. */
-    suspend fun verifySuggest(id: String): VerifySuggestResult? =
-        runApi("verifySuggest") { api.verifySuggest(id) }
-
-    /** Save an edited verify script (the FinishDialog auto-runs merge when `ok`). Null on failure. */
-    suspend fun verifySave(id: String, content: String): VerifySaveResult? =
-        runApi("verifySave") { api.verifySave(id, content) }
-
-    /** Dismiss a finished/failed job's card (client-side only; mirrors web `finishJob.clear(id)`).
-     *  The broker keeps its record — this only drops the local overlay so the dialog closes. Also
-     *  drops the ack entry: the card is gone, so its acked-startedAt no longer needs remembering. */
-    fun clearFinishJob(id: String) {
-        _state.update { it.copy(finishJobs = it.finishJobs - id) }
-        _ackedFinish.update { it - id }
-    }
-
-    /** Record that the user has SEEN (acked) the finish result for [id] at [startedAt] — bumped on
-     *  the FinishButton click. Survives session switches (unlike per-composable state). */
-    fun ackFinish(id: String, startedAt: Double) {
-        _ackedFinish.update { it + (id to startedAt) }
-    }
-
-    /** Whether the finish result for [id] at [startedAt] has been acked (its dot is "seen"). */
-    fun isFinishAcked(id: String, startedAt: Double): Boolean = _ackedFinish.value[id] == startedAt
 
     // ── Scratch / agent terminals (Android AppViewModel:439-444 parity) ──────────────
 
@@ -1750,6 +1763,10 @@ class HostStore(
         } ?: false
 
     /** #72: puts whole files into the next commit, or takes them out → true on success. */
+    /** #72: the Source Control pane's calls for [workspaceId] and the chat in it ([sessionId]). */
+    // Source Control's network and agent calls (push, pull, gh, the agent-written PR text) on the 2-minute client.
+    fun sourceControl(workspaceId: String, sessionId: String?): SourceControlApi = SourceControlApi(api, workspaceId, sessionId, finishJobs, net = apiDictate)
+
     suspend fun workspaceStage(workspaceId: String, repo: String, paths: List<String>, staged: Boolean): Boolean =
         runApi("workspaceStage") { api.workspaceStage(workspaceId, repo, paths, staged); true } ?: false
 
@@ -1969,10 +1986,14 @@ class HostStore(
         }
     }
 
-    fun closeWorkspaceView(workspaceId: String, viewId: String) {
+    fun closeWorkspaceView(workspaceId: String, viewId: String, onDone: () -> Unit = {}, onFailed: () -> Unit = {}) {
         stateScope.launch {
             runCatching { api.closeView(workspaceId, viewId) }
-                .onFailure { println("[HostStore] closeWorkspaceView failed: $it") }
+                .onSuccess { onDone() }
+                .onFailure {
+                    println("[HostStore] closeWorkspaceView failed: $it")
+                    onFailed()
+                }
         }
     }
 
@@ -1993,6 +2014,14 @@ class HostStore(
                     ),
                 )
             }.onFailure { println("[HostStore] savePendingChatDraft failed: $it") }
+        }
+    }
+
+    /** Replace a view's state (the broker stores it whole): #72 keeps a Source Control preview tab. */
+    fun setWorkspaceViewState(workspaceId: String, viewId: String, state: JsonObject) {
+        stateScope.launch {
+            runCatching { api.patchView(workspaceId, viewId, PatchViewBody(state = state)) }
+                .onFailure { println("[HostStore] setWorkspaceViewState failed: $it") }
         }
     }
 
@@ -2203,6 +2232,7 @@ class HostStore(
      * opens (the desktop has nothing else to show for the ~5 s a launch takes). Only into an empty,
      * not-yet-synced store; the first live snapshot replaces every part of it.
      */
+    @OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class)
     fun seedFromCache(snap: dev.supermux.host.HostSnapshot) {
         var seeded = false
         _state.update { st ->
@@ -2220,8 +2250,19 @@ class HostStore(
                 )
             }
         }
+        // #117: the applets grid and its icons too, until the host lists them again.
+        if (_applets.value == null && snap.applets != null) {
+            _applets.value = snap.applets
+            val byId = snap.applets.associateBy { it.id }
+            synchronized(appletIconsLock) {
+                for ((id, b64) in snap.appletIcons) {
+                    val a = byId[id] ?: continue
+                    if (appletIcons[id] == null) runCatching { kotlin.io.encoding.Base64.decode(b64) }.getOrNull()?.let { appletIcons[id] = a.updatedAt to it }
+                }
+            }
+        }
         if (seeded) {
-            PerfTrace.milestone("cache.seeded", "sessions" to snap.sessions.size, "workspaces" to snap.workspaces.size, "host" to baseUrl)
+            PerfTrace.milestone("cache.seeded", "sessions" to snap.sessions.size, "workspaces" to snap.workspaces.size, "applets" to (snap.applets?.size ?: 0), "host" to baseUrl)
         }
     }
 
@@ -2426,6 +2467,56 @@ class HostStore(
     suspend fun finishOpenCodeOAuth(providerId: String, method: Int, code: String): Boolean =
         runApi("finishOpenCodeOAuth") { api.finishOpenCodeOAuth(providerId, method, code); true } ?: false
 
+    // ── Applets (#117) ────────────────────────────────────────────────────────────────────────
+    // Fetched at every snapshot (connect, reconnect) and on `applets_changed`. A broker without applets answers 404:
+    // the list stays null and the app shows no Applets section (an older host can't do it, so it isn't offered).
+
+    fun refreshApplets() {
+        appletsJob?.cancel()
+        appletsJob = stateScope.launch {
+            runApi("applets") { api.applets() }?.let { _applets.value = it }
+        }
+    }
+
+    /** Pins or unpins an applet in the host's sidebar grid. Null on success, else the broker's reason (shown where he clicked). */
+    suspend fun pinApplet(name: String, pinned: Boolean): String? =
+        try {
+            api.pinApplet(name, pinned)
+            refreshApplets()
+            null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            e.message ?: "couldn't change the pins"
+        }
+
+    /** An applet's icon: fetched (and remembered) while the host answers, the remembered one while it doesn't. */
+    suspend fun appletIconBytes(applet: AppletDto): ByteArray? {
+        val held = synchronized(appletIconsLock) { appletIcons[applet.id] }
+        if (held != null && held.first == applet.updatedAt) return held.second
+        val fresh = runApi("appletIcon") { api.appletIconBytes(applet) }
+        if (fresh != null) synchronized(appletIconsLock) { appletIcons[applet.id] = applet.updatedAt to fresh }
+        return fresh ?: held?.second
+    }
+
+    /** Applet info's facts; null when the host can't say (offline, or the applet is gone). */
+    suspend fun appletDetail(name: String): dev.supermux.net.AppletDetailDto? = runApi("appletDetail") { api.appletDetail(name) }
+
+    suspend fun appletJobRuns(name: String, job: String): List<dev.supermux.net.AppletJobRunDto>? = runApi("appletJobRuns") { api.appletJobRuns(name, job) }
+
+    /**
+     * One owner action on an applet (Run now, a secret, a setting, Name, Stop, Delete): the result, or the broker's
+     * reason, which the screen shows where he clicked. The list refreshes after anything but a run.
+     */
+    suspend fun <T> appletAction(block: suspend (dev.supermux.net.BrokerApi) -> T): Result<T> =
+        try {
+            Result.success(block(api)).also { refreshApplets() }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Result.failure(IllegalStateException(e.message ?: "the machine didn't answer"))
+        }
+
     // ── Accounts (slice A3b; HTTP + frames are A3a's) ────────────────────────────────────────
     // Fetched lazily: nothing asks for GET /accounts until a screen does ([ensureAccounts]), and
     // from then on every snapshot (reconnect) and `accounts_changed` refreshes it. Null = never
@@ -2476,7 +2567,7 @@ class HostStore(
         accountCall { api.setSessionAccount(sessionId, account) }
 
     suspend fun loadAccountsAutoSwitch(): Boolean? =
-        runApi("accountsSettings") { api.accountsSettings() }?.also { _accountsAutoResume.value = it.autoResume }?.autoSwitch
+        runApi("accountsSettings") { api.accountsSettings() }?.also { _accountsAutoResume.value = it.autoResume; _accountsCompactBeforeWait.value = it.compactBeforeWait }?.autoSwitch
             ?.also { _accountsAutoSwitch.value = it }
 
     suspend fun setAccountsAutoSwitch(enabled: Boolean): AccountResult<Boolean> =
@@ -2487,6 +2578,11 @@ class HostStore(
     suspend fun setAccountsAutoResume(enabled: Boolean): AccountResult<Boolean> =
         accountCall { api.setAccountsAutoResume(enabled).autoResume }.also {
             if (it is AccountResult.Ok) _accountsAutoResume.value = it.value
+        }
+
+    suspend fun setAccountsCompactBeforeWait(enabled: Boolean): AccountResult<Boolean> =
+        accountCall { api.setAccountsCompactBeforeWait(enabled).compactBeforeWait }.also {
+            if (it is AccountResult.Ok) _accountsCompactBeforeWait.value = it.value
         }
 
     /** #92: the session no longer resumes by itself after its usage limit. */
@@ -2684,6 +2780,25 @@ class HostStore(
     suspend fun launcherRepoInfo(workdir: String, fetch: Boolean = false): RepoInfo? =
         runApi("launcherRepoInfo") { api.getRepoInfo(workdir, fetch) }
 
+    /** #152: the project folder's branches (where each is open), its state, and the user's Local / Worktree pick. Null on failure. */
+    suspend fun launcherProjectBranches(dir: String): GitBranches? =
+        runApi("launcherProjectBranches") { api.projectBranches(dir) }
+    suspend fun launcherFolderState(dir: String): ProjectFolderState? =
+        runApi("launcherFolderState") { api.projectFolderState(dir) }
+    suspend fun launcherProjectPrefs(dir: String): ProjectPrefs? =
+        runApi("launcherProjectPrefs") { api.projectPrefs(dir) }
+    suspend fun branchPrefixSetting(): BranchPrefixSetting? = runApi("branchPrefixSetting") { api.branchPrefixSetting() }
+    suspend fun setBranchPrefixSetting(prefix: String?): BranchPrefixSetting? = runApi("setBranchPrefixSetting") { api.setBranchPrefixSetting(prefix) }
+    suspend fun launcherProjectPrs(dir: String, q: String = ""): OpenPrList? =
+        runApi("launcherProjectPrs") { api.projectPrs(dir, q) }
+    suspend fun launcherProjectPr(dir: String, ref: String): OpenPrRead? =
+        runApi("launcherProjectPr") { api.projectPr(dir, ref) }
+    /** #152: the project folder to [name] (only when it is clean), for "Move the folder to main, then use it here". */
+    suspend fun launcherSwitchFolder(dir: String, name: String): GitSwitchResult? =
+        runApi("launcherSwitchFolder") { api.projectSwitch(dir, name) }
+    suspend fun setLauncherProjectPrefs(dir: String, workIn: String?, branchPrefix: String? = null): ProjectPrefs? =
+        runApi("setLauncherProjectPrefs") { api.setProjectPrefs(dir, workIn, branchPrefix) }
+
     /** GET /commands/preview?agent=&workdir= → the agent's slash commands for the launcher (no
      *  session yet). Empty on failure OR a blank workdir (AppViewModel.launcherCommands parity —
      *  a blank workdir would 4xx, so short-circuit it). */
@@ -2798,6 +2913,14 @@ class HostStore(
     }
 
     /** POST /sessions/<id>/fast-mode — Claude relaunches and Codex reconfigures, at the end of a running turn. */
+    /** #144: what fills [id]'s context window and what it used; null when the broker can't say. */
+    suspend fun sessionContext(id: String): dev.supermux.net.SessionContextDto? =
+        runApi("sessionContext") { api.sessionContext(id) }
+
+    /** #144 Compact, queued like a message. False when the broker refused (it says why in the log). */
+    suspend fun compact(id: String, note: String?): Boolean =
+        runApi("compact") { api.compact(id, note); true } ?: false
+
     suspend fun switchFastMode(id: String, fastMode: Boolean): Boolean {
         val ok = runApi("switchFastMode") { api.switchFastMode(id, fastMode); true } ?: false
         if (ok) patchSession(id) { it.copy(fastMode = fastMode) }
@@ -2977,10 +3100,12 @@ class HostStore(
         permissionMode: String? = null,
         /** Account id for [agent] (GET /accounts); null = Auto (the broker picks the account with the most room left). */
         account: String? = null,
+        /** #152: what the launcher picked (it wins over [worktree] / [baseBranch]). */
+        source: SessionSourceBody? = null,
     ): String? = runApi("createSessionWithFirstMessage") {
         createSessionWithFirstMessageOrThrow(
             workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
-            replaceDraftId, workspaceId, name, inheritFrom, firstMessage, viewId, permissionMode, account,
+            replaceDraftId, workspaceId, name, inheritFrom, firstMessage, viewId, permissionMode, account, source,
         )
     }
 
@@ -3014,6 +3139,8 @@ class HostStore(
         permissionMode: String? = null,
         /** Account id for [agent] (GET /accounts); null = Auto (the broker picks the account with the most room left). */
         account: String? = null,
+        /** #152: what the launcher picked (it wins over [worktree] / [baseBranch]). */
+        source: SessionSourceBody? = null,
     ): String {
         // Card #75: the launcher's Send began a start trace; its requests and frames join it.
         val startTrace = PerfTrace.pendingStart()
@@ -3057,6 +3184,7 @@ class HostStore(
                     firstMessage = (firstMessage ?: text).ifBlank { null },
                     firstAttachments = attachmentIds.ifEmpty { null },
                     clientMessageId = if ((firstMessage ?: text).isNotBlank() || attachmentIds.isNotEmpty()) newClientMessageId() else null,
+                    source = source,
                 ),
                 trace = startTrace,
             )
@@ -3142,8 +3270,15 @@ class HostStore(
         state: JsonObject,
         id: String? = null,
         groupId: String? = null,
+        /** #151: the broker made it (its id). */
+        onDone: (String) -> Unit = {},
+        /** #151: the broker did not make it. */
+        onFailed: () -> Unit = {},
     ) {
-        stateScope.launch { addView(workspaceId, AddViewBody(kind = kind, state = state, id = id, groupId = groupId)) }
+        stateScope.launch {
+            val view = addView(workspaceId, AddViewBody(kind = kind, state = state, id = id, groupId = groupId))
+            if (view != null) onDone(view.id) else onFailed()
+        }
     }
 
     /** PATCH /workspaces/:id with a new layout tree (drag-resize / split commits). */
@@ -3233,3 +3368,6 @@ internal fun subscribeFrameJson(fullLogs: Collection<String>, trace: String? = n
     // Card #76: replies while they are written (reply_stream frames), for the chats on screen.
     if (streams) put("streams", 1)
 }.toString()
+
+/** A Browser tab's routes (#155): the host's by-port template (null from a broker without one) and its previews (null: unknown). */
+data class PreviewRoutes(val byPort: String?, val proxies: List<ProxyDto>?)

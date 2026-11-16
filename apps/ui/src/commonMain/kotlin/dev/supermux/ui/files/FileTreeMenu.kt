@@ -35,6 +35,8 @@ import dev.supermux.fs.sameHostSegment
 import dev.supermux.fs.snapshotOrPrevious
 import dev.supermux.net.FsException
 import dev.supermux.ui.adaptive.LocalHardwareKeyboard
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.retain.rememberRetainedScope
 import dev.supermux.ui.widgets.AlertDialog
@@ -66,15 +68,15 @@ fun validateNewName(name: String, siblings: Collection<String>, current: String?
     val reserved = if (windows) name.firstOrNull { it in WINDOWS_RESERVED_CHARS } else null
     return when {
         name.isBlank() -> ""
-        name != current && name != name.trim() -> "A name can't start or end with a space"
-        '/' in name -> "A name can't contain “/”"
-        '\u0000' in name -> "A name can't contain a null character"
-        name == "." || name == ".." -> "“$name” isn't a valid name"
-        reserved != null -> "A name can't contain “$reserved”"
-        windows && WINDOWS_DEVICE_NAME.matches(name) -> "“$name” is reserved on Windows"
-        windows && name != current && name.endsWith('.') -> "A name can't end with “.”"
+        name != current && name != name.trim() -> localized(Str.files_name_space)
+        '/' in name -> localized(Str.files_name_slash)
+        '\u0000' in name -> localized(Str.files_name_null)
+        name == "." || name == ".." -> localized(Str.files_name_dots, name)
+        reserved != null -> localized(Str.files_name_reserved_char, reserved.toString())
+        windows && WINDOWS_DEVICE_NAME.matches(name) -> localized(Str.files_name_windows_device, name)
+        windows && name != current && name.endsWith('.') -> localized(Str.files_name_trailing_dot)
         // A Windows host names a file whatever its letter case; a rename that only changes the case is the same file.
-        name != current && siblings.any { it != current && sameHostSegment(it, name, windows) } -> "A file with that name already exists"
+        name != current && siblings.any { it != current && sameHostSegment(it, name, windows) } -> localized(Str.files_name_exists)
         else -> null
     }
 }
@@ -97,12 +99,12 @@ fun fsOpErrorMessage(e: Throwable): String {
     val code = fsOpErrorCode(e)
     val message = obj?.get("message")?.let { runCatching { it.jsonPrimitive.contentOrNull }.getOrNull() }
     return when {
-        code == "EEXIST" || (code == null && e is FsException && e.status == 409) -> "A file with that name already exists"
-        code == "EACCES" || code == "EPERM" -> "Permission denied"
-        code == "ENOENT" -> "It no longer exists"
+        code == "EEXIST" || (code == null && e is FsException && e.status == 409) -> localized(Str.files_name_exists)
+        code == "EACCES" || code == "EPERM" -> localized(Str.files_error_permission)
+        code == "ENOENT" -> localized(Str.files_error_gone)
         !message.isNullOrBlank() -> message
         obj == null && body.isNotBlank() -> body
-        else -> code ?: "Something went wrong"
+        else -> code ?: localized(Str.files_error_generic)
     }
 }
 
@@ -183,7 +185,7 @@ private fun InlineEditField(
             folder = edit.folder,
             siblings = siblingNames(fileSystem, edit.parent),
             inFolder = edit.parent,
-            placeholder = if (edit.folder) "Folder name" else "File name",
+            placeholder = localized(if (edit.folder) Str.files_folder_name else Str.files_file_name),
             typed = view.typedName { nameFieldValue("", edit.folder) },
             op = view.fileOp(),
             onSubmit = { name -> createEntry(fileSystem, edit.parent, name, edit.folder) },
@@ -284,36 +286,36 @@ fun ColumnScope.FileTreeMenuItems(
     val parent = newEntryParent(row)
     val folder = row.status != RowStatus.FILE
     DropdownMenuItem(
-        text = { Text("New file…") },
+        text = { Text(localized(Str.files_new_file_menu)) },
         modifier = Modifier.testTag("tree_menu_new_file"),
         onClick = { dismiss(); onDialog(FileTreeDialog.NewEntry(parent, folder = false)) },
     )
     DropdownMenuItem(
-        text = { Text("New folder…") },
+        text = { Text(localized(Str.files_new_folder_menu)) },
         modifier = Modifier.testTag("tree_menu_new_folder"),
         onClick = { dismiss(); onDialog(FileTreeDialog.NewEntry(parent, folder = true)) },
     )
     MenuDivider()
     DropdownMenuItem(
-        text = { Text("Rename…") },
+        text = { Text(localized(Str.files_rename_menu)) },
         modifier = Modifier.testTag("tree_menu_rename"),
         onClick = { dismiss(); onDialog(FileTreeDialog.Rename(row.path)) },
     )
     DropdownMenuItem(
-        text = { Text("Delete…") },
+        text = { Text(localized(Str.files_delete_menu)) },
         modifier = Modifier.testTag("tree_menu_delete"),
         onClick = { dismiss(); onDialog(FileTreeDialog.Delete(row.path, folder)) },
     )
     MenuDivider()
     DropdownMenuItem(
-        text = { Text("Copy path") },
+        text = { Text(localized(Str.files_copy_path)) },
         modifier = Modifier.testTag("tree_menu_copy_path"),
         onClick = { dismiss(); platform.copyToClipboard(row.path) },
     )
     val relative = relativeToWorkdir(workdir, row.path)?.takeIf { it != "." }
     if (relative != null) {
         DropdownMenuItem(
-            text = { Text("Copy relative path") },
+            text = { Text(localized(Str.files_copy_relative_path)) },
             modifier = Modifier.testTag("tree_menu_copy_relative_path"),
             onClick = { dismiss(); platform.copyToClipboard(relative) },
         )
@@ -343,8 +345,8 @@ fun FileTreeDialogs(
         is FileTreeDialog.NewEntry -> {
             val parent = dialog.parent
             NameDialog(
-                title = if (dialog.folder) "New folder" else "New file",
-                confirmLabel = "Create",
+                title = localized(if (dialog.folder) Str.files_new_folder else Str.files_new_file),
+                confirmLabel = localized(Str.files_create),
                 initial = "",
                 current = null,
                 folder = dialog.folder,
@@ -365,8 +367,8 @@ fun FileTreeDialogs(
             val oldName = displayName(old)
             val folder = view.isExpanded(old) || isFolderRow(fileSystem, old)
             NameDialog(
-                title = "Rename",
-                confirmLabel = "Rename",
+                title = localized(Str.files_rename),
+                confirmLabel = localized(Str.files_rename),
                 initial = oldName,
                 current = oldName,
                 folder = folder,
@@ -461,7 +463,7 @@ private fun NameDialog(
                     if (it.text != field.text) serverError = null
                     field = it
                 },
-                label = { Text("Name") },
+                label = { Text(localized(Str.files_name)) },
                 singleLine = true,
                 isError = shown != null,
                 supportingText = shown?.let { msg ->
@@ -480,7 +482,7 @@ private fun NameDialog(
             ) { Text(confirmLabel) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !busy, modifier = Modifier.testTag("tree_dialog_cancel")) { Text("Cancel") }
+            TextButton(onClick = onDismiss, enabled = !busy, modifier = Modifier.testTag("tree_dialog_cancel")) { Text(localized(Str.files_cancel)) }
         },
     )
 }
@@ -522,22 +524,18 @@ private fun DeleteDialog(
             error = fsOpErrorMessage(failure)
         }
     }
-    val what = if (dialog.folder) "This folder and everything in it" else "This file"
     AlertDialog(
         // Not while the delete is in flight — see NameDialog.
         onDismissRequest = { if (!busy) onDismiss() },
         title = {
-            Text(if (permanent) "Delete “${displayName(path)}” permanently?" else "Move “${displayName(path)}” to the trash?")
+            Text(localized(if (permanent) Str.files_delete_permanently_title else Str.files_trash_title, displayName(path)))
         },
         text = {
             val err = error
             when {
                 err != null -> Text(err, color = cs.error, modifier = Modifier.testTag("tree_dialog_error"))
-                permanent -> Text(
-                    "$what can't be moved to the trash because the trash is on another filesystem. " +
-                        "Delete permanently? This can't be undone.",
-                )
-                else -> Text("$what will be moved to the host's trash.")
+                permanent -> Text(localized(if (dialog.folder) Str.files_folder_cross_fs else Str.files_file_cross_fs))
+                else -> Text(localized(if (dialog.folder) Str.files_folder_to_trash else Str.files_file_to_trash))
             }
         },
         confirmButton = {
@@ -553,10 +551,10 @@ private fun DeleteDialog(
                     }
                 },
                 modifier = Modifier.testTag(if (permanent) "tree_dialog_delete_permanently" else "tree_dialog_confirm"),
-            ) { Text(if (permanent) "Delete Permanently" else "Move to Trash", color = cs.error) }
+            ) { Text(localized(if (permanent) Str.files_delete_permanently else Str.files_move_to_trash), color = cs.error) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !busy, modifier = Modifier.testTag("tree_dialog_cancel")) { Text("Cancel") }
+            TextButton(onClick = onDismiss, enabled = !busy, modifier = Modifier.testTag("tree_dialog_cancel")) { Text(localized(Str.files_cancel)) }
         },
     )
 }

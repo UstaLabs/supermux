@@ -7,6 +7,7 @@ import { grokContext } from "../../../../packages/supermux-core/src/context/agen
 import { sessionInstructions } from "../instructions"
 import { sessionPlugins } from "../../plugins"
 import { muxShimContextServer } from "../mux-shim-server"
+import { sessionCliEnv } from "../session-cli-env"
 import { MUX_HOST_SERVERS } from "../../mux-tools/server"
 import { makeLogger } from "../../../shared/log"
 
@@ -126,7 +127,7 @@ export function createGrokCoreHost(options: GrokCoreHostOptions): GrokCoreHost {
         platform: host.os(),
       })
       return {
-        env: prepared.env,
+        env: { ...prepared.env, ...sessionCliEnv(prepared.env, "grok", extra.sessionId, extra.sessionName) },
         context: {
           instructions: sessionInstructions({ agent: "grok", sessionName: extra.sessionName, workdir: extra.workdir, sessionId: registration.id }),
           plugins: sessionPlugins("grok", registration.id, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),

@@ -76,6 +76,8 @@ import dev.supermux.ui.session.AgentLogo
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.Stroke
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -163,11 +165,13 @@ fun InboxMessageCard(
     val senderId = entry.from_session_id
     val childName = senderId?.let { subagentUi?.nameOf?.invoke(it) }
     val chatSearch = LocalChatSearch.current
+    val openSubagent = localized(Str.chatcard_inbox_open_subagent)
+    val openChat = localized(Str.chatcard_inbox_open_chat)
     // What a tap on the header does, and what a screen reader calls it.
     val (onOpen, openLabel) = when {
         council || senderId == null -> Pair(null, null)
-        subagentUi != null && childName != null -> Pair({ subagentUi.open(senderId) }, "Open subagent")
-        chatSearch != null && canOpenChat(senderId) -> Pair({ chatSearch.openChat(senderId) }, "Open chat")
+        subagentUi != null && childName != null -> Pair({ subagentUi.open(senderId) }, openSubagent)
+        chatSearch != null && canOpenChat(senderId) -> Pair({ chatSearch.openChat(senderId) }, openChat)
         else -> Pair(null, null)
     }
     // On touch the header is the only way to the sender: a full 48dp band across the card's top,
@@ -177,7 +181,7 @@ fun InboxMessageCard(
         ?: inboxSenderName(entry)
         ?: childName
         ?: senderId
-        ?: "Another session"
+        ?: localized(Str.chatcard_inbox_another_session)
     val blocks = remember(body) { parseMarkdownBlocks(body) }
     val shape = RoundedCornerShape(Radii.md)
     Box(Modifier.fillMaxWidth(0.85f)) {
@@ -265,7 +269,7 @@ private fun InboxBody(id: String, body: String, onOpenFile: (FilePathRef) -> Uni
             }
             Box(Modifier.background(Brush.verticalGradient(listOf(background.copy(alpha = 0f), background))))
             Text(
-                if (expanded) "Show less" else "Show more",
+                if (expanded) localized(Str.chatcard_show_less) else localized(Str.chatcard_show_more),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier

@@ -28,7 +28,7 @@
     <string name="settings_update_ready">%1$s hazır</string>
     <string name="settings_update_up_to_date">güncel</string>
     <string name="settings_update_install_restart">Yükle ve yeniden başlat</string>
-    <string name="settings_update_install">Yükle</string>
+    <string name="settings_update_install">Kur</string>
     <string name="settings_update_download">İndir</string>
     <string name="settings_update_check">Güncellemeleri denetle</string>
     <string name="settings_update_check_failed">Güncellemeler denetlenemedi.</string>

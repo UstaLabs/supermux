@@ -90,7 +90,7 @@
     <string name="search_machine_share">Bir port paylaş…</string>
     <string name="search_machine_share_kw">vekil bağlantı aç</string>
     <string name="search_machine_worktrees">Sohbet worktree'leri</string>
-    <string name="search_machine_worktrees_kw">disk alan sil temizle klasör</string>
+    <string name="search_machine_worktrees_kw">disk alan sil temizle klasör dal önek</string>
     <string name="search_machine_limits">Limitler</string>
     <string name="search_machine_limits_kw">kullanım kota sıfırlama</string>
 </resources>

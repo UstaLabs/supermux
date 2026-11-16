@@ -63,6 +63,8 @@ import dev.supermux.ui.adaptive.LocalInputMode
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.retain.rememberRetainedOnPage
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
@@ -107,15 +109,15 @@ fun DisplaysScreen(
             modifier = modifier,
             topBar = {
                 TopAppBar(
-                    title = { Text("Displays", color = cs.onSurface) },
+                    title = { Text(localized(Str.display_title), color = cs.onSurface) },
                     navigationIcon = {
                         IconButton(onClick = onBack, modifier = Modifier.testTag("displays_back")) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = cs.onSurface)
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = localized(Str.display_back), tint = cs.onSurface)
                         }
                     },
                     actions = {
                         IconButton(onClick = start, modifier = Modifier.testTag("displays_start")) {
-                            Icon(Icons.Filled.Add, contentDescription = "Start display", tint = cs.onSurface)
+                            Icon(Icons.Filled.Add, contentDescription = localized(Str.display_start), tint = cs.onSurface)
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
@@ -153,7 +155,7 @@ private fun DisplaysBody(
     fun stop(id: String) {
         scope.launch {
             actions.stopDisplay(id)
-            runCatching { snackbar.showSnackbar("Display stopped") }
+            runCatching { snackbar.showSnackbar(localized(Str.display_stopped)) }
         }
     }
 
@@ -166,13 +168,13 @@ private fun DisplaysBody(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Button(onClick = onStart, modifier = Modifier.testTag("displays_start_button")) {
-                    Text("Start display")
+                    Text(localized(Str.display_start))
                 }
             }
         }
         if (list.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("No active displays.", color = cs.onSurfaceVariant, modifier = Modifier.testTag("displays_empty"))
+                Text(localized(Str.display_none), color = cs.onSurfaceVariant, modifier = Modifier.testTag("displays_empty"))
             }
         } else {
             LazyColumn(Modifier.fillMaxSize().testTag("displays_list")) {
@@ -198,7 +200,7 @@ private fun DisplayListItem(display: DisplayStream, onOpen: () -> Unit, onStop: 
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             DisplayRow(display, onOpen, Modifier.weight(1f))
             TextButton(onClick = onStop, modifier = Modifier.padding(end = Space.sm).testTag("displays_stop_${display.id}")) {
-                Text("Stop", color = cs.error)
+                Text(localized(Str.display_stop), color = cs.error)
             }
         }
         return
@@ -220,7 +222,7 @@ private fun DisplayListItem(display: DisplayStream, onOpen: () -> Unit, onStop: 
                 Modifier.fillMaxSize().background(cs.errorContainer).padding(horizontal = Space.lg),
                 contentAlignment = Alignment.CenterStart,
             ) {
-                Text("Stop", color = cs.onErrorContainer, fontWeight = FontWeight.Medium)
+                Text(localized(Str.display_stop), color = cs.onErrorContainer, fontWeight = FontWeight.Medium)
             }
         },
     ) {
@@ -232,7 +234,7 @@ private fun DisplayListItem(display: DisplayStream, onOpen: () -> Unit, onStop: 
 private fun DisplayRow(display: DisplayStream, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
     val title = "${display.display.ifEmpty { display.id }} · ${display.provider}"
-    val subtitle = "${display.sessionName.ifEmpty { "—" }} · ${display.status}"
+    val subtitle = "${display.sessionName.ifEmpty { "—" }} · ${display.status}" // i18n-ok: the session name and the broker's status word
     Column(
         modifier
             .clickable(onClick = onClick)
@@ -264,7 +266,8 @@ private fun DisplayViewerDialog(stream: DisplayStream, actions: DisplayActions, 
                 modifier = Modifier.align(Alignment.TopStart).padding(Space.md).size(44.dp)
                     .testTag("display_viewer_close"),
             ) {
-                Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White)
+                Icon(Icons.Filled.Close, contentDescription = localized(Str.display_close),
+ tint = Color.White)
             }
         }
     }

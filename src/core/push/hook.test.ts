@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { firePushForReply, firePushToAll, extractPreview } from "./hook"
+import { firePushForReply, firePushForRequest, firePushToAll, extractPreview } from "./hook"
 import type { Logger } from "../../shared/log"
 
 function recorder() {
@@ -154,4 +154,108 @@ test("a broker notice with nobody to push to is a warning", async () => {
   expect(lines).toEqual([
     { level: "warn", msg: "push_decision", extra: { session: "s", sessionId: "sid", trigger: "finish", outcome: "no_targets" } },
   ])
+})
+
+// #123: an attachment's preview is worded in each web device's language; native devices get English (the apps
+// re-word it from `kind`), and the user's own text is never touched.
+test("extractPreview words an attachment in the asked language", () => {
+  const photo = { op: "reply", chat_id: "web", text: "", attachments: [{ kind: "photo", file_id: "f1" }] } as any
+  expect(extractPreview(photo)).toBe("📷 Photo")
+  expect(extractPreview(photo, "tr")).toBe("📷 Fotoğraf")
+  expect(extractPreview({ op: "reply", chat_id: "web", text: "" } as any, "tr")).toBe("Yeni mesaj")
+  expect(extractPreview({ op: "reply", chat_id: "web", text: "", attachments: [{ kind: "document", file_id: "f" }] } as any, "tr")).toBe("📎 Dosya")
+  expect(extractPreview({ op: "reply", chat_id: "web", text: "", attachments: [{ kind: "document", file_id: "f", name: "a.pdf" }] } as any, "tr")).toBe("📎 a.pdf")
+  expect(extractPreview({ op: "reply", chat_id: "web", text: "merhaba" } as any, "tr")).toBe("merhaba")
+})
+
+test("a tr web device gets a Turkish preview, an en one and native devices get English", async () => {
+  const web: Record<string, string> = {}
+  const native: string[] = []
+  const { args } = baseArgs({
+    action: { op: "reply", chat_id: "web", text: "", attachments: [{ kind: "photo", file_id: "f1" }] },
+    devices: () => ["tr-browser", "en-browser", "old-browser"],
+    langOf: (d: string) => (d === "tr-browser" ? "tr-TR" : d === "en-browser" ? "en" : undefined),
+    sender: { sendToDevice: async (d: string, p: any) => { web[d] = p.text; return { ok: true as const } }, sendToChat: async () => ({ ok: true as const }) },
+    nativeSender: { sendToDevice: async (_d: string, p: any) => { native.push(p.text); return { ok: true as const } } },
+  })
+  await firePushForReply(args as any)
+  expect(web).toEqual({ "tr-browser": "📷 Fotoğraf", "en-browser": "📷 Photo", "old-browser": "📷 Photo" })
+  expect(native).toEqual(["📷 Photo"])
+})
+
+test("firePushToAll words a notice per web device when given textFor; native gets English", async () => {
+  const web: Record<string, string> = {}
+  const native: string[] = []
+  await firePushToAll({
+    sender: { sendToDevice: async (d: string, p: any) => { web[d] = p.text; return { ok: true as const } }, sendToChat: async () => ({ ok: true as const }) } as any,
+    nativeSender: { sendToDevice: async (_d: string, p: any) => { native.push(p.text); return { ok: true as const } } } as any,
+    devices: () => ["a", "b"],
+    nativeDevices: () => ["phone"],
+    langOf: (d) => (d === "a" ? "tr" : undefined),
+    textFor: (lang) => (lang === "tr" ? "türkçe" : "english"),
+    payload: { session: "s", text: "fallback", ts: "t" },
+    trigger: "finish",
+  })
+  expect(web).toEqual({ a: "türkçe", b: "english" })
+  expect(native).toEqual(["english"])
+})
+
+test("firePushToAll without textFor sends the payload's text as it is", async () => {
+  const web: string[] = []
+  await firePushToAll({
+    sender: { sendToDevice: async (_d: string, p: any) => { web.push(p.text); return { ok: true as const } }, sendToChat: async () => ({ ok: true as const }) } as any,
+    devices: () => ["a"],
+    langOf: () => "tr",
+    payload: { session: "curator", text: "curator notice", ts: "t" },
+    trigger: "curator",
+  })
+  expect(web).toEqual(["curator notice"])
+})
+
+// #143: a permission prompt nobody saw blocked #117 for 23 min. A prompt pushes like a reply, with what a client
+// needs to answer from the notification.
+function requestArgs(over: any = {}) {
+  const sent: { device: string; payload: any }[] = []
+  const args = {
+    sender: { sendToDevice: async () => ({ ok: true as const }), sendToChat: async () => ({ ok: true as const }) },
+    sessionName: "Applets (#117)", sessionId: "sid",
+    request: {
+      requestId: "r1", kind: "permission" as const, title: "Allow Bash?", body: "rm -f ~/work/probe/*\nadb shell …",
+      options: [{ id: "allow_once", label: "Allow" }, { id: "reject_once", label: "Reject" }],
+    },
+    isInternal: () => false,
+    devices: () => [] as string[],
+    presentOn: () => [] as string[],
+    nativeSender: { sendToDevice: async (device: string, payload: any) => { sent.push({ device, payload }); return { ok: true as const } } },
+    nativeDevices: () => ["phone"],
+    hostId: "h1",
+    ...over,
+  }
+  return { args, sent }
+}
+
+test("a permission prompt pushes with its question, the first line of what it asks, and its answers", async () => {
+  const { args, sent } = requestArgs()
+  await firePushForRequest(args as any)
+  expect(sent).toHaveLength(1)
+  expect(sent[0]!.payload).toMatchObject({
+    session: "Applets (#117)", sessionId: "sid", hostId: "h1",
+    text: "Allow Bash? rm -f ~/work/probe/*",
+    request: { requestId: "r1", kind: "permission", options: [{ id: "allow_once", label: "Allow" }, { id: "reject_once", label: "Reject" }] },
+  })
+})
+
+test("a prompt pushes even when the session is muted (the agent is blocked), but never for an internal worker", async () => {
+  const muted = requestArgs({ isMuted: () => true })
+  await firePushForRequest(muted.args as any)
+  expect(muted.sent).toHaveLength(1)
+  const internal = requestArgs({ isInternal: () => true })
+  await firePushForRequest(internal.args as any)
+  expect(internal.sent).toHaveLength(0)
+})
+
+test("a prompt is not pushed to a device already showing the session", async () => {
+  const { args, sent } = requestArgs({ presentOn: () => ["phone"] })
+  await firePushForRequest(args as any)
+  expect(sent).toHaveLength(0)
 })

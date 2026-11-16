@@ -43,6 +43,8 @@ import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.browser.AppWebViews
 import dev.supermux.ui.browser.LocalAppWebViews
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.oklchToArgb
 import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.Space
@@ -333,7 +335,7 @@ internal fun HtmlCardView(entryId: String, card: HtmlCardDto, modifier: Modifier
             is CardPage.Ready -> CardPageView(entryId, p.content, card, theme, reserved, max, host)
             CardPage.Loading -> Box(Modifier.fillMaxWidth().height(reserved).testTag("html-card-page:$entryId"))
             CardPage.Missing -> Box(Modifier.fillMaxWidth().height(reserved).testTag("html-card-page:$entryId"), contentAlignment = Alignment.Center) {
-                Text("This card's page isn't available.", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+                Text(localized(Str.chatcard_html_page_missing), style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
             }
         }
     }

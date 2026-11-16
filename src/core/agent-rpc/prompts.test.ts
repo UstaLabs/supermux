@@ -8,3 +8,19 @@ test("prompt embeds request_id, resolve/reject instruction, and JSON payload", (
   expect(p).toContain("reject")
   expect(p).toContain('"draft": "helo wrld"')
 })
+
+test("pr_text asks for a title and a body from the commits, without inventing", () => {
+  const p = buildRpcPrompt("pr_text", { base: "dev", branch: "mux/x", commits: [] }, "req-7")
+  expect(p).toContain("{ title")
+  expect(p).toContain("body")
+  expect(p).toMatch(/invent/i)
+  expect(p).not.toContain("text-cleanup")
+  // Ahmet: describe the change from the diff; never critique the commits or sign it.
+  expect(p).toMatch(/diff/)
+  expect(p).toMatch(/Never comment on the commits/)
+  expect(p).toMatch(/no signature, attribution or \\?"Generated with\\?" line/)
+})
+
+test("voice keeps its own fast-cleanup instruction", () => {
+  expect(buildRpcPrompt("voice", { draft: "x" }, "r")).toContain("fast text-cleanup")
+})

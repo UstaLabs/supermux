@@ -90,8 +90,8 @@ internal fun AgentAvatar(
         val p = (time % 1800L).toFloat() / 900f
         FastOutSlowInEasing.transform(if (p <= 1f) p else 2f - p)
     }
-    val perk by animateFloatAsState(if ((hovered && online) || listening) 1f else 0f, spring(dampingRatio = 0.45f), label = "perk")
-    val dim by animateFloatAsState(if (state.desaturate) 1f else 0f, tween(500), label = "dim")
+    val perk by animateFloatAsState(if ((hovered && online) || listening) 1f else 0f, spring(dampingRatio = 0.45f), label = "perk") // i18n-ok: animation label
+    val dim by animateFloatAsState(if (state.desaturate) 1f else 0f, tween(500), label = "dim") // i18n-ok: animation label
 
     val blink = remember { Animatable(1f) }
     LaunchedEffect(name, look.eyes.blink, blinking, live) {

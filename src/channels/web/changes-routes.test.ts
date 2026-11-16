@@ -1,7 +1,7 @@
 import { test, expect, afterEach } from "bun:test"
 import { execFileSync } from "child_process"
 import { mkdirSync, mkdtempSync, writeFileSync } from "fs"
-import { join } from "path"
+import { basename, join } from "path"
 import { tmpdir } from "os"
 import { WebChannel } from "./index"
 import { DeviceStore } from "./device-store"
@@ -230,6 +230,106 @@ test("commit refuses a bad message and an unknown repo", async () => {
   expect((await post(token, "/workspaces/ws-1/git/nope", { repo: "" })).status).not.toBe(200)
 })
 
+test("discard throws a file's unstaged edit away, or every one with all; staged edits stay", async () => {
+  const { dir, token } = await setup()
+  writeFileSync(join(dir, "n.txt"), "new\n")
+  expect((await post(token, "/workspaces/ws-1/git/discard", { repo: "", paths: ["a.txt"] })).status).toBe(200)
+  expect(git(dir, "status", "--porcelain")).toBe("?? n.txt")
+  writeFileSync(join(dir, "a.txt"), "staged\n"); git(dir, "add", "a.txt"); writeFileSync(join(dir, "a.txt"), "staged\nmore\n")
+  const all = await post(token, "/sessions/s-1/git/discard", { repo: "", all: true })
+  expect(all.status).toBe(200)
+  expect(((await all.json()) as any).discarded.sort()).toEqual(["a.txt", "n.txt"])
+  expect(git(dir, "status", "--porcelain")).toBe("M  a.txt")
+})
+
+test("discard refuses paths outside the repo, no paths, and both at once", async () => {
+  const { token } = await setup()
+  expect((await post(token, "/workspaces/ws-1/git/discard", { repo: "", paths: ["../x"] })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/discard", { repo: "", paths: [] })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/discard", { repo: "" })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/discard", { repo: "", paths: ["a.txt"], all: true })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/discard", { repo: "nope", all: true })).status).toBe(404)
+})
+
+test("undo get latest moves the branch back only while it is still where get latest left it", async () => {
+  const { dir, base, token } = await setup()
+  git(dir, "commit", "-qam", "came in")
+  const after = git(dir, "rev-parse", "HEAD")
+  expect((await post(token, "/sessions/s-1/git/latest/undo", { before: "nope", after })).status).toBe(400)
+  expect((await post(token, "/sessions/s-x/git/latest/undo", { before: base, after })).status).toBe(404)
+  expect((await post(token, "/sessions/s-1/git/latest/undo", { before: base, after: base })).status).toBe(409)
+  const r = await post(token, "/sessions/s-1/git/latest/undo", { before: base, after })
+  expect(r.status).toBe(200)
+  expect(git(dir, "rev-parse", "HEAD")).toBe(base)
+})
+
+test("a chat in a folder (workspace) has status, publish, push, fetch and pull like a chat with its own copy", async () => {
+  const { dir, token } = await setup()
+  const origin = mkdtempSync(join(tmpdir(), "mux-origin-"))
+  git(origin, "init", "-q", "--bare")
+  let st = (await (await get(token, "/workspaces/ws-1/git/status")).json()) as any
+  expect(st).toMatchObject({ hasRemote: false, project: basename(dir) })
+  git(dir, "remote", "add", "origin", origin)
+  git(dir, "commit", "-qam", "local work")
+  st = (await (await get(token, "/workspaces/ws-1/git/status")).json()) as any
+  expect(st.project).toBeUndefined()
+  expect(st).toMatchObject({ isRepo: true, hasRemote: true, branch: "main", upstream: null })
+  expect(((await (await post(token, "/workspaces/ws-1/git/publish", {})).json()) as any).status).toBe("pushed")
+  st = (await (await get(token, "/workspaces/ws-1/git/status")).json()) as any
+  expect(st).toMatchObject({ upstream: "origin/main", ahead: 0, behind: 0 })
+  writeFileSync(join(dir, "a.txt"), "three\n"); git(dir, "commit", "-qam", "more")
+  expect(((await (await get(token, "/sessions/s-1/git/status")).json()) as any).ahead).toBe(1)
+  expect(((await (await post(token, "/workspaces/ws-1/git/push", {})).json()) as any).status).toBe("pushed")
+  expect(((await (await post(token, "/workspaces/ws-1/git/fetch", {})).json()) as any).ok).toBe(true)
+  expect(((await (await post(token, "/workspaces/ws-1/git/pull", {})).json()) as any).status).toBe("up_to_date")
+  expect((await get(token, "/workspaces/ws-x/git/status")).status).toBe(404)
+  expect((await post(token, "/workspaces/ws-x/git/push", {})).status).toBe(404)
+})
+
+test("the branch's pull request: no origin says so; off a branch says so", async () => {
+  const { dir, token } = await setup()
+  expect(await (await get(token, "/workspaces/ws-1/git/pr")).json()).toEqual({ status: "unavailable", reason: "no_remote" })
+  git(dir, "checkout", "-q", "--detach")
+  expect(await (await get(token, "/sessions/s-1/git/pr")).json()).toEqual({ status: "unavailable", reason: "no_branch" })
+  expect((await get(token, "/workspaces/ws-x/git/pr")).status).toBe(404)
+})
+
+test("creating a pull request needs a title and a target; ready needs a number; a log needs a check's URL", async () => {
+  const { token } = await setup()
+  expect((await post(token, "/workspaces/ws-1/git/pr", { title: "", target: "dev" })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/pr", { title: "T" })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-x/git/pr", { title: "T", target: "dev" })).status).toBe(404)
+  const noRemote = await post(token, "/workspaces/ws-1/git/pr", { title: "T", target: "dev" })
+  expect(noRemote.status).toBe(409)
+  expect(await noRemote.json()).toMatchObject({ status: "unavailable", reason: "no_remote" })
+  expect((await post(token, "/sessions/s-1/git/pr/ready", { number: "x" })).status).toBe(400)
+  expect((await get(token, "/sessions/s-1/git/pr/check-log")).status).toBe(400)
+  expect(await (await get(token, "/sessions/s-1/git/pr/check-log?url=https%3A%2F%2Fx.example%2F1")).json()).toEqual({ ok: false, reason: "unknown_check" })
+})
+
+test("a PR's title and description: from the commits when no agent writes them; a folder chat names its target", async () => {
+  const { dir, token } = await setup()
+  git(dir, "checkout", "-qb", "feature/search"); git(dir, "commit", "-qam", "Add a search box")
+  expect((await post(token, "/workspaces/ws-1/git/pr/text", {})).status).toBe(400)
+  const r = await post(token, "/workspaces/ws-1/git/pr/text", { target: "main" })
+  expect(r.status).toBe(200)
+  expect(await r.json()).toEqual({ title: "Add a search box", body: "- Add a search box", by: "commits" })
+})
+
+test("a project with no remote: add one by URL; publishing to a forge needs a name and a visibility", async () => {
+  const { dir, token } = await setup()
+  expect((await post(token, "/workspaces/ws-1/git/remote", { name: "origin", url: "" })).status).toBe(400)
+  const r = await post(token, "/workspaces/ws-1/git/remote", { name: "origin", url: "https://example.com/a/b.git" })
+  expect(r.status).toBe(200)
+  expect(git(dir, "remote", "get-url", "origin")).toBe("https://example.com/a/b.git")
+  const again = await post(token, "/workspaces/ws-1/git/remote", { name: "origin", url: "https://example.com/c.git" })
+  expect(again.status).toBe(409)
+  expect(await again.json()).toEqual({ ok: false, reason: "exists" })
+  expect((await post(token, "/workspaces/ws-1/git/publish-new", { forge: "github", name: "x y", visibility: "private" })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-1/git/publish-new", { forge: "bitbucket", name: "x", visibility: "private" })).status).toBe(400)
+  expect((await post(token, "/workspaces/ws-x/git/remote", { name: "origin", url: "u" })).status).toBe(404)
+})
+
 test("get latest needs the chat's own base; resolve and abort refuse bad input", async () => {
   const { token } = await setup()
   expect((await post(token, "/sessions/s-1/git/latest", {})).status).toBe(409)   // no base known here: no guess
@@ -247,4 +347,36 @@ test("history lists commits; revert/branch/tag refuse bad input", async () => {
   expect((await post(token, "/workspaces/ws-1/git/revert", { repo: "", sha: "zzz" })).status).toBe(400)
   expect((await post(token, "/workspaces/ws-1/git/branch", { repo: "", sha: h.chat[0].sha, name: "-bad" })).status).toBe(400)
   expect((await post(token, "/workspaces/ws-1/git/tag", { repo: "", sha: h.chat[0].sha, name: "v1" })).status).toBe(200)
+})
+
+// #72 v5: Create Pull Request asks first, as the GitHub Pull Requests extension does; nothing is pushed unasked.
+test("Create Pull Request asks to publish an unpublished branch, then to push unpushed commits", async () => {
+  const { dir, token } = await setup()
+  const origin = mkdtempSync(join(tmpdir(), "mux-origin-"))
+  git(origin, "init", "-q", "--bare")
+  git(dir, "remote", "add", "origin", origin)
+  git(dir, "commit", "-qam", "local work")
+  const pr = { title: "Add search", target: "main" }
+  let r = await post(token, "/workspaces/ws-1/git/pr", pr)
+  expect(r.status).toBe(409)
+  expect(await r.json()).toEqual({ status: "ask", ask: "publish" })
+  expect(git(origin, "branch", "--format=%(refname:short)")).toBe("")      // nothing went up unasked
+  expect(((await (await post(token, "/workspaces/ws-1/git/publish", {})).json()) as any).status).toBe("pushed")
+  writeFileSync(join(dir, "a.txt"), "four\n"); git(dir, "commit", "-qam", "more")
+  r = await post(token, "/workspaces/ws-1/git/pr", pr)
+  expect(await r.json()).toEqual({ status: "ask", ask: "push", count: 1 })
+})
+
+test("Continue Without Pushing: the PR is asked for from what is on the remote already (no push)", async () => {
+  const { dir, token } = await setup()
+  const origin = mkdtempSync(join(tmpdir(), "mux-origin-"))
+  git(origin, "init", "-q", "--bare")
+  git(dir, "remote", "add", "origin", origin)
+  git(dir, "commit", "-qam", "local work")
+  await post(token, "/workspaces/ws-1/git/publish", {})
+  writeFileSync(join(dir, "a.txt"), "five\n"); git(dir, "commit", "-qam", "unpushed")
+  const before = git(origin, "rev-parse", "main")
+  const r = (await (await post(token, "/workspaces/ws-1/git/pr", { title: "t", target: "main", skipPush: true })).json()) as any
+  expect(r.status).not.toBe("ask")                                     // went on to create (gh decides from here)
+  expect(git(origin, "rev-parse", "main")).toBe(before)                 // and pushed nothing
 })

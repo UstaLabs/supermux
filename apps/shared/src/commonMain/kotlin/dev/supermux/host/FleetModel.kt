@@ -4,11 +4,13 @@ import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.WorkspaceDto
 import dev.supermux.workspace.chatSessionIds
 import dev.supermux.ui.oklchToArgb
+import dev.supermux.util.TimeAgo
+import dev.supermux.util.timeAgo
 
 /**
  * Pure, framework-free fleet-view model (spec §5) — the SINGLE source of truth every native client
  * reuses for the merged multi-host session list. Everything the list needs that ISN'T platform UI:
- * a per-host badge color slot, a compact badge label, an offline "last seen" string, the host
+ * a per-host badge color slot, a compact badge label, an offline "last seen" time, the host
  * filter, and the fixed OKLCH dot palette. Kept in commonMain so Android (Compose) and iOS (SwiftUI)
  * render byte-identical badge colors from ONE algorithm — no per-platform reimplementation (spec D5).
  *
@@ -46,6 +48,9 @@ data class HostView(
  * host then appeared as the identical `This` badge. Preserve custom names, but unwrap that legacy
  * local-only prefix everywhere so existing installs become clear without a destructive migration.
  */
+/** What an unnamed host is called in stored data and in [hostDisplayLabel]; the UI words it in the app's language. */
+const val HOST_FALLBACK = "Host"
+
 fun hostDisplayLabel(displayName: String): String {
     val trimmed = displayName.trim()
     val wrapped = Regex("^This\\s+(?:computer|host)\\s*\\((.+)\\)$", RegexOption.IGNORE_CASE)
@@ -57,8 +62,8 @@ fun hostDisplayLabel(displayName: String): String {
     if (wrapped.isNotEmpty()) return wrapped
     if (trimmed.equals("This computer", ignoreCase = true) ||
         trimmed.equals("This host", ignoreCase = true)
-    ) return "Host"
-    return trimmed.ifEmpty { "Host" }
+    ) return HOST_FALLBACK
+    return trimmed.ifEmpty { HOST_FALLBACK }
 }
 
 fun isLegacyHostDisplayName(displayName: String): Boolean =
@@ -84,24 +89,15 @@ fun hostColorIndex(seed: String, paletteSize: Int = HOST_PALETTE_SIZE): Int {
 fun hostShortLabel(displayName: String): String {
     val label = hostDisplayLabel(displayName)
     val firstToken = label.split(Regex("\\s+")).firstOrNull().orEmpty()
-    return firstToken.take(14).ifEmpty { "Host" }
+    return firstToken.take(14).ifEmpty { HOST_FALLBACK }
 }
 
 /**
- * Relative "last seen" for an offline host group header — e.g. "just now", "5m ago", "2h ago",
- * "3d ago". [lastSeenAt] is epoch-millis (0 = never seen → empty). Mirrors the list's relTime
- * buckets so offline headers read consistently with row timestamps.
+ * When an offline host was last seen, for its group header — null when it never was
+ * ([lastSeenAt] is epoch-millis, 0 = never). Same buckets as the list's other "ago" times.
  */
-fun formatLastSeen(nowMs: Long, lastSeenAt: Long): String {
-    if (lastSeenAt <= 0L) return ""
-    val diffSec = ((nowMs - lastSeenAt) / 1000L).coerceAtLeast(0L)
-    return when {
-        diffSec < 60L -> "just now"
-        diffSec < 3600L -> "${diffSec / 60}m ago"
-        diffSec < 86_400L -> "${diffSec / 3600}h ago"
-        else -> "${diffSec / 86_400}d ago"
-    }
-}
+fun lastSeenAgo(nowMs: Long, lastSeenAt: Long): TimeAgo? =
+    if (lastSeenAt <= 0L) null else timeAgo(nowMs, lastSeenAt)
 
 /**
  * The sessions visible under the current host [filter] (a recordId, or null = "All"). An unknown

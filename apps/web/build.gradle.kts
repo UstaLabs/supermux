@@ -62,6 +62,26 @@ kotlin {
     }
 }
 
+// ── wasm-opt: two size flags on top of KGP's own list (#142) ─────────────────────────────────
+// `--generate-global-effects` lets binaryen learn which functions have no side effects BEFORE the
+// -O3/--gufa passes, so more calls fold away; `--minimize-rec-groups` regroups the GC types at the
+// end. Measured in CI on the shipped bundle (probe run 43531091146, sweep in tools/size-probe-142):
+// app wasm gzip 5,529,689 -> 5,469,716 bytes (-59 KB). -Oz, --converge and --unsubtyping each gave
+// <= 4 KB, an -Os pipeline was 40 KB WORSE. `binaryenArgs` is KGP's own single-module list (deprecated
+// for removal in Kotlin 2.5, where this moves to `binaryenArguments`); the check stops the build if a
+// KGP upgrade changes that list, because the flags' positions were measured against 2.4.10's.
+fun withSizeFlags(kgp: List<String>): MutableList<String> {
+    val i = kgp.indexOf("--type-ssa")
+    check(i >= 0 && "--closed-world" in kgp && kgp.last() == "-Oz" && "--generate-global-effects" !in kgp) {
+        "KGP's wasm-opt arguments changed ($kgp): re-measure #142's --generate-global-effects / --minimize-rec-groups"
+    }
+    return (kgp.take(i) + "--generate-global-effects" + kgp.drop(i) + "--minimize-rec-groups").toMutableList()
+}
+tasks.withType<org.jetbrains.kotlin.gradle.targets.wasm.binaryen.BinaryenExec>().configureEach {
+    @Suppress("DEPRECATION")
+    binaryenArgs = withSizeFlags(binaryenArgs)
+}
+
 // ── The terminal engine's browser assets ────────────────────────────────────────────────────
 //
 // MEASURED (terminal-core/consumer-smoke, 2026-09-22) and hit here for real in Plan 4 Task 4: the
@@ -282,7 +302,38 @@ val distDir = layout.buildDirectory.dir("dist/wasmJs/productionExecutable")
 // 2026-11-13 (v0.18.0, Tally): the seven release cars together crossed by <1 KiB; #123's numbered-key catalog (the next
 // car after the release) wins back the per-key accessor cost and must bring the bundle to 9376 KiB or less.
 // 2026-11-13 (#135, Tally/Ahmet): Recently closed ~7–8 KiB of code; web shrink is card #142.
-val maxGzipBytes = 9392L * 1024
+// 2026-11-14 (#142/#123/#144, Tally/Ahmet): LOWERED. #142's cuts (Compose source info + trace markers off, wasm-opt
+// --generate-global-effects --minimize-rec-groups) took dev 9389 → 9052 KiB; #123 cars 4–6 → 9030; #144 + #146 → 9064
+// (train4 43624150506). Ceiling = 9064 + 8 KiB. From here a feature that grows the bundle raises it by its measured size.
+// 2026-11-15 (#151 instant open, Tally): +2 KiB, the optimistic open tipped it over by <1 KiB (dev 9071); web shrink is card #142.
+// 2026-11-15 (#143 sidebar "Needs you", Tally/Ahmet): +2 KiB, measured 9075 KiB on dev ad0a2b707 (train10 43684753882).
+// 2026-11-15 (#152 launcher C1–C3, Tally): +50 KiB, measured 9125 KiB on train6 43741960086: the Local / Worktree row,
+// the three-tab branch picker with its Pull request tab, the line under it and the inline cards (session/LauncherWork*.kt),
+// and their strings in both catalogs. The prefix setting and C4 get their own measured raises.
+// 2026-11-15 (#152 prefix setting + C4, Tally): +4 KiB, measured 9129 KiB on train6 43750478449: Settings › Chat
+// worktrees' branch prefix, the chat header's PR chip, the launcher opened on a PR, the sidebar's live branch (~260 lines,
+// 3 DTOs, 14 strings × 2).
+// 2026-11-15 (#152 spacing, Tally/Ahmet): +1 KiB, measured 9130 KiB on train6 43753321986: the launcher row's spacing
+// as the prototype's (the row's own layout under the composer, the summary's 16 dp icon column).
+// 2026-11-16 (#146 account-wide advice, Tally): +1 KiB, measured 9131 KiB (over by <1 KiB) on train9 43774096668: the
+// sidebar row's amber compact-advice dot (WorkspaceStatusMark) and its string in both catalogs.
+// 2026-11-16 (#117 applets, Tally): +5 KiB, measured 9135 KiB on run 43789955301: the applet DTOs and broker calls
+// (list, info, jobs, secrets, settings, data, pins, installs, widget summary, applets_changed) and ~140 strings × 2.
+// The applet SCREENS are not in it: web hides applets until #114, and they're reached only through LocalAppletScreens,
+// which only the native hosts provide, so dead-code elimination drops them (that took 9191 → 9135 KiB).
+// 2026-11-16 (#72 Source Control, Tally/Ahmet): +94 KiB over #146's 9132, measured on car A 0fbbd5b84, run
+// 43794726113 (9225 KiB against dev's 9131): VS Code's Source Control pane (~2,000 lines of Compose: groups, commit
+// box, conflicts, Graph, publish picks, the pull request section), ~300 strings in each catalog, its API. No new
+// library or icon set. The waste check before raising it removed #72's dead code (the include box, the composer git
+// sign, DiffView's stage plumbing). CI re-measures it on dev a204a08de.
+// 2026-11-16 (train13, Muxie): #146 + #117 + #72 car A together measured 9235 KiB on train13 43811939722 (9236: 9235.x rounds over 9235).
+// 2026-11-16 (#117 applets fixes, Muxie): +1 KiB for 2 strings × 2 (measured 9136 on its own base, +1 over 9135).
+// 2026-11-16 (#157 downloads, pickers and permissions, Tally): +5 KiB on top, measured +5 over dev on 43790522735
+// (9136 against 9131): a page's downloads in the downloads list, its permission strip, Settings' site permissions,
+// the load-failure page (~520 lines of code, 1 DTO, ~40 strings × 2). Muxie re-measures it on the landing train.
+// 2026-11-16 (#157 landing, Muxie): +5 KiB for #157 on top of 9237 (measured 9240 KiB on train12 43830596937).
+// 2026-11-16 (#117 iOS model + offline cache, Muxie): +1 KiB ("Open in new window" × 2, cached applets), measured 9241 KiB on train14 43836099208.
+val maxGzipBytes = 9242L * 1024
 
 // THE NATIVE EDITOR'S SYNTAX MODULE IS OUTSIDE THAT CEILING, with a ceiling of its own (M5).
 // `supermux-syntax.wasm` is 7.45 MB raw / 2.69 MB gzipped (editor-syntax/native/README.md): counted
@@ -395,6 +446,20 @@ val stageForBroker by tasks.registering {
             val dst = if (rel.startsWith("composeResources/")) staging.resolve("assets/$rel") else staging.resolve(rel)
             dst.parentFile.mkdirs()
             if (f.name == "index.html") dst.writeText(rewrite(f.readText(), "")) else f.copyTo(dst, overwrite = true)
+        }
+
+        // JetBrains Mono ships once (#142): the app fetches the editor's faces from the terminal's copy
+        // (SharedResourcePath.kt, whose SHARED_MONO_FACES must name these same files), so the editor's
+        // copy is dropped here, but only while the two are still byte-identical.
+        val sharedMonoFaces = listOf("jetbrains_mono_regular.ttf", "jetbrains_mono_bold.ttf", "jetbrains_mono_italic.ttf")
+        for (face in sharedMonoFaces) {
+            val editorCopy = staging.resolve("assets/composeResources/dev.supermux.editor.compose.resources/font/$face")
+            val terminalCopy = staging.resolve("assets/composeResources/dev.supermux.terminal.compose.resources/font/$face")
+            check(terminalCopy.isFile && editorCopy.isFile && editorCopy.readBytes().contentEquals(terminalCopy.readBytes())) {
+                "$face: the editor's and the terminal's JetBrains Mono differ or are missing; " +
+                    "SharedResourcePath.kt would serve the editor the terminal's bytes — update both copies together"
+            }
+            check(editorCopy.delete()) { "could not drop the editor's copy of $face" }
         }
 
         // The PWA shell, copied verbatim into the staged root: `sw.js` must be served from `/`

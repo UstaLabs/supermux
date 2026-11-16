@@ -118,6 +118,13 @@ kotlin {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
+// #123: Android's local unit tests run on a plain JVM without the app's assets, so the generated string catalogs go on
+// their classpath (Catalogs reads them from there when Compose resources can't), as files/i18n/<lang>.txt.
+android.sourceSets.getByName("test").resources.srcDir(project(":ui").layout.projectDirectory.dir("src/commonMain/composeResources"))
+tasks.configureEach {
+    if (name.contains("UnitTest") && (name.contains("JavaRes") || name.contains("Resources"))) dependsOn(":ui:generateI18n")
+}
+
 dependencies {
     implementation(project(":shared"))
     implementation(project(":ui"))
@@ -137,6 +144,9 @@ dependencies {
     // that as fatal (InvalidFragmentVersionForActivityResult). Pin a current one.
     implementation(libs.androidx.fragment)
     implementation(libs.androidx.core.splashscreen)
+    // #117 W1: the applets widgets.
+    implementation(libs.androidx.glance.appwidget)
+    implementation(libs.androidx.glance.material3)
     // (Navigation 3 replaced navigation-compose in cluster G8: the shared `SupermuxApp` root
     //  drives one `NavDisplay` back stack on BOTH hosts, and it arrives transitively from :ui.)
     implementation(libs.androidx.lifecycle.viewmodel.compose)

@@ -4,6 +4,7 @@
 package dev.supermux.web.push
 
 import dev.supermux.net.BrokerApi
+import dev.supermux.ui.i18n.shownLanguageTag
 import dev.supermux.ui.platform.PushRegistrar
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
@@ -220,7 +221,8 @@ class WebPushRegistrar(
 
     /**
      * Subscribe, or reconcile an existing subscription with the broker. Idempotent — safe on every
-     * launch, which is exactly how `Main.kt` calls it.
+     * launch, which is exactly how `Main.kt` calls it — and again when the app's language changes, so the re-POST
+     * carries the new `lang` and the broker words this device's notifications in it (#123).
      *
      * The reconcile branch is the Vue `probe()`: a subscription can outlive the broker's record of
      * it (a restored profile, a re-installed broker), and re-POSTing is a cheap upsert. A 401/404
@@ -251,7 +253,7 @@ class WebPushRegistrar(
 
         val existing = parse(getSubscription(reg))
         if (existing != null) {
-            val ok = quietly { broker.pushSubscribe(existing.endpoint, existing.keys.p256dh, existing.keys.auth) }
+            val ok = quietly { broker.pushSubscribe(existing.endpoint, existing.keys.p256dh, existing.keys.auth, shownLanguageTag()) }
             // Three outcomes, and the difference matters:
             //   true  — reconciled, done.
             //   false — the broker ANSWERED and refused. `pushSubscribe` collapses every non-2xx
@@ -284,7 +286,7 @@ class WebPushRegistrar(
             println("[push] pushManager.subscribe() produced no subscription")
             return false
         }
-        return when (quietly { broker.pushSubscribe(fresh.endpoint, fresh.keys.p256dh, fresh.keys.auth) }) {
+        return when (quietly { broker.pushSubscribe(fresh.endpoint, fresh.keys.p256dh, fresh.keys.auth, shownLanguageTag()) }) {
             true -> true
             // Answered and refused: the broker has no record, so a local subscription is dead
             // weight — and keeping it would make the next launch take the reconcile branch and

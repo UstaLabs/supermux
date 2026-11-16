@@ -9,21 +9,11 @@ package dev.supermux.ui.worktree
 
 fun formatBytes(bytes: Long?): String = when {
     bytes == null -> "…"
-    bytes >= 1L shl 30 -> "${(bytes * 10 / (1L shl 30)) / 10.0} GB"
-    bytes >= 1L shl 20 -> "${bytes / (1L shl 20)} MB"
-    bytes >= 1L shl 10 -> "${bytes / (1L shl 10)} KB"
+    bytes >= 1L shl 30 -> "${(bytes * 10 / (1L shl 30)) / 10.0} GB" // i18n-ok: unit symbol
+    bytes >= 1L shl 20 -> "${bytes / (1L shl 20)} MB" // i18n-ok: unit symbol
+    bytes >= 1L shl 10 -> "${bytes / (1L shl 10)} KB" // i18n-ok: unit symbol
     else -> "$bytes B"
 }
-
-fun formatAge(nowMs: Long, thenMs: Long): String {
-    val d = (nowMs - thenMs).coerceAtLeast(0) / 86_400_000
-    return when {
-        d >= 1 -> "$d d"
-        else -> "${((nowMs - thenMs).coerceAtLeast(0) / 3_600_000)} h"
-    }
-}
-
-internal fun plural(n: Int, one: String, many: String) = if (n == 1) "$n $one" else "$n $many"
 
 /** Ignored-entry names are broker-reported relative paths (`docs`, `apps/build`, even a nested
  *  `docs/superpowers/plans/x.md`) — collapse anything that isn't tag-safe so a Compose testTag

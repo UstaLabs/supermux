@@ -46,6 +46,23 @@ class NotificationService: UNNotificationServiceExtension {
             let plaintext = try openSealedPush(blob, privateKey: key)
             guard let note = Self.parseNotification(plaintext) else { deliver(best); return }
 
+            // #143: a permission prompt stands alone (not folded into the chat's card) and carries its answers, so
+            // its Allow / Deny actions (PushGroupState.promptCategory) can answer it.
+            if let sid = note.sessionId, !sid.isEmpty, let prompt = note.prompt {
+                var info = best.userInfo
+                info["sm_session_id"] = sid
+                info["sm_request_id"] = prompt.requestId
+                if let allow = prompt.allow { info["sm_allow_option"] = allow }
+                if let reject = prompt.reject { info["sm_reject_option"] = reject }
+                best.userInfo = info
+                best.title = note.title
+                best.body = note.body
+                best.threadIdentifier = sid
+                best.categoryIdentifier = PushGroupState.promptCategory
+                deliver(best)
+                return
+            }
+
             // Carry the session id through to the TAP handler so the app opens the right
             // chat — the original userInfo only holds the encrypted blob.
             if let sid = note.sessionId, !sid.isEmpty {
@@ -150,7 +167,10 @@ class NotificationService: UNNotificationServiceExtension {
 
     // MARK: - Payload parsing (mirrors Android `PushRouter.parseNotification`)
 
-    private struct ParsedNotification { let title: String; let body: String; let sessionId: String? }
+    /// #143: a permission prompt's request id, and the option ids its Allow / Deny send (the one-off Allow only).
+    struct ParsedPrompt { let requestId: String; let allow: String?; let reject: String? }
+
+    private struct ParsedNotification { let title: String; let body: String; let sessionId: String?; var prompt: ParsedPrompt? = nil }
 
     /// Parse the decrypted broker `PushPayload` JSON `{session, sessionId?, text?, kind?}`
     /// into a renderable (title, body). `session` is the title; `text` the body, falling
@@ -161,17 +181,29 @@ class NotificationService: UNNotificationServiceExtension {
               let session = obj["session"] as? String else { return nil }
         let body = (obj["text"] as? String) ?? mediaLabel(obj["kind"] as? String)
         let sessionId = obj["sessionId"] as? String
-        return ParsedNotification(title: session, body: body, sessionId: sessionId)
+        return ParsedNotification(title: session, body: body, sessionId: sessionId,
+                                  prompt: parsePrompt(obj["request"] as? [String: Any]))
+    }
+
+    /// Mirrors Android `PushRouter.parsePrompt`: permission prompts only; Allow is the one-off grant, never "always".
+    static func parsePrompt(_ request: [String: Any]?) -> ParsedPrompt? {
+        guard let request, request["kind"] as? String == "permission",
+              let requestId = request["requestId"] as? String, !requestId.isEmpty else { return nil }
+        let ids = ((request["options"] as? [[String: Any]]) ?? []).compactMap { $0["id"] as? String }
+        let allow = ids.first { $0 == "allow_once" } ?? ids.first { $0.hasPrefix("allow") && $0 != "allow_always" }
+        let reject = ids.first { $0 == "reject_once" } ?? ids.first { $0.hasPrefix("reject") }
+        if allow == nil && reject == nil { return nil }
+        return ParsedPrompt(requestId: requestId, allow: allow, reject: reject)
     }
 
     private static func mediaLabel(_ kind: String?) -> String {
         switch kind {
-        case "photo": return "Sent a photo"
-        case "voice": return "Sent a voice message"
-        case "audio": return "Sent audio"
-        case "video_note": return "Sent a video note"
-        case "document": return "Sent a document"
-        default: return "New message"
+        case "photo": return String(localized: "Sent a photo")
+        case "voice": return String(localized: "Sent a voice message")
+        case "audio": return String(localized: "Sent audio")
+        case "video_note": return String(localized: "Sent a video note")
+        case "document": return String(localized: "Sent a document")
+        default: return String(localized: "New message")
         }
     }
 }

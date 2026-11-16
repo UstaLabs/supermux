@@ -29,7 +29,6 @@ import dev.supermux.ui.settings.HostingPowerUi
 import dev.supermux.ui.settings.HostingUiState
 import dev.supermux.ui.settings.KeepAwakeUi
 import dev.supermux.ui.settings.LidClosedUi
-import dev.supermux.ui.settings.HostingCopy
 import dev.supermux.ui.settings.SystemSettingsActions
 import dev.supermux.ui.settings.kit.KitMachine
 import dev.supermux.ui.settings.kit.LocalSettingsMachines
@@ -358,12 +357,12 @@ class MachinePageTest {
         assertEquals(
             "This stops supermux and the chat working right now: “a”. It stops mid-reply." to
                 "Nothing is deleted, and supermux no longer starts with this computer.",
-            MachineCopy.stopText(MachineChats(1, listOf("a"))),
+            MachineCopy.stopLines(MachineChats(1, listOf("a"))),
         )
         assertEquals(
             "This stops supermux on this computer. No chat is working right now." to
                 "Your 2 chats wait until you host again. Nothing is deleted, and supermux no longer starts with this computer.",
-            MachineCopy.stopText(MachineChats(2)),
+            MachineCopy.stopLines(MachineChats(2)),
         )
     }
 
@@ -421,7 +420,7 @@ class MachinePageTest {
 
     @Test fun keep_awake_says_why_it_is_not_held_and_unsupported_turns_the_switch_off() = runComposeUiTest {
         var power by mutableStateOf(
-            HostingPowerUi(keepAwake = KeepAwakeUi(enabled = true, onBattery = false, warning = "Not held: log in again", note = HostingCopy.PAUSED_ON_BATTERY)),
+            HostingPowerUi(keepAwake = KeepAwakeUi(enabled = true, onBattery = false, warning = "Not held: log in again", note = "Paused while on battery")),
         )
         setPlatformContent(platform = FakePlatform(), widthClass = WindowWidthClass.Expanded, pointer = true) {
             Machines(laptop) {
@@ -459,7 +458,7 @@ class MachinePageTest {
         onNodeWithTag("machine_lid").assertIsNotEnabled()
         onNodeWithTag("machine_lid_note").assertTextEquals("Waiting for your password…")
         onNodeWithTag("machine_lid_uninstall").assertIsNotEnabled()
-        lid = LidClosedUi(on = false, installed = false, enabled = false, note = HostingCopy.LID_HOME_UNSUPPORTED)
+        lid = LidClosedUi(on = false, installed = false, enabled = false, note = "Not available for this account's home folder.")
         waitForIdle()
         onNodeWithTag("machine_lid").assertIsNotEnabled()
         onNodeWithTag("machine_lid_note").assertTextEquals("Not available for this account's home folder.")

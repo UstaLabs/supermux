@@ -68,6 +68,8 @@ import dev.supermux.fs.FileSystemService
 import dev.supermux.fs.SearchHit
 import dev.supermux.fs.hostJoin
 import dev.supermux.fs.pathLeaf
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
 import kotlinx.coroutines.delay
@@ -230,7 +232,7 @@ fun FileSearch(
                     decorationBox = { inner ->
                         Box {
                             if (view.query.isEmpty()) {
-                                Text("Go to file…", color = cs.onSurfaceVariant, fontFamily = MonoFontFamily, fontSize = 12.sp)
+                                Text(localized(Str.files_go_to_file), color = cs.onSurfaceVariant, fontFamily = MonoFontFamily, fontSize = 12.sp)
                             }
                             inner()
                         }
@@ -246,10 +248,10 @@ fun FileSearch(
                     selectedIdx = sel,
                     emptyText = when {
                         q.isEmpty() -> null
-                        fileSystem == null -> "Host offline"
-                        failed -> "Search failed"
+                        fileSystem == null -> localized(Str.files_host_offline)
+                        failed -> localized(Str.files_search_failed)
                         results == null -> null // still searching
-                        else -> "No matching files"
+                        else -> localized(Str.files_no_matches)
                     },
                     onChoose = ::choose,
                     modifier = Modifier.fillMaxSize().background(cs.surfaceContainerHigh),

@@ -9,13 +9,17 @@ import { makeLogger } from "../../shared/log"
 import { FrameStats, LoopLag, lapTimer, perfPath, type PerfLog } from "../../core/perf/perf-log"
 import { home } from "../../shared/home"
 import { MUX_HOME, isMuxInternalPath } from "../../shared/paths"
-import { existsSync, writeFileSync, mkdirSync, rmSync } from "fs"
+import { existsSync, writeFileSync, mkdirSync, rmSync, realpathSync } from "fs"
 import { tmpdir } from "os"
-import { join, resolve, sep } from "path"
+import { basename, dirname, join, resolve, sep } from "path"
+import { gitAsync } from "../../core/git/exec"
 import { CardSendGuard } from "../../core/show-html/card-send"
 import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
 import { PayloadTooLargeError, EmptyUploadError, OffsetConflictError, UploadOverflowError, UploadNotFoundError } from "../../core/files/store"
 import { buildProxyPublicUrl, extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie, portFromSlug } from "./proxy"
+import { deviceViaId, handleAppletRequest, matchAppletPath, type AppletCaller } from "./applet-route"
+import { handleAppletApi } from "./applet-api"
+import { isOwnerOnly } from "../../core/applets/manifest"
 import { AUTH_COOKIE, PREVIEW_COOKIE, authToken, authedViaBearer, bearerToken, buildAuthCookie, buildClearCookie, crossSiteRefusal, previewCookieSpec, previewCookieToken, sameOriginOk } from "./cookies"
 import { browserStateError } from "../../core/workspace/browser-state"
 
@@ -27,8 +31,9 @@ import { UnsupportedAudioError } from "../../core/transcription/wav"
 import { computeWorkdirDiff, listRepoRefs } from "../../core/editor/workdir-diff"
 import { listChanges, readBaseBlob, discoverReposCached } from "../../core/editor/changes"
 import { safeRepoPath, setStaged } from "../../core/git/stage"
+import { discard } from "../../core/git/discard"
 import { commit as gitCommit, uncommit as gitUncommit } from "../../core/git/commit"
-import { abortMerge, getLatest, resolveConflict } from "../../core/git/latest"
+import { abortMerge, getLatest, resolveConflict, undoLatest } from "../../core/git/latest"
 import { createRef, history, revert } from "../../core/git/history"
 import { reanchor } from "../../core/review/anchor"
 import { formatInstantComment, matchingStep, toWalkthroughDto } from "../../core/walkthrough/author"
@@ -45,11 +50,15 @@ import type { KeepAwakeState } from "../../core/power/keep-awake"
 import type { KeepAwakeSettings } from "../../core/settings/keep-awake-config"
 import { parseKeepAwakeBody } from "../../core/settings/keep-awake-config"
 import { normalizeExistingWorkdir, uniqueKnownWorkdirs } from "../../core/session-manager/workdir-paths"
+import { parseSessionSource, SourceRefused } from "../../core/session-manager/born-asleep"
+import { branchPrefixSetting, launcherPrefs, OWNER, setBranchPrefixSetting, setLauncherPrefs, type UserPrefs, type WorkIn } from "../../core/settings/user-prefs"
 import { worktreesRoot } from "../../core/worktree/manager"
 
 import { getRepoInfo } from "../../core/git/repo-info"
 import { remoteStatus, fetchRemote, publishBranch, pushBranch, pullBranch } from "../../core/git/remote"
-import { listBranches, switchBranch } from "../../core/git/branches"
+import { branchList, folderState, liveBranch, realPath, repoToplevel, samePath, switchBranch, type BranchOwner, type OpenIn, type SwitchResult } from "../../core/git/branches"
+import { addRemote, checkLog, createPr, listOpenPrs, markReady, prBase, prDefaultTarget, prPreflight, publishNew, readPr, readPrByNumber, type PrBase, type PrRead } from "../../core/git/forge"
+import { prInput, writePrText, type PrTextWriter } from "../../core/git/pr-text"
 import type { AgentKind } from "../../core/agents/types"
 import { AGENT_KINDS, isAgentKind } from "../../shared/agents"
 import { isPermissionMode, permissionCatalog } from "../../core/agents/permission-modes"
@@ -184,7 +193,15 @@ function hostOrigin(req: Request): string | undefined {
 /** Largest body PUT /fs/write accepts (the editor reads at most 1 MB). */
 const FS_WRITE_MAX_BYTES = 8 * 1024 * 1024
 
-const API_PREFIXES = ["/api", "/ports", "/sessions", "/archived-sessions", "/archived-workspaces", "/projects", "/project-catalog", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/accounts", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views", "/worktrees", "/search", "/html"]
+/** #72: the project's own folder name (a chat's copy lives in a uuid folder; the repo's common dir is the project's .git). */
+async function projectFolderName(workdir: string): Promise<string> {
+  const common = await gitAsync(workdir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).catch(() => "")
+  return common ? basename(dirname(common)) : basename(workdir)
+}
+
+/** How long a read PR/MR is reused (#72): the pane polls while open; gh / glab calls take a second or two. */
+const PR_CACHE_MS = 15_000
+const API_PREFIXES = ["/api", "/ports", "/sessions", "/archived-sessions", "/archived-workspaces", "/projects", "/project-catalog", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/accounts", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views", "/worktrees", "/search", "/html", "/applets"]
 const MAX_CLIENT_LOG_RING = 800
 // randomUUID() shape: version 4, RFC 4122 variant. A client-minted view id must
 // match what the store would have generated itself — it ends up in layout trees
@@ -272,6 +289,14 @@ function newTerminalViewerId(): string {
 
 type WSData = { deviceName: string; openedAt: number; surface?: Surface; lastPongAt?: number; terminal?: true; terminalKind?: "scratch" | "agent"; terminalSession?: string; terminalId?: string; terminalViewerId?: string; terminalAgentTarget?: string; terminalIntent?: import("../../core/terminal/manager").TerminalAttachIntent; terminalRevision?: 1 | 2; terminalRevisionError?: string; _termLane?: TerminalFrameLane; display?: true; scrcpy?: true; displayStreamId?: string; dictation?: { id: string; sessionId?: string }; _dictation?: ReturnType<NonNullable<WebChannelOpts["openDictationStream"]>>; _termDrain?: { promise: Promise<void>; resolve: () => void }; perfTrace?: string }
 
+/** #144: GET /sessions/:id/context. */
+export interface SessionContextReport {
+  context?: { used: number; size: number }
+  breakdown?: import("../../../packages/supermux-core/src/types.js").ContextBreakdown
+  /** Tools this chat called (main thread), most first; a Skill call as `Skill:<skill>`. Since the broker started. */
+  used: Array<{ name: string; count: number }>
+}
+
 export interface SessionSnapshot {
   id?: string
   name: string
@@ -289,8 +314,14 @@ export interface SessionSnapshot {
   avatar?: string
   model?: string
   permissionMode?: string
+  /** How full the agent's context window is (#144), when the agent reports it. */
+  context?: { used: number; size: number }
   session_branch?: string
   repo_root?: string
+  /** #152: where its work comes from (new | existing | pr | local | reuse), its pull / merge request, and where pushes go. */
+  source?: string
+  pr?: { forge: "github" | "gitlab"; number: number; url: string }
+  push_remote?: string
   git?: import("../../core/worktree/lite-status").GitLiteStatus
   finish_job?: import("../../core/worktree/finish-job").FinishJob
 }
@@ -330,8 +361,8 @@ export interface WebAccountsApi {
   resumeLimitWait?(sessionId: string): Promise<boolean>
   /** #92 demo: a real wait on the session, resuming in `minutes`; false when there is no such session. */
   forceLimitWait?(sessionId: string, minutes: number): boolean
-  getSettings(): { autoSwitch: boolean; autoResume?: boolean }
-  setSettings(patch: Record<string, unknown>): { autoSwitch: boolean; autoResume?: boolean }
+  getSettings(): { autoSwitch: boolean; autoResume?: boolean; compactBeforeWait?: boolean }
+  setSettings(patch: Record<string, unknown>): { autoSwitch: boolean; autoResume?: boolean; compactBeforeWait?: boolean }
 }
 
 export interface WebChannelOpts {
@@ -344,6 +375,8 @@ export interface WebChannelOpts {
   staticDir?: string
   staticEmbedded?: Record<string, string>
   getSessionsSnapshot: () => SessionSnapshot[]
+  /** #72: the agent writing a PR's title and description (agent-rpc "pr_text"); without it, the commits' subjects. */
+  writePrText?: PrTextWriter
   /** Newest `limit` entries (the store's default when omitted), oldest first. */
   getSessionLog: (name: string, limit?: number) => unknown[]
   /**
@@ -353,6 +386,13 @@ export interface WebChannelOpts {
    */
   enrichAttachments?: (entries: unknown[]) => Promise<void>
   getSessionActivity?: (name: string) => unknown[]
+  /**
+   * #144: a session's context window: the live numbers, what fills it (asked of the agent when it can say) and the
+   * tools this chat used. Undefined for an unknown session.
+   */
+  getSessionContext?: (id: string) => Promise<SessionContextReport | undefined>
+  /** #144 Compact: queued like a message; the note is kept only where the agent takes one. */
+  compactSession?: (id: string, note: string | undefined, actor: import("../../core/session-manager/messages").CompactionActor) => Promise<{ ok: true } | { ok: false; status: number; error: string }>
   getSessionBgTasks?: (name: string) => unknown[]
   /** Latest view of each subagent of a session (snapshot `subagents`; live `subagent_update`). */
   getSessionSubagents?: (id: string) => unknown[]
@@ -391,10 +431,11 @@ export interface WebChannelOpts {
   switchFastMode?: (id: string, fastMode: boolean) => Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }>
   switchPermissionMode?: (id: string, mode: string) => Promise<{ ok: true; status: "applied"; applied?: "now" | "next-turn" } | { ok: false; error: string }>
   getSessionRequests?: (id: string) => unknown[]
-  respondRequest?: (sessionId: string, requestId: string, answer: unknown) => Promise<{ ok: true } | { ok: false; error: string }>
+  /** [who].by: the answering device's name (#143: request_closed says who answered; a user, once there are users). */
+  respondRequest?: (sessionId: string, requestId: string, answer: unknown, who?: { by: string }) => Promise<{ ok: true } | { ok: false; error: string }>
   getSessionAgent?: (name: string) => { agent: AgentKind; model?: string; reasoningLevel?: string } | undefined
   interruptSession?: (id: string) => Promise<{ ok: boolean; reason?: string }>
-  finishSession?: (id: string, req: { action: "merge"|"pr"|"keep"|"discard"; skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string; keep?: boolean }) => Promise<import("../../core/worktree/finish-job").FinishJob | { error: string }>
+  finishSession?: (id: string, req: { action: "merge"|"pr"|"keep"|"discard"; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prTitle?: string; prBody?: string; keep?: boolean }) => Promise<import("../../core/worktree/finish-job").FinishJob | { error: string }>
   finishReadiness?: (id: string) => import("../../core/worktree/readiness").FinishReadiness | { error: string }
   reviewList?: (id: string) => import("../../core/review/store").Comment[]
   reviewAdd?: (id: string, c: Omit<import("../../core/review/store").NewComment, "sessionId">) => import("../../core/review/store").Comment
@@ -409,9 +450,9 @@ export interface WebChannelOpts {
   sendUserMessage?: (id: string, text: string) => Promise<{ ok: boolean; reason?: string }>
   getWalkthrough?: (id: string) => import("../../core/walkthrough/store").Walkthrough | undefined
   reviewSession?: (id: string) => { workdir: string; repoRoot?: string; baseCommits?: Record<string, string> } | undefined
-  verifySuggest?: (id: string) => { content: string; source: string } | undefined
-  verifySave?: (id: string, content: string) => { ok: boolean; reason?: string }
-  spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; account?: string; worktree?: boolean; baseBranch?: string; inheritFrom?: string; workspaceId?: string; viewId?: string; firstMessage?: string; firstAttachments?: InboundAttachment[]; /** Card #75: the app's own id for the first message (`web-<uuid>`). */ firstMessageId?: string; device?: string; /** Card #75: the app's session-start trace (`x-mux-trace: S…/<req>`). */ perfTrace?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; repo_root?: string; session_branch?: string }>
+  /** #152 B4: the user's own choices (the launcher's Local / Worktree per project, the branch prefix). */
+  userPrefs?: UserPrefs
+  spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; account?: string; worktree?: boolean; baseBranch?: string; inheritFrom?: string; workspaceId?: string; viewId?: string; firstMessage?: string; firstAttachments?: InboundAttachment[]; /** Card #75: the app's own id for the first message (`web-<uuid>`). */ firstMessageId?: string; device?: string; /** Card #75: the app's session-start trace (`x-mux-trace: S…/<req>`). */ perfTrace?: string; /** #152: what the launcher picked, and who asked (JSON). */ source?: import("../../core/session-manager/born-asleep").SessionSource; createdBy?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; repo_root?: string; session_branch?: string }>
   createDraft?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; draftPayload?: { text?: string; attachments?: unknown[] } }) => Promise<{ id: string; name: string; workdir: string; agent: AgentKind }>
   killSession?: (name: string) => Promise<void>
   /** Explicit worktree cleanup (spec 2026-09-22-explicit-worktree-cleanup). */
@@ -537,6 +578,8 @@ export interface WebChannelOpts {
   proxyMainHost?: string
   proxyLookup?: (domain: string) => { port: number; sessionName: string; isPublic: boolean } | undefined
   proxyAuth?: (token: string) => boolean
+  /** #117: the host's applets, served at /a/<name>/. */
+  applets?: import("../../core/applets/service").AppletService
   /** The base URL named proxies' links are built on (main.ts: the relay's, else MUX_WEB_PUBLIC_URL); GET /proxies/by-port builds on it too. Defaults to [publicUrl]. */
   proxyLinksBaseUrl?: () => string | undefined
   internalSecret?: string
@@ -1157,10 +1200,28 @@ export class WebChannel implements Channel {
     // Path-based proxy (active only when no base domain is configured). A digits slug is a port and needs no lookup.
     const pathMatch = !this.opts.proxyBaseDomain ? matchProxyPath(url.pathname) : null
     const pm = pathMatch && (this.opts.proxyLookup || portFromSlug(pathMatch.slug) !== undefined) ? pathMatch : undefined
+    // #117: /a/<name>/ on the app's own host, in both proxy modes (per-applet origins come with #114).
+    const am = this.opts.applets && !sub ? matchAppletPath(url.pathname) : null
     // Before any route, so a new route can't miss it (cookies.ts explains the rules).
     const appOrigins = [this.opts.publicUrl, this.getRelayUrl?.(), hostOrigin(req)]
-    if (crossSiteRefusal(req, { appOrigins, proxied: Boolean(sub || pm) })) {
+    if (crossSiteRefusal(req, { appOrigins, proxied: Boolean(sub || pm || am) })) {
       return new Response("bad origin", { status: 403 })
+    }
+    if (am) return this.handleAppletRoute(req, server)
+    // #117: an applet's server or job calling supermux.* with its own token (never a device credential).
+    if (this.opts.applets && url.pathname === "/applet-api/notify" && req.method === "POST") {
+      const v = this.opts.applets.appletForToken(req.headers.get("x-supermux-applet-token") ?? "")
+      if (!v) return this.json({ error: "not an applet token" }, 401)
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>
+      const r = await this.opts.applets.notify(v.row.name, b.title, b.body)
+      return r.ok ? this.json({ ok: true }) : this.json({ error: r.error }, 400)
+    }
+    // ...and telling supermux its widget summary changed, so phone widgets follow now rather than within 15 minutes.
+    if (this.opts.applets && url.pathname === "/applet-api/widget" && req.method === "POST") {
+      const v = this.opts.applets.appletForToken(req.headers.get("x-supermux-applet-token") ?? "")
+      if (!v) return this.json({ error: "not an applet token" }, 401)
+      const r = await this.opts.applets.refreshWidget(v.row.name)
+      return r.ok ? this.json({ ok: true, summary: r.summary }) : this.json({ error: r.error }, 400)
     }
     if (sub) {
       return this.handleProxyRoute(req, sub, server)
@@ -2162,7 +2223,7 @@ export class WebChannel implements Channel {
         ws.send(JSON.stringify({ type: "error", reason: "requests not available" }))
         return
       }
-      const result = await this.opts.respondRequest(frame.session, frame.requestId, frame.answer)
+      const result = await this.opts.respondRequest(frame.session, frame.requestId, frame.answer, { by: ws.data.deviceName })
       if (!result.ok) ws.send(JSON.stringify({ type: "error", reason: result.error }))
       return
     }
@@ -2365,11 +2426,29 @@ export class WebChannel implements Channel {
   /**
    * POST …/git/{stage,commit,uncommit} (#72), all with {repo}:
    * stage {paths, staged} puts whole files into the next commit or takes them out;
+   * discard {paths} | {all: true} throws unstaged edits away and deletes new files (staged edits stay);
    * commit {message?, all?, amend?} commits it (an empty message is written from the files);
    * uncommit undoes the last commit and keeps its changes in the next one;
    * resolve {path, side: mine|theirs|both} settles one conflicted file; abort cancels the merge;
    * revert {sha} adds a commit that undoes one; branch|tag {sha, name} names one, moving nothing.
    */
+  /** #72: the other sessions, as owners of the copies their branches are open in (#152's project folder: all of them). */
+  private branchOwners(except?: string): BranchOwner[] {
+    return this.opts.getSessionsSnapshot().flatMap((s) => (s.id && s.id !== except && s.workdir ? [{ id: s.id, name: s.name, workdir: s.workdir }] : []))
+  }
+
+  /** A switch git refused because another copy has the branch: which session's, when a session has it. */
+  private withOpenIn(r: SwitchResult, owners: BranchOwner[]): SwitchResult & { openIn?: OpenIn } {
+    if (r.status !== "checked_out_elsewhere") return r
+    const at = realPath(r.path), owner = owners.find((o) => samePath(realPath(o.workdir), at))
+    return owner ? { ...r, openIn: { kind: "session", id: owner.id, name: owner.name } } : r
+  }
+
+  /** #72: a branch's PR/MR as last read, per checkout and branch (GET …/git/pr). */
+  private readonly prCache = new Map<string, { at: number; r: PrRead }>()
+  /** #72: whether a PR/MR into a target can be opened (GET …/git/pr/base), per checkout, target and branch. */
+  private readonly prBaseCache = new Map<string, { at: number; r: PrBase }>()
+
   private async gitWrite(workdir: string, op: string, req: Request): Promise<Response> {
     let body: { repo?: unknown; paths?: unknown; staged?: unknown; message?: unknown; all?: unknown; amend?: unknown; path?: unknown; side?: unknown; sha?: unknown; name?: unknown }
     try { body = (await req.json()) as typeof body } catch { return this.json({ error: "bad json" }, 400) }
@@ -2388,6 +2467,19 @@ export class WebChannel implements Channel {
         return this.json({ ok: true })
       } catch (err) {
         return this.json({ error: err instanceof Error ? err.message : String(err) }, 409)
+      }
+    }
+    if (op === "discard") {
+      const all = body.all === true, paths = Array.isArray(body.paths) ? body.paths : null
+      if (all === !!paths || (paths && (!paths.length || paths.length > 5000 || !paths.every(safeRepoPath)))) {
+        return this.json({ error: "bad request" }, 400)
+      }
+      if (!found) return this.json({ error: "repo not found" }, 404)
+      try {
+        const r = await discard(found.absPath, all ? "all" : paths as string[])
+        return r.ok ? this.json(r) : this.json(r, 409)
+      } catch (err) {
+        return this.json({ ok: false, reason: "failed", message: err instanceof Error ? err.message : String(err) }, 409)
       }
     }
     if (!found) return this.json({ error: "repo not found" }, 404)
@@ -2653,6 +2745,47 @@ export class WebChannel implements Channel {
     return { port, sessionName: `port ${port}`, isPublic: false }
   }
 
+  /**
+   * Who asks for an applet: a native client's bearer device token, or the preview-only cookie (#105) the native applet
+   * window sets for /a/. NEVER the device cookie: in path mode the applet shares the app's origin, so a page that got
+   * the cookie would hold the owner's whole API. The web client hides applets until #114 gives them their own origins.
+   */
+  private appletCaller(req: Request): AppletCaller | undefined {
+    const bearer = bearerToken(req)
+    const dev = bearer ? this.store.verify(bearer) : undefined
+    if (dev) return { kind: "device", id: deviceViaId(dev.token_hash), name: dev.name }
+    const preview = previewCookieToken(req)
+    const pdev = preview ? this.store.verifyPreview(preview) : undefined
+    return pdev ? { kind: "device", id: deviceViaId(pdev.token_hash), name: pdev.name } : undefined
+  }
+
+  private async handleAppletRoute(req: Request, server: import("bun").Server<WSData>): Promise<Response | undefined> {
+    const applets = this.opts.applets!
+    if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+      // A server applet's own socket: same checks as its pages, then the proxy's websocket bridge.
+      const url = new URL(req.url)
+      const m = matchAppletPath(url.pathname)
+      const v = m?.rest ? applets.get(m.name) : undefined
+      const caller = this.appletCaller(req)
+      if (!m || !m.rest || !v?.manifest?.run || !caller) return new Response("not found", { status: 404 })
+      if (caller.kind !== "device" && isOwnerOnly(m.rest, v.manifest.ownerOnly)) return new Response("forbidden", { status: 403 })
+      const port = applets.supervisor.port(v.row.id)
+      if (!port) return new Response("applet not running", { status: 503 })
+      const wsProtocol = req.headers.get("sec-websocket-protocol")
+      const selectedProtocol = wsProtocol?.split(",")[0]?.trim()
+      const upgraded = server.upgrade(req, {
+        data: { proxyUpstream: { port, sessionName: `applet ${m.name}` }, proxyPath: m.rest + url.search, proxyWsProtocol: wsProtocol } as any,
+        ...(selectedProtocol ? { headers: { "Sec-WebSocket-Protocol": selectedProtocol } } : {}),
+      })
+      return upgraded ? undefined : new Response("ws upgrade failed", { status: 500 })
+    }
+    return handleAppletRequest(req, {
+      applets,
+      caller: (r) => this.appletCaller(r),
+      own: { cookies: [AUTH_COOKIE, PREVIEW_COOKIE], isOwnBearer: (t) => !!this.store.verify(t) },
+    })
+  }
+
   private async handleProxyRoute(
     req: Request,
     slug: string,
@@ -2670,9 +2803,8 @@ export class WebChannel implements Channel {
       const token = authToken(req)
       const preview = previewCookieToken(req)
       if (!(token && this.opts.proxyAuth?.(token)) && !(preview && this.store.verifyPreview(preview))) {
-        const mainUrl = this.opts.publicUrl.replace(/\/$/, "")
         return new Response(
-          `<!DOCTYPE html><meta charset="utf-8"><title>Not paired</title><body style="font-family:system-ui;background:#0a0a0a;color:#e5e5e5;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0"><p>Pair this device in the <a style="color:#6ea8fe" href="${mainUrl}/">main app</a> first, then reload.</p></body>`,
+          `<!DOCTYPE html><meta charset="utf-8"><title>Preview link expired</title><body style="font-family:system-ui;background:#0a0a0a;color:#e5e5e5;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0"><p>This preview link has expired. Reload the page to open it again.</p></body>`,
           { status: 401, headers: { "content-type": "text/html" } },
         )
       }
@@ -3026,11 +3158,14 @@ export class WebChannel implements Channel {
       if (typeof endpoint !== "string" || typeof p256dh !== "string" || typeof authKey !== "string") {
         return new Response("endpoint + keys.p256dh + keys.auth required", { status: 400 })
       }
+      // #123: the app's language, so this device's previews and notices are worded in it. A short tag or nothing.
+      const lang: unknown = body?.lang
       this.pushStore.upsert({
         device: auth.device.name,
         endpoint,
         keys: { p256dh, auth: authKey },
         userAgent: req.headers.get("user-agent") ?? undefined,
+        ...(typeof lang === "string" && /^[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{1,8})?$/.test(lang) ? { lang } : {}),
       })
       return this.json({ ok: true })
     }
@@ -3789,7 +3924,20 @@ export class WebChannel implements Channel {
       const r = await getLatest(workdir, g.repoRoot, g.base)
       return this.json(r, r.status === "failed" ? 409 : 200)
     }
-    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/(stage|commit|uncommit|resolve|abort|revert|branch|tag)$/)) {
+    // #72: undo a clean Get latest ({before, after} from its answer); refused once the branch moved on.
+    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/latest\/undo$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getSessionWorkdir?.(id)
+      if (!workdir) return this.json({ error: "session not found" }, 404)
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      const sha = /^[0-9a-f]{7,64}$/i
+      if (typeof body.before !== "string" || typeof body.after !== "string" || !sha.test(body.before) || !sha.test(body.after)) {
+        return this.json({ error: "bad request" }, 400)
+      }
+      const r = await undoLatest(workdir, body.before, body.after)
+      return this.json(r, r.ok ? 200 : 409)
+    }
+    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/(stage|discard|commit|uncommit|resolve|abort|revert|branch|tag)$/)) {
       const workdir = this.opts.getSessionWorkdir?.(decodeURIComponent(path.split("/")[2]!))
       if (!workdir) return this.json({ error: "session not found" }, 404)
       return this.gitWrite(workdir, path.split("/")[4]!, req)
@@ -3895,7 +4043,7 @@ export class WebChannel implements Channel {
       const { repos } = await listChanges(workdir, base?.baseCommits ?? {}, base?.createdAt, url.searchParams.get("base") ?? undefined)
       return this.json({ repos, comments: [] })
     }
-    if (method === "POST" && path.match(/^\/workspaces\/[^/]+\/git\/(stage|commit|uncommit|resolve|abort|revert|branch|tag)$/)) {
+    if (method === "POST" && path.match(/^\/workspaces\/[^/]+\/git\/(stage|discard|commit|uncommit|resolve|abort|revert|branch|tag)$/)) {
       const workdir = this.opts.getWorkspaceWorkdir?.(decodeURIComponent(path.split("/")[2]!))
       if (!workdir) return this.json({ error: "workspace not found" }, 404)
       return this.gitWrite(workdir, path.split("/")[4]!, req)
@@ -4048,6 +4196,20 @@ export class WebChannel implements Channel {
       return this.json({ ok: true })
     }
     {
+      // #143: answer an agent's prompt over HTTP, e.g. from a notification's Allow / Deny with the app closed. Same
+      // answer as the WebSocket's request_respond; like every API route, only a paired device's token gets here.
+      const ask = method === "POST" ? path.match(/^\/sessions\/([^/]+)\/requests\/([^/]+)$/) : null
+      if (ask) {
+        if (!this.opts.respondRequest) return this.json({ ok: false, error: "requests not available" }, 503)
+        const body = await req.json().catch(() => ({})) as Record<string, unknown>
+        if (!body.answer || typeof body.answer !== "object") return this.json({ ok: false, error: "answer is required" }, 400)
+        const auth = this.authenticate(req)
+        const who = auth.ok ? { by: auth.device.name } : undefined
+        const result = await this.opts.respondRequest(decodeURIComponent(ask[1]!), decodeURIComponent(ask[2]!), body.answer, who)
+        return result.ok ? this.json({ ok: true }) : this.json({ ok: false, error: result.error }, 409)
+      }
+    }
+    {
       const sub = method === "POST" ? path.match(/^\/sessions\/([^/]+)\/subagents\/([^/]+)\/(message|stop)$/) : null
       if (sub) {
         const id = decodeURIComponent(sub[1]!)
@@ -4094,11 +4256,9 @@ export class WebChannel implements Channel {
       const action = body.action === "pr" || body.action === "keep" || body.action === "discard" ? body.action : "merge"
       const result = await this.opts.finishSession(id, {
         action,
-        skipVerify: body.skipVerify === true,
         commitFirst: body.commitFirst === true,
         commitMessage: typeof body.commitMessage === "string" ? body.commitMessage : undefined,
         draft: body.draft === true,
-        prRequiresGreen: body.prRequiresGreen === true,
         prTitle: typeof body.prTitle === "string" ? body.prTitle : undefined,
         prBody: typeof body.prBody === "string" ? body.prBody : undefined,
         keep: body.keep === true,
@@ -4106,61 +4266,205 @@ export class WebChannel implements Channel {
       if (result && typeof result === "object" && "error" in result) return this.json(result, 400)
       return this.json(result)
     }
-    if (method === "GET" && path.match(/^\/sessions\/[^/]+\/git\/status$/)) {
-      const id = decodeURIComponent(path.split("/")[2]!)
-      const workdir = this.opts.getSessionWorkdir?.(id)
-      if (!workdir) return this.json({ error: "session not found" }, 404)
-      return this.json(remoteStatus(workdir))
+    // #72: the pull request (GitHub) / merge request (GitLab) of the branch the chat is on, read with the user's own
+    // gh / glab sign-in. Cached for a few seconds per checkout, so a pane polling it costs little; ?fresh=1 skips that.
+    const prOp = path.match(/^\/(sessions|workspaces)\/([^/]+)\/git\/pr$/)
+    if (method === "GET" && prOp) {
+      const [, scope, rawId] = prOp
+      const id = decodeURIComponent(rawId!)
+      const workdir = scope === "sessions" ? this.opts.getSessionWorkdir?.(id) : this.opts.getWorkspaceWorkdir?.(id)
+      if (!workdir) return this.json({ error: `${scope === "sessions" ? "session" : "workspace"} not found` }, 404)
+      const branch = liveBranch(workdir)
+      const key = `${workdir}\0${branch}`
+      const hit = this.prCache.get(key)
+      if (hit && url.searchParams.get("fresh") !== "1" && Date.now() - hit.at < PR_CACHE_MS) return this.json(hit.r)
+      const r: PrRead = branch ? await readPr(workdir, branch) : { status: "unavailable", reason: "no_branch" }
+      this.prCache.set(key, { at: Date.now(), r })
+      return this.json(r)
     }
-    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/fetch$/)) {
-      const id = decodeURIComponent(path.split("/")[2]!)
-      const workdir = this.opts.getSessionWorkdir?.(id)
-      if (!workdir) return this.json({ error: "session not found" }, 404)
-      return this.json(fetchRemote(workdir))
+    // #72: open a PR/MR from the branch the chat is on (published first when it isn't yet), mark one ready,
+    // and read a failing check's log for "Ask the agent to fix".
+    const prWrite = path.match(/^\/(sessions|workspaces)\/([^/]+)\/git\/pr(\/ready|\/check-log|\/text|\/base)?$/)
+    if (prWrite && (method === "POST" || (method === "GET" && (prWrite[3] === "/check-log" || prWrite[3] === "/base")))) {
+      const [, scope, rawId, sub] = prWrite
+      const id = decodeURIComponent(rawId!)
+      const workdir = scope === "sessions" ? this.opts.getSessionWorkdir?.(id) : this.opts.getWorkspaceWorkdir?.(id)
+      // Can a PR/MR into ?target= be opened: is it on origin (else: here, to publish), and is this branch ahead of it?
+      if (sub === "/base" && method === "GET") {
+        if (!workdir) return this.json({ error: `${scope === "sessions" ? "session" : "workspace"} not found` }, 404)
+        // No target: the default one, as the GitHub Pull Requests extension picks it (the branch it was made from,
+        // else the remote's default; never the branch itself).
+        const branch = liveBranch(workdir) ?? ""
+        const asked = (url.searchParams.get("target") ?? "").trim()
+        const target = asked || (await prDefaultTarget(workdir, branch, scope === "sessions" ? this.opts.getSessionGitBase?.(id)?.base : undefined)) || ""
+        if (!target) return this.json({ error: "no target" }, 409)
+        const key = `${workdir}\0base\0${target}\0${branch}`
+        const hit = this.prBaseCache.get(key)
+        if (hit && url.searchParams.get("fresh") !== "1" && Date.now() - hit.at < PR_CACHE_MS) return this.json(hit.r)
+        const r = await prBase(workdir, target)
+        if (!r) return this.json({ error: "bad request" }, 400)
+        this.prBaseCache.set(key, { at: Date.now(), r })
+        return this.json(r)
+      }
+      if (sub === "/check-log") {
+        const checkUrl = url.searchParams.get("url") ?? ""
+        if (!/^https?:\/\/\S+$/.test(checkUrl)) return this.json({ error: "bad request" }, 400)
+        if (!workdir) return this.json({ error: `${scope === "sessions" ? "session" : "workspace"} not found` }, 404)
+        return this.json(await checkLog(workdir, checkUrl))
+      }
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      if (sub === "/text") {
+        // The Create form's title and description: by the agent from the branch's commits, else the commits' subjects.
+        const own = scope === "sessions" ? this.opts.getSessionGitBase?.(id)?.base : undefined
+        const target = typeof body.target === "string" && body.target.trim() ? body.target.trim() : own
+        if (!target) return this.json({ error: "bad request" }, 400)
+        if (!workdir) return this.json({ error: `${scope === "sessions" ? "session" : "workspace"} not found` }, 404)
+        const branch = liveBranch(workdir)
+        if (!branch) return this.json({ status: "unavailable", reason: "no_branch" }, 409)
+        return this.json(await writePrText(await prInput(workdir, target, branch), this.opts.writePrText))
+      }
+      if (sub === "/ready") {
+        if (typeof body.number !== "number" || !Number.isInteger(body.number) || body.number <= 0) return this.json({ error: "bad request" }, 400)
+        if (!workdir) return this.json({ error: `${scope === "sessions" ? "session" : "workspace"} not found` }, 404)
+        const r = await markReady(workdir, body.number)
+        this.prCache.clear()
+        return this.json(r, r.ok ? 200 : 409)
+      }
+      const title = typeof body.title === "string" ? body.title.trim() : ""
+      const target = typeof body.target === "string" ? body.target.trim() : ""
+      if (!title || !target || (body.body !== undefined && typeof body.body !== "string")) return this.json({ error: "bad request" }, 400)
+      if (!workdir) return this.json({ error: `${scope === "sessions" ? "session" : "workspace"} not found` }, 404)
+      const branch = liveBranch(workdir)
+      if (!branch) return this.json({ status: "unavailable", reason: "no_branch" }, 409)
+      const remote = remoteStatus(workdir)
+      if (!remote.hasRemote) return this.json({ status: "unavailable", reason: "no_remote" }, 409)
+      // The extension's questions first: publish the branch, push its unpushed commits. The app asks (or "Always"),
+      // then sends publish / push: true.
+      const pre = prPreflight(workdir)
+      if (pre.ask === "publish") {
+        if (body.publish !== true) return this.json({ status: "ask", ask: "publish" }, 409)
+        const pub = publishBranch(workdir)
+        if (pub.status !== "pushed" && pub.status !== "up_to_date") return this.json({ status: "publish_failed", publish: pub }, 409)
+      } else if (pre.ask === "push") {
+        // "Continue Without Pushing" (skipPush): the PR is made from what is on the remote already.
+        if (body.push !== true && body.skipPush !== true) return this.json({ status: "ask", ask: "push", count: pre.count }, 409)
+        if (body.push === true) {
+          const push = pushBranch(workdir)
+          if (push.status !== "pushed" && push.status !== "up_to_date") return this.json({ status: "push_failed", publish: push }, 409)
+        }
+      }
+      const r = await createPr(workdir, branch, { title, body: (body.body as string | undefined) ?? "", target, draft: body.draft === true })
+      this.prCache.clear()
+      return this.json(r, r.status === "opened" || r.status === "exists" ? 200 : 409)
     }
-    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/publish$/)) {
-      const id = decodeURIComponent(path.split("/")[2]!)
-      const workdir = this.opts.getSessionWorkdir?.(id)
-      if (!workdir) return this.json({ error: "session not found" }, 404)
-      return this.json(publishBranch(workdir))
+    // #72 G10: a project with no remote yet: add one by URL, or publish to GitHub / GitLab (VS Code's "Publish Branch").
+    const remoteOp = path.match(/^\/(sessions|workspaces)\/([^/]+)\/git\/(remote|publish-new)$/)
+    if (method === "POST" && remoteOp) {
+      const [, scope, rawId, op] = remoteOp
+      const id = decodeURIComponent(rawId!)
+      const workdir = scope === "sessions" ? this.opts.getSessionWorkdir?.(id) : this.opts.getWorkspaceWorkdir?.(id)
+      if (!workdir) return this.json({ error: `${scope === "sessions" ? "session" : "workspace"} not found` }, 404)
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      if (op === "remote") {
+        const name = typeof body.name === "string" ? body.name : "origin", url = typeof body.url === "string" ? body.url : ""
+        const r = await addRemote(workdir, name, url)
+        return this.json(r, r.ok ? 200 : r.reason === "bad" ? 400 : 409)
+      }
+      const forge = body.forge === "github" || body.forge === "gitlab" ? body.forge : null
+      const visibility = body.visibility === "public" ? "public" : body.visibility === "private" ? "private" : null
+      // No name: the project's own folder (a chat's copy sits in a uuid folder; its repo's common dir knows the real one).
+      const given = typeof body.name === "string" ? body.name.trim() : ""
+      const name = given || (await projectFolderName(workdir)).replace(/[^A-Za-z0-9._-]+/g, "-")
+      if (!forge || !visibility || !/^[A-Za-z0-9._-]+$/.test(name)) return this.json({ error: "bad request" }, 400)
+      const r = await publishNew(workdir, { forge, name, visibility, branch: liveBranch(workdir) ?? undefined })
+      this.prBaseCache.clear()
+      this.prCache.clear()
+      return this.json(r, r.ok ? 200 : 409)
     }
-    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/push$/)) {
-      const id = decodeURIComponent(path.split("/")[2]!)
-      const workdir = this.opts.getSessionWorkdir?.(id)
-      if (!workdir) return this.json({ error: "session not found" }, 404)
-      return this.json(pushBranch(workdir))
-    }
-    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/pull$/)) {
-      const id = decodeURIComponent(path.split("/")[2]!)
-      const workdir = this.opts.getSessionWorkdir?.(id)
-      if (!workdir) return this.json({ error: "session not found" }, 404)
+    // A branch's sync with origin, for a chat with its own copy (sessions) and a chat in a folder (workspaces) alike.
+    const syncOp = path.match(/^\/(sessions|workspaces)\/([^/]+)\/git\/(status|fetch|publish|push|pull)$/)
+    if (syncOp && (method === "GET") === (syncOp[3] === "status")) {
+      const [, scope, rawId, op] = syncOp
+      const id = decodeURIComponent(rawId!)
+      const workdir = scope === "sessions" ? this.opts.getSessionWorkdir?.(id) : this.opts.getWorkspaceWorkdir?.(id)
+      if (!workdir) return this.json({ error: `${scope === "sessions" ? "session" : "workspace"} not found` }, 404)
+      if (op === "status") {
+        // No remote yet: the project's folder name too, the repository name Publish suggests (VS Code's).
+        const st = remoteStatus(workdir)
+        return this.json(st.hasRemote ? st : { ...st, project: await projectFolderName(workdir) })
+      }
+      if (op === "fetch") return this.json(fetchRemote(workdir))
+      if (op === "publish") {
+        // VS Code's Publish Branch: to the remote picked (several remotes), else the default one.
+        const body = await req.json().catch(() => ({})) as Record<string, unknown>
+        return this.json(publishBranch(workdir, typeof body.remote === "string" && body.remote.trim() ? body.remote.trim() : undefined))
+      }
+      if (op === "push") return this.json(pushBranch(workdir))
       return this.json(pullBranch(workdir))
     }
+    // #72: every chat can switch branch, a chat with its own copy too; the copy follows. Each branch says where it is
+    // open (this chat, the main folder, another session, a worktree no session owns): git refuses one checked out twice.
+    // The same service (core/git/branches.ts) serves the main folder for #152's launcher.
     if (method === "GET" && path.match(/^\/sessions\/[^/]+\/git\/branches$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
-      const snap = this.opts.getSessionsSnapshot().find((s) => s.id === id || s.name === id)
-      if (snap?.session_branch) {
-        // Worktree sessions are pinned — no list, and no git calls needed.
-        return this.json({ inPlace: false, repoRoot: null, current: null, detachedSha: null, local: [], remote: [] })
-      }
-      return this.json({ inPlace: true, ...listBranches(workdir) })
+      return this.json(branchList(workdir, this.branchOwners(id)))
     }
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/git\/switch$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
-      // getSessionWorkdir is UUID-only, so name-addressed requests 404 above;
-      // the name arm of this find keeps the 409 guard intact if that changes.
-      const snap = this.opts.getSessionsSnapshot().find((s) => s.id === id || s.name === id)
-      if (snap?.session_branch) {
-        return this.json({ error: "worktree sessions are pinned to their session branch" }, 409)
-      }
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
       const name = String(body.name ?? "").trim()
       if (!name) return this.json({ error: "name required" }, 400)
-      return this.json(switchBranch(workdir, name, { create: body.create === true }))
+      const r = switchBranch(workdir, name, { create: body.create === true, requireClean: body.requireClean === true })
+      return this.json(this.withOpenIn(r, this.branchOwners(id)))
+    }
+    // #152: Settings › Worktrees' branch prefix, the user's own (never the device's): null = automatic, "" = none.
+    if (path === "/settings/branch-prefix" && (method === "GET" || method === "PUT")) {
+      const prefs = this.opts.userPrefs
+      if (!prefs) return this.json({ error: "not configured" }, 503)
+      if (method === "PUT") {
+        const body = await req.json().catch(() => ({})) as Record<string, unknown>
+        if (body.branchPrefix !== null && typeof body.branchPrefix !== "string") return this.json({ error: "branchPrefix must be a string or null" }, 400)
+        try { await setBranchPrefixSetting(prefs, OWNER, home(), body.branchPrefix as string | null) } catch (err: any) { return this.json({ error: err?.message ?? String(err) }, 400) }
+      }
+      return this.json(await branchPrefixSetting(prefs, OWNER, home()))
+    }
+    // #152: the launcher reads and switches the project folder itself, every session an owner. Local mode switches
+    // a folder only when it is clean (VS Code's rule): changes git could carry over are refused too. prefs: the
+    // user's Local / Worktree pick for the folder and their branch prefix (B4). prs / pr: the Pull request tab, origin's
+    // open PRs/MRs (searched with ?q=) or one by ?ref= (#N, !N, N or its URL), read with the user's own gh / glab (B2).
+    const projectGit = path.match(/^\/projects\/(branches|folder-state|switch|prefs|prs|pr)$/)
+    const projectMethods = projectGit?.[1] === "switch" ? ["POST"] : projectGit?.[1] === "prefs" ? ["GET", "PUT"] : ["GET"]
+    if (projectGit && projectMethods.includes(method)) {
+      const op = projectGit[1]
+      const body = method === "GET" ? {} : await req.json().catch(() => ({})) as Record<string, unknown>
+      const raw = method === "GET" ? url.searchParams.get("dir") : body.dir
+      if (typeof raw !== "string" || !raw.trim()) return this.json({ error: "dir required" }, 400)
+      let dir: string
+      try { dir = normalizeExistingWorkdir(raw, home()) } catch (err: any) { return this.json({ error: err?.message ?? String(err) }, 400) }
+      if (op === "prefs") {
+        const prefs = this.opts.userPrefs
+        if (!prefs) return this.json({ error: "not configured" }, 503)
+        // The user's own, never the device's (the team rule); the owner's until users exist.
+        if (method === "PUT") {
+          if (body.branchPrefix !== undefined && typeof body.branchPrefix !== "string") return this.json({ error: "branchPrefix must be a string" }, 400)
+          const patch = { ...(body.workIn !== undefined ? { workIn: body.workIn as WorkIn } : {}), ...(typeof body.branchPrefix === "string" ? { branchPrefix: body.branchPrefix } : {}) }
+          try { await setLauncherPrefs(prefs, OWNER, dir, patch) } catch (err: any) { return this.json({ error: err?.message ?? String(err) }, 400) }
+        }
+        const logins = (host: string) => (this.opts.getForgeConnections?.() ?? []).filter((c) => c.host.toLowerCase() === host.toLowerCase()).map((c) => c.account.login)
+        return this.json(await launcherPrefs(prefs, OWNER, dir, logins))
+      }
+      if (!repoToplevel(dir)) return this.json({ error: "not a git repository" }, 409)
+      if (op === "branches") return this.json(branchList(dir, this.branchOwners()))
+      if (op === "folder-state") return this.json(folderState(dir))
+      if (op === "prs") return this.json(await listOpenPrs(dir, url.searchParams.get("q") ?? ""))
+      if (op === "pr") return this.json(await readPrByNumber(dir, url.searchParams.get("ref") ?? ""))
+      const name = String(body.name ?? "").trim()
+      if (!name) return this.json({ error: "name required" }, 400)
+      return this.json(this.withOpenIn(switchBranch(dir, name, { requireClean: true }), this.branchOwners()))
     }
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/message$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
@@ -4169,19 +4473,6 @@ export class WebChannel implements Channel {
       const text = String(body.text ?? "").trim()
       if (!text) return this.json({ error: "text required" }, 400)
       return this.json(await this.opts.sendUserMessage(id, text))
-    }
-    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/verify\/suggest$/)) {
-      const id = decodeURIComponent(path.split("/")[2]!)
-      const s = this.opts.verifySuggest?.(id)
-      return s ? this.json(s) : this.json({ error: "not worktree-backed" }, 400)
-    }
-    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/verify\/save$/)) {
-      const id = decodeURIComponent(path.split("/")[2]!)
-      if (!this.opts.verifySave) return this.json({ error: "not configured" }, 503)
-      const body = await req.json().catch(() => ({})) as Record<string, unknown>
-      const content = String(body.content ?? "")
-      if (!content.trim()) return this.json({ error: "content required" }, 400)
-      return this.json(this.opts.verifySave(id, content))
     }
     // #122 phase 4: whose dev server a port's preview is, so its comments go to that session by default.
     if (method === "GET" && path.match(/^\/ports\/\d+\/owner$/)) {
@@ -4358,6 +4649,23 @@ export class WebChannel implements Channel {
       if (!result.ok) return this.json({ error: result.error }, 400)
       return this.json({ ok: true, status: result.status }, result.status === "queued" ? 202 : 200)
     }
+    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/compact$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      if (body.note !== undefined && typeof body.note !== "string") return this.json({ error: "note must be a string" }, 400)
+      if (!this.opts.compactSession) return this.json({ error: "not configured" }, 503)
+      // Who asked: the paired device (the team rule: the actor goes with what it changed).
+      const auth = this.authenticate(req)
+      const actor = auth.ok ? { kind: "device" as const, name: auth.device.name } : { kind: "supermux" as const }
+      const result = await this.opts.compactSession(id, body.note as string | undefined, actor)
+      return result.ok ? this.json({ ok: true }, 202) : this.json({ error: result.error }, result.status)
+    }
+    if (method === "GET" && path.match(/^\/sessions\/[^/]+\/context$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      if (!this.opts.getSessionContext) return this.json({ error: "not configured" }, 503)
+      const report = await this.opts.getSessionContext(id)
+      return report ? this.json(report) : this.json({ error: "unknown session" }, 404)
+    }
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/fast-mode$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
@@ -4444,6 +4752,8 @@ export class WebChannel implements Channel {
           return this.json({ error: `unknown agent: ${String(requestedAgent)}` }, 400)
         }
         const agent = requestedAgent == null ? undefined : requestedAgent
+        const parsedSource = parseSessionSource(body.source)
+        if ("error" in parsedSource) return this.json({ error: parsedSource.error }, 400)
         const userStatus = body.userStatus as string | undefined
         if (userStatus === "draft") {
           if (!this.opts.createDraft) return this.json({ error: "not configured" }, 503)
@@ -4511,6 +4821,9 @@ export class WebChannel implements Channel {
           firstMessageId: clientMessageIdOf(body.client_message_id),
           device: auth.device.name,
           perfTrace: (req.headers.get("x-mux-trace") ?? "").split("/")[0] || undefined,
+          source: parsedSource.source,
+          // Who asked: the paired device (the team rule: the actor goes with what it made).
+          createdBy: JSON.stringify({ kind: "device", name: auth.device.name }),
         })
         return this.json(result)
       } catch (err: any) {
@@ -4520,9 +4833,10 @@ export class WebChannel implements Channel {
           model: body.model as string | undefined,
           err: err?.message ?? String(err),
         })
-        // A rejected account (unknown, another agent's, unsupported) is the caller's error.
+        // A rejected account (unknown, another agent's, unsupported) is the caller's error; so is a refused
+        // source (#152), with what the launcher needs to offer a way out (who holds the branch, …).
         const status = typeof err?.status === "number" ? err.status : 500
-        return this.json({ ...(err?.code ? { code: err.code } : {}), ...(err?.agent ? { agent: err.agent } : {}), error: err?.message ?? String(err) }, status)
+        return this.json({ ...(err?.code ? { code: err.code } : {}), ...(err?.agent ? { agent: err.agent } : {}), error: err?.message ?? String(err), ...(err instanceof SourceRefused ? err.details : {}) }, status)
       }
     }
     if (method === "DELETE" && path.match(/^\/sessions\/[^/]+$/)) {
@@ -5087,6 +5401,11 @@ export class WebChannel implements Channel {
           publicUrl: previewLinksBase(this.opts, req),
         }),
       })
+    }
+    // #117: the host's applets, for this device's Applets grid and Applet info. Agents use `supermux applet …` instead.
+    if (path === "/applets" || path.startsWith("/applets/")) {
+      if (!this.opts.applets) return this.json({ error: "applets are not available on this host" }, 404)
+      return handleAppletApi(req, { applets: this.opts.applets, device: auth.device.name, json: (b, st) => this.json(b, st) })
     }
     if (method === "GET" && path === "/proxies") {
       const proxies = this.opts.listProxies?.() ?? []

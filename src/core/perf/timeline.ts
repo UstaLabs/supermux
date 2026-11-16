@@ -4,9 +4,10 @@
 // reorder them), and the WebSocket traffic per frame type. Used by scripts/perf-timeline.ts.
 import { perfPath, type PerfEvent } from "./perf-log"
 
-export type TraceKind = "launch" | "chat" | "start"
+export type TraceKind = "launch" | "chat" | "start" | "browser"
 
-const kindOf = (trace: string): TraceKind | undefined => (trace.startsWith("L") ? "launch" : trace.startsWith("C") ? "chat" : trace.startsWith("S") ? "start" : undefined)
+const kindOf = (trace: string): TraceKind | undefined =>
+  trace.startsWith("L") ? "launch" : trace.startsWith("C") ? "chat" : trace.startsWith("S") ? "start" : trace.startsWith("B") ? "browser" : undefined
 
 export function parsePerfLines(text: string): PerfEvent[] {
   const out: PerfEvent[] = []
@@ -489,4 +490,32 @@ export function renderStartSummary(events: PerfEvent[], traces: string[]): strin
   const failed = facts.filter((f) => f.failed).length
   if (failed) lines.push("", `${failed} of ${facts.length} failed.`)
   return lines.join("\n")
+}
+
+/** #155: the Browser tab's steps, in the order a tab opens; each `browser.<step>` event carries `ms` since the pane opened. */
+const BROWSER_STEPS = ["routes", "activating", "live", "key", "load", "loading", "commit", "done"] as const
+
+/**
+ * Browser tab opens (#155), one row each: the ms from the pane opening to each step, the two route lookups and the
+ * key's round trip, and whether the app's web views were made by this open (cold) or already there (warm).
+ */
+export function renderBrowser(events: PerfEvent[], traces: string[]): string {
+  if (traces.length === 0) return "No Browser tab opens recorded yet."
+  const cols = ["surface", "device", "runtime", ...BROWSER_STEPS, "byPort", "proxies", "keyRtt"]
+  const out: string[][] = []
+  for (const trace of traces) {
+    const mine = events.filter((e) => e.trace === trace && e.event.startsWith("browser."))
+    if (mine.length === 0) continue
+    const step = (name: string) => mine.find((e) => e.event === `browser.${name}`)
+    const ms = (v: unknown) => (typeof v === "number" ? String(v) : "")
+    const open = step("open")
+    out.push([
+      String(open?.surface ?? mine[0]!.surface ?? ""), String(open?.device ?? mine[0]!.device ?? ""), String(open?.runtime ?? ""),
+      ...BROWSER_STEPS.map((s) => ms(step(s)?.ms)),
+      ms(step("routes")?.byPortMs), ms(step("routes")?.proxiesMs), ms(step("key")?.keyMs),
+    ])
+  }
+  const widths = cols.map((c, i) => Math.max(c.length, ...out.map((r) => r[i]!.length)))
+  const line = (r: string[]) => r.map((v, i) => v.padStart(widths[i]!)).join("  ")
+  return [`Browser tab opens, ms since the pane opened (${out.length}):`, line(cols), ...out.map(line)].join("\n")
 }

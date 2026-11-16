@@ -43,6 +43,8 @@ import dev.supermux.fs.hostRoot
 import dev.supermux.fs.inferHomeDir
 import dev.supermux.fs.sameHostPath
 import dev.supermux.fs.trimHostPath
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 
 /** One breadcrumb: its label and the folder it roots the tree at. */
 data class Crumb(val label: String, val path: String)
@@ -135,7 +137,7 @@ fun FileTreeHeader(
                         .testTag("tree_workspace_chip"),
                 ) {
                     Text(
-                        "Workspace",
+                        localized(Str.files_workspace),
                         fontSize = 11.sp,
                         color = cs.onSecondaryContainer,
                         maxLines = 1,
@@ -148,7 +150,7 @@ fun FileTreeHeader(
             onClick = { view.collapseAll() },
             modifier = Modifier.size(32.dp).pointerHoverIcon(PointerIcon.Hand).testTag("tree_collapse_all"),
         ) {
-            Icon(Icons.Filled.UnfoldLess, contentDescription = "Collapse all", tint = cs.onSurfaceVariant, modifier = Modifier.size(18.dp))
+            Icon(Icons.Filled.UnfoldLess, contentDescription = localized(Str.files_collapse_all), tint = cs.onSurfaceVariant, modifier = Modifier.size(18.dp))
         }
         IconButton(
             onClick = {
@@ -160,7 +162,7 @@ fun FileTreeHeader(
             enabled = fileSystem != null,
             modifier = Modifier.size(32.dp).pointerHoverIcon(PointerIcon.Hand).testTag("tree_refresh"),
         ) {
-            Icon(Icons.Filled.Refresh, contentDescription = "Refresh", tint = cs.onSurfaceVariant, modifier = Modifier.size(18.dp))
+            Icon(Icons.Filled.Refresh, contentDescription = localized(Str.files_refresh), tint = cs.onSurfaceVariant, modifier = Modifier.size(18.dp))
         }
         if (onRevealActiveChange != null || onNewEntry != null) {
             var menuOpen by remember { mutableStateOf(false) }
@@ -169,12 +171,12 @@ fun FileTreeHeader(
                     onClick = { menuOpen = true },
                     modifier = Modifier.size(32.dp).pointerHoverIcon(PointerIcon.Hand).testTag("tree_menu"),
                 ) {
-                    Icon(Icons.Filled.MoreVert, contentDescription = "Files options", tint = cs.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Filled.MoreVert, contentDescription = localized(Str.files_options), tint = cs.onSurfaceVariant, modifier = Modifier.size(18.dp))
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                     if (onNewEntry != null) {
                         DropdownMenuItem(
-                            text = { Text("New file…", fontSize = 13.sp) },
+                            text = { Text(localized(Str.files_new_file_menu), fontSize = 13.sp) },
                             leadingIcon = { Box(Modifier.size(18.dp)) },
                             onClick = {
                                 menuOpen = false
@@ -183,7 +185,7 @@ fun FileTreeHeader(
                             modifier = Modifier.testTag("tree_menu_root_new_file"),
                         )
                         DropdownMenuItem(
-                            text = { Text("New folder…", fontSize = 13.sp) },
+                            text = { Text(localized(Str.files_new_folder_menu), fontSize = 13.sp) },
                             leadingIcon = { Box(Modifier.size(18.dp)) },
                             onClick = {
                                 menuOpen = false
@@ -196,11 +198,11 @@ fun FileTreeHeader(
                         }
                     }
                     if (onRevealActiveChange != null) DropdownMenuItem(
-                        text = { Text("Reveal active file", fontSize = 13.sp) },
+                        text = { Text(localized(Str.files_reveal_active), fontSize = 13.sp) },
                         leadingIcon = {
                             // A fixed-width slot either way, so the label doesn't jump when toggled.
                             Box(Modifier.size(18.dp)) {
-                                if (revealActive) Icon(Icons.Filled.Check, contentDescription = "On", modifier = Modifier.size(18.dp))
+                                if (revealActive) Icon(Icons.Filled.Check, contentDescription = localized(Str.files_on), modifier = Modifier.size(18.dp))
                             }
                         },
                         onClick = {

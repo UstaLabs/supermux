@@ -16,6 +16,17 @@ export interface PushPayload {
    * notification + its tap to the right host — the client maps hostId → its local
    * PairedHost recordId. Absent on single-host / pre-multi-host brokers. */
   hostId?: string
+  /** #143: set when the notification is an agent's prompt: what a client needs to answer it from the notification. */
+  request?: PushRequest
+  /** #117: the applet that sent it (supermux.notify): a phone refreshes its applet widgets on it. */
+  applet?: string
+}
+
+/** An open prompt, as a notification carries it (inside the encrypted native payload). */
+export interface PushRequest {
+  requestId: string
+  kind: "permission" | "question"
+  options: { id: string; label: string }[]
 }
 
 export interface WebPushAdapter {

@@ -139,6 +139,10 @@ internal class FakeWpeView(override val id: Long = 1) : WpeView {
         calls += "clearData $request"
     }
 
+    override fun setCookie(request: Long, url: String, header: String) {
+        calls += "setCookie $request $url $header"
+    }
+
     override fun answer(request: Long, allow: Boolean, text: String?, files: List<String>?) {
         answers[request] = Triple(allow, text, files)
     }

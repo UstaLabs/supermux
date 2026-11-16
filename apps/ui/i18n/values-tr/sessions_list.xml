@@ -1,0 +1,180 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #123: the sidebar's session list — workspace and session rows, the Agents block, project headers, the status
+     rail, unread pills, search, the list's dialogs and footer. Turkish; the same keys as values/sessions_list.xml
+     (tests/i18n-strings.test.ts). -->
+<resources>
+    <string name="sessions_list_no_workspaces">Henüz çalışma alanı yok</string>
+    <string name="sessions_list_drafts">Taslaklar</string>
+    <string name="sessions_list_in_progress">Sürüyor</string>
+    <string name="sessions_list_active">Etkin</string>
+    <!-- #143: a session blocked on an open prompt or question: the sidebar section and its rows' chip -->
+    <string name="sessions_needs_you">Sizi bekliyor</string>
+    <string name="sessions_list_everything_else">Diğerleri</string>
+    <string name="sessions_list_workspaces">Çalışma alanları</string>
+    <string name="sessions_list_sessions">Oturumlar</string>
+    <string name="sessions_list_in_chat_history">Sohbet geçmişinde</string>
+    <string name="sessions_list_no_matches">Eşleşme yok</string>
+    <string name="sessions_list_history_failed">Sohbet geçmişi aranamadı</string>
+    <string name="sessions_list_history_searching">Sohbet geçmişi aranıyor…</string>
+    <string name="sessions_list_history_none">Başka sohbette geçmiyor</string>
+    <string name="sessions_list_logo">Supermux logosu</string>
+    <plurals name="sessions_list_archive_workspaces_title">
+        <item quantity="one">%1$d çalışma alanı arşivlensin mi?</item>
+        <item quantity="other">%1$d çalışma alanı arşivlensin mi?</item>
+    </plurals>
+    <string name="sessions_list_archive_selected_text">Seçili çalışma alanları arşivlenir ve oturumları durdurulur. Worktree'ler korunur. Bu işlem geri alınamaz.</string>
+    <string name="sessions_list_archive_agents_skipped">Ajanlar atlanır.</string>
+    <string name="sessions_list_rename_workspace">Çalışma alanını yeniden adlandır</string>
+    <string name="sessions_list_archive_workspace_title">Çalışma alanı arşivlensin mi?</string>
+    <string name="sessions_list_archive_workspace_text">"%1$s" arşivlenir ve oturumları durdurulur. Bu işlem geri alınamaz.</string>
+    <string name="sessions_list_archive_and_delete">Arşivle ve sil</string>
+    <string name="sessions_list_discard_draft_title">Taslak silinsin mi?</string>
+    <string name="sessions_list_settle_title">Oturum tamamlansın mı?</string>
+    <string name="sessions_list_discard_draft_text">"%1$s" kalıcı olarak silinir. Bu işlem geri alınamaz.</string>
+    <string name="sessions_list_settle_and_delete">Tamamla ve sil</string>
+    <string name="sessions_list_group_by_project">Projeye göre grupla</string>
+    <string name="sessions_list_group_by_status">Duruma göre grupla</string>
+    <string name="sessions_list_flat_list">Düz liste</string>
+    <string name="sessions_list_on">Açık</string>
+    <string name="sessions_list_off">Kapalı</string>
+    <string name="sessions_list_show_settled">Tamamlanan %1$d oturumu göster</string>
+    <string name="sessions_list_hide_settled">Tamamlanan %1$d oturumu gizle</string>
+    <string name="sessions_list_awake_hint">Bilgisayar uyanık ve oturum açık mı?</string>
+    <string name="sessions_list_offline">· çevrimdışı</string>
+    <string name="sessions_list_offline_seen">· çevrimdışı · son görülme: %1$s</string>
+    <string name="sessions_list_cant_reach">Ulaşılamıyor: %1$s</string>
+    <string name="sessions_list_cant_reach_seen">Ulaşılamıyor: %1$s · son görülme: %2$s</string>
+    <string name="sessions_list_search">Ara</string>
+    <string name="sessions_list_select_workspaces">Çalışma alanlarını seçin</string>
+    <string name="sessions_list_cancel_selection">Seçimi iptal et</string>
+    <string name="sessions_list_selected">%1$d seçili</string>
+    <string name="sessions_list_select_all">Tümü</string>
+    <string name="sessions_list_select_none">Hiçbiri</string>
+    <string name="sessions_list_actions">İşlemler</string>
+    <string name="sessions_list_new_project">Yeni proje</string>
+    <string name="sessions_list_organize_projects">Projeleri düzenle</string>
+    <string name="sessions_list_switch_light">Açık temaya geç</string>
+    <string name="sessions_list_switch_dark">Koyu temaya geç</string>
+    <string name="sessions_list_search_placeholder">Çalışma alanlarında ve sohbetlerde ara</string>
+    <string name="sessions_list_search_close">Aramayı kapat</string>
+    <string name="sessions_list_project_options">%1$s seçenekleri</string>
+    <string name="sessions_list_project_settings">Proje ayarları…</string>
+    <string name="sessions_list_project_no_workspaces">Çalışma alanı yok</string>
+    <string name="sessions_list_project_new_workspace">Yeni çalışma alanı</string>
+    <plurals name="sessions_list_unread_count">
+        <item quantity="one">%1$d okunmamış</item>
+        <item quantity="other">%1$d okunmamış</item>
+    </plurals>
+    <plurals name="sessions_list_unread_above">
+        <item quantity="one">Yukarıda %1$d okunmamış, oraya kaydır</item>
+        <item quantity="other">Yukarıda %1$d okunmamış, oraya kaydır</item>
+    </plurals>
+    <plurals name="sessions_list_unread_below">
+        <item quantity="one">Aşağıda %1$d okunmamış, oraya kaydır</item>
+        <item quantity="other">Aşağıda %1$d okunmamış, oraya kaydır</item>
+    </plurals>
+    <string name="sessions_list_unread_dismiss">Kapat</string>
+
+    <string name="sessions_row_another_session">Başka bir oturum</string>
+    <string name="sessions_row_expand">Genişlet</string>
+    <string name="sessions_row_collapse">Daralt</string>
+    <string name="sessions_row_expand_named">%1$s: genişlet</string>
+    <string name="sessions_row_collapse_named">%1$s: daralt</string>
+    <string name="sessions_row_expanded">Genişletildi</string>
+    <string name="sessions_row_collapsed">Daraltıldı</string>
+    <string name="sessions_row_start_new">Yeni oturum başlat</string>
+    <string name="sessions_row_start_new_hint">Bir proje seçin ve ilk mesajınızı gönderin</string>
+    <string name="sessions_row_resume">Sürdür</string>
+    <string name="sessions_row_open_draft">Taslağı aç</string>
+    <string name="sessions_row_discard">Sil</string>
+    <string name="sessions_row_move_up">Yukarı taşı</string>
+    <string name="sessions_row_move_down">Aşağı taşı</string>
+    <string name="sessions_row_settle">Tamamla</string>
+    <string name="sessions_row_status_starting">başlatılıyor</string>
+    <string name="sessions_row_status_suspended">askıda</string>
+    <string name="sessions_row_mark_read">Okundu olarak işaretle</string>
+    <string name="sessions_row_select">Seç</string>
+    <string name="sessions_row_archive">Arşivle</string>
+    <string name="sessions_row_new_chat_here">Burada yeni sohbet</string>
+    <string name="sessions_row_selected">Seçili</string>
+    <string name="sessions_row_not_selected">Seçili değil</string>
+    <string name="sessions_row_archived">Arşivlenenler</string>
+    <string name="sessions_row_hide_archived">Arşivlenenleri gizle</string>
+    <string name="sessions_row_restore">Geri yükle</string>
+
+    <string name="sessions_agents_title">Ajanlar</string>
+    <plurals name="sessions_agents_waiting">
+        <item quantity="one">%1$d bekliyor</item>
+        <item quantity="other">%1$d bekliyor</item>
+    </plurals>
+    <string name="sessions_agents_new">Yeni ajan</string>
+    <string name="sessions_agents_rename">Yeniden adlandır…</string>
+    <string name="sessions_agents_change_character">Karakteri değiştir…</string>
+    <string name="sessions_agents_make_default">Varsayılan yap</string>
+    <string name="sessions_agents_archive">Arşivle…</string>
+    <string name="sessions_agents_restore_failed">Geri yüklenemedi</string>
+    <string name="sessions_agents_archived_just_now">Az önce arşivlendi</string>
+    <string name="sessions_agents_archived_ago">%1$s önce arşivlendi</string>
+    <string name="sessions_agents_restoring">Geri yükleniyor…</string>
+
+    <string name="sessions_rail_working">çalışıyor</string>
+    <string name="sessions_rail_idle">boşta</string>
+    <string name="sessions_rail_compact_advised">kullanım sınırından önce sıkıştırma önerildi</string>
+    <string name="sessions_rail_unread">okunmamış</string>
+    <plurals name="sessions_rail_agents">
+        <item quantity="one">%1$d ajan</item>
+        <item quantity="other">%1$d ajan</item>
+    </plurals>
+    <!-- #117: appletler — kenar çubuğundaki Appletler bölümü, menüsü ve Tüm appletler sayfası. -->
+    <string name="sessions_applets_title">Appletler</string>
+    <string name="sessions_applets_all">Tüm appletler</string>
+    <string name="applets_menu_open">Aç</string>
+    <string name="applets_menu_pin">Kenar çubuğuna sabitle</string>
+    <string name="applets_menu_unpin">Sabitlemeyi kaldır</string>
+    <string name="applets_menu_updated">%1$s önce güncellendi</string>
+    <string name="applets_menu_expired">%1$s süresi doldu</string>
+    <string name="applets_menu_needed">%1$s gerekli</string>
+    <string name="applets_page_host">%1$s üzerinde</string>
+    <string name="applets_hint_desktop">Yeni bir tane yapmak için herhangi bir oturuma “bunu applet yap” deyin. Diğer seçenekler için bir applete sağ tıklayın ya da ⋯ simgesine tıklayın.</string>
+    <string name="applets_hint_phone">Yeni bir tane yapmak için herhangi bir oturuma “bunu applet yap” deyin. Diğer seçenekler için bir applete basılı tutun.</string>
+    <string name="applets_window_no_host">Bu appletin makinesi artık bu cihazla eşli değil. Makineyi yeniden eşleyin, sonra appleti supermux'tan açın.</string>
+    <string name="applets_window_no_key">Bu applet açılamıyor: makinesi bu cihaza onun için bir anahtar vermedi. Makinenin çevrimiçi olduğunu kontrol edip appleti yeniden açın.</string>
+    <string name="applets_menu_info">Applet bilgisi</string>
+    <string name="applets_cover_done">Bitti</string>
+    <string name="applets_save_not_yet">Appletten dosya kaydetmek bu sürümde henüz yok.</string>
+    <string name="applets_menu_add_home">Ana ekrana ekle</string>
+    <string name="applets_menu_on_home">Ana ekranda</string>
+    <string name="applets_menu_install">Bu bilgisayara yükle</string>
+    <string name="applets_menu_installed">Yüklü</string>
+    <string name="applets_install_no_home">Bu telefonun ana ekranı uygulamalardan kısayol almıyor.</string>
+    <string name="applets_install_refused">Ana ekran kısayolu almadı.</string>
+    <string name="applets_where_home">Ana ekran</string>
+    <string name="applets_updated_just_now">Az önce güncellendi</string>
+    <string name="applets_where_applications">Uygulamalar</string>
+    <string name="applets_where_start_menu">Başlat menüsü</string>
+    <string name="applets_where_app_menu">Uygulama menüsü</string>
+    <string name="applets_menu_install_mac">Bu Mac'e yükle</string>
+    <string name="applets_menu_install_pc">Bu bilgisayara yükle</string>
+    <string name="applets_install_failed">Yüklenemedi.</string>
+    <string name="applets_install_dev_build">supermux'un bu kopyası applet yükleyemiyor (yüklü bir kopya değil).</string>
+    <string name="applets_install_comment">Bir supermux appleti</string>
+    <!-- #117 W1: Home screen widgets. -->
+    <string name="applets_menu_add_widget">Widget ekle</string>
+    <string name="applets_widget_empty">Burada görmek için supermux'ta applet sabitleyin.</string>
+    <string name="applets_widget_signed_out">Appletlerinizi görmek için supermux'ı açın.</string>
+    <string name="applets_widget_choose">Bir applet seçin</string>
+    <string name="applets_widget_gone">Bu applet artık yok. Başka birini seçin.</string>
+    <string name="applets_widget_needs_you">Sizi bekliyor</string>
+    <string name="applets_widget_no_home">Bu ana ekran uygulamalardan widget almıyor.</string>
+    <string name="applets_widget_none">Bu makinede henüz applet yok.</string>
+    <string name="applets_widget_ios_title">Appletler widget'ını ekleyin</string>
+    <string name="applets_widget_ios_step1">Ana Ekranınızda boş bir yere dokunup basılı tutun</string>
+    <string name="applets_widget_ios_step2">Düzenle'ye, ardından Widget Ekle'ye dokunun</string>
+    <string name="applets_widget_ios_step3">supermux'ı bulun ve “Appletler”i ya da tek biri için “Applet”i seçin</string>
+    <string name="applets_widget_ios_note">iOS widget'ları yalnızca sizin eklemenize izin veriyor; supermux sizin yerinize ekleyemez.</string>
+    <string name="applets_window_no_engine">Bu cihaz applet sayfalarını gösteremiyor: web motoru eksik ya da çok eski. Güncelleyin, sonra appleti yeniden açın.</string>
+    <string name="applets_window_no_engine_android">Bu telefon applet sayfalarını gösteremiyor: Android System WebView çok eski. Play Store'dan güncelleyin, sonra appleti yeniden açın.</string>
+    <string name="applets_stub_not_running_title">supermux çalışmıyor</string>
+    <string name="applets_stub_not_running_body">supermux'ı açın, sonra bu appleti yeniden açın.</string>
+    <string name="applets_menu_open_window">Yeni pencerede aç</string>
+</resources>

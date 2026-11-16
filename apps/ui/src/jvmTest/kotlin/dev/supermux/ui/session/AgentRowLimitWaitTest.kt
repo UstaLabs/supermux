@@ -2,6 +2,7 @@ package dev.supermux.ui.session
 
 import dev.supermux.chat.formatChatTime
 import dev.supermux.chat.parseChatTs
+import dev.supermux.ui.i18n.chatTimeText
 import dev.supermux.proto.LimitWaitDto
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -14,7 +15,7 @@ class AgentRowLimitWaitTest {
     private val anya = AgentEntry(id = "w", name = "Anya", working = false, unread = false, active = false, online = true, muted = false, preview = null)
 
     @Test fun a_waiting_agent_says_when_it_resumes() {
-        val hhmm = formatChatTime(parseChatTs(wait.resumeAt)!!, now)
+        val hhmm = chatTimeText(formatChatTime(parseChatTs(wait.resumeAt)!!, now))
         assertEquals("Waiting · resumes $hhmm", agentRowStatus(anya.copy(limitWait = wait), now))
         assertEquals("Waiting · resumes $hhmm", agentRowStatus(anya.copy(limitWait = wait, online = false), now))
     }

@@ -2,6 +2,7 @@ package dev.supermux.webview.engine.ios
 
 import kotlinx.cinterop.ObjCSignatureOverride
 import platform.Foundation.NSError
+import platform.WebKit.WKDownload
 import platform.WebKit.WKFrameInfo
 import platform.WebKit.WKMediaCaptureType
 import platform.WebKit.WKNavigation
@@ -86,6 +87,16 @@ internal class NavigationDelegate : NSObject(), WKNavigationDelegateProtocol {
 
     override fun webViewWebContentProcessDidTerminate(webView: WKWebView) {
         engine?.onRendererGone()
+    }
+
+    @ObjCSignatureOverride
+    override fun webView(webView: WKWebView, navigationAction: WKNavigationAction, didBecomeDownload: WKDownload) {
+        IosDownloads.adopt(didBecomeDownload, engine)
+    }
+
+    @ObjCSignatureOverride
+    override fun webView(webView: WKWebView, navigationResponse: WKNavigationResponse, didBecomeDownload: WKDownload) {
+        IosDownloads.adopt(didBecomeDownload, engine)
     }
 }
 

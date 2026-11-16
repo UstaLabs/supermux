@@ -46,3 +46,15 @@ describe("normalizeTelegramInbound attachment kinds", () => {
     expect(msg.attachments?.[0]).toMatchObject({ kind: "video_note" })
   })
 })
+
+describe("normalizeTelegramInbound language", () => {
+  test("carries the sender's Telegram language_code", async () => {
+    const msg = await normalizeTelegramInbound({ ctx: ctxWith({ text: "/sessions", from: { id: 99, username: "ada", language_code: "tr" } }), api: makeApi(new Uint8Array()), fileStore: fakeStore() })
+    expect(msg.lang).toBe("tr")
+  })
+
+  test("leaves it out when Telegram sent none", async () => {
+    const msg = await normalizeTelegramInbound({ ctx: ctxWith({ text: "hi" }), api: makeApi(new Uint8Array()), fileStore: fakeStore() })
+    expect(msg.lang).toBeUndefined()
+  })
+})

@@ -9,6 +9,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.chat.formatChatTime
 import dev.supermux.chat.parseChatTs
+import dev.supermux.ui.i18n.chatTimeText
 import dev.supermux.proto.LimitWaitDto
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.setPlatformContent
@@ -22,7 +23,7 @@ import kotlin.test.assertEquals
 class LimitWaitUiTest {
     private val resumeAt = "2026-11-08T18:13:00.000Z"
     private val now = parseChatTs("2026-11-08T16:49:00.000Z")!!
-    private val hhmm = formatChatTime(parseChatTs(resumeAt)!!, now)
+    private val hhmm = chatTimeText(formatChatTime(parseChatTs(resumeAt)!!, now))
     private val wait = LimitWaitDto(resumeAt = resumeAt, resetsAt = "2026-11-08T18:10:00.000Z", account = "work", accountLabel = "Work Max")
 
     private fun ComposeUiTest.content(body: @Composable () -> Unit) =

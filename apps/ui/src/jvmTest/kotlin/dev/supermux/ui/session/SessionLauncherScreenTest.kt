@@ -2,10 +2,19 @@ package dev.supermux.ui.session
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.test.click
+import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertTextEquals
@@ -15,6 +24,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pressKey
@@ -26,10 +36,23 @@ import dev.supermux.net.AgentModelsResponse
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ReasoningLevel
 import dev.supermux.net.ReasoningOptions
+import dev.supermux.net.GitBranches
+import dev.supermux.net.GitLocalBranch
+import dev.supermux.net.GitOpenIn
+import dev.supermux.net.GitRemoteBranch
+import dev.supermux.net.GitSwitchResult
+import dev.supermux.net.OpenPr
+import dev.supermux.net.OpenPrList
+import dev.supermux.net.OpenPrRead
+import dev.supermux.net.ProjectFolderState
+import dev.supermux.net.ProjectPrefs
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.RepoBranches
 import dev.supermux.net.RepoInfo
+import dev.supermux.net.SessionSourceBody
 import dev.supermux.proto.PermissionModeInfo
+import dev.supermux.proto.ProjectDto
+import dev.supermux.proto.ProjectLocationDto
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
 import dev.supermux.state.LauncherDraft
@@ -58,7 +81,7 @@ import kotlinx.coroutines.runBlocking
 /**
  * The shared [SessionLauncherScreen] (cluster F6) — three layers:
  *
- *  1. The PURE settle-vs-change helper ([shouldResetModelOnAgentChange]) + [filterBranches] are unit-tested
+ *  1. The PURE settle-vs-change helper ([shouldResetModelOnAgentChange]) is unit-tested (the row's own data in LauncherWorkTest)
  *     directly (no Compose). These encode the subtle draft-restore-vs-genuine-change logic that
  *     caused a real device bug on iOS/Android — a restore-settle must NEVER reset the model or the
  *     base branch, a genuine later change MUST.
@@ -90,16 +113,6 @@ class SessionLauncherScreenTest {
 
     @Test fun model_reset_genuine_change_resets() {
         assertTrue(shouldResetModelOnAgentChange(lastSeen = "claude", current = "codex", restoring = false))
-    }
-
-    // ── filterBranches ──────────────────────────────────────────────────────────────────────────
-
-    @Test fun filter_branches_combines_local_and_remote_and_is_case_insensitive() {
-        val info = RepoInfo(branches = RepoBranches(local = listOf("main", "feat/Login"), remote = listOf("origin/main")))
-        assertEquals(listOf("main", "feat/Login", "origin/main"), filterBranches(info, ""))
-        assertEquals(listOf("feat/Login"), filterBranches(info, "login"))
-        assertEquals(listOf("main", "origin/main"), filterBranches(info, "MAIN"))
-        assertTrue(filterBranches(null, "x").isEmpty())
     }
 
     // ── (2) UI: fakes + harness ─────────────────────────────────────────────────────────────────
@@ -146,10 +159,27 @@ class SessionLauncherScreenTest {
         onDraftChange: (LauncherDraft) -> Unit = {},
         onClearDraft: () -> Unit = {},
         onOpenSession: ((String) -> Unit)? = null,
-        onSubmit: suspend (String, String, String?, String?, String, List<StagedUpload>, Boolean, String?, String?, String?, String?) -> String? =
-            { _, _, _, _, _, _, _, _, _, _, _ -> null },
+        onSubmit: suspend (String, String, String?, String?, String, List<StagedUpload>, Boolean, String?, String?, String?, String?, SessionSourceBody?) -> String? =
+            { _, _, _, _, _, _, _, _, _, _, _, _ -> null },
         permissionCatalog: Map<String, List<PermissionModeInfo>> = emptyMap(),
         accounts: kotlinx.coroutines.flow.Flow<List<dev.supermux.net.AccountDto>?> = kotlinx.coroutines.flow.flowOf(null),
+        /** #152's broker: null = one that predates it (the row falls back to the worktree flag + base). */
+        projectPrefs: ProjectPrefs? = null,
+        branches: GitBranches? = null,
+        folder: ProjectFolderState? = null,
+        /** Every PUT /projects/prefs, as "dir=workIn". */
+        prefsPut: MutableList<String>? = null,
+        /** The broker can't keep a pick (PUT /projects/prefs fails). */
+        prefsSaveFails: Boolean = false,
+        /** Origin's open PRs (GET /projects/prs), one read by ref, and every POST /projects/switch as "dir=name". */
+        prs: OpenPrList? = null,
+        prRead: (String) -> OpenPrRead? = { null },
+        switched: MutableList<String>? = null,
+        onOpenSessionFromCard: ((String) -> Unit)? = null,
+        /** The host's projects, and the one the launcher opens on (the sidebar's "+", #72's "Check Out Pull Request…"). */
+        catalog: List<ProjectDto> = emptyList(),
+        initialProjectId: String? = null,
+        initialPrNumber: Int? = null,
     ) {
         SupermuxTheme(appearance = AppearanceMode.DARK) {
             SessionLauncherScreen(
@@ -166,6 +196,14 @@ class SessionLauncherScreenTest {
                     launcherRepoInfo = { w, _ -> asked?.add(w); repoInfoAt?.invoke(w) ?: repoInfo },
                     launcherCommands = { _, w -> asked?.add(w); commands },
                     accounts = accounts,
+                    projectPrefs = { projectPrefs },
+                    projectBranches = { branches },
+                    folderState = { folder },
+                    setProjectPrefs = { d, w -> prefsPut?.add("$d=$w"); if (prefsSaveFails) null else projectPrefs?.copy(workIn = w) },
+                    projectPrs = { _, _ -> prs },
+                    projectPr = { _, ref -> prRead(ref) },
+                    switchFolder = { d, n -> switched?.add("$d=$n"); GitSwitchResult(status = "switched", branch = n) },
+                    projectCatalog = kotlinx.coroutines.flow.flowOf(catalog),
                 ),
                 loadPrefs = { prefs },
                 onPrefsChange = onPrefsChange,
@@ -174,10 +212,12 @@ class SessionLauncherScreenTest {
                 onClearDraft = onClearDraft,
                 onSubmit = onSubmit,
                 permissionCatalog = permissionCatalog,
-                onOpenSession = onOpenSession,
+                onOpenSession = onOpenSession ?: onOpenSessionFromCard,
                 standalone = standalone,
                 workspaceWorkdir = workspaceWorkdir,
                 workspaceLabel = workspaceLabel,
+                initialProjectId = initialProjectId,
+                initialPrNumber = initialPrNumber,
             )
         }
     }
@@ -251,7 +291,7 @@ class SessionLauncherScreenTest {
             Harness(
                 draft = LauncherDraft(workdir = "/proj/x", text = "do it"),
                 onClearDraft = { cleared = true },
-                onSubmit = { w, a, m, r, t, s, wt, b, _replaceDraftId, _perm, _ ->
+                onSubmit = { w, a, m, r, t, s, wt, b, _replaceDraftId, _perm, _, _ ->
                     captured = Submitted(w, a, m, r, t, s.size, wt, b)
                     null
                 },
@@ -280,7 +320,7 @@ class SessionLauncherScreenTest {
             Harness(
                 draft = LauncherDraft(workdir = "/proj/x", text = "do it"),
                 accounts = accounts,
-                onSubmit = { _, _, _, _, _, _, _, _, _, _, account -> sent += account; null },
+                onSubmit = { _, _, _, _, _, _, _, _, _, _, account, _ -> sent += account; null },
             )
         }
         waitForIdle()
@@ -302,7 +342,7 @@ class SessionLauncherScreenTest {
             Harness(
                 draft = LauncherDraft(workdir = "/proj/x", text = "do it"),
                 accounts = accounts,
-                onSubmit = { _, _, _, _, _, _, _, _, _, _, account -> sent += account; null },
+                onSubmit = { _, _, _, _, _, _, _, _, _, _, account, _ -> sent += account; null },
             )
         }
         waitForIdle()
@@ -336,7 +376,7 @@ class SessionLauncherScreenTest {
             Harness(
                 draft = LauncherDraft(workdir = "/proj/x", text = "do it"),
                 accounts = accounts,
-                onSubmit = { _, _, _, _, _, _, _, _, _, _, account -> sent += account; null },
+                onSubmit = { _, _, _, _, _, _, _, _, _, _, account, _ -> sent += account; null },
             )
         }
         waitForIdle()
@@ -374,7 +414,7 @@ class SessionLauncherScreenTest {
             Harness(
                 draft = LauncherDraft(workdir = "/proj/x", text = "do it"),
                 accounts = accounts,
-                onSubmit = { _, _, _, _, _, _, _, _, _, _, account -> sent += account; null },
+                onSubmit = { _, _, _, _, _, _, _, _, _, _, account, _ -> sent += account; null },
             )
         }
         waitForIdle()
@@ -411,7 +451,7 @@ class SessionLauncherScreenTest {
             Harness(
                 draft = LauncherDraft(workdir = "/proj/x", text = "do it"),
                 accounts = accounts,
-                onSubmit = { _, _, _, _, _, _, _, _, _, _, account -> sent += account; null },
+                onSubmit = { _, _, _, _, _, _, _, _, _, _, account, _ -> sent += account; null },
             )
         }
         waitForIdle()
@@ -444,7 +484,7 @@ class SessionLauncherScreenTest {
             Harness(
                 draft = LauncherDraft(workdir = "/proj/x", text = "do it"),
                 accounts = accounts,
-                onSubmit = { _, _, _, _, _, _, _, _, _, _, account -> sent += account; null },
+                onSubmit = { _, _, _, _, _, _, _, _, _, _, account, _ -> sent += account; null },
             )
         }
         waitForIdle()
@@ -484,7 +524,7 @@ class SessionLauncherScreenTest {
                 draft = LauncherDraft(workdir = "/proj/x", text = "do it"),
                 prefs = LauncherPrefs(permissionModes = mapOf("claude" to "ask")),
                 permissionCatalog = catalog,
-                onSubmit = { _, _, _, _, _, _, _, _, _, p, _ ->
+                onSubmit = { _, _, _, _, _, _, _, _, _, p, _, _ ->
                     perm = p
                     null
                 },
@@ -533,7 +573,7 @@ class SessionLauncherScreenTest {
                 draft = LauncherDraft(workdir = "/other/proj", useWorktree = true, baseBranch = "dev", text = "tab text"),
                 repoInfo = repo,
                 workspaceWorkdir = "/ws/tree",
-                onSubmit = { w, a, m, r, t, s, wt, b, _, _perm, _ ->
+                onSubmit = { w, a, m, r, t, s, wt, b, _, _perm, _, _ ->
                     captured = Submitted(w, a, m, r, t, s.size, wt, b)
                     null
                 },
@@ -541,7 +581,7 @@ class SessionLauncherScreenTest {
         }
         waitForIdle()
         onNodeWithTag("launcher_project_field").assertDoesNotExist()
-        onNodeWithTag("launcher_worktree").assertDoesNotExist()
+        onNodeWithTag(WorkRowTags.WORK_IN).assertDoesNotExist()
         onNodeWithTag("launcher_save_draft").assertDoesNotExist()
         onNodeWithTag("launcher_submit").performClick()
         waitForIdle()
@@ -557,7 +597,7 @@ class SessionLauncherScreenTest {
                 draft = LauncherDraft(text = "hi"),
                 projects = listOf("/proj/a"),
                 workspaceWorkdir = "/ws/tree",
-                onSubmit = { w, a, m, r, t, s, wt, b, _, _perm, _ ->
+                onSubmit = { w, a, m, r, t, s, wt, b, _, _perm, _, _ ->
                     captured = Submitted(w, a, m, r, t, s.size, wt, b)
                     null
                 },
@@ -589,7 +629,7 @@ class SessionLauncherScreenTest {
             Harness(
                 draft = LauncherDraft(workdir = "/proj/x", text = "keep me"),
                 onDraftChange = { drafts.add(it) },
-                onSubmit = { _, _, _, _, _, _, _, _, _, _, _ -> throw IllegalStateException("nope") },
+                onSubmit = { _, _, _, _, _, _, _, _, _, _, _, _ -> throw IllegalStateException("nope") },
             )
         }
         waitForIdle()
@@ -688,7 +728,7 @@ class SessionLauncherScreenTest {
         waitForIdle()
         onNodeWithTag("launcher_project_label", useUnmergedTree = true).assertTextEquals("Choose a project")
         onNodeWithTag("launcher_workdir_caption").assertDoesNotExist()
-        onNodeWithTag("launcher_worktree").assertDoesNotExist()
+        onNodeWithTag(WorkRowTags.WORK_IN).assertDoesNotExist()
         onNodeWithTag("launcher_submit").assertIsNotEnabled()
         assertTrue(asked.isEmpty(), "no repo info / commands for a project nobody chose; got $asked")
     }
@@ -699,7 +739,8 @@ class SessionLauncherScreenTest {
             Harness(sessions = listOf(session("s1", "/proj/x")), repoInfo = repo, asked = asked)
         }
         waitForIdle()
-        onNodeWithTag("launcher_workdir_caption").assertTextEquals(dev.supermux.session.formatWorkdir("/proj/x", "/home/u"))
+        // The row under the composer says where the work lands, so the heading is what names the folder here.
+        onNodeWithTag("launcher_project_label", useUnmergedTree = true).assertTextEquals(dev.supermux.session.formatWorkdir("/proj/x", "/home/u"))
         assertEquals(setOf("/proj/x"), asked.toSet())
     }
 
@@ -720,7 +761,7 @@ class SessionLauncherScreenTest {
                 // No text yet: typing freezes the project, and this one must follow recency.
                 sessions = sessions,
                 repoInfoAt = { w -> if (w == "/proj/y") gate.await() else repo },
-                onSubmit = { w, a, m, r, t, st, wt, b, _, _, _ -> captured = Submitted(w, a, m, r, t, st.size, wt, b); null },
+                onSubmit = { w, a, m, r, t, st, wt, b, _, _, _, _ -> captured = Submitted(w, a, m, r, t, st.size, wt, b); null },
             )
         }
         waitForIdle()
@@ -729,7 +770,7 @@ class SessionLauncherScreenTest {
         // The most recent project moves to /proj/y while its repo info is still loading.
         sessions = listOf(session("s2", "/proj/y"), session("s1", "/proj/x"))
         waitForIdle()
-        onNodeWithTag("launcher_worktree").assertDoesNotExist()
+        onNodeWithTag(WorkRowTags.WORK_IN).assertDoesNotExist()
         onNodeWithTag("launcher_submit").assertIsNotEnabled()
 
         gate.complete(repoY)
@@ -758,7 +799,7 @@ class SessionLauncherScreenTest {
         onNodeWithText("stale/branch").assertDoesNotExist()
     }
 
-    @Test fun worktree_off_is_remembered_for_that_folder_only() = runComposeUiTest {
+    @Test fun local_is_remembered_for_that_folder_only_on_a_broker_before_152() = runComposeUiTest {
         var saved: LauncherPrefs? = null
         pointerContent {
             Harness(
@@ -768,12 +809,12 @@ class SessionLauncherScreenTest {
             )
         }
         waitForIdle()
-        onNodeWithTag("launcher_worktree").performClick()
+        onNodeWithTag(WorkRowTags.WORK_IN).performClick()
         waitForIdle()
-        onNodeWithTag("launcher_worktree_toggle").performClick()
+        onNodeWithTag(WorkRowTags.WORK_IN_LOCAL).performClick()
         waitForIdle()
         assertEquals(setOf(worktreeChoiceKey("", "/proj/x")), saved?.worktreeOff)
-        onNodeWithText("No worktree").assertIsDisplayed()
+        onNodeWithTag(WorkRowTags.WORK_IN).assertTextContains("Local")
     }
 
     @Test fun a_remembered_opt_out_spawns_that_folder_without_a_worktree() = runComposeUiTest {
@@ -783,11 +824,11 @@ class SessionLauncherScreenTest {
                 prefs = LauncherPrefs(worktreeOff = setOf(worktreeChoiceKey("", "/proj/x"))),
                 draft = LauncherDraft(workdir = "/proj/x", text = "go"),
                 repoInfo = repo,
-                onSubmit = { w, a, m, r, t, st, wt, b, _, _, _ -> captured = Submitted(w, a, m, r, t, st.size, wt, b); null },
+                onSubmit = { w, a, m, r, t, st, wt, b, _, _, _, _ -> captured = Submitted(w, a, m, r, t, st.size, wt, b); null },
             )
         }
         waitForIdle()
-        onNodeWithText("No worktree").assertIsDisplayed()
+        onNodeWithTag(WorkRowTags.WORK_IN).assertTextContains("Local")
         onNodeWithTag("launcher_submit").performClick()
         waitForIdle()
         assertEquals(false, captured?.worktree)
@@ -799,7 +840,7 @@ class SessionLauncherScreenTest {
         pointerContent { Harness(prefs = prefs, draft = LauncherDraft(workdir = "/proj/x"), repoInfo = repo) }
         waitForIdle()
         onNodeWithText("main").assertIsDisplayed()
-        onNodeWithText("No worktree").assertDoesNotExist()
+        onNodeWithTag(WorkRowTags.WORK_IN).assertTextContains("Worktree")
     }
 
     /**
@@ -811,7 +852,7 @@ class SessionLauncherScreenTest {
         pointerContent {
             Harness(
                 draft = LauncherDraft(workdir = "/proj/x", text = "do it"),
-                onSubmit = { _, _, _, _, _, _, _, _, _, _, _ ->
+                onSubmit = { _, _, _, _, _, _, _, _, _, _, _, _ ->
                     throw IllegalStateException("spawn refused: workdir is not a directory")
                 },
             )
@@ -871,7 +912,7 @@ class SessionLauncherScreenTest {
             Harness(
                 draft = LauncherDraft(workdir = "/proj/x", text = ""),
                 commands = listOf(cmd("review")),
-                onSubmit = { _, _, _, _, _, _, _, _, _, _, _ -> submits++; null },
+                onSubmit = { _, _, _, _, _, _, _, _, _, _, _, _ -> submits++; null },
             )
         }
         waitForIdle()
@@ -946,68 +987,448 @@ class SessionLauncherScreenTest {
         branches = RepoBranches(local = listOf("main", "feat/one"), remote = emptyList()),
     )
 
-    @Test fun the_touch_worktree_sheet_picks_a_base_branch() = runComposeUiTest {
+    @Test fun the_touch_branch_sheet_picks_a_base_branch() = runComposeUiTest {
         touchContent { Harness(draft = LauncherDraft(workdir = "/proj/x"), repoInfo = repo) }
         waitForIdle()
-        onNodeWithTag("launcher_worktree").performClick()
+        onNodeWithTag(WorkRowTags.BRANCH).performClick()
         waitForIdle()
-        onNodeWithTag("launcher_worktree_sheet").assertIsDisplayed()
-        onNodeWithTag("launcher_branch_search").assertIsDisplayed()
-        onNodeWithTag("launcher_branch_feat/one").performClick()
+        onNodeWithTag(WorkRowTags.SHEET).assertIsDisplayed()
+        onNodeWithTag(WorkRowTags.BASE).performClick()
         waitForIdle()
-        // Picking dismisses the sheet and the pill now reads the chosen base.
-        onNodeWithTag("launcher_worktree_sheet").assertDoesNotExist()
-        onNodeWithText("feat/one").assertIsDisplayed()
+        onNodeWithTag(WorkRowTags.row("feat/one")).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.USE_NEW).performClick()
+        waitForIdle()
+        // Using it dismisses the sheet, and the pill now reads the chosen base.
+        onNodeWithTag(WorkRowTags.SHEET).assertDoesNotExist()
+        onNodeWithTag(WorkRowTags.BRANCH).assertTextContains("feat/one")
     }
 
-    @Test fun a_swipe_down_dismisses_the_worktree_sheet_and_the_pill_reopens_it() = runComposeUiTest {
+    @Test fun a_swipe_down_dismisses_the_branch_sheet_and_the_pill_reopens_it() = runComposeUiTest {
         // M3 hides the sheet BEFORE reporting the dismiss, so a guarded onDismissRequest would
         // strand it composed-but-invisible and the pill would become a no-op. Nothing guards it.
-        val gate = CompletableDeferred<RepoInfo?>()
-        touchContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
-                SessionLauncherScreen(
-                    sessions = emptyList(),
-                    home = "/home/u",
-                    onBack = {},
-                    actions = LauncherActions(
-                        // The first (unfetched) call answers at once; the picker's fetch hangs, so
-                        // the swipe below lands while a branch fetch is still in flight.
-                        launcherRepoInfo = { _, fetch -> if (fetch) gate.await() else repo },
-                    ),
-                    loadPrefs = { LauncherPrefs() },
-                    loadDraft = { LauncherDraft(workdir = "/proj/x") },
-                    onSubmit = { _, _, _, _, _, _, _, _, _, _, _ -> null },
-                    standalone = true,
-                )
-            }
-        }
+        touchContent { Harness(draft = LauncherDraft(workdir = "/proj/x"), repoInfo = repo) }
         waitForIdle()
-        onNodeWithTag("launcher_worktree").performClick()
+        onNodeWithTag(WorkRowTags.BRANCH).performClick()
         waitForIdle()
-        onNodeWithTag("launcher_worktree_sheet").assertIsDisplayed()
-
-        onNodeWithTag("launcher_worktree_sheet").performTouchInput { swipeDown() }
-        waitUntil(timeoutMillis = 5_000) {
-            onAllNodesWithTag("launcher_worktree_sheet").fetchSemanticsNodes().isEmpty()
-        }
-        gate.complete(repo)
-        waitForIdle()
-
-        onNodeWithTag("launcher_worktree").performClick()
-        waitUntil(timeoutMillis = 5_000) {
-            onAllNodesWithTag("launcher_worktree_sheet").fetchSemanticsNodes().isNotEmpty()
-        }
+        onNodeWithTag(WorkRowTags.SHEET).assertIsDisplayed()
+        onNodeWithTag(WorkRowTags.SHEET).performTouchInput { swipeDown() }
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag(WorkRowTags.SHEET).fetchSemanticsNodes().isEmpty() }
+        onNodeWithTag(WorkRowTags.BRANCH).performClick()
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag(WorkRowTags.SHEET).fetchSemanticsNodes().isNotEmpty() }
     }
 
-    @Test fun a_pointer_host_gets_the_worktree_dialog_instead() = runComposeUiTest {
+    @Test fun a_pointer_host_gets_a_popover_under_the_pill_instead() = runComposeUiTest {
         pointerContent { Harness(draft = LauncherDraft(workdir = "/proj/x"), repoInfo = repo) }
         waitForIdle()
-        onNodeWithTag("launcher_worktree").performClick()
+        onNodeWithTag(WorkRowTags.BRANCH).performClick()
         waitForIdle()
-        onNodeWithTag("launcher_worktree_dialog").assertIsDisplayed()
-        onNodeWithTag("launcher_worktree_sheet").assertDoesNotExist()
-        onNodeWithTag("launcher_worktree_toggle").assertIsDisplayed()
+        onNodeWithTag(WorkRowTags.POPOVER).assertIsDisplayed()
+        onNodeWithTag(WorkRowTags.SHEET).assertDoesNotExist()
+    }
+
+    // ── #152: the row on a broker that takes a source ──────────────────────────────────────────────
+
+    /** The prototype's sample: the folder on feat/checkout-v2, a session with fix/cart-total, origin's feat/login-redirect. */
+    private val storefront = GitBranches(
+        current = "feat/checkout-v2",
+        local = listOf(
+            GitLocalBranch("main", isDefault = true, upstream = "origin/main", author = "deniz", at = 1),
+            GitLocalBranch("feat/checkout-v2", openIn = GitOpenIn("this"), author = "you", at = 3),
+            GitLocalBranch("fix/cart-total", openIn = GitOpenIn("session", "s-2", "Cart total off by one"), author = "you", at = 2),
+        ),
+        remote = listOf(GitRemoteBranch("origin/main", isDefault = true), GitRemoteBranch("origin/feat/login-redirect")),
+    )
+    private val clean = ProjectFolderState(branch = "feat/checkout-v2")
+
+    private fun captureSource(into: MutableList<SessionSourceBody?>): suspend (String, String, String?, String?, String, List<StagedUpload>, Boolean, String?, String?, String?, String?, SessionSourceBody?) -> String? =
+        { _, _, _, _, _, _, _, _, _, _, _, src -> into += src; null }
+
+    @Test fun a_new_branch_named_from_the_message_from_the_default_base_is_what_start_sends() = runComposeUiTest {
+        val sent = mutableListOf<SessionSourceBody?>()
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(workdir = "/proj/x"), repoInfo = repo,
+                projectPrefs = ProjectPrefs("worktree", "ahmet/"), branches = storefront, folder = clean,
+                onSubmit = captureSource(sent),
+            )
+        }
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.BRANCH).assertTextContains("main")
+        onNodeWithTag("launcher_message").performTextInput("Fix the login redirect loop")
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.SUMMARY).assertTextContains("ahmet/fix-the-login-redirect", substring = true)
+        onNodeWithTag("launcher_submit").performClick()
+        waitForIdle()
+        assertEquals(listOf<SessionSourceBody?>(SessionSourceBody(kind = "new", base = "main", name = "ahmet/fix-the-login-redirect", auto = true)), sent)
+    }
+
+    @Test fun the_new_branch_hint_says_where_the_prefix_is_set() = runComposeUiTest {
+        pointerContent {
+            Harness(draft = LauncherDraft(workdir = "/proj/x"), repoInfo = repo, projectPrefs = ProjectPrefs("worktree", "ahmet/"), branches = storefront, folder = clean)
+        }
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.BRANCH).performClick()
+        waitForIdle()
+        // One paragraph, as the prototype's: where the base comes from, then where the prefix is set.
+        onNode(
+            hasText("The base is fetched from origin first, so the branch starts from the latest main. Prefix ahmet/ is set in Settings › Machine › Chat worktrees."),
+            useUnmergedTree = true,
+        ).assertExists()
+    }
+
+    @Test fun no_prefix_says_it_is_off_and_where() = runComposeUiTest {
+        pointerContent {
+            Harness(draft = LauncherDraft(workdir = "/proj/x"), repoInfo = repo, projectPrefs = ProjectPrefs("worktree", ""), branches = storefront, folder = clean)
+        }
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.BRANCH).performClick()
+        waitForIdle()
+        onNode(hasText("The branch prefix is off in Settings › Machine › Chat worktrees.", substring = true), useUnmergedTree = true).assertExists()
+    }
+
+    @Test fun a_branch_only_origin_has_is_tracked() = runComposeUiTest {
+        val sent = mutableListOf<SessionSourceBody?>()
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(workdir = "/proj/x", text = "go"), repoInfo = repo,
+                projectPrefs = ProjectPrefs("worktree", "ahmet/"), branches = storefront, folder = clean,
+                onSubmit = captureSource(sent),
+            )
+        }
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.BRANCH).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.TAB_EXISTING).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.row("origin/feat/login-redirect")).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.BRANCH).assertTextContains("feat/login-redirect")
+        onNodeWithTag(WorkRowTags.SUMMARY).assertTextContains("origin/feat/login-redirect", substring = true)
+        onNodeWithTag("launcher_submit").assertIsEnabled().performClick()
+        waitForIdle()
+        assertEquals(listOf<SessionSourceBody?>(SessionSourceBody(kind = "existing", branch = "origin/feat/login-redirect")), sent)
+    }
+
+    @Test fun local_is_the_users_remembered_pick_and_a_new_pick_is_kept_on_the_broker() = runComposeUiTest {
+        val put = mutableListOf<String>()
+        val sent = mutableListOf<SessionSourceBody?>()
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(workdir = "/proj/x", text = "go"), repoInfo = repo,
+                projectPrefs = ProjectPrefs("local", "ahmet/"), branches = storefront, folder = clean,
+                prefsPut = put, onSubmit = captureSource(sent),
+            )
+        }
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.WORK_IN).assertTextContains("Local")
+        onNodeWithTag(WorkRowTags.LOCAL_BRANCH).assertTextContains("feat/checkout-v2")
+        // The folder switches at Start; a branch another session has open is worked on in that session's copy.
+        onNodeWithTag(WorkRowTags.LOCAL_BRANCH).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.row("fix/cart-total")).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.SUMMARY).assertTextContains("Cart total off by one", substring = true)
+        onNodeWithTag("launcher_submit").performClick()
+        waitForIdle()
+        assertEquals(listOf<SessionSourceBody?>(SessionSourceBody(kind = "reuse", sessionId = "s-2")), sent)
+        onNodeWithTag(WorkRowTags.WORK_IN).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.WORK_IN_WORKTREE).performClick()
+        waitForIdle()
+        assertEquals(listOf("/proj/x=worktree"), put)
+    }
+
+    @Test fun a_pick_the_broker_cannot_keep_is_said_under_the_row() = runComposeUiTest {
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(workdir = "/proj/x"), repoInfo = repo,
+                projectPrefs = ProjectPrefs("worktree", "ahmet/"), branches = storefront, folder = clean, prefsSaveFails = true,
+            )
+        }
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.NOT_REMEMBERED).assertDoesNotExist()
+        onNodeWithTag(WorkRowTags.WORK_IN).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.WORK_IN_LOCAL).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.WORK_IN).assertTextContains("Local")
+        onNodeWithTag(WorkRowTags.NOT_REMEMBERED).assertIsDisplayed()
+    }
+
+    @Test fun a_folder_with_changes_says_why_and_only_its_branch_and_worktree_ones_stay_pickable() = runComposeUiTest {
+        val sent = mutableListOf<SessionSourceBody?>()
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(workdir = "/proj/x", text = "go"), repoInfo = repo,
+                projectPrefs = ProjectPrefs("local", "ahmet/"), branches = storefront,
+                folder = ProjectFolderState(branch = "feat/checkout-v2", clean = false, changed = 2),
+                onSubmit = captureSource(sent),
+            )
+        }
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.LOCAL_BRANCH).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.DIRTY).assertTextContains("2 uncommitted changes", substring = true)
+        onNodeWithTag(WorkRowTags.row("main")).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.POPOVER).assertIsDisplayed()
+        onNodeWithTag(WorkRowTags.row("feat/checkout-v2")).performClick()
+        waitForIdle()
+        onNodeWithTag("launcher_submit").performClick()
+        waitForIdle()
+        assertEquals(listOf<SessionSourceBody?>(SessionSourceBody(kind = "local")), sent)
+    }
+
+    // ── #152 C2 (Pull request) + C3 (the ways out) ──────────────────────────────────────────────────
+
+    private val pr123 = OpenPr(number = 123, title = "Fix login redirect loop", head = "feat/login-redirect", base = "main", author = "deniz", headRepo = "acme/storefront", checks = "ok")
+    private val pr125 = OpenPr(number = 125, title = "Speed up product search", head = "fix/cart-total", base = "main", headRepo = "acme/storefront", localAhead = 2)
+    private val prs = OpenPrList(status = "ok", forge = "github", repo = "github.com/acme/storefront", prs = listOf(pr123))
+
+    @Test fun a_pull_request_is_picked_from_the_list_or_by_its_number_and_start_sends_it() = runComposeUiTest {
+        val sent = mutableListOf<SessionSourceBody?>()
+        val asked = mutableListOf<String>()
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(workdir = "/proj/x", text = "go"), repoInfo = repo,
+                projectPrefs = ProjectPrefs("worktree", "ahmet/"), branches = storefront, folder = clean, prs = prs,
+                prRead = { ref -> asked += ref; OpenPrRead(status = "not_open", state = "merged") },
+                onSubmit = captureSource(sent),
+            )
+        }
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.BRANCH).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.TAB_PR).assertTextContains("Pull request").performClick()
+        waitForIdle()
+        // A number the list doesn't have is read from the forge, and what it says is said.
+        onNodeWithTag(WorkRowTags.PR_SEARCH).performTextInput("#5")
+        waitUntil(timeoutMillis = 5_000) { asked.isNotEmpty() }
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.PR_NOTE).assertTextContains("PR #5 is already merged.")
+        onNodeWithTag(WorkRowTags.PR_SEARCH).performTextClearance()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.pr(123)).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.BRANCH).assertTextContains("#123")
+        onNodeWithTag(WorkRowTags.SUMMARY).assertTextContains("update PR #123", substring = true)
+        onNodeWithTag("launcher_submit").performClick()
+        waitForIdle()
+        assertEquals(listOf<SessionSourceBody?>(SessionSourceBody(kind = "pr", number = 123)), sent)
+    }
+
+    // ── #152: the row under the composer, measured against the prototype's launcher.css ──────────────────
+
+    /** The prototype's tokens: `.ln-where` 12 px under the card, flush with it; `.ln-sum` 10 px under the pills, 2 px in,
+     *  a 16 px icon column and an 8 px gap before the words, 18 px lines 4 px apart. */
+    private fun ComposeUiTest.rowSitsAsThePrototype(pillHeight: Float) {
+        val card = onNodeWithTag("launcher_composer_card").getUnclippedBoundsInRoot()
+        val pill = onNodeWithTag(WorkRowTags.WORK_IN).getUnclippedBoundsInRoot()
+        val sum = onNodeWithTag(WorkRowTags.SUMMARY).getUnclippedBoundsInRoot()
+        val lines = onAllNodes(
+            hasAnyAncestor(hasTestTag(WorkRowTags.SUMMARY)) and SemanticsMatcher.keyIsDefined(SemanticsProperties.Text),
+            useUnmergedTree = true,
+        ).fetchSemanticsNodes().map { it.boundsInRoot }
+        fun near(expected: Float, actual: Float, what: String) =
+            kotlin.test.assertTrue(kotlin.math.abs(expected - actual) <= 0.5f, "$what: expected $expected dp, was $actual dp")
+        val d = density.density
+        near(0f, (pill.left - card.left).value, "pills flush with the card")
+        near(12f, (pill.top - card.bottom).value, "card → pills")
+        near(pillHeight, (pill.bottom - pill.top).value, "pill height")
+        near(10f, (sum.top - pill.bottom).value, "pills → summary")
+        near(26f, lines[0].left / d - card.left.value, "summary words from the card's edge")
+        near(22f, (lines[1].top - lines[0].top) / d, "summary line pitch")
+    }
+
+    @Test fun the_row_and_its_lines_sit_where_the_prototype_puts_them() = runComposeUiTest {
+        pointerContent {
+            Harness(draft = LauncherDraft(workdir = "/proj/x"), repoInfo = repo, projectPrefs = ProjectPrefs("local", "ahmet/"), branches = storefront, folder = clean)
+        }
+        waitForIdle()
+        rowSitsAsThePrototype(pillHeight = 34f)
+        // The row is drawn 4 dp above its slot in the column; a click on the pill's top edge still opens its menu.
+        onNodeWithTag(WorkRowTags.WORK_IN).performMouseInput { click(Offset(width / 2f, 2f)) }
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.POPOVER).assertExists()
+    }
+
+    @Test fun on_a_phone_the_row_sits_the_same_with_taller_pills() = runComposeUiTest {
+        touchContent {
+            Harness(draft = LauncherDraft(workdir = "/proj/x"), repoInfo = repo, projectPrefs = ProjectPrefs("local", "ahmet/"), branches = storefront, folder = clean)
+        }
+        waitForIdle()
+        rowSitsAsThePrototype(pillHeight = 40f)
+    }
+
+    // ── #152 C4: #72's "Check Out Pull Request…" opens the launcher on a project with a PR's number ────────
+
+    private val storefrontProject = ProjectDto(id = "sf", name = "Storefront", locations = listOf(ProjectLocationDto("sf-l0", "/proj/x")))
+
+    @Test fun opened_for_a_pull_request_the_launcher_reads_it_again_and_picks_it_in_a_worktree() = runComposeUiTest {
+        val sent = mutableListOf<SessionSourceBody?>()
+        val asked = mutableListOf<String>()
+        val put = mutableListOf<String>()
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(text = "Address the review comments"), repoInfo = repo,
+                projectPrefs = ProjectPrefs("local", "ahmet/"), branches = storefront, folder = clean, prs = prs,
+                prRead = { ref -> asked += ref; OpenPrRead(status = "found", pr = pr123, forge = "github") },
+                prefsPut = put, catalog = listOf(storefrontProject), initialProjectId = "sf", initialPrNumber = 123,
+                onSubmit = captureSource(sent),
+            )
+        }
+        waitUntil(timeoutMillis = 5_000) { asked.isNotEmpty() }
+        waitForIdle()
+        assertEquals(listOf("#123"), asked)
+        // Local is the user's pick for this project; a PR is worked on in a worktree, and the pick is left as it was.
+        onNodeWithTag(WorkRowTags.WORK_IN).assertTextContains("Worktree")
+        onNodeWithTag(WorkRowTags.BRANCH).assertTextContains("#123")
+        onNodeWithTag(WorkRowTags.SUMMARY).assertTextContains("update PR #123", substring = true)
+        assertEquals(emptyList(), put)
+        onNodeWithTag("launcher_submit").performClick()
+        waitForIdle()
+        assertEquals(listOf<SessionSourceBody?>(SessionSourceBody(kind = "pr", number = 123)), sent)
+    }
+
+    @Test fun a_pull_request_that_cannot_be_opened_says_why_under_the_row() = runComposeUiTest {
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(text = "go"), repoInfo = repo,
+                projectPrefs = ProjectPrefs("worktree", "ahmet/"), branches = storefront, folder = clean, prs = prs,
+                prRead = { OpenPrRead(status = "not_open", state = "merged", forge = "github") },
+                catalog = listOf(storefrontProject), initialProjectId = "sf", initialPrNumber = 118,
+            )
+        }
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag(WorkRowTags.PR_LINK_NOTE).fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithTag(WorkRowTags.PR_LINK_NOTE).assertTextContains("PR #118 is already merged.")
+        // Nothing is picked for it: the row is as the project left it.
+        onNodeWithTag(WorkRowTags.BRANCH).assertTextContains("New branch", substring = true)
+    }
+
+    @Test fun a_pull_request_the_host_could_not_read_says_so() = runComposeUiTest {
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(text = "go"), repoInfo = repo,
+                projectPrefs = ProjectPrefs("worktree", "ahmet/"), branches = storefront, folder = clean, prs = prs,
+                prRead = { null }, catalog = listOf(storefrontProject), initialProjectId = "sf", initialPrNumber = 118,
+            )
+        }
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag(WorkRowTags.PR_LINK_NOTE).fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithTag(WorkRowTags.PR_LINK_NOTE).assertTextContains("Couldn’t read PR #118: the host didn’t answer.")
+    }
+
+    @Test fun no_remote_means_no_pull_request_tab() = runComposeUiTest {
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(workdir = "/proj/x"), repoInfo = repo,
+                projectPrefs = ProjectPrefs("worktree", "ahmet/"), branches = storefront, folder = clean,
+                prs = OpenPrList(status = "unavailable", reason = "no_remote"),
+            )
+        }
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.BRANCH).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.TAB_EXISTING).assertIsDisplayed()
+        onNodeWithTag(WorkRowTags.TAB_PR).assertDoesNotExist()
+    }
+
+    @Test fun the_folders_branch_waits_for_a_way_out_and_moving_the_folder_happens_at_start() = runComposeUiTest {
+        val sent = mutableListOf<SessionSourceBody?>()
+        val switched = mutableListOf<String>()
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(workdir = "/proj/x", text = "go"), repoInfo = repo,
+                projectPrefs = ProjectPrefs("worktree", "ahmet/"), branches = storefront, folder = clean, prs = prs,
+                switched = switched, onSubmit = captureSource(sent),
+            )
+        }
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.BRANCH).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.TAB_EXISTING).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.row("feat/checkout-v2")).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.CARD_HEAD).assertTextContains("is checked out in your folder", substring = true)
+        onNodeWithTag("launcher_submit").assertIsNotEnabled()
+        onNodeWithTag(WorkRowTags.CARD_MOVE).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.CARD).assertDoesNotExist()
+        assertTrue(switched.isEmpty(), "nothing moves before Start")
+        onNodeWithTag("launcher_submit").performClick()
+        waitForIdle()
+        assertEquals(listOf("/proj/x=main"), switched)
+        assertEquals(listOf<SessionSourceBody?>(SessionSourceBody(kind = "existing", branch = "feat/checkout-v2")), sent)
+    }
+
+    @Test fun a_branch_another_session_has_offers_that_session_or_a_new_branch_from_it() = runComposeUiTest {
+        val opened = mutableListOf<String>()
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(workdir = "/proj/x", text = "go"), repoInfo = repo,
+                projectPrefs = ProjectPrefs("worktree", "ahmet/"), branches = storefront, folder = clean,
+                onOpenSessionFromCard = { opened += it },
+            )
+        }
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.BRANCH).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.TAB_EXISTING).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.row("fix/cart-total")).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.CARD_OPEN).performClick()
+        assertEquals(listOf("s-2"), opened)
+        onNodeWithTag(WorkRowTags.CARD_NEW_FROM).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.CARD).assertDoesNotExist()
+        onNodeWithTag(WorkRowTags.BRANCH).assertTextContains("fix/cart-total")
+        onNodeWithTag(WorkRowTags.SUMMARY).assertTextContains("ahmet/cart-total-2", substring = true)
+    }
+
+    @Test fun local_commits_the_pr_lacks_wait_for_whose_version_wins() = runComposeUiTest {
+        val sent = mutableListOf<SessionSourceBody?>()
+        val free = storefront.copy(local = storefront.local.map { if (it.name == "fix/cart-total") it.copy(openIn = null) else it })
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(workdir = "/proj/x", text = "go"), repoInfo = repo,
+                projectPrefs = ProjectPrefs("worktree", "ahmet/"), branches = free, folder = clean,
+                prs = prs.copy(prs = listOf(pr123, pr125)), onSubmit = captureSource(sent),
+            )
+        }
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.BRANCH).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.TAB_PR).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.pr(125)).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.CARD_HEAD).assertTextContains("has 2 commits that aren't on #125", substring = true)
+        onNodeWithTag("launcher_submit").assertIsNotEnabled()
+        onNodeWithTag(WorkRowTags.CARD_USE_PR).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.SUMMARY).assertTextContains("fix/cart-total-backup", substring = true)
+        onNodeWithTag("launcher_submit").performClick()
+        waitForIdle()
+        assertEquals(listOf<SessionSourceBody?>(SessionSourceBody(kind = "pr", number = 125, divergedPolicy = "pr")), sent)
+    }
+
+    @Test fun an_old_client_side_opt_out_moves_to_the_broker_once() = runComposeUiTest {
+        val put = mutableListOf<String>()
+        var saved: LauncherPrefs? = null
+        pointerContent {
+            Harness(
+                prefs = LauncherPrefs(worktreeOff = setOf(worktreeChoiceKey("", "/proj/x"))),
+                draft = LauncherDraft(workdir = "/proj/x"), repoInfo = repo,
+                projectPrefs = ProjectPrefs("worktree", "ahmet/"), branches = storefront, folder = clean,
+                prefsPut = put, onPrefsChange = { saved = it },
+            )
+        }
+        waitForIdle()
+        onNodeWithTag(WorkRowTags.WORK_IN).assertTextContains("Local")
+        assertEquals(listOf("/proj/x=local"), put)
+        assertEquals(emptySet(), saved?.worktreeOff)
     }
 
     // ── chrome (cluster E's gate) ───────────────────────────────────────────────────────────────
@@ -1033,7 +1454,7 @@ class SessionLauncherScreenTest {
                     onBack = {},
                     loadPrefs = { LauncherPrefs() },
                     loadDraft = { LauncherDraft() },
-                    onSubmit = { _, _, _, _, _, _, _, _, _, _, _ -> null },
+                    onSubmit = { _, _, _, _, _, _, _, _, _, _, _, _ -> null },
                     topBarShown = true,
                 )
             }
@@ -1069,7 +1490,7 @@ class SessionLauncherScreenTest {
             Harness(
                 draft = LauncherDraft(workdir = "/proj/x", text = "go"),
                 onOpenSession = { opened.add(it) },
-                onSubmit = { _, _, _, _, _, _, _, _, _, _, _ -> "s-new" },
+                onSubmit = { _, _, _, _, _, _, _, _, _, _, _, _ -> "s-new" },
             )
         }
         waitForIdle()

@@ -43,6 +43,12 @@ data class SessionInfo(
     val git: GitLiteStatusDto? = null,
     /** Last/in-flight finish job for this session (mirrors the broker session record). */
     val finish_job: FinishJobDto? = null,
+    /** #152 B5: what the launcher started it from (new | existing | pr | local | reuse); null: an older session. */
+    val source: String? = null,
+    /** #152 B5: the pull / merge request it works on (its own head branch). */
+    val pr: SessionPrDto? = null,
+    /** #152 B5: the remote its pushes go to when they update [pr] ("origin", "pr-<owner>"); null with a [pr]: review only. */
+    val push_remote: String? = null,
     /**
      * User-facing task state (independent of lifecycle [status]):
      * draft | in_progress | settled. Broker JSON uses snake_case.
@@ -61,6 +67,12 @@ data class SessionInfo(
     val accountLabel: String? = null,
     /** #92: every account of its agent is out and it waits for the first reset; null = no wait. */
     val limitWait: LimitWaitDto? = null,
+    /** How full the agent's context window is (#144), when the agent reports it; null until it does. */
+    val context: ContextUsageDto? = null,
+    /** Broker-derived behaviour flags; only #144's Compact flags are read here. Null on an older broker. */
+    val capabilities: SessionCapabilitiesDto? = null,
+    /** #146: compact now, before the usage limit's wait (the agent's 5-hour window is close to its wall). */
+    val compactAdvice: CompactAdviceDto? = null,
 )
 
 /** #92: when a session resumes by itself after a usage limit, and on which account. ISO times. */
@@ -87,6 +99,10 @@ data class FinishJobDto(
     val endedAt: Double? = null,
 )
 
+/** #152 B5: a session's pull request (GitHub) or merge request (GitLab). */
+@Serializable
+data class SessionPrDto(val forge: String = "github", val number: Int = 0, val url: String = "")
+
 @Serializable
 data class GitLiteStatusDto(
     val mode: String = "base",        // base | remote
@@ -96,8 +112,19 @@ data class GitLiteStatusDto(
     val dirty: Int = 0,
     val unpublished: Boolean? = null,
     val touched: Boolean = false,
+    /** #72: the branch checked out now (null: detached or an older broker), for the footer. */
+    val branch: String? = null,
+    /** #72: ↑↓ against the branch's upstream; null: not published (or an older broker). */
+    val sync: GitSyncDto? = null,
+    /** #72: the repo has any remote; false: Publish offers GitHub / GitLab / Add Remote. Null: an older broker. */
+    val hasRemote: Boolean? = null,
     val computedAt: Double = 0.0,     // epoch millis
 )
+
+@Serializable
+data class GitSyncDto(val ahead: Int = 0, val behind: Int = 0,
+    /** #72 v5: the upstream by name ("origin/feature"), for VS Code's tooltip; null: an older broker. */
+    val upstream: String? = null)
 
 @Serializable
 data class LogEntry(
@@ -133,6 +160,8 @@ data class LogEntry(
     val card: HtmlCardDto? = null,
     /** #104: on the user's message a click in an html card sent. */
     @SerialName("from_card") val fromCard: FromCardDto? = null,
+    /** #144: the "Compacted" line (op "compaction"): how it went, the context before → after, Claude's summary. */
+    val compaction: CompactionDto? = null,
 )
 
 /**
@@ -745,6 +774,20 @@ sealed interface ServerFrame {
     @Serializable @SerialName("agents_changed")
     data object AgentsChanged : ServerFrame
 
+    /** A port preview was made, changed or removed (#155): a client holding the previews (a Browser tab's routes) reloads them. */
+    @Serializable @SerialName("proxy_created")
+    data class ProxyCreated(val proxy: kotlinx.serialization.json.JsonObject? = null) : ServerFrame
+
+    @Serializable @SerialName("proxy_updated")
+    data class ProxyUpdated(val proxy: kotlinx.serialization.json.JsonObject? = null) : ServerFrame
+
+    @Serializable @SerialName("proxy_removed")
+    data class ProxyRemoved(val domain: String? = null) : ServerFrame
+
+    /** #117: the host's applets (or their pins) changed. No payload: a client showing applets reloads GET /applets. */
+    @Serializable @SerialName("applets_changed")
+    data object AppletsChanged : ServerFrame
+
     /** An Agent's avatar changed (set_avatar or an edit on disk); [avatar] is the new hash, null = none. */
     @Serializable @SerialName("agent_avatar_changed")
     data class AgentAvatarChanged(val id: String = "", val avatar: String? = null) : ServerFrame
@@ -765,7 +808,7 @@ sealed interface ServerFrame {
 
     /** The accounts settings changed (PUT /settings/accounts). */
     @Serializable @SerialName("accounts_settings")
-    data class AccountsSettings(val autoSwitch: Boolean = false, val autoResume: Boolean = true) : ServerFrame
+    data class AccountsSettings(val autoSwitch: Boolean = false, val autoResume: Boolean = true, val compactBeforeWait: Boolean = false) : ServerFrame
 
     /** #92: a session's wait for a usage-limit reset was made, replaced or dropped ([wait] null). */
     @Serializable @SerialName("limit_wait")
@@ -848,6 +891,26 @@ sealed interface ServerFrame {
     /** One of [session]'s councils changed; [council] is its full latest view (upsert by id). */
     @Serializable @SerialName("council_update")
     data class CouncilUpdate(val session: String, val council: CouncilView) : ServerFrame
+
+    /** #146: a session's "compact before the limit" advice changed (null: none now). */
+    @Serializable @SerialName("compact_advice")
+    data class CompactAdvice(val session: String, val advice: CompactAdviceDto? = null) : ServerFrame
+
+    /** #144: a session's compaction started ("in_progress") or ended (its line follows as a message_append). */
+    @Serializable @SerialName("compaction")
+    data class Compaction(
+        val session: String,
+        val id: String,
+        val status: String,
+    ) : ServerFrame
+
+    /** How full a session's context window is (#144): pushed as the agent reports it. */
+    @Serializable @SerialName("context_usage")
+    data class ContextUsage(
+        val session: String,
+        val used: Long,
+        val size: Long,
+    ) : ServerFrame
 
     @Serializable @SerialName("commands_changed")
     data class CommandsChanged(
@@ -982,6 +1045,8 @@ sealed interface ServerFrame {
         val outcome: String,
         /** What was actually chosen ("Allow always", "Reject — too risky"); absent on an older broker. */
         val answerLabel: String? = null,
+        /** #143: who answered (a device name now, a user once supermux has users); absent when not known. */
+        val answeredBy: String? = null,
     ) : ServerFrame
 
     /** Broker `{type:"error", reason}` — switch/respond failures surface here. */
@@ -1019,6 +1084,11 @@ data class PromptRequest(
     val subagentId: String? = null,
     val subagentName: String? = null,
     val subagentDescription: String? = null,
+    /**
+     * #143: the agent's own reason for asking, in its words (Claude Code's decision_reason, e.g. a safety check that
+     * asks even in bypassPermissions). Absent when the agent gave none, and on older brokers.
+     */
+    val reason: String? = null,
 )
 
 /** One question inside a `kind=question` request. Broker JSON-stringifies the list into [PromptRequest.body]. */
@@ -1133,3 +1203,36 @@ sealed interface ClientFrame {
 /** One `client_logs` entry: [ts] is the app's own clock (ms since launch for "perf"). */
 @Serializable
 data class ClientLogEntry(val category: String, val event: String, val ts: Long, val data: JsonObject? = null)
+
+/** How full an agent's context window is (#144): tokens in use of the model's window. */
+@Serializable
+data class ContextUsageDto(val used: Long, val size: Long)
+
+/** #144: whether the agent can Compact on request, and whether its Compact takes a note on what to keep. */
+@Serializable
+data class SessionCapabilitiesDto(val compact: Boolean = false, val compactNote: Boolean = false)
+
+/** #144: a "Compacted" line. [status]: completed | failed | cancelled. Sizes in tokens, where the agent says. */
+@Serializable
+data class CompactionDto(
+    val status: String,
+    val before: Long? = null,
+    val after: Long? = null,
+    /** manual (the user's Compact) or auto (the agent's own). */
+    val trigger: String? = null,
+    /** What the user asked to keep. */
+    val note: String? = null,
+    /** The summary the agent kept (Claude). */
+    val summary: String? = null,
+    val error: String? = null,
+    /** Who started it: a paired device (by name), supermux (#146's automatic Compact) or the agent itself. */
+    val actor: CompactionActorDto? = null,
+)
+
+/** [kind]: device | supermux | agent; [name] for a device. */
+@Serializable
+data class CompactionActorDto(val kind: String, val name: String? = null)
+
+/** #146: the 5-hour window is [usedPct] full and resets at [resetsAt] (epoch ms); [auto]: at 95%+, where the opt-in mode acts. */
+@Serializable
+data class CompactAdviceDto(val usedPct: Int, val resetsAt: Long, val auto: Boolean = false)

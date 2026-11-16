@@ -4,6 +4,14 @@
 // device's, and each section head says whose it is.
 package dev.supermux.ui.settings.pages
 
+import androidx.compose.runtime.collectAsState
+import dev.supermux.ui.browser.permissionKindName
+import dev.supermux.ui.browser.rememberSitePermissions
+import dev.supermux.ui.browser.siteName
+import dev.supermux.ui.platform.PageDevice
+import dev.supermux.ui.settings.kit.KitRow
+import dev.supermux.ui.settings.kit.KitToggle
+import dev.supermux.webview.PermissionKind
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.heightIn
@@ -98,6 +106,11 @@ fun PrivacyLabsPage(
     ) {
         KitSectionHead(localized(Str.settings_privacy_title), note = pagesMachineNote())
         if (!currentMachineOnline()) KitOfflineNote() else TelemetryRows(system)
+        // This device's answers to websites in Browser tabs (#157): where pages ask through the app at all.
+        if (LocalPlatform.current.page !== PageDevice.None) {
+            KitSectionHead(localized(Str.site_permissions_title), Modifier.kitAnchor("site-permissions"), note = pagesDeviceNote())
+            SitePermissionRows()
+        }
         if (caps.assistantOverlay) {
             LocalPlatform.current.assistantOverlay?.let { host ->
                 KitSectionHead(localized(Str.settings_privacy_labs), note = pagesDeviceNote())
@@ -271,3 +284,40 @@ private fun AssistantOverlayRows(host: AssistantOverlayHost) {
         }
     }
 }
+
+/** Every site's answers on this device, each changeable or forgotten, and Forget all. */
+@Composable
+private fun SitePermissionRows() {
+    val sites = rememberSitePermissions()
+    val decisions by sites.decisions.collectAsState(emptyList())
+    val scope = rememberCoroutineScope()
+    KitNote(localized(Str.site_permissions_hint))
+    if (decisions.isEmpty()) {
+        KitNote(localized(Str.site_permissions_empty), Modifier.testTag("site_permissions_empty"))
+        return
+    }
+    for (d in decisions.sortedWith(compareBy({ it.origin }, { it.kind }))) {
+        KitRow(
+            label = siteName(d.origin),
+            description = "${permissionKindName(d.kind)} · ${localized(if (d.allow) Str.site_allowed else Str.site_blocked)}",
+            modifier = Modifier.testTag("site_permission_${siteName(d.origin)}_${d.kind}"),
+        ) {
+            KitToggle(
+                checked = d.allow,
+                onCheckedChange = { allow -> scope.launch { sites.decide(d.origin, setOfNotNull(kindOf(d.kind)), allow) } },
+                label = permissionKindName(d.kind),
+            )
+            KitTextAction(localized(Str.site_forget), { scope.launch { sites.forget(d.origin, d.kind) } })
+        }
+    }
+    KitButtons {
+        KitGhostButton(
+            localized(Str.site_forget_all),
+            onClick = { scope.launch { sites.forgetAll() } },
+            modifier = Modifier.testTag("site_permissions_forget_all"),
+            destructive = true,
+        )
+    }
+}
+
+private fun kindOf(name: String): PermissionKind? = PermissionKind.entries.firstOrNull { it.name == name }

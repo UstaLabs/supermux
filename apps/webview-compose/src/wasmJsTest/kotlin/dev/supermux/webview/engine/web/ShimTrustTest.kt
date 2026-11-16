@@ -2,6 +2,7 @@ package dev.supermux.webview.engine.web
 
 import dev.supermux.webview.DialogResult
 import dev.supermux.webview.DownloadRequest
+import dev.supermux.webview.DownloadTarget
 import dev.supermux.webview.FileChooserRequest
 import dev.supermux.webview.NavigationDecision
 import dev.supermux.webview.NavigationRequest
@@ -36,7 +37,7 @@ internal class RecordingEngineClient : EngineClient {
 
     override suspend fun onPermission(request: PermissionRequest): Boolean = false
 
-    override suspend fun onDownload(request: DownloadRequest): Boolean = false
+    override suspend fun onDownload(request: DownloadRequest): DownloadTarget? = null
 
     override fun onNewWindow(request: NewWindowRequest): NewWindowDecision {
         requests += "new window ${request.url}"

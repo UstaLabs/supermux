@@ -30,6 +30,8 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.supermux.ui.adaptive.LocalPointerAvailable
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.work.Download
 import dev.supermux.work.DownloadState
 
@@ -112,8 +114,8 @@ internal fun RingControl(
             modifier
                 .size(target)
                 .semantics {
-                    contentDescription = "Downloaded"
-                    stateDescription = "downloaded"
+                    contentDescription = localized(Str.work_downloaded)
+                    stateDescription = localized(Str.work_state_downloaded)
                 }
                 .testTag(tag),
             contentAlignment = Alignment.Center,
@@ -124,9 +126,9 @@ internal fun RingControl(
     }
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
         val label = when (state) {
-            is DownloadState.Running -> "Pause"
-            DownloadState.Cancelled -> "Resume"
-            else -> "Retry"
+            is DownloadState.Running -> localized(Str.work_pause)
+            DownloadState.Cancelled -> localized(Str.work_resume)
+            else -> localized(Str.work_retry)
         }
         QuietSquare(
             size = target,
@@ -134,11 +136,11 @@ internal fun RingControl(
             onClick = onToggle,
             modifier = Modifier
                 .semantics {
-                    contentDescription = "Download"
+                    contentDescription = localized(Str.work_download)
                     stateDescription = when (state) {
-                        is DownloadState.Running -> state.percent()?.let { "$it%" } ?: "downloading"
-                        is DownloadState.Failed -> "failed"
-                        else -> "paused"
+                        is DownloadState.Running -> state.percent()?.let { localized(Str.work_percent, it) } ?: localized(Str.work_state_downloading)
+                        is DownloadState.Failed -> localized(Str.work_state_failed)
+                        else -> localized(Str.work_state_paused)
                     }
                     if (progressSemantics) {
                         val at = (state as? DownloadState.Running) ?: item.pausedAt.takeIf { state == DownloadState.Cancelled }
@@ -162,9 +164,10 @@ internal fun RingControl(
         if (state == DownloadState.Cancelled || state is DownloadState.Failed) {
             QuietSquare(
                 size = target,
-                label = "Remove",
+                label = localized(Str.work_remove),
                 onClick = onRemove,
-                modifier = Modifier.semantics { contentDescription = "Remove download" }.testTag(tag + RING_REMOVE_SUFFIX),
+                modifier = Modifier.semantics { contentDescription = localized(Str.work_remove_download) }
+.testTag(tag + RING_REMOVE_SUFFIX),
             ) {
                 Icon(DownloadGlyphs.Remove, contentDescription = null, tint = tint, modifier = Modifier.size(ItemRingTokens.Cross))
             }

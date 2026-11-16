@@ -15,7 +15,6 @@ import dev.supermux.workspace.groupIdOf
 import dev.supermux.workspace.normalizeLayout
 import dev.supermux.workspace.openSingletonView
 import dev.supermux.ui.i18n.localized
-import androidx.compose.runtime.Composable
 import dev.supermux.ui.i18n.Str
 
 /** The view kind of a New tab. Apps that don't know it draw their UnknownViewHint. */
@@ -108,35 +107,9 @@ internal data class NewTabChoice(
     val label: String,
     val detail: String,
     val alreadyOpen: Boolean = false,
-    /** The workspace's folder, which the Terminal row's detail names. */
-    val folder: String = "",
 )
 
-/** [kind]'s name in the app's language; [NewViewKind.label] stays the English one. */
-@Composable
-internal fun localizedKindLabel(kind: NewViewKind): String = localized(
-    when (kind) {
-        NewViewKind.CHAT -> Str.shell_kind_chat
-        NewViewKind.TERMINAL -> Str.shell_kind_terminal
-        NewViewKind.EDITOR -> Str.shell_kind_files
-        NewViewKind.DIFF -> Str.shell_kind_changes
-        NewViewKind.DISPLAY -> Str.shell_kind_display
-        NewViewKind.BROWSER -> Str.shell_kind_browser
-    },
-)
-
-/** What [kind]'s row is for, in the app's language: what the page shows ([NewTabChoice.detail] is the English twin). */
-@Composable
-internal fun localizedKindDetail(kind: NewViewKind, folder: String): String = when (kind) {
-    NewViewKind.CHAT -> localized(Str.shell_kind_chat_detail)
-    NewViewKind.TERMINAL -> localized(Str.shell_kind_terminal_detail, folder)
-    NewViewKind.EDITOR -> localized(Str.shell_kind_files_detail)
-    NewViewKind.DIFF -> localized(Str.shell_kind_changes_detail)
-    NewViewKind.DISPLAY -> localized(Str.shell_kind_display_detail)
-    NewViewKind.BROWSER -> localized(Str.shell_kind_browser_detail)
-}
-
-/** A row per kind the "+" offers ([kinds]: the phone's are [phoneAddKinds]). */
+/** A row per kind the "+" offers ([kinds]: the phone's are [phoneAddKinds]), worded in the app's language. */
 internal fun newTabChoices(
     workspace: WorkspaceDto,
     layout: LayoutNode,
@@ -155,17 +128,25 @@ internal fun newTabChoices(
                 NewViewKind.DISPLAY -> NewTabGlyphs.Display
                 NewViewKind.BROWSER -> NewTabGlyphs.Browser
             },
-            label = k.label,
+            label = localized(
+                when (k) {
+                    NewViewKind.CHAT -> Str.shell_kind_chat
+                    NewViewKind.TERMINAL -> Str.shell_kind_terminal
+                    NewViewKind.EDITOR -> Str.shell_kind_files
+                    NewViewKind.DIFF -> Str.shell_kind_changes
+                    NewViewKind.DISPLAY -> Str.shell_kind_display
+                    NewViewKind.BROWSER -> Str.shell_kind_browser
+                },
+            ),
             detail = when (k) {
-                NewViewKind.CHAT -> "Start a chat with an agent" // i18n-ok: test twin; the page shows localizedKindDetail
-                NewViewKind.TERMINAL -> "A shell in $folder" // i18n-ok: test twin
-                NewViewKind.EDITOR -> "Browse and edit files" // i18n-ok: test twin
-                NewViewKind.DIFF -> "Review what changed" // i18n-ok: test twin
-                NewViewKind.DISPLAY -> "Watch an agent's screen" // i18n-ok: test twin
-                NewViewKind.BROWSER -> "A web page, or an app running on a port" // i18n-ok: test twin
+                NewViewKind.CHAT -> localized(Str.shell_kind_chat_detail)
+                NewViewKind.TERMINAL -> localized(Str.shell_kind_terminal_detail, folder)
+                NewViewKind.EDITOR -> localized(Str.shell_kind_files_detail)
+                NewViewKind.DIFF -> localized(Str.shell_kind_changes_detail)
+                NewViewKind.DISPLAY -> localized(Str.shell_kind_display_detail)
+                NewViewKind.BROWSER -> localized(Str.shell_kind_browser_detail)
             },
             alreadyOpen = k.singleton && openSingletonView(layout, viewsById, k) != null,
-            folder = folder,
         )
     }
 }

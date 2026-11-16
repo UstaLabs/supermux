@@ -10,6 +10,7 @@ import dev.supermux.net.ArchivedDto
 import dev.supermux.proto.SessionInfo
 
 data class SessionGroup(
+    /** The path label; empty for the pinned Agents group, which the UI names in the app's language. */
     val label: String,
     val workdir: String,
     val sessions: List<SessionInfo>,
@@ -20,7 +21,6 @@ data class SessionGroup(
 /** One task-state bucket inside a path group or the flat task list. */
 data class TaskSection(
     val key: SectionKey,
-    val label: String,
     val sessions: List<SessionInfo>,
 )
 
@@ -35,13 +35,6 @@ enum class SectionKey {
             IN_PROGRESS -> "in_progress"
             DRAFT -> "draft"
             SETTLED -> "settled"
-        }
-
-    val title: String
-        get() = when (this) {
-            IN_PROGRESS -> "In Progress"
-            DRAFT -> "Drafts"
-            SETTLED -> "Settled"
         }
 
     companion object {
@@ -148,7 +141,7 @@ fun buildTaskSections(
 
     return SECTION_ORDER
         .filter { buckets.getValue(it).isNotEmpty() }
-        .map { TaskSection(key = it, label = it.title, sessions = buckets.getValue(it)) }
+        .map { TaskSection(key = it, sessions = buckets.getValue(it)) }
 }
 
 /** Leaf project tag for a row in flat mode (web projectLabel). */
@@ -203,7 +196,7 @@ fun groupSessions(
     if (pas.isNotEmpty()) {
         result.add(
             SessionGroup(
-                label = "Agents",
+                label = "",
                 workdir = PA_GROUP_KEY,
                 sessions = sessionsByUserOrder(pas),
                 sections = emptyList(),

@@ -8,7 +8,7 @@ import type { Logger } from "../../shared/log"
 function stores() {
   const db = new Database(":memory:")
   db.run(`CREATE TABLE device_push_tokens (device TEXT PRIMARY KEY, platform TEXT NOT NULL, token TEXT NOT NULL, routing_token TEXT, device_pubkey TEXT, created_at TEXT NOT NULL, last_used_at TEXT)`)
-  db.run(`CREATE TABLE push_subscriptions (device TEXT PRIMARY KEY, endpoint TEXT NOT NULL, p256dh TEXT NOT NULL, auth TEXT NOT NULL, user_agent TEXT, created_at TEXT NOT NULL, last_used_at TEXT)`)
+  db.run(`CREATE TABLE push_subscriptions (device TEXT PRIMARY KEY, endpoint TEXT NOT NULL, p256dh TEXT NOT NULL, auth TEXT NOT NULL, user_agent TEXT, lang TEXT, created_at TEXT NOT NULL, last_used_at TEXT)`)
   return { native: new DevicePushTokenStore(db), web: new PushSubscriptionStore(db) }
 }
 

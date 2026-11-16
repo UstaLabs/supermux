@@ -240,3 +240,45 @@ test.skipIf(process.platform !== "win32")("windowsLaunch: a .cmd shim in a folde
   expect(result.status).toBe(0)
   expect(JSON.parse(readFileSync(out, "utf8"))).toEqual(args)
 })
+
+// Storage init names who holds db.sqlite3 when it is locked.
+test("holders lists the processes with a file open; off Linux it knows none", () => {
+  const dir = mkdtempSync(join(tmpdir(), "holders-"))
+  const path = join(dir, "held")
+  writeFileSync(path, "x")
+  const { openSync, closeSync } = require("node:fs") as typeof import("node:fs")
+  const fd = openSync(path, "r")
+  try {
+    if (process.platform === "linux") expect(proc.holders(path)).toContain(process.pid)
+    expect(proc.holders(path, { platform: "win32" })).toEqual([])
+    expect(proc.holders(join(dir, "nobody-has-this"))).toEqual([])
+  } finally {
+    closeSync(fd)
+  }
+})
+
+test("holders on macOS asks lsof for the pids, and an lsof that fails or is missing knows none", () => {
+  const asked: string[][] = []
+  const lsof = (argv: string[]) => { asked.push(argv); return { exitCode: 0, stdout: "123\n456\n" } }
+  expect(proc.holders("/s/db.sqlite3", { platform: "darwin", run: lsof })).toEqual([123, 456])
+  expect(asked).toEqual([["/usr/sbin/lsof", "-t", "--", "/s/db.sqlite3"]])
+  expect(proc.holders("/s/db.sqlite3", { platform: "darwin", run: () => ({ exitCode: 1, stdout: "" }) })).toEqual([])
+  expect(proc.holders("/s/db.sqlite3", { platform: "darwin", run: () => { throw new Error("ENOENT") } })).toEqual([])
+})
+
+test("shellLine: sh -c elsewhere, cmd.exe verbatim on Windows (#117)", () => {
+  expect(proc.shellLine("bun server.ts --port $PORT", { platform: "linux" })).toEqual({ command: "/bin/sh", args: ["-c", "bun server.ts --port $PORT"] })
+  expect(proc.shellLine("python app.py", { platform: "win32", env: { ComSpec: "C:\\Windows\\system32\\cmd.exe" } })).toEqual({
+    command: "C:\\Windows\\system32\\cmd.exe", args: ["/d", "/s", "/c", '"python app.py"'], windowsVerbatimArguments: true,
+  })
+})
+
+test("startToken: Linux reads field 22 after the last ')', macOS asks ps, Windows asks PowerShell (#117)", () => {
+  const stat = "4242 (a (weird) name) S 1 4242 4242 0 -1 4194560 100 0 0 0 1 2 0 0 20 0 1 0 987654 1000 10"
+  expect(proc.startToken(4242, { platform: "linux", readFile: () => stat })).toBe("987654")
+  expect(proc.startToken(4242, { platform: "darwin", run: () => ({ exitCode: 0, stdout: "Sun Nov 15 10:00:00 2026\n" }) })).toBe("Sun Nov 15 10:00:00 2026")
+  expect(proc.startToken(4242, { platform: "darwin", run: () => ({ exitCode: 1, stdout: "" }) })).toBeNull()
+  expect(proc.startToken(4242, { platform: "win32", run: (argv) => ({ exitCode: 0, stdout: argv.join(" ").includes("Get-Process -Id 4242") ? "133456789012345678\r\n" : "" }) })).toBe("133456789012345678")
+  expect(proc.startToken(4242, { platform: "win32", run: () => ({ exitCode: 1, stdout: "" }) })).toBeNull()
+  expect(proc.startToken(4242, { platform: "linux", readFile: () => { throw new Error("gone") } })).toBeNull()
+})

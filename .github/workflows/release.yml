@@ -396,6 +396,11 @@ jobs:
       - name: Build the web client
         working-directory: apps
         run: ./gradlew :web:stageForBroker --console=plain -PsupermuxVersion="${{ steps.ver.outputs.version }}"
+      # Brotli siblings (#142), made once here so no downstream job (binaries, installers, docker under
+      # QEMU) spends the ~1.5 min of q11 again; precompress-static.ts is idempotent for them.
+      - uses: oven-sh/setup-bun@v2
+      - name: Precompress the web client (brotli)
+        run: bun scripts/precompress-static.ts
       - uses: actions/upload-artifact@v4
         with:
           name: web-client
@@ -1193,23 +1198,41 @@ jobs:
           fi
           codesign --verify --deep --strict "$(ls -d "$MNT"/*.app)" && echo "bundle signature valid"
           # -version maps the archive but never loads an app class, and rc.6 passed it yet died at launch (a sealing
-          # violation through the archive). So launch the packaged app itself for 20 s: it must still be alive and must
-          # have a main window, not an error dialog. Unlike a missing archive, a crash at launch fails the job.
+          # violation through the archive). So launch the packaged app itself: it must reach a main window (not an
+          # error dialog) within LAUNCH_WINDOW_LIMIT_S (20 s) and print no exception, or the job fails: a slow start is
+          # a regression to block, not to hide. It keeps watching up to 60 s anyway, so the log says WHEN the window came,
+          # and at the limit it prints the UI-thread stacks, naming the blocker (the 2026-11-15 dev dry run sat 12 s
+          # between host.init and ws.connecting with no window painted).
           # From a ditto copy, the way a user installs it (ditto keeps the mtimes the archive checks).
           LAUNCH_DIR="$RUNNER_TEMP/launch-check"; rm -rf "$LAUNCH_DIR"; mkdir -p "$LAUNCH_DIR"
-          ditto "$(ls -d "$MNT"/*.app)" "$LAUNCH_DIR/Supermux Desktop.app"
-          "$LAUNCH_DIR/Supermux Desktop.app/Contents/MacOS/Supermux Desktop" > "$RUNNER_TEMP/launch.txt" 2>&1 &
+          APP="$LAUNCH_DIR/Supermux Desktop.app"
+          ditto "$(ls -d "$MNT"/*.app)" "$APP"
+          "$APP/Contents/MacOS/Supermux Desktop" > "$RUNNER_TEMP/launch.txt" 2>&1 &
           APP_PID=$!
-          sleep 20
+          LIMIT="${LAUNCH_WINDOW_LIMIT_S:-20}"
           # rc.6's failure was an error dialog (740x173) and no main window, so "alive" alone is not enough.
-          MAIN_WINDOW=$(osascript -l JavaScript -e "ObjC.import('CoreGraphics'); const w = ObjC.deepUnwrap(ObjC.castRefToObject(\$.CGWindowListCopyWindowInfo(1|16, 0))); w.some(x => x.kCGWindowOwnerPID == $APP_PID && x.kCGWindowBounds.Height > 300)" 2>&1)
-          echo "main window up: $MAIN_WINDOW"
-          if ! kill -0 "$APP_PID" 2>/dev/null || [ "$MAIN_WINDOW" != "true" ] || grep -Eq "SecurityException|sealing violation|Exception in thread \"main\"" "$RUNNER_TEMP/launch.txt"; then
+          main_window() { osascript -l JavaScript -e "ObjC.import('CoreGraphics'); const w = ObjC.deepUnwrap(ObjC.castRefToObject(\$.CGWindowListCopyWindowInfo(1|16, 0))); w.some(x => x.kCGWindowOwnerPID == $APP_PID && x.kCGWindowBounds.Height > 300)" 2>&1; }
+          WINDOW_AT=""
+          for second in $(seq 1 60); do
+            sleep 1
+            kill -0 "$APP_PID" 2>/dev/null || break
+            if [ "$(main_window)" = "true" ]; then WINDOW_AT=$second; break; fi
+            if [ "$second" = "$LIMIT" ]; then
+              echo "no main window after $LIMIT s: the JVM's threads at that moment follow"
+              "$APP/Contents/runtime/Contents/Home/bin/jcmd" "$APP_PID" Thread.print > "$RUNNER_TEMP/threads-20s.txt" 2>&1 || true
+              # The UI thread and anything blocked or waiting on a lock, in full; the rest stays in the file.
+              awk '/^"AWT-EventQueue|^"main"|^"AppKit/{p=1} /^$/{if(p)print; p=0} p' "$RUNNER_TEMP/threads-20s.txt" | head -150
+            fi
+          done
+          echo "startup marks:"; grep -E "^\[startup\]" "$RUNNER_TEMP/launch.txt" | head -30 || true
+          echo "main window up after: ${WINDOW_AT:-never} s"
+          if ! kill -0 "$APP_PID" 2>/dev/null || [ -z "$WINDOW_AT" ] || [ "$WINDOW_AT" -gt "$LIMIT" ] \
+            || grep -Eq "SecurityException|sealing violation|Exception in thread \"main\"" "$RUNNER_TEMP/launch.txt"; then
             cat "$RUNNER_TEMP/launch.txt"
-            echo "::error::the packaged app did not survive 20 s at launch"
+            echo "::error::the packaged app had no main window within $LIMIT s (it came after: ${WINDOW_AT:-never} s), or it threw at launch"
             kill "$APP_PID" 2>/dev/null; hdiutil detach "$MNT" -force -quiet; exit 1
           fi
-          echo "the packaged app is up after 20 s"
+          echo "the packaged app is up (main window after ${WINDOW_AT} s, limit $LIMIT s)"
           kill "$APP_PID"; sleep 5; pkill -f "$LAUNCH_DIR" || true
           hdiutil detach "$MNT" -quiet || hdiutil detach "$MNT" -force -quiet
       - name: Assert the packaged client engine
@@ -1331,6 +1354,9 @@ jobs:
       IOS_PP_WATCH_BASE64: ${{ secrets.IOS_PP_WATCH_BASE64 }}
       IOS_PP_PUSH_NSE_BASE64: ${{ secrets.IOS_PP_PUSH_NSE_BASE64 }}
       IOS_PP_NOTIF_CONTENT_BASE64: ${{ secrets.IOS_PP_NOTIF_CONTENT_BASE64 }}
+      # #117: the applet widgets extension (dev.supermux.app.widgets, App Group group.dev.supermux.app). Optional:
+      # without it a TestFlight build ships without the widgets extension instead of failing to sign.
+      IOS_PP_WIDGETS_BASE64: ${{ secrets.IOS_PP_WIDGETS_BASE64 }}
       # App Store Connect API key used for the TestFlight upload. Dedicated key (App Manager
       # role) rather than the Compose macOS job's notary key, which may be notarization-scoped and would
       # 403 on an upload.
@@ -1474,6 +1500,34 @@ jobs:
           install_pp "$IOS_PP_WATCH_BASE64"
           install_pp "$IOS_PP_PUSH_NSE_BASE64"
           install_pp "$IOS_PP_NOTIF_CONTENT_BASE64"
+          if [ -n "$IOS_PP_WIDGETS_BASE64" ]; then install_pp "$IOS_PP_WIDGETS_BASE64"; fi
+      - name: Applet widgets only with their profile
+        # #117: the widgets extension needs its own App Store profile ("Supermux Widgets App Store"). Until that
+        # secret exists, a signed build leaves the extension out (and says so) rather than failing to sign;
+        # with it, the export maps the extension to its profile.
+        if: steps.signing.outputs.upload == '1'
+        working-directory: apps/iosApp
+        run: |
+          if [ -z "$IOS_PP_WIDGETS_BASE64" ]; then
+            echo "::warning::IOS_PP_WIDGETS_BASE64 is absent — this TestFlight build has no applet widgets."
+            python3 - <<'PY'
+          import re
+          p = "project.yml"
+          s = open(p).read()
+          s2 = re.sub(r"\n      # #117 W1: the applet widgets[^\n]*\n(      #[^\n]*\n)*      - target: SupermuxWidgets\n        embed: true", "", s)
+          assert s2 != s, "the SupermuxWidgets dependency was not found in project.yml"
+          open(p, "w").write(s2)
+          PY
+            xcodegen generate
+          else
+            python3 - <<'PY'
+          import plistlib
+          p = "ExportOptions.plist"
+          d = plistlib.load(open(p, "rb"))
+          d["provisioningProfiles"]["dev.supermux.app.widgets"] = "Supermux Widgets App Store"
+          plistlib.dump(d, open(p, "wb"))
+          PY
+          fi
       - name: Archive
         if: steps.signing.outputs.upload == '1'
         working-directory: apps/iosApp

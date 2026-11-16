@@ -75,4 +75,53 @@ the catalog (İ, not I): Kotlin's uppercase() has no Turkish "i".
 | credits | kredi | |
 | billing cycle | fatura dönemi | |
 | percent | %62 | Turkish puts % first: "%%1$d" |
+| council | konsey | |
+| subagent | alt ajan | |
+| round (a council) | tur | |
+| verdict | karar | |
+| "To X" / "Message X…" | "Alıcı: X" / "X için mesaj…" | no case ending on a name |
+| "Allow X?" | "X için izin verilsin mi?" | |
+| skill | beceri | |
+| walkthrough | anlatım | not "tur" (that is a council round) |
+| viewer | görüntüleyici | |
+| truncated | kısaltıldı | |
+| finish (a chat's work) | bitir | |
+| merge | birleştir | |
+| commit | commit | kept |
+| base branch | temel dal | |
+| remote (git) | uzak depo | |
+| transcribe | yazıya dök | |
+| built-in | yerleşik | |
+| plugin | eklenti | |
+| isolated (worktree mode) | ayrık | |
+| fast mode | hızlı mod | |
+| star / unstar | yıldızla / yıldızı kaldır | |
+| project / folder / location | proje / klasör / konum | |
+| repository | depo | |
+| clone | klonla | |
+| archive / archived | arşivle / arşiv | the screen is "Arşiv" |
+| resume / restore | sürdür / geri yükle | |
+| settle / settled | tamamla / tamamlananlar | |
+| draft | taslak | |
+| suspended / idle | askıda / boşta | |
+| unread | okunmamış | |
+| short times | şimdi, %d dk, %d sa, %d g | |
+| effort levels | Düşük, Orta, Yüksek, Çok yüksek, En yüksek | |
+| trash | çöp kutusu | |
+| overlay (assistant) | katman | |
+| git status | Değiştirildi, Eklendi, Silindi, Yeniden adlandırıldı, İzlenmiyor, Çakışma | |
+| binary (file) | ikili | |
+| comment / resolve / outdated | yorum / çöz / eskimiş | |
+| match (search) | eşleşme | |
+| downloads | İndirilenler | |
+| displays | Ekranlar | |
+| responsive (device mode) | Duyarlı | |
+| what's new | Yenilikler | |
+| menus | Dosya, Düzen, Görünüm; Geri al, Yinele, Kes, Kopyala, Yapıştır, Tümünü seç | |
+| unpair | eşleştirmeyi kaldır | |
+| relay | aktarıcı | |
+| background service | arka plan hizmeti | |
+| months (short) | Oca Şub Mar Nis May Haz Tem Ağu Eyl Eki Kas Ara | dates day first: "14 Tem" |
+| yesterday | dün | "Dün 14:05" |
+| new chat | yeni sohbet | |
 | supermux | supermux | the brand, never translated or capitalised |

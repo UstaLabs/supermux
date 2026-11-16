@@ -388,14 +388,28 @@ compose.desktop {
                 // supervisor's watch loop must keep their timing.
                 // NSLocalNetworkUsageDescription: the text under macOS's "find devices on local
                 // networks" prompt (Local Network privacy, macOS 15+), which would otherwise show none.
+                // NSAllowsArbitraryLoadsInWebContent (#117): web views (applets, the Browser tab) load plain-http hosts —
+                // a broker on the LAN or a Tailscale address is http — which App Transport Security otherwise blocks,
+                // leaving a blank page (seen with an applet on http://100.x). The app's own connections are unaffected.
+                // No supermux: URL scheme here (#117): the iPhone app (which runs on Apple-silicon Macs) and every stray
+                // build claim it too, and macOS picks one. An installed applet's stub talks to its own supermux instead.
                 infoPlist {
                     extraKeysRawXml = """
                         <key>NSMicrophoneUsageDescription</key>
-                        <string>Supermux uses the microphone for voice dictation.</string>
+                        <string>Supermux uses the microphone for voice dictation, and for websites in Browser tabs you allow to use it.</string>
+                        <key>NSCameraUsageDescription</key>
+                        <string>Supermux lets websites in Browser tabs use the camera when you allow it.</string>
+                        <key>NSLocationUsageDescription</key>
+                        <string>Supermux shares your location only with websites in Browser tabs you allow.</string>
                         <key>NSLocalNetworkUsageDescription</key>
                         <string>Supermux connects to your agents' host and paired devices on your network.</string>
                         <key>NSAppSleepDisabled</key>
                         <true/>
+                        <key>NSAppTransportSecurity</key>
+                        <dict>
+                            <key>NSAllowsArbitraryLoadsInWebContent</key>
+                            <true/>
+                        </dict>
                     """.trimIndent()
                 }
                 // Signing is OPT-IN so unsigned local/CI dry-run builds keep working untouched:

@@ -7,7 +7,7 @@
 // avatar, a back arrow, the workdir/git sub-label, the chat-DETAIL level submenu and the
 // continue-conversation + Displays rows, none of which `ChatViewHeader` has a slot for, and it is
 // the only place a `SharedTransitionScope` reaches a chat. What it already shares: `SessionAvatar`,
-// `FinishHeaderButton`/`FinishBindings`, `ChatPanel`, `TerminalTabs`, `DisplayPanel`, `EditorPanel`.
+// `ChatPanel`, `TerminalTabs`, `DisplayPanel`, `EditorPanel`.
 // Every WORKSPACE chat — which is every chat on a current broker — goes through the shared
 // `ViewHost`/`ChatViewHeader` instead.
 package dev.supermux.android.chat
@@ -63,8 +63,6 @@ fun SessionChatFallback(
     val commandsResolved = commandsResolvedAll[session.id] ?: false
 
     // Collect the finish-job flow at this layer (consistent with messages/activity/agent).
-    val finishJobs by vm.fleet.finishJobs.collectAsState()
-    val finishJob = finishJobs[session.id]
 
     // Background tasks (bg shells / subagents / workflows) for the chips row + waiting state.
     val bgTasksAll by vm.fleet.bgTasks.collectAsState()
@@ -144,15 +142,6 @@ fun SessionChatFallback(
             loadContinueReasoning = { ag, md -> vm.fleet.launcherReasoning(ag, md) },
             onContinued = onSelectSession,
             onEditorConsumesBackChange = { editorConsumesBack = it },
-            finishJob = finishJob,
-            onFinishReadiness = { vm.fleet.finishReadiness(session.id) },
-            onFinish = { action, skipVerify, commitFirst, commitMessage, onKickoff ->
-                vm.fleet.finish(session.id, action, skipVerify, commitFirst, commitMessage, onKickoff = onKickoff)
-            },
-            onClearFinishJob = { vm.fleet.clearFinishJob(session.id) },
-            onVerifySuggest = { vm.fleet.verifySuggest(session.id) },
-            onVerifySave = { vm.fleet.verifySave(session.id, it) },
-            onSendToAgent = { vm.fleet.sendMessage(session.id, it) },
             sharedScope = sharedScope,
             animScope = animScope,
         )

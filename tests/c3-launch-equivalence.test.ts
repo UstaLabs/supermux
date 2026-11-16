@@ -59,6 +59,10 @@ for (const key of Object.keys(INTENDED)) {
 // (permission.external_directory, part of the non-context keys of opencode.json), so reading an
 // inbox never prompts.
 for (const key of ["opencode/worker", "opencode/pa"]) INTENDED[key] = [...INTENDED[key]!, "files.<opencode.json non-context keys>"].sort()
+// 2026-11-15 (#156, the supermux CLI): every agent's own process gets its session identity and the `supermux` launcher
+// first on PATH (src/core/agents/session-cli-env.ts). Claude already had the identity (for its global ~/.claude.json shim).
+const CLI_ENV = (agent: string): string[] => agent === "claude" ? ["env.PATH"] : ["env.MUX_AGENT_KIND", "env.MUX_DISPLAY_NAME", "env.MUX_SESSION_ID", "env.MUX_SOCKETS_DIR", "env.PATH"]
+for (const key of Object.keys(INTENDED)) INTENDED[key] = [...new Set([...INTENDED[key]!, ...CLI_ENV(key.split("/")[0]!)])].sort()
 
 // How each agent is told to read its own inbox file (session sess-c3): the shell commands where they need no prompt (Claude's exact
 // rules, Grok's built-in list, Codex's rules, which name the host binaries by ABSOLUTE path: here the fakes in <ROOT>/bin), the

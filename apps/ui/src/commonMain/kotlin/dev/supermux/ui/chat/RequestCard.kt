@@ -133,6 +133,10 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import dev.supermux.ui.i18n.Plurals
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.localizedPlural
 
 /** Lines of the quoted body shown before "Show more" takes over. */
 private const val COLLAPSED_BODY_LINES = 6
@@ -224,11 +228,11 @@ private fun RequestHeader(
     val name = requestName(request)
     val meta = buildList {
         // A subagent asking, not the main agent: say which one, first — it changes the answer.
-        subagentLabel(request)?.let { add("from $it") }
+        subagentLabel(request)?.let { add(localized(Str.chatcard_request_from, it)) }
         if (permission) name.qualifier?.let { add(it) }
         // A non-blocking ask comes from a turn the user is not watching; say so, or the card looks
         // like it appeared out of nowhere.
-        if (!request.blocking) add("background turn")
+        if (!request.blocking) add(localized(Str.chatcard_request_background_turn))
         if (showId) add("#${request.requestId.takeLast(6)}")
     }.joinToString(" · ")
     Row(
@@ -249,7 +253,7 @@ private fun RequestHeader(
             Box(contentAlignment = Alignment.Center) {
                 Icon(
                     imageVector = if (permission) Icons.Filled.Shield else Icons.AutoMirrored.Filled.HelpOutline,
-                    contentDescription = if (permission) "Permission request" else "Question from the agent",
+                    contentDescription = if (permission) localized(Str.chatcard_request_permission_icon) else localized(Str.chatcard_request_question_icon),
                     tint = if (permission) cs.onTertiaryContainer else cs.onPrimaryContainer,
                     modifier = Modifier.size(IconSize.md),
                 )
@@ -257,7 +261,7 @@ private fun RequestHeader(
         }
         Column(Modifier.weight(1f)) {
             Text(
-                title ?: "Allow ${name.title}?",
+                title ?: localized(Str.chatcard_request_allow_title, name.title),
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
@@ -285,13 +289,13 @@ private fun WaitingChip(disabled: Boolean) {
     if (disabled) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
             CircularProgressIndicator(Modifier.size(IconSize.sm), color = cs.primary, strokeWidth = Stroke.thin)
-            Text("Sending…", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+            Text(localized(Str.chatcard_request_sending), style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
         }
         return
     }
     Surface(shape = RoundedCornerShape(Radii.pill), color = sem.warning.copy(alpha = 0.16f)) {
         Text(
-            "Waiting for you",
+            localized(Str.chatcard_request_waiting),
             style = MaterialTheme.typography.labelMedium,
             color = sem.warning,
             modifier = Modifier.padding(horizontal = Space.sm, vertical = 3.dp),
@@ -310,8 +314,9 @@ internal fun subagentLabel(request: PromptRequest): String? {
 /** What the header says: a tool name, plus the server/agent it belongs to when there is one. */
 private data class RequestName(val title: String, val qualifier: String?)
 
+@Composable
 private fun requestName(request: PromptRequest): RequestName {
-    val raw = request.title.ifBlank { if (request.kind == "question") "Question" else "Permission" }
+    val raw = request.title.ifBlank { if (request.kind == "question") localized(Str.chatcard_request_question) else localized(Str.chatcard_request_permission) }
     // `mcp__<server>__<tool>` is the wire name for an MCP tool; nobody wants to read the prefix.
     if (raw.startsWith("mcp__")) {
         val parts = raw.removePrefix("mcp__").split("__")
@@ -339,6 +344,15 @@ private fun PermissionBody(
         val args = argumentRows(body)
         if (args != null) ArgumentRows(args, request.requestId) else QuotedBody(request, body, expanded, onToggleExpand)
     }
+    // #143: why the agent stops here (a safety check asks even in bypass), in its own words, under what it asks.
+    request.reason?.takeIf { it.isNotBlank() }?.let { reason ->
+        Text(
+            reason,
+            style = MaterialTheme.typography.bodySmall,
+            color = cs.onSurfaceVariant,
+            modifier = Modifier.fillMaxWidth().padding(top = Space.sm).testTag("request-reason:${request.requestId}"),
+        )
+    }
 
     val allows = request.options.filter { it.isAllow() }
     val rejects = request.options.filterNot { it.isAllow() }
@@ -348,6 +362,7 @@ private fun PermissionBody(
     val rejection = rememberRetained("request:${request.requestId}:note") { RejectNote() }
     var noteOpen by rejection::open
     var note by rejection::text
+    val rejectLabel = rejects.firstOrNull()?.label ?: localized(Str.chatcard_request_reject)
 
     fun reject(option: PromptRequestOption) {
         onRespond(
@@ -361,13 +376,13 @@ private fun PermissionBody(
     if (noteOpen) {
         NoteField(
             value = note,
-            placeholder = "Tell the agent why (optional)",
+            placeholder = localized(Str.chatcard_request_note_placeholder),
             enabled = !disabled,
             onChange = { note = it },
             onSubmit = { rejects.firstOrNull()?.let { reject(it) } },
         )
         Text(
-            "${rejects.firstOrNull()?.label ?: "Reject"} again sends it, with or without a note.",
+            localized(Str.chatcard_request_reject_again, rejectLabel),
             style = MaterialTheme.typography.labelMedium,
             color = cs.onSurfaceVariant,
         )
@@ -503,6 +518,7 @@ private fun QuotedBody(request: PromptRequest, body: String, expanded: Boolean, 
     val shell = request.title.equals("Bash", ignoreCase = true) || request.title.equals("shell", ignoreCase = true)
     // Sticky: with maxLines lifted the layout no longer overflows, and the toggle must not vanish.
     var overflowed by remember(request.requestId) { mutableStateOf(false) }
+    val copied = localized(Str.chatcard_request_copied)
     val shape = RoundedCornerShape(Radii.sm)
     Column(
         Modifier
@@ -533,13 +549,13 @@ private fun QuotedBody(request: PromptRequest, body: String, expanded: Boolean, 
                 )
             }
             IconButton(
-                onClick = { platform.copyToClipboard(body); platform.notices.show("Copied") },
+                onClick = { platform.copyToClipboard(body); platform.notices.show(copied) },
                 modifier = Modifier.align(Alignment.TopEnd).padding(top = 4.dp, end = 4.dp).size(28.dp)
                     .pointerHoverIcon(PointerIcon.Hand).testTag("request-copy:${request.requestId}"),
             ) {
                 Icon(
                     Icons.Filled.ContentCopy,
-                    contentDescription = "Copy to clipboard",
+                    contentDescription = localized(Str.chatcard_request_copy),
                     tint = cs.onSurfaceVariant,
                     modifier = Modifier.size(IconSize.sm),
                 )
@@ -547,7 +563,7 @@ private fun QuotedBody(request: PromptRequest, body: String, expanded: Boolean, 
         }
         if (overflowed) {
             Text(
-                if (expanded) "Show less" else "Show more",
+                if (expanded) localized(Str.chatcard_show_less) else localized(Str.chatcard_show_more),
                 style = MaterialTheme.typography.labelMedium,
                 color = cs.primary,
                 modifier = Modifier
@@ -648,12 +664,13 @@ private fun questionsOf(request: PromptRequest): Pair<List<PromptQuestion>, Bool
  * header; a question with no header is just "Question", because the broker's fallback title for
  * it IS the prompt, which the body is about to show.
  */
+@Composable
 private fun questionTitle(request: PromptRequest, questions: List<PromptQuestion>): String {
-    if (questions.size > 1) return "${questions.size} questions"
+    if (questions.size > 1) return localizedPlural(Plurals.chatcard_request_questions, questions.size, questions.size)
     val only = questions.firstOrNull()
     only?.header?.takeIf { it.isNotBlank() }?.let { return it }
     val name = requestName(request).title
-    return if (name.isBlank() || name == only?.prompt?.trim() || name == request.body.trim()) "Question" else name
+    return if (name.isBlank() || name == only?.prompt?.trim() || name == request.body.trim()) localized(Str.chatcard_request_question) else name
 }
 
 /** A question set's answers so far and the page shown, kept for a rebuilt card (`rememberRetained`, #89). */
@@ -759,7 +776,7 @@ private fun QuestionBody(
     }
     QuestionActions(
         showBack = page > 0,
-        primaryLabel = if (last) "Submit" else "Next",
+        primaryLabel = if (last) localized(Str.chatcard_request_submit) else localized(Str.chatcard_request_next),
         primaryTag = if (last) "request-send" else "request-next",
         primaryEnabled = if (last) canSubmit else canAdvance,
         disabled = disabled,
@@ -790,7 +807,7 @@ private fun StepTabs(
             val container by animateColorAsState(
                 if (active) cs.primary.copy(alpha = 0.14f) else Color.Transparent,
                 Motion.stateChange(),
-                label = "step-bg",
+                label = "step-bg", // i18n-ok: animation label
             )
             val content = if (active) cs.primary else cs.onSurfaceVariant
             Row(
@@ -807,7 +824,7 @@ private fun StepTabs(
             ) {
                 StepBadge(number = index + 1, done = done, active = active)
                 Text(
-                    q.header?.takeIf { it.isNotBlank() } ?: "Question ${index + 1}",
+                    q.header?.takeIf { it.isNotBlank() } ?: localized(Str.chatcard_request_question_number, index + 1),
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
                     color = content,
@@ -829,7 +846,7 @@ private fun StepBadge(number: Int, done: Boolean, active: Boolean) {
     }
     Box(Modifier.size(20.dp).clip(CircleShape).background(fill), contentAlignment = Alignment.Center) {
         if (done) {
-            Icon(Icons.Filled.Check, contentDescription = "Answered", tint = cs.onPrimary, modifier = Modifier.size(IconSize.sm))
+            Icon(Icons.Filled.Check, contentDescription = localized(Str.chatcard_request_answered), tint = cs.onPrimary, modifier = Modifier.size(IconSize.sm))
         } else {
             Text(
                 "$number",
@@ -862,7 +879,7 @@ private fun QuestionPage(
             )
         }
         if (question.multiSelect && question.options.isNotEmpty()) {
-            Text("Select all that apply", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+            Text(localized(Str.chatcard_request_select_all), style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
         }
         Spacer(Modifier.height(2.dp))
         question.options.forEach { opt ->
@@ -929,7 +946,7 @@ private fun optionColors(selected: Boolean, hovered: Boolean, focused: Boolean =
             else -> cs.surfaceContainerLowest
         },
         Motion.stateChange(),
-        label = "option-bg",
+        label = "option-bg", // i18n-ok: animation label
     )
     val border by animateColorAsState(
         when {
@@ -938,7 +955,7 @@ private fun optionColors(selected: Boolean, hovered: Boolean, focused: Boolean =
             else -> cs.outlineVariant
         },
         Motion.stateChange(),
-        label = "option-border",
+        label = "option-border", // i18n-ok: animation label
     )
     return container to border
 }
@@ -1024,7 +1041,7 @@ private fun ChoiceGlyph(selected: Boolean, multiSelect: Boolean, enabled: Boolea
     val ring by animateColorAsState(
         if (selected) accent else cs.onSurfaceVariant.copy(alpha = 0.75f),
         Motion.stateChange(),
-        label = "glyph-ring",
+        label = "glyph-ring", // i18n-ok: animation label
     )
     if (multiSelect) {
         val shape = RoundedCornerShape(5.dp)
@@ -1118,7 +1135,7 @@ private fun OtherRow(
                 Box(contentAlignment = Alignment.CenterStart) {
                     if (value.isEmpty()) {
                         Text(
-                            if (standalone) "Type your answer" else "Other — type your own answer",
+                            if (standalone) localized(Str.chatcard_request_type_answer) else localized(Str.chatcard_request_other_answer),
                             style = MaterialTheme.typography.bodyLarge,
                             color = cs.onSurfaceVariant,
                             maxLines = 1,
@@ -1154,7 +1171,7 @@ private fun QuestionActions(
     ) {
         if (showBack) {
             CardButton(
-                label = "Back",
+                label = localized(Str.chatcard_request_back),
                 style = CardButtonStyle.Ghost,
                 enabled = !disabled,
                 testTag = "request-back",
@@ -1163,7 +1180,7 @@ private fun QuestionActions(
             )
         }
         Spacer(Modifier.weight(1f))
-        CardButton(label = "Decline", style = CardButtonStyle.Secondary, enabled = !disabled, testTag = "request-decline", onClick = onDecline)
+        CardButton(label = localized(Str.chatcard_request_decline), style = CardButtonStyle.Secondary, enabled = !disabled, testTag = "request-decline", onClick = onDecline)
         CardButton(
             label = primaryLabel,
             style = CardButtonStyle.Primary,
@@ -1251,11 +1268,19 @@ private fun ClosedRequestReceipt(receipt: ClosedRequest) {
         else -> sem.success
     }
     val title = requestNameOf(receipt)
+    val answered = localized(Str.chatcard_request_answered)
     val (lead, rest) = when {
-        unanswered -> receipt.outcome.replaceFirstChar { it.uppercase() } to title
-        declined -> "Declined" to title
-        question -> "Answered" to label
-        else -> (title ?: "Permission") to (label ?: "Answered")
+        unanswered -> Pair(
+            when (receipt.outcome) {
+                "expired" -> localized(Str.chatcard_request_expired)
+                "cancelled" -> localized(Str.chatcard_request_cancelled)
+                else -> receipt.outcome.replaceFirstChar { it.uppercase() }
+            },
+            title,
+        )
+        declined -> localized(Str.chatcard_request_declined) to title
+        question -> answered to label
+        else -> (title ?: localized(Str.chatcard_request_permission)) to (label ?: answered)
     }
     Surface(
         shape = RoundedCornerShape(Radii.md),
@@ -1275,9 +1300,9 @@ private fun ClosedRequestReceipt(receipt: ClosedRequest) {
                 Icon(
                     icon,
                     contentDescription = when {
-                        unanswered -> "Request closed unanswered"
-                        declined -> "Question declined"
-                        else -> "Request answered"
+                        unanswered -> localized(Str.chatcard_request_closed_unanswered)
+                        declined -> localized(Str.chatcard_request_question_declined)
+                        else -> localized(Str.chatcard_request_request_answered)
                     },
                     tint = tint,
                     modifier = Modifier.size(IconSize.sm),

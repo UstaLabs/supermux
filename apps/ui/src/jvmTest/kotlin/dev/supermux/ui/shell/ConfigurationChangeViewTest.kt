@@ -429,6 +429,9 @@ class ConfigurationChangeViewTest {
 
     /** Closes the folder `src`, picks "Uncommitted" as the base, then opens the base menu again. */
     private fun ComposeUiTest.pickABaseCloseAFolderAndOpenTheMenu() {
+        // #72 v4: the Changes view opens on Source Control; the review (base menu, folders) is its "Review" button.
+        await("scm_review")
+        onNodeWithTag("scm_review").performClick()
         await("diff_file_0")
         onNodeWithTag("diff_folder_src").performClick()
         waitForIdle()

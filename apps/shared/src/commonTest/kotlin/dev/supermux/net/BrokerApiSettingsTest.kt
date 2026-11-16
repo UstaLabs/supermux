@@ -74,26 +74,6 @@ class BrokerApiSettingsTest {
         assertFalse(r.nothingToLand)
     }
 
-    @Test fun finish_readiness_decodes_prRequiresGreen() {
-        val withFlag = json.decodeFromString<FinishReadiness>(
-            """{"branch":"b","base":"main","prRequiresGreen":true}"""
-        )
-        assertTrue(withFlag.prRequiresGreen)
-        val omitted = json.decodeFromString<FinishReadiness>(
-            """{"branch":"b","base":"main"}"""
-        )
-        assertFalse(omitted.prRequiresGreen)
-    }
-
-    @Test fun verify_results_decode() {
-        val s = json.decodeFromString<VerifySuggestResult>("""{"content":"bun test","source":"package.json"}""")
-        assertEquals("bun test", s.content)
-        assertEquals("package.json", s.source)
-        val sv = json.decodeFromString<VerifySaveResult>("""{"ok":false,"reason":"empty"}""")
-        assertFalse(sv.ok)
-        assertEquals("empty", sv.reason)
-    }
-
     @Test fun agent_install_status_list_decodes() {
         val list = json.decodeFromString<List<AgentInstallStatus>>(
             """[{"kind":"claude","installed":true,"authed":true},{"kind":"codex","installed":true,"authed":false}]""")

@@ -48,6 +48,34 @@ final enum class dev.supermux.webview/DarkMode : kotlin/Enum<dev.supermux.webvie
     final fun values(): kotlin/Array<dev.supermux.webview/DarkMode> // dev.supermux.webview/DarkMode.values|values#static(){}[0]
 }
 
+final enum class dev.supermux.webview/DownloadFailure : kotlin/Enum<dev.supermux.webview/DownloadFailure> { // dev.supermux.webview/DownloadFailure|null[0]
+    enum entry FormPost // dev.supermux.webview/DownloadFailure.FormPost|null[0]
+    enum entry Other // dev.supermux.webview/DownloadFailure.Other|null[0]
+
+    final val entries // dev.supermux.webview/DownloadFailure.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<dev.supermux.webview/DownloadFailure> // dev.supermux.webview/DownloadFailure.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): dev.supermux.webview/DownloadFailure // dev.supermux.webview/DownloadFailure.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<dev.supermux.webview/DownloadFailure> // dev.supermux.webview/DownloadFailure.values|values#static(){}[0]
+}
+
+final enum class dev.supermux.webview/LoadFailure : kotlin/Enum<dev.supermux.webview/LoadFailure> { // dev.supermux.webview/LoadFailure|null[0]
+    enum entry BadAnswer // dev.supermux.webview/LoadFailure.BadAnswer|null[0]
+    enum entry CannotConnect // dev.supermux.webview/LoadFailure.CannotConnect|null[0]
+    enum entry ConnectionLost // dev.supermux.webview/LoadFailure.ConnectionLost|null[0]
+    enum entry NameNotResolved // dev.supermux.webview/LoadFailure.NameNotResolved|null[0]
+    enum entry Other // dev.supermux.webview/LoadFailure.Other|null[0]
+    enum entry SignInRequired // dev.supermux.webview/LoadFailure.SignInRequired|null[0]
+    enum entry TimedOut // dev.supermux.webview/LoadFailure.TimedOut|null[0]
+    enum entry TooManyRedirects // dev.supermux.webview/LoadFailure.TooManyRedirects|null[0]
+
+    final val entries // dev.supermux.webview/LoadFailure.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<dev.supermux.webview/LoadFailure> // dev.supermux.webview/LoadFailure.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): dev.supermux.webview/LoadFailure // dev.supermux.webview/LoadFailure.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<dev.supermux.webview/LoadFailure> // dev.supermux.webview/LoadFailure.values|values#static(){}[0]
+}
+
 final enum class dev.supermux.webview/NavigationDecision : kotlin/Enum<dev.supermux.webview/NavigationDecision> { // dev.supermux.webview/NavigationDecision|null[0]
     enum entry Allow // dev.supermux.webview/NavigationDecision.Allow|null[0]
     enum entry Block // dev.supermux.webview/NavigationDecision.Block|null[0]
@@ -110,7 +138,7 @@ abstract interface dev.supermux.webview.engine/EngineClient { // dev.supermux.we
     abstract fun onNavigation(dev.supermux.webview/NavigationRequest): dev.supermux.webview/NavigationDecision // dev.supermux.webview.engine/EngineClient.onNavigation|onNavigation(dev.supermux.webview.NavigationRequest){}[0]
     abstract fun onNewWindow(dev.supermux.webview/NewWindowRequest): dev.supermux.webview/NewWindowDecision // dev.supermux.webview.engine/EngineClient.onNewWindow|onNewWindow(dev.supermux.webview.NewWindowRequest){}[0]
     abstract suspend fun onDialog(dev.supermux.webview/WebDialog): dev.supermux.webview/DialogResult // dev.supermux.webview.engine/EngineClient.onDialog|onDialog(dev.supermux.webview.WebDialog){}[0]
-    abstract suspend fun onDownload(dev.supermux.webview/DownloadRequest): kotlin/Boolean // dev.supermux.webview.engine/EngineClient.onDownload|onDownload(dev.supermux.webview.DownloadRequest){}[0]
+    abstract suspend fun onDownload(dev.supermux.webview/DownloadRequest): dev.supermux.webview/DownloadTarget? // dev.supermux.webview.engine/EngineClient.onDownload|onDownload(dev.supermux.webview.DownloadRequest){}[0]
     abstract suspend fun onFileChooser(dev.supermux.webview/FileChooserRequest): kotlin.collections/List<kotlin/String>? // dev.supermux.webview.engine/EngineClient.onFileChooser|onFileChooser(dev.supermux.webview.FileChooserRequest){}[0]
     abstract suspend fun onPermission(dev.supermux.webview/PermissionRequest): kotlin/Boolean // dev.supermux.webview.engine/EngineClient.onPermission|onPermission(dev.supermux.webview.PermissionRequest){}[0]
     open fun onUnusedKey(androidx.compose.ui.input.key/KeyEvent): kotlin/Boolean // dev.supermux.webview.engine/EngineClient.onUnusedKey|onUnusedKey(androidx.compose.ui.input.key.KeyEvent){}[0]
@@ -172,7 +200,7 @@ abstract interface dev.supermux.webview/WebClient { // dev.supermux.webview/WebC
     open fun onNewWindow(dev.supermux.webview/NewWindowRequest): dev.supermux.webview/NewWindowDecision // dev.supermux.webview/WebClient.onNewWindow|onNewWindow(dev.supermux.webview.NewWindowRequest){}[0]
     open fun onUnusedKey(androidx.compose.ui.input.key/KeyEvent): kotlin/Boolean // dev.supermux.webview/WebClient.onUnusedKey|onUnusedKey(androidx.compose.ui.input.key.KeyEvent){}[0]
     open suspend fun onDialog(dev.supermux.webview/WebDialog): dev.supermux.webview/DialogResult // dev.supermux.webview/WebClient.onDialog|onDialog(dev.supermux.webview.WebDialog){}[0]
-    open suspend fun onDownload(dev.supermux.webview/DownloadRequest): kotlin/Boolean // dev.supermux.webview/WebClient.onDownload|onDownload(dev.supermux.webview.DownloadRequest){}[0]
+    open suspend fun onDownload(dev.supermux.webview/DownloadRequest): dev.supermux.webview/DownloadTarget? // dev.supermux.webview/WebClient.onDownload|onDownload(dev.supermux.webview.DownloadRequest){}[0]
     open suspend fun onFileChooser(dev.supermux.webview/FileChooserRequest): kotlin.collections/List<kotlin/String>? // dev.supermux.webview/WebClient.onFileChooser|onFileChooser(dev.supermux.webview.FileChooserRequest){}[0]
     open suspend fun onPermission(dev.supermux.webview/PermissionRequest): kotlin/Boolean // dev.supermux.webview/WebClient.onPermission|onPermission(dev.supermux.webview.PermissionRequest){}[0]
 
@@ -180,6 +208,21 @@ abstract interface dev.supermux.webview/WebClient { // dev.supermux.webview/WebC
         final val Default // dev.supermux.webview/WebClient.Companion.Default|{}Default[0]
             final fun <get-Default>(): dev.supermux.webview/WebClient // dev.supermux.webview/WebClient.Companion.Default.<get-Default>|<get-Default>(){}[0]
     }
+}
+
+abstract interface dev.supermux.webview/WebDownload { // dev.supermux.webview/WebDownload|null[0]
+    abstract val canPause // dev.supermux.webview/WebDownload.canPause|{}canPause[0]
+        abstract fun <get-canPause>(): kotlin/Boolean // dev.supermux.webview/WebDownload.canPause.<get-canPause>|<get-canPause>(){}[0]
+    abstract val path // dev.supermux.webview/WebDownload.path|{}path[0]
+        abstract fun <get-path>(): kotlin/String // dev.supermux.webview/WebDownload.path.<get-path>|<get-path>(){}[0]
+    abstract val request // dev.supermux.webview/WebDownload.request|{}request[0]
+        abstract fun <get-request>(): dev.supermux.webview/DownloadRequest // dev.supermux.webview/WebDownload.request.<get-request>|<get-request>(){}[0]
+    abstract val state // dev.supermux.webview/WebDownload.state|{}state[0]
+        abstract fun <get-state>(): kotlinx.coroutines.flow/StateFlow<dev.supermux.webview/WebDownloadState> // dev.supermux.webview/WebDownload.state.<get-state>|<get-state>(){}[0]
+
+    abstract fun cancel() // dev.supermux.webview/WebDownload.cancel|cancel(){}[0]
+    abstract fun pause() // dev.supermux.webview/WebDownload.pause|pause(){}[0]
+    abstract fun resume() // dev.supermux.webview/WebDownload.resume|resume(){}[0]
 }
 
 sealed interface dev.supermux.webview.engine/EngineEvent { // dev.supermux.webview.engine/EngineEvent|null[0]
@@ -586,6 +629,98 @@ sealed interface dev.supermux.webview/WebDialog { // dev.supermux.webview/WebDia
     }
 }
 
+sealed interface dev.supermux.webview/WebDownloadState { // dev.supermux.webview/WebDownloadState|null[0]
+    abstract val received // dev.supermux.webview/WebDownloadState.received|{}received[0]
+        abstract fun <get-received>(): kotlin/Long // dev.supermux.webview/WebDownloadState.received.<get-received>|<get-received>(){}[0]
+    abstract val total // dev.supermux.webview/WebDownloadState.total|{}total[0]
+        abstract fun <get-total>(): kotlin/Long? // dev.supermux.webview/WebDownloadState.total.<get-total>|<get-total>(){}[0]
+
+    final class Cancelled : dev.supermux.webview/WebDownloadState { // dev.supermux.webview/WebDownloadState.Cancelled|null[0]
+        constructor <init>(kotlin/Long, kotlin/Long?) // dev.supermux.webview/WebDownloadState.Cancelled.<init>|<init>(kotlin.Long;kotlin.Long?){}[0]
+
+        final val received // dev.supermux.webview/WebDownloadState.Cancelled.received|{}received[0]
+            final fun <get-received>(): kotlin/Long // dev.supermux.webview/WebDownloadState.Cancelled.received.<get-received>|<get-received>(){}[0]
+        final val total // dev.supermux.webview/WebDownloadState.Cancelled.total|{}total[0]
+            final fun <get-total>(): kotlin/Long? // dev.supermux.webview/WebDownloadState.Cancelled.total.<get-total>|<get-total>(){}[0]
+
+        final fun component1(): kotlin/Long // dev.supermux.webview/WebDownloadState.Cancelled.component1|component1(){}[0]
+        final fun component2(): kotlin/Long? // dev.supermux.webview/WebDownloadState.Cancelled.component2|component2(){}[0]
+        final fun copy(kotlin/Long = ..., kotlin/Long? = ...): dev.supermux.webview/WebDownloadState.Cancelled // dev.supermux.webview/WebDownloadState.Cancelled.copy|copy(kotlin.Long;kotlin.Long?){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview/WebDownloadState.Cancelled.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // dev.supermux.webview/WebDownloadState.Cancelled.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // dev.supermux.webview/WebDownloadState.Cancelled.toString|toString(){}[0]
+    }
+
+    final class Done : dev.supermux.webview/WebDownloadState { // dev.supermux.webview/WebDownloadState.Done|null[0]
+        constructor <init>(kotlin/Long) // dev.supermux.webview/WebDownloadState.Done.<init>|<init>(kotlin.Long){}[0]
+
+        final val received // dev.supermux.webview/WebDownloadState.Done.received|{}received[0]
+            final fun <get-received>(): kotlin/Long // dev.supermux.webview/WebDownloadState.Done.received.<get-received>|<get-received>(){}[0]
+        final val total // dev.supermux.webview/WebDownloadState.Done.total|{}total[0]
+            final fun <get-total>(): kotlin/Long? // dev.supermux.webview/WebDownloadState.Done.total.<get-total>|<get-total>(){}[0]
+
+        final fun component1(): kotlin/Long // dev.supermux.webview/WebDownloadState.Done.component1|component1(){}[0]
+        final fun copy(kotlin/Long = ...): dev.supermux.webview/WebDownloadState.Done // dev.supermux.webview/WebDownloadState.Done.copy|copy(kotlin.Long){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview/WebDownloadState.Done.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // dev.supermux.webview/WebDownloadState.Done.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // dev.supermux.webview/WebDownloadState.Done.toString|toString(){}[0]
+    }
+
+    final class Failed : dev.supermux.webview/WebDownloadState { // dev.supermux.webview/WebDownloadState.Failed|null[0]
+        constructor <init>(kotlin/String, kotlin/Long, kotlin/Long?, dev.supermux.webview/DownloadFailure = ...) // dev.supermux.webview/WebDownloadState.Failed.<init>|<init>(kotlin.String;kotlin.Long;kotlin.Long?;dev.supermux.webview.DownloadFailure){}[0]
+
+        final val message // dev.supermux.webview/WebDownloadState.Failed.message|{}message[0]
+            final fun <get-message>(): kotlin/String // dev.supermux.webview/WebDownloadState.Failed.message.<get-message>|<get-message>(){}[0]
+        final val reason // dev.supermux.webview/WebDownloadState.Failed.reason|{}reason[0]
+            final fun <get-reason>(): dev.supermux.webview/DownloadFailure // dev.supermux.webview/WebDownloadState.Failed.reason.<get-reason>|<get-reason>(){}[0]
+        final val received // dev.supermux.webview/WebDownloadState.Failed.received|{}received[0]
+            final fun <get-received>(): kotlin/Long // dev.supermux.webview/WebDownloadState.Failed.received.<get-received>|<get-received>(){}[0]
+        final val total // dev.supermux.webview/WebDownloadState.Failed.total|{}total[0]
+            final fun <get-total>(): kotlin/Long? // dev.supermux.webview/WebDownloadState.Failed.total.<get-total>|<get-total>(){}[0]
+
+        final fun component1(): kotlin/String // dev.supermux.webview/WebDownloadState.Failed.component1|component1(){}[0]
+        final fun component2(): kotlin/Long // dev.supermux.webview/WebDownloadState.Failed.component2|component2(){}[0]
+        final fun component3(): kotlin/Long? // dev.supermux.webview/WebDownloadState.Failed.component3|component3(){}[0]
+        final fun component4(): dev.supermux.webview/DownloadFailure // dev.supermux.webview/WebDownloadState.Failed.component4|component4(){}[0]
+        final fun copy(kotlin/String = ..., kotlin/Long = ..., kotlin/Long? = ..., dev.supermux.webview/DownloadFailure = ...): dev.supermux.webview/WebDownloadState.Failed // dev.supermux.webview/WebDownloadState.Failed.copy|copy(kotlin.String;kotlin.Long;kotlin.Long?;dev.supermux.webview.DownloadFailure){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview/WebDownloadState.Failed.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // dev.supermux.webview/WebDownloadState.Failed.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // dev.supermux.webview/WebDownloadState.Failed.toString|toString(){}[0]
+    }
+
+    final class Paused : dev.supermux.webview/WebDownloadState { // dev.supermux.webview/WebDownloadState.Paused|null[0]
+        constructor <init>(kotlin/Long, kotlin/Long?) // dev.supermux.webview/WebDownloadState.Paused.<init>|<init>(kotlin.Long;kotlin.Long?){}[0]
+
+        final val received // dev.supermux.webview/WebDownloadState.Paused.received|{}received[0]
+            final fun <get-received>(): kotlin/Long // dev.supermux.webview/WebDownloadState.Paused.received.<get-received>|<get-received>(){}[0]
+        final val total // dev.supermux.webview/WebDownloadState.Paused.total|{}total[0]
+            final fun <get-total>(): kotlin/Long? // dev.supermux.webview/WebDownloadState.Paused.total.<get-total>|<get-total>(){}[0]
+
+        final fun component1(): kotlin/Long // dev.supermux.webview/WebDownloadState.Paused.component1|component1(){}[0]
+        final fun component2(): kotlin/Long? // dev.supermux.webview/WebDownloadState.Paused.component2|component2(){}[0]
+        final fun copy(kotlin/Long = ..., kotlin/Long? = ...): dev.supermux.webview/WebDownloadState.Paused // dev.supermux.webview/WebDownloadState.Paused.copy|copy(kotlin.Long;kotlin.Long?){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview/WebDownloadState.Paused.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // dev.supermux.webview/WebDownloadState.Paused.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // dev.supermux.webview/WebDownloadState.Paused.toString|toString(){}[0]
+    }
+
+    final class Running : dev.supermux.webview/WebDownloadState { // dev.supermux.webview/WebDownloadState.Running|null[0]
+        constructor <init>(kotlin/Long, kotlin/Long?) // dev.supermux.webview/WebDownloadState.Running.<init>|<init>(kotlin.Long;kotlin.Long?){}[0]
+
+        final val received // dev.supermux.webview/WebDownloadState.Running.received|{}received[0]
+            final fun <get-received>(): kotlin/Long // dev.supermux.webview/WebDownloadState.Running.received.<get-received>|<get-received>(){}[0]
+        final val total // dev.supermux.webview/WebDownloadState.Running.total|{}total[0]
+            final fun <get-total>(): kotlin/Long? // dev.supermux.webview/WebDownloadState.Running.total.<get-total>|<get-total>(){}[0]
+
+        final fun component1(): kotlin/Long // dev.supermux.webview/WebDownloadState.Running.component1|component1(){}[0]
+        final fun component2(): kotlin/Long? // dev.supermux.webview/WebDownloadState.Running.component2|component2(){}[0]
+        final fun copy(kotlin/Long = ..., kotlin/Long? = ...): dev.supermux.webview/WebDownloadState.Running // dev.supermux.webview/WebDownloadState.Running.copy|copy(kotlin.Long;kotlin.Long?){}[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview/WebDownloadState.Running.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // dev.supermux.webview/WebDownloadState.Running.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // dev.supermux.webview/WebDownloadState.Running.toString|toString(){}[0]
+    }
+}
+
 sealed interface dev.supermux.webview/WebError { // dev.supermux.webview/WebError|null[0]
     abstract val url // dev.supermux.webview/WebError.url|{}url[0]
         abstract fun <get-url>(): kotlin/String? // dev.supermux.webview/WebError.url.<get-url>|<get-url>(){}[0]
@@ -629,9 +764,12 @@ sealed interface dev.supermux.webview/WebError { // dev.supermux.webview/WebErro
 
     final class Network : dev.supermux.webview/WebError { // dev.supermux.webview/WebError.Network|null[0]
         constructor <init>(kotlin/String?, kotlin/String) // dev.supermux.webview/WebError.Network.<init>|<init>(kotlin.String?;kotlin.String){}[0]
+        constructor <init>(kotlin/String?, kotlin/String, dev.supermux.webview/LoadFailure = ...) // dev.supermux.webview/WebError.Network.<init>|<init>(kotlin.String?;kotlin.String;dev.supermux.webview.LoadFailure){}[0]
 
         final val description // dev.supermux.webview/WebError.Network.description|{}description[0]
             final fun <get-description>(): kotlin/String // dev.supermux.webview/WebError.Network.description.<get-description>|<get-description>(){}[0]
+        final val reason // dev.supermux.webview/WebError.Network.reason|{}reason[0]
+            final fun <get-reason>(): dev.supermux.webview/LoadFailure // dev.supermux.webview/WebError.Network.reason.<get-reason>|<get-reason>(){}[0]
         final val url // dev.supermux.webview/WebError.Network.url|{}url[0]
             final fun <get-url>(): kotlin/String? // dev.supermux.webview/WebError.Network.url.<get-url>|<get-url>(){}[0]
 
@@ -1097,6 +1235,17 @@ final class dev.supermux.webview/DownloadRequest { // dev.supermux.webview/Downl
     final fun toString(): kotlin/String // dev.supermux.webview/DownloadRequest.toString|toString(){}[0]
 }
 
+final class dev.supermux.webview/DownloadTarget { // dev.supermux.webview/DownloadTarget|null[0]
+    constructor <init>(kotlin/String, kotlin/Function1<dev.supermux.webview/WebDownload, kotlin/Unit> = ...) // dev.supermux.webview/DownloadTarget.<init>|<init>(kotlin.String;kotlin.Function1<dev.supermux.webview.WebDownload,kotlin.Unit>){}[0]
+
+    final val onStarted // dev.supermux.webview/DownloadTarget.onStarted|{}onStarted[0]
+        final fun <get-onStarted>(): kotlin/Function1<dev.supermux.webview/WebDownload, kotlin/Unit> // dev.supermux.webview/DownloadTarget.onStarted.<get-onStarted>|<get-onStarted>(){}[0]
+    final val path // dev.supermux.webview/DownloadTarget.path|{}path[0]
+        final fun <get-path>(): kotlin/String // dev.supermux.webview/DownloadTarget.path.<get-path>|<get-path>(){}[0]
+
+    final fun toString(): kotlin/String // dev.supermux.webview/DownloadTarget.toString|toString(){}[0]
+}
+
 final class dev.supermux.webview/FileChooserRequest { // dev.supermux.webview/FileChooserRequest|null[0]
     constructor <init>(kotlin.collections/List<kotlin/String>, kotlin/Boolean) // dev.supermux.webview/FileChooserRequest.<init>|<init>(kotlin.collections.List<kotlin.String>;kotlin.Boolean){}[0]
 
@@ -1471,6 +1620,7 @@ final val dev.supermux.webview/dev_supermux_webview_DialogResult_Confirmed$stabl
 final val dev.supermux.webview/dev_supermux_webview_DialogResult_Dismissed$stableprop // dev.supermux.webview/dev_supermux_webview_DialogResult_Dismissed$stableprop|#static{}dev_supermux_webview_DialogResult_Dismissed$stableprop[0]
 final val dev.supermux.webview/dev_supermux_webview_DialogResult_Text$stableprop // dev.supermux.webview/dev_supermux_webview_DialogResult_Text$stableprop|#static{}dev_supermux_webview_DialogResult_Text$stableprop[0]
 final val dev.supermux.webview/dev_supermux_webview_DownloadRequest$stableprop // dev.supermux.webview/dev_supermux_webview_DownloadRequest$stableprop|#static{}dev_supermux_webview_DownloadRequest$stableprop[0]
+final val dev.supermux.webview/dev_supermux_webview_DownloadTarget$stableprop // dev.supermux.webview/dev_supermux_webview_DownloadTarget$stableprop|#static{}dev_supermux_webview_DownloadTarget$stableprop[0]
 final val dev.supermux.webview/dev_supermux_webview_FileChooserRequest$stableprop // dev.supermux.webview/dev_supermux_webview_FileChooserRequest$stableprop|#static{}dev_supermux_webview_FileChooserRequest$stableprop[0]
 final val dev.supermux.webview/dev_supermux_webview_FindResult$stableprop // dev.supermux.webview/dev_supermux_webview_FindResult$stableprop|#static{}dev_supermux_webview_FindResult$stableprop[0]
 final val dev.supermux.webview/dev_supermux_webview_InspectorResult_Elsewhere$stableprop // dev.supermux.webview/dev_supermux_webview_InspectorResult_Elsewhere$stableprop|#static{}dev_supermux_webview_InspectorResult_Elsewhere$stableprop[0]
@@ -1491,6 +1641,11 @@ final val dev.supermux.webview/dev_supermux_webview_WebDialog_Alert$stableprop /
 final val dev.supermux.webview/dev_supermux_webview_WebDialog_BeforeUnload$stableprop // dev.supermux.webview/dev_supermux_webview_WebDialog_BeforeUnload$stableprop|#static{}dev_supermux_webview_WebDialog_BeforeUnload$stableprop[0]
 final val dev.supermux.webview/dev_supermux_webview_WebDialog_Confirm$stableprop // dev.supermux.webview/dev_supermux_webview_WebDialog_Confirm$stableprop|#static{}dev_supermux_webview_WebDialog_Confirm$stableprop[0]
 final val dev.supermux.webview/dev_supermux_webview_WebDialog_Prompt$stableprop // dev.supermux.webview/dev_supermux_webview_WebDialog_Prompt$stableprop|#static{}dev_supermux_webview_WebDialog_Prompt$stableprop[0]
+final val dev.supermux.webview/dev_supermux_webview_WebDownloadState_Cancelled$stableprop // dev.supermux.webview/dev_supermux_webview_WebDownloadState_Cancelled$stableprop|#static{}dev_supermux_webview_WebDownloadState_Cancelled$stableprop[0]
+final val dev.supermux.webview/dev_supermux_webview_WebDownloadState_Done$stableprop // dev.supermux.webview/dev_supermux_webview_WebDownloadState_Done$stableprop|#static{}dev_supermux_webview_WebDownloadState_Done$stableprop[0]
+final val dev.supermux.webview/dev_supermux_webview_WebDownloadState_Failed$stableprop // dev.supermux.webview/dev_supermux_webview_WebDownloadState_Failed$stableprop|#static{}dev_supermux_webview_WebDownloadState_Failed$stableprop[0]
+final val dev.supermux.webview/dev_supermux_webview_WebDownloadState_Paused$stableprop // dev.supermux.webview/dev_supermux_webview_WebDownloadState_Paused$stableprop|#static{}dev_supermux_webview_WebDownloadState_Paused$stableprop[0]
+final val dev.supermux.webview/dev_supermux_webview_WebDownloadState_Running$stableprop // dev.supermux.webview/dev_supermux_webview_WebDownloadState_Running$stableprop|#static{}dev_supermux_webview_WebDownloadState_Running$stableprop[0]
 final val dev.supermux.webview/dev_supermux_webview_WebError_BlockedByPolicy$stableprop // dev.supermux.webview/dev_supermux_webview_WebError_BlockedByPolicy$stableprop|#static{}dev_supermux_webview_WebError_BlockedByPolicy$stableprop[0]
 final val dev.supermux.webview/dev_supermux_webview_WebError_Certificate$stableprop // dev.supermux.webview/dev_supermux_webview_WebError_Certificate$stableprop|#static{}dev_supermux_webview_WebError_Certificate$stableprop[0]
 final val dev.supermux.webview/dev_supermux_webview_WebError_Http$stableprop // dev.supermux.webview/dev_supermux_webview_WebError_Http$stableprop|#static{}dev_supermux_webview_WebError_Http$stableprop[0]
@@ -1602,6 +1757,7 @@ final fun dev.supermux.webview/dev_supermux_webview_DialogResult_Confirmed$stabl
 final fun dev.supermux.webview/dev_supermux_webview_DialogResult_Dismissed$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_DialogResult_Dismissed$stableprop_getter|dev_supermux_webview_DialogResult_Dismissed$stableprop_getter(){}[0]
 final fun dev.supermux.webview/dev_supermux_webview_DialogResult_Text$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_DialogResult_Text$stableprop_getter|dev_supermux_webview_DialogResult_Text$stableprop_getter(){}[0]
 final fun dev.supermux.webview/dev_supermux_webview_DownloadRequest$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_DownloadRequest$stableprop_getter|dev_supermux_webview_DownloadRequest$stableprop_getter(){}[0]
+final fun dev.supermux.webview/dev_supermux_webview_DownloadTarget$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_DownloadTarget$stableprop_getter|dev_supermux_webview_DownloadTarget$stableprop_getter(){}[0]
 final fun dev.supermux.webview/dev_supermux_webview_FileChooserRequest$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_FileChooserRequest$stableprop_getter|dev_supermux_webview_FileChooserRequest$stableprop_getter(){}[0]
 final fun dev.supermux.webview/dev_supermux_webview_FindResult$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_FindResult$stableprop_getter|dev_supermux_webview_FindResult$stableprop_getter(){}[0]
 final fun dev.supermux.webview/dev_supermux_webview_InspectorResult_Elsewhere$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_InspectorResult_Elsewhere$stableprop_getter|dev_supermux_webview_InspectorResult_Elsewhere$stableprop_getter(){}[0]
@@ -1622,6 +1778,11 @@ final fun dev.supermux.webview/dev_supermux_webview_WebDialog_Alert$stableprop_g
 final fun dev.supermux.webview/dev_supermux_webview_WebDialog_BeforeUnload$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_WebDialog_BeforeUnload$stableprop_getter|dev_supermux_webview_WebDialog_BeforeUnload$stableprop_getter(){}[0]
 final fun dev.supermux.webview/dev_supermux_webview_WebDialog_Confirm$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_WebDialog_Confirm$stableprop_getter|dev_supermux_webview_WebDialog_Confirm$stableprop_getter(){}[0]
 final fun dev.supermux.webview/dev_supermux_webview_WebDialog_Prompt$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_WebDialog_Prompt$stableprop_getter|dev_supermux_webview_WebDialog_Prompt$stableprop_getter(){}[0]
+final fun dev.supermux.webview/dev_supermux_webview_WebDownloadState_Cancelled$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_WebDownloadState_Cancelled$stableprop_getter|dev_supermux_webview_WebDownloadState_Cancelled$stableprop_getter(){}[0]
+final fun dev.supermux.webview/dev_supermux_webview_WebDownloadState_Done$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_WebDownloadState_Done$stableprop_getter|dev_supermux_webview_WebDownloadState_Done$stableprop_getter(){}[0]
+final fun dev.supermux.webview/dev_supermux_webview_WebDownloadState_Failed$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_WebDownloadState_Failed$stableprop_getter|dev_supermux_webview_WebDownloadState_Failed$stableprop_getter(){}[0]
+final fun dev.supermux.webview/dev_supermux_webview_WebDownloadState_Paused$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_WebDownloadState_Paused$stableprop_getter|dev_supermux_webview_WebDownloadState_Paused$stableprop_getter(){}[0]
+final fun dev.supermux.webview/dev_supermux_webview_WebDownloadState_Running$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_WebDownloadState_Running$stableprop_getter|dev_supermux_webview_WebDownloadState_Running$stableprop_getter(){}[0]
 final fun dev.supermux.webview/dev_supermux_webview_WebError_BlockedByPolicy$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_WebError_BlockedByPolicy$stableprop_getter|dev_supermux_webview_WebError_BlockedByPolicy$stableprop_getter(){}[0]
 final fun dev.supermux.webview/dev_supermux_webview_WebError_Certificate$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_WebError_Certificate$stableprop_getter|dev_supermux_webview_WebError_Certificate$stableprop_getter(){}[0]
 final fun dev.supermux.webview/dev_supermux_webview_WebError_Http$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_WebError_Http$stableprop_getter|dev_supermux_webview_WebError_Http$stableprop_getter(){}[0]

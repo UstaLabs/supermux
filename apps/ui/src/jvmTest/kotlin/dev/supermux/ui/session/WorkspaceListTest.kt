@@ -267,4 +267,28 @@ class WorkspaceListTest {
         }
     }
 
+    // #152: the row's branch line is the branch the work tree is on now (the session's git status). Until that is known
+    // (a session still asleep), a worktree's recorded branch; a Local session's project folder records none.
+    @Test fun a_rows_branch_is_the_one_checked_out_now_or_else_the_recorded_one() {
+        fun row(recorded: String?, live: String?) = deriveWorkspaceRow(
+            w = workspaceDto(id = "w1", views = listOf(workspaceChatView("v1", "s1", "w1")), primarySessionId = "s1").copy(branch = recorded),
+            sessionsById = mapOf(
+                "s1" to SessionInfo(
+                    id = "s1", name = "s1", workdir = "/home/u/projects/app", agent = "claude",
+                    git = live?.let { GitLiteStatusDto(mode = "remote", compareRef = "origin/$it", branch = it) },
+                ),
+            ),
+            agentState = emptyMap(),
+            lastBySession = emptyMap(),
+            lastRead = emptyMap(),
+            home = "/home/u",
+            selectedSessionId = null,
+        )
+        assertEquals("ahmet/fix-login", row("ahmet/fix-login", "ahmet/fix-login").branch)
+        assertEquals("dev", row(null, "dev").branch)
+        assertEquals("ahmet/other", row("ahmet/fix-login", "ahmet/other").branch)
+        assertEquals("ahmet/fix-login", row("ahmet/fix-login", null).branch)
+        assertNull(row(null, null).branch)
+        assertNull(row("", null).branch)
+    }
 }

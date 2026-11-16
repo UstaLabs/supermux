@@ -5,7 +5,7 @@ import {
   spawn as nodeSpawn, spawnSync as nodeSpawnSync, type ChildProcess, type SpawnOptions, type SpawnSyncOptions,
   type SpawnSyncReturns,
 } from "node:child_process"
-import { accessSync, constants, statSync } from "node:fs"
+import { accessSync, constants, readdirSync, readFileSync, readlinkSync, statSync } from "node:fs"
 import { posix, win32 } from "node:path"
 
 /** Whether a process with [pid] exists. `EPERM` (it exists but is someone else's) is alive; only `ESRCH` is gone. */
@@ -355,4 +355,91 @@ export function posixShell(env: CommandEnvironment = process.env, options: Resol
     if (base) candidates.push(win32.join(base, "Git", "bin", "bash.exe"))
   }
   return candidates.find((path) => !path.toLowerCase().startsWith(system) && fileExists(path)) ?? null
+}
+
+/** Runs a command to its end: its exit code and stdout. */
+export type RunSync = (argv: string[]) => { exitCode: number | null; stdout: string }
+
+const runSync: RunSync = (argv) => {
+  const r = nodeSpawnSync(argv[0]!, argv.slice(1), { encoding: "utf8", windowsHide: true, timeout: 5_000 })
+  return { exitCode: r.status, stdout: r.stdout ?? "" }
+}
+
+/**
+ * The pids that have [path] open: Linux reads /proc/<pid>/fd, macOS asks lsof, another OS answers []. Only processes
+ * this user may look into. For a log line naming who holds a locked file, never for a decision.
+ */
+export function holders(path: string, options: { platform?: NodeJS.Platform; run?: RunSync } = {}): number[] {
+  const platform = options.platform ?? process.platform
+  if (platform === "darwin") {
+    try {
+      const r = (options.run ?? runSync)(["/usr/sbin/lsof", "-t", "--", path])
+      if (r.exitCode !== 0) return []
+      return r.stdout.split(/\s+/).filter((pid) => /^\d+$/.test(pid)).map(Number)
+    } catch {
+      return []
+    }
+  }
+  if (platform !== "linux") return []
+  const found: number[] = []
+  let pids: string[]
+  try { pids = readdirSync("/proc").filter((name) => /^\d+$/.test(name)) } catch { return [] }
+  for (const pid of pids) {
+    let fds: string[]
+    try { fds = readdirSync(`/proc/${pid}/fd`) } catch { continue }
+    for (const fd of fds) {
+      let target: string
+      try { target = readlinkSync(`/proc/${pid}/fd/${fd}`) } catch { continue }
+      if (target === path) { found.push(Number(pid)); break }
+    }
+  }
+  return found
+}
+
+/**
+ * How the OS's own shell runs [line], a whole command line as a person or agent wrote it (an applet's `run`, #117):
+ * `/bin/sh -c` on macOS and Linux, `cmd.exe /d /s /c` on Windows with the line passed verbatim, so cmd reads it as
+ * written.
+ */
+export function shellLine(line: string, options: { env?: CommandEnvironment; platform?: NodeJS.Platform } = {}): WindowsLaunch {
+  const platform = options.platform ?? process.platform
+  if (platform === "win32") {
+    return { command: envValue(options.env ?? process.env, "ComSpec", "win32") || "cmd.exe", args: ["/d", "/s", "/c", `"${line}"`], windowsVerbatimArguments: true }
+  }
+  return { command: "/bin/sh", args: ["-c", line] }
+}
+
+/** Starts [line] through [shellLine], from [spawnDefaults] overridden by [options] (a test passes its own spawn). */
+export function spawnShellLine(line: string, options: SpawnOptions & { platform?: NodeJS.Platform; spawn?: SpawnLike } = {}): ChildProcess {
+  const { platform, spawn = nodeSpawn as unknown as SpawnLike, ...spawnOptions } = options
+  const plan = shellLine(line, { env: (spawnOptions.env ?? process.env) as CommandEnvironment, ...(platform ? { platform } : {}) })
+  return spawn(plan.command, plan.args, {
+    ...spawnDefaults(),
+    ...spawnOptions,
+    ...(plan.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+  })
+}
+
+/**
+ * A fingerprint of when [pid] started, so a pid the OS has since reused is never taken for the process it once was:
+ * Linux, the start time in clock ticks from /proc/<pid>/stat; macOS, `ps -o lstart=`; Windows, the process's start as a
+ * file time from PowerShell. Null whenever it can't be read, which a caller treats as "not provably the same process".
+ */
+export function startToken(pid: number, deps: { platform?: NodeJS.Platform; readFile?: (path: string) => string; run?: RunSync } = {}): string | null {
+  const platform = deps.platform ?? process.platform
+  try {
+    if (platform === "linux") {
+      const stat = (deps.readFile ?? ((p: string) => readFileSync(p, "utf8")))(`/proc/${pid}/stat`)
+      // pid (comm) state ppid … starttime is field 22: comm may hold spaces and parentheses, so count after the last ")".
+      return stat.slice(stat.lastIndexOf(")") + 1).trim().split(/\s+/)[19] || null
+    }
+    if (platform === "win32") {
+      const r = (deps.run ?? runSync)(["powershell", "-NoProfile", "-Command", `(Get-Process -Id ${pid}).StartTime.ToFileTimeUtc()`])
+      return r.exitCode === 0 ? r.stdout.trim() || null : null
+    }
+    const r = (deps.run ?? runSync)(["ps", "-o", "lstart=", "-p", String(pid)])
+    return r.exitCode === 0 ? r.stdout.trim() || null : null
+  } catch {
+    return null
+  }
 }

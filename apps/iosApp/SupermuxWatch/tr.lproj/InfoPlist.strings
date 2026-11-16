@@ -1,0 +1,3 @@
+/* #123: the permission prompts, Turkish. */
+
+"NSSpeechRecognitionUsageDescription" = "Supermux, dikte ettiğiniz sesi ajanlarınıza giden mesajlara çevirir.";

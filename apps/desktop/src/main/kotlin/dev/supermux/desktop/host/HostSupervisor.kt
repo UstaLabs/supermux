@@ -66,7 +66,7 @@ class HostSupervisor(
     internal val bunPath: () -> String = ::defaultBunPath,
     /** This computer's name for the broker (`MUX_HOST_NAME`); null: [lookupHostName] answers it when a launch needs it. */
     hostName: String? = null,
-    private val lookupHostName: () -> String = DesktopHostBootstrap::defaultHostName,
+    private val lookupHostName: () -> String = DesktopHostBootstrap::brokerHostName,
     /** Where a taken port moves to: the first free port of [MOVE_PORTS] (see [firstFreePort]). */
     private val freePort: () -> Int = { firstFreePort() },
     internal val now: () -> Long = System::currentTimeMillis,
@@ -110,9 +110,8 @@ class HostSupervisor(
     internal enum class Mode { CHILD, SERVICE, READ_ONLY, ORPHAN }
 
     /**
-     * This computer's name for the broker. Looked up when a launch first needs it (on [io]), never while the supervisor
-     * is built: the app builds it during composition, on the UI thread, and InetAddress.getLocalHost() can stall ~5 s on
-     * macOS (#29).
+     * This computer's name for the broker. Read when a launch first needs it (on [io]), never while the supervisor is
+     * built: the app builds it during composition, on the UI thread, and the read may wait for the OS (#29, #133).
      */
     internal val brokerHostName: String by lazy { hostName ?: lookupHostName() }
 

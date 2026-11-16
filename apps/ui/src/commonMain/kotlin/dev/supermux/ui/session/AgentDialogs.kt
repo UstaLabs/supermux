@@ -80,10 +80,12 @@ import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.retain.rememberRetainedScope
 import kotlinx.coroutines.flow.first
 import dev.supermux.state.AccountResult
-import dev.supermux.state.agentFailureText
+import dev.supermux.state.AgentNameError
 import dev.supermux.state.agentNameError
 import dev.supermux.state.agentNameTrim
 import dev.supermux.ui.accounts.agentDisplayName
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.widgets.Dialog
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
@@ -110,7 +112,7 @@ private class NewAgentForm {
     var effort by mutableStateOf<String?>(null)
     var launcherPrefs by mutableStateOf<LauncherPrefs?>(null)
     var busy by mutableStateOf(false)
-    var error by mutableStateOf<String?>(null)
+    var error by mutableStateOf<AccountResult.Failed?>(null)
 
     fun clear() {
         picked = 0
@@ -130,12 +132,44 @@ private class NewAgentForm {
 
 /** The states the preview cycles through, with the caption shown under it. */
 private val PreviewStates = listOf(
-    "idle" to "Idle",
-    "working" to "Working",
-    "waiting" to "Has a reply",
-    "listening" to "Listening",
-    "speaking" to "Speaking",
-    "asleep" to "Asleep",
+    "idle" to Str.agentdlg_state_idle,
+    "working" to Str.agentdlg_state_working,
+    "waiting" to Str.agentdlg_state_waiting,
+    "listening" to Str.agentdlg_state_listening,
+    "speaking" to Str.agentdlg_state_speaking,
+    "asleep" to Str.agentdlg_state_asleep,
+)
+
+/** Effort ids shown by name; any other id is shown capitalised. */
+private val EffortNames = mapOf(
+    "low" to Str.agentdlg_effort_low,
+    "medium" to Str.agentdlg_effort_medium,
+    "high" to Str.agentdlg_effort_high,
+    "xhigh" to Str.agentdlg_effort_xhigh,
+    "max" to Str.agentdlg_effort_max,
+)
+
+/**
+ * What to show for a refused Agents call, in the app's language: the broker's own message first, then the codes it
+ * is known to send, then [fallback] (the action's "Couldn't …" line).
+ */
+private fun agentFailure(failure: AccountResult.Failed, fallback: String): String =
+    failure.message?.takeIf { it.isNotBlank() } ?: when (failure.code) {
+        "name_invalid" -> localized(Str.agentdlg_name_invalid)
+        "name_taken" -> localized(Str.agentdlg_name_taken)
+        "agent_not_installed" -> localized(Str.agentdlg_not_installed)
+        else -> fallback
+    }
+
+/** Why a typed name is refused ([agentNameError]), in the app's language. */
+private fun agentNameErrorText(e: AgentNameError): String = localized(
+    when (e) {
+        AgentNameError.CONTROL_CHARACTER -> Str.words_agent_name_control
+        AgentNameError.EMPTY -> Str.words_agent_name_empty
+        AgentNameError.TOO_LONG -> Str.words_agent_name_too_long
+        AgentNameError.LEADING_DOT -> Str.words_agent_name_dot
+        AgentNameError.SLASH -> Str.words_agent_name_slash
+    },
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -227,7 +261,7 @@ internal fun CreateAgentDialog(
         scope.launch {
             when (val r = actions.create(finalName, p, model, character?.json, effort?.takeIf { it in effortIds })) {
                 is AccountResult.Ok -> created()
-                is AccountResult.Failed -> error = agentFailureText(r, "create the agent")
+                is AccountResult.Failed -> error = r
             }
             busy = false
         }
@@ -236,22 +270,22 @@ internal fun CreateAgentDialog(
     // A phone gets a bottom sheet laid out for a narrow screen; wider windows the centred dialog.
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
 
-    val createLabel = if (busy) "Creating…" else "Create ${finalName.ifEmpty { "Agent" }}"
+    val createLabel = if (busy) localized(Str.agentdlg_creating) else localized(Str.agentdlg_create, finalName.ifEmpty { localized(Str.agentdlg_agent) })
     val body: @Composable () -> Unit = {
         // ── Title ──
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("New Agent", color = cs.onSurface, fontSize = if (compact) 19.sp else 17.sp, fontWeight = FontWeight.SemiBold)
+                Text(localized(Str.agentdlg_new_title), color = cs.onSurface, fontSize = if (compact) 19.sp else 17.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    "An always-on assistant with its own memory. Pick its character.",
+                    localized(Str.agentdlg_new_subtitle),
                     color = cs.onSurfaceVariant,
                     fontSize = if (compact) 13.sp else 12.5.sp,
                 )
             }
             if (!compact) {
                 GhostIconButton(onClick = { if (!busy) dismiss() }, tag = "agents_create_cancel_x") {
-                    Icon(Icons.Filled.Close, contentDescription = "Close", tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Filled.Close, contentDescription = localized(Str.agentdlg_close), tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
                 }
             }
         }
@@ -286,11 +320,11 @@ internal fun CreateAgentDialog(
 
         Column(Modifier.padding(end = if (compact) 0.dp else 8.dp), verticalArrangement = Arrangement.spacedBy(if (compact) 16.dp else 14.dp)) {
             // ── Name ──
-            Field("Name") {
+            Field(localized(Str.agentdlg_name)) {
                 QuietTextField(
                     value = name,
                     onValueChange = { name = it; error = null },
-                    placeholder = character?.name ?: "Name",
+                    placeholder = character?.name ?: localized(Str.agentdlg_name),
                     isError = nameError != null && name.isNotEmpty(),
                     tag = "agents_create_name",
                     // On a phone the keyboard would cover the gallery before anything is picked.
@@ -298,21 +332,21 @@ internal fun CreateAgentDialog(
                     tall = compact,
                 )
                 if (nameError != null && name.isNotEmpty()) {
-                    Text(nameError, color = cs.error, fontSize = 11.5.sp, modifier = Modifier.padding(top = 4.dp))
+                    Text(agentNameErrorText(nameError), color = cs.error, fontSize = 11.5.sp, modifier = Modifier.padding(top = 4.dp))
                 }
             }
 
             // ── Provider ──
-            Field("Provider") {
+            Field(localized(Str.agentdlg_provider)) {
                 when {
                     providersFailed -> Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Couldn't load providers.", color = cs.error, fontSize = 12.5.sp)
+                        Text(localized(Str.agentdlg_providers_failed), color = cs.error, fontSize = 12.5.sp)
                         Spacer(Modifier.width(8.dp))
-                        LinkButton("Retry", tag = "agents_create_providers_error") { providersAttempt++ }
+                        LinkButton(localized(Str.agentdlg_retry), tag = "agents_create_providers_error") { providersAttempt++ }
                     }
                     providers == null -> CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                     providers!!.isEmpty() -> Text(
-                        "No provider is installed. Install one in Settings ▸ Providers & accounts.",
+                        localized(Str.agentdlg_no_provider),
                         color = cs.onSurfaceVariant,
                         fontSize = 12.5.sp,
                         modifier = Modifier.testTag("agents_create_no_provider"),
@@ -332,7 +366,7 @@ internal fun CreateAgentDialog(
             // ── Model + effort (side by side on a wide window, stacked on a phone) ──
             if (provider != null && providers?.isNotEmpty() == true) {
                 val modelField: @Composable () -> Unit = {
-                    Field("Model") {
+                    Field(localized(Str.agentdlg_model)) {
                         if (models.isEmpty()) {
                             CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                         } else {
@@ -342,11 +376,12 @@ internal fun CreateAgentDialog(
                 }
                 val effortField: @Composable () -> Unit = {
                     if (effortIds.isNotEmpty()) {
-                        Field("Effort") {
+                        val names = EffortNames.mapValues { localized(it.value) }
+                        Field(localized(Str.agentdlg_effort)) {
                             Segmented(
                                 options = effortIds,
                                 selected = effort,
-                                label = ::effortLabel,
+                                label = { names[it] ?: it.replaceFirstChar { c -> c.uppercase() } },
                                 onSelect = { effort = it },
                                 tagPrefix = "agents_create_effort_",
                                 modifier = if (compact) Modifier.horizontalScroll(rememberScrollState()) else Modifier,
@@ -365,15 +400,15 @@ internal fun CreateAgentDialog(
                     }
                 }
             }
-            error?.let { Text(it, color = cs.error, fontSize = 12.5.sp, modifier = Modifier.testTag("agents_create_error")) }
+            error?.let { Text(agentFailure(it, localized(Str.agentdlg_create_failed)), color = cs.error, fontSize = 12.5.sp, modifier = Modifier.testTag("agents_create_error")) }
         }
         if (!compact) {
             Spacer(Modifier.height(22.dp))
             // ── Footer (the sheet pins its own below the scrolling part) ──
             Row(Modifier.fillMaxWidth().padding(end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("↵ to create · esc to cancel", color = cs.onSurfaceVariant.copy(alpha = 0.55f), fontSize = 11.sp)
+                Text(localized(Str.agentdlg_hint), color = cs.onSurfaceVariant.copy(alpha = 0.55f), fontSize = 11.sp)
                 Spacer(Modifier.weight(1f))
-                SecondaryButton("Cancel", enabled = !busy, tag = "agents_create_cancel", onClick = dismiss)
+                SecondaryButton(localized(Str.agentdlg_cancel), enabled = !busy, tag = "agents_create_cancel", onClick = dismiss)
                 Spacer(Modifier.width(8.dp))
                 PrimaryButton(createLabel, enabled = canCreate, tag = "agents_create_confirm", onClick = ::create)
             }
@@ -446,7 +481,8 @@ private fun CharacterPreview(c: GalleryCharacter, compact: Boolean = false) {
             step = (step + 1) % PreviewStates.size
         }
     }
-    val (state, caption) = PreviewStates[step]
+    val (state, captionKey) = PreviewStates[step]
+    val caption = localized(captionKey)
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val box: @Composable () -> Unit = {
@@ -634,7 +670,7 @@ private fun Segmented(
 private fun ModelMenu(models: List<ModelInfo>, selected: String?, onSelect: (String) -> Unit, tall: Boolean = false) {
     val cs = MaterialTheme.colorScheme
     var open by remember { mutableStateOf(false) }
-    val label = models.firstOrNull { it.id == selected }?.displayName ?: "Choose a model"
+    val label = models.firstOrNull { it.id == selected }?.displayName ?: localized(Str.agentdlg_choose_model)
     Box {
         Row(
             Modifier
@@ -659,12 +695,6 @@ private fun ModelMenu(models: List<ModelInfo>, selected: String?, onSelect: (Str
             }
         }
     }
-}
-
-/** "xhigh" → "Extra high"; the rest capitalised ("medium" → "Medium"). */
-private fun effortLabel(id: String): String = when (id) {
-    "xhigh" -> "Extra high"
-    else -> id.replaceFirstChar { it.uppercase() }
 }
 
 @Composable
@@ -792,7 +822,7 @@ internal fun ChangeCharacterDialog(
     }
     var picked by remember { mutableIntStateOf(-1) }
     var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf<AccountResult.Failed?>(null) }
     val character = gallery.getOrNull(picked)
     fun save() {
         val c = character ?: return
@@ -801,23 +831,29 @@ internal fun ChangeCharacterDialog(
         scope.launch {
             when (val r = setAvatar(agentId, c.json)) {
                 is AccountResult.Ok -> onDismiss()
-                is AccountResult.Failed -> error = agentFailureText(r, "change $agentName's character")
+                is AccountResult.Failed -> error = r
             }
             busy = false
         }
     }
     AgentSheet(
-        title = "Change $agentName's character",
-        subtitle = "Its name, memory and history stay the same.",
+        title = localized(Str.agentdlg_character_title, agentName),
+        subtitle = localized(Str.agentdlg_character_subtitle),
         busy = busy,
         onDismiss = onDismiss,
         onSubmit = ::save,
         tag = "agents_character_dialog",
         maxWidth = 600,
         footer = {
-            SecondaryButton("Cancel", enabled = !busy, tag = "agents_character_cancel", onClick = onDismiss)
+            SecondaryButton(localized(Str.agentdlg_cancel), enabled = !busy, tag = "agents_character_cancel", onClick = onDismiss)
             Spacer(Modifier.width(8.dp))
-            PrimaryButton(if (busy) "Saving…" else "Use ${character?.name ?: "character"}", enabled = character != null && !busy, tag = "agents_character_save", onClick = ::save)
+            PrimaryButton(
+                when {
+                    busy -> localized(Str.agentdlg_saving)
+                    character != null -> localized(Str.agentdlg_use, character.name)
+                    else -> localized(Str.agentdlg_use_character)
+                },
+                enabled = character != null && !busy, tag = "agents_character_save", onClick = ::save)
         },
     ) {
         Row {
@@ -832,7 +868,7 @@ internal fun ChangeCharacterDialog(
                     ) { AvatarRigView(current, state = "idle", size = 112) }
                     Spacer(Modifier.height(8.dp))
                     Text(agentName, color = cs.onSurface, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                    Text("Current", color = cs.onSurfaceVariant.copy(alpha = 0.7f), fontSize = 11.sp)
+                    Text(localized(Str.agentdlg_current), color = cs.onSurfaceVariant.copy(alpha = 0.7f), fontSize = 11.sp)
                 }
             }
             Spacer(Modifier.width(18.dp))
@@ -849,7 +885,7 @@ internal fun ChangeCharacterDialog(
         }
         error?.let {
             Spacer(Modifier.height(10.dp))
-            Text(it, color = cs.error, fontSize = 12.5.sp)
+            Text(agentFailure(it, localized(Str.agentdlg_character_failed, agentName)), color = cs.error, fontSize = 12.5.sp)
         }
     }
 }
@@ -866,7 +902,7 @@ internal fun RenameAgentDialog(
     val scope = rememberCoroutineScope()
     var name by remember(agentId) { mutableStateOf(agentName) }
     var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf<AccountResult.Failed?>(null) }
     val trimmed = agentNameTrim(name)
     val nameError = if (name.isEmpty()) null else agentNameError(name)
     val canRename = !busy && trimmed.isNotEmpty() && nameError == null && trimmed != agentName
@@ -877,22 +913,22 @@ internal fun RenameAgentDialog(
         scope.launch {
             when (val r = rename(agentId, trimmed)) {
                 is AccountResult.Ok -> onDismiss()
-                is AccountResult.Failed -> error = agentFailureText(r, "rename $agentName")
+                is AccountResult.Failed -> error = r
             }
             busy = false
         }
     }
     AgentSheet(
-        title = "Rename $agentName",
-        subtitle = "Its memory and history stay with it.",
+        title = localized(Str.agentdlg_rename_title, agentName),
+        subtitle = localized(Str.agentdlg_rename_subtitle),
         busy = busy,
         onDismiss = onDismiss,
         onSubmit = ::submit,
         tag = "agents_rename_dialog",
         footer = {
-            SecondaryButton("Cancel", enabled = !busy, tag = "agents_rename_cancel", onClick = onDismiss)
+            SecondaryButton(localized(Str.agentdlg_cancel), enabled = !busy, tag = "agents_rename_cancel", onClick = onDismiss)
             Spacer(Modifier.width(8.dp))
-            PrimaryButton("Rename", enabled = canRename, tag = "agents_rename_confirm", onClick = ::submit)
+            PrimaryButton(localized(Str.agentdlg_rename), enabled = canRename, tag = "agents_rename_confirm", onClick = ::submit)
         },
     ) {
         QuietTextField(
@@ -902,7 +938,7 @@ internal fun RenameAgentDialog(
             isError = nameError != null,
             tag = "agents_rename_name",
         )
-        (nameError ?: error)?.let { Text(it, color = cs.error, fontSize = 11.5.sp, modifier = Modifier.padding(top = 6.dp)) }
+        (nameError?.let(::agentNameErrorText) ?: error?.let { agentFailure(it, localized(Str.agentdlg_rename_failed, agentName)) })?.let { Text(it, color = cs.error, fontSize = 11.5.sp, modifier = Modifier.padding(top = 6.dp)) }
     }
 }
 
@@ -917,32 +953,32 @@ internal fun ArchiveAgentDialog(
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf<AccountResult.Failed?>(null) }
     fun submit() {
         if (busy) return
         busy = true
         scope.launch {
             when (val r = kill(agentId)) {
                 is AccountResult.Ok -> onDismiss()
-                is AccountResult.Failed -> error = agentFailureText(r.copy(message = null), "archive $agentName")
+                is AccountResult.Failed -> error = r.copy(message = null)
             }
             busy = false
         }
     }
     AgentSheet(
-        title = "Archive $agentName?",
-        subtitle = "It stops running and leaves the sidebar. Its memory is kept, and you can restore it from the archive.",
+        title = localized(Str.agentdlg_archive_title, agentName),
+        subtitle = localized(Str.agentdlg_archive_subtitle),
         busy = busy,
         onDismiss = onDismiss,
         onSubmit = ::submit,
         tag = "agents_kill_dialog",
         footer = {
-            SecondaryButton("Cancel", enabled = !busy, tag = "agents_kill_cancel", onClick = onDismiss)
+            SecondaryButton(localized(Str.agentdlg_cancel), enabled = !busy, tag = "agents_kill_cancel", onClick = onDismiss)
             Spacer(Modifier.width(8.dp))
-            DangerButton(if (busy) "Archiving…" else "Archive", enabled = !busy, tag = "agents_kill_confirm", onClick = ::submit)
+            DangerButton(localized(if (busy) Str.agentdlg_archiving else Str.agentdlg_archive), enabled = !busy, tag = "agents_kill_confirm", onClick = ::submit)
         },
     ) {
-        error?.let { Text(it, color = cs.error, fontSize = 12.5.sp) }
+        error?.let { Text(agentFailure(it, localized(Str.agentdlg_archive_failed, agentName)), color = cs.error, fontSize = 12.5.sp) }
     }
 }
 

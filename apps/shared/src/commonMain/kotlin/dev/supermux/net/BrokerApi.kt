@@ -24,6 +24,7 @@ import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
+import io.ktor.http.encodeURLPathPart
 import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readAvailable
 import io.ktor.utils.io.readUTF8Line
@@ -243,6 +244,11 @@ data class AppConfigDto(
     /** Model the cleanup engine uses. null/empty = that engine's own default. */
     val voiceCleanupModel: String? = null,
     /** Read-aloud backend: platform (OS TTS) | codex (ChatGPT pronunciation). null = platform. */
+    /** #72: Source Control's Commit ▾ pick (commit | push | sync) and its "no staged changes" answer (ask | always | never). */
+    val gitPostCommit: String? = null,
+    val gitSmartCommit: String? = null,
+    /** #72 v5: Create Pull Request with unpushed commits: "ask" (default) or "always" push first. */
+    val gitPrPush: String? = null,
     val voiceTtsEngine: String? = null,
     /** ISO-639-1 codes the user dictates in (e.g. ["tr", "en"]). null/empty = auto-detect. */
     val voiceLanguages: List<String>? = null,
@@ -305,6 +311,36 @@ data class ModelInfo(
     /** Fast mode is offered on this model (GET /agents/models only). */
     val supportsFast: Boolean = false,
 )
+
+/** #144: GET /sessions/<id>/context. [breakdown] only where the agent reports one (Claude, Grok). */
+@Serializable
+data class SessionContextDto(
+    val context: dev.supermux.proto.ContextUsageDto? = null,
+    val breakdown: ContextBreakdownDto? = null,
+    /** Tools this chat called, most first; a Skill call as `Skill:<skill>`. Counted since the broker started. */
+    val used: List<ToolUseDto> = emptyList(),
+)
+
+@Serializable
+data class ContextBreakdownDto(
+    val used: Long,
+    val size: Long,
+    /** Where the agent compacts by itself, when it says. */
+    val threshold: Long? = null,
+    val categories: List<ContextCategoryDto> = emptyList(),
+    val mcpTools: List<McpToolCostDto> = emptyList(),
+    val mcpInstructions: List<McpInstructionsCostDto> = emptyList(),
+    val skills: List<SkillCostDto> = emptyList(),
+    val memoryFiles: List<MemoryFileCostDto> = emptyList(),
+)
+
+/** [kind]: used | deferred (loaded on use, not counted) | buffer | free. */
+@Serializable data class ContextCategoryDto(val id: String, val name: String, val tokens: Long, val kind: String)
+@Serializable data class McpToolCostDto(val server: String, val name: String, val tokens: Long, val loaded: Boolean = true)
+@Serializable data class McpInstructionsCostDto(val server: String, val tokens: Long)
+@Serializable data class SkillCostDto(val name: String, val tokens: Long, val source: String? = null)
+@Serializable data class MemoryFileCostDto(val path: String, val type: String? = null, val tokens: Long)
+@Serializable data class ToolUseDto(val name: String, val count: Int)
 
 @Serializable
 data class ModelsResponse(
@@ -411,6 +447,8 @@ data class SpawnRequest(
     val firstMessage: String? = null,
     /** Card #75: the app's own id for [firstMessage] (`web-<uuid>`), the one the broker logs it under. */
     @SerialName("client_message_id") val clientMessageId: String? = null,
+    /** #152: what the launcher picked; it wins over [worktree] and [baseBranch]. */
+    val source: SessionSourceBody? = null,
 )
 
 /** Draft composer payload on POST /sessions (mirrors web draftPayload). */
@@ -923,12 +961,22 @@ data class ClaudeResetResult(
 data class GitRemoteStatus(
     val isRepo: Boolean = false,
     val hasRemote: Boolean = false,
+    /** #72 v5: the remotes by name: Publish asks which when there are several (VS Code). Empty: an older broker. */
+    val remotes: List<String> = emptyList(),
     val branch: String? = null,
     val detachedSha: String? = null,
     val upstream: String? = null,
     val ahead: Int = 0,
     val behind: Int = 0,
+    /** #72: with no remote, the project's folder name: the repository name Publish suggests. */
+    val project: String? = null,
 )
+
+/**
+ * #72: the message of a write whose route the host's broker doesn't have yet (the app is newer than the broker):
+ * the pane says "update supermux on the host", never the router's bare "not found".
+ */
+const val ROUTE_MISSING = "\u0000route_missing"
 
 /** Flat result for git push/pull/fetch/publish — `status` discriminates. */
 @Serializable
@@ -939,10 +987,10 @@ data class GitOpResult(
 )
 
 /**
- * Flat result for a finish outcome — `status` discriminates the 15 variants
+ * Flat result for a finish outcome — `status` discriminates the 13 variants
  * (integrated | pr_opened | branch_published | push_rejected | kept | discarded |
- *  push_auth_failed | nothing_to_do | sync_conflict | tests_failed | dirty_overlap |
- *  non_ff | no_verify | uncommitted | error).
+ *  push_auth_failed | nothing_to_do | sync_conflict | dirty_overlap | non_ff |
+ *  uncommitted | error).
  *
  * NOTE: `POST /sessions/<id>/finish` no longer returns this directly — it kicks off
  * an async finish *job* and returns a [dev.supermux.proto.FinishJobDto] (initially
@@ -987,16 +1035,7 @@ data class FinishReadiness(
     val conflictPreflight: String = "unknown", // "clean" | "will_conflict" | "unknown"
     val recommended: String = "merge",         // "merge" | "pr"
     val nothingToLand: Boolean = false,
-    val prRequiresGreen: Boolean = false,
 )
-
-/** POST /sessions/<id>/verify/suggest → suggested verify command/content + its source. */
-@Serializable
-data class VerifySuggestResult(val content: String = "", val source: String = "")
-
-/** POST /sessions/<id>/verify/save → { ok, reason? }. */
-@Serializable
-data class VerifySaveResult(val ok: Boolean = false, val reason: String? = null)
 
 // ─── Agents (GET/POST /api/pas) ─────────────────────────────────
 @Serializable
@@ -1207,6 +1246,8 @@ data class RepoDiff(
     val truncated: Boolean = false,
     val total: Int? = null,
     val error: String? = null,
+    /** #72: a merge is in progress here (conflicts, or settled and waiting for "Continue"). */
+    val merging: Boolean = false,
 )
 
 @Serializable
@@ -1227,6 +1268,8 @@ data class DiffFile(
     val lazy: Boolean = false,
     /** #72: how much of it is in the next commit (all | partial | none); null: nothing uncommitted. */
     val staged: String? = null,
+    /** #72: the staged version's blob when part or all of it is staged ("(Index)" / "(Working Tree)" diffs). */
+    val indexBlob: String? = null,
 )
 
 /** GET …/changes — the Changes pane's list (spec 2026-09-29 §2.1): no file text. */
@@ -1244,6 +1287,8 @@ data class RepoChanges(
     val truncated: Boolean = false,
     val total: Int = 0,
     val error: String? = null,
+    /** #72: a merge is in progress here. */
+    val merging: Boolean = false,
 )
 
 @Serializable
@@ -1257,11 +1302,257 @@ data class ChangedFile(
     val baseBlob: String? = null,
     val size: Long? = null,
     val staged: String? = null,
+    val indexBlob: String? = null,
 )
+
+@Serializable
+internal data class UndoLatestBody(val before: String, val after: String)
+@Serializable
+internal data class SwitchBody(val name: String, val create: Boolean)
+@Serializable
+internal data class PrNumberBody(val number: Int)
+@Serializable
+internal data class PrTextBody(val target: String? = null)
 
 /** POST …/git/stage (#72): whole files into the next commit, or out of it. */
 @Serializable
 data class StageRequest(val repo: String, val paths: List<String>, val staged: Boolean)
+
+/** POST …/git/discard (#72): the files' unstaged changes, or the whole Changes group ([all]). One of the two. */
+@Serializable
+data class DiscardRequest(val repo: String, val paths: List<String>? = null, val all: Boolean? = null)
+
+/** POST …/git/{commit,uncommit,resolve,abort} (#72): {repo} plus what the op needs. */
+@Serializable
+data class CommitRequest(
+    val repo: String,
+    val message: String? = null,
+    val all: Boolean = false,
+    val amend: Boolean = false,
+    /** resolve: the conflicted file and the side kept (mine | theirs | both). */
+    val path: String? = null,
+    val side: String? = null,
+)
+
+/** What a git write did: ok (a commit's sha/subject, the files discarded), or why not. */
+@Serializable
+data class GitWriteResult(
+    val ok: Boolean = false,
+    val sha: String? = null,
+    val subject: String? = null,
+    val discarded: List<String> = emptyList(),
+    /** nothing | failed | none | merge | pushed | conflict (discard: [paths] are in a conflict) | moved (undo latest) */
+    val reason: String? = null,
+    val paths: List<String> = emptyList(),
+    val message: String? = null,
+    val error: String? = null,
+)
+
+/** GET …/git/history: the chat's commits (its branch minus its base) and the base's recent ones. */
+@Serializable
+data class GitHistory(
+    val branch: String? = null,
+    val base: String? = null,
+    val chat: List<LogCommit> = emptyList(),
+    val baseCommits: List<LogCommit> = emptyList(),
+    /** #72: how many commits the base has that this chat doesn't yet (the Graph's "Incoming Changes"). */
+    val incoming: Int = 0,
+)
+
+@Serializable
+data class LogCommit(val sha: String, val subject: String = "", val author: String = "", val at: Long = 0, val pushed: Boolean? = null)
+
+/** POST /sessions/<id>/git/latest: the base merged in (clean, with [before]/[after] for its undo), up_to_date, conflict, or failed. */
+@Serializable
+data class LatestResult(
+    val status: String = "failed",
+    val from: String? = null,
+    val commits: Int = 0,
+    val before: String? = null,
+    val after: String? = null,
+    val files: List<String> = emptyList(),
+    val message: String? = null,
+)
+
+/** GET /sessions/<id>/git/branches: each branch's default flag, upstream with ↑↓, and where it is open. */
+@Serializable
+data class GitBranches(
+    val current: String? = null,
+    val detachedSha: String? = null,
+    val local: List<GitLocalBranch> = emptyList(),
+    val remote: List<GitRemoteBranch> = emptyList(),
+)
+
+@Serializable
+data class GitLocalBranch(
+    val name: String,
+    val isDefault: Boolean = false,
+    val upstream: String? = null,
+    val ahead: Int = 0,
+    val behind: Int = 0,
+    val openIn: GitOpenIn? = null,
+    /** #152: the last commit's author and time (epoch ms), the launcher's "who · ago". */
+    val author: String = "",
+    val at: Long = 0,
+)
+
+@Serializable
+data class GitRemoteBranch(val name: String, val isDefault: Boolean = false, val author: String = "", val at: Long = 0)
+
+/** GET /projects/folder-state?dir= (#152): the project folder's branch, and whether it has changes. */
+@Serializable
+data class ProjectFolderState(val branch: String? = null, val detachedSha: String? = null, val clean: Boolean = true, val changed: Int = 0)
+
+/** GET/PUT /projects/prefs (#152): the user's Local / Worktree pick for a project ("local" | "worktree"), and their branch prefix. */
+@Serializable
+data class ProjectPrefs(val workIn: String = "worktree", val branchPrefix: String = "")
+
+@Serializable
+data class ProjectPrefsPatch(val dir: String, val workIn: String? = null, val branchPrefix: String? = null)
+
+@Serializable
+data class ProjectSwitchBody(val dir: String, val name: String)
+
+/**
+ * POST /sessions `source` (#152): what the launcher picked. kind: new ([base], [name], [auto]) | existing ([branch]) |
+ * local ([switchTo]) | reuse ([sessionId]). A refused one answers 409 with `code` (held_elsewhere, dirty, branch_exists…).
+ */
+@Serializable
+data class SessionSourceBody(
+    val kind: String,
+    val base: String? = null,
+    val name: String? = null,
+    val auto: Boolean? = null,
+    val branch: String? = null,
+    val switchTo: String? = null,
+    val sessionId: String? = null,
+    /** pr: the pull / merge request, and whose version wins when the local branch has commits it lacks ("pr" | "mine"). */
+    val number: Int? = null,
+    val divergedPolicy: String? = null,
+)
+
+/**
+ * An open pull request (GitHub) / merge request (GitLab) as the launcher lists it (GET /projects/prs, /projects/pr,
+ * #152): its own [head] branch, the repo it lives in, whether it comes from a fork (and the author lets maintainers
+ * push to it), its [checks] rolled up (ok | bad | run | none), and how many commits a local branch of the same name
+ * has that it doesn't.
+ */
+@Serializable
+data class OpenPr(
+    val forge: String = "github",
+    val number: Int = 0,
+    val title: String = "",
+    val url: String = "",
+    val author: String = "",
+    val base: String = "",
+    val head: String = "",
+    val headRepo: String = "",
+    val isFork: Boolean = false,
+    val headOwner: String? = null,
+    val maintainerCanModify: Boolean = false,
+    val draft: Boolean = false,
+    val checks: String = "none",
+    val localAhead: Int? = null,
+)
+
+/**
+ * GET/PUT /settings/branch-prefix (#152): the user's prefix as kept (null = automatic, "" = none), and what automatic
+ * gives. [refused]: the PUT's 400, a prefix git won't take; the broker never sends it.
+ */
+@Serializable
+data class BranchPrefixSetting(val branchPrefix: String? = null, val automatic: String = "", val refused: Boolean = false)
+
+/** GET /projects/prs: status ok ([repo] "host/owner/repo", [prs]) | unavailable ([reason]: no_remote | no_cli | not_authed | error). */
+@Serializable
+data class OpenPrList(val status: String = "unavailable", val forge: String? = null, val repo: String? = null, val prs: List<OpenPr> = emptyList(), val reason: String? = null, val message: String? = null)
+
+/** GET /projects/pr: found ([pr]) | none | not_open ([state]) | other_repo | bad_ref | unavailable ([reason]). */
+@Serializable
+data class OpenPrRead(val status: String = "unavailable", val pr: OpenPr? = null, val forge: String? = null, val state: String? = null, val repo: String? = null, val reason: String? = null, val message: String? = null)
+
+/** kind: this | folder (the main folder) | session (with [id], [name]) | external (a worktree no session owns, at [path]) */
+@Serializable
+data class GitOpenIn(val kind: String = "", val id: String? = null, val name: String? = null, val path: String? = null)
+
+/** POST /sessions/<id>/git/switch: switched | dirty ([changed], with requireClean) | clobber ([files]) |
+ *  checked_out_elsewhere ([path], [openIn] when a session has it) | merge_in_progress | invalid_name | error */
+@Serializable
+data class GitSwitchResult(
+    val status: String = "error",
+    val branch: String? = null,
+    val files: List<String> = emptyList(),
+    val changed: Int = 0,
+    val path: String? = null,
+    val openIn: GitOpenIn? = null,
+    val message: String? = null,
+)
+
+/** GET …/git/pr: the branch's pull request (GitHub) / merge request (GitLab). status: found | none | unavailable ([reason]). */
+@Serializable
+data class PrRead(val status: String = "unavailable", val forge: String? = null, val reason: String? = null, val message: String? = null, val pr: PrInfo? = null)
+
+@Serializable
+data class PrInfo(
+    val forge: String = "github",
+    val number: Int = 0,
+    val url: String = "",
+    val title: String = "",
+    /** open | merged | closed */
+    val state: String = "open",
+    val draft: Boolean = false,
+    val target: String = "",
+    val head: String = "",
+    val review: PrReview = PrReview(),
+    val checks: List<PrCheck> = emptyList(),
+    val comments: List<PrComment> = emptyList(),
+)
+
+/** state: approved | changes | required | none; GitLab adds [got] of [need] approvals. */
+@Serializable
+data class PrReview(val state: String = "none", val by: List<String> = emptyList(), val got: Int? = null, val need: Int? = null)
+
+/** state: ok | bad | run | skip */
+@Serializable
+data class PrCheck(val name: String, val state: String = "run", val url: String? = null)
+
+@Serializable
+data class PrComment(val who: String = "", val body: String = "", val file: String? = null, val line: Int? = null, val url: String? = null)
+
+@Serializable
+data class PrCreateRequest(val title: String, val body: String, val target: String, val draft: Boolean,
+    /** The answers to the extension's questions: publish the branch / push its commits first. */
+    val publish: Boolean = false, val push: Boolean = false,
+    /** "Continue Without Pushing": made from what the remote already has. */
+    val skipPush: Boolean = false)
+
+/** opened | exists | publish_failed | unavailable ([reason]) */
+@Serializable
+data class PrCreateResult(val status: String = "unavailable", val url: String? = null, val number: Int? = null, val reason: String? = null, val message: String? = null,
+    /** status "ask": the extension's question first ("publish" | "push"), and how many commits to push. */
+    val ask: String? = null, val count: Int = 0)
+
+/** The Create form's start: by: agent | commits */
+@Serializable
+data class PrText(val title: String = "", val body: String = "", val by: String = "commits")
+
+/** POST …/git/publish-new: the new repo's URL, or why not (bad | no_cli | not_authed | error). */
+@Serializable
+data class PublishNewResult(val ok: Boolean = false, val url: String? = null, val reason: String? = null, val message: String? = null)
+
+/** #72 GET …/git/pr/base: can a PR/MR into [target] be opened (on origin? here? how far ahead?). */
+@Serializable
+data class PrBaseCheck(val target: String = "", val onRemote: Boolean = false, val ahead: Int? = null)
+
+@Serializable
+internal data class RemoteBody(val name: String, val url: String)
+
+@Serializable
+internal data class PublishToBody(val remote: String)
+@Serializable
+internal data class PublishNewBody(val forge: String, val visibility: String, val name: String? = null)
+
+@Serializable
+data class PrCheckLog(val ok: Boolean = false, val log: String? = null, val reason: String? = null, val message: String? = null)
 
 /** The list in the shape the pane already renders: every file [DiffFile.lazy], no patch. */
 fun ChangesResult.toFsDiffResult(): FsDiffResult = FsDiffResult(
@@ -1272,10 +1563,10 @@ fun ChangesResult.toFsDiffResult(): FsDiffResult = FsDiffResult(
                 DiffFile(
                     path = f.path, status = f.status, binary = f.binary,
                     added = f.added, removed = f.removed, oldPath = f.oldPath,
-                    baseBlob = f.baseBlob, size = f.size, lazy = true, staged = f.staged,
+                    baseBlob = f.baseBlob, size = f.size, lazy = true, staged = f.staged, indexBlob = f.indexBlob,
                 )
             },
-            baseSha = r.baseSha, truncated = r.truncated, total = r.total, error = r.error,
+            baseSha = r.baseSha, truncated = r.truncated, total = r.total, error = r.error, merging = r.merging,
         )
     },
     comments = comments,
@@ -1558,12 +1849,12 @@ data class AccountRemovalPlanDto(
 /** GET/PUT /settings/accounts. [autoSwitch]: move a session to another account on a usage limit (default off).
  *  [autoResume] (#92): when every account is out, wait for the first reset and carry on (default on). */
 @Serializable
-data class AccountsSettingsDto(val autoSwitch: Boolean = false, val autoResume: Boolean = true)
+data class AccountsSettingsDto(val autoSwitch: Boolean = false, val autoResume: Boolean = true, val compactBeforeWait: Boolean = false)
 
 /** PUT /settings/accounts body: only the toggle being written. A null field is left out (explicitNulls=false),
  *  so writing one never resets the other (encodeDefaults would send its default). */
 @Serializable
-private data class AccountsSettingsPatch(val autoSwitch: Boolean? = null, val autoResume: Boolean? = null)
+private data class AccountsSettingsPatch(val autoSwitch: Boolean? = null, val autoResume: Boolean? = null, val compactBeforeWait: Boolean? = null)
 
 /** POST /sessions/<id>/account → the session's account after the switch. */
 @Serializable
@@ -1698,10 +1989,20 @@ private data class ReasoningLevelBody(val reasoningLevel: String)
 private data class FastModeBody(val fastMode: Boolean)
 
 @Serializable
+private data class CompactBody(val note: String? = null)
+
+@Serializable
 private data class RenameBody(val name: String)
 
 @Serializable
 private data class MuteBody(val muted: Boolean)
+
+/** #143: a prompt's answer as `POST /sessions/<id>/requests/<requestId>` takes it. */
+@Serializable
+private data class OptionAnswer(val optionId: String)
+
+@Serializable
+private data class RequestAnswerBody(val answer: OptionAnswer)
 
 @Serializable
 private data class CreateProxyBody(val sessionName: String, val port: Int, val domain: String? = null)
@@ -1715,17 +2016,14 @@ private data class AddDeviceBody(val name: String)
 @Serializable
 private data class FinishBody(
     val action: String? = null,
-    val skipVerify: Boolean? = null,
     val commitFirst: Boolean? = null,
     val commitMessage: String? = null,
     val prTitle: String? = null,
     val prBody: String? = null,
     val draft: Boolean? = null,
-    val prRequiresGreen: Boolean? = null,
+    /** #72: never archive the chat after a merge. */
+    val keep: Boolean? = null,
 )
-
-@Serializable
-private data class VerifySaveBody(val content: String)
 
 @Serializable
 private data class MessageBody(val text: String)
@@ -1807,6 +2105,9 @@ private data class OpenCodeOAuthStartBody(val providerId: String, val method: In
 @Serializable
 private data class OpenCodeOAuthFinishBody(val providerId: String, val method: Int, val code: String)
 
+@Serializable
+private data class GitPrefsBody(val gitPostCommit: String? = null, val gitSmartCommit: String? = null, val gitPrPush: String? = null)
+
 /** Partial PUT /settings/config body. explicitNulls=false omits unset fields, so
  *  this never clobbers config the caller didn't touch. */
 @Serializable
@@ -1881,7 +2182,12 @@ private data class WebPushKeys(val p256dh: String, val auth: String)
 /** POST /push/subscribe body. Field ORDER is the wire shape the broker validates by name;
  *  keep `endpoint` first and `keys` nested, never flattened. */
 @Serializable
-private data class WebPushSubscribeBody(val endpoint: String, val keys: WebPushKeys)
+private data class WebPushSubscribeBody(
+    val endpoint: String,
+    val keys: WebPushKeys,
+    /** #123: the app's language, so the broker words this device's notifications in it. Omitted when null. */
+    val lang: String? = null,
+)
 
 /** POST /usage/refresh body. [force] is always encoded (the Kotlin default is true; the
  *  broker treats an omitted force as false). [providers] is omitted when null. */
@@ -2188,6 +2494,10 @@ class BrokerApi(
     suspend fun models(id: String): ModelsResponse =
         getJson("$httpBase/sessions/$id/models")
 
+    /** GET /sessions/<id>/context (#144): how full the context window is, what fills it, what this chat used. */
+    suspend fun sessionContext(id: String): SessionContextDto =
+        getJson("$httpBase/sessions/${urlEncode(id)}/context")
+
     /** GET /models?agent= — models for the launcher (no session). */
     suspend fun listModels(agent: String): LauncherModels =
         getJson("$httpBase/models?agent=${urlEncode(agent)}")
@@ -2234,6 +2544,10 @@ class BrokerApi(
     suspend fun switchReasoning(id: String, level: String) =
         postJson("$httpBase/sessions/$id/reasoning-level", ReasoningLevelBody(level))
 
+    /** #144 POST /sessions/<id>/compact {"note"?}: queued like a message (202). */
+    suspend fun compact(id: String, note: String? = null) =
+        postJson("$httpBase/sessions/${urlEncode(id)}/compact", CompactBody(note?.takeIf { it.isNotBlank() }))
+
     /** POST /sessions/<id>/fast-mode {"fastMode": ...} */
     suspend fun switchFastMode(id: String, fastMode: Boolean) =
         postJson("$httpBase/sessions/$id/fast-mode", FastModeBody(fastMode))
@@ -2245,6 +2559,13 @@ class BrokerApi(
     /** POST /sessions/<id>/mute {"muted": ...} */
     suspend fun setMute(id: String, muted: Boolean) =
         postJson("$httpBase/sessions/$id/mute", MuteBody(muted))
+
+    /**
+     * #143: POST /sessions/<id>/requests/<requestId> — answer an agent's prompt with one of its options, without the
+     * WebSocket (a notification's Allow / Deny with the app closed). Non-2xx throws: 409 means the prompt is gone.
+     */
+    suspend fun answerRequest(sessionId: String, requestId: String, optionId: String) =
+        postJson("$httpBase/sessions/${sessionId.encodeURLPathPart()}/requests/${requestId.encodeURLPathPart()}", RequestAnswerBody(OptionAnswer(optionId)))
 
     /** POST /sessions/<id>/read — advance last_read_at to now (broadcasts `session_read`). */
     suspend fun markSessionRead(id: String) {
@@ -2522,6 +2843,10 @@ class BrokerApi(
         })
     }
 
+    /** PUT /settings/config with only #72's git preferences (null: unchanged). */
+    suspend fun saveGitPrefs(postCommit: String? = null, smartCommit: String? = null, prPush: String? = null) =
+        putJson("$httpBase/settings/config", GitPrefsBody(postCommit, smartCommit, prPush))
+
     /** GET /settings/config */
     suspend fun getConfig(): AppConfigDto =
         getJson("$httpBase/settings/config")
@@ -2740,6 +3065,14 @@ class BrokerApi(
             authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(AccountsSettingsPatch(autoResume = enabled)))
+        })
+
+    /** PUT /settings/accounts {compactBeforeWait} (#146). */
+    suspend fun setAccountsCompactBeforeWait(enabled: Boolean): AccountsSettingsDto =
+        decode(http.put("$httpBase/settings/accounts") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(AccountsSettingsPatch(compactBeforeWait = enabled)))
         })
 
     /** DELETE /sessions/<id>/limit-wait — the session no longer resumes by itself (#92). */
@@ -3039,17 +3372,152 @@ class BrokerApi(
     }
 
     /** GET /sessions/<id>/git/status */
-    suspend fun gitStatus(id: String): GitRemoteStatus =
-        getJson("$httpBase/sessions/$id/git/status")
+    suspend fun gitStatus(id: String): GitRemoteStatus = gitStatus("sessions", id)
 
-    private suspend fun gitOp(id: String, op: String): GitOpResult =
-        decode(http.post("$httpBase/sessions/$id/git/$op") {
+    /** GET /<sessions|workspaces>/<id>/git/status (#72: a chat in a folder has it too). */
+    suspend fun gitStatus(scope: String, id: String): GitRemoteStatus =
+        getJson("$httpBase/$scope/$id/git/status")
+
+    /** POST /<sessions|workspaces>/<id>/git/<fetch|publish|push|pull> */
+    suspend fun gitOp(scope: String, id: String, op: String): GitOpResult =
+        decode(http.post("$httpBase/$scope/$id/git/$op") {
             authHeader()
         })
-    suspend fun gitFetch(id: String): GitOpResult = gitOp(id, "fetch")
-    suspend fun gitPublish(id: String): GitOpResult = gitOp(id, "publish")
-    suspend fun gitPush(id: String): GitOpResult = gitOp(id, "push")
-    suspend fun gitPull(id: String): GitOpResult = gitOp(id, "pull")
+
+    /** POST …/git/publish to a remote picked (VS Code's Publish Branch with several remotes). */
+    suspend fun gitPublishTo(scope: String, id: String, remote: String): GitOpResult =
+        decode(http.post("$httpBase/$scope/$id/git/publish") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(PublishToBody(remote)))
+        })
+    suspend fun gitFetch(id: String): GitOpResult = gitOp("sessions", id, "fetch")
+    suspend fun gitPublish(id: String): GitOpResult = gitOp("sessions", id, "publish")
+    suspend fun gitPush(id: String): GitOpResult = gitOp("sessions", id, "push")
+    suspend fun gitPull(id: String): GitOpResult = gitOp("sessions", id, "pull")
+
+    // ── #72 Source Control: every write answers, a refusal (4xx) included, so the pane can say why ──
+
+    private suspend inline fun <reified R> answer(url: String, body: String, fallback: (String) -> R): R {
+        val resp = http.post(url) {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(body)
+        }
+        val text = resp.bodyAsText()
+        // The router's plain "not found" (no JSON): this broker predates the route, so say that, not "not found".
+        if (resp.status == HttpStatusCode.NotFound && !text.trimStart().startsWith("{")) return fallback(ROUTE_MISSING)
+        return runCatching { json.decodeFromString<R>(text) }.getOrElse { fallback(text.take(200)) }
+    }
+
+    /** POST /<sessions|workspaces>/<id>/git/<commit|uncommit|resolve|abort> */
+    suspend fun gitWrite(scope: String, id: String, op: String, body: CommitRequest): GitWriteResult =
+        answer("$httpBase/$scope/$id/git/$op", json.encodeToString(body)) { GitWriteResult(reason = "failed", message = it) }
+
+    /** POST /<sessions|workspaces>/<id>/git/discard */
+    suspend fun gitDiscard(scope: String, id: String, body: DiscardRequest): GitWriteResult =
+        answer("$httpBase/$scope/$id/git/discard", json.encodeToString(body)) { GitWriteResult(reason = "failed", message = it) }
+
+    /** GET /<sessions|workspaces>/<id>/git/history?repo= */
+    suspend fun gitHistory(scope: String, id: String, repo: String): GitHistory =
+        getJson("$httpBase/$scope/$id/git/history?repo=${urlEncode(repo)}")
+
+    /** POST /sessions/<id>/git/latest: the chat's base merged in. */
+    suspend fun gitLatest(sessionId: String): LatestResult =
+        answer("$httpBase/sessions/$sessionId/git/latest", "{}") { LatestResult(message = it) }
+
+    /** POST /sessions/<id>/git/latest/undo: back to [before], only while the branch is still at [after]. */
+    suspend fun gitLatestUndo(sessionId: String, before: String, after: String): GitWriteResult =
+        answer("$httpBase/sessions/$sessionId/git/latest/undo", json.encodeToString(UndoLatestBody(before, after))) { GitWriteResult(reason = "failed", message = it) }
+
+    /** GET /sessions/<id>/git/branches */
+    suspend fun gitBranches(sessionId: String): GitBranches =
+        getJson("$httpBase/sessions/$sessionId/git/branches")
+
+    /** GET /projects/branches?dir= (#152): the project folder's branches, each with where it is open. */
+    suspend fun projectBranches(dir: String): GitBranches =
+        getJson("$httpBase/projects/branches?dir=${urlEncode(dir)}")
+
+    /** GET /projects/folder-state?dir= (#152) */
+    suspend fun projectFolderState(dir: String): ProjectFolderState =
+        getJson("$httpBase/projects/folder-state?dir=${urlEncode(dir)}")
+
+    /** POST /projects/switch (#152): the project folder to [name], only when it is clean (else `dirty`). */
+    suspend fun projectSwitch(dir: String, name: String): GitSwitchResult =
+        answer("$httpBase/projects/switch", json.encodeToString(ProjectSwitchBody(dir, name))) { GitSwitchResult(message = it) }
+
+    /** GET /projects/prs?dir=&q= (#152): origin's open PRs / MRs, searched. */
+    suspend fun projectPrs(dir: String, q: String = ""): OpenPrList =
+        getJson("$httpBase/projects/prs?dir=${urlEncode(dir)}" + if (q.isBlank()) "" else "&q=${urlEncode(q.trim())}")
+
+    /** GET /projects/pr?dir=&ref= (#152): one by #N, !N, N or its URL. */
+    suspend fun projectPr(dir: String, ref: String): OpenPrRead =
+        getJson("$httpBase/projects/pr?dir=${urlEncode(dir)}&ref=${urlEncode(ref.trim())}")
+
+    /** GET /settings/branch-prefix (#152) */
+    suspend fun branchPrefixSetting(): BranchPrefixSetting = getJson("$httpBase/settings/branch-prefix")
+
+    /**
+     * PUT /settings/branch-prefix (#152): [prefix] null = back to automatic, "" = none. The null goes as JSON null. A
+     * 400 is a prefix git won't take: [BranchPrefixSetting.refused], so the page can say that rather than "no answer".
+     */
+    suspend fun setBranchPrefixSetting(prefix: String?): BranchPrefixSetting {
+        val resp = http.put("$httpBase/settings/branch-prefix") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(if (prefix == null) "{\"branchPrefix\":null}" else json.encodeToString(BranchPrefixSetting(branchPrefix = prefix)))
+        }
+        if (resp.status.value == 400) return BranchPrefixSetting(refused = true)
+        return decode(resp)
+    }
+
+    /** GET /projects/prefs?dir= (#152) */
+    suspend fun projectPrefs(dir: String): ProjectPrefs =
+        getJson("$httpBase/projects/prefs?dir=${urlEncode(dir)}")
+
+    /** PUT /projects/prefs (#152): remembers the user's pick; answers the prefs as they now are. */
+    suspend fun setProjectPrefs(dir: String, workIn: String? = null, branchPrefix: String? = null): ProjectPrefs =
+        decode(http.put("$httpBase/projects/prefs") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(ProjectPrefsPatch(dir, workIn, branchPrefix)))
+        })
+
+    /** POST /sessions/<id>/git/switch: to a branch, or a new one ([create]). */
+    suspend fun gitSwitch(sessionId: String, name: String, create: Boolean): GitSwitchResult =
+        answer("$httpBase/sessions/$sessionId/git/switch", json.encodeToString(SwitchBody(name, create))) { GitSwitchResult(message = it) }
+
+    /** GET /<sessions|workspaces>/<id>/git/pr[?fresh=1] */
+    suspend fun gitPr(scope: String, id: String, fresh: Boolean = false): PrRead =
+        getJson("$httpBase/$scope/$id/git/pr" + if (fresh) "?fresh=1" else "")
+
+    /** POST /<sessions|workspaces>/<id>/git/pr: opens it (the branch is published first when it must be). */
+    suspend fun gitPrCreate(scope: String, id: String, body: PrCreateRequest): PrCreateResult =
+        answer("$httpBase/$scope/$id/git/pr", json.encodeToString(body)) { PrCreateResult(message = it) }
+
+    /** POST /<sessions|workspaces>/<id>/git/pr/ready */
+    suspend fun gitPrReady(scope: String, id: String, number: Int): GitWriteResult =
+        answer("$httpBase/$scope/$id/git/pr/ready", json.encodeToString(PrNumberBody(number))) { GitWriteResult(reason = "failed", message = it) }
+
+    /** POST /<sessions|workspaces>/<id>/git/pr/text: the title and description for the Create form. */
+    suspend fun gitPrText(scope: String, id: String, target: String?): PrText =
+        answer("$httpBase/$scope/$id/git/pr/text", json.encodeToString(PrTextBody(target))) { PrText() }
+
+    /** POST /<sessions|workspaces>/<id>/git/remote: add a remote (reason exists | bad on a refusal). */
+    suspend fun gitAddRemote(scope: String, id: String, name: String, url: String): GitWriteResult =
+        answer("$httpBase/$scope/$id/git/remote", json.encodeToString(RemoteBody(name, url))) { GitWriteResult(reason = "failed", message = it) }
+
+    /** POST /<sessions|workspaces>/<id>/git/publish-new: create the repo on GitHub / GitLab from this folder and push. */
+    suspend fun gitPublishNew(scope: String, id: String, forge: String, visibility: String, name: String? = null): PublishNewResult =
+        answer("$httpBase/$scope/$id/git/publish-new", json.encodeToString(PublishNewBody(forge, visibility, name))) { PublishNewResult(message = it) }
+
+    /** GET /<sessions|workspaces>/<id>/git/pr/base?target=: the extension's two checks; no target: the default one. */
+    suspend fun gitPrBase(scope: String, id: String, target: String?, fresh: Boolean = false): PrBaseCheck =
+        getJson("$httpBase/$scope/$id/git/pr/base?target=${urlEncode(target.orEmpty())}" + if (fresh) "&fresh=1" else "")
+
+    /** GET /<sessions|workspaces>/<id>/git/pr/check-log?url=: a failing check's log tail. */
+    suspend fun gitPrCheckLog(scope: String, id: String, checkUrl: String): PrCheckLog =
+        getJson("$httpBase/$scope/$id/git/pr/check-log?url=${urlEncode(checkUrl)}")
 
     /**
      * POST /sessions/<id>/finish — kick off the finish job for the session branch.
@@ -3062,33 +3530,24 @@ class BrokerApi(
     suspend fun finish(
         id: String,
         action: String? = null,
-        skipVerify: Boolean? = null,
         commitFirst: Boolean? = null,
         commitMessage: String? = null,
         prTitle: String? = null,
         prBody: String? = null,
         draft: Boolean? = null,
-        prRequiresGreen: Boolean? = null,
+        keep: Boolean? = null,
     ): FinishResult =
         decode(http.post("$httpBase/sessions/$id/finish") {
             authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(FinishBody(
-                action, skipVerify, commitFirst, commitMessage, prTitle, prBody, draft, prRequiresGreen,
+                action, commitFirst, commitMessage, prTitle, prBody, draft, keep,
             )))
         })
 
     /** GET /sessions/<id>/finish/readiness — preflight for the finish menu. */
     suspend fun finishReadiness(id: String): FinishReadiness =
         getJson("$httpBase/sessions/$id/finish/readiness")
-
-    /** POST /sessions/<id>/verify/suggest → { content, source }. */
-    suspend fun verifySuggest(id: String): VerifySuggestResult =
-        postReturningJson("$httpBase/sessions/$id/verify/suggest", EmptyBody())
-
-    /** POST /sessions/<id>/verify/save {content} → { ok, reason? }. */
-    suspend fun verifySave(id: String, content: String): VerifySaveResult =
-        postReturningJson("$httpBase/sessions/$id/verify/save", VerifySaveBody(content))
 
     /** POST /sessions/<id>/message — post a message to the agent (e.g. a "Send to agent" fix request). */
     suspend fun sendMessage(id: String, text: String) {
@@ -3108,6 +3567,116 @@ class BrokerApi(
 
     suspend fun updatePA(id: String, isDefault: Boolean? = null, name: String? = null) =
         patchJson("$httpBase/api/pas/${urlEncode(id)}", UpdatePABody(isDefault, name))
+
+    /** GET /applets (#117): this host's applets, with their pins. */
+    suspend fun applets(): List<AppletDto> =
+        getJson("$httpBase/applets")
+
+    /** GET an applet's icon ([AppletDto.iconUrl]) with this client's bearer: raw bytes, null on non-2xx. */
+    suspend fun appletIconBytes(applet: AppletDto): ByteArray? {
+        val path = applet.iconUrl ?: return null
+        val resp = http.get("$httpBase$path?v=${urlEncode(applet.updatedAt)}") { authHeader() }
+        return if (resp.status.isSuccess()) resp.bodyAsBytes() else null
+    }
+
+    /**
+     * POST /applets/<name>/pin or /unpin: the host's one list of sidebar applets. The broker's reason when it
+     * refuses (the grid is full, the applet is gone) is the error message.
+     */
+    suspend fun pinApplet(name: String, pinned: Boolean) {
+        val resp = http.post("$httpBase/applets/${urlEncode(name)}/${if (pinned) "pin" else "unpin"}") { authHeader() }
+        if (!resp.status.isSuccess()) {
+            val body = resp.bodyAsText()
+            throw IllegalStateException(
+                runCatching { json.parseToJsonElement(body).jsonObject["error"]?.jsonPrimitive?.contentOrNull }.getOrNull() ?: "HTTP ${resp.status.value}",
+            )
+        }
+    }
+
+    /** GET /applets/<name>: Applet info. */
+    suspend fun appletDetail(name: String): AppletDetailDto =
+        getJson("$httpBase/applets/${urlEncode(name)}")
+
+    /** One owner call on an applet; the broker's reason when it refuses is the exception's message. */
+    private suspend fun appletCall(resp: HttpResponse): String {
+        val body = resp.bodyAsText()
+        if (!resp.status.isSuccess()) {
+            throw IllegalStateException(
+                runCatching { json.parseToJsonElement(body).jsonObject["error"]?.jsonPrimitive?.contentOrNull }.getOrNull() ?: "HTTP ${resp.status.value}",
+            )
+        }
+        return body
+    }
+
+    /** POST /applets/<name>/jobs/<job>/run: runs it now and waits for its end. */
+    suspend fun runAppletJob(name: String, job: String): AppletJobRunDto =
+        json.decodeFromString(AppletJobRunDto.serializer(), appletCall(http.post("$httpBase/applets/${urlEncode(name)}/jobs/${urlEncode(job)}/run") { authHeader() }))
+
+    /** GET /applets/<name>/jobs/<job>/runs: its last runs, newest first. */
+    suspend fun appletJobRuns(name: String, job: String): List<AppletJobRunDto> =
+        getJson("$httpBase/applets/${urlEncode(name)}/jobs/${urlEncode(job)}/runs")
+
+    /** PUT /applets/<name>/secrets/<secret> (owner only): the value goes to the applet's server and jobs, never back here. */
+    suspend fun setAppletSecret(name: String, secret: String, value: String, expiresAt: String? = null) {
+        appletCall(http.put("$httpBase/applets/${urlEncode(name)}/secrets/${urlEncode(secret)}") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(AppletValueBody.serializer(), AppletValueBody(value, expiresAt)))
+        })
+    }
+
+    suspend fun removeAppletSecret(name: String, secret: String) {
+        appletCall(http.delete("$httpBase/applets/${urlEncode(name)}/secrets/${urlEncode(secret)}") { authHeader() })
+    }
+
+    /** PUT /applets/<name>/settings/<key>: a value for one of the applet's own options. */
+    suspend fun setAppletSetting(name: String, key: String, value: String) {
+        appletCall(http.put("$httpBase/applets/${urlEncode(name)}/settings/${urlEncode(key)}") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(AppletValueBody.serializer(), AppletValueBody(value)))
+        })
+    }
+
+    /** PATCH /applets/<name> {title}: Settings ▸ Name. */
+    suspend fun setAppletTitle(name: String, title: String) {
+        appletCall(http.patch("$httpBase/applets/${urlEncode(name)}") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(AppletTitleBody.serializer(), AppletTitleBody(title)))
+        })
+    }
+
+    /** POST /applets/<name>/stop or /start. */
+    suspend fun setAppletStopped(name: String, stopped: Boolean) {
+        appletCall(http.post("$httpBase/applets/${urlEncode(name)}/${if (stopped) "stop" else "start"}") { authHeader() })
+    }
+
+    /** POST /applets/<name>/ask: supermux.agent.ask, after his click in the applet's window. */
+    suspend fun askApplet(name: String, text: String, agent: String? = null): AppletAskResponse =
+        json.decodeFromString(AppletAskResponse.serializer(), appletCall(http.post("$httpBase/applets/${urlEncode(name)}/ask") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(AppletAskBody.serializer(), AppletAskBody(text, agent)))
+        }))
+
+    /** POST /applets/<name>/chat: the applet's own chat ("Change it in a chat"), made if needed. */
+    suspend fun appletChat(name: String): AppletAskResponse =
+        json.decodeFromString(AppletAskResponse.serializer(), appletCall(http.post("$httpBase/applets/${urlEncode(name)}/chat") { authHeader() }))
+
+    /** POST /applets/<name>/installs {where}: this device put the applet on its launcher. */
+    suspend fun addAppletInstall(name: String, where: String) {
+        appletCall(http.post("$httpBase/applets/${urlEncode(name)}/installs") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(AppletWhereBody.serializer(), AppletWhereBody(where)))
+        })
+    }
+
+    /** DELETE /applets/<name> (owner only): gone from every device, kept 30 days. */
+    suspend fun deleteApplet(name: String) {
+        appletCall(http.delete("$httpBase/applets/${urlEncode(name)}") { authHeader() })
+    }
 
     /** GET /proxies */
     suspend fun proxies(): List<ProxyDto> =
@@ -3956,11 +4525,11 @@ class BrokerApi(
      * That third case is exactly what the browser registrar needs, and it is why this method does
      * not follow the `Boolean` shape of its neighbours.
      */
-    suspend fun pushSubscribe(endpoint: String, p256dh: String, auth: String): Boolean? = try {
+    suspend fun pushSubscribe(endpoint: String, p256dh: String, auth: String, lang: String? = null): Boolean? = try {
         http.post("$httpBase/push/subscribe") {
             authHeader()
             contentType(ContentType.Application.Json)
-            setBody(json.encodeToString(WebPushSubscribeBody(endpoint, WebPushKeys(p256dh, auth))))
+            setBody(json.encodeToString(WebPushSubscribeBody(endpoint, WebPushKeys(p256dh, auth), lang)))
         }.status.isSuccess()
     } catch (c: CancellationException) {
         throw c

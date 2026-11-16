@@ -1,5 +1,6 @@
 // src/core/git/remote.ts
 import { gitSync } from "./exec-sync"
+import { branchOfRef } from "./refs"
 import { dirtyFiles, mergeInProgress, syncBaseIntoBranch } from "./integrate"
 
 function git(cwd: string, args: string[], timeout = 120_000): { ok: boolean; out: string } {
@@ -8,7 +9,8 @@ function git(cwd: string, args: string[], timeout = 120_000): { ok: boolean; out
 
 export interface RemoteStatus {
   isRepo: boolean            // workdir is inside a git work tree
-  hasRemote: boolean         // an "origin" remote exists
+  hasRemote: boolean         // the repo has any remote (a fork's PR branch may have no "origin")
+  remotes: string[]          // their names: Publish asks which when there are several (VS Code)
   branch: string | null      // current branch, or null when detached
   detachedSha: string | null // short HEAD sha when detached (and isRepo)
   upstream: string | null    // e.g. "origin/mux/s", or null when unpublished
@@ -21,8 +23,9 @@ export function remoteStatus(workdir: string): RemoteStatus {
   const inside = git(workdir, ["rev-parse", "--is-inside-work-tree"])
   const isRepo = inside.ok && inside.out === "true"
 
-  const remotes = git(workdir, ["remote"])
-  const hasRemote = remotes.ok && remotes.out.split("\n").map((s) => s.trim()).includes("origin")
+  const list = git(workdir, ["remote"])
+  const remotes = list.ok ? list.out.split("\n").map((s) => s.trim()).filter(Boolean) : []
+  const hasRemote = remotes.length > 0
 
   const br = git(workdir, ["symbolic-ref", "--quiet", "--short", "HEAD"])
   const branch = br.ok && br.out ? br.out : null
@@ -32,11 +35,11 @@ export function remoteStatus(workdir: string): RemoteStatus {
     detachedSha = sha.ok && sha.out ? sha.out : null
   }
 
-  if (!hasRemote || !branch) return { isRepo, hasRemote, branch, detachedSha, upstream: null, ahead: 0, behind: 0 }
+  if (!hasRemote || !branch) return { isRepo, hasRemote, remotes, branch, detachedSha, upstream: null, ahead: 0, behind: 0 }
 
   const up = git(workdir, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])
   const upstream = up.ok && up.out ? up.out : null
-  if (!upstream) return { isRepo, hasRemote, branch, detachedSha, upstream: null, ahead: 0, behind: 0 }
+  if (!upstream) return { isRepo, hasRemote, remotes, branch, detachedSha, upstream: null, ahead: 0, behind: 0 }
 
   const counts = git(workdir, ["rev-list", "--count", "--left-right", "@{upstream}...HEAD"])
   let ahead = 0, behind = 0
@@ -45,12 +48,22 @@ export function remoteStatus(workdir: string): RemoteStatus {
     behind = Number(b) || 0
     ahead = Number(a) || 0
   }
-  return { isRepo, hasRemote, branch, detachedSha, upstream, ahead, behind }
+  return { isRepo, hasRemote, remotes, branch, detachedSha, upstream, ahead, behind }
 }
 
-/** Refresh remote-tracking refs from origin (best-effort, timeboxed). */
-export function fetchRemote(workdir: string): { ok: boolean; error?: string } {
-  const r = git(workdir, ["fetch", "origin", "--prune"], 30_000)
+/** The branch's upstream as its remote and its branch there ("origin" + "main"); null: not published. */
+function upstreamOf(workdir: string): { remote: string; name: string } | null {
+  const br = git(workdir, ["symbolic-ref", "--quiet", "--short", "HEAD"])
+  if (!br.ok || !br.out) return null
+  const remote = git(workdir, ["config", `branch.${br.out}.remote`])
+  const merge = git(workdir, ["config", `branch.${br.out}.merge`])
+  if (!remote.ok || !merge.ok || !remote.out || remote.out === ".") return null
+  return { remote: remote.out, name: branchOfRef(merge.out) }
+}
+
+/** Refresh remote-tracking refs (best-effort, timeboxed): the branch's own remote, else origin. */
+export function fetchRemote(workdir: string, remote?: string): { ok: boolean; error?: string } {
+  const r = git(workdir, ["fetch", remote ?? upstreamOf(workdir)?.remote ?? "origin", "--prune"], 30_000)
   return r.ok ? { ok: true } : { ok: false, error: r.out }
 }
 
@@ -82,14 +95,25 @@ function doPush(workdir: string, extra: string[]): PushResult {
   return { status: "error", message: r.out }
 }
 
-/** First push of an unpublished branch: pushes HEAD to origin and sets upstream. */
-export function publishBranch(workdir: string): PushResult {
-  return doPush(workdir, ["-u", "origin", "HEAD"])
+/** The remote Publish uses unless one is picked: the only one, else origin, else the first. */
+export function defaultRemote(workdir: string): string {
+  const list = git(workdir, ["remote"])
+  const remotes = list.ok ? list.out.split("\n").map((s) => s.trim()).filter(Boolean) : []
+  return remotes.length === 1 ? remotes[0]! : remotes.includes("origin") ? "origin" : remotes[0] ?? "origin"
 }
 
-/** Push an already-published branch to its upstream. */
+/** Publish Branch (VS Code): `push -u <remote> <branch>`, only the current branch; the remote is the one picked. */
+export function publishBranch(workdir: string, remote?: string): PushResult {
+  const r = remote ?? defaultRemote(workdir)
+  if (r.startsWith("-")) return { status: "error", message: `bad remote: ${r}` }
+  return doPush(workdir, ["-u", r, "HEAD"])
+}
+
+/** Push a published branch to its own upstream, by name (VS Code's `<remote> <local>:<upstream>`): an upstream with
+ *  another name is pushed to, not refused by push.default=simple. */
 export function pushBranch(workdir: string): PushResult {
-  return doPush(workdir, [])
+  const up = upstreamOf(workdir)
+  return up ? doPush(workdir, [up.remote, `HEAD:refs/heads/${up.name}`]) : doPush(workdir, [])
 }
 
 export type PullResult =

@@ -61,6 +61,12 @@ WvFrames *wv_frames_lookup(int64_t view)
 
 static WvWeb *web_of(int64_t id) { return webs ? g_hash_table_lookup(webs, KEY(id)) : NULL; }
 
+int64_t wv_web_id(WebKitWebView *web)
+{
+    WvWeb *w = web ? g_object_get_data(G_OBJECT(web), "wv-web") : NULL;
+    return w && web_of(w->id) == w ? w->id : 0;
+}
+
 /* ---------------------------------------------------------------------------------------------------- signals */
 
 static void on_load_changed(WebKitWebView *web, WebKitLoadEvent event, WvWeb *w)
@@ -280,6 +286,7 @@ static void keep_damage_regions(WebKitSettings *settings)
 static int64_t web_create(WvOp *op)
 {
     WebKitNetworkSession *session = session_for((int)op->i[0], op->s[0]);
+    wv_downloads_watch(session);
     WebKitSettings *settings = webkit_settings_new();
     keep_damage_regions(settings);
     webkit_settings_set_javascript_can_open_windows_automatically(settings, FALSE);
@@ -661,6 +668,36 @@ static void web_clear_data(WvWeb *w, WvOp *op)
         NULL, on_cleared, c);
 }
 
+static void on_cookie_added(GObject *source, GAsyncResult *result, gpointer data)
+{
+    WvClear *c = data;
+    GError *error = NULL;
+    gboolean ok = webkit_cookie_manager_add_cookie_finish(WEBKIT_COOKIE_MANAGER(source), result, &error);
+    wv_emit(c->view, WV_EV_COOKIE_SET, c->request, ok ? 1 : 0, NULL, error ? error->message : NULL);
+    g_clear_error(&error);
+    g_free(c);
+}
+
+/* i[0] request, s[0] the cookie's URL, s[1] its Set-Cookie header (the JVM built and checked it). Into this view's network
+ * session's cookie manager: a Named profile's session is its engines' shared one, so every engine of it sees the cookie. */
+static void web_set_cookie(WvWeb *w, WvOp *op)
+{
+    GUri *origin = op->s[0] ? g_uri_parse(op->s[0], G_URI_FLAGS_NONE, NULL) : NULL;
+    SoupCookie *cookie = origin && op->s[1] ? soup_cookie_parse(op->s[1], origin) : NULL;
+    if (origin)
+        g_uri_unref(origin);
+    if (!cookie) {
+        wv_emit(w->id, WV_EV_COOKIE_SET, op->i[0], 0, NULL, "webview-wpe: not a cookie for that URL");
+        return;
+    }
+    WvClear *c = g_new0(WvClear, 1);
+    c->view = w->id;
+    c->request = op->i[0];
+    WebKitNetworkSession *session = webkit_web_view_get_network_session(w->web);
+    webkit_cookie_manager_add_cookie(webkit_network_session_get_cookie_manager(session), cookie, NULL, on_cookie_added, c);
+    soup_cookie_free(cookie);
+}
+
 /* ------------------------------------------------------------------------------------------------ operations */
 
 WvOp *wv_op_new(int op, int64_t view)
@@ -734,6 +771,9 @@ static gboolean op_run(gpointer data)
     case WV_OP_CLIPBOARD:
         wv_clipboard_set_system(op->s[0]);
         break;
+    case WV_OP_DOWNLOAD:
+        wv_download_op(op->i[0], (int)op->i[1], op->s[0]);
+        break;
     default:
         if (!w)
             break; /* the view is gone */
@@ -766,6 +806,7 @@ static gboolean op_run(gpointer data)
         case WV_OP_IME: web_ime(w, op); break;
         case WV_OP_TERMINATE: webkit_web_view_terminate_web_process(w->web); break;
         case WV_OP_CLEAR_DATA: web_clear_data(w, op); break;
+        case WV_OP_SET_COOKIE: web_set_cookie(w, op); break;
         case WV_OP_ANSWER: wv_client_answer(op->i[0], op->i[1] != 0, op->s[0], op->strv); break;
         default: break;
         }

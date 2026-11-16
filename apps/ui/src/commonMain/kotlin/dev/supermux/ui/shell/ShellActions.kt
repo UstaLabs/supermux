@@ -30,8 +30,6 @@ import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.ReviewComment
 import dev.supermux.net.ReviewSubmitResult
 import dev.supermux.net.TerminalClient
-import dev.supermux.net.VerifySaveResult
-import dev.supermux.net.VerifySuggestResult
 import dev.supermux.net.Walkthrough
 import dev.supermux.proto.FinishJobDto
 import dev.supermux.proto.ServerFrame
@@ -91,7 +89,7 @@ class ShellActions(
     // ── git ops (the header menus' Fetch / Pull / Push / Publish) ─────────────────────────────
     /**
      * Each returns the broker's [GitOpResult], or null when the op failed / no host owns the
-     * session. The menus turn that into a label ([dev.supermux.chat.gitOpResultLabel] inline on a
+     * session. The menus turn that into a label ([gitOpResultLabel] inline on a
      * pointer, [gitOpResultText] through `Platform.notices` under touch) — never into a throw.
      */
     val gitFetch: suspend (sessionId: String) -> GitOpResult? = { null },
@@ -101,21 +99,6 @@ class ShellActions(
 
     // ── finish flow ───────────────────────────────────────────────────────────────────────────
     val finishReadiness: suspend (sessionId: String) -> FinishReadiness? = { null },
-    /**
-     * Fire-and-forget finish kickoff on the STORE's scope (never the pane's): switching views
-     * mid-kickoff must not cancel the POST. [onKickoff] reports only whether it was ACCEPTED.
-     */
-    val kickoffFinish: (
-        sessionId: String,
-        action: String,
-        skipVerify: Boolean?,
-        commitFirst: Boolean?,
-        commitMessage: String?,
-        onKickoff: (Boolean) -> Unit,
-    ) -> Unit = { _, _, _, _, _, done -> done(false) },
-    val clearFinishJob: (sessionId: String) -> Unit = {},
-    val verifySuggest: suspend (sessionId: String) -> VerifySuggestResult? = { null },
-    val verifySave: suspend (sessionId: String, content: String) -> VerifySaveResult? = { _, _ -> null },
 
     // ── terminals ─────────────────────────────────────────────────────────────────────────────
     /** The agent's own PTY (the chat view's Chat⇄Native pill). Null = no host owns that session. */
@@ -132,6 +115,8 @@ class ShellActions(
     val workspaceFsWrite: suspend (workspaceId: String, path: String, content: String) -> Boolean =
         { _, _, _ -> false },
     val workspaceFsDiff: suspend (workspaceId: String, base: String?) -> FsDiffResult? = { _, _ -> null },
+    /** #72: the Source Control pane's broker calls for a workspace and its chat; null: no host has it. */
+    val sourceControl: (workspaceId: String, sessionId: String?) -> dev.supermux.state.SourceControlApi? = { _, _ -> null },
     /** #72: whole files into the next commit, or out of it; null: this host can't stage (no checkboxes). */
     val workspaceStage: (suspend (workspaceId: String, repo: String, paths: List<String>, staged: Boolean) -> Boolean)? = null,
     /** A lazy Changes file's base text by blob; null: this host can't load one (no Retry offered). */
@@ -211,17 +196,12 @@ fun rememberShellActions(
             gitPush = { app.gitPush(it) },
             gitPublish = { app.gitPublish(it) },
             finishReadiness = { app.finishReadiness(it) },
-            kickoffFinish = { id, action, skipVerify, commitFirst, commitMessage, onKickoff ->
-                app.kickoffFinish(id, action, skipVerify, commitFirst, commitMessage, onKickoff)
-            },
-            clearFinishJob = { app.clearFinishJob(it) },
-            verifySuggest = { app.verifySuggest(it) },
-            verifySave = { id, content -> app.verifySave(id, content) },
             connectAgentTerminal = { app.connectAgentTerminal(it) },
             connectTerminal = { id, terminalId -> app.connectTerminal(id, terminalId) },
             connectWorkspaceTerminal = { wsId, terminalId -> app.connectWorkspaceTerminal(wsId, terminalId) },
             workspaceFsRead = { wsId, path -> app.workspaceFsRead(wsId, path) },
             workspaceFsWrite = { wsId, path, content -> app.workspaceFsWrite(wsId, path, content) },
+            sourceControl = { wsId, sid -> app.sourceControl(wsId, sid) },
             workspaceStage = { wsId, repo, paths, staged -> app.workspaceStage(wsId, repo, paths, staged) },
             workspaceFsDiff = { wsId, base -> app.workspaceFsDiff(wsId, base) },
             workspaceChangesBlob = { wsId, repo, sha, force -> app.workspaceChangesBlob(wsId, repo, sha, force) },
@@ -277,17 +257,12 @@ fun rememberShellActions(fleet: FleetStore): ShellActions {
             gitPush = { fleet.gitPush(it) },
             gitPublish = { fleet.gitPublish(it) },
             finishReadiness = { fleet.finishReadiness(it) },
-            kickoffFinish = { id, action, skipVerify, commitFirst, commitMessage, onKickoff ->
-                fleet.finish(id, action, skipVerify, commitFirst, commitMessage, onKickoff = onKickoff)
-            },
-            clearFinishJob = { fleet.clearFinishJob(it) },
-            verifySuggest = { fleet.verifySuggest(it) },
-            verifySave = { id, content -> fleet.verifySave(id, content) },
             connectAgentTerminal = { fleet.connectAgentTerminal(it) },
             connectTerminal = { id, terminalId -> fleet.connectTerminal(id, terminalId) },
             connectWorkspaceTerminal = { wsId, terminalId -> fleet.connectWorkspaceTerminal(wsId, terminalId) },
             workspaceFsRead = { wsId, path -> fleet.workspaceFsRead(wsId, path) },
             workspaceFsWrite = { wsId, path, content -> fleet.workspaceFsWrite(wsId, path, content) },
+            sourceControl = { wsId, sid -> fleet.sourceControl(wsId, sid) },
             workspaceStage = { wsId, repo, paths, staged -> fleet.workspaceStage(wsId, repo, paths, staged) },
             workspaceFsDiff = { wsId, base -> fleet.workspaceFsDiff(wsId, base) },
             workspaceChangesBlob = { wsId, repo, sha, force -> fleet.workspaceChangesBlob(wsId, repo, sha, force) },

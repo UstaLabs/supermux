@@ -83,7 +83,7 @@ export class Registry {
     return healSessionsWithoutWorkspace(this.db, this.workspaces, ensureProject)
   }
 
-  register(input: { id?: string; name: string; workdir: string; tmux_target?: string; tmux_window_id?: string; pid: number; base_commit?: string; base_commits?: Record<string, string>; role?: SessionRole; is_default?: boolean; internal?: boolean; connected?: boolean; parent_session_id?: string; workspace_id?: string } & Partial<Pick<Session, "mute" | "can_orchestrate" | "agent" | "agent_session_id" | "agent_home" | "model" | "reasoningLevel" | "repo_root" | "base_branch" | "session_branch" | "core" | "permissionMode" | "account">>): Session {
+  register(input: { id?: string; name: string; workdir: string; tmux_target?: string; tmux_window_id?: string; pid: number; base_commit?: string; base_commits?: Record<string, string>; role?: SessionRole; is_default?: boolean; internal?: boolean; connected?: boolean; parent_session_id?: string; workspace_id?: string } & Partial<Pick<Session, "mute" | "can_orchestrate" | "agent" | "agent_session_id" | "agent_home" | "model" | "reasoningLevel" | "repo_root" | "base_branch" | "session_branch" | "core" | "permissionMode" | "account" | "source_kind" | "pr_forge" | "pr_number" | "pr_url" | "push_remote" | "created_by">>): Session {
     if (this.sessions.takenNames().has(input.name)) {
       throw new Error(`session name already in use: ${input.name}`)
     }
@@ -111,6 +111,12 @@ export class Registry {
       core: input.core,
       permissionMode: input.permissionMode ?? undefined,
       ...(input.account ? { account: input.account } : {}),
+      source_kind: input.source_kind,
+      pr_forge: input.pr_forge,
+      pr_number: input.pr_number,
+      pr_url: input.pr_url,
+      push_remote: input.push_remote,
+      created_by: input.created_by,
     })
     // A delegated child is linked to its parent, and hidden in the parent's workspace, in the same
     // synchronous call that creates its row: it is never listed or announced as a top-level session,

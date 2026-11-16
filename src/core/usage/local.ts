@@ -126,7 +126,20 @@ export function codexUsageFromRateLimits(rl: any, prev?: CodexUsage | null): Cod
   if (!body || typeof body !== "object") return null
 
   const primary = mapCodexWindow("primary", body.primary, "5-hour window")
-  if (!primary) return null
+  if (!primary) {
+    // #146: at the wall Codex sends `primary: null` with only its credits. That is the wall itself: keep the last
+    // windows, the 5-hour one full, rather than dropping the one frame that says the limit was hit.
+    if (body.primary !== null || !prev?.windows.length) return null
+    const creditsAtWall = body.credits && typeof body.credits === "object"
+      ? { hasCredits: Boolean(body.credits.hasCredits ?? body.credits.has_credits), balance: String(body.credits.balance ?? "0") }
+      : prev.credits
+    return {
+      ...prev,
+      windows: prev.windows.map((w) => (w.id === "primary" ? { ...w, used: 100 } : w)),
+      credits: creditsAtWall,
+      limitReached: true,
+    }
+  }
   const secondary = mapCodexWindow("secondary", body.secondary, "7-day window")
 
   const plan = body.planType ?? body.plan_type ?? body.plan ?? prev?.plan ?? "unknown"

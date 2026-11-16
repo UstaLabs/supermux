@@ -1,7 +1,10 @@
 package dev.supermux.android.push
 
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -58,7 +61,22 @@ object PushRouter {
         val session: String,
         val sessionId: String?,
         val text: String,
+        /** The broker that sent it (multi-host routing); null on an older or single-host broker. */
+        val hostId: String? = null,
+        /** #143: set for an agent's permission prompt, so the notification can answer it. */
+        val prompt: Prompt? = null,
+        /** #117: the applet that sent it (supermux.notify); its widgets are refreshed. */
+        val applet: String? = null,
     )
+
+    /** One answer a notification action sends. */
+    data class Answer(val id: String, val label: String)
+
+    /**
+     * #143: a permission prompt, as the notification answers it: one Allow (the one-off grant, never "always" from a
+     * lock screen) and one Reject. A question has free-form answers and gets no actions.
+     */
+    data class Prompt(val requestId: String, val allow: Answer?, val reject: Answer?)
 
     /**
      * Parse the decrypted plaintext of a sealed message into a [Notification].
@@ -73,16 +91,38 @@ object PushRouter {
         val sessionId = obj["sessionId"]?.jsonPrimitive?.contentOrNull
         val text = obj["text"]?.jsonPrimitive?.contentOrNull
             ?: mediaLabel(obj["kind"]?.jsonPrimitive?.contentOrNull)
-        return Notification(session = session, sessionId = sessionId, text = text)
+        return Notification(
+            session = session,
+            sessionId = sessionId,
+            text = text,
+            hostId = obj["hostId"]?.jsonPrimitive?.contentOrNull,
+            prompt = parsePrompt(obj["request"] as? JsonObject),
+            applet = obj["applet"]?.jsonPrimitive?.contentOrNull,
+        )
+    }
+
+    private fun parsePrompt(request: JsonObject?): Prompt? {
+        if (request == null) return null
+        if (request["kind"]?.jsonPrimitive?.contentOrNull != "permission") return null
+        val requestId = request["requestId"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: return null
+        val options = (request["options"] as? JsonArray).orEmpty().mapNotNull { o ->
+            val row = o as? JsonObject ?: return@mapNotNull null
+            val id = row["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            Answer(id, row["label"]?.jsonPrimitive?.contentOrNull ?: id)
+        }
+        val allow = options.firstOrNull { it.id == "allow_once" } ?: options.firstOrNull { it.id.startsWith("allow") && it.id != "allow_always" }
+        val reject = options.firstOrNull { it.id == "reject_once" } ?: options.firstOrNull { it.id.startsWith("reject") }
+        if (allow == null && reject == null) return null
+        return Prompt(requestId, allow, reject)
     }
 
     private fun mediaLabel(kind: String?): String = when (kind) {
-        "photo" -> "Sent a photo"
-        "voice" -> "Sent a voice message"
-        "audio" -> "Sent audio"
-        "video_note" -> "Sent a video note"
-        "document" -> "Sent a document"
-        else -> "New message"
+        "photo" -> localized(Str.host_app_android_push_photo)
+        "voice" -> localized(Str.host_app_android_push_voice)
+        "audio" -> localized(Str.host_app_android_push_audio)
+        "video_note" -> localized(Str.host_app_android_push_video_note)
+        "document" -> localized(Str.host_app_android_push_document)
+        else -> localized(Str.notify_new_message)
     }
 
     private fun parseObjectOrNull(s: String): JsonObject? {

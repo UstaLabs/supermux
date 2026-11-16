@@ -1,5 +1,7 @@
 package dev.supermux.ui.terminal
 
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.Str
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -87,7 +89,7 @@ internal fun TerminalSearchBar(search: TerminalSearchState, modifier: Modifier =
         ) {
             Box(Modifier.width(170.dp), contentAlignment = Alignment.CenterStart) {
                 if (field.text.isEmpty()) {
-                    Text("Find", color = cs.onSurfaceVariant, fontSize = 13.sp, fontFamily = MonoFontFamily)
+                    Text(localized(Str.keys_cmd_find), color = cs.onSurfaceVariant, fontSize = 13.sp, fontFamily = MonoFontFamily)
                 }
                 BasicTextField(
                     value = field,
@@ -137,9 +139,9 @@ internal fun TerminalSearchBar(search: TerminalSearchState, modifier: Modifier =
                 modifier = Modifier.widthIn(min = 48.dp).padding(horizontal = 4.dp).testTag(TERMINAL_SEARCH_COUNT_TAG),
             )
             CaseToggle(on = !search.ignoreCase) { search.ignoreCase = !search.ignoreCase }
-            BarIcon(Icons.Filled.KeyboardArrowUp, "Previous match", "terminal_search_prev") { search.previous() }
-            BarIcon(Icons.Filled.KeyboardArrowDown, "Next match", "terminal_search_next") { search.next() }
-            BarIcon(Icons.Filled.Close, "Close find", "terminal_search_close") { search.close() }
+            BarIcon(Icons.Filled.KeyboardArrowUp, localized(Str.terminal_previous_match), "terminal_search_prev") { search.previous() }
+            BarIcon(Icons.Filled.KeyboardArrowDown, localized(Str.terminal_next_match), "terminal_search_next") { search.next() }
+            BarIcon(Icons.Filled.Close, localized(Str.terminal_close_find), "terminal_search_close") { search.close() }
         }
     }
 }
@@ -189,7 +191,7 @@ private class TerminalFind {
 internal fun searchCountLabel(search: TerminalSearchState): String = when {
     search.query.isEmpty() -> ""
     search.searching && search.matches.isEmpty() -> "…"
-    search.matches.isEmpty() -> "No results"
+    search.matches.isEmpty() -> localized(Str.terminal_no_results)
     else -> {
         val position = if (search.current >= 0) "${search.current + 1}" else "–"
         "$position/${search.matches.size}${if (search.truncated) "+" else ""}"
@@ -208,7 +210,7 @@ private fun CaseToggle(on: Boolean, onClick: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            "Aa",
+            "Aa", // i18n-ok: the match-case glyph, the same in every language
             color = if (on) cs.primary else cs.onSurfaceVariant,
             fontSize = 12.sp,
             fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,

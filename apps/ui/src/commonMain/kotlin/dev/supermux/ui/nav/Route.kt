@@ -43,6 +43,8 @@ sealed interface Route {
         val draftId: String = "",
         val projectHostId: String = "",
         val projectId: String = "",
+        /** #152: a pull / merge request of [projectId] to work on (#72's "Check Out Pull Request…"); 0 = none. */
+        val prNumber: Int = 0,
     ) : Route
 
     @Serializable
@@ -91,6 +93,25 @@ sealed interface Route {
     @Serializable
     @SerialName("displays")
     data object Displays : Route
+
+    /** #117: All applets, a plain icon grid of the host picker's host's applets. */
+    @Serializable
+    @SerialName("applets")
+    data object Applets : Route
+
+    /** #117: one applet's Applet info, at [tab] (overview, data, jobs, secrets, settings; blank = overview). */
+    @Serializable
+    @SerialName("applet_info")
+    data class AppletInfo(val name: String = "", val tab: String = "") : Route
+
+    /**
+     * #117: an applet itself, as a screen of the app (iPhone and iPad, whose one window has no room for an applet
+     * window of its own): back and the edge swipe leave it, like every other full screen. [hostId] is the host
+     * record whose broker serves it (a widget or Spotlight may name another host than the picker's).
+     */
+    @Serializable
+    @SerialName("applet")
+    data class Applet(val hostId: String = "", val name: String = "") : Route
 
     // Appearance and the updater's page are General's rows since #97 (`openSettings(General)`,
     // `ShellUiState.openAppUpdate`); a saved back stack naming them decodes to Home.

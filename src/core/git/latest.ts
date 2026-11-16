@@ -10,7 +10,7 @@ import { gitAsync } from "./exec"
 import { freshBase } from "../worktree/manager"
 
 export type LatestResult =
-  | { status: "clean"; from: string; commits: number }
+  | { status: "clean"; from: string; commits: number; before: string; after: string }
   | { status: "up_to_date"; from: string }
   | { status: "conflict"; from: string; files: string[] }
   | { status: "failed"; message: string }
@@ -33,9 +33,10 @@ export async function getLatest(dir: string, repoRoot: string, base: string): Pr
   const from = await freshBase(repoRoot, base)
   const commits = Number(await gitAsync(dir, ["rev-list", "--count", `HEAD..${from}`]).catch(() => "0")) || 0
   if (!commits) return { status: "up_to_date", from }
+  const before = await gitAsync(dir, ["rev-parse", "HEAD"])
   try {
     await gitAsync(dir, ["merge", "--no-edit", from], { timeoutMs: 120_000, env: { ...process.env, GIT_EDITOR: "true" } })
-    return { status: "clean", from, commits }
+    return { status: "clean", from, commits, before, after: await gitAsync(dir, ["rev-parse", "HEAD"]) }
   } catch (err) {
     const files = await unmerged(dir)
     if (files.length) return { status: "conflict", from, files }
@@ -73,4 +74,25 @@ export async function resolveConflict(dir: string, path: string, side: Side): Pr
 
 export async function abortMerge(dir: string): Promise<void> {
   await gitAsync(dir, ["merge", "--abort"])
+}
+
+export type UndoLatestResult = { ok: true } | { ok: false; reason: "moved" | "failed"; message?: string }
+
+/** Undoes a clean Get latest: the branch goes back to `before`, but only while it is still at `after`, so a
+ *  commit made since is never thrown away. Not Undo Last Commit: after a fast-forward that would undo a base
+ *  commit. `reset --merge` keeps uncommitted edits, and refuses when one is in a file the merge touched. */
+export async function undoLatest(dir: string, before: string, after: string): Promise<UndoLatestResult> {
+  const sha = /^[0-9a-f]{7,64}$/i
+  if (!sha.test(before) || !sha.test(after)) return { ok: false, reason: "failed", message: "bad commit" }
+  const head = await gitAsync(dir, ["rev-parse", "HEAD"]).catch(() => "")
+  const at = await gitAsync(dir, ["rev-parse", "--verify", "--quiet", `${after}^{commit}`]).catch(() => "")
+  if (!head || head !== at) return { ok: false, reason: "moved" }
+  const ancestor = await gitAsync(dir, ["merge-base", "--is-ancestor", before, head]).then(() => true, () => false)
+  if (!ancestor) return { ok: false, reason: "moved" }
+  try {
+    await gitAsync(dir, ["reset", "--merge", before])
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, reason: "failed", message: err instanceof Error ? err.message : String(err) }
+  }
 }

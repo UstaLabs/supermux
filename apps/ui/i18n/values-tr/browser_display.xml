@@ -1,0 +1,189 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #123: the Browser tab (toolbar, find, device mode, page comments), displays, downloads and the audio player, and
+     the app update card. Turkish; the same keys as values/browser_display.xml (tests/i18n-strings.test.ts). -->
+<resources>
+    <!-- Browser tab › toolbar and menu -->
+    <string name="browser_back">Geri</string>
+    <string name="browser_forward">İleri</string>
+    <string name="browser_stop">Durdur</string>
+    <string name="browser_reload">Yenile</string>
+    <string name="browser_address_hint">Bir site ya da 5173 gibi bir port yazın</string>
+    <string name="browser_new_tab_hint">Bir site ya da 5173 gibi bir port yazın.</string>
+    <string name="browser_comment_on_page">Sayfaya yorum yap</string>
+    <string name="browser_device_mode">Cihaz modu</string>
+    <string name="browser_more">Diğer</string>
+    <string name="browser_find_in_page">Sayfada bul</string>
+    <string name="browser_send_screenshot">Ekran görüntüsünü sohbete gönder</string>
+    <string name="browser_screenshot_to_chat">Ekran görüntüsü sohbete</string>
+    <string name="browser_inspect">İncele</string>
+    <string name="browser_desktop_site">Masaüstü sitesi</string>
+    <string name="browser_zoom">Yakınlaştırma</string>
+    <string name="browser_zoom_out">Uzaklaştır</string>
+    <string name="browser_zoom_in">Yakınlaştır</string>
+    <string name="browser_on">Açık</string>
+    <string name="browser_zoom_unavailable">Yakınlaştırma burada henüz yok</string>
+    <string name="browser_no_inspector">Bu motorun burada denetçisi yok</string>
+    <string name="browser_ok">Tamam</string>
+
+    <!-- Browser tab › find in page -->
+    <string name="browser_find">Bul</string>
+    <string name="browser_find_unavailable">Bulma burada henüz yok</string>
+    <string name="browser_find_none">Eşleşme yok</string>
+    <string name="browser_find_position">%1$s / %2$s</string>
+    <plurals name="browser_find_matches">
+        <item quantity="one">%1$d eşleşme</item>
+        <item quantity="other">%1$d eşleşme</item>
+    </plurals>
+    <string name="browser_find_found">Bulundu</string>
+    <string name="browser_find_previous">Önceki</string>
+    <string name="browser_find_next">Sonraki</string>
+    <string name="browser_find_close">Bulmayı kapat</string>
+
+    <!-- Browser tab › device mode -->
+    <string name="browser_device_responsive">Duyarlı</string>
+    <string name="browser_device_phones">Telefonlar</string>
+    <string name="browser_device_tablets">Tabletler</string>
+    <string name="browser_device_desktops">Masaüstleri</string>
+    <string name="browser_device_width">Genişlik</string>
+    <string name="browser_device_height">Yükseklik</string>
+    <string name="browser_device_rotate">Döndür</string>
+    <string name="browser_device_fit">Sığdır %%1$d</string>
+    <string name="browser_device_fit_pane">Bölmeye sığdır</string>
+    <string name="browser_device_dpr_default">Varsayılan (%1$s)</string>
+    <string name="browser_device_touch_on">Dokunma açık</string>
+    <string name="browser_device_touch_off">Dokunma kapalı</string>
+    <string name="browser_device_mobile">Mobil</string>
+    <string name="browser_device_desktop">Masaüstü</string>
+    <string name="browser_device_close">Cihaz modunu kapat</string>
+
+    <!-- Browser tab › comments on the page -->
+    <string name="browser_pick_add">Yorum ekle</string>
+    <string name="browser_pick_delete">Bu yorumu sil</string>
+    <string name="browser_pick_placeholder">Burada ne değişmeli?</string>
+    <string name="browser_pick_tap">Kastettiğiniz yere dokunun</string>
+    <string name="browser_pick_hint">Bir öğe seçin · ↑↓ üst / alt · bitirmek için Esc</string>
+    <string name="browser_pick_save">Kaydet</string>
+    <string name="browser_pick_deleted">Yorum silindi</string>
+    <string name="browser_pick_undo">Geri al</string>
+    <string name="browser_pick_add_to_message">Mesaja ekle</string>
+    <string name="browser_pick_send">Gönder</string>
+    <plurals name="browser_pick_count">
+        <item quantity="one">%1$d yorum</item>
+        <item quantity="other">%1$d yorum</item>
+    </plurals>
+    <plurals name="browser_pick_count_to">
+        <item quantity="one">%1$d yorum → %2$s</item>
+        <item quantity="other">%1$d yorum → %2$s</item>
+    </plurals>
+    <plurals name="browser_pick_send_count">
+        <item quantity="one">%1$d yorumu gönder</item>
+        <item quantity="other">%1$d yorumu gönder</item>
+    </plurals>
+    <plurals name="browser_pick_send_to">
+        <item quantity="one">%1$d yorumu gönder → %2$s</item>
+        <item quantity="other">%1$d yorumu gönder → %2$s</item>
+    </plurals>
+
+    <!-- Displays -->
+    <string name="display_title">Ekranlar</string>
+    <string name="display_back">Geri</string>
+    <string name="display_close">Kapat</string>
+    <string name="display_start">Ekran başlat</string>
+    <string name="display_stop">Durdur</string>
+    <string name="display_stopped">Ekran durduruldu</string>
+    <string name="display_none">Etkin ekran yok.</string>
+    <string name="display_none_for_session">Bu oturum için etkin ekran yok</string>
+    <string name="display_refresh">Yenile</string>
+    <string name="display_unsupported">Desteklenmeyen ekran aktarımı '%1$s'</string>
+    <string name="display_toggle_keyboard">Klavyeyi aç/kapat</string>
+    <string name="display_password_required">Parola gerekli</string>
+    <string name="display_password_explain">Bu ekrana bağlanmak için parola gerekiyor.</string>
+    <string name="display_password_explain_mac">Bu Mac'in Ekran Paylaşımı bağlanmak için parola istiyor.</string>
+    <string name="display_password_label">Ekran paylaşımı parolası</string>
+    <string name="display_connect">Bağlan</string>
+    <string name="display_cancel">İptal</string>
+    <string name="display_connecting">Bağlanıyor…</string>
+    <string name="display_connected">Bağlandı</string>
+    <string name="display_disconnected">Bağlantı kesildi</string>
+
+    <!-- Downloads (#95) -->
+    <string name="work_downloads">İndirilenler</string>
+    <string name="work_show_downloads">İndirilenleri göster</string>
+    <string name="work_clear_finished">Bitenleri temizle</string>
+    <string name="work_show_in_chat">Sohbette göster</string>
+    <string name="work_hint_move">↑↓ gezin</string>
+    <string name="work_hint_enter">↵ %1$s</string>
+    <string name="work_hint_close">esc kapat</string>
+    <string name="work_install">Kur</string>
+    <string name="work_open">Aç</string>
+    <string name="work_save">Kaydet</string>
+    <string name="work_share">Paylaş</string>
+    <string name="work_pause">Duraklat</string>
+    <string name="work_resume">Sürdür</string>
+    <string name="work_retry">Tekrar dene</string>
+    <string name="work_remove">Kaldır</string>
+    <string name="work_remove_download">İndirmeyi kaldır</string>
+    <string name="work_download">İndirme</string>
+    <string name="work_percent">%%1$d</string>
+    <string name="work_downloaded">İndirildi</string>
+    <string name="work_ready_to_install">Kuruluma hazır</string>
+    <string name="work_failed">Başarısız</string>
+    <string name="work_paused">Duraklatıldı</string>
+    <string name="work_state_downloading">indiriliyor</string>
+    <string name="work_state_downloaded">indirildi</string>
+    <string name="work_state_ready_to_install">kuruluma hazır</string>
+    <string name="work_state_failed">başarısız</string>
+    <string name="work_state_paused">duraklatıldı</string>
+    <string name="work_so_far">şimdiye dek %1$s</string>
+    <string name="work_bytes_so_far">%1$s / %2$s %3$s</string>
+    <string name="work_eta_minutes">yaklaşık %1$d dk kaldı</string>
+    <string name="work_eta_minute">yaklaşık bir dakika kaldı</string>
+    <string name="work_eta_seconds">%1$d sn kaldı</string>
+    <string name="work_ring_percent">%1$s, %%2$d</string>
+    <string name="work_ring_downloading">%1$s, indiriliyor</string>
+    <string name="work_ring_ready">%1$s kuruluma hazır</string>
+    <string name="work_ring_downloaded">%1$s indirildi</string>
+    <string name="work_ring_failed">%1$s başarısız</string>
+    <string name="work_ring_paused">%1$s duraklatıldı</string>
+    <string name="work_file_removed">%1$s kaldırılmış; yeniden indirmek için tekrar deneyin</string>
+    <string name="work_open_failed">Açılamadı: %1$s</string>
+    <string name="work_chat_gone">O sohbet artık yok</string>
+
+    <!-- Audio player (#118) -->
+    <string name="work_play">Oynat</string>
+    <string name="work_speed">Hız</string>
+    <string name="work_stop">Durdur</string>
+    <string name="work_play_failed">Bu oynatılamadı</string>
+    <string name="work_open_source_chat">Geldiği sohbeti aç</string>
+    <string name="work_position">Konum</string>
+    <string name="work_position_state">%1$s / %2$s</string>
+    <string name="work_now_playing">Şimdi çalıyor</string>
+    <string name="work_now_playing_title">Şimdi çalıyor: %1$s</string>
+    <string name="work_state_reading">okunuyor</string>
+    <string name="work_state_playing">çalıyor</string>
+
+    <!-- App update card (#113) -->
+    <string name="update_downloading">İndiriliyor…</string>
+    <string name="update_downloading_percent">İndiriliyor %%1$d…</string>
+    <string name="update_downloading_bytes">İndiriliyor %1$s…</string>
+    <string name="update_updated">v%1$s sürümüne güncellendi</string>
+    <string name="update_updated_reconnected">v%1$s sürümüne güncellendi · tüm oturumlar yeniden bağlandı</string>
+    <string name="update_install_caption_apk">Tek dokunuşla en son sürümün APK'sını bu derlemenin üzerine kurar. İlerleme bildirim çubuğunda da görünür.</string>
+    <string name="update_install_caption">En son yükleyiciyi indirir ve açar.</string>
+    <string name="update_install_caption_kind">En son .%1$s dosyasını indirir ve açar.</string>
+    <string name="update_finishing_upload">Yükleme bitiriliyor…</string>
+    <string name="update_finishing_recording">Kayıt bitiriliyor…</string>
+    <string name="update_restart_caption">Güncellemek için yeniden başlatın: supermux kapanır, güncellemeyi kurar ve yeniden açılır. Oturumlarınız sürer.</string>
+    <string name="update_card_caption_apk">Yeni APK'yı indirir ve bu derlemenin üzerine kurar.</string>
+    <string name="update_card_caption">Yeni sürümü indirir ve yükleyiciyi açar.</string>
+    <string name="update_card_caption_kind">Yeni .%1$s dosyasını indirir ve açar.</string>
+    <string name="update_ready">Güncelleme hazır</string>
+    <string name="update_available">Güncelleme var</string>
+    <string name="update_dismiss">Kapat</string>
+    <string name="update_card_downloaded">v%1$s indirildi.</string>
+    <string name="update_card_ready">v%1$s kuruluma hazır.</string>
+    <string name="update_restart">Yeniden başlat ve güncelle</string>
+    <string name="update_whats_new">Yenilikler</string>
+    <string name="update_whats_new_in">%1$s sürümündeki yenilikler</string>
+    <string name="update_full_notes">Tüm sürüm notları</string>
+</resources>

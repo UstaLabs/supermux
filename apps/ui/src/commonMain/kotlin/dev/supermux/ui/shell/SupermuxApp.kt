@@ -178,7 +178,8 @@ import dev.supermux.ui.settings.SettingsSlotScope
 import dev.supermux.ui.settings.kit.KitMachine
 import dev.supermux.ui.settings.kit.SettingsMachines
 import dev.supermux.ui.settings.kit.THIS_COMPUTER_ID
-import dev.supermux.host.formatLastSeen
+import dev.supermux.host.lastSeenAgo
+import dev.supermux.ui.i18n.timeAgoText
 import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.update.AppUpdateCard
@@ -220,7 +221,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import dev.supermux.ui.i18n.localized
-import dev.supermux.ui.notify.localizedNotifyWords
+import dev.supermux.ui.i18n.localizedHost
 
 /**
  * Which chats of one workspace are actually ON SCREEN (spec §11).
@@ -353,6 +354,13 @@ fun SupermuxApp(
         subagentsBySession.mapValues { dev.supermux.ui.chat.runningSubagentCount(it.value) }.filterValues { it > 0 }
     }
     val lastRead by fleet.lastRead.collectAsState()
+    // #143: sessions blocked on the user ("Needs you" on top of the sidebar), with the question each waits on.
+    val openRequests by fleet.requests.collectAsState()
+    val allowWord = localized(Str.chatcard_request_allow_title, "%s")
+    val questionWord = localized(Str.chatcard_request_question)
+    val waiting = remember(openRequests, allowWord, questionWord) {
+        dev.supermux.ui.session.needsYouAsks(openRequests, allowTitle = { tool -> allowWord.replace("%s", tool) }, question = questionWord)
+    }
     val hostViews by fleet.hostViews.collectAsState()
     val sessionHost by fleet.sessionHost.collectAsState()
     val activeHostId by fleet.activeHost.collectAsState()
@@ -364,20 +372,19 @@ fun SupermuxApp(
     val offlineWord = localized(Str.shell_machine_offline)
     val notHostingWord = localized(Str.shell_machine_not_hosting)
     val thisComputerWord = localized(Str.shell_this_computer)
-    val offlineSeen = localizedTemplate(Str.shell_machine_offline_seen)
     val settingsMachines = remember(hostViews, activeHostId, localBrokerCap, settingsClock, runningWord, offlineWord, notHostingWord, thisComputerWord) {
         val now = settingsClock
         val paired = hostViews.map { h ->
-            val seen = formatLastSeen(now, h.lastSeenAt)
+            val seen = lastSeenAgo(now, h.lastSeenAt)?.let(::timeAgoText).orEmpty()
             KitMachine(
                 id = h.recordId,
-                name = h.displayLabel,
+                name = h.displayLabel.localizedHost(),
                 local = isLocalHost(h.hostId),
                 online = h.online,
                 status = when {
                     h.online -> runningWord
                     seen.isEmpty() -> offlineWord
-                    else -> offlineSeen(seen)
+                    else -> localized(Str.shell_machine_offline_seen, seen)
                 },
                 lastSeen = seen,
             )
@@ -594,7 +601,6 @@ fun SupermuxApp(
 
     // Observe live agent replies and decide whether to raise an OS notification. Keyed on
     // [appForeground] so the collector relaunches with a freshly captured value.
-    val notifyWords by rememberUpdatedState(localizedNotifyWords())
     LaunchedEffect(fleet, appForeground) {
         fleet.agentReplies.collect { event ->
             val target = fleet.sessions.value.firstOrNull { it.id == event.session }
@@ -605,16 +611,14 @@ fun SupermuxApp(
                 selectedId = ui.selectedId,
                 windowFocused = appForeground,
                 muted = target?.mute ?: false,
-                words = notifyWords,
             )
         }
     }
 
     // A download that finished with nobody waiting for it (#95, decision 2a) opens nothing: it waits in the activity
     // bar, and a small notice says so.
-    val downloadedNotice by rememberUpdatedState(localizedTemplate(Str.shell_downloaded))
     LaunchedEffect(fleet) {
-        fleet.downloads.unclaimedCompletions.collect { notices.show(downloadedNotice(it.name)) }
+        fleet.downloads.unclaimedCompletions.collect { notices.show(localized(Str.shell_downloaded, it.name)) }
     }
 
     // Sessions changed: reconcile the selection against the live set (empty-guarded) and prune
@@ -756,10 +760,10 @@ fun SupermuxApp(
             // depends on this pane staying composed. Answers the new session's id and does NOT
             // open it: the spawn can outlive this composition (#89), and [onOpenSession] below is
             // called by whichever launcher is on screen when it lands.
-            onSubmit = { workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId, permissionMode, account ->
+            onSubmit = { workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId, permissionMode, account, source ->
                 if (tab == null) {
                     launcherActions.createSessionWithFirstMessage(
-                        workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId, permissionMode, account,
+                        workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId, permissionMode, account, source,
                     )
                 } else {
                     // A workspace tab's composer: JOIN that workspace and fill this very tab.
@@ -793,6 +797,7 @@ fun SupermuxApp(
             initialProjectHost = if (tab == null) ui.launcherProject?.first else null,
             initialProjectId = if (tab == null) ui.launcherProject?.second else null,
             onInitialProjectApplied = { if (tab == null) ui.consumeLauncherSeeds() },
+            initialPrNumber = if (tab == null) ui.launcherPr else null,
             hosts = hostViews,
             selectedHost = activeHostId,
             projectImageCache = projectImageCache,
@@ -882,7 +887,16 @@ fun SupermuxApp(
             }
         }
     }
+    // #149: whose folders open in Finder / Explorer here: a session whose host is this computer.
+    val sessionHosts by fleet.sessionHost.collectAsState()
+    val shellPlatform = LocalPlatform.current
+    val folderOpener = remember(sessionHosts, isLocalHost, shellPlatform) {
+        shellPlatform.fileManager?.let { manager ->
+            dev.supermux.ui.platform.FolderOpener(manager, { sid -> isLocalHost(fleet.hostIdOfSession(sid)) }, shellPlatform::openFolder)
+        }
+    }
     CompositionLocalProvider(
+        dev.supermux.ui.platform.LocalFolderOpener provides folderOpener,
         dev.supermux.ui.chat.LocalChatSearch provides chatSearch,
         dev.supermux.ui.retain.LocalRetainedUiState provides fleet.retainedUi,
         dev.supermux.ui.chat.LocalComposerAttachmentStore provides attachmentStore,
@@ -952,6 +966,14 @@ fun SupermuxApp(
                     var settingsTryClose by remember { mutableStateOf<(() -> Unit)?>(null) }
                     val fullPaneOverlay = remember { FullPaneOverlaySceneStrategy<Route>() }
 
+                    // #117: the host picker's host's applets (null: none, or this platform can't open them).
+                    val appletsHostName = hostViews.firstOrNull { it.recordId == activeHostId }?.displayLabel.orEmpty()
+                    val appletsActions = dev.supermux.ui.session.rememberAppletsActions(
+                        fleet, activeHostId, appletsHostName,
+                        showAll = remember(ui) { { ui.openApplets() } },
+                        info = remember(ui) { { a, tab -> ui.openAppletInfo(a.name, tab) } },
+                    )
+
                     // The sidebar, drawn by Home on a wide host and by the Compact list layer.
                     val sidebarList: @Composable (standalone: Boolean, listState: LazyListState?) -> Unit =
                         { standalone, listState ->
@@ -959,6 +981,7 @@ fun SupermuxApp(
                                 agentAvatars = agentAvatars,
                                 archivedAgents = archivedAgents,
                                 agentsActions = dev.supermux.ui.session.rememberAgentsActions(fleet),
+                                applets = appletsActions,
                                 mode = sessionListMode,
                                 openWorkspaceByWorkspaceId = openByWorkspace,
                                 workspaces = workspaces,
@@ -986,6 +1009,7 @@ fun SupermuxApp(
                                 lastBySession = lastBySession,
                                 lastRead = lastRead,
                                 agentState = agentState,
+                                waiting = waiting,
                                 runningAgents = runningAgents,
                                 onOpenSession = { _, sid -> ui.focusChatTab(sid) },
                                 actions = remember(listActions, workspaces) {
@@ -1383,6 +1407,62 @@ fun SupermuxApp(
                                                 // review's blocker.
                                                 standalone = true,
                                             )
+                                        }
+                                    }
+                                }
+                            }
+
+                            entry<Route.Applets>(
+                                metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
+                            ) {
+                                EscapeBox("applets_overlay", onEscape = { ui.goBack() }) {
+                                    HostScopedPage(hostViews, activeHostId, fleet::setActiveHost) {
+                                        key(activeHostId) {
+                                            val actions = appletsActions
+                                            if (actions != null) {
+                                                actions.screens.All(actions, phone = compact, onBack = { ui.goBack() })
+                                            } else {
+                                                // The host can't have applets (or isn't connected yet): back to where he was.
+                                                LaunchedEffect(Unit) { ui.goBack() }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            entry<Route.Applet>(
+                                metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
+                            ) { route ->
+                                EscapeBox("applet_overlay", onEscape = { ui.goBack() }) {
+                                    val screens = dev.supermux.ui.session.LocalAppletScreens.current
+                                    if (screens != null) {
+                                        screens.Page(
+                                            fleet, route.hostId, route.name,
+                                            onBack = { ui.goBack() },
+                                            openChat = { id -> ui.goBack(); ui.selectSession(id) },
+                                        )
+                                    } else {
+                                        LaunchedEffect(Unit) { ui.goBack() }
+                                    }
+                                }
+                            }
+
+                            entry<Route.AppletInfo>(
+                                metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
+                            ) { route ->
+                                EscapeBox("applet_info_overlay", onEscape = { ui.goBack() }) {
+                                    HostScopedPage(hostViews, activeHostId, fleet::setActiveHost) {
+                                        key(activeHostId) {
+                                            val actions = appletsActions
+                                            if (actions != null) {
+                                                actions.screens.Info(
+                                                    fleet, actions, route.name, phone = compact, initialTab = route.tab,
+                                                    onBack = { ui.goBack() },
+                                                    openChat = { id -> ui.goBack(); ui.selectSession(id) },
+                                                )
+                                            } else {
+                                                LaunchedEffect(Unit) { ui.goBack() }
+                                            }
                                         }
                                     }
                                 }
@@ -2141,7 +2221,7 @@ private fun WorkspacePanel(
                 val hostedLayout = ui.windows.layoutFor(ui.windows.mainHostId, localLayout)
                 WorkspacePanes(
                     hostId = ui.windows.mainHostId,
-                    layout = hostedLayout,
+                    layout = withoutClosing(hostedLayout, ws.closing.keys),
                     current = current,
                     session = workspaceSession,
                     ws = ws,

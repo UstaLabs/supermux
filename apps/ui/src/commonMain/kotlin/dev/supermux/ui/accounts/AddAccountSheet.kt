@@ -272,7 +272,7 @@ fun AddAccountSheet(
         )
         AddStep.Login -> LoginStep(
             agent = agent,
-            title = signInAgain?.let { localized(Str.accounts_sign_in_again_title, localizedAccountDisplayName(it)) },
+            title = signInAgain?.let { localized(Str.accounts_sign_in_again_title, accountDisplayName(it)) },
             flow = flow,
             existing = existing,
             form = form,
@@ -307,9 +307,9 @@ private fun ChooseStep(
         KitItemList(Modifier.padding(top = 12.dp)) {
             options.forEach { option ->
                 KitItem(
-                    localizedAddOptionTitle(agent, option),
+                    addOptionTitle(agent, option),
                     Modifier.testTag("account-add-option:${optionTag(option)}"),
-                    subtitle = localizedAddOptionHint(agent, option),
+                    subtitle = addOptionHint(agent, option),
                     onClick = { onPick(option) },
                 )
             }
@@ -362,9 +362,9 @@ private fun SecretStep(
 
     val addFailed = localized(Str.accounts_add_failed)
     KitSheet(
-        title = localizedAddOptionTitle(agent, method),
+        title = addOptionTitle(agent, method),
         onDismiss = { if (!saving) onCancel() },
-        description = if (token) localized(Str.accounts_token_description) else localizedAddOptionHint(agent, method),
+        description = if (token) localized(Str.accounts_token_description) else addOptionHint(agent, method),
         tag = "account-add-sheet",
         // A half-typed key is not thrown away by a stray tap.
         dismissOnOutside = false,
@@ -468,17 +468,14 @@ private fun LoginStep(
                     is LoginView.AwaitingUser -> AwaitingBlock(view, form, scope, onSubmitCode)
                     LoginView.Verifying -> SheetLine(localized(Str.accounts_checking_sign_in), tag = "account-login-verifying")
                     is LoginView.Done -> Text(
-                        localized(
-                            Str.accounts_added,
-                            flow.state?.account?.let { localizedAccountShortLabel(it) } ?: localized(Str.accounts_the_account),
-                        ),
+                        localized(Str.accounts_added, view.label),
                         fontSize = 13.5.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = kitColors().ok,
                         modifier = Modifier.testTag("account-login-done"),
                     )
                     is LoginView.Failed -> SheetLine(
-                        flow.state?.let { localizedLoginFailureText(it, agent, existing) } ?: view.message,
+                        view.message,
                         warn = true,
                         tag = "account-login-failed",
                     )

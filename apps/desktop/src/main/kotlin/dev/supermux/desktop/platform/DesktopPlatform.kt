@@ -9,6 +9,7 @@ import dev.supermux.ui.platform.AppUpdater
 import dev.supermux.ui.platform.Caps
 import dev.supermux.ui.platform.ClipboardAccess
 import dev.supermux.ui.platform.FileAccess
+import dev.supermux.ui.platform.FileManager
 import dev.supermux.ui.platform.MicCapture
 import dev.supermux.ui.platform.PickKind
 import dev.supermux.ui.platform.TtsEngine
@@ -109,6 +110,15 @@ class DesktopPlatform : Platform {
         DesktopOs.LINUX -> ReleasePlatform.Linux
     }
 
+    override val fileManager: FileManager = when (DesktopOs.current) {
+        DesktopOs.MACOS -> FileManager.Finder
+        DesktopOs.WINDOWS -> FileManager.Explorer
+        DesktopOs.LINUX -> FileManager.Files
+    }
+
+    // A folder opens in the OS file manager: Desktop.open, then open / ShellExecute / xdg-open (#149).
+    override fun openFolder(path: String): Boolean = File(path).let { it.isDirectory && openLocalFile(it) }
+
     init {
         dev.supermux.ui.browser.AppWebViews.liveBudget = dev.supermux.ui.browser.BrowserTabKeeper.MAX_LIVE_TABS + 8
     }
@@ -161,6 +171,8 @@ class DesktopPlatform : Platform {
     override val clipboard: ClipboardAccess = DesktopClipboardAccess()
 
     override val files: FileAccess = DesktopFileAccess()
+
+    override val page: dev.supermux.ui.platform.PageDevice = DesktopPageDevice(files::probeMime)
 
     override val mic: MicCapture = DesktopMicCapture()
 
@@ -258,21 +270,6 @@ internal fun awtPickDirectory(title: String): String? {
         isAcceptAllFileFilterUsed = false
     }
     return if (chooser.showOpenDialog(null) == javax.swing.JFileChooser.APPROVE_OPTION) chooser.selectedFile?.absolutePath else null
-}
-
-/**
- * THE desktop save dialog: a modal AWT [FileDialog] in SAVE mode, pre-filled with [defaultName].
- * Returns the chosen target file, or null when the user cancelled. Not (yet) on the shared
- * [Platform] interface — no shared screen saves a file in cluster A; the timeline's attachment
- * download is the only caller and it moves in cluster D.
- */
-internal fun awtSaveFile(defaultName: String): File? {
-    val dialog = FileDialog(null as Frame?, "Save attachment", FileDialog.SAVE)
-    dialog.file = defaultName
-    dialog.isVisible = true
-    val dir = dialog.directory ?: return null
-    val fileName = dialog.file ?: return null
-    return File(dir, fileName)
 }
 
 /** Best-effort content type; `application/octet-stream` when the OS cannot tell. The ONE mime

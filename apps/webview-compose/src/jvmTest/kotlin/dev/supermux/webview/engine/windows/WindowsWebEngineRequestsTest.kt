@@ -2,6 +2,7 @@ package dev.supermux.webview.engine.windows
 
 import dev.supermux.webview.DialogResult
 import dev.supermux.webview.DownloadRequest
+import dev.supermux.webview.DownloadTarget
 import dev.supermux.webview.FileChooserRequest
 import dev.supermux.webview.NewWindowDecision
 import dev.supermux.webview.NewWindowRequest
@@ -9,15 +10,20 @@ import dev.supermux.webview.PermissionKind
 import dev.supermux.webview.PermissionRequest
 import dev.supermux.webview.WebContent
 import dev.supermux.webview.WebDialog
+import dev.supermux.webview.LoadFailure
+import dev.supermux.webview.WebDownload
+import dev.supermux.webview.WebDownloadState
 import dev.supermux.webview.WebError
 import dev.supermux.webview.WebOrigin
 import dev.supermux.webview.WebProfile
 import dev.supermux.webview.engine.EngineEvent
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
-import kotlinx.coroutines.test.runTest
 
 class WindowsWebEngineRequestsTest {
     private val demo = WebContent.Html("<p>hi</p>", WebOrigin("demo"))
@@ -72,13 +78,63 @@ class WindowsWebEngineRequestsTest {
         rig.close()
     }
 
-    @Test fun aDownloadIsRefusedAndTheClientTold() = runTest {
+    @Test fun aDownloadTheClientDropsIsCancelled() = runTest {
         val rig = WinRig(this, WebProfile.Default)
         rig.warm()
         rig.show(WebContent.Url("https://a.example/"), "https://a.example/")
-        rig.engine.onEvent(WinEvent.Download(rig.page.epoch, "https://a.example/f.zip", "application/zip", "f.zip"))
-        assertEquals(DownloadRequest("https://a.example/f.zip", "f.zip", "application/zip", null), rig.client.asked.last())
+        rig.engine.onEvent(WinEvent.Download(rig.page.epoch, 7, "https://a.example/f.zip", "application/zip", "f.zip", 2048))
+        runCurrent()
+        assertEquals(DownloadRequest("https://a.example/f.zip", "f.zip", "application/zip", 2048), rig.client.asked.last())
+        assertEquals(0 to null, rig.page.answers.getValue(7), "WebView2 cancels it")
         rig.close()
+    }
+
+    @Test fun aDownloadTheClientPlacesIsSavedThereAndReported() = runTest {
+        val calls = mutableListOf<String>()
+        val previous = WinDownloads.ops
+        WinDownloads.ops = object : WinDownloads.Ops {
+            override fun pause(download: Long) { calls += "pause $download" }
+            override fun resume(download: Long) { calls += "resume $download" }
+            override fun cancel(download: Long) { calls += "cancel $download" }
+        }
+        try {
+            val rig = WinRig(this, WebProfile.Default)
+            rig.warm()
+            rig.show(WebContent.Url("https://a.example/"), "https://a.example/")
+            var started: WebDownload? = null
+            // Joined with `/`, as shared code joins it: WebView2 gets Windows' separators.
+            rig.client.download = DownloadTarget("C:\\dl/7f/f.zip") { started = it }
+            rig.engine.onEvent(WinEvent.Download(rig.page.epoch, 8, "https://a.example/f.zip", "application/zip", "f.zip", null))
+            runCurrent()
+            val (id, path) = rig.page.answers.getValue(8)
+            assertTrue(id > 0)
+            assertEquals("C:\\dl\\7f\\f.zip", path)
+            val transfer = assertNotNull(started)
+            assertEquals("C:\\dl\\7f\\f.zip", transfer.path)
+            WinDownloads.on(WinEvent.DownloadProgress(id.toLong(), 100, 400))
+            assertEquals(WebDownloadState.Running(100, 400), transfer.state.value)
+            transfer.pause()
+            WinDownloads.on(WinEvent.DownloadState(id.toLong(), 1, 100, null))
+            assertEquals(WebDownloadState.Paused(100, 400), transfer.state.value)
+            transfer.resume()
+            WinDownloads.on(WinEvent.DownloadState(id.toLong(), 2, 100, "The connection was lost"))
+            assertEquals(WebDownloadState.Failed("The connection was lost", 100, 400), transfer.state.value)
+            transfer.resume()
+            WinDownloads.on(WinEvent.DownloadState(id.toLong(), 0, 400, null))
+            assertEquals(WebDownloadState.Done(400), transfer.state.value)
+            assertEquals(listOf("pause $id", "resume $id", "resume $id"), calls)
+            rig.close()
+        } finally {
+            WinDownloads.ops = previous
+        }
+    }
+
+    @Test fun aFailedLoadNamesItsReasonForTheApp() {
+        assertEquals(LoadFailure.CannotConnect, loadFailureOf(12))
+        assertEquals(LoadFailure.CannotConnect, loadFailureOf(9))
+        assertEquals(LoadFailure.ConnectionLost, loadFailureOf(10))
+        assertEquals(LoadFailure.NameNotResolved, loadFailureOf(13))
+        assertEquals(LoadFailure.Other, loadFailureOf(99))
     }
 
     @Test fun aLoadThatIsADownloadEndsWithAnError() = runTest {
@@ -87,7 +143,7 @@ class WindowsWebEngineRequestsTest {
         rig.warm()
         rig.engine.load(WebContent.Url("https://a.example/f.zip"))
         rig.starts("https://a.example/f.zip")
-        rig.engine.onEvent(WinEvent.Download(rig.page.epoch, "https://a.example/f.zip", "application/zip", "f.zip"))
+        rig.engine.onEvent(WinEvent.Download(rig.page.epoch, 9, "https://a.example/f.zip", "application/zip", "f.zip", null))
         assertEquals(EngineEvent.Error(WebError.BlockedByPolicy("https://a.example/f.zip")), rig.events.last { it is EngineEvent.Error })
         rig.close()
     }

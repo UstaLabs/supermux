@@ -13,7 +13,7 @@ import dev.supermux.ui.i18n.localized
 
 /**
  * A paired machine as Settings shows it. [local] = it runs on this computer (desktop). [status] is the card's line
- * ("Running", "Offline · last seen 2h ago", "Not hosting"); [lastSeen] is `formatLastSeen`'s text or "".
+ * ("Running", "Offline · last seen 2 h ago", "Not hosting"); [lastSeen] is `lastSeenAgo` worded, or "".
  */
 @Immutable
 data class KitMachine(

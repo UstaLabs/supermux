@@ -106,11 +106,13 @@ internal fun civilFromDays(days: Long): Triple<Int, Int, Int> {
 private fun two(n: Int): String = if (n < 10) "0$n" else n.toString()
 
 /**
- * A chat row's time label.
- *
- * - today → `HH:mm` (the old `DateTimeFormatter.ofPattern("HH:mm")` output, unchanged)
- * - yesterday → `Yesterday HH:mm`
- * - anything older → `yyyy-MM-dd HH:mm`
+ * A chat row's time: [clock] is `HH:mm`; [yesterday] marks the previous local day and [date]
+ * (`yyyy-MM-dd`) anything else that is not today. The UI words it (SharedWords.kt chatTimeText).
+ */
+data class ChatTime(val clock: String, val yesterday: Boolean = false, val date: String? = null)
+
+/**
+ * A chat row's time.
  *
  * "Today" is decided in local wall-clock days, using [offsetMs] (defaulted from the host clock)
  * for both instants so a message sent seconds ago never lands on "yesterday".
@@ -119,7 +121,7 @@ fun formatChatTime(
     epochMs: Long,
     nowMs: Long,
     offsetMs: Long = localUtcOffsetMs(epochMs),
-): String {
+): ChatTime {
     val local = epochMs + offsetMs
     val localNow = nowMs + offsetMs
     val day = floorDiv(local, DAY_MS)
@@ -127,17 +129,17 @@ fun formatChatTime(
     val minuteOfDay = floorMod(local, DAY_MS) / 60_000L
     val hhmm = "${two((minuteOfDay / 60).toInt())}:${two((minuteOfDay % 60).toInt())}"
     return when (day) {
-        today -> hhmm
-        today - 1 -> "Yesterday $hhmm"
+        today -> ChatTime(hhmm)
+        today - 1 -> ChatTime(hhmm, yesterday = true)
         else -> {
             val (y, m, d) = civilFromDays(day)
-            "$y-${two(m)}-${two(d)} $hhmm"
+            ChatTime(hhmm, date = "$y-${two(m)}-${two(d)}")
         }
     }
 }
 
 /** [formatChatTime] over the raw broker `ts`; null when there is nothing to show. */
-fun chatTimeLabel(ts: String?, nowMs: Long): String? =
+fun chatTime(ts: String?, nowMs: Long): ChatTime? =
     parseChatTs(ts)?.let { formatChatTime(it, nowMs) }
 
 private fun floorDiv(a: Long, b: Long): Long {

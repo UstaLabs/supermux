@@ -17,7 +17,7 @@ import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.worktree.WorktreeCleanupSection
 import dev.supermux.ui.worktree.WorktreeCleanupTick
-import dev.supermux.workspace.viewTitle
+import dev.supermux.ui.i18n.viewTitle
 import dev.supermux.ui.i18n.localized
 
 /**
@@ -58,7 +58,7 @@ fun CloseViewDialog(
         onDismissRequest = onDismiss,
         text = {
             Column {
-                Text(localizedCloseConfirmText(view, sessionId?.let { sessionNames[it] }))
+                Text(closeConfirmText(view, sessionId?.let { sessionNames[it] }))
                 if (view.kind == "chat" && chatWorkdir != null && worktreeForWorkdir != null) {
                     WorktreeCleanupSection(
                         listOf(chatWorkdir), setOfNotNull(sessionId), worktreeForWorkdir,
@@ -82,17 +82,8 @@ fun CloseViewDialog(
     )
 }
 
-/** [closeConfirmText] in the app's language: what the dialog shows. */
-@Composable
-fun localizedCloseConfirmText(view: ViewDto, sessionName: String?): String = when (view.kind) {
-    "chat" -> localized(Str.shell_close_chat_confirm, sessionName?.takeIf { it.isNotBlank() } ?: viewTitle(view))
-    "terminal" -> localized(Str.shell_close_terminal_confirm, view.stateString("terminalId") ?: "?")
-    "display" -> localized(Str.shell_close_display_confirm)
-    else -> localized(Str.shell_close_view_confirm)
-}
-
 /**
- * The one question, naming what the close stops. English, the tests' twin of [localizedCloseConfirmText].
+ * The one question, naming what the close stops.
  *
  * Desktop's wording throughout (it names the terminal being killed, which Android's "This kills
  * it." did not); [sessionName] is the chat's session name where the caller could resolve one.
@@ -100,10 +91,10 @@ fun localizedCloseConfirmText(view: ViewDto, sessionName: String?): String = whe
 fun closeConfirmText(view: ViewDto, sessionName: String?): String = when (view.kind) {
     // Android's fallback (the view's own title) rather than desktop's "this session" — it names
     // something the user can see on the tab.
-    "chat" -> "Close this chat? This archives the session ${sessionName?.takeIf { it.isNotBlank() } ?: viewTitle(view)}." // i18n-ok: test twin
-    "terminal" -> "Close this terminal? This stops the terminal ${view.stateString("terminalId") ?: "?"}." // i18n-ok: test twin
-    "display" -> "Close this display? This stops the stream." // i18n-ok: test twin
-    else -> "Close this view?" // i18n-ok: test twin
+    "chat" -> localized(Str.shell_close_chat_confirm, sessionName?.takeIf { it.isNotBlank() } ?: viewTitle(view))
+    "terminal" -> localized(Str.shell_close_terminal_confirm, view.stateString("terminalId") ?: "?")
+    "display" -> localized(Str.shell_close_display_confirm)
+    else -> localized(Str.shell_close_view_confirm)
 }
 
 /**

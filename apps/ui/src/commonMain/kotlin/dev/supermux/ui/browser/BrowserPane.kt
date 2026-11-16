@@ -56,6 +56,12 @@ import dev.supermux.webview.InspectorResult
 import dev.supermux.webview.LoadingState
 import dev.supermux.webview.NewWindowDecision
 import dev.supermux.webview.NewWindowRequest
+import dev.supermux.webview.LoadFailure
+import dev.supermux.webview.WebError
+import dev.supermux.webview.PermissionRequest
+import dev.supermux.webview.FileChooserRequest
+import dev.supermux.webview.DownloadTarget
+import dev.supermux.webview.DownloadRequest
 import dev.supermux.webview.runtime.ProvideWebViewRuntime
 import dev.supermux.webview.WebClient
 import dev.supermux.webview.WebContent
@@ -68,6 +74,8 @@ import dev.supermux.webview.WebViewPhase
 import dev.supermux.webview.WebViewState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import dev.supermux.webview.webViewOverlay
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
@@ -99,12 +107,43 @@ internal fun PreviewCookieDto.toWebCookie(): WebCookie = WebCookie(
     secure = secure, httpOnly = httpOnly, sameSite = sameSite, maxAgeSeconds = maxAge,
 )
 
-/** A tab's answers to its page: a new window asked for with the user's press opens as a link does. */
-private class BrowserClient(private val newWindow: (String) -> Unit, private val unusedKey: (KeyEvent) -> Boolean = { false }) : WebClient {
+/**
+ * #117: the same preview key for /a/ on the host the key was minted for, where applets are served (in both proxy modes,
+ * until #114 gives them their own origins). The applet route takes this cookie and never the device token.
+ */
+internal fun PreviewCookieDto.forApplets(): PreviewCookieDto {
+    val scheme = url.indexOf("://")
+    val slash = if (scheme < 0) -1 else url.indexOf('/', scheme + 3)
+    val origin = if (slash < 0) url.trimEnd('/') else url.substring(0, slash) // platform-ok: url
+    return copy(url = "$origin/a/", path = "/a/", domain = null)
+}
+
+/** Puts the host's preview key into this engine's (the Browser profile's) store: for /p/ previews and for /a/ applets. */
+internal suspend fun dev.supermux.webview.WebNavigator.putPreviewKeys(key: PreviewCookieDto): Boolean {
+    val previews = setCookie(key.toWebCookie())
+    val applets = setCookie(key.forApplets().toWebCookie())
+    return previews && applets
+}
+
+/**
+ * A tab's answers to its page: a new window asked for with the user's press opens as a link does; downloads, file
+ * inputs and permissions go through [hooks] (#157).
+ */
+private class BrowserClient(
+    private val hooks: PageHooks,
+    private val newWindow: (String) -> Unit,
+    private val unusedKey: (KeyEvent) -> Boolean = { false },
+) : WebClient {
     override fun onNewWindow(request: NewWindowRequest): NewWindowDecision {
         if (request.isUserGesture) newWindow(request.url)
         return NewWindowDecision.Block
     }
+
+    override suspend fun onDownload(request: DownloadRequest): DownloadTarget? = hooks.download(request)
+
+    override suspend fun onFileChooser(request: FileChooserRequest): List<String>? = hooks.chooseFiles(request)
+
+    override suspend fun onPermission(request: PermissionRequest): Boolean = hooks.permission(request)
 
     /** A key the page had first and left unused (Android, #122 page-first keys): the app's shortcuts, as after Compose. */
     override fun onUnusedKey(event: KeyEvent): Boolean = unusedKey(event)
@@ -130,6 +169,10 @@ fun BrowserPane(
 ) {
     val platform = LocalPlatform.current
     val provided = LocalAppWebViews.current
+    // #155: the open's timings; whether this pane is the one that makes the app's web views (the cold start) is the first.
+    val opening = remember(view.id) {
+        TabOpenTrace(view.id).apply { mark("open", "runtime" to if (provided != null || AppWebViews.appIfMade != null) "warm" else "cold") }
+    }
     // The app's runtime is made on first use: a tab with no page makes no engine, nor loads one.
     val webViews by remember(provided) { derivedStateOf { provided ?: AppWebViews.app } }
     val links by rememberUpdatedState(LocalLinkOpener.current)
@@ -160,12 +203,25 @@ fun BrowserPane(
 
     // A port resolves through the by-port route or the previews, so the first page waits for them: three seconds at
     // most, then none.
+    // Both at the same time (#155), and the app keeps them, so a tab after the first finds them at once.
     LaunchedEffect(Unit) {
+        val asked = opening.elapsed()
+        var byPortMs: Long? = null
+        var proxiesMs: Long? = null
         withTimeoutOrNull(3_000) {
-            byPort = runCatching { actions.byPort() }.getOrNull()
-            previews = runCatching { actions.proxies() }.getOrNull()
+            coroutineScope {
+                launch {
+                    byPort = runCatching { actions.byPort() }.getOrNull()
+                    byPortMs = opening.elapsed() - asked
+                }
+                launch {
+                    previews = runCatching { actions.proxies() }.getOrNull()
+                    proxiesMs = opening.elapsed() - asked
+                }
+            }
         }
         if (previews == null) previews = emptyList()
+        opening.mark("routes", "byPortMs" to byPortMs, "proxiesMs" to proxiesMs)
     }
 
     fun go(url: String) {
@@ -191,21 +247,53 @@ fun BrowserPane(
         sync.toFollow(stored, showing)?.let(::go)
     }
 
-    // Load the page: a preview after its cookie, which goes in through a live engine (the blank page brings one up).
+    // Load the page: a preview after its key, which goes in through a live engine (the blank page brings one up).
     val page = (body as? BrowserBody.Page)?.url
     val live = state.phase == WebViewPhase.Live
+    LaunchedEffect(state.phase) {
+        when (state.phase) {
+            WebViewPhase.Activating -> opening.mark("activating")
+            WebViewPhase.Live -> opening.mark("live")
+            else -> Unit
+        }
+    }
+    // While live, this engine is one the host's preview keeper renews the key through (#155): the Browser profile's store
+    // is shared, so a key put in through any engine is every tab's.
+    val previewSink = remember(state) { PreviewKeeper.Sink<PreviewCookieDto> { state.navigator.putPreviewKeys(it) } }
+    // The key is renewed the moment an engine is up (#155), while the routes are still being asked for, not when the first
+    // preview loads: a page waits on the renewal under way instead of starting its own.
+    LaunchedEffect(live, actions.preview) {
+        if (!live) return@LaunchedEffect
+        val detach = actions.preview.attach(previewSink)
+        try {
+            actions.preview.renewIfDue()
+            awaitCancellation()
+        } finally {
+            detach()
+        }
+    }
     LaunchedEffect(page, live) {
         val url = page ?: return@LaunchedEffect
         if (url == requested) return@LaunchedEffect
         if (displayAddress(url, previews.orEmpty(), byPort) is DisplayAddress.Preview) {
-            val cookie = actions.previewCookie()
-            if (cookie != null && webViews.needsPreviewCookie(cookie)) {
-                if (!live) return@LaunchedEffect
-                if (state.navigator.setCookie(cookie.toWebCookie())) webViews.previewCookieSet(cookie)
-            }
+            // Asked only when live: the keeper mints only when the key can go into the store at once.
+            if (!live) return@LaunchedEffect
+            val asked = opening.elapsed()
+            actions.preview.ready(previewSink)
+            opening.mark("key", "keyMs" to opening.elapsed() - asked)
         }
         requested = url
+        opening.mark("load", "preview" to (displayAddress(url, previews.orEmpty(), byPort) is DisplayAddress.Preview))
         state.load(WebContent.Url(url))
+    }
+    // #155: the page's commit and its load's end, after the load the pane asked for.
+    LaunchedEffect(view.id) {
+        snapshotFlow { Triple(opening.has("load"), state.url, state.loading) }.collect { (loaded, url, loading) ->
+            if (!loaded) return@collect
+            if (loading is LoadingState.Loading) opening.mark("loading")
+            if (url != null && opening.has("loading")) opening.mark("commit")
+            if (loading == LoadingState.Idle && opening.has("loading")) opening.mark("done")
+        }
     }
     // A zoom outlives the engine: a new lease gets it again.
     // Device mode's fit (#122 2b) zooms the page by the stage's scale on top of the user's zoom; leaving it zooms back.
@@ -259,7 +347,9 @@ fun BrowserPane(
     // answers one press with a burst opens one).
     val windows = remember { Channel<String>(capacity = 4, onBufferOverflow = BufferOverflow.DROP_LATEST) }
     val shortcuts by rememberUpdatedState(LocalShortcutDispatcher.current)
-    val client = remember { BrowserClient(newWindow = { windows.trySend(it) }, unusedKey = { shortcuts?.onBubble(it) == true }) }
+    val hooks = rememberPageHooks(PageSource(view.id, view.title.orEmpty()))
+    val client = remember(hooks) { BrowserClient(hooks, newWindow = { windows.trySend(it) }, unusedKey = { shortcuts?.onBubble(it) == true }) }
+    val asking by hooks.prompt.collectAsState()
     LaunchedEffect(Unit) {
         var last: TimeSource.Monotonic.ValueTimeMark? = null
         for (url in windows) {
@@ -277,13 +367,13 @@ fun BrowserPane(
     }
     fun zoomBy(direction: Int) {
         val next = if (direction == 0) 1f else nextZoom(zoom, direction)
-        if (state.navigator.setZoom(next * (if (zoomFits) stageScale else 1f))) zoom = next else notice = "Zoom isn't available here yet"
+        if (state.navigator.setZoom(next * (if (zoomFits) stageScale else 1f))) zoom = next else notice = localized(Str.browser_zoom_unavailable)
     }
     fun inspect() {
         notice = when (val r = state.navigator.openInspector()) {
             InspectorResult.Opened -> null
             is InspectorResult.Elsewhere -> r.hint
-            else -> "This engine has no inspector here"
+            else -> localized(Str.browser_no_inspector)
         }
     }
     // The inspect key opens what the engine has, and leaves the key alone where it has none (#122: never a note that
@@ -458,15 +548,17 @@ fun BrowserPane(
             onChange = { device = it }, onClose = { deviceOn = false },
         )
         if (pick.on) PickStrip(touch = phone, onDone = { pick.on = false; pick.closeComment() })
+        asking?.let { PermissionStrip(it, touch = phone) }
         notice?.let { text ->
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp).testTag("browser-notice"), verticalAlignment = Alignment.CenterVertically) {
                 Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                dev.supermux.ui.settings.kit.KitTextAction("OK", { notice = null })
+                dev.supermux.ui.settings.kit.KitTextAction(localized(Str.browser_ok), { notice = null })
             }
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (val b = body) {
-                BrowserBody.NewTab -> BrowserMessage("Type a site, or a port such as 5173.", "browser-new-tab")
+                BrowserBody.NewTab -> BrowserMessage(localized(Str.browser_new_tab_hint), "browser-new-tab")
+
                 is BrowserBody.Said -> BrowserMessage(b.message, "browser-said")
                 is BrowserBody.Page -> {
                     val pageAndPicks = @Composable {
@@ -475,6 +567,20 @@ fun BrowserPane(
                     }
                     if (deviceOn && !phone) DeviceStage(device, fit = fitting, onScale = { stageScale = it }) { pageAndPicks() }
                     else Box(Modifier.fillMaxSize().testTag("browser-viewport")) { pageAndPicks() }
+                    // A page that didn't load says why, where it would have been, and can be tried again: a blank tab
+                    // told nothing (a refused connection, a name that doesn't resolve, plain http the OS refused).
+                    // Over the page, as one of its overlays: on macOS the page is a native view under the canvas.
+                    loadFailure(state.error)?.let { why ->
+                        Box(
+                            Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).webViewOverlay(),
+                        ) {
+                            BrowserMessage(
+                                localized(Str.browser_load_failed, why),
+                                "browser-load-failed",
+                                localized(Str.browser_try_again) to { state.navigator.reload() },
+                            )
+                        }
+                    }
                     (state.phase as? WebViewPhase.Unavailable)?.let { unavailable ->
                         // Why is the log's, not the person's (#137: a released Windows build told them to run winvm.sh).
                         LaunchedEffect(unavailable) {
@@ -507,6 +613,26 @@ fun BrowserPane(
         }
     }
     }
+}
+
+/**
+ * Why the page didn't load, or null when it did. An HTTP error status is a page the server sent, which the page shows
+ * itself; the rest left nothing to show.
+ */
+internal fun loadFailure(error: WebError?): String? = when (error) {
+    is WebError.Network -> when (error.reason) {
+        LoadFailure.CannotConnect -> localized(Str.browser_fail_cannot_connect)
+        LoadFailure.ConnectionLost -> localized(Str.browser_fail_connection_lost)
+        LoadFailure.NameNotResolved -> localized(Str.browser_fail_name)
+        LoadFailure.TimedOut -> localized(Str.browser_fail_timed_out)
+        LoadFailure.BadAnswer -> localized(Str.browser_fail_bad_answer)
+        LoadFailure.TooManyRedirects -> localized(Str.browser_fail_redirects)
+        LoadFailure.SignInRequired -> localized(Str.browser_fail_sign_in)
+        else -> error.description
+    }
+    is WebError.Certificate -> error.description
+    is WebError.BlockedByPolicy -> localized(Str.browser_load_blocked)
+    else -> null
 }
 
 /** [content] with the window's overlay registry, or one of its own where the window provides none. */

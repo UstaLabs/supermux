@@ -62,6 +62,9 @@ cd "$REPO_ROOT"
 # (the native-client Maestro lanes).
 if [ "${MUX_TEST_SKIP_WEB_BUILD:-0}" != "1" ]; then
   ( cd apps && ./gradlew :web:stageForBroker --console=plain )
+  # Brotli siblings (#142), so the journeys load the bundle the way a release serves it. Low quality:
+  # seconds instead of the release's ~1.5 min; the serving path is identical.
+  PRECOMPRESS_QUALITY=5 bun scripts/precompress-static.ts
 fi
 
 PORT="$(bun -e 'const listener=Bun.listen({hostname:"127.0.0.1",port:0,socket:{data(){}}}); console.log(listener.port); listener.stop(true)')"

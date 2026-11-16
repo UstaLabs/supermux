@@ -35,6 +35,8 @@ import dev.supermux.ui.files.FileBadgeBox
 import dev.supermux.ui.files.GoToEntry
 import dev.supermux.ui.files.fileBadge
 import dev.supermux.ui.files.highlighted
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 
 /**
  * The `@` file menu, drawn in the composer's menu strip where the `/` commands sit. One row per file
@@ -106,7 +108,7 @@ fun FileMentionMenu(
                 if (row.isDir) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                        contentDescription = "Open ${row.name}",
+                        contentDescription = localized(Str.composer_mention_open_folder, row.name),
                         tint = cs.onSurfaceVariant,
                         modifier = Modifier
                             .size(28.dp)

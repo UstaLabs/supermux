@@ -5,6 +5,7 @@ import Speech
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
+import WidgetKit
 import SupermuxKit
 
 /// The Swift side of `IosBridge` — everything the Compose root cannot do for itself.
@@ -258,7 +259,7 @@ final class SwiftBridge: NSObject, IosBridge {
         let scanner = QRScannerView.ScannerController(
             coordinator: QRScannerView.Coordinator { code in delegate.finish(code) }
         )
-        scanner.title = "Scan pairing code"
+        scanner.title = String(localized: "Scan pairing code")
         let nav = UINavigationController(rootViewController: scanner)
         scanner.navigationItem.leftBarButtonItem = UIBarButtonItem(
             systemItem: .cancel,
@@ -410,6 +411,16 @@ final class SwiftBridge: NSObject, IosBridge {
     /// `PushGroupState` (App Group) is the source of truth for the unread counts the NSE keeps.
     func cancelNotificationsFor(sessionId: String) {
         PushManager.shared.clearDelivered(sessionId: sessionId)
+    }
+
+    /// #117 W1: the applet widgets' snapshot (App Group, applet-widgets/) changed; WidgetKit redraws them.
+    func reloadWidgets() {
+        WidgetCenter.shared.reloadAllTimelines()
+        if #available(iOS 18.0, *) {
+            ControlCenter.shared.reloadAllControls()
+            // Spotlight learns new applets' names.
+            SupermuxAppShortcuts.updateAppShortcutParameters()
+        }
     }
 }
 

@@ -99,6 +99,9 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
@@ -115,7 +118,8 @@ import dev.supermux.fs.inferHomeDir
 import dev.supermux.fs.pathLeaf
 import dev.supermux.host.HostView
 import dev.supermux.host.filterSessions
-import dev.supermux.host.formatLastSeen
+import dev.supermux.host.lastSeenAgo
+import dev.supermux.ui.i18n.timeAgoText
 import kotlin.time.Clock
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.foundation.gestures.animateScrollBy
@@ -144,6 +148,13 @@ import dev.supermux.ui.adaptive.LocalInputMode
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.host.HostDot
+import dev.supermux.ui.i18n.Plurals
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.StringKey
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.localizedHost
+import dev.supermux.ui.i18n.localizedPlural
+import dev.supermux.ui.i18n.uppercaseInAppLanguage
 import dev.supermux.ui.panes.PaneDragController
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.retain.rememberRetained
@@ -152,6 +163,7 @@ import dev.supermux.ui.resources.mux_logo
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.rememberHaptics
@@ -221,6 +233,11 @@ fun SessionListScreen(
     /** Bare sessionId → ISO last_read_at (server + optimistic local marks). */
     lastRead: Map<String, String> = emptyMap(),
     agentState: Map<String, AgentStatus?> = emptyMap(),
+    /**
+     * #143: session id → the question it waits on ([needsYouAsks]). Its workspace leaves its usual place for the
+     * "Needs you" section on top until the question is answered.
+     */
+    waiting: Map<String, String> = emptyMap(),
     /** session id → running subagents (only sessions with any); drives the "2 agents" tag. */
     runningAgents: Map<String, Int> = emptyMap(),
     /** session id → display name for multi-agent child rows; defaults from [sessions]. */
@@ -278,6 +295,8 @@ fun SessionListScreen(
     archivedAgents: List<dev.supermux.net.ArchivedDto> = emptyList(),
     /** Create / rename / archive / make default / change character; null hides those entries. */
     agentsActions: AgentsActions? = null,
+    /** #117: the host picker's host's applets; null when it has none or can't have them (no Applets block then). */
+    applets: AppletsActions? = null,
     /** Agent session id → its avatar (rememberAgentAvatars); an Agent without one draws the default. */
     agentAvatars: Map<String, AvatarRig> = emptyMap(),
     initialGroupByProject: Boolean = true,
@@ -370,9 +389,14 @@ fun SessionListScreen(
             locs.isNotEmpty() && locs.all { loc -> agentHomeRoots.any { root -> hostIsInside(loc.path, root) } }
         }
     }
-    val groups = remember(visibleWorkspaces, effectiveHome, roles, visibleProjects, workspaceHost, archivedWorkspaces, archivedPending, homeDirs) {
+    // #143: a workspace waiting on the user is listed under "Needs you" instead of in its group.
+    val needsYou = remember(visibleWorkspaces, waiting) { waitingWorkspaces(visibleWorkspaces, waiting.keys) }
+    val listedWorkspaces = remember(visibleWorkspaces, needsYou) {
+        if (needsYou.isEmpty()) visibleWorkspaces else needsYou.map { it.id }.toSet().let { ids -> visibleWorkspaces.filterNot { it.id in ids } }
+    }
+    val groups = remember(listedWorkspaces, effectiveHome, roles, visibleProjects, workspaceHost, archivedWorkspaces, archivedPending, homeDirs) {
         // Archived rows only decide whether an empty project is shown (archived-only → hidden).
-        groupWorkspaces(visibleWorkspaces, effectiveHome, visibleProjects, workspaceHost, archivedWorkspaces, hideEmptyProjects = archivedPending, homeOf = { homeDirs[it] }) { w ->
+        groupWorkspaces(listedWorkspaces, effectiveHome, visibleProjects, workspaceHost, archivedWorkspaces, hideEmptyProjects = archivedPending, homeOf = { homeDirs[it] }) { w ->
             val sid = w.primarySessionId ?: w.chatSessionIds().firstOrNull()
             sid != null && roles[sid] == "personal_assistant"
         }
@@ -527,9 +551,10 @@ fun SessionListScreen(
     // ── Search matches: names first, then chat history (SidebarSearch.kt) ──────────────────────
     val chatSearch = dev.supermux.ui.chat.LocalChatSearch.current
     /** Workspace id → the project label its group shows (the status view's tag). */
-    val wsProjectLabel = remember(groups) {
+    val agentsWord = localized(Str.sessions_agents_title)
+    val wsProjectLabel = remember(groups, agentsWord) {
         groups.flatMap { g ->
-            val label = g.projectRef()?.project?.name ?: pathLeaf(g.label)
+            val label = if (g.key == PA_GROUP_KEY) agentsWord else g.projectRef()?.project?.name ?: pathLeaf(g.label)
             g.workspaces.map { it.id to label }
         }.toMap()
     }
@@ -731,6 +756,9 @@ fun SessionListScreen(
         val isActive =
             if (openWorkspaceByWorkspaceId) w.id == activeId else openSid != null && openSid == activeId
         val rowInteraction = remember { MutableInteractionSource() }
+        // #149: the workspace's folder, in Finder / Explorer, when its host is this computer.
+        val folderEntry = dev.supermux.ui.platform.rememberOpenFolder(model.primarySessionId ?: openSid, w.workdir)
+            ?.let { RowContextMenuEntry(it.label, it.open) }
         val body: @Composable (Boolean, Modifier) -> Unit = { isDragging, dragModifier ->
             Column(Modifier.fillMaxWidth()) {
                 WorkspaceRow(
@@ -775,6 +803,7 @@ fun SessionListScreen(
                     selecting = selecting,
                     selected = w.id in selectedWorkspaceIds,
                     highlight = highlight,
+                    folder = folderEntry,
                     onRename = { renameWorkspaceTarget = w; renameText = w.name },
                     onNewChat = { onNewChatInWorkspace(w) },
                     onKill = { archiveWorkspaceTarget = w },
@@ -801,6 +830,7 @@ fun SessionListScreen(
                                     lastMessageTs = lastBySession[child.sessionId]?.ts,
                                     lastReadAt = lastRead[child.sessionId],
                                 ),
+                                advice = sessionById[child.sessionId]?.compactAdvice != null,
                                 onClick = { openChild(w.id, child.sessionId) },
                             )
                         }
@@ -883,6 +913,13 @@ fun SessionListScreen(
         if (openWorkspaceByWorkspaceId) onOpen(w.id)
         else (w.primarySessionId ?: w.chatSessionIds().firstOrNull())?.let(onOpen)
     }
+    val agentRenameWord = localized(Str.sessions_agents_rename)
+    val agentCharacterWord = localized(Str.sessions_agents_change_character)
+    val agentDefaultWord = localized(Str.sessions_agents_make_default)
+    val muteWord = localized(Str.shell_mute)
+    val unmuteWord = localized(Str.shell_unmute)
+    val markReadWord = localized(Str.sessions_row_mark_read)
+    val agentArchiveWord = localized(Str.sessions_agents_archive)
     fun agentContextEntries(w: WorkspaceDto): List<RowContextMenuEntry> {
         val sid = w.primarySessionId ?: w.chatSessionIds().firstOrNull()
         val s = sid?.let { sessionById[it] }
@@ -891,17 +928,17 @@ fun SessionListScreen(
         val a = agentsActions
         return buildList {
             if (a != null && sid != null) {
-                add(RowContextMenuEntry("Rename…") { agentDialog = AgentDialog.Rename(sid, name) })
-                add(RowContextMenuEntry("Change character…") { agentDialog = AgentDialog.Character(sid, name) })
+                add(RowContextMenuEntry(agentRenameWord) { agentDialog = AgentDialog.Rename(sid, name) })
+                add(RowContextMenuEntry(agentCharacterWord) { agentDialog = AgentDialog.Character(sid, name) })
                 if (s?.isDefault != true) {
-                    add(RowContextMenuEntry("Make default") { listScope.launch { a.setDefault(sid) } })
+                    add(RowContextMenuEntry(agentDefaultWord) { listScope.launch { a.setDefault(sid) } })
                 }
             }
-            if (sid != null) add(RowContextMenuEntry(if (muted) "Unmute" else "Mute") { onMute(sid, !muted) })
+            if (sid != null) add(RowContextMenuEntry(if (muted) unmuteWord else muteWord) { onMute(sid, !muted) })
             if (workspaceUnread(w)) {
-                add(RowContextMenuEntry("Mark as read") { actions.markRead(batchMarkReadSessionIds(listOf(w), setOf(w.id))) })
+                add(RowContextMenuEntry(markReadWord) { actions.markRead(batchMarkReadSessionIds(listOf(w), setOf(w.id))) })
             }
-            if (a != null && sid != null) add(RowContextMenuEntry("Archive…") { agentDialog = AgentDialog.Archive(sid, name) })
+            if (a != null && sid != null) add(RowContextMenuEntry(agentArchiveWord) { agentDialog = AgentDialog.Archive(sid, name) })
         }
     }
 
@@ -909,7 +946,7 @@ fun SessionListScreen(
         if (groups.isEmpty() && archivedWorkspaces.isEmpty() && mode == SessionListMode.Workspaces) {
             item(key = "empty_hint") {
                 Text(
-                    "No workspaces yet",
+                    localized(Str.sessions_list_no_workspaces),
                     color = cs.onSurfaceVariant,
                     fontSize = 12.sp,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.md),
@@ -933,7 +970,7 @@ fun SessionListScreen(
                 }
             }
             if (mode == SessionListMode.Workspaces && draftSessions.isNotEmpty()) {
-                item(key = "flat:h:draft") { SectionLabel("DRAFTS") }
+                item(key = "flat:h:draft") { SectionLabel(localized(Str.sessions_list_drafts)) }
                 items(draftSessions, key = { "f:draft:${it.id}" }) { s ->
                     SessionRow(
                         s = s,
@@ -980,7 +1017,7 @@ fun SessionListScreen(
             fun isWorking(w: WorkspaceDto) = workspaceActivity(w, agentTyped) == WorkspaceActivity.WORKING
             val rows = all.filter { (w, _) -> isWorking(w) || workspaceUnread(w) }
             if (rows.isNotEmpty()) {
-                item(key = "inbox:h:active") { StatusSectionLabel("Active", rows.size, accent = true) }
+                item(key = "inbox:h:active") { StatusSectionLabel(localized(Str.sessions_list_active), rows.size, accent = true) }
                 itemsIndexed(rows, key = { _, r -> "ws:${r.first.id}" }) { index, (w, label) ->
                     WorkspaceEntry(
                         w = w, scopeKey = null, grouped = false,
@@ -990,7 +1027,7 @@ fun SessionListScreen(
                 }
                 rows.forEach { inboxPulled += it.first.id }
             }
-            item(key = "inbox:h:rest") { StatusSectionLabel("Everything else", null) }
+            item(key = "inbox:h:rest") { StatusSectionLabel(localized(Str.sessions_list_everything_else), null) }
         }
         groups.forEach { g ->
             if (g.key == PA_GROUP_KEY) return@forEach
@@ -1101,7 +1138,7 @@ fun SessionListScreen(
             // messages must not reshuffle.
             val pas = sessionsByUserOrder(onlineSessions.filter { it.role == "personal_assistant" })
             if (pas.isNotEmpty()) {
-                item(key = "flat:pa_hdr") { SectionLabel("AGENTS") }
+                item(key = "flat:pa_hdr") { SectionLabel(localized(Str.sessions_agents_title)) }
                 items(pas, key = { "flat:pa:${it.id}" }) { s ->
                     SessionRow(
                         s = s,
@@ -1160,7 +1197,7 @@ fun SessionListScreen(
                         }
                     }
                 } else {
-                    item(key = "flat:hdr:${section.key}") { SectionLabel(section.label.uppercase()) }
+                    item(key = "flat:hdr:${section.key}") { SectionLabel(localized(if (section.key == SectionKey.DRAFT) Str.sessions_list_drafts else Str.sessions_list_in_progress)) }
                     items(section.sessions, key = { "task:${it.id}" }) { s ->
                         ReorderableItem(reorderableState, key = "task:${s.id}") { isDragging ->
                             // Whole-row long-press on the swipe shell (parent of the Surface click).
@@ -1216,7 +1253,7 @@ fun SessionListScreen(
             groupHeader(key = "group:header:${g.workdir}") {
                 GroupHeaderRow {
                     PathGroupHeader(
-                        label = g.label,
+                        label = if (isPaGroup) localized(Str.sessions_agents_title) else g.label,
                         unreadCount = g.allSessions().count { sessionUnread(it.id) },
                         collapsed = isCollapsed,
                         onToggle = {
@@ -1474,10 +1511,10 @@ fun SessionListScreen(
         Box(Modifier.searchCursor(key == cursorKey, cs.primary.copy(alpha = 0.10f))) { content() }
     }
 
-    fun LazyListScope.searchStatus(key: String, text: String) {
+    fun LazyListScope.searchStatus(key: String, text: StringKey) {
         item(key = key) {
             Text(
-                text,
+                localized(text),
                 color = cs.onSurfaceVariant,
                 fontSize = 12.sp,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.sm)
@@ -1490,7 +1527,7 @@ fun SessionListScreen(
         val nameMatches = if (useWorkspaces) searchWorkspaces.size + searchArchived.size else searchSessions.size
         if (useWorkspaces) {
             if (searchWorkspaces.isNotEmpty()) {
-                item(key = "search:h:ws") { SectionLabel("WORKSPACES") }
+                item(key = "search:h:ws") { SectionLabel(localized(Str.sessions_list_workspaces)) }
                 itemsIndexed(searchWorkspaces, key = { _, w -> "search:ws:${w.id}" }) { index, w ->
                     SearchResultItem("search:ws:${w.id}") {
                         WorkspaceEntry(
@@ -1503,13 +1540,13 @@ fun SessionListScreen(
                 }
             }
             if (searchArchived.isNotEmpty()) {
-                item(key = "search:h:archived") { SectionLabel("ARCHIVED") }
+                item(key = "search:h:archived") { SectionLabel(localized(Str.sessions_row_archived)) }
                 items(searchArchived, key = { "search:a:${it.id}" }) { w ->
                     SearchResultItem("search:a:${w.id}") { ArchivedEntry(w, highlight = searchQ) }
                 }
             }
         } else if (searchSessions.isNotEmpty()) {
-            item(key = "search:h:sessions") { SectionLabel("SESSIONS") }
+            item(key = "search:h:sessions") { SectionLabel(localized(Str.sessions_list_sessions)) }
             items(searchSessions, key = { "search:s:${it.id}" }) { s ->
                 SearchResultItem("search:s:${s.id}") {
                     SessionRow(
@@ -1533,17 +1570,17 @@ fun SessionListScreen(
             }
         }
         if (chatSearch == null) {
-            if (nameMatches == 0) searchStatus("search:none", "No matches")
+            if (nameMatches == 0) searchStatus("search:none", Str.sessions_list_no_matches)
             return
         }
         // History second: chats whose messages mention it, past the ones the names surfaced.
-        item(key = "search:h:history") { SectionLabel("IN CHAT HISTORY") }
+        item(key = "search:h:history") { SectionLabel(localized(Str.sessions_list_in_chat_history)) }
         when {
-            historyAnswer.failed -> searchStatus("search:history_status", "Couldn't search chat history")
-            historyAnswer.hits == null -> searchStatus("search:history_status", "Searching chat history…")
+            historyAnswer.failed -> searchStatus("search:history_status", Str.sessions_list_history_failed)
+            historyAnswer.hits == null -> searchStatus("search:history_status", Str.sessions_list_history_searching)
             historyHits.isEmpty() -> searchStatus(
                 "search:history_status",
-                if (nameMatches == 0) "No matches" else "No other chats mention it",
+                if (nameMatches == 0) Str.sessions_list_no_matches else Str.sessions_list_history_none,
             )
             else -> items(historyHits, key = { "search:hit:${it.session_id}" }) { hit ->
                 SearchResultItem("search:hit:${hit.session_id}") {
@@ -1565,12 +1602,12 @@ fun SessionListScreen(
         ) {
             Icon(
                 painter = painterResource(Res.drawable.mux_logo),
-                contentDescription = "Supermux logo",
+                contentDescription = localized(Str.sessions_list_logo),
                 tint = cs.onSurface,
                 modifier = Modifier.size(22.dp),
             )
             Spacer(Modifier.width(Space.sm))
-            Text("supermux", color = cs.onSurface, style = MaterialTheme.typography.titleMedium)
+            Text("supermux", color = cs.onSurface, style = MaterialTheme.typography.titleMedium) // i18n-ok: brand
         }
     }
     // Agents are always on, so they get their own zone at the very top — above the Workspaces
@@ -1596,6 +1633,38 @@ fun SessionListScreen(
             archived = archivedAgents,
             avatars = agentAvatars,
         )
+    }
+    // #143: sessions blocked on the user, on top of everything else, until answered.
+    fun LazyListScope.needsYouItems() {
+        if (selecting || searching) return
+        val rows: List<Pair<String, String>> = if (useWorkspaces) {
+            needsYou.mapNotNull { w ->
+                val sid = (listOfNotNull(w.primarySessionId) + w.chatSessionIds()).firstOrNull { it in waiting } ?: return@mapNotNull null
+                w.id to sid
+            }
+        } else {
+            visibleSessions.filter { it.id in waiting }.map { it.id to it.id }
+        }
+        if (rows.isEmpty()) return
+        item(key = "needs-you:h") { NeedsYouLabel(rows.size) }
+        items(rows, key = { "needs-you:${it.first}" }) { (rowId, sid) ->
+            val workspace = needsYou.firstOrNull { it.id == rowId }
+            val name = workspace?.let { w ->
+                sessionById[sid]?.name?.takeIf { it.isNotBlank() } ?: w.name
+            } ?: sessionById[sid]?.name ?: sid
+            NeedsYouRow(
+                name = name,
+                question = waiting[sid].orEmpty(),
+                sessionId = sid,
+                onClick = {
+                    when {
+                        workspace == null -> onOpen(sid)
+                        openWorkspaceByWorkspaceId -> onOpenSession?.invoke(workspace.id, sid) ?: onOpen(workspace.id)
+                        else -> onOpen(sid)
+                    }
+                },
+            )
+        }
     }
     val newSessionCard: @Composable () -> Unit = {
         // No extra room above it: under the title band its top lines up with the sheets beside it.
@@ -1632,7 +1701,7 @@ fun SessionListScreen(
             transitionSpec = {
                 fadeIn(tween(200, delayMillis = 60)) togetherWith fadeOut(tween(120)) using SizeTransform(clip = false)
             },
-            label = "sidebar_search",
+            label = "sidebar_search", // i18n-ok: animation label
         ) { open ->
             if (open) {
                 SidebarSearchBar(
@@ -1646,7 +1715,7 @@ fun SessionListScreen(
                 return@AnimatedContent
             }
             SessionsSectionHeader(
-                title = if (useWorkspaces) "Workspaces" else "Sessions",
+                title = localized(if (useWorkspaces) Str.sessions_list_workspaces else Str.sessions_list_sessions),
                 onSearch = { searchOpen = true },
                 onSelect = if (useWorkspaces && visibleWorkspaces.isNotEmpty()) {
                     { selecting = true }
@@ -1689,6 +1758,9 @@ fun SessionListScreen(
             item(key = "chrome:new_session") { newSessionCard() }
             // Banners and "can't reach the host" come before the Agents, as on wide hosts.
             item(key = "chrome:above") { aboveList() }
+            // #117: the applets first, at the top of the list (Ahmet), as on a home screen.
+            if (applets != null && !selecting) applets.screens.zone(this, applets, phone = true)
+            needsYouItems()
             agentsItems()
             stickyHeader(key = "chrome:section") {
                 Box(Modifier.fillMaxWidth().background(cs.surfaceContainerHigh)) { sectionHeader() }
@@ -1696,6 +1768,10 @@ fun SessionListScreen(
         } else {
             // Wide hosts: the Agents scroll with the list, and the Workspaces header pins once
             // they have scrolled away (search, select and the menu stay reachable).
+            // #117: the applets at the top of the sidebar, above the Agents (Ahmet); 3×3 in a sidebar whatever the
+            // input (an unfolded Fold cut the phone's four-across labels short); long-press still opens the menu on touch.
+            if (applets != null && !selecting) applets.screens.zone(this, applets, phone = false)
+            needsYouItems()
             agentsItems()
             stickyHeader(key = "chrome:section") {
                 Box(Modifier.fillMaxWidth().background(cs.surfaceContainerHigh)) { sectionHeader() }
@@ -1850,13 +1926,11 @@ fun SessionListScreen(
         val skippedPa = selectedWorkspaceIds.count { it in paWorkspaceIds }
         AlertDialog(
             onDismissRequest = { batchArchiveOpen = false },
-            title = { Text(if (ids.size == 1) "Archive 1 workspace?" else "Archive ${ids.size} workspaces?") },
+            title = { Text(localizedPlural(Plurals.sessions_list_archive_workspaces_title, ids.size, ids.size)) },
             text = {
                 Text(
-                    buildString {
-                        append("This archives the selected workspaces and stops their sessions. Worktrees are kept. This can't be undone.")
-                        if (skippedPa > 0) append("\n\nAgents are skipped.")
-                    },
+                    localized(Str.sessions_list_archive_selected_text) +
+                        if (skippedPa > 0) "\n\n" + localized(Str.sessions_list_archive_agents_skipped) else "",
                 )
             },
             confirmButton = {
@@ -1864,9 +1938,9 @@ fun SessionListScreen(
                     batchArchiveOpen = false
                     ids.forEach(actions.archiveWorkspace)
                     exitSelection()
-                }) { Text("Archive", color = cs.error) }
+                }) { Text(localized(Str.sessions_row_archive), color = cs.error) }
             },
-            dismissButton = { TextButton(onClick = { batchArchiveOpen = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { batchArchiveOpen = false }) { Text(localized(Str.shell_cancel)) } },
         )
     }
     if (organizeProjectsOpen) {
@@ -1881,29 +1955,29 @@ fun SessionListScreen(
     renameTarget?.let { target ->
         AlertDialog(
             onDismissRequest = { renameTarget = null },
-            title = { Text("Rename session") },
+            title = { Text(localized(Str.shell_rename_session)) },
             text = { OutlinedTextField(value = renameText, onValueChange = { renameText = it }, singleLine = true, modifier = Modifier.testTag("sidebar_rename_field")) },
             confirmButton = {
                 TextButton(onClick = { onRename(target.id, renameText.trim()); renameTarget = null }) {
-                    Text("Rename")
+                    Text(localized(Str.shell_rename))
                 }
             },
-            dismissButton = { TextButton(onClick = { renameTarget = null }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { renameTarget = null }) { Text(localized(Str.shell_cancel)) } },
         )
     }
     renameWorkspaceTarget?.let { target ->
         AlertDialog(
             onDismissRequest = { renameWorkspaceTarget = null },
-            title = { Text("Rename workspace") },
+            title = { Text(localized(Str.sessions_list_rename_workspace)) },
             text = { OutlinedTextField(value = renameText, onValueChange = { renameText = it }, singleLine = true, modifier = Modifier.testTag("sidebar_rename_field")) },
             confirmButton = {
                 TextButton(onClick = {
                     val sid = target.primarySessionId ?: target.chatSessionIds().firstOrNull()
                     if (sid != null) onRename(sid, renameText.trim())
                     renameWorkspaceTarget = null
-                }) { Text("Rename") }
+                }) { Text(localized(Str.shell_rename)) }
             },
-            dismissButton = { TextButton(onClick = { renameWorkspaceTarget = null }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { renameWorkspaceTarget = null }) { Text(localized(Str.shell_cancel)) } },
         )
     }
     archiveWorkspaceTarget?.let { target ->
@@ -1914,10 +1988,10 @@ fun SessionListScreen(
         val workdirs = sessionIds.mapNotNull { id -> sessions.firstOrNull { it.id == id }?.workdir }.ifEmpty { listOf(target.workdir) }
         AlertDialog(
             onDismissRequest = { archiveWorkspaceTarget = null },
-            title = { Text("Archive workspace?") },
+            title = { Text(localized(Str.sessions_list_archive_workspace_title)) },
             text = {
                 Column {
-                    Text("This archives \"${target.name}\" and stops its sessions. This can't be undone.")
+                    Text(localized(Str.sessions_list_archive_workspace_text, target.name))
                     WorktreeCleanupSection(
                         workdirs, sessionIds.toSet(), { wd -> actions.worktreeForWorkspaceWorkdir(target.id, wd) },
                         onDeleteChange = { c, ids -> deleteWt = c; deleteIds = ids },
@@ -1935,9 +2009,9 @@ fun SessionListScreen(
                     } else {
                         actions.archiveWorkspace(id)
                     }
-                }) { Text(if (deleteWt) "Archive & delete" else "Archive", color = cs.error) }
+                }) { Text(localized(if (deleteWt) Str.sessions_list_archive_and_delete else Str.sessions_row_archive), color = cs.error) }
             },
-            dismissButton = { TextButton(onClick = { archiveWorkspaceTarget = null }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { archiveWorkspaceTarget = null }) { Text(localized(Str.shell_cancel)) } },
         )
     }
     killTarget?.let { target ->
@@ -1947,16 +2021,10 @@ fun SessionListScreen(
         val notices = LocalPlatform.current.notices
         AlertDialog(
             onDismissRequest = { killTarget = null },
-            title = { Text(if (discard) "Discard draft?" else "Settle session?") },
+            title = { Text(localized(if (discard) Str.sessions_list_discard_draft_title else Str.sessions_list_settle_title)) },
             text = {
                 Column {
-                    Text(
-                        if (discard) {
-                            "This permanently discards \"${target.name}\". This can't be undone."
-                        } else {
-                            "This ends \"${target.name}\" and its agent. This can't be undone."
-                        },
-                    )
+                    Text(localized(if (discard) Str.sessions_list_discard_draft_text else Str.shell_kill_session_text, target.name))
                     if (!discard) {
                         WorktreeCleanupSection(
                             listOf(target.workdir), setOf(target.id), { wd -> actions.worktreeForSessionWorkdir(target.id, wd) },
@@ -1980,10 +2048,10 @@ fun SessionListScreen(
                         onKill(id)
                     }
                 }) {
-                    Text(if (discard) "Discard" else if (deleteWt) "Settle & delete" else "Settle", color = cs.error)
+                    Text(localized(if (discard) Str.sessions_row_discard else if (deleteWt) Str.sessions_list_settle_and_delete else Str.sessions_row_settle), color = cs.error)
                 }
             },
-            dismissButton = { TextButton(onClick = { killTarget = null }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { killTarget = null }) { Text(localized(Str.shell_cancel)) } },
         )
     }
 }
@@ -1997,10 +2065,78 @@ private fun groupedRowShape(first: Boolean, last: Boolean) = RoundedCornerShape(
     bottomEnd = if (last) Radii.lg else 0.dp,
 )
 
+/** #143: the "Needs you · N" label, in the warning role (the app's colour for "a human is needed"). */
+@Composable
+private fun NeedsYouLabel(count: Int) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = 6.dp).testTag("needs-you-header"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            localized(Str.sessions_needs_you).uppercaseInAppLanguage(),
+            color = LocalSemantics.current.warning,
+            fontFamily = MonoFontFamily,
+            fontSize = 11.sp,
+            modifier = Modifier.weight(1f),
+        )
+        Text("$count", color = LocalSemantics.current.warning, fontFamily = MonoFontFamily, fontSize = 11.sp)
+    }
+}
+
+/** #143: a session waiting on the user: an amber mark, its name with a "Needs you" chip, and its question. */
+@Composable
+private fun NeedsYouRow(name: String, question: String, sessionId: String, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val wait = LocalSemantics.current.warning
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Space.sm, vertical = 1.dp)
+            .clip(RoundedCornerShape(7.dp))
+            .clickable(onClick = onClick)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .padding(start = 14.dp, end = 10.dp, top = 6.dp, bottom = 6.dp)
+            .testTag("needs-you:$sessionId"),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Box(Modifier.padding(top = 6.dp).size(9.dp).rotate(45f).clip(RoundedCornerShape(2.dp)).background(wait))
+        Column(Modifier.weight(1f).padding(start = 10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = cs.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                Text(
+                    localized(Str.sessions_needs_you),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = LocalSemantics.current.onStatus,
+                    maxLines = 1,
+                    modifier = Modifier.padding(start = 6.dp).clip(RoundedCornerShape(6.dp)).background(wait).padding(horizontal = 6.dp),
+                )
+            }
+            if (question.isNotBlank()) {
+                Text(
+                    question,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = wait,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun SectionLabel(text: String) {
     Text(
-        text,
+        text.uppercaseInAppLanguage(),
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         fontFamily = MonoFontFamily,
         fontSize = 11.sp,
@@ -2018,7 +2154,7 @@ private fun NewSessionFab(visible: Boolean, onClick: () -> Unit, modifier: Modif
         modifier = modifier,
     ) {
         FloatingActionButton(onClick = onClick, modifier = Modifier.testTag("new_session_fab")) {
-            Icon(Icons.Filled.Add, contentDescription = "Start a new session")
+            Icon(Icons.Filled.Add, contentDescription = localized(Str.sessions_row_start_new))
         }
     }
 }
@@ -2050,13 +2186,15 @@ private fun ArchivedGroupLabel(label: String, trailing: (@Composable () -> Unit)
 @Composable
 private fun GroupByProjectRow(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     val cs = MaterialTheme.colorScheme
+    val groupWord = localized(Str.sessions_list_group_by_project)
+    val groupState = localized(if (checked) Str.sessions_list_on else Str.sessions_list_off)
     Row(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp)
             .testTag("group_by_project")
             .semantics {
-                stateDescription = if (checked) "Group by project on" else "Group by project off"
+                stateDescription = groupState
             },
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -2073,7 +2211,7 @@ private fun GroupByProjectRow(checked: Boolean, onCheckedChange: (Boolean) -> Un
                 modifier = Modifier.size(16.dp),
             )
             Text(
-                "Group by project",
+                groupWord,
                 color = cs.onSurfaceVariant,
                 fontSize = 12.sp,
                 maxLines = 1,
@@ -2085,7 +2223,7 @@ private fun GroupByProjectRow(checked: Boolean, onCheckedChange: (Boolean) -> Un
             onCheckedChange = onCheckedChange,
             modifier = Modifier
                 .testTag("group_by_project_switch")
-                .semantics { contentDescription = "Group by project" },
+                .semantics { contentDescription = groupWord },
         )
     }
 }
@@ -2099,7 +2237,7 @@ private fun QuietSettledToggle(
 ) {
     val cs = MaterialTheme.colorScheme
     Text(
-        if (expanded) "Hide $count settled" else "Show $count settled",
+        localized(if (expanded) Str.sessions_list_hide_settled else Str.sessions_list_show_settled, count),
         color = cs.onSurfaceVariant.copy(alpha = 0.75f),
         fontSize = 12.sp,
         modifier = Modifier
@@ -2110,12 +2248,6 @@ private fun QuietSettledToggle(
     )
 }
 
-/** Copy for a host the app can't reach. */
-object OfflineHostCopy {
-    /** The first thing to check (spec "Keep the computer awake while hosting"): a sleeping or logged-out computer. */
-    const val AWAKE_HINT = "Is the computer awake and logged in?"
-}
-
 /**
  * Greyed group header for an offline/unreachable host (spec §5): dot + name + last-seen, then a
  * quiet first hint — the usual reason is a computer that is asleep or not logged in.
@@ -2123,7 +2255,7 @@ object OfflineHostCopy {
 @Composable
 private fun OfflineHostHeader(host: HostView) {
     val cs = MaterialTheme.colorScheme
-    val lastSeen = formatLastSeen(Clock.System.now().toEpochMilliseconds(), host.lastSeenAt)
+    val lastSeen = lastSeenAgo(Clock.System.now().toEpochMilliseconds(), host.lastSeenAt)?.let(::timeAgoText).orEmpty()
     Column(
         Modifier
             .fillMaxWidth()
@@ -2138,7 +2270,7 @@ private fun OfflineHostHeader(host: HostView) {
         ) {
             HostDot(host.colorIndex, size = 8.dp)
             Text(
-                host.displayLabel,
+                host.displayLabel.localizedHost(),
                 color = cs.onSurfaceVariant,
                 fontFamily = MonoFontFamily,
                 fontSize = 11.sp,
@@ -2147,7 +2279,7 @@ private fun OfflineHostHeader(host: HostView) {
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                "· offline" + if (lastSeen.isNotEmpty()) " · seen $lastSeen" else "",
+                if (lastSeen.isNotEmpty()) localized(Str.sessions_list_offline_seen, lastSeen) else localized(Str.sessions_list_offline),
                 color = cs.onSurfaceVariant.copy(alpha = 0.6f),
                 fontFamily = MonoFontFamily,
                 fontSize = 10.sp,
@@ -2155,7 +2287,7 @@ private fun OfflineHostHeader(host: HostView) {
             )
         }
         Text(
-            OfflineHostCopy.AWAKE_HINT,
+            localized(Str.sessions_list_awake_hint),
             color = cs.onSurfaceVariant.copy(alpha = 0.6f),
             fontSize = 11.sp,
             maxLines = 2,
@@ -2168,7 +2300,7 @@ private fun OfflineHostHeader(host: HostView) {
 @Composable
 private fun SingleHostOfflineNotice(host: HostView) {
     val cs = MaterialTheme.colorScheme
-    val lastSeen = formatLastSeen(Clock.System.now().toEpochMilliseconds(), host.lastSeenAt)
+    val lastSeen = lastSeenAgo(Clock.System.now().toEpochMilliseconds(), host.lastSeenAt)?.let(::timeAgoText).orEmpty()
     Column(
         Modifier
             .fillMaxWidth()
@@ -2180,7 +2312,8 @@ private fun SingleHostOfflineNotice(host: HostView) {
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Text(
-            "Can't reach ${host.displayLabel}" + if (lastSeen.isNotEmpty()) " · seen $lastSeen" else "",
+            if (lastSeen.isNotEmpty()) localized(Str.sessions_list_cant_reach_seen, host.displayLabel.localizedHost(), lastSeen)
+            else localized(Str.sessions_list_cant_reach, host.displayLabel.localizedHost()),
             color = cs.onSurface,
             fontSize = 13.sp,
             fontWeight = FontWeight.Medium,
@@ -2188,7 +2321,7 @@ private fun SingleHostOfflineNotice(host: HostView) {
             overflow = TextOverflow.Ellipsis,
         )
         Text(
-            OfflineHostCopy.AWAKE_HINT,
+            localized(Str.sessions_list_awake_hint),
             color = cs.onSurfaceVariant,
             fontSize = 12.sp,
             modifier = Modifier.testTag("offline_single_host_hint"),
@@ -2230,7 +2363,7 @@ private fun SessionsSectionHeader(
         ) {
             Icon(
                 Icons.Filled.Search,
-                contentDescription = "Search",
+                contentDescription = localized(Str.sessions_list_search),
                 tint = cs.onSurfaceVariant,
                 modifier = Modifier.size(15.dp),
             )
@@ -2242,7 +2375,7 @@ private fun SessionsSectionHeader(
             ) {
                 Icon(
                     Icons.Filled.Checklist,
-                    contentDescription = "Select workspaces",
+                    contentDescription = localized(Str.sessions_list_select_workspaces),
                     tint = cs.onSurfaceVariant,
                     modifier = Modifier.size(15.dp),
                 )
@@ -2254,11 +2387,13 @@ private fun SessionsSectionHeader(
         ) {
             Icon(
                 if (statusView == true) Icons.Filled.Inbox else Icons.Filled.ViewAgenda,
-                contentDescription = when (statusView) {
-                    null -> if (groupByProject) "Flat list" else "Group by project"
-                    true -> "Group by project"
-                    false -> "Group by status"
-                },
+                contentDescription = localized(
+                    when (statusView) {
+                        null -> if (groupByProject) Str.sessions_list_flat_list else Str.sessions_list_group_by_project
+                        true -> Str.sessions_list_group_by_project
+                        false -> Str.sessions_list_group_by_status
+                    },
+                ),
                 tint = if (statusView != null || groupByProject) cs.primary else cs.onSurfaceVariant,
                 modifier = Modifier.size(15.dp),
             )
@@ -2287,10 +2422,10 @@ private fun WorkspaceBatchBar(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconButton(onClick = onCancel, modifier = Modifier.size(28.dp).testTag(WorkspaceListTestIds.BATCH_CANCEL)) {
-            Icon(Icons.Filled.Close, contentDescription = "Cancel selection", tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
+            Icon(Icons.Filled.Close, contentDescription = localized(Str.sessions_list_cancel_selection), tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
         }
         Text(
-            if (count == 0) "Select workspaces" else "$count selected",
+            if (count == 0) localized(Str.sessions_list_select_workspaces) else localized(Str.sessions_list_selected, count),
             color = cs.onSurface,
             fontSize = 12.sp,
             fontWeight = FontWeight.Medium,
@@ -2298,7 +2433,7 @@ private fun WorkspaceBatchBar(
             modifier = Modifier.weight(1f).padding(start = 4.dp),
         )
         TextButton(onClick = onToggleAll, modifier = Modifier.testTag(WorkspaceListTestIds.BATCH_SELECT_ALL)) {
-            Text(if (allSelected) "None" else "All", fontSize = 12.sp)
+            Text(localized(if (allSelected) Str.sessions_list_select_none else Str.sessions_list_select_all), fontSize = 12.sp)
         }
         IconButton(
             onClick = onMarkRead,
@@ -2307,7 +2442,7 @@ private fun WorkspaceBatchBar(
         ) {
             Icon(
                 Icons.Filled.DoneAll,
-                contentDescription = "Mark as read",
+                contentDescription = localized(Str.sessions_row_mark_read),
                 tint = if (count > 0) cs.onSurfaceVariant else cs.onSurfaceVariant.copy(alpha = 0.38f),
                 modifier = Modifier.size(16.dp),
             )
@@ -2319,7 +2454,7 @@ private fun WorkspaceBatchBar(
         ) {
             Icon(
                 Icons.Filled.Archive,
-                contentDescription = "Archive",
+                contentDescription = localized(Str.sessions_row_archive),
                 tint = if (canArchive) cs.error else cs.onSurfaceVariant.copy(alpha = 0.38f),
                 modifier = Modifier.size(16.dp),
             )
@@ -2348,7 +2483,7 @@ private fun OverflowNav(
         ) {
             Icon(
                 imageVector = Icons.Filled.MoreVert,
-                contentDescription = "Actions",
+                contentDescription = localized(Str.sessions_list_actions),
                 tint = cs.onSurfaceVariant,
                 modifier = Modifier.size(if (touch) 19.dp else 16.dp),
             )
@@ -2356,33 +2491,33 @@ private fun OverflowNav(
         DropdownMenu(expanded = expanded, onDismissRequest = { onExpandedChange(false) }) {
             // Always-reachable add-host entry (the filter row's `+` chip is hidden until a 2nd
             // host exists, so the very first extra host is added from here — spec §5).
-            NavItem("Add host", Icons.Filled.Add, "nav_add_host") { onExpandedChange(false); onAddHost() }
+            NavItem(localized(Str.host_add), Icons.Filled.Add, "nav_add_host") { onExpandedChange(false); onAddHost() }
             onNewProject?.let { newProject ->
-                NavItem("New project", Icons.Filled.CreateNewFolder, "nav_new_project") {
+                NavItem(localized(Str.sessions_list_new_project), Icons.Filled.CreateNewFolder, "nav_new_project") {
                     onExpandedChange(false); newProject()
                 }
             }
             onOrganizeProjects?.let { organize ->
-                NavItem("Organize projects", Icons.Filled.SwapVert, "nav_organize_projects") {
+                NavItem(localized(Str.sessions_list_organize_projects), Icons.Filled.SwapVert, "nav_organize_projects") {
                     onExpandedChange(false); organize()
                 }
             }
-            NavItem("Archived", Icons.Filled.Archive, "nav_archived") {
+            NavItem(localized(Str.sessions_row_archived), Icons.Filled.Archive, "nav_archived") {
                 onExpandedChange(false); onNavigate("archived")
             }
-            NavItem("Usage", Icons.Filled.BarChart, "nav_usage") {
+            NavItem(localized(Str.shell_usage), Icons.Filled.BarChart, "nav_usage") {
                 onExpandedChange(false); onNavigate("usage")
             }
-            NavItem("Shared links", Icons.Filled.Hub, "nav_proxies") {
+            NavItem(localized(Str.machine_links), Icons.Filled.Hub, "nav_proxies") {
                 onExpandedChange(false); onNavigate("proxies")
             }
-            NavItem("General", Icons.Filled.Monitor, "nav_appearance") {
+            NavItem(localized(Str.general_title), Icons.Filled.Monitor, "nav_appearance") {
                 onExpandedChange(false); onNavigate("appearance")
             }
-            NavItem("Settings", Icons.Filled.Settings, "nav_settings") {
+            NavItem(localized(Str.shell_settings), Icons.Filled.Settings, "nav_settings") {
                 onExpandedChange(false); onNavigate("settings")
             }
-            NavItem("Devices", Icons.Filled.PhoneAndroid, "nav_devices") {
+            NavItem(localized(Str.shell_devices), Icons.Filled.PhoneAndroid, "nav_devices") {
                 onExpandedChange(false); onNavigate("devices")
             }
         }
@@ -2429,7 +2564,7 @@ fun SessionListFooter(
     // The icon shows what you'll switch TO: sun when dark, moon when light.
     val darkNow = appearance != AppearanceMode.LIGHT
     val themeIcon = if (darkNow) Icons.Filled.LightMode else Icons.Filled.DarkMode
-    val themeLabel = if (darkNow) "Switch to light theme" else "Switch to dark theme"
+    val themeLabel = localized(if (darkNow) Str.sessions_list_switch_light else Str.sessions_list_switch_dark)
     DownloadsBar { downloads ->
         Column(Modifier.fillMaxWidth()) {
             card?.invoke()
@@ -2461,7 +2596,7 @@ fun SessionListFooter(
                     }
                     FooterIcon(themeIcon, themeLabel, "sidebar_footer_theme", onToggleTheme)
                     Box {
-                        FooterIcon(Icons.Filled.DataUsage, "Usage", "sidebar_footer_usage", onUsage)
+                        FooterIcon(Icons.Filled.DataUsage, localized(Str.shell_usage), "sidebar_footer_usage", onUsage)
                         if (usageContent != null) {
                             UsagePopover(
                                 expanded = usageOpen,
@@ -2470,8 +2605,8 @@ fun SessionListFooter(
                             )
                         }
                     }
-                    FooterIcon(Icons.Filled.Devices, "Devices", "sidebar_footer_devices", onDevices)
-                    FooterIcon(Icons.Filled.Settings, "Settings", "sidebar_footer_settings", onSettings)
+                    FooterIcon(Icons.Filled.Devices, localized(Str.shell_devices), "sidebar_footer_devices", onDevices)
+                    FooterIcon(Icons.Filled.Settings, localized(Str.shell_settings), "sidebar_footer_settings", onSettings)
                 }
             }
         }

@@ -1,0 +1,8 @@
+/* #123: Turkish. Keys are the English text, as SwiftUI looks them up. */
+
+"Sent a photo" = "Bir fotoğraf gönderdi";
+"Sent a voice message" = "Bir sesli mesaj gönderdi";
+"Sent audio" = "Ses gönderdi";
+"Sent a video note" = "Bir video notu gönderdi";
+"Sent a document" = "Bir belge gönderdi";
+"New message" = "Yeni mesaj";

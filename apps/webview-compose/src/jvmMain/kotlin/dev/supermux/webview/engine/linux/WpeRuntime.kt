@@ -31,7 +31,7 @@ import org.jetbrains.skiko.OS
  */
 internal object WpeRuntime {
     /** The glue's natives as this library calls them; the runtime's manifest says which it was built with. */
-    const val ABI: String = "2"
+    const val ABI: String = "4"
     const val VERSION_PREFIX: String = "2.54."
     const val PROPERTY: String = "dev.supermux.webview.wpe.runtime"
     const val ENV: String = "WEBVIEW_WPE_RUNTIME"
@@ -177,7 +177,13 @@ internal object WpeRuntime {
         }
         WpeNative.setenv("WEBKIT_EXEC_PATH", File(dir, "libexec").path)
         WpeNative.setenv("WEBKIT_INJECTED_BUNDLE_PATH", File(dir, "lib/wpe-webkit-2.0/injected-bundle").path)
-        WpeHost.processListener = { event -> if (event is WpeEvent.Clipboard) WpeClipboard.System.onPageCopied(event.text) }
+        WpeHost.processListener = { event ->
+            when (event) {
+                is WpeEvent.Clipboard -> WpeClipboard.System.onPageCopied(event.text)
+                is WpeEvent.DownloadProgress, is WpeEvent.DownloadState -> LinuxDownloads.on(event)
+                else -> {}
+            }
+        }
         WpeHost.attach()
         val flags = (if (sandbox) 0 else WpeNative.INIT_NO_SANDBOX) or (if (WpeDefaults.GLOBAL_CONTEXT) WpeNative.INIT_GLOBAL_CONTEXT else 0)
         // The app's own folders: another app's profiles are another's (WpeProfiles).

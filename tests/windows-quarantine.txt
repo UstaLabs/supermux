@@ -87,7 +87,6 @@ src/core/runtime/index.test.ts | expected "Windows session backend is not initia
 src/core/runtime/tmux-backend.test.ts | expected 0 got undefined; first: "tmux session backend > preserves exact argv and env without " | #29
 src/core/session-manager/pane-owner.test.ts | expected "sess-123" got null; first: "reads MUX_SESSION_ID from the process or its child, null whe" | #29
 src/core/session-manager/shim-spawn.test.ts | expected "/src/shim/index.ts" got \\a\\supermux\\supermux\\src\\shim\\index.ts"; first: "shimSpawnSpec > source mode: bun + absolute shim entry path" | #29
-src/core/session-manager/socket-server.test.ts | connects to a Unix socket file (s1.sock): connect ENOENT on Windows, where the endpoint is a named pipe; hidden until the lane's JUnit parse counted nested describe blocks | #29
 src/core/session-manager/tmux.test.ts | spawns /bin/sh (uv_spawn ENOENT): Windows has none; hidden until the lane's JUnit parse counted nested describe blocks | #29
 src/core/sessiond/client.test.ts | expects / where Windows writes \ (or back): a POSIX path in the test or the code; first: "SessiondBackend > retains the legacy override and executable" | #29
 src/core/sessiond/server.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "sessiond server > refuses to replace a non-socket stale endp" | #29
@@ -132,7 +131,6 @@ tests/search-store.test.ts | 8.3 short name vs long name (tmpdir() vs realpath);
 tests/session-born-asleep-e2e.test.ts | a POSIX-only e2e harness: #!/bin/sh stubs for claude and tmux, chmod, and a PATH joined with ":", so `bun` is not found | #75
 tests/session-store.test.ts | file locked or denied (EBUSY); first: "register > creates session with UUID, active status, correct" | #29
 tests/session-tools.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "find_sessions returns a matching session with a transcript p" | #29
-tests/socket-transport.test.ts | runs a POSIX command Windows lacks; first: "shim connects through an explicit local endpoint" | #29
 tests/spawn-codex-attachments.test.ts | file locked or denied (EBUSY); first: "fresh codex spawn wires attachment resolver into registered " | #29
 tests/spawn-opencode.test.ts | file locked or denied (EBUSY); first: "opencode spawn threads ONE uuid through registry, socket bin" | #29
 tests/spawn-pa.test.ts | file locked or denied (EBUSY); first: "spawns a Claude PA and registers it as personal_assistant" | #29

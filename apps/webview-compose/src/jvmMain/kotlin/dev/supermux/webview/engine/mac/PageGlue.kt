@@ -78,6 +78,10 @@ internal interface PageGlue {
     fun answerPolicy(question: Long, allow: Boolean, javaScript: Boolean)
     fun answerResponse(question: Long, allow: Boolean)
 
+    /** Answers a policy question, or a response's, with a download: WebKit saves it, then asks where (`DOWNLOAD`). */
+    fun downloadPolicy(question: Long)
+    fun downloadResponse(question: Long)
+
     /** Alert: any. Confirm: [confirmed]. Prompt: [text] if [confirmed], else nothing. */
     fun answerDialog(question: Long, confirmed: Boolean, text: String?)
     fun answerPermission(question: Long, grant: Boolean)
@@ -181,6 +185,8 @@ internal class NativePageGlue(override val token: Long, handle: Long) : PageGlue
     override fun answerPolicy(question: Long, allow: Boolean, javaScript: Boolean) =
         live(Unit) { MacGlue.answerPolicy(it, question, allow, javaScript) }
     override fun answerResponse(question: Long, allow: Boolean) = live(Unit) { MacGlue.answerResponse(it, question, allow) }
+    override fun downloadPolicy(question: Long) = live(Unit) { MacGlue.downloadPolicy(it, question) }
+    override fun downloadResponse(question: Long) = live(Unit) { MacGlue.downloadResponse(it, question) }
     override fun answerDialog(question: Long, confirmed: Boolean, text: String?) =
         live(Unit) { MacGlue.answerDialog(it, question, confirmed, text) }
     override fun answerPermission(question: Long, grant: Boolean) = live(Unit) { MacGlue.answerPermission(it, question, grant) }

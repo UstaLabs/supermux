@@ -3,6 +3,17 @@ package dev.supermux.ui.browser
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
+import dev.supermux.webview.engine.EngineEvent
+import dev.supermux.webview.LoadFailure
+import dev.supermux.webview.WebError
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import dev.supermux.work.DownloadedFile
+import dev.supermux.work.DownloadSource
+import dev.supermux.work.DownloadPurpose
+import dev.supermux.work.DownloadCenter
+import dev.supermux.ui.work.LocalDownloads
+import dev.supermux.webview.runtime.ProvideWebViewOverlays
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -91,7 +102,7 @@ class BrowserPaneTest {
         saveView = { _, _, state, title -> writes += state to title; true },
         proxies = { previews },
         byPort = { byPort },
-        previewCookie = { cookie },
+        preview = PreviewKeeper(mint = { cookie }),
     )
 
     private fun ComposeUiTest.show(rig: Rig, view: MutableState<ViewDto>, actions: BrowserActions, platform: FakePlatform = FakePlatform(), opener: LinkOpener? = null, icons: SnapshotStateMap<String, String>? = null) {
@@ -459,6 +470,72 @@ class BrowserPaneTest {
         assertEquals(0, holes())
         onNodeWithTag("browser-menu").performClick()
         waitUntil(timeoutMillis = 5_000) { holes() > 0 }
+    }
+
+    /**
+     * The downloads list opens over the sidebar and the page beside it. Its rows' buttons over the page took no click on
+     * macOS (#157's run, 2026-11-16) until the list was one of the page's overlays, as the ⋯ menu is.
+     */
+    @Test fun theOpenDownloadsListIsAnOverlayOfThePage() = runComposeUiTest {
+        val rig = Rig()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        val runtime = WebViewRuntime(
+            RuntimeConfig(maxLive = 2, snapshotCacheBytes = 8L shl 20, factory = rig.engines, scope = scope, clock = { mainClock.currentTime }),
+        )
+        val downloads = DownloadCenter(scope)
+        downloads.start("page:t:1", "big.bin", "application/octet-stream", DownloadPurpose.File, object : DownloadSource {
+            override suspend fun fetch(progress: (Long, Long?) -> Unit): DownloadedFile? = kotlinx.coroutines.awaitCancellation()
+        }).release()
+        setPlatformContent {
+            ProvideWebViewOverlays {
+                CompositionLocalProvider(LocalAppWebViews provides AppWebViews(runtime), LocalDownloads provides downloads) {
+                    Box(Modifier.size(1000.dp, 600.dp)) {
+                        BrowserPane(view("https://vitejs.dev/"), "w1", rig.actions(), Modifier.size(1000.dp, 600.dp))
+                        Box(Modifier.align(Alignment.BottomStart)) { SessionListFooterForTest() }
+                    }
+                }
+            }
+        }
+        waitUntil(timeoutMillis = 5_000) { "https://vitejs.dev/" in rig.loads() }
+        fun holes() = rig.calls.filter { it.startsWith("overlays:") }.lastOrNull()?.substringAfter(':')?.toInt() ?: 0
+        assertEquals(0, holes())
+        onNodeWithTag("sidebar_footer_downloads").performClick()
+        waitUntil(timeoutMillis = 5_000) { holes() > 0 }
+    }
+
+    @Composable
+    private fun SessionListFooterForTest() = dev.supermux.ui.session.SessionListFooter(
+        appearance = dev.supermux.ui.theme.AppearanceMode.LIGHT,
+        onToggleTheme = {},
+        onUsage = {},
+        onDevices = {},
+        onSettings = {},
+    )
+
+    /** A page that didn't load says why where it would have been, and Try again reloads it (it was a blank tab). */
+    @Test fun aPageThatFailedToLoadSaysWhyAndCanBeTriedAgain() = runComposeUiTest {
+        val rig = Rig()
+        show(rig, mutableStateOf(view("https://vitejs.dev/")), rig.actions())
+        waitUntil(timeoutMillis = 5_000) { "https://vitejs.dev/" in rig.loads() }
+        onNodeWithTag("browser-load-failed").assertDoesNotExist()
+        runOnUiThread {
+            rig.engines.created.first { e -> e.calls.any { "vitejs.dev" in it } }.emit(EngineEvent.Error(WebError.Network("https://vitejs.dev/", "Could not connect to the server.")))
+        }
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag("browser-load-failed").fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithText("Could not connect to the server.", substring = true).assertExists()
+        onNodeWithText("Try again").performClick()
+        waitUntil(timeoutMillis = 5_000) { "reload" in rig.calls }
+    }
+
+    /** A server's error page is a page: it shows, with no message over it. */
+    @Test fun anHttpErrorPageIsLeftToShow() {
+        assertEquals(null, loadFailure(WebError.Http("https://a.test/", 404)))
+        assertEquals("boom", loadFailure(WebError.Network("https://a.test/", "boom")))
+        // A reason the engine names is said in the app's words, not the engine's.
+        assertEquals(
+            "Could not connect to the server.",
+            loadFailure(WebError.Network("https://a.test/", "load failed (WebView2 status 12)", LoadFailure.CannotConnect)),
+        )
     }
 
     /** Every row of the ⋯ menu does what it says. */

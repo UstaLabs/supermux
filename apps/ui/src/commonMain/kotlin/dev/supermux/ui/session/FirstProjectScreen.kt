@@ -55,6 +55,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.supermux.net.PathValidation
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.formatCatalogText
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.Stroke
@@ -96,6 +99,11 @@ fun FirstProjectScreen(
     var step by remember { mutableStateOf(FirstProjectStep.Choose) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    // The failure words, read here: the ops report from a coroutine.
+    val checkFailed = localized(Str.firstproject_check_failed)
+    val openFailed = localized(Str.firstproject_open_failed, "%1\$s")
+    val createFailed = localized(Str.launch_create_failed, "%1\$s")
+    val openThatFailed = localized(Str.firstproject_open_that_failed)
 
     fun go(next: FirstProjectStep) {
         if (busy) return
@@ -107,10 +115,11 @@ fun FirstProjectScreen(
         val res = validatePath(path)
         val resolved = res?.path
         if (res != null && res.ok && !resolved.isNullOrBlank()) onProject(resolved)
-        else error = res?.error ?: "Couldn't check that folder — check the connection and try again."
+        else error = res?.error ?: checkFailed
     }
 
-    fun run(label: String, block: suspend () -> Unit) {
+    /** [failed]: what a failure says ("Couldn't create x"), before the broker's reason or the connection advice. */
+    fun run(failed: String, block: suspend () -> Unit) {
         if (busy) return
         busy = true
         error = null
@@ -120,7 +129,7 @@ fun FirstProjectScreen(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
-                error = hostOpFailureMessage(label, e)
+                error = hostOpFailure(failed, e)
             } finally {
                 busy = false
             }
@@ -129,7 +138,7 @@ fun FirstProjectScreen(
 
     fun openFolder() {
         if (pickFolder == null) return go(FirstProjectStep.TypePath)
-        run("open that folder") { pickFolder()?.let { openPath(it) } }
+        run(openThatFailed) { pickFolder()?.let { openPath(it) } }
     }
 
     Column(
@@ -142,14 +151,14 @@ fun FirstProjectScreen(
             verticalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
             Text(
-                "Where should your agents work?",
+                localized(Str.firstproject_title),
                 color = cs.onSurface,
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.SemiBold,
                 textAlign = TextAlign.Center,
             )
             Text(
-                "Agents read and change files only inside the folder you choose.",
+                localized(Str.firstproject_subtitle),
                 color = cs.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
@@ -158,7 +167,7 @@ fun FirstProjectScreen(
             AnimatedContent(
                 targetState = step,
                 transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(120)) },
-                label = "first-project-step",
+                label = "first-project-step", // i18n-ok: animation debug label
             ) { current ->
                 when (current) {
                     FirstProjectStep.Choose -> ChooseStep(
@@ -169,49 +178,56 @@ fun FirstProjectScreen(
                         onCreate = { go(FirstProjectStep.Name) },
                         onTypePath = { go(FirstProjectStep.TypePath) },
                     )
-                    FirstProjectStep.TypePath -> InputStep(
-                        icon = Icons.Outlined.FolderOpen,
-                        title = "Open a folder",
-                        label = "Folder path",
-                        placeholder = "~/code/my-app",
-                        hint = { "The folder must already exist on the host." },
-                        confirm = "Open folder",
-                        fieldTag = LauncherFirstRunTags.PATH_FIELD,
-                        busy = busy,
-                        onBack = { go(FirstProjectStep.Choose) },
-                        onConfirm = { value -> run("open $value") { openPath(value) } },
-                        onEdit = { error = null },
-                    )
-                    FirstProjectStep.Name -> InputStep(
-                        icon = Icons.Outlined.CreateNewFolder,
-                        title = "Create a new project",
-                        label = "Project name",
-                        placeholder = "my-app",
-                        hint = { typed ->
-                            val folder = projectFolderName(typed)
-                            if (folder.isEmpty()) "An empty folder in Supermux's projects folder."
-                            else "Creates “$folder” in Supermux's projects folder."
-                        },
-                        confirm = "Create project",
-                        fieldTag = LauncherFirstRunTags.NAME_FIELD,
-                        busy = busy,
-                        transform = ::projectFolderName,
-                        onBack = { go(FirstProjectStep.Choose) },
-                        onConfirm = { name ->
-                            run("create $name") {
-                                val path = createLocalRepo(name)
-                                if (!path.isNullOrBlank()) onProject(path) else error = hostOpFailureMessage("create $name", null)
-                            }
-                        },
-                        onEdit = { error = null },
-                    )
+                    FirstProjectStep.TypePath -> {
+                        val pathHint = localized(Str.firstproject_path_hint)
+                        InputStep(
+                            icon = Icons.Outlined.FolderOpen,
+                            title = localized(Str.firstproject_open_folder),
+                            label = localized(Str.firstproject_folder_path),
+                            placeholder = "~/code/my-app", // i18n-ok: an example path
+                            hint = { pathHint },
+                            confirm = localized(Str.firstproject_open_confirm),
+                            fieldTag = LauncherFirstRunTags.PATH_FIELD,
+                            busy = busy,
+                            onBack = { go(FirstProjectStep.Choose) },
+                            onConfirm = { value -> run(formatCatalogText(openFailed, arrayOf(value))) { openPath(value) } },
+                            onEdit = { error = null },
+                        )
+                    }
+                    FirstProjectStep.Name -> {
+                        val hintEmpty = localized(Str.firstproject_name_hint_empty)
+                        val hintNamed = localized(Str.firstproject_name_hint, "%1\$s")
+                        InputStep(
+                            icon = Icons.Outlined.CreateNewFolder,
+                            title = localized(Str.firstproject_create_title),
+                            label = localized(Str.firstproject_project_name),
+                            placeholder = "my-app", // i18n-ok: an example name
+                            hint = { typed ->
+                                val folder = projectFolderName(typed)
+                                if (folder.isEmpty()) hintEmpty else formatCatalogText(hintNamed, arrayOf(folder))
+                            },
+                            confirm = localized(Str.firstproject_create_confirm),
+                            fieldTag = LauncherFirstRunTags.NAME_FIELD,
+                            busy = busy,
+                            transform = ::projectFolderName,
+                            onBack = { go(FirstProjectStep.Choose) },
+                            onConfirm = { name ->
+                                val failed = formatCatalogText(createFailed, arrayOf(name))
+                                run(failed) {
+                                    val path = createLocalRepo(name)
+                                    if (!path.isNullOrBlank()) onProject(path) else error = hostOpFailure(failed, null)
+                                }
+                            },
+                            onEdit = { error = null },
+                        )
+                    }
                 }
             }
             error?.let { ErrorLine(it) }
             if (step == FirstProjectStep.Choose) {
                 Spacer(Modifier.height(Space.sm))
                 Text(
-                    "You can add more projects any time.",
+                    localized(Str.firstproject_more_later),
                     color = cs.onSurfaceVariant.copy(alpha = 0.8f),
                     style = MaterialTheme.typography.labelMedium,
                 )
@@ -233,8 +249,8 @@ private fun ChooseStep(
         val open: @Composable (Modifier) -> Unit = { m ->
             ChoiceCard(
                 icon = Icons.Outlined.FolderOpen,
-                title = "Open a folder",
-                caption = if (localPicker) "Choose a folder on this computer" else "Use a folder you already have",
+                title = localized(Str.firstproject_open_folder),
+                caption = localized(if (localPicker) Str.firstproject_open_caption_local else Str.firstproject_open_caption_remote),
                 busy = busy && localPicker,
                 onClick = onOpen,
                 modifier = m.testTag(LauncherFirstRunTags.OPEN_FOLDER),
@@ -243,8 +259,8 @@ private fun ChooseStep(
         val create: @Composable (Modifier) -> Unit = { m ->
             ChoiceCard(
                 icon = Icons.Outlined.CreateNewFolder,
-                title = "Create a new project",
-                caption = "Start from an empty folder",
+                title = localized(Str.firstproject_create_title),
+                caption = localized(Str.firstproject_create_caption),
                 busy = false,
                 onClick = onCreate,
                 modifier = m.testTag(LauncherFirstRunTags.CREATE_PROJECT),
@@ -263,7 +279,7 @@ private fun ChooseStep(
         }
         if (localPicker) {
             TextButton(onClick = onTypePath, enabled = !busy, modifier = Modifier.testTag(LauncherFirstRunTags.TYPE_PATH)) {
-                Text("or type a folder path", style = MaterialTheme.typography.labelLarge)
+                Text(localized(Str.firstproject_type_path), style = MaterialTheme.typography.labelLarge)
             }
         }
     }
@@ -380,7 +396,7 @@ private fun InputStep(
             TextButton(onClick = onBack, enabled = !busy, modifier = Modifier.testTag(LauncherFirstRunTags.BACK)) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.size(Space.xs))
-                Text("Back")
+                Text(localized(Str.launch_back))
             }
             Spacer(Modifier.weight(1f))
             Button(

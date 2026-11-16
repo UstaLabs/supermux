@@ -58,6 +58,9 @@ import dev.supermux.state.ProjectLocationResult
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.formatCatalogText
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.PickKind
 import dev.supermux.ui.platform.PickedFile
@@ -244,6 +247,18 @@ private fun ProjectSettingsBody(
     var message by remember(hostId, project.id) { mutableStateOf<String?>(null) }
     var newPath by form::newPath
     var conflict by form::conflict
+    // What the ops below report, read here: they report from a coroutine or a callback.
+    val renameFailed = localized(Str.project_rename_failed)
+    val imageType = localized(Str.project_image_type)
+    val imageTooBig = localized(Str.project_image_too_big)
+    val uploadFailed = localized(Str.project_image_upload_failed)
+    val removeFailed = localized(Str.project_image_remove_failed)
+    val invalidPath = localized(Str.project_invalid_path)
+    val ownedElsewhere = localized(Str.project_location_other)
+    val alreadyHere = localized(Str.project_location_same)
+    val addFailed = localized(Str.project_location_add_failed)
+    val notFoundIn = localized(Str.project_location_not_found, "%1\$s")
+    val moveFailed = localized(Str.project_location_move_failed)
 
     val trimmedName = name.trim()
     val canSaveName = !busy && trimmedName.isNotEmpty() && trimmedName != project.name
@@ -265,7 +280,7 @@ private fun ProjectSettingsBody(
     fun saveName() {
         if (!canSaveName) return
         launchOp {
-            if (actions.rename(hostId, project.id, trimmedName) == null) message = "Couldn't rename the project."
+            if (actions.rename(hostId, project.id, trimmedName) == null) message = renameFailed
             else nameEdited = false
         }
     }
@@ -273,13 +288,13 @@ private fun ProjectSettingsBody(
     fun uploadImage(file: PickedFile) {
         val mime = projectImageMime(file)
         when {
-            mime == null -> message = "Pick a PNG, JPEG, WebP or GIF image."
-            file.source.size > PROJECT_IMAGE_MAX_BYTES -> message = "That image is over 5 MB."
+            mime == null -> message = imageType
+            file.source.size > PROJECT_IMAGE_MAX_BYTES -> message = imageTooBig
             else -> launchOp {
                 // Off the main thread: an Android ContentResolver read is blocking I/O.
                 val bytes = withContext(Dispatchers.Default) { file.source.read(0, file.source.size.toInt()) }
                 if (actions.setImage(latestRef.hostId, latestRef.project.id, bytes, mime) == null) {
-                    message = "Couldn't upload the image."
+                    message = uploadFailed
                 }
             }
         }
@@ -298,7 +313,7 @@ private fun ProjectSettingsBody(
             val v = actions.validatePath(hostId, typed)
             val resolved = v?.path
             if (v == null || !v.ok || resolved.isNullOrBlank()) {
-                message = v?.error ?: "Invalid path"
+                message = v?.error ?: invalidPath
                 return@launchOp
             }
             when (val r = actions.addLocation(hostId, project.id, resolved)) {
@@ -306,13 +321,12 @@ private fun ProjectSettingsBody(
                 is ProjectLocationResult.Conflict -> {
                     val owner = projects.firstOrNull { it.hostId == hostId && it.project.id == r.projectId }
                     if (owner == null || owner.project.id == project.id) {
-                        message = if (owner == null) "That folder already belongs to another project."
-                                  else "That folder is already a location of this project."
+                        message = if (owner == null) ownedElsewhere else alreadyHere
                     } else {
                         conflict = LocationConflict(resolved, owner)
                     }
                 }
-                ProjectLocationResult.Failed -> message = "Couldn't add the location."
+                ProjectLocationResult.Failed -> message = addFailed
             }
         }
     }
@@ -322,7 +336,7 @@ private fun ProjectSettingsBody(
         val owner = projects.firstOrNull { it.hostId == hostId && it.project.id == c.owner.project.id }?.project
         val locationId = owner?.let { locationIdForPath(it, c.path) }
         if (locationId == null) {
-            message = "Couldn't find that location in ${c.owner.project.name}."
+            message = formatCatalogText(notFoundIn, arrayOf(c.owner.project.name))
             conflict = null
             return
         }
@@ -331,7 +345,7 @@ private fun ProjectSettingsBody(
                 conflict = null
                 newPath = ""
             } else {
-                message = "Couldn't move the location."
+                message = moveFailed
             }
         }
     }
@@ -343,10 +357,10 @@ private fun ProjectSettingsBody(
             .padding(horizontal = Space.xl, vertical = Space.lg),
         verticalArrangement = Arrangement.spacedBy(Space.md),
     ) {
-        Text("Project settings", style = MaterialTheme.typography.titleMedium, color = cs.onSurface)
+        Text(localized(Str.project_settings_title), style = MaterialTheme.typography.titleMedium, color = cs.onSurface)
 
         // ── Name ──
-        SectionLabel("Name")
+        SectionLabel(localized(Str.project_name))
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
                 value = name,
@@ -360,11 +374,11 @@ private fun ProjectSettingsBody(
                 onClick = { saveName() },
                 enabled = canSaveName,
                 modifier = Modifier.testTag(ProjectSettingsTestIds.SAVE_NAME),
-            ) { Text("Save") }
+            ) { Text(localized(Str.project_save)) }
         }
 
         // ── Image ──
-        SectionLabel("Image")
+        SectionLabel(localized(Str.project_image))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 Modifier.size(40.dp).clip(RoundedCornerShape(6.dp)).background(cs.surfaceContainerHighest),
@@ -384,25 +398,25 @@ private fun ProjectSettingsBody(
                 },
                 enabled = !busy,
                 modifier = Modifier.testTag(ProjectSettingsTestIds.PICK_IMAGE),
-            ) { Text(if (project.imageId == null) "Choose image…" else "Change…") }
+            ) { Text(localized(if (project.imageId == null) Str.project_image_choose else Str.project_image_change)) }
             if (project.imageId != null) {
                 Spacer(Modifier.width(Space.sm))
                 TextButton(
                     onClick = {
                         launchOp {
-                            if (actions.clearImage(hostId, project.id) == null) message = "Couldn't remove the image."
+                            if (actions.clearImage(hostId, project.id) == null) message = removeFailed
                         }
                     },
                     enabled = !busy,
                     modifier = Modifier.testTag(ProjectSettingsTestIds.REMOVE_IMAGE),
-                ) { Text("Remove") }
+                ) { Text(localized(Str.project_image_remove)) }
             }
         }
 
         // ── Locations ──
-        SectionLabel("Locations")
+        SectionLabel(localized(Str.project_locations))
         if (project.locations.isEmpty()) {
-            Text("No locations yet.", color = cs.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+            Text(localized(Str.project_no_locations), color = cs.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
         }
         project.locations.forEach { loc ->
             LocationRow(
@@ -413,7 +427,7 @@ private fun ProjectSettingsBody(
                 onMove = { target ->
                     launchOp {
                         if (actions.moveLocation(hostId, loc.id, target.project.id) == null) {
-                            message = "Couldn't move the location."
+                            message = moveFailed
                         }
                     }
                 },
@@ -424,7 +438,7 @@ private fun ProjectSettingsBody(
                 value = newPath,
                 onValueChange = { newPath = it; conflict = null },
                 singleLine = true,
-                placeholder = { Text("~/projects/app") },
+                placeholder = { Text("~/projects/app") }, // i18n-ok: an example path
                 modifier = Modifier.weight(1f).testTag(ProjectSettingsTestIds.ADD_PATH),
             )
             Spacer(Modifier.width(Space.sm))
@@ -432,7 +446,7 @@ private fun ProjectSettingsBody(
                 onClick = { addLocation() },
                 enabled = !busy && newPath.isNotBlank(),
                 modifier = Modifier.testTag(ProjectSettingsTestIds.ADD_LOCATION),
-            ) { Text("Add location") }
+            ) { Text(localized(Str.project_add_location)) }
         }
         conflict?.let { c ->
             Row(
@@ -440,7 +454,7 @@ private fun ProjectSettingsBody(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    "Already in ${c.owner.project.name}",
+                    localized(Str.project_already_in, c.owner.project.name),
                     color = cs.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.weight(1f),
@@ -449,7 +463,7 @@ private fun ProjectSettingsBody(
                     onClick = { moveHere(c) },
                     enabled = !busy,
                     modifier = Modifier.testTag(ProjectSettingsTestIds.MOVE_HERE),
-                ) { Text("Move here") }
+                ) { Text(localized(Str.project_move_here)) }
             }
         }
 
@@ -464,7 +478,7 @@ private fun ProjectSettingsBody(
 
         HorizontalDivider(color = cs.outlineVariant)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            TextButton(onClick = onDismiss) { Text("Done") }
+            TextButton(onClick = onDismiss) { Text(localized(Str.project_done)) }
         }
     }
 }
@@ -508,7 +522,7 @@ private fun LocationRow(
                     onClick = { menu = true },
                     enabled = enabled,
                     modifier = Modifier.testTag(ProjectSettingsTestIds.moveTo(locationId)),
-                ) { Text("Move to…") }
+                ) { Text(localized(Str.project_move_to)) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     targets.forEach { t ->
                         DropdownMenuItem(
@@ -594,6 +608,7 @@ fun NewProjectDialog(
     var error by form::error
     val askHost = initialHost == null && hosts.size > 1
     val canCreate = !busy && name.isNotBlank() && host != null
+    val createFailed = localized(Str.project_create_failed)
 
     fun create() {
         val h = host ?: return
@@ -606,7 +621,7 @@ fun NewProjectDialog(
                 form.fresh = true
                 onCreated(h, created.id)
             } else {
-                error = "Couldn't create the project."
+                error = createFailed
             }
         }
     }
@@ -614,18 +629,18 @@ fun NewProjectDialog(
     AlertDialog(
         onDismissRequest = { if (!busy) dismiss() },
         modifier = Modifier.testTag(ProjectSettingsTestIds.NEW_PROJECT),
-        title = { Text("New project") },
+        title = { Text(localized(Str.project_new)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
                     singleLine = true,
-                    label = { Text("Name") },
+                    label = { Text(localized(Str.project_name)) },
                     modifier = Modifier.fillMaxWidth().testTag(ProjectSettingsTestIds.NEW_PROJECT_NAME),
                 )
                 if (askHost) {
-                    Text("Host", color = cs.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
+                    Text(localized(Str.project_host), color = cs.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
                     hosts.forEach { h ->
                         val selected = h.recordId == host
                         Row(
@@ -638,7 +653,7 @@ fun NewProjectDialog(
                         ) {
                             TextButton(onClick = { host = h.recordId }, modifier = Modifier.fillMaxWidth()) {
                                 Text(
-                                    h.displayName + if (h.online) "" else " (offline)",
+                                    if (h.online) h.displayName else localized(Str.project_host_offline, h.displayName),
                                     color = if (selected) cs.onSecondaryContainer else cs.onSurface,
                                     modifier = Modifier.fillMaxWidth(),
                                 )
@@ -655,10 +670,10 @@ fun NewProjectDialog(
                 onClick = { create() },
                 enabled = canCreate,
                 modifier = Modifier.testTag(ProjectSettingsTestIds.NEW_PROJECT_CREATE),
-            ) { Text("Create") }
+            ) { Text(localized(Str.project_create)) }
         },
         dismissButton = {
-            TextButton(onClick = dismiss, enabled = !busy) { Text("Cancel") }
+            TextButton(onClick = dismiss, enabled = !busy) { Text(localized(Str.project_cancel)) }
         },
     )
 }

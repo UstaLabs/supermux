@@ -3,6 +3,7 @@ package dev.supermux.ui.shell
 import dev.supermux.proto.ViewDto
 import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.StringKey
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.session.RowContextMenuEntry
 import dev.supermux.workspace.LayoutNode
 
@@ -11,19 +12,11 @@ import dev.supermux.workspace.LayoutNode
  * the whole strip. Scoped to ONE strip — the tab's own group on a wide layout, the single row on a
  * phone — the way an editor's "Close to the Right" never reaches into the pane beside it.
  */
-enum class BulkClose(val label: String) {
-    RIGHT("Close to the Right"), // i18n-ok: English label (tests); the menu shows labelRes
-    LEFT("Close to the Left"), // i18n-ok: English label (tests); the menu shows labelRes
-    ALL("Close All"), // i18n-ok: English label (tests); the menu shows labelRes
+enum class BulkClose(val label: StringKey) {
+    RIGHT(Str.shell_close_to_right),
+    LEFT(Str.shell_close_to_left),
+    ALL(Str.shell_close_all),
 }
-
-/** [BulkClose]'s menu row in the app's language. */
-val BulkClose.labelRes: StringKey
-    get() = when (this) {
-        BulkClose.RIGHT -> Str.shell_close_to_right
-        BulkClose.LEFT -> Str.shell_close_to_left
-        BulkClose.ALL -> Str.shell_close_all
-    }
 
 /** The ids [which] closes from a strip of [viewIds], relative to [anchorId]. Empty when the anchor
  *  is not in the strip. */
@@ -39,16 +32,15 @@ fun bulkCloseTargets(viewIds: List<String>, anchorId: String, which: BulkClose):
 
 /**
  * The bulk-close menu rows for [anchorId], omitting any that would close nothing (no "Close to the
- * Right" on the last tab). [labels] words them (`localizedLabels(BulkClose.entries) { it.labelRes }`); English without.
+ * Right" on the last tab), in the app's language.
  */
 fun bulkCloseEntries(
     viewIds: List<String>,
     anchorId: String,
-    labels: Map<BulkClose, String> = emptyMap(),
     onBulkClose: (BulkClose, List<String>) -> Unit,
 ): List<RowContextMenuEntry> = BulkClose.entries.mapNotNull { which ->
     val ids = bulkCloseTargets(viewIds, anchorId, which)
-    if (ids.isEmpty()) null else RowContextMenuEntry(labels[which] ?: which.label) { onBulkClose(which, ids) }
+    if (ids.isEmpty()) null else RowContextMenuEntry(localized(which.label)) { onBulkClose(which, ids) }
 }
 
 /** The tab ids of the group holding [viewId], in strip order; empty when no group holds it. */

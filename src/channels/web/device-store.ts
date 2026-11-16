@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "crypto"
 import { statSync } from "fs"
-import { readJsonOr, writeJsonAtomic } from "../../shared/atomic-json"
+import { readJsonOr, requirePath, writeJsonAtomic } from "../../shared/atomic-json"
 
 export interface DeviceRecord {
   token_hash: string
@@ -9,6 +9,8 @@ export interface DeviceRecord {
   last_seen_at: string | null
   /** The device's preview-only token (#105): it opens port previews and nothing else. Gone with the device. */
   preview_hash?: string
+  /** When [preview_hash] stops opening previews (#155): [PREVIEW_TTL_MS] after its mint. */
+  preview_expires_at?: string
   /**
    * Set while the device's pairing link is unclaimed (#119): the link pairs once, by [expires_at]. [by] is the
    * device that made the code: its next code revokes this one. Gone once claimed; an expired one is revoked.
@@ -18,6 +20,12 @@ export interface DeviceRecord {
 
 /** How long a pairing link pairs (#119), on the broker, whatever the app does. */
 export const PAIRING_TTL_MS = 10 * 60_000
+
+/**
+ * How long a preview token opens previews (#155). The apps renew theirs every 12 hours and whenever they start or
+ * reconnect, so a token in use never reaches this; one copied off a device works for a day at most.
+ */
+export const PREVIEW_TTL_MS = 24 * 60 * 60_000
 
 /** The longest name a rename gives a device (#97). */
 export const DEVICE_NAME_MAX = 40
@@ -37,6 +45,8 @@ export class DeviceStore {
   private readonly clock: () => number
 
   constructor(private readonly path: string, opts: { clock?: () => number } = {}) {
+    // Fails at construction, not at the first write: a store without a file would lose every device it mints.
+    requirePath(path, "DeviceStore")
     this.clock = opts.clock ?? Date.now
   }
 
@@ -136,7 +146,8 @@ export class DeviceStore {
 
   /**
    * A preview-only token for the device holding `deviceToken`, or undefined when that token isn't a device's.
-   * Minting again replaces the last one. It never verifies as a device token: verify() matches token_hash only.
+   * Minting again replaces the last one at once, and it expires [PREVIEW_TTL_MS] after its mint (#155). It never verifies
+   * as a device token: verify() matches token_hash only.
    */
   mintPreview(deviceToken: string): string | undefined {
     const records = this.read()
@@ -144,6 +155,7 @@ export class DeviceStore {
     if (!record) return undefined
     const token = randomBytes(32).toString("base64url")
     record.preview_hash = sha256(token)
+    record.preview_expires_at = new Date(this.clock() + PREVIEW_TTL_MS).toISOString()
     this.write(records)
     return token
   }
@@ -152,7 +164,11 @@ export class DeviceStore {
     if (!token) return undefined
     const hash = sha256(token)
     const r = this.cached().find((x) => x.preview_hash === hash)
-    return r ? { ...r } : undefined
+    if (!r) return undefined
+    // A token from before expiry existed (#155) has no deadline: it is expired, and the app's next renewal replaces it.
+    const expires = r.preview_expires_at ? Date.parse(r.preview_expires_at) : NaN
+    if (!(this.clock() < expires)) return undefined
+    return { ...r }
   }
 
   /**

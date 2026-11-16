@@ -63,6 +63,9 @@ class SettingsSearchTest {
         // The machine's worktrees are the Worktrees page now, not a row on the machine page (#97 Step 2).
         val hits = searchSettings("worktrees", desk).flatMap { it.hits }
         assertEquals(listOf(SettingsSection.Machine to dev.supermux.ui.settings.MachineSub.WORKTREES), hits.map { it.section to it.sub })
+        // #152: the branch prefix is set there, and the launcher says so.
+        val prefix = searchSettings("branch prefix", desk).flatMap { it.hits }
+        assertEquals(listOf(SettingsSection.Machine to dev.supermux.ui.settings.MachineSub.WORKTREES), prefix.map { it.section to it.sub })
     }
 
     @Test fun anchors_are_unique_within_a_page() {

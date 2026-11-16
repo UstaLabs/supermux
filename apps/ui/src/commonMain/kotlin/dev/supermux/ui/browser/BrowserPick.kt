@@ -62,8 +62,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.ui.i18n.Plurals
 import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.localizedPlural
 import dev.supermux.ui.settings.kit.KitGlyphs
 import dev.supermux.ui.settings.kit.KitTextAction
 import dev.supermux.ui.settings.kit.kitColors
@@ -314,7 +316,7 @@ internal fun PickLayers(
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             androidx.compose.material3.Icon(KitGlyphs.Plus, contentDescription = null, tint = c.accent, modifier = Modifier.size(14.dp))
-                            Text("Add comment", fontSize = 13.sp, color = c.text)
+                            Text(localized(Str.browser_pick_add), fontSize = 13.sp, color = c.text)
                         }
                     }
                 }
@@ -401,7 +403,7 @@ private fun CommentPopover(open: Pick, pick: PickState, w: Dp, h: Dp) {
             Text("${open.number}", fontSize = 11.sp, color = c.onAccent, modifier = Modifier.clip(CircleShape).background(c.accent).padding(horizontal = 6.dp))
             Spacer(Modifier.width(6.dp))
             Text(open.element.label, fontSize = 11.5.sp, color = c.dim, maxLines = 1, modifier = Modifier.weight(1f))
-            BarButton(KitGlyphs.Trash, "Delete this comment", "browser-pick-delete", { pick.removeWithUndo(open) }, size = 22.dp)
+            BarButton(KitGlyphs.Trash, localized(Str.browser_pick_delete), "browser-pick-delete", { pick.removeWithUndo(open) }, size = 22.dp)
         }
         BasicTextField(
             value = open.comment,
@@ -426,7 +428,7 @@ private fun CommentPopover(open: Pick, pick: PickState, w: Dp, h: Dp) {
                 .testTag("browser-pick-comment"),
             decorationBox = { inner ->
                 Box {
-                    if (open.comment.isEmpty()) Text("What should change here?", color = c.faint, fontSize = 13.sp)
+                    if (open.comment.isEmpty()) Text(localized(Str.browser_pick_placeholder), color = c.faint, fontSize = 13.sp)
                     inner()
                 }
             },
@@ -491,8 +493,8 @@ internal fun PickStrip(touch: Boolean = false, onDone: () -> Unit = {}, modifier
         modifier.fillMaxWidth().height(if (touch) 40.dp else 28.dp).background(c.accent.copy(alpha = 0.12f)).padding(horizontal = 12.dp).testTag("browser-pick-strip"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(if (touch) "Tap what you mean" else "Pick an element · ↑↓ parent / child · Esc to finish", fontSize = if (touch) 14.sp else 12.sp, color = c.text, maxLines = 1, modifier = Modifier.weight(1f))
-        if (touch) KitTextAction("Done", onDone, Modifier.testTag("browser-pick-done"))
+        Text(localized(if (touch) Str.browser_pick_tap else Str.browser_pick_hint), fontSize = if (touch) 14.sp else 12.sp, color = c.text, maxLines = 1, modifier = Modifier.weight(1f))
+        if (touch) KitTextAction(localized(Str.browser_comment_done), onDone, Modifier.testTag("browser-pick-done"))
     }
 }
 
@@ -539,7 +541,7 @@ private fun CommentPanel(open: Pick, pick: PickState, modifier: Modifier = Modif
             Text("${open.number}", fontSize = 12.sp, color = c.onAccent, modifier = Modifier.clip(CircleShape).background(c.accent).padding(horizontal = 7.dp, vertical = 1.dp))
             Spacer(Modifier.width(8.dp))
             Text(open.element.label, fontSize = 13.sp, color = c.dim, maxLines = 1, modifier = Modifier.weight(1f))
-            BarButton(KitGlyphs.Trash, "Delete this comment", "browser-pick-delete", { pick.removeWithUndo(open) }, size = 36.dp)
+            BarButton(KitGlyphs.Trash, localized(Str.browser_pick_delete), "browser-pick-delete", { pick.removeWithUndo(open) }, size = 36.dp)
         }
         BasicTextField(
             value = open.comment,
@@ -550,7 +552,7 @@ private fun CommentPanel(open: Pick, pick: PickState, modifier: Modifier = Modif
                 .focusRequester(focus).testTag("browser-pick-comment"),
             decorationBox = { inner ->
                 Box {
-                    if (open.comment.isEmpty()) Text("What should change here?", color = c.faint, fontSize = 15.sp)
+                    if (open.comment.isEmpty()) Text(localized(Str.browser_pick_placeholder), color = c.faint, fontSize = 15.sp)
                     inner()
                 }
             },
@@ -560,7 +562,7 @@ private fun CommentPanel(open: Pick, pick: PickState, modifier: Modifier = Modif
                 Modifier.height(36.dp).clip(RoundedCornerShape(8.dp)).background(c.accent).clickable { pick.closeComment() }
                     .padding(horizontal = 18.dp).testTag("browser-pick-save"),
                 contentAlignment = Alignment.Center,
-            ) { Text("Save", fontSize = 14.sp, color = c.onAccent) }
+            ) { Text(localized(Str.browser_pick_save), fontSize = 14.sp, color = c.onAccent) }
         }
     }
 }
@@ -582,7 +584,7 @@ internal fun PickSendBar(
 ) {
     val c = kitColors()
     val n = pick.commented.size
-    val count = if (n == 1) "1 comment" else "$n comments"
+    val count = localizedPlural(Plurals.browser_pick_count, n, n)
     Column(modifier.fillMaxWidth().testTag("browser-pick-sendbar")) {
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.line))
         Row(
@@ -593,9 +595,9 @@ internal fun PickSendBar(
             val choose = onSend != null && n > 0 && chats.size > 1
             Text(
                 when {
-                    n == 0 -> "Comment deleted"
+                    n == 0 -> localized(Str.browser_pick_deleted)
                     choose -> count
-                    onSend != null && recipient != null -> "$count → $recipient"
+                    onSend != null && recipient != null -> localizedPlural(Plurals.browser_pick_count_to, n, n, recipient)
                     else -> count
                 },
                 fontSize = 12.5.sp, color = c.text, maxLines = 1, modifier = if (choose) Modifier else Modifier.weight(1f),
@@ -627,12 +629,12 @@ internal fun PickSendBar(
             // Undo, for a few seconds after the trash.
             pick.removed?.let { removed ->
                 LaunchedEffect(removed) { delay(UNDO_MILLIS); if (pick.removed === removed) pick.removed = null }
-                KitTextAction("Undo", { pick.undo() }, Modifier.testTag("browser-pick-undo"))
+                KitTextAction(localized(Str.browser_pick_undo), { pick.undo() }, Modifier.testTag("browser-pick-undo"))
             }
             // On touch one bar and one way: Send. Clear and Add to message are the desktop's.
-            if (!touch && n > 0) KitTextAction("Clear", { pick.clear() }, Modifier.testTag("browser-pick-clear"))
+            if (!touch && n > 0) KitTextAction(localized(Str.common_clear), { pick.clear() }, Modifier.testTag("browser-pick-clear"))
             if (n > 0) onSend?.let { send ->
-                if (!touch) KitTextAction("Add to message", { send(false) }, Modifier.testTag("browser-pick-compose"))
+                if (!touch) KitTextAction(localized(Str.browser_pick_add_to_message), { send(false) }, Modifier.testTag("browser-pick-compose"))
                 SendButton { send(true) }
             }
         }
@@ -647,7 +649,7 @@ internal fun PickSendBar(
 @Composable
 internal fun PickSendPill(pick: PickState, recipient: String?, onSend: ((send: Boolean) -> Unit)?, modifier: Modifier = Modifier) {
     val n = pick.commented.size
-    val count = if (n == 1) "1 comment" else "$n comments"
+    val count = localizedPlural(Plurals.browser_pick_count, n, n)
     val shape = RoundedCornerShape(24.dp)
     val ink = Color.White
     Row(
@@ -667,15 +669,16 @@ internal fun PickSendPill(pick: PickState, recipient: String?, onSend: ((send: B
     ) {
         pick.removed?.let { removed ->
             LaunchedEffect(removed) { delay(UNDO_MILLIS); if (pick.removed === removed) pick.removed = null }
-            Text("Undo", fontSize = 15.sp, color = ink, modifier = Modifier.clickable { pick.undo() }.testTag("browser-pick-undo"))
+            Text(localized(Str.browser_pick_undo), fontSize = 15.sp, color = ink, modifier = Modifier.clickable { pick.undo() }.testTag("browser-pick-undo"))
         }
         if (n > 0) {
             Text(
-                if (onSend != null && recipient != null) "Send $count to $recipient" else if (onSend != null) "Send $count" else count,
+                if (onSend != null && recipient != null) localizedPlural(Plurals.browser_pick_send_to, n, n, recipient)
+                else if (onSend != null) localizedPlural(Plurals.browser_pick_send_count, n, n) else count,
                 fontSize = 15.sp, color = ink, maxLines = 1,
             )
         } else {
-            Text("Comment deleted", fontSize = 15.sp, color = ink.copy(alpha = 0.7f), maxLines = 1)
+            Text(localized(Str.browser_pick_deleted), fontSize = 15.sp, color = ink.copy(alpha = 0.7f), maxLines = 1)
         }
     }
 }
@@ -694,7 +697,8 @@ private fun SendButton(onClick: () -> Unit) {
             .testTag("browser-pick-send"),
         contentAlignment = Alignment.Center,
     ) {
-        Text("Send", fontSize = 12.5.sp, color = c.onAccent)
+        Text(localized(Str.browser_pick_send), fontSize = 12.5.sp
+, color = c.onAccent)
     }
 }
 

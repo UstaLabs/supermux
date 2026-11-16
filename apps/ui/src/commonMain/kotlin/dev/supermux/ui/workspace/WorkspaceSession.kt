@@ -53,6 +53,12 @@ class WorkspaceSession(
 
     /** The view whose pane the user last pressed, of any kind — where Ctrl/Cmd+T opens a terminal. */
     var focusedViewId: String? = null
+
+    /**
+     * #151: tabs closed here that the broker's frame still has, with when they were clicked (epoch ms); the panes draw
+     * without them (withoutClosing).
+     */
+    val closing = androidx.compose.runtime.mutableStateMapOf<String, Long>()
 }
 
 // ── A rename / delete in the Files tree vs the open file tabs ────────────────────────────────

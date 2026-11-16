@@ -14,35 +14,37 @@ class ViewTitleTest {
 
     @Test
     fun aFileTabIsNamedAfterItsFile() {
-        assertEquals("Main.kt", viewTitle(view("editor", mapOf("mode" to "file", "path" to "src/Main.kt"))))
-        assertEquals("Files", viewTitle(view("editor", mapOf("mode" to "tree"))))
-        assertEquals("Files", viewTitle(view("editor", emptyMap())))
-        assertEquals("Changes", viewTitle(view("editor", mapOf("mode" to "diff"))))
+        assertEquals(ViewTitle.Name("Main.kt"), viewTitleOf(view("editor", mapOf("mode" to "file", "path" to "src/Main.kt"))))
+        assertEquals(ViewTitle.Word.FILES, viewTitleOf(view("editor", mapOf("mode" to "tree"))))
+        assertEquals(ViewTitle.Word.FILES, viewTitleOf(view("editor", emptyMap())))
+        assertEquals(ViewTitle.Word.CHANGES, viewTitleOf(view("editor", mapOf("mode" to "diff"))))
+        // #72: one Source Control file's diff is named after its file.
+        assertEquals(ViewTitle.Name("App.jsx"), viewTitleOf(view("editor", mapOf("mode" to "scmdiff", "path" to "src/App.jsx"))))
     }
 
     @Test
     fun aChatTabIsNamedAfterItsSession() {
         val bound = view("chat", mapOf("sessionId" to "s1"))
-        assertEquals("Fix the launcher", viewTitle(bound, sessionName = { if (it == "s1") "Fix the launcher" else null }))
+        assertEquals(ViewTitle.Name("Fix the launcher"), viewTitleOf(bound, sessionName = { if (it == "s1") "Fix the launcher" else null }))
         // Names not loaded yet (or blank) → the kind's own word.
-        assertEquals("Chat", viewTitle(bound, sessionName = { null }))
-        assertEquals("Chat", viewTitle(bound))
+        assertEquals(ViewTitle.Word.CHAT, viewTitleOf(bound, sessionName = { null }))
+        assertEquals(ViewTitle.Word.CHAT, viewTitleOf(bound))
         // A pending "+ → Chat" tab has no session yet.
-        assertEquals("New Chat", viewTitle(view("chat", emptyMap()), sessionName = { "unused" }))
+        assertEquals(ViewTitle.Word.NEW_CHAT, viewTitleOf(view("chat", emptyMap()), sessionName = { "unused" }))
     }
 
     @Test
     fun aFileTabOnAWindowsHostIsNamedAfterItsFile() {
-        assertEquals("Main.kt", viewTitle(view("editor", mapOf("mode" to "file", "path" to "C:\\Users\\me\\proj\\src\\Main.kt"))))
+        assertEquals(ViewTitle.Name("Main.kt"), viewTitleOf(view("editor", mapOf("mode" to "file", "path" to "C:\\Users\\me\\proj\\src\\Main.kt"))))
     }
 
     @Test
     fun aBrowserTabIsNamedAfterItsPage() {
         // The pane writes the page's title to the view, so every client's tab shows it.
-        assertEquals("Vite", viewTitle(view("browser", mapOf("url" to "https://vitejs.dev/guide/")).copy(title = "Vite")))
+        assertEquals(ViewTitle.Name("Vite"), viewTitleOf(view("browser", mapOf("url" to "https://vitejs.dev/guide/")).copy(title = "Vite")))
         // Before the page has a title: its site, or the port on the host.
-        assertEquals("vitejs.dev", viewTitle(view("browser", mapOf("url" to "https://vitejs.dev/guide/"))))
-        assertEquals("localhost:5173", viewTitle(view("browser", mapOf("url" to "http://localhost:5173/login"))))
-        assertEquals("New tab", viewTitle(view("browser", emptyMap())))
+        assertEquals(ViewTitle.Name("vitejs.dev"), viewTitleOf(view("browser", mapOf("url" to "https://vitejs.dev/guide/"))))
+        assertEquals(ViewTitle.Name("localhost:5173"), viewTitleOf(view("browser", mapOf("url" to "http://localhost:5173/login"))))
+        assertEquals(ViewTitle.Word.NEW_TAB, viewTitleOf(view("browser", emptyMap())))
     }
 }

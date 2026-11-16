@@ -4,6 +4,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.window.DialogProperties
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.widgets.AlertDialog
 
 /** "This stops supermux and your N running sessions." [Cancel] [Quit]. */
@@ -11,10 +13,10 @@ import dev.supermux.ui.widgets.AlertDialog
 fun QuitConfirmDialog(text: String, onQuit: () -> Unit, onCancel: () -> Unit) {
     AlertDialog(
         onDismissRequest = onCancel,
-        title = { Text("Quit supermux?") },
+        title = { Text(localized(Str.host_app_desktop_quit_title)) },
         text = { Text(text) },
-        confirmButton = { TextButton(onClick = onQuit) { Text("Quit") } },
-        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
+        confirmButton = { TextButton(onClick = onQuit) { Text(localized(Str.host_app_desktop_quit)) } },
+        dismissButton = { TextButton(onClick = onCancel) { Text(localized(Str.shell_cancel)) } },
     )
 }
 
@@ -25,13 +27,10 @@ fun TakeoverDialog(onManage: () -> Unit, onLeave: () -> Unit) {
         onDismissRequest = {},
         properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
         text = {
-            Text(
-                "supermux is already running on this computer (set up outside the app). " +
-                    "Let the app manage and update it?",
-            )
+            Text(localized(Str.host_app_desktop_takeover_text))
         },
-        confirmButton = { TextButton(onClick = onManage) { Text("Manage it") } },
-        dismissButton = { TextButton(onClick = onLeave) { Text("Leave it alone") } },
+        confirmButton = { TextButton(onClick = onManage) { Text(localized(Str.host_app_desktop_manage_it)) } },
+        dismissButton = { TextButton(onClick = onLeave) { Text(localized(Str.host_app_desktop_leave_it)) } },
     )
 }
 
@@ -41,9 +40,9 @@ fun DowngradeDialog(onKeep: () -> Unit, onUseBundled: () -> Unit) {
     AlertDialog(
         onDismissRequest = {},
         properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
-        text = { Text("A newer supermux is running. Keep it until the app catches up?") },
-        confirmButton = { TextButton(onClick = onKeep) { Text("Keep it") } },
-        dismissButton = { TextButton(onClick = onUseBundled) { Text("Use this app's version") } },
+        text = { Text(localized(Str.host_app_desktop_downgrade_text)) },
+        confirmButton = { TextButton(onClick = onKeep) { Text(localized(Str.host_app_desktop_keep_it)) } },
+        dismissButton = { TextButton(onClick = onUseBundled) { Text(localized(Str.host_app_desktop_use_bundled)) } },
     )
 }
 

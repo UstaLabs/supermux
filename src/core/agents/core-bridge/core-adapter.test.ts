@@ -11,7 +11,7 @@ import { createAcpNormalizer } from "../../../../packages/supermux-core/src/acp/
 import { createCodexNormalizer } from "../../../../packages/supermux-core/src/codex/normalize.js"
 import { createClaudeNormalizer } from "../../../../packages/supermux-core/src/claude/normalize.js"
 
-import { agentFailure, CoreAdapter, CORE_ADAPTER_PROFILES, missingConversation, INBOX_INTERRUPT_NOTE } from "./core-adapter"
+import { agentFailure, CoreAdapter, CORE_ADAPTER_PROFILES, missingConversation, interruptNote } from "./core-adapter"
 import { createGrokCoreHost } from "../grok/core-host"
 import { createCodexCoreHost } from "../codex/core-host"
 import { createCursorCoreHost } from "../cursor/core-host"
@@ -279,8 +279,8 @@ afterEach(async () => {
 })
 
 function listen(adapter: CoreAdapter) {
-  const events: Array<{ kind: string; error?: Error; recoverable?: boolean; text?: string; phase?: string; detail?: unknown; events?: unknown[]; reported?: boolean }> = []
-  for (const k of ["assistant-message", "tool-call", "turn-start", "turn-complete", "turn-failed", "error", "session-failed", "commands-update", "activity"]) {
+  const events: Array<{ kind: string; error?: Error; recoverable?: boolean; text?: string; phase?: string; detail?: unknown; events?: unknown[]; reported?: boolean; used?: number }> = []
+  for (const k of ["assistant-message", "tool-call", "turn-start", "turn-complete", "turn-failed", "error", "session-failed", "commands-update", "context-update", "activity"]) {
     adapter.on(k, (e: { kind: string }) => events.push(e))
   }
   return events
@@ -1820,7 +1820,9 @@ test("codex: an inbox message with busy=queue waits for the running turn instead
 })
 
 /** A message that ended a running turn, as the agent gets it (#143). */
-const noted = (text: string) => `${INBOX_INTERRUPT_NOTE}\n\n${text}`
+const noted = (text: string) => `${interruptNote()}\n\n${text}`
+/** A prompt's text blocks as one string (the #143 note is a block of its own). */
+const joined = (p: string[]) => p.join("\n\n")
 
 /** What the logger wrote to stderr (info level and up) while `fn` ran. */
 async function stderrDuring(fn: () => Promise<void>): Promise<string> {
@@ -1853,7 +1855,7 @@ for (const kind of [...QUEUE_KINDS, "codex"] as const) {
     fake.completePrompt()
     await Promise.all([first, queued, urgent])
     expect(fake.interruptCalls).toBe(1)
-    expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "queued", noted("urgent")])
+    expect(fake.promptTexts.map(joined)).toEqual(["one", noted("queued"), "urgent"])
   })
 
   // #143: an agent cut off mid tool call reads "The user doesn't want to proceed… [Request interrupted by user for
@@ -1870,8 +1872,8 @@ for (const kind of [...QUEUE_KINDS, "codex"] as const) {
     await waitUntil(() => fake.interruptCalls === 1)
     fake.completePrompt()
     await Promise.all([first, urgent])
-    const delivered = fake.promptTexts[1]![0]!
-    expect(delivered.startsWith(INBOX_INTERRUPT_NOTE)).toBe(true)
+    const delivered = joined(fake.promptTexts[1]!)
+    expect(delivered.startsWith(interruptNote())).toBe(true)
     expect(delivered).toContain("not the user")
     expect(delivered.endsWith("Message from [a:b] (m1):\nstop")).toBe(true)
   })
@@ -1906,7 +1908,7 @@ for (const kind of [...QUEUE_KINDS, "codex"] as const) {
       await first
       await urgent
     })
-    expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", noted("urgent")])
+    expect(fake.promptTexts.map(joined)).toEqual(["one", noted("urgent")])
     const warning = logged.split("\n").find((line) => line.includes("[WARN]") && line.includes("inbox_interrupt_unconfirmed"))
     expect(warning).toContain('"session_id":"sess-1"')
     expect(warning).toContain('"outcome":"unconfirmed"')
@@ -1931,7 +1933,7 @@ for (const kind of [...QUEUE_KINDS, "codex"] as const) {
       fake.completePrompt()
       await Promise.all([first, queued, urgent])
     })
-    expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "queued", noted("urgent")])
+    expect(fake.promptTexts.map(joined)).toEqual(["one", noted("queued"), "urgent"])
     expect(events.filter((e) => e.kind === "error")).toEqual([])
     const warning = logged.split("\n").find((line) => line.includes("[WARN]") && line.includes("inbox_interrupt_unconfirmed"))
     expect(warning).toContain('"outcome":"failed"')
@@ -2001,7 +2003,7 @@ for (const kind of [...QUEUE_KINDS, "codex"] as const) {
     fake.completePrompt() // the fake's hold outlives the interrupt: release "STOP"
     await Promise.all([long, stop])
     expect(fake.interruptCalls).toBe(1)
-    expect(fake.promptTexts.map((p) => p[0])).toEqual(["long task", noted("STOP")])
+    expect(fake.promptTexts.map(joined)).toEqual(["long task", noted("STOP")])
   })
 
   test(`${kind}: busy=interrupt leaves a turn that started after its hand-over alone, and queues behind it`, async () => {
@@ -2047,7 +2049,7 @@ for (const kind of [...QUEUE_KINDS, "codex"] as const) {
     fake.completePrompt()
     await Promise.all([first, u1, u2])
     expect(fake.interruptCalls).toBe(1)
-    expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", noted("u1"), "u2"])
+    expect(fake.promptTexts.map(joined)).toEqual(["one", noted("u1"), "u2"])
   })
 
   test(`${kind}: pendingInput counts input queued behind the running turn, and is 0 once it has all run`, async () => {
@@ -2082,7 +2084,7 @@ for (const kind of [...QUEUE_KINDS, "codex"] as const) {
     await waitUntil(() => fake.interruptCalls === 1)
     fake.completePrompt()
     await urgent
-    expect(fake.promptTexts.map((p) => p[0])).toEqual(["native", noted("urgent")])
+    expect(fake.promptTexts.map(joined)).toEqual(["native", noted("urgent")])
   })
 
   test(`${kind}: busy=interrupt handed over the moment the next turn starts ends that turn, not the one before`, async () => {
@@ -2110,7 +2112,7 @@ for (const kind of [...QUEUE_KINDS, "codex"] as const) {
     expect(startsSeenAtHandOver).toBe(1) // "first"'s turn end and "second"'s turn start were both still on their way
     fake.completePrompt()
     await Promise.all([first, second, urgent!])
-    expect(fake.promptTexts.map((p) => p[0])).toEqual(["first", "second", noted("urgent")])
+    expect(fake.promptTexts.map(joined)).toEqual(["first", "second", noted("urgent")])
   })
 }
 
@@ -2134,7 +2136,7 @@ test("claude: busy=interrupt: a model change that needs a restart is refused whi
   await urgent
   expect(fake.opens).toHaveLength(1)
   expect(adapter.model).toBe("old/model")
-  expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", noted("urgent")])
+  expect(fake.promptTexts.map(joined)).toEqual(["one", noted("urgent")])
   expect(events.filter((e) => e.kind === "error")).toEqual([])
 })
 
@@ -2268,7 +2270,7 @@ for (const interrupt of ["confirmed", "unconfirmed"] as const) {
     fake.completePrompt() // ends the unconfirmed turn; releases the fake's hold for the input after it
     await Promise.all([first, queued, urgent, reload])
     expect(fake.opens).toHaveLength(2)
-    expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "queued", noted("urgent")])
+    expect(fake.promptTexts.map(joined)).toEqual(["one", noted("queued"), "urgent"])
     expect(host.core.sessions.live("s1")?.snapshot().paused).toBe(false)
     expect(errors).toEqual([])
     // "urgent" was accepted by the old Session before it closed (3), or by the new one after (2).
@@ -2811,7 +2813,7 @@ acrossGrok("busy=interrupt waits for the running tool call to finish, then ends 
   await waitUntil(() => fake.interruptCalls === 1)
   fake.completePrompt()
   await Promise.all([first, urgent])
-  expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", noted("urgent")])
+  expect(fake.promptTexts.map(joined)).toEqual(["one", noted("urgent")])
 })
 
 acrossGrok("busy=stop ends the turn at once, even with a tool call running", async (kind) => {
@@ -2828,5 +2830,83 @@ acrossGrok("busy=stop ends the turn at once, even with a tool call running", asy
   await waitUntil(() => fake.interruptCalls === 1)
   fake.completePrompt()
   await Promise.all([first, urgent])
-  expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", noted("urgent")])
+  expect(fake.promptTexts.map(joined)).toEqual(["one", noted("urgent")])
+})
+
+// #143 regression (#117, 2026-11-14): on Claude's own frames, busy=interrupt still cut off a running Bash call.
+test("claude: busy=interrupt waits for a running tool call reported in Claude's own frames", async () => {
+  const fake = fakeAgentDriver("claude", { claudeFrames: true })
+  const { host, workdir } = await harness("claude", fake)
+  const adapter = makeAdapter("claude", host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  const events = listen(adapter)
+  await adapter.start()
+  fake.holdNextPrompt()
+  const first = adapter.send("one")
+  await waitUntil(() => events.some((e) => e.kind === "turn-start"))
+  fake.emit({ protocol: "native", value: {
+    type: "assistant", parent_tool_use_id: null,
+    message: { id: "m1", role: "assistant", type: "message", content: [{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "adb wait-for-device" } }] },
+  } })
+  await flush()
+  const urgent = adapter.send("urgent", { busy: "interrupt" })
+  await flush()
+  await tick()
+  expect(fake.interruptCalls).toBe(0)
+  fake.emit({ protocol: "native", value: {
+    type: "user", parent_tool_use_id: null,
+    message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "done" }] },
+  } })
+  await waitUntil(() => fake.interruptCalls === 1)
+  fake.completePrompt()
+  await Promise.all([first, urgent])
+})
+
+acrossGrok("a usage update's context becomes contextUsage and one context-update per change (#144)", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  const events = listen(adapter)
+  await adapter.start()
+  fake.emit({ protocol: "acp", value: { sessionUpdate: "usage_update", used: 11465, size: 200000 } })
+  fake.emit({ protocol: "acp", value: { sessionUpdate: "usage_update", used: 11465, size: 200000 } })
+  fake.emit({ protocol: "acp", value: { sessionUpdate: "usage_update", used: 12000, size: 200000 } })
+  await flush()
+  expect(adapter.contextUsage).toEqual({ used: 12000, size: 200000 })
+  expect(events.filter((e) => e.kind === "context-update").map((e) => (e as { used?: number }).used)).toEqual([11465, 12000])
+})
+
+acrossGrok("tools the chat started are counted for 'used in this chat' (#144)", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  await adapter.start()
+  for (const id of ["t1", "t2"]) fake.emit({ protocol: "acp", value: { sessionUpdate: "tool_call", toolCallId: id, title: "Read", kind: "read", status: "pending" } })
+  await flush()
+  expect([...adapter.toolUses.values()].reduce((a, b) => a + b, 0)).toBe(2)
+})
+
+acrossGrok("a compaction notice becomes the adapter's compaction event (#144)", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  const seen: unknown[] = []
+  adapter.on("compaction", (e: unknown) => seen.push(e))
+  await adapter.start()
+  fake.emit({ protocol: "native", value: { method: "_x.ai/session_notification", params: { update: { sessionUpdate: "auto_compact_completed", tokens_before: 28200, tokens_after: 28200 } } } })
+  await flush()
+  expect(seen).toEqual([{ kind: "compaction", compactionId: "grok-compact-1", status: "completed", before: 28200 }])
+})
+
+test("claude: a rate_limit_event reaches the adapter's raw \"rate-limits\" event (#146 advisor input)", async () => {
+  const fake = fakeAgentDriver("claude", { claudeFrames: true })
+  const { host, workdir } = await harness("claude", fake)
+  const adapter = makeAdapter("claude", host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  const raw: unknown[] = []
+  adapter.on("rate-limits", (r: unknown) => raw.push(r))
+  await adapter.start()
+  // Real 2.1.308 frame.
+  fake.emit({ protocol: "native", value: { type: "rate_limit_event", rate_limit_info: { status: "allowed", resetsAt: 1794711600, rateLimitType: "five_hour",
+    unifiedWindows: { five_hour: { utilization: 0.41, resetsAt: 1794711600 }, seven_day: { utilization: 0.09, resetsAt: 1795125600 } } } } })
+  await flush()
+  expect(raw).toHaveLength(1)
 })

@@ -118,6 +118,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.ui.oklchToArgb
 import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.i18n.Plurals
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.localizedPlural
 import dev.supermux.ui.theme.MonoFontFamily
 import kotlinx.coroutines.delay
 
@@ -252,13 +256,12 @@ internal fun formatToolDuration(ms: Long): String = when {
     else -> "${ms / 60_000}m ${(ms % 60_000) / 1000}s"
 }
 
+@Composable
 internal fun ToolCallData.derivedSummary(): String? = summary ?: when (val o = output) {
-    is ToolCallOutput.Items -> plural(o.items.size, "result")
-    is ToolCallOutput.Table -> plural(o.rows.size, "row")
+    is ToolCallOutput.Items -> localizedPlural(Plurals.chatline_tool_results, o.items.size, o.items.size)
+    is ToolCallOutput.Table -> localizedPlural(Plurals.chatline_tool_rows, o.rows.size, o.rows.size)
     else -> null
 }
-
-private fun plural(n: Int, noun: String) = if (n == 1) "1 $noun" else "$n ${noun}s"
 
 private val ToolCallStatus.needsAttention get() = this == ToolCallStatus.Approval || this == ToolCallStatus.Error
 
@@ -356,12 +359,20 @@ private fun ToolCallHead(
     )
     val title = call.titles[call.status] ?: call.title
     val note = call.message?.takeIf { call.status == ToolCallStatus.Error || call.status == ToolCallStatus.Approval }
+    val deny = localized(Str.chatline_tool_deny)
+    val denyWhat = localized(Str.chatline_tool_deny_what, call.title)
+    val allow = localized(Str.chatline_tool_allow)
+    val allowWhat = localized(Str.chatline_tool_allow_what, call.title)
+    val retry = localized(Str.chatline_tool_retry)
+    val retryWhat = localized(Str.chatline_tool_retry_what, call.title)
+    val expandedWord = localized(Str.chatline_tool_expanded)
+    val collapsedWord = localized(Str.chatline_tool_collapsed)
     val actions: List<Action> = when (call.status) {
         ToolCallStatus.Approval -> listOfNotNull(
-            onDeny?.let { Action("Deny", "Deny ${call.title}", primary = false, icon = null, it) },
-            onApprove?.let { Action("Allow", "Allow ${call.title}", primary = true, icon = null, it) },
+            onDeny?.let { Action(deny, denyWhat, primary = false, icon = null, it) },
+            onApprove?.let { Action(allow, allowWhat, primary = true, icon = null, it) },
         )
-        ToolCallStatus.Error -> listOfNotNull(onRetry?.let { Action("Retry", "Retry ${call.title}", primary = false, icon = Icons.Outlined.Replay, it) })
+        ToolCallStatus.Error -> listOfNotNull(onRetry?.let { Action(retry, retryWhat, primary = false, icon = Icons.Outlined.Replay, it) })
         else -> emptyList()
     }
 
@@ -374,7 +385,7 @@ private fun ToolCallHead(
             .background(bg)
             .hoverable(interaction)
             .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = toggle)
-            .semantics { stateDescription = if (isOpen) "Expanded" else "Collapsed" }
+            .semantics { stateDescription = if (isOpen) expandedWord else collapsedWord }
             .testTag("tool_call_head_${call.id}"),
     ) {
         // Below 440dp the summary drops and the actions move under the reason line.
@@ -430,14 +441,15 @@ private fun ToolCallHead(
 @Composable
 private fun MetaLine(call: ToolCallData, narrow: Boolean) {
     val c = LocalToolCallColors.current
+    val summary = call.derivedSummary()
     val parts = buildList {
-        if (call.status == ToolCallStatus.Success && !narrow) call.derivedSummary()?.let(::add)
+        if (call.status == ToolCallStatus.Success && !narrow) summary?.let(::add)
         if (call.status == ToolCallStatus.Success || call.status == ToolCallStatus.Error) call.durationMs?.let { add(formatToolDuration(it)) }
     }
     AnimatedContent(
         targetState = parts,
         transitionSpec = { fadeIn(ToolCallMotion.fast()) togetherWith fadeOut(tween(100)) },
-        label = "meta",
+        label = "meta", // i18n-ok: animation label
     ) { p ->
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
             p.forEachIndexed { i, s ->
@@ -502,12 +514,12 @@ private fun SwapText(text: String, shimmering: Boolean, style: TextStyle, color:
         transitionSpec = { fadeIn(tween(120, delayMillis = 80)) togetherWith fadeOut(tween(90)) },
         contentAlignment = Alignment.CenterStart,
         modifier = modifier,
-        label = "swap",
+        label = "swap", // i18n-ok: animation label
     ) { t ->
-        val blur by transition.animateFloat(transitionSpec = { tween(160, easing = ToolCallMotion.standard) }, label = "blur") {
+        val blur by transition.animateFloat(transitionSpec = { tween(160, easing = ToolCallMotion.standard) }, label = "blur") { // i18n-ok: animation label
             when (it) { EnterExitState.PreEnter -> 4f; EnterExitState.Visible -> 0f; EnterExitState.PostExit -> 2f }
         }
-        val dy by transition.animateFloat(transitionSpec = { tween(120) }, label = "dy") {
+        val dy by transition.animateFloat(transitionSpec = { tween(120) }, label = "dy") { // i18n-ok: animation label
             if (it == EnterExitState.PostExit) -rise else 0f
         }
         ShimmerLabel(
@@ -535,7 +547,7 @@ private fun ShimmerLabel(text: String, shimmering: Boolean, style: TextStyle, co
     val pos by rememberLiveLoop(
         0f, 1f,
         infiniteRepeatable(keyframes { durationMillis = 2400; 0f at 0 using LinearEasing; 1f at 1800; 1f at 2399 }, RepeatMode.Restart),
-        label = "shimmer",
+        label = "shimmer", // i18n-ok: animation label
     )
     val base = lerp(color, lerp(c.textMuted, color, 0.12f), strength)
     val x = width * pos
@@ -559,15 +571,22 @@ private fun ShimmerLabel(text: String, shimmering: Boolean, style: TextStyle, co
 @Composable
 private fun StatusIcon(status: ToolCallStatus) {
     val c = LocalToolCallColors.current
+    val statusWord = when (status) {
+        ToolCallStatus.Running -> localized(Str.chatline_tool_status_running)
+        ToolCallStatus.Success -> localized(Str.chatline_tool_status_success)
+        ToolCallStatus.Error -> localized(Str.chatline_tool_status_error)
+        ToolCallStatus.Approval -> localized(Str.chatline_tool_status_approval)
+        ToolCallStatus.Denied -> localized(Str.chatline_tool_status_denied)
+    }
     AnimatedContent(
         targetState = status,
         transitionSpec = {
             (scaleIn(ToolCallMotion.statusIn(), initialScale = 0.6f) + fadeIn(tween(90, delayMillis = 130))) togetherWith
                 (scaleOut(tween(130, easing = ToolCallMotion.standard), targetScale = 0.6f) + fadeOut(tween(110)))
         },
-        modifier = Modifier.size(16.dp).semantics { liveRegion = LiveRegionMode.Polite; contentDescription = status.name },
+        modifier = Modifier.size(16.dp).semantics { liveRegion = LiveRegionMode.Polite; contentDescription = statusWord },
         contentAlignment = Alignment.Center,
-        label = "status",
+        label = "status", // i18n-ok: animation label
     ) { s ->
         when (s) {
             ToolCallStatus.Running -> Spinner(c.textMuted)
@@ -581,7 +600,7 @@ private fun StatusIcon(status: ToolCallStatus) {
 
 @Composable
 private fun Spinner(color: Color) {
-    val angle by rememberLiveLoop(0f, 360f, infiniteRepeatable(tween(800, easing = LinearEasing)), label = "spin")
+    val angle by rememberLiveLoop(0f, 360f, infiniteRepeatable(tween(800, easing = LinearEasing)), label = "spin") // i18n-ok: animation label
     Canvas(Modifier.size(14.dp)) {
         val w = 1.4.dp.toPx()
         drawArc(
@@ -635,25 +654,25 @@ private fun ToolCallPanel(call: ToolCallData, renderOutput: (@Composable (ToolCa
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             if (call.input.isNotEmpty()) {
-                Section("Input", call.input.joinToString("\n") { (k, v) -> "$k: $v" }) { KeyValues(call.input) }
+                Section(localized(Str.chatline_tool_input), localized(Str.chatline_tool_copy_input), call.input.joinToString("\n") { (k, v) -> "$k: $v" }) { KeyValues(call.input) }
             }
             val out = call.output
             when {
                 call.status == ToolCallStatus.Error && call.message != null ->
-                    Section("Error", call.message) { Text(call.message, style = Body, color = c.foreground) }
+                    Section(localized(Str.chatline_tool_error_title), localized(Str.chatline_tool_copy_error), call.message) { Text(call.message, style = Body, color = c.foreground) }
                 out != null && call.status != ToolCallStatus.Running && call.status != ToolCallStatus.Approval ->
-                    Section("Output", out.copyText(), tight = out is ToolCallOutput.Items || out is ToolCallOutput.Table) {
+                    Section(localized(Str.chatline_tool_output), localized(Str.chatline_tool_copy_output), out.copyText(), tight = out is ToolCallOutput.Items || out is ToolCallOutput.Table) {
                         if (call.status != ToolCallStatus.Success || renderOutput?.invoke(call) != true) OutputBody(out, narrow)
                     }
                 call.status == ToolCallStatus.Running ->
-                    Section("Output", null) { Text("Waiting for the result…", style = Body, color = c.textMuted) }
+                    Section(localized(Str.chatline_tool_output), localized(Str.chatline_tool_copy_output), null) { Text(localized(Str.chatline_tool_waiting), style = Body, color = c.textMuted) }
             }
         }
     }
 }
 
 @Composable
-private fun Section(label: String, copyText: String?, tight: Boolean = false, content: @Composable () -> Unit) {
+private fun Section(label: String, copyLabel: String, copyText: String?, tight: Boolean = false, content: @Composable () -> Unit) {
     val c = LocalToolCallColors.current
     val platform = LocalPlatform.current
     Column {
@@ -665,7 +684,7 @@ private fun Section(label: String, copyText: String?, tight: Boolean = false, co
                         .size(28.dp)
                         .clip(RoundedCornerShape(9.dp))
                         .clickable(role = Role.Button) { platform.copyToClipboard(copyText) }
-                        .semantics { contentDescription = "Copy ${label.lowercase()}" },
+                        .semantics { contentDescription = copyLabel },
                     contentAlignment = Alignment.Center,
                 ) { Icon(Icons.Outlined.ContentCopy, null, tint = c.textMuted, modifier = Modifier.size(14.dp)) }
             }
@@ -701,7 +720,7 @@ private fun KeyValues(input: List<Pair<String, String>>) {
                 )
             }
         }
-        if (clipped) MoreButton(if (full) "Show less" else "Show all", full) { full = !full }
+        if (clipped) MoreButton(if (full) localized(Str.chatline_tool_show_less) else localized(Str.chatline_tool_show_all), full) { full = !full }
     }
 }
 
@@ -761,7 +780,7 @@ private fun OutputBody(out: ToolCallOutput, narrow: Boolean) {
                     maxLines = if (full) Int.MAX_VALUE else ToolCallMotion.FOLD_LINES, overflow = TextOverflow.Ellipsis,
                     onTextLayout = { if (it.hasVisualOverflow) clipped = true },
                 )
-                if (clipped) MoreButton(if (full) "Show less" else "Show all", full) { full = !full }
+                if (clipped) MoreButton(if (full) localized(Str.chatline_tool_show_less) else localized(Str.chatline_tool_show_all), full) { full = !full }
             }
         }
     }
@@ -792,7 +811,7 @@ private fun Foldable(total: Int, limit: Int, content: @Composable (shown: Int) -
     var expanded by remember { mutableStateOf(false) }
     Column(Modifier.animateContentSize(ToolCallMotion.height())) {
         content(if (expanded || total <= limit) total else limit)
-        if (total > limit) MoreButton(if (expanded) "Show less" else "Show ${total - limit} more", expanded) { expanded = !expanded }
+        if (total > limit) MoreButton(if (expanded) localized(Str.chatline_tool_show_less) else localized(Str.chatline_tool_show_more, total - limit), expanded) { expanded = !expanded }
     }
 }
 
@@ -846,7 +865,7 @@ fun ToolCallGroup(
     onRetry: ((ToolCallData) -> Unit)? = null,
     renderOutput: (@Composable (ToolCallData) -> Boolean)? = null,
     /** Shown as a live last row while [active] and no call is running; null to leave it out. */
-    planningLabel: String? = "Planning next moves",
+    planningLabel: String? = localized(Str.chatline_tool_planning),
     colors: ToolCallColors? = null,
 ) = ProvideToolCallColors(colors) {
     val c = LocalToolCallColors.current
@@ -875,6 +894,10 @@ fun ToolCallGroup(
     val totalMs = calls.mapNotNull { it.durationMs }.sum()
     val marks = calls.map { it.tool }.distinctBy { it.name }
     val shape = RoundedCornerShape(16.dp)
+    val expandedWord = localized(Str.chatline_tool_expanded)
+    val collapsedWord = localized(Str.chatline_tool_collapsed)
+    val groupTitle = if (active) localizedPlural(Plurals.chatline_tool_using_tools, calls.size, calls.size)
+    else localizedPlural(Plurals.chatline_tool_used_tools, calls.size, calls.size)
 
     Column(modifier.fillMaxWidth().clip(shape).background(c.surface).border(1.dp, c.border, shape)) {
         val interaction = remember { MutableInteractionSource() }
@@ -893,7 +916,7 @@ fun ToolCallGroup(
                     .background(bg)
                     .hoverable(interaction)
                     .clickable(interactionSource = interaction, indication = null, role = Role.Button) { touched = true; setOpen(!isOpen) }
-                    .semantics { stateDescription = if (isOpen) "Expanded" else "Collapsed" }
+                    .semantics { stateDescription = if (isOpen) expandedWord else collapsedWord }
                     .testTag("tool_group_head")
                     .padding(horizontal = PadH),
                 verticalAlignment = Alignment.CenterVertically,
@@ -901,7 +924,7 @@ fun ToolCallGroup(
                 MarkStack(marks)
                 Spacer(Modifier.width(Gap))
                 SwapText(
-                    text = "${if (active) "Using" else "Used"} ${plural(calls.size, "tool")}",
+                    text = groupTitle,
                     shimmering = active,
                     style = Body,
                     color = if (hovered) c.foreground else c.textSecondary,
@@ -909,7 +932,7 @@ fun ToolCallGroup(
                 )
                 Spacer(Modifier.width(Gap))
                 when {
-                    failed > 0 -> Text("$failed failed", style = Meta, color = lerp(c.textSecondary, c.danger, 0.85f))
+                    failed > 0 -> Text(localized(Str.chatline_tool_n_failed, failed), style = Meta, color = lerp(c.textSecondary, c.danger, 0.85f))
                     !busy && totalMs > 0 -> Text(formatToolDuration(totalMs), style = Meta, color = c.textMuted)
                 }
                 Spacer(Modifier.width(Gap))

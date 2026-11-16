@@ -1,0 +1,17 @@
+/* #123: English, the source. Keys are the English text, as SwiftUI looks them up. */
+
+"Dictate a message" = "Dictate a message";
+"Cleaning…" = "Cleaning…";
+"Send" = "Send";
+"Talk" = "Talk";
+"unread" = "unread";
+"Open Supermux on your iPhone to connect your watch." = "Open Supermux on your iPhone to connect your watch.";
+"Connecting…" = "Connecting…";
+"Offline" = "Offline";
+"No active sessions" = "No active sessions";
+"Continue" = "Continue";
+"Stop" = "Stop";
+"Unmute" = "Unmute";
+"Mute" = "Mute";
+"Connected via iPhone" = "Connected via iPhone";
+"Attachment" = "Attachment";

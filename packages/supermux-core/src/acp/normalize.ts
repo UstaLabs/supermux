@@ -1,5 +1,5 @@
 /** ACP SessionUpdate mapper. Schema pin: @agentclientprotocol/sdk 1.4.0 types.gen.d.ts. */
-import type { AgentUpdate } from "../types.js"
+import type { AgentUpdate, ContextBreakdown } from "../types.js"
 import type { NormalizedBody, PlanEntryPriority, PlanEntryStatus, SubagentEndedBy, SubagentMessaging, SubagentPhase, SubagentStats, ToolCallPhase, ToolCategory } from "../events/normalized.js"
 import type { SubagentSnapshot } from "../types.js"
 import { REASON, SUBAGENT_STATE_METHOD, actionFields, actionsKey, endedReason, type SubagentActions } from "../subagent-actions.js"
@@ -190,10 +190,41 @@ function taskResult(text: string): string {
   return (m ? m[1]! : text).trim()
 }
 
+/**
+ * Grok's `_x.ai/session/info` reply → the breakdown (#144). Its own `used` counts only the system prompt (1.0.46),
+ * so the total is what its categories add up to; the ring's live number comes from each call's usage instead.
+ */
+export function grokContextBreakdown(reply: unknown): ContextBreakdown | undefined {
+  const outer = rec(reply)
+  const context = rec(rec(outer?.result)?.context) ?? rec(outer?.context)
+  const size = num(context?.total)
+  if (!context || size == null) return undefined
+  const categories: ContextBreakdown["categories"] = []
+  const add = (id: string, name: string, tokens: number | undefined) => { if (tokens != null && tokens > 0) categories.push({ id, name, tokens, kind: "used" }) }
+  add("messages", "Messages", num(context.messageTokens))
+  add("tool_definitions", "Tool definitions", num(context.toolDefinitionsTokens))
+  add("system_prompt", "System prompt", num(context.systemPromptTokens))
+  for (const row of Array.isArray(context.usageCategories) ? context.usageCategories : []) {
+    const label = str(rec(row)?.label)
+    if (label) add(label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, ""), label, num(rec(row)?.tokens))
+  }
+  const pct = num(context.autoCompactThresholdPercent)
+  return {
+    used: categories.reduce((sum, c) => sum + c.tokens, 0), size,
+    ...(pct != null ? { threshold: Math.round(size * pct / 100) } : {}),
+    categories,
+  }
+}
+
 export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNormalizer {
   const vendor = options.vendor
   const toolNames = new Map<string, string>()
   let lastCommandsJson: string | undefined
+  /** Each model's context window and the one in use (#144): Grok reports usage per call but no window with it. */
+  const windows: { current?: string; sizes: Record<string, number> } = { sizes: {} }
+  const grokCompaction = { seq: 0, open: false }
+  const driverCompaction: { seq: number; open: boolean; before?: number; summary?: string } = { seq: 0, open: false }
+  let lastContextUsed: number | undefined
   let lastModelsJson: string | undefined
   let firstSession: string | undefined
   const scopes = new Map<string, Scope>()
@@ -393,7 +424,31 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
     const kind = value.sessionUpdate
     const subagentId = scope.subagentId
     if (kind === "turn_completed" || kind === "user_message_chunk") return []
+    if (kind === "auto_compact_started" || kind === "auto_compact_completed" || kind === "auto_compact_failed") {
+      // Grok's compaction (#144), its own or a /compact. tokens_after repeats tokens_before on a first one (1.0.46).
+      if (sub) return []
+      if (!grokCompaction.open) { grokCompaction.seq += 1; grokCompaction.open = true }
+      const compactionId = `grok-compact-${grokCompaction.seq}`
+      if (kind === "auto_compact_started") return [{ kind: "compaction", compactionId, status: "in_progress" }]
+      grokCompaction.open = false
+      if (kind === "auto_compact_failed") return [{ kind: "compaction", compactionId, status: "failed", error: str(value.error) ?? str(value.message) ?? "Compaction failed" }]
+      const before = num(value.tokens_before)
+      return [{ kind: "compaction", compactionId, status: "completed", ...(before != null ? { before } : {}) }]
+    }
+    if (kind === "response_completed") {
+      // Grok, one per model call: what that call sent is how full the window is now (#144).
+      const usage = rec(value.usage)
+      const size = windows.current ? windows.sizes[windows.current] : undefined
+      if (sub || !usage || size == null) return []
+      const used = (num(usage.input_tokens) ?? 0) + (num(usage.cache_read_input_tokens) ?? 0) + (num(usage.cache_creation_input_tokens) ?? 0)
+      return used > 0 ? [{ kind: "usage", context: { used, size } }] : []
+    }
     if (sub && (kind === "available_commands_update" || kind === "usage_update" || kind === "session_info_update" || kind === "current_mode_update" || kind === "config_option_update")) return []
+    if (driverCompaction.open && !sub && (kind === "agent_message_chunk" || kind === "agent_thought_chunk")) {
+      // OpenCode streams its compaction summary as an ordinary message (#144): it belongs to the Compacted line.
+      if (kind === "agent_message_chunk") driverCompaction.summary = (driverCompaction.summary ?? "") + contentText(value.content)
+      return []
+    }
     if (kind === "agent_message_chunk") {
       const prefix = takeThoughts(scope)
       if (prefix.length && !str(value.messageId)) scope.thoughtSeq += 1
@@ -535,13 +590,18 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
       const optionsList = Array.isArray(value.configOptions) ? value.configOptions : []
       const modelOpt = optionsList.map(rec).find(row => row && (row.id === "model" || row.name === "model"))
       const model = modelOpt ? str(modelOpt.value) ?? str(modelOpt.currentValue) : undefined
+      if (model) windows.current = model
       return [{ kind: "mode-update", ...(model ? { model } : {}) }]
     }
     if (kind === "session_info_update") {
       return [{ kind: "session-info", ...("title" in value ? { title: (value.title as string | null | undefined) ?? null } : {}) }]
     }
     if (kind === "usage_update") {
-      const used = typeof value.used === "number" ? value.used : undefined
+      // OpenCode sends used 0 (with the failed model's window) after a refused turn: no size, the last good one stands.
+      const reported = typeof value.used === "number" && value.used > 0 ? value.used : undefined
+      // During a compaction OpenCode reports the summarizing call itself, not the window (#144).
+      const used = driverCompaction.open ? undefined : reported
+      if (used != null) lastContextUsed = used
       const size = typeof value.size === "number" ? value.size : undefined
       const costRow = rec(value.cost)
       return [{
@@ -794,6 +854,34 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
   }
 
   function mapNative(method: string, params: unknown): NormalizedBody[] {
+    if (method === "compaction") {
+      // The driver brackets a Compact it ran on an agent that announces none (OpenCode, #144).
+      const status = str(rec(params)?.status)
+      if (status === "in_progress") {
+        driverCompaction.seq += 1
+        driverCompaction.open = true
+        driverCompaction.before = lastContextUsed
+        driverCompaction.summary = undefined
+        return [{ kind: "compaction", compactionId: `compact-${driverCompaction.seq}`, status: "in_progress" }]
+      }
+      if (!driverCompaction.open || (status !== "completed" && status !== "failed" && status !== "cancelled")) return []
+      driverCompaction.open = false
+      const error = str(rec(params)?.error)
+      return [{
+        kind: "compaction", compactionId: `compact-${driverCompaction.seq}`, status,
+        ...(status === "completed" && driverCompaction.before != null ? { before: driverCompaction.before } : {}),
+        ...(status === "completed" && driverCompaction.summary?.trim() ? { summary: driverCompaction.summary.trim() } : {}),
+        ...(error ? { error } : {}),
+      }]
+    }
+    if (method === "model_windows") {
+      // The driver forwards each model's context window and the current one (Grok's _meta.modelState).
+      const p = rec(params)
+      const current = str(p?.current)
+      if (current) windows.current = current
+      for (const [id, size] of Object.entries(rec(p?.windows) ?? {})) if (typeof size === "number") windows.sizes[id] = size
+      return []
+    }
     if (method === "config_options") {
       // The driver forwards a session start's configOptions (#102): the agent's own model list.
       const options = Array.isArray(rec(params)?.configOptions) ? rec(params)!.configOptions as unknown[] : []

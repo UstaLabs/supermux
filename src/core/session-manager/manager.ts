@@ -32,7 +32,12 @@ import { checkSessionRename, createAgentFromTool, type CreateAgentDeps } from ".
 
 import { buildProxyPublicUrl } from "../../channels/web/proxy"
 import { listDevices } from "../display/scrcpy/adb"
-import { INBOX_DIR } from "../../shared/paths"
+import { host } from "@supermux/platform"
+import { join } from "path"
+import { INBOX_DIR, SOCKETS_DIR, STATE_DIR } from "../../shared/paths"
+import { cliAdoption, processHasCli, sessionKnowsCli, withCliNote } from "../cli/adoption"
+import { agentPidOf } from "../../../packages/supermux-core/src/keeper/index.js"
+import { SUPERMUX_BIN_DIR } from "../agents/session-cli-env"
 import type { RegisterReply, OpResult } from "./socket-server"
 import type { RegisterFrame, OutboundFrame, OrchestrationFrame, ToolOperation } from "../../shared/socket-frames"
 import { shimTools } from "../../shim/tools"
@@ -63,6 +68,8 @@ const log = makeLogger("session-manager")
 
 /** How long a settled orchestration call's result is shared with identical calls. */
 export const ORCH_DEDUP_MS = 10_000
+/** Orchestration ops that only read: never served from a settled call (see orchestration()). */
+export const READ_OPS = new Set(["list_sessions", "find_sessions", "read_session", "memory_search", "list_models", "list_devices", "list_proxies", "browser_comments"])
 /** Why the session tools refuse a draft (a launcher chat nothing has been sent in): its id is temporary too. */
 const DRAFT_HAS_NO_AGENT = "a draft has no agent until its first message is sent"
 
@@ -180,6 +187,8 @@ export type SessionManagerPorts = {
     createAgentDeps(): CreateAgentDeps
     /** set_avatar saved a new avatar for this Agent: tell the clients. */
     agentAvatarChanged?(agentId: string): void
+    /** #117: `supermux applet …` ops (applet_*), open to every session; undefined = no applets on this broker. */
+    appletOp?(sessionId: string, name: string, args: Record<string, unknown> | undefined): Promise<{ ok: true; value: unknown } | { ok: false; error: string }>
     /** delegate (spec §3): start a child session for parentId and hand it the task. */
     delegate(args: { parentId: string; task: string; agent: AgentKind; model?: string; effort?: string; access: string; checkout: "shared" | "worktree"; title?: string; callId?: string }): Promise<{ session: string; agent: AgentKind; model: string | null; access: string }>
     /** council (spec §5): start the members and send them the question. */
@@ -206,7 +215,7 @@ export type SessionManagerPorts = {
     /** Socket bind — the server is constructed after the component (late-bound). */
     bind(sessionId: string): Promise<void>
     /** Recreate a merged-away worktree at the SAME path before any respawn. */
-    ensureSessionWorktree(session: { id: string; name: string; workdir: string; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null }): Promise<void>
+    ensureSessionWorktree(session: { id: string; name: string; workdir: string; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null; source_kind?: string | null }): Promise<void>
     /** Resolved CLI effort for a session (model cache lives in main.ts). */
     sessionEffort(s: { agent?: string; model?: string; reasoningLevel?: string }): string | undefined
     /** Resolved fast mode for a session (model cache lives in main.ts). */
@@ -288,11 +297,20 @@ export class SessionManager {
     return phase === "thinking" || phase === "running" ? "working" : "idle"
   }
 
+  /** Whether session `s`'s running agent process has the CLI in its env (undefined: unknown). See processHasCli. */
+  private agentHasCli(s: Session): boolean | undefined {
+    const pid = isPersistentRuntimeSession(s) ? (s.pid || undefined) : agentPidOf(join(STATE_DIR, "core", s.agent), s.id)
+    return pid ? processHasCli(pid, SUPERMUX_BIN_DIR) : undefined
+  }
+
   /**
    * THE one inbound door: adapter.send() for every agent (all run through supermux-core). Every
    * broker-side sender (channels, curator, agent-rpc, reviews) must call this.
    */
   deliver(sessionId: string, text: string, meta: any): Promise<InboundDeliveryResult> {
+    // #156: a session whose agent process started before the CLI gets one note about it, on a turn it gets anyway.
+    const s = this.registry.get(sessionId)
+    if (s) text = withCliNote(sessionId, !!s.internal, text, { binDir: SUPERMUX_BIN_DIR, socketsDir: SOCKETS_DIR, platform: host.os(), hasCli: () => this.agentHasCli(s) })
     // Record where this session is talking, for the reply that comes back. This
     // is the one place every inbound turn passes through — including the ones
     // that never reach the message log (curator wakes, agent-rpc calls).
@@ -529,12 +547,17 @@ export class SessionManager {
 
   /** The external shim's socket path (`outbound` frame): the socket's bound session id is the caller. */
   handleOutbound(msg: OutboundFrame & { session_id: string }): Promise<OpResult> {
+    cliAdoption().recordCall(msg.session_id, String(msg.call_id ?? "").startsWith("cli-") ? "cli" : "mcp", msg.op.name)
     return this.outbound(msg.session_id, msg.op)
   }
 
   /** The external shim's socket path (`orchestration` frame). */
   handleOrchestration(msg: OrchestrationFrame & { session_id: string }): Promise<OpResult> {
-    return this.orchestration(msg.session_id, msg.op)
+    // #156: a `supermux` CLI command is one explicit call from its own process (call ids "cli-…"), never a retry or a
+    // second shim's copy, so it is not deduplicated: re-running a command must run it, and must read fresh state.
+    const fromCli = String(msg.call_id ?? "").startsWith("cli-")
+    cliAdoption().recordCall(msg.session_id, fromCli ? "cli" : "mcp", msg.op.name)
+    return this.orchestration(msg.session_id, msg.op, { dedup: !fromCli })
   }
 
   /**
@@ -657,7 +680,11 @@ export class SessionManager {
    * end (a mutation is applied completely, never half), and a retry within the window gets the
    * same result instead of a second mutation.
    */
-  orchestration(fromSession: string, op: ToolOperation): Promise<OpResult> {
+  orchestration(fromSession: string, op: ToolOperation, opts: { dedup?: boolean } = {}): Promise<OpResult> {
+    if (opts.dedup === false) return this.runOrchestration(fromSession, op).catch((err: unknown): OpResult => ({ ok: false, error: `handler threw: ${err instanceof Error ? err.message : String(err)}` }))
+    // #117: `supermux applet` comes from a shell, never an MCP retry: an info right after a backup, or a second
+    // `applet run`, must not get the previous call's answer.
+    if (op.name.startsWith("applet_")) return this.runOrchestration(fromSession, op).catch((err: unknown): OpResult => ({ ok: false, error: `handler threw: ${err instanceof Error ? err.message : String(err)}` }))
     const key = `${fromSession}|${op.name}|${JSON.stringify(op.args)}`
     const inflight = this.orchInflight.get(key)
     if (inflight) {
@@ -666,7 +693,12 @@ export class SessionManager {
     }
     const p = this.runOrchestration(fromSession, op).catch((err: unknown): OpResult => ({ ok: false, error: `handler threw: ${err instanceof Error ? err.message : String(err)}` }))
     this.orchInflight.set(key, p)
-    void p.finally(() => { const t = setTimeout(() => { if (this.orchInflight.get(key) === p) this.orchInflight.delete(key) }, ORCH_DEDUP_MS); t.unref?.() })
+    // A read shares a call only while it is in flight: after it settles the next one reads fresh state (#156: `port ls`
+    // after `port private` within 10 s showed the old link). A mutation keeps the window, so a retry never runs it twice.
+    void p.finally(() => {
+      if (READ_OPS.has(op.name)) { if (this.orchInflight.get(key) === p) this.orchInflight.delete(key); return }
+      const t = setTimeout(() => { if (this.orchInflight.get(key) === p) this.orchInflight.delete(key) }, ORCH_DEDUP_MS); t.unref?.()
+    })
     return p
   }
 
@@ -676,7 +708,12 @@ export class SessionManager {
     // The ops listed here are open to every session. Any other op needs can_orchestrate, which
     // personal assistants have: today that leaves mute_session, set_active and get_active (spec §4).
     // A new tool meant for every session must be added here.
-    const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment", "browser_comments", "resolve_browser_comment", "reply_browser_comment", "dismiss_browser_comment", "message_session", "list_models", "spawn_session", "kill_session", "list_sessions", "delegate", "council", "council_round", "council_add", "council_remove", "council_end", "council_report", "preview_avatar", "set_avatar"])
+    const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment", "browser_comments", "resolve_browser_comment", "reply_browser_comment", "dismiss_browser_comment", "message_session", "list_models", "spawn_session", "kill_session", "list_sessions", "delegate", "council", "council_round", "council_add", "council_remove", "council_end", "council_report", "preview_avatar", "set_avatar", "list_proxies", "cli_adoption"])
+    if (op.name.startsWith("applet_")) {
+      if (!s) return { ok: false, error: "unknown session" }
+      const applets = this.ports.orchestration.appletOp
+      return applets ? await applets(s.id, op.name, op.args) : { ok: false, error: "applets are not available on this broker" }
+    }
     if (!s?.can_orchestrate && !NO_ORCHESTRATE_REQUIRED.has(op.name)) {
       return { ok: false, error: "permission denied (can_orchestrate=false)" }
     }
@@ -989,6 +1026,20 @@ export class SessionManager {
         } catch (err: any) {
           return { ok: false, error: err?.message ?? String(err) }
         }
+      }
+      // #156: the CLI's `supermux port ls`. No MCP tool lists links, so an agent asked to change "the fold preview
+      // link" had no way to find its name (0/3 with MCP in the eval, 3/3 with this).
+      case "list_proxies": {
+        if (!s) return { ok: false, error: "unknown session" }
+        const base = { baseDomain: process.env.MUX_PROXY_BASE_DOMAIN, publicUrl: this.ports.orchestration.exposedProxyLinksBaseUrl() }
+        return { ok: true, value: this.registry.listProxies().map((p) => ({ domain: p.domain, port: p.port, isPublic: p.isPublic, sessionName: p.sessionName, mine: p.sessionId === s.id, createdAt: p.createdAt, url: buildProxyPublicUrl(p.domain, base) })) }
+      }
+      // #156: who knows the CLI yet, and is any moved MCP tool still in use (`supermux api cli_adoption`).
+      case "cli_adoption": {
+        const live = this.registry.list().filter((x) => !x.internal && !isDraftSession(x) && x.status !== "archived")
+        const rows = live.map((x) => ({ id: x.id, name: x.name, agent: x.agent, state: this.sessionState(x), knows: sessionKnowsCli(x.id, () => this.agentHasCli(x)), processHasCli: this.agentHasCli(x) ?? null, ...(cliAdoption().get(x.id) ?? { cliCalls: 0, mcpMovedCalls: 0 }) }))
+        const lastMcpMoved = Object.values(cliAdoption().all()).map((r) => r.lastMcpMovedAt).filter(Boolean).sort().pop() ?? null
+        return { ok: true, value: { live: rows.length, know: rows.filter((r) => r.knows).length, lastMcpMovedAt: lastMcpMoved, notYet: rows.filter((r) => !r.knows).map((r) => r.name), sessions: rows } }
       }
       case "unexpose_port": {
         if (!s) return { ok: false, error: "unknown session" }

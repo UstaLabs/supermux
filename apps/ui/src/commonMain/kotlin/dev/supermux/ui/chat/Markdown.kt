@@ -108,6 +108,8 @@ import dev.supermux.ui.SpanStyleKind
 import dev.supermux.ui.parseInlineMarkdown
 import dev.supermux.ui.parseMarkdownBlocks
 import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.theme.Media
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
@@ -385,7 +387,7 @@ fun FencedCodeBlock(code: String, lang: String? = null, extraAction: (@Composabl
             ) {
                 Icon(
                     imageVector = if (copied) Icons.Filled.Check else Icons.Filled.ContentCopy,
-                    contentDescription = if (copied) "Copied" else "Copy",
+                    contentDescription = if (copied) localized(Str.chatline_copied) else localized(Str.chatline_copy),
                     tint = if (copied) cs.primary else cs.onSurfaceVariant,
                     modifier = Modifier.size(14.dp),
                 )
@@ -684,12 +686,13 @@ private fun MarkdownHeading(block: MdBlock.Heading, text: AnnotatedString, body:
 private fun MarkdownCheckbox(checked: Boolean, body: TextStyle, modifier: Modifier) {
     val cs = MaterialTheme.colorScheme
     val lineHeight = with(LocalDensity.current) { body.lineHeight.takeIf { it.isSp }?.toDp() ?: Space.lg + Space.xs }
+    val stateWord = if (checked) localized(Str.chatline_task_done) else localized(Str.chatline_task_to_do)
     Box(modifier.height(lineHeight), contentAlignment = Alignment.CenterEnd) {
         val shape = RoundedCornerShape(3.dp)
         Box(
             Modifier
                 .size(MdListDimens.CheckboxSize)
-                .semantics { contentDescription = if (checked) "Done" else "To do" }
+                .semantics { contentDescription = stateWord }
                 .clip(shape)
                 .then(if (checked) Modifier.background(cs.primary) else Modifier.border(1.5.dp, cs.onSurfaceVariant.copy(alpha = 0.7f), shape)),
             contentAlignment = Alignment.Center,
@@ -931,7 +934,7 @@ private fun InjectedMarkdownImage(
         ) { modifier ->
             Image(
                 bitmap = bmp,
-                contentDescription = image.alt.ifEmpty { "Image" },
+                contentDescription = image.alt.ifEmpty { localized(Str.chatline_media_image_title) },
                 contentScale = ContentScale.Fit,
                 modifier = modifier,
             )
@@ -970,7 +973,7 @@ private fun CoilMarkdownImage(image: MdBlock.Image, onOpenUrl: (String) -> Unit)
         ) { modifier ->
             Image(
                 painter = decoded.painter,
-                contentDescription = image.alt.ifEmpty { "Image" },
+                contentDescription = image.alt.ifEmpty { localized(Str.chatline_media_image_title) },
                 contentScale = ContentScale.Fit,
                 modifier = modifier,
             )
@@ -1113,8 +1116,8 @@ internal fun MarkdownImageLinkLine(
     val cs = MaterialTheme.colorScheme
     val linkColor = cs.primary
     val label = when {
-        loadFailed && image.alt.isNotEmpty() -> "Couldn't load image — ${image.alt}"
-        loadFailed -> "Couldn't load image"
+        loadFailed && image.alt.isNotEmpty() -> localized(Str.chatline_media_image_failed_alt, image.alt)
+        loadFailed -> localized(Str.chatline_media_image_failed)
         else -> image.alt.ifEmpty { image.url }
     }
     Text(

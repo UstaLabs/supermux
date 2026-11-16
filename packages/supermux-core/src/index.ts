@@ -24,7 +24,7 @@ export type {
   QuestionRequest, QuestionResponse, AnswersHandler, UserQuestionSpec, UserQuestionOption,
   Receipt, SendOptions, SubagentMessageResult, SubagentMessageOptions, SubagentMessageDelivery, SubagentSnapshot,
   SessionRecord, SessionState, ForkOptions, ForkSource, ConversationReset,
-  SessionConfiguration, HistoryOptions, HistoryPage,
+  SessionConfiguration, HistoryOptions, HistoryPage, ContextBreakdown,
   CloseMode, CloseOptions, CoreCloseOptions,
   PermissionsSpec, PermissionsApplied, ToolKind,
 } from "./types.js"

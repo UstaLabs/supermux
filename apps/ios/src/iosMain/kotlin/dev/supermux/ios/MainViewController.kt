@@ -3,6 +3,8 @@ package dev.supermux.ios
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -34,6 +36,8 @@ import dev.supermux.state.HostStore
 import dev.supermux.state.HostStoreDeps
 import dev.supermux.state.WalkthroughSeam
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.MessageTts
 import dev.supermux.ui.editor.WalkthroughState
@@ -339,6 +343,63 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
                 }
             }
 
+            // #117 (Ahmet's model): from INSIDE supermux an applet is a full screen of the app, left with the edge
+            // swipe (Route.Applet). From OUTSIDE (a widget, Control Center, Spotlight, a supermux://applet link) it is
+            // the app on an iPhone — full screen, nothing behind it, no swipe; leaving is the home gesture, and the
+            // next launch shows supermux — and its own window on an iPad, as an applet on a Mac.
+            LaunchedEffect(fleet) { IosWindows.fleet = fleet }
+            val ownWindows = remember { bridge.supportsExtraWindows() }
+            var outsideApplet by remember { mutableStateOf<Pair<String, String>?>(null) }
+            val openApplet: (String, String) -> Unit = remember(ui) {
+                { h, n ->
+                    dev.supermux.ui.session.AppletSheets.closeAll()
+                    if (ownWindows) bridge.openExtraWindow(dev.supermux.ui.applets.appletUri(h, n)) else outsideApplet = h to n
+                }
+            }
+            // Gone once the app goes to the background, so a launch from the supermux icon shows supermux. Collected
+            // from the flow itself: a backgrounded app doesn't recompose, so an effect keyed on `foreground` would only
+            // see the change after the app is back in front (seen on the simulator: the applet stayed).
+            LaunchedEffect(Unit) { IosAppState.foreground.collect { if (!it) outsideApplet = null } }
+            val appletOpener = remember(ui) { dev.supermux.ui.session.AppletOpener { h, a -> ui.openApplet(h, a.name) } }
+            val appletWindowOpener = remember {
+                if (ownWindows) dev.supermux.ui.session.AppletOpener { h, a -> bridge.openExtraWindow(dev.supermux.ui.applets.appletUri(h, a.name)) } else null
+            }
+            // W1: a widget's supermux://applet/<host>/<name> link, or what a control / Spotlight left in the App Group.
+            // Collected from the flows themselves, not keyed on recomposition: on an iPad the main window can be in the
+            // background while an applet window is in front, and a backgrounded window doesn't recompose (seen on the
+            // simulator: a link only brought back the window already open).
+            LaunchedEffect(Unit) {
+                IosAppState.openedUrl.collect { url ->
+                    url?.let { dev.supermux.ui.applets.parseAppletUri(it) }?.let { (h, n) ->
+                        IosAppState.consumeOpenedUrl()
+                        openApplet(h, n)
+                    }
+                }
+            }
+            LaunchedEffect(Unit) {
+                IosAppState.foreground.collect { now ->
+                    if (now) IosAppletWidgetStore.takePendingOpen()?.let { (h, n) -> openApplet(h, n) }
+                }
+            }
+            // ...and the widgets follow the host picker's applets whenever the app sees them change.
+            LaunchedEffect(fleet) {
+                kotlinx.coroutines.flow.combine(fleet.activeHost, fleet.activeApplets) { h, a -> h to a }.collect { (hostId, applets) ->
+                    if (hostId != null && applets != null) {
+                        runCatching {
+                            IosAppletWidgetStore.save(hostId, applets, icon = { fleet.appForRecord(hostId)?.appletIconBytes(it) }, reload = { bridge.reloadWidgets() })
+                        }
+                    }
+                }
+            }
+            androidx.compose.runtime.CompositionLocalProvider(
+                dev.supermux.ui.session.LocalAppletOpener provides appletOpener,
+                dev.supermux.ui.session.LocalAppletWindowOpener provides appletWindowOpener,
+                dev.supermux.ui.session.LocalAppletScreens provides dev.supermux.ui.session.NativeAppletScreens,
+                // Add widget only where the widgets exist: iOS 18 (their control and App Intents) and a build that carries
+                // the extension (a signed build without its App Store / Ad Hoc profile leaves it out).
+                dev.supermux.ui.session.LocalAppletWidgets provides IosAppletWidgets.takeIf { iosHasAppletWidgets() },
+            ) {
+            androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) {
             SupermuxApp(
                 fleet = fleet,
                 ui = ui,
@@ -377,6 +438,22 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
                 // No `chatFallback`: that slot IS the host-specific escape hatch, and iOS has no
                 // screen to put in it. `UnavailableSessionPane` (H3.7) is what covers its absence.
             )
+            // An applet opened from outside, on an iPhone: the app is the applet until it goes to the background.
+            outsideApplet?.let { (h, n) ->
+                androidx.compose.foundation.layout.Box(
+                    androidx.compose.ui.Modifier
+                        .fillMaxSize()
+                        .background(androidx.compose.material3.MaterialTheme.colorScheme.background)
+                        .windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.safeDrawing),
+                ) {
+                    dev.supermux.ui.applets.AppletPage(
+                        fleet, h, n, androidx.compose.ui.Modifier.fillMaxSize(),
+                        onOpenChat = { id -> outsideApplet = null; ui.selectSession(id) },
+                    )
+                }
+            }
+            }
+            }
         }
     }
 }
@@ -464,7 +541,7 @@ private fun AlreadyOpenElsewhere() {
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            "supermux is already open in another window.",
+            localized(Str.host_app_ios_already_open),
             style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center,
         )

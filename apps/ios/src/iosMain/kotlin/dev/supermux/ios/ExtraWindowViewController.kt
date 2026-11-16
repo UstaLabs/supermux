@@ -3,6 +3,8 @@
 package dev.supermux.ios
 
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.LaunchedEffect
@@ -38,6 +40,8 @@ fun ExtraWindowViewController(
     claim: String,
     onClaim: (String) -> Unit,
 ): UIViewController {
+    // #117: an applet's own window (iPad): its claim is the applet's address, which iPadOS restores the window with.
+    dev.supermux.ui.applets.parseAppletUri(claim)?.let { (hostId, name) -> return AppletWindowViewController(bridge, hostId, name) }
     val parsed = decodeClaim(claim)
     // A restored window (a new process, an empty registry) parks its claim until the main window
     // composes the workspace and the registry takes it back.
@@ -92,4 +96,40 @@ fun ExtraWindowViewController(
  */
 fun releaseExtraWindow(claim: String) {
     decodeClaim(claim)?.let { ExtraWindows.close(IosWindows.shellWindows, it.id) }
+}
+
+/**
+ * #117: an applet in a window of its own on an iPad (Split View, Stage Manager), as an applet window on a Mac: only its
+ * page, inside the safe area. Closing it is iPadOS's own. A window restored before the main one has built the fleet
+ * waits for it; with no main window at all it brings one back.
+ */
+@OptIn(ExperimentalNativeApi::class)
+private fun AppletWindowViewController(bridge: IosBridge, hostId: String, name: String): UIViewController {
+    val uiPrefs = UiPrefs(NSUserDefaultsSettingsStore(NSUserDefaults.standardUserDefaults))
+    val (appearanceSeed, textScaleSeed) = runBlocking {
+        uiPrefs.appearance(AppearanceMode.SYSTEM).first() to uiPrefs.textScale.first()
+    }
+    var self: WeakReference<UIViewController>? = null
+    return ComposeUIViewController {
+        val platform = remember { IosPlatform(bridge) }
+        val appearance by uiPrefs.appearance(AppearanceMode.SYSTEM).collectAsState(appearanceSeed)
+        val textScale by uiPrefs.textScale.collectAsState(textScaleSeed)
+        val fleet = IosWindows.fleet
+        IosTheme(platform = platform, appearance = appearance, textScale = textScale, uiPrefs = uiPrefs) {
+            if (fleet == null) LaunchedEffect(Unit) { bridge.openMainWindow() }
+            else {
+                val listed by (fleet.appForRecord(hostId)?.applets ?: remember { kotlinx.coroutines.flow.MutableStateFlow<List<dev.supermux.net.AppletDto>?>(null) }).collectAsState()
+                val title = listed?.firstOrNull { it.name == name }?.title?.takeIf { it.isNotBlank() } ?: name
+                // The scene's title is what App Exposé and the window switcher show.
+                LaunchedEffect(title) { self?.get()?.view?.window?.windowScene?.title = title }
+            }
+            Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                dev.supermux.ui.applets.AppletPage(
+                    fleet, hostId, name,
+                    Modifier.fillMaxSize().windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.safeDrawing),
+                    onOpenChat = { id -> IosWindows.mainUi?.selectSession(id); bridge.openMainWindow() },
+                )
+            }
+        }
+    }.also { self = WeakReference(it) }
 }

@@ -34,12 +34,12 @@ class GitRequirementBannerTest {
     @Test fun title_hint_and_install_on_a_one_click_host() = runComposeUiTest {
         var calls = 0
         setContent { MaterialTheme { GitRequirementBanner(mac, onInstall = { calls++; true }) } }
-        onNodeWithText(GitBannerCopy.TITLE).assertExists()
+        onNodeWithText("Developer tools not installed").assertExists()
         // Optional, not blocking: it says agents work without the tools, and what they add.
-        onNodeWithTag(GitBannerTags.HINT).assertTextEquals(GitBannerCopy.OPTIONAL_MAC)
+        onNodeWithTag(GitBannerTags.HINT).assertTextEquals(GitBannerText.optional("xcode-select"))
         // The broker's "install the command line tools" would only repeat that on a Mac.
         onNodeWithTag(GitBannerTags.HOW).assertDoesNotExist()
-        onNodeWithTag(GitBannerTags.INSTALL).assertTextEquals(GitBannerCopy.INSTALL).performClick()
+        onNodeWithTag(GitBannerTags.INSTALL).assertTextEquals("Install…").performClick()
         waitForIdle()
         assertEquals(1, calls)
         onNodeWithTag(GitBannerTags.STATUS)
@@ -48,8 +48,8 @@ class GitRequirementBannerTest {
 
     @Test fun a_manual_host_has_the_hint_and_no_button() = runComposeUiTest {
         setContent { MaterialTheme { GitRequirementBanner(linux, onInstall = { true }) } }
-        onNodeWithText(GitBannerCopy.GIT_TITLE).assertExists()
-        onNodeWithTag(GitBannerTags.HINT).assertTextEquals(GitBannerCopy.OPTIONAL)
+        onNodeWithText("Git not installed").assertExists()
+        onNodeWithTag(GitBannerTags.HINT).assertTextEquals(GitBannerText.optional("manual"))
         onNodeWithTag(GitBannerTags.HOW).assertTextEquals(linux.hint)
         onNodeWithTag(GitBannerTags.INSTALL).assertDoesNotExist()
     }
@@ -62,7 +62,7 @@ class GitRequirementBannerTest {
         onNodeWithTag(GitBannerTags.INSTALL).assertIsNotEnabled()
         gate.complete(false)
         waitForIdle()
-        onNodeWithTag(GitBannerTags.STATUS).assertTextEquals(GitBannerCopy.FAILED)
+        onNodeWithTag(GitBannerTags.STATUS).assertTextEquals("Couldn't start the installer.")
     }
 
     @Test fun a_named_host_titles_the_banner() = runComposeUiTest {
@@ -79,11 +79,11 @@ class GitRequirementBannerTest {
     }
 
     @Test fun mingit_status_copy_has_no_permission_wording() {
-        assertEquals("Installing git on this computer…", GitBannerCopy.started("mingit", null))
+        assertEquals("Installing git on this computer…", GitBannerText.started("mingit", null))
     }
 
     @Test fun winget_status_copy() {
-        assertEquals("Installing git on Work PC… this clears by itself when done.", GitBannerCopy.started("winget", "Work PC"))
+        assertEquals("Installing git on Work PC… this clears by itself when done.", GitBannerText.started("winget", "Work PC"))
     }
 
     @Test fun a_failed_winget_run_leaves_installing_and_offers_retry() = runComposeUiTest {
@@ -100,7 +100,7 @@ class GitRequirementBannerTest {
         req = winget.copy(installing = false, installError = "declined")
         waitForIdle()
         onNodeWithTag(GitBannerTags.STATUS).assertTextEquals("Couldn't install git: declined")
-        onNodeWithTag(GitBannerTags.INSTALL).assertTextEquals(GitBannerCopy.RETRY).performClick()
+        onNodeWithTag(GitBannerTags.INSTALL).assertTextEquals("Retry").performClick()
         waitForIdle()
         assertEquals(2, calls)
     }

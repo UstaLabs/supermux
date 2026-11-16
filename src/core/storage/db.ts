@@ -10,6 +10,8 @@ export function openDb(path: string): Db {
   const exists = isMemory || existsSync(path)
   const db = new Database(path, { create: true })
   if (!exists) files.makePrivate(path)
+  // Another process's lock (a credential helper, `supermux connect`, WAL recovery after a crash) is waited for.
+  db.exec("PRAGMA busy_timeout = 5000")
   if (!isMemory) db.exec("PRAGMA journal_mode = WAL")
   db.exec("PRAGMA foreign_keys = ON")
   return db

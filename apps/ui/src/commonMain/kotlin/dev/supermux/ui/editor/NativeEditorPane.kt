@@ -177,7 +177,7 @@ fun NativeDocumentEditor(
             )
             badge?.let { px ->
                 Text(
-                    "${px}px",
+                    "${px}px", // i18n-ok: a pixel size, not words
                     color = MaterialTheme.colorScheme.onPrimaryContainer,
                     fontSize = 12.sp,
                     modifier = Modifier

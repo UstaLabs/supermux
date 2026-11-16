@@ -1,0 +1,17 @@
+/* #123: Turkish. Keys are the English text, as SwiftUI looks them up. */
+
+"Dictate a message" = "Bir mesaj dikte edin";
+"Cleaning…" = "Toparlanıyor…";
+"Send" = "Gönder";
+"Talk" = "Konuş";
+"unread" = "okunmamış";
+"Open Supermux on your iPhone to connect your watch." = "Saatinizi bağlamak için iPhone'unuzda Supermux'ı açın.";
+"Connecting…" = "Bağlanıyor…";
+"Offline" = "Çevrimdışı";
+"No active sessions" = "Etkin oturum yok";
+"Continue" = "Devam et";
+"Stop" = "Durdur";
+"Unmute" = "Sesi aç";
+"Mute" = "Sessize al";
+"Connected via iPhone" = "iPhone üzerinden bağlı";
+"Attachment" = "Ek";

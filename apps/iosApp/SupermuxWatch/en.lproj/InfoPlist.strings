@@ -1,0 +1,3 @@
+/* #123: the permission prompts, English. */
+
+"NSSpeechRecognitionUsageDescription" = "Supermux turns your dictated voice into messages for your agents.";

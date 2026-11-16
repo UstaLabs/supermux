@@ -7,6 +7,7 @@ import dev.supermux.webview.InspectorResult
 import dev.supermux.webview.WebCookie
 import dev.supermux.webview.FindResult
 import dev.supermux.webview.DownloadRequest
+import dev.supermux.webview.DownloadTarget
 import dev.supermux.webview.FileChooserRequest
 import dev.supermux.webview.NavigationDecision
 import dev.supermux.webview.NavigationRequest
@@ -61,7 +62,7 @@ class FakeWebEngineTest {
         override suspend fun onDialog(dialog: WebDialog): DialogResult = DialogResult.Dismissed
         override suspend fun onFileChooser(request: FileChooserRequest): List<String>? = null
         override suspend fun onPermission(request: PermissionRequest) = false
-        override suspend fun onDownload(request: DownloadRequest) = false
+        override suspend fun onDownload(request: DownloadRequest): DownloadTarget? = null
         override fun onNewWindow(request: NewWindowRequest) = NewWindowDecision.Block
     }
 

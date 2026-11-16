@@ -9,7 +9,7 @@ import type {
   HistoryOptions, HistoryPage, SessionConfiguration, CloseOptions,
   PendingRequest, PermissionOptionKind, PermissionRequest, PermissionResponse, RequestAnswer,
   QuestionRequest, QuestionResponse, PermissionsSpec, PermissionsApplied,
-  ContentBlock, SubagentMessageOptions, SubagentMessageDelivery, SubagentSnapshot, ConversationReset,
+  ContentBlock, SubagentMessageOptions, SubagentMessageDelivery, SubagentSnapshot, ConversationReset, ContextBreakdown,
 } from "./types.js"
 import { validatePermissionsSpec } from "./permissions.js"
 import type { ContextPatch, RuntimeContextControl, SessionContext, UpdateContextOptions, UpdateContextResult } from "./context/types.js"
@@ -28,7 +28,7 @@ export type SessionOptions = {
 }
 
 /** Queued input handed from a session to the one that replaces it (a context reload). */
-export type CarriedQueue = { entries: unknown[]; seen: Array<[string, unknown]>; paused: boolean }
+export type CarriedQueue = { entries: unknown[]; seen: Array<[string, unknown]>; paused: boolean; notice?: string }
 
 /** Subagents remembered per session (running ones are always kept). */
 const SUBAGENTS_KEPT = 64
@@ -52,6 +52,7 @@ export class Session {
   private active?: Entry
   private abort?: AbortController
   private paused = false
+  private nextNotice: string | undefined
   private forking?: Promise<Session>
   private closing?: Promise<void>
   private interrupting?: Promise<InterruptResult>
@@ -159,6 +160,8 @@ export class Session {
       return true
     },
     clear: (): void => { for (const entry of this.queue.splice(0)) entry.finish({ status: "cancelled" }) },
+    /** A text put before the next input the queue runs, whichever that is (#143: why the last turn was cut). */
+    notice: (text: string): void => { this.nextNotice = text },
     continue: (): void => {
       this.assertReady()
       if (this.interrupting || this.state === "interrupting") throw new CoreError("session_busy", "Interrupt has not been confirmed")
@@ -261,7 +264,11 @@ export class Session {
     })
   }
 
-  interrupt(options: { pending: "keep" | "discard" }): Promise<InterruptResult> {
+  /**
+   * [reason] (#143) answers the turn's open prompts in place of a bare cancel, and reaches the agent before its
+   * interrupt does, so it reads why nobody answered instead of taking the cut for the user's refusal.
+   */
+  interrupt(options: { pending: "keep" | "discard"; reason?: string }): Promise<InterruptResult> {
     if (!options || (options.pending !== "keep" && options.pending !== "discard")) {
       return Promise.reject(new TypeError("pending is required and must be keep or discard"))
     }
@@ -277,8 +284,8 @@ export class Session {
     // An interrupted turn cannot keep asking: resolve its pending requests as cancelled before
     // telling the agent to stop, so a prompt blocked on a permission can unwind and the
     // interrupt can be confirmed (request-resolved 'cancelled' reaches the UI).
-    this.cancelPendingRequests()
-    const operation = this.interruptActive(owned, gates)
+    const answered = this.cancelPendingRequests(options.reason)
+    const operation = this.interruptActive(owned, gates, answered)
     this.interrupting = operation
     void operation.catch(() => {})
     void operation.finally(() => {
@@ -291,8 +298,10 @@ export class Session {
     return operation
   }
 
-  private async interruptActive(owned: Entry | undefined, gates: Promise<void>[]): Promise<InterruptResult> {
-    const interrupted = Promise.resolve().then(() => this.runtime.interrupt())
+  private async interruptActive(owned: Entry | undefined, gates: Promise<void>[], answered = false): Promise<InterruptResult> {
+    // Prompts just answered reach the driver through promise chains: give them a turn of the event loop first.
+    const before = answered ? new Promise<void>(resolve => setTimeout(resolve, 0)) : Promise.resolve()
+    const interrupted = before.then(() => this.runtime.interrupt())
     const ownedDone = owned ? owned.receipt.completed.then(() => {}) : Promise.resolve()
     const acknowledged = interrupted
       .then(() => Promise.all([ownedDone, ...gates]))
@@ -413,6 +422,28 @@ export class Session {
         : { status: "unconfirmed", reason: completion.status === "cancelled" ? "The relay was cancelled" : "The relay turn failed" })
     })
     return { via: "relay", receipt, delivery }
+  }
+
+  /**
+   * #144 Compact: the agent summarizes the conversation and drops the rest, as a turn in the queue like a message.
+   * [note] says what to keep where the agent takes one (`canCompact().note`).
+   */
+  async compact(options: { note?: string; whenBusy: "queue" | "reject" }): Promise<Receipt> {
+    this.assertReady()
+    if (!this.runtime.compact) throw new UnsupportedOperation("compact", this.record.agent)
+    const note = options.note?.trim() || undefined
+    return this.send({ content: [{ type: "text", text: note ? `/compact ${note}` : "/compact" }], whenBusy: options.whenBusy, compact: note ? { note } : {} })
+  }
+
+  /** #144: whether this agent can Compact from here, and whether it takes a note on what to keep. */
+  canCompact(): { compact: boolean; note: boolean } {
+    return { compact: !!this.runtime?.compact, note: !!this.runtime?.compact && this.runtime.compactTakesNote === true }
+  }
+
+  /** What fills the context window now (#144); undefined when the agent doesn't report a breakdown. */
+  async contextBreakdown(): Promise<ContextBreakdown | undefined> {
+    this.assertReady()
+    return this.runtime.contextBreakdown ? this.runtime.contextBreakdown() : undefined
   }
 
   /** Stop one subagent without interrupting the main turn. */
@@ -541,7 +572,9 @@ export class Session {
     const entries = this.queue.splice(0)
     const seen = [...this.seen.entries()].filter(([, value]) => entries.includes(value.entry))
     for (const [key] of seen) this.seen.delete(key)
-    return { entries, seen, paused: this.paused }
+    const notice = this.nextNotice
+    this.nextNotice = undefined
+    return { entries, seen, paused: this.paused, ...(notice ? { notice } : {}) }
   }
 
   /** Core-internal: runs input carried over from the session this one replaces, in order, first. */
@@ -550,6 +583,7 @@ export class Session {
     this.queue.unshift(...entries)
     for (const [key, value] of carried.seen) this.seen.set(key, value as { fingerprint: string; entry: Entry })
     if (carried.paused) this.paused = true
+    if (carried.notice) this.nextNotice = carried.notice
     this.drain()
   }
 
@@ -708,7 +742,14 @@ export class Session {
 
   private async run(entry: Entry, abort: AbortController): Promise<void> {
     try {
-      const result = await this.runtime.prompt(entry.input.content, abort.signal)
+      const compact = entry.input.compact && this.runtime.compact ? entry.input.compact : undefined
+      // A compaction is not an input the agent reads: the notice waits for the next prompt.
+      const notice = compact ? undefined : this.nextNotice
+      if (!compact) this.nextNotice = undefined
+      const content = notice ? [{ type: "text" as const, text: notice }, ...entry.input.content] : entry.input.content
+      const result = compact
+        ? await this.runtime.compact!(this.runtime.compactTakesNote ? compact.note : undefined, abort.signal)
+        : await this.runtime.prompt(content, abort.signal)
       entry.finish(result.stopReason === "cancelled" ? { status: "cancelled" } : { status: "completed", stopReason: result.stopReason })
     } catch (error) {
       entry.finish(abort.signal.aborted ? { status: "cancelled" } : { status: "failed", error: asError(error) })
@@ -894,11 +935,14 @@ export class Session {
     )
   }
 
-  private cancelPendingRequests(): void {
-    for (const [id, slot] of [...this.pendingRequests.entries()]) {
+  /** Whether any prompt was open. [reason] goes with a permission's cancel as its message. */
+  private cancelPendingRequests(reason?: string): boolean {
+    const open = [...this.pendingRequests.entries()]
+    for (const [id, slot] of open) {
       if (slot.request.kind === "question") this.finishRequest(id, { outcome: "cancelled" }, "cancelled")
-      else this.finishRequest(id, { outcome: { outcome: "cancelled" } }, "cancelled")
+      else this.finishRequest(id, { outcome: { outcome: "cancelled" }, ...(reason ? { message: reason } : {}) }, "cancelled")
     }
+    return open.length > 0
   }
 
   private trimSeen(): void {
@@ -1010,6 +1054,7 @@ function permissionBody(requestId: string, request: PermissionRequest): Extract<
     ...(typeof request.detail?.command === "string" ? { command: request.detail.command } : inputCommand ? { command: inputCommand } : {}),
     ...(typeof request.detail?.cwd === "string" ? { cwd: request.detail.cwd } : {}),
     ...(typeof request.detail?.blockedPath === "string" ? { blockedPath: request.detail.blockedPath } : {}),
+    ...(typeof request.detail?.reason === "string" && request.detail.reason ? { reason: request.detail.reason } : {}),
   } : undefined
   return {
     kind: "permission-request",

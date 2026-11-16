@@ -12,6 +12,8 @@
 // it survives above the IME and types into the ACTIVE tab.
 package dev.supermux.ui.terminal
 
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.Str
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -397,7 +399,7 @@ fun TerminalTabs(
                 ) {
                     Icon(
                         Icons.Filled.Add,
-                        contentDescription = "New terminal",
+                        contentDescription = localized(Str.terminal_new),
                         tint = cs.onSurfaceVariant,
                         modifier = Modifier.size(16.dp),
                     )
@@ -465,7 +467,7 @@ fun TerminalTabs(
  * (Android's phone chips lost both when the strip moved to `:ui`; G3 review).
  */
 internal fun terminalTabLabel(id: String, index: Int, pointer: Boolean): String =
-    if (pointer) id else "Terminal ${index + 1}"
+    if (pointer) id else localized(Str.terminal_tab_label, index + 1)
 
 /** One tab chip: mono label + an always-present (hover-brightened) × close affordance. Middle-
  *  click also closes (a desktop convenience the web strip lacks). */
@@ -536,7 +538,7 @@ private fun TerminalTabChip(
                 ) {
                     Icon(
                         Icons.Filled.Close,
-                        contentDescription = "Close $label",
+                        contentDescription = localized(Str.terminal_close_tab, label),
                         tint = fg,
                         modifier = Modifier.size(12.dp),
                     )
@@ -563,7 +565,7 @@ private fun TerminalEmptyState(onAdd: () -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Icon(Icons.Filled.Add, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
-                Text("New terminal", color = cs.onSurfaceVariant, fontSize = 13.sp)
+                Text(localized(Str.terminal_new), color = cs.onSurfaceVariant, fontSize = 13.sp)
             }
         }
     }

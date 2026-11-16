@@ -83,7 +83,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.chat.gitOpResultLabel
 import dev.supermux.chat.shouldPublish
 import dev.supermux.net.GitOpResult
 import dev.supermux.net.ModelInfo
@@ -96,8 +95,6 @@ import dev.supermux.state.ContinueHandoff
 import dev.supermux.ui.ChatDetailLevel
 import dev.supermux.ui.chat.ContinueConversationFlow
 import dev.supermux.ui.chat.ContinueMenuItem
-import dev.supermux.ui.chat.FinishBindings
-import dev.supermux.ui.chat.FinishHeaderButton
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.retain.rememberRetained
@@ -112,7 +109,6 @@ import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
 import kotlinx.coroutines.launch
 import dev.supermux.ui.i18n.localized
-import androidx.compose.runtime.rememberUpdatedState
 import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.StringKey
 
@@ -123,54 +119,32 @@ import dev.supermux.ui.i18n.StringKey
 fun sessionProxies(proxies: List<ProxyDto>, session: SessionInfo): List<ProxyDto> =
     proxies.filter { it.sessionName == session.name }
 
+/** Compact result label for a completed git [op] (its menu word) — the broker's message when it gave one, else its
+ *  status, else "<Op> done"; a `null` result (any failure) → "<Op> failed". */
+fun gitOpResultLabel(op: String, result: GitOpResult?): String {
+    if (result == null) return localized(Str.words_git_failed, op)
+    result.message?.takeIf { it.isNotBlank() }?.let { return it }
+    return result.status.ifBlank { localized(Str.words_git_done, op) }
+}
+
 /**
  * Android's user-facing wording for a completed git op — the text that goes to `Platform.notices`.
  *
- * Distinct from `:shared`'s [gitOpResultLabel], which is the COMPACT inline form desktop shows next
+ * Distinct from [gitOpResultLabel], which is the COMPACT inline form desktop shows next
  * to the badge; this one spells the failure modes out ("Push rejected — pull first") because a
  * toast is all the user gets.
  */
-fun gitOpResultText(r: GitOpResult?, words: GitOpWords = GitOpWords()): String = when (r?.status) {
-    null -> words.failed
-    "pushed" -> words.pushed
-    "up_to_date" -> words.upToDate
-    "clean" -> words.pulled
-    "rejected_non_ff" -> words.rejected
-    "conflict" -> words.conflict(r.files.size)
-    "dirty" -> words.dirty
-    "auth_failed" -> words.authFailed
-    "error" -> r.message ?: words.error
+fun gitOpResultText(r: GitOpResult?): String = when (r?.status) {
+    null -> localized(Str.shell_git_failed)
+    "pushed" -> localized(Str.shell_git_pushed)
+    "up_to_date" -> localized(Str.shell_git_up_to_date)
+    "clean" -> localized(Str.shell_git_pulled)
+    "rejected_non_ff" -> localized(Str.shell_git_rejected)
+    "conflict" -> localized(Str.shell_git_conflict, r.files.size.toString())
+    "dirty" -> localized(Str.shell_git_dirty)
+    "auth_failed" -> localized(Str.shell_git_auth_failed)
+    "error" -> r.message ?: localized(Str.shell_git_error)
     else -> r.status
-}
-
-/** [gitOpResultText]'s words: English by default (the tests'), [localizedGitOpWords] in the app's language. */
-data class GitOpWords(
-    val failed: String = "Failed", // i18n-ok: English default (tests); the UI passes localizedGitOpWords()
-    val pushed: String = "Pushed", // i18n-ok: English default (tests)
-    val upToDate: String = "Up to date", // i18n-ok: English default (tests)
-    val pulled: String = "Pulled", // i18n-ok: English default (tests)
-    val rejected: String = "Push rejected — pull first", // i18n-ok: English default (tests)
-    val conflict: (Int) -> String = { "Conflict in $it file(s)" }, // i18n-ok: English default (tests)
-    val dirty: String = "Uncommitted changes block the pull", // i18n-ok: English default (tests)
-    val authFailed: String = "Auth failed", // i18n-ok: English default (tests)
-    val error: String = "Error", // i18n-ok: English default (tests)
-)
-
-/** [GitOpWords] in the app's language, looked up here so a coroutine can word its notice. */
-@Composable
-fun localizedGitOpWords(): GitOpWords {
-    val conflict = localizedTemplate(Str.shell_git_conflict)
-    return GitOpWords(
-        failed = localized(Str.shell_git_failed),
-        pushed = localized(Str.shell_git_pushed),
-        upToDate = localized(Str.shell_git_up_to_date),
-        pulled = localized(Str.shell_git_pulled),
-        rejected = localized(Str.shell_git_rejected),
-        conflict = { n -> conflict(n.toString()) },
-        dirty = localized(Str.shell_git_dirty),
-        authFailed = localized(Str.shell_git_auth_failed),
-        error = localized(Str.shell_git_error),
-    )
 }
 
 /**
@@ -190,7 +164,6 @@ enum class GitMenuForceOp { OPEN, FETCH, PULL }
 fun rememberGitOpRunner(sessionId: String, actions: ShellActions): (String) -> Unit {
     val notices = LocalPlatform.current.notices
     val scope = rememberCoroutineScope()
-    val words by rememberUpdatedState(localizedGitOpWords())
     return remember(sessionId, actions, notices, scope) {
         { op: String ->
             scope.launch {
@@ -201,7 +174,7 @@ fun rememberGitOpRunner(sessionId: String, actions: ShellActions): (String) -> U
                     "publish" -> actions.gitPublish(sessionId)
                     else -> null
                 }
-                notices.show(gitOpResultText(result, words))
+                notices.show(gitOpResultText(result))
             }
             Unit
         }
@@ -250,11 +223,11 @@ fun GitBadgeMenu(
 
     // Fire an op on a coroutine, record its outcome into the inline result label (only if this op is
     // still the latest one), and close the menu.
-    fun run(op: String, call: suspend () -> GitOpResult?) {
+    fun run(op: StringKey, call: suspend () -> GitOpResult?) {
         expanded = false
         val token = ++seq
         scope.launch {
-            val label = gitOpResultLabel(op, call())
+            val label = gitOpResultLabel(localized(op), call())
             if (token == seq) result = label
         }
     }
@@ -268,8 +241,8 @@ fun GitBadgeMenu(
                 seq++
                 expanded = true
             }
-            GitMenuForceOp.FETCH -> run("Fetch", onFetch)
-            GitMenuForceOp.PULL -> run("Pull", onPull)
+            GitMenuForceOp.FETCH -> run(Str.shell_git_fetch, onFetch)
+            GitMenuForceOp.PULL -> run(Str.shell_git_pull, onPull)
         }
         if (forceOp != null) onForceOpConsumed()
     }
@@ -300,24 +273,24 @@ fun GitBadgeMenu(
                 DropdownMenuItem(
                     text = { Text(localized(Str.shell_git_fetch)) },
                     modifier = Modifier.testTag("git_fetch"),
-                    onClick = { run("Fetch", onFetch) },
+                    onClick = { run(Str.shell_git_fetch, onFetch) },
                 )
                 DropdownMenuItem(
                     text = { Text(localized(Str.shell_git_pull)) },
                     modifier = Modifier.testTag("git_pull"),
-                    onClick = { run("Pull", onPull) },
+                    onClick = { run(Str.shell_git_pull, onPull) },
                 )
                 if (shouldPublish(session.git)) {
                     DropdownMenuItem(
                         text = { Text(localized(Str.shell_git_publish)) },
                         modifier = Modifier.testTag("git_publish"),
-                        onClick = { run("Publish", onPublish) },
+                        onClick = { run(Str.shell_git_publish, onPublish) },
                     )
                 } else {
                     DropdownMenuItem(
                         text = { Text(localized(Str.shell_git_push)) },
                         modifier = Modifier.testTag("git_push"),
-                        onClick = { run("Push", onPush) },
+                        onClick = { run(Str.shell_git_push, onPush) },
                     )
                 }
             }
@@ -683,7 +656,6 @@ fun ChatViewHeader(
     session: SessionInfo,
     working: Boolean,
     sessionLinks: List<ProxyDto>,
-    finish: FinishBindings,
     onGitOp: (String) -> Unit,
     /** Rename / Mute / Kill — Android's tablet overflow had none of the three; desktop's did, and
      *  its dialogs come with them. [onToggleMute] receives the DESIRED next state. */

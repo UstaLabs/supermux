@@ -320,7 +320,7 @@ private fun CheckMark() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ComposerSheet(onDismiss: () -> Unit, content: @Composable () -> Unit) {
+internal fun ComposerSheet(onDismiss: () -> Unit, content: @Composable () -> Unit) {
     val cs = MaterialTheme.colorScheme
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -385,7 +385,7 @@ private fun SheetRow(
  * hovered, pressed or opened. Never an outline.
  */
 @Composable
-private fun Modifier.toolbarControl(pointer: Boolean, open: Boolean, tonal: Boolean = false): Modifier {
+internal fun Modifier.toolbarControl(pointer: Boolean, open: Boolean, tonal: Boolean = false): Modifier {
     val cs = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(Radii.pill)
     return this

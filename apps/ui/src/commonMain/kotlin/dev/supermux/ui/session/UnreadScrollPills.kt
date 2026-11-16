@@ -44,6 +44,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.ui.i18n.Plurals
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
+import dev.supermux.ui.i18n.localizedPlural
 import dev.supermux.ui.theme.LocalSemantics
 
 object UnreadPillTestIds {
@@ -165,7 +169,8 @@ fun UnreadScrollPill(
 ) {
     val cs = MaterialTheme.colorScheme
     val sem = LocalSemantics.current
-    val direction = if (up) "above" else "below"
+    val pillDescription = localizedPlural(if (up) Plurals.sessions_list_unread_above else Plurals.sessions_list_unread_below, count, count)
+    val dismissWord = localized(Str.sessions_list_unread_dismiss)
     Surface(
         onClick = onClick,
         shape = CircleShape,
@@ -174,7 +179,7 @@ fun UnreadScrollPill(
         shadowElevation = 3.dp,
         modifier = modifier
             .testTag(if (up) UnreadPillTestIds.ABOVE else UnreadPillTestIds.BELOW)
-            .semantics { contentDescription = "$count unread $direction, scroll to it" },
+            .semantics { contentDescription = pillDescription },
     ) {
         Row(
             Modifier.padding(start = 8.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
@@ -189,7 +194,7 @@ fun UnreadScrollPill(
             // Same green as a row's unread dot, so the pill reads as "those dots, up there".
             Spacer(Modifier.size(6.dp).background(sem.success, CircleShape))
             Spacer(Modifier.width(6.dp))
-            Text("$count unread", fontSize = 12.sp, fontWeight = FontWeight.Medium)
+            Text(localizedPlural(Plurals.sessions_list_unread_count, count, count), fontSize = 12.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.width(4.dp))
             // Its own click target inside the pill: hides the pill instead of scrolling.
             Box(
@@ -197,7 +202,7 @@ fun UnreadScrollPill(
                     .testTag(if (up) UnreadPillTestIds.DISMISS_ABOVE else UnreadPillTestIds.DISMISS_BELOW)
                     .clip(CircleShape)
                     .clickable(onClick = onDismiss)
-                    .semantics { contentDescription = "Dismiss" }
+                    .semantics { contentDescription = dismissWord }
                     .padding(2.dp),
             ) {
                 Icon(Icons.Filled.Close, contentDescription = null, modifier = Modifier.size(14.dp))

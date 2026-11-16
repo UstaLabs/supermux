@@ -27,6 +27,8 @@
     <string name="providers_auto_switch">Switch accounts at a limit</string>
     <string name="providers_auto_switch_description">With two logins for a provider, a chat moves to the other one when the first runs out. Not for Cursor or logins kept apart.</string>
     <string name="providers_auto_resume">Resume after a limit reset</string>
+    <string name="providers_compact_before_wait">Compact before waiting for a reset</string>
+    <string name="providers_compact_before_wait_description">When a Claude chat is about to hit its usage limit, it compacts first, so it starts again small and cheap after the reset instead of re-reading everything. Not when another seat of the same team can take the chat over.</string>
     <string name="providers_auto_resume_description">When every login has run out, the chat waits for the first reset and then carries on.</string>
 
     <!-- A provider's page: Your login and the sign-in flow -->

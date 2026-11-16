@@ -90,6 +90,9 @@ import dev.supermux.session.looksLikePath
 import dev.supermux.session.fuzzyMatch
 import dev.supermux.session.projectFolderName
 import dev.supermux.ui.adaptive.LocalPointerAvailable
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.formatCatalogText
+import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Size
@@ -240,6 +243,12 @@ fun ProjectPicker(
     /** "2m ago" is relative to when the picker opened — no ticking clock inside a menu. */
     val nowMs = remember(expanded) { Clock.System.now().toEpochMilliseconds() }
     var highlight by remember(expanded) { mutableStateOf(0) }
+    // Words the coroutines below report with, read here.
+    val searchFailed = localized(Str.project_search_failed)
+    val someForgesFailed = localized(Str.project_some_forges_failed, "%1\$s")
+    val invalidPath = localized(Str.project_invalid_path)
+    val cloneFailed = localized(Str.launch_clone_failed, "%1\$s")
+    val createFailed = localized(Str.launch_create_failed, "%1\$s")
 
     val query = search.trim()
     // Offer a free-path pick when the typed query isn't already an exact known project path.
@@ -301,7 +310,7 @@ fun ProjectPicker(
         searching = false
         if (result == null) {
             cloudRepos = emptyList()
-            searchError = "Couldn't search repositories — check the connection and try again."
+            searchError = searchFailed
             searchEmpty = false
         } else {
             cloudRepos = result.repos
@@ -314,7 +323,7 @@ fun ProjectPicker(
                 partial.isNotEmpty() && result.repos.isEmpty() ->
                     partial.joinToString(" · ")
                 partial.isNotEmpty() ->
-                    "Some forges failed: ${partial.joinToString(" · ")}"
+                    formatCatalogText(someForgesFailed, arrayOf(partial.joinToString(" · ")))
                 else -> null
             }
             searchEmpty = result.repos.isEmpty() && partial.isEmpty()
@@ -385,6 +394,11 @@ fun ProjectPicker(
         resolveLabel = label
         resolveError = null
         readyPath = null
+        // The label is "clone o/r" or "create x"; a failure says it in the app's language.
+        val failed = formatCatalogText(
+            if (label.startsWith("clone ")) cloneFailed else createFailed,
+            arrayOf(label.substringAfter(' ')),
+        )
         resolveJob = scope.launch {
             try {
                 val path = block()
@@ -402,14 +416,14 @@ fun ProjectPicker(
                     }
                 } else {
                     // No path and no refusal: the host never answered.
-                    resolveError = hostOpFailureMessage(label, null)
+                    resolveError = hostOpFailure(failed, null)
                 }
             } catch (_: CancellationException) {
                 // Scope disposed (menu closed / composition left) — not user Hide.
             } catch (e: Throwable) {
                 // The broker's own reason ("A folder named x already exists") when it gave one;
                 // the connection wording only for a real network failure.
-                resolveError = hostOpFailureMessage(label, e)
+                resolveError = hostOpFailure(failed, e)
             } finally {
                 resolving = false
                 resolveLabel = ""
@@ -432,7 +446,7 @@ fun ProjectPicker(
             if (res != null && res.ok && !resolved.isNullOrBlank()) {
                 pick(resolved)
             } else {
-                validationError = res?.error ?: "Invalid path"
+                validationError = res?.error ?: invalidPath
             }
         }
     }
@@ -449,7 +463,7 @@ fun ProjectPicker(
             validating = false
             val resolved = res?.path
             if (res != null && res.ok && !resolved.isNullOrBlank()) pick(resolved)
-            else validationError = res?.error ?: "Invalid path"
+            else validationError = res?.error ?: invalidPath
         }
     }
 
@@ -492,11 +506,6 @@ fun ProjectPicker(
 
     // resolveHid + non-blank label: user hid while host op still in flight (label cleared in finally).
     val hostOpContinues = resolveHid && resolveLabel.isNotEmpty()
-    val hostOpVerb = when {
-        resolveLabel.startsWith("clone ") -> "Clone"
-        resolveLabel.startsWith("create ") -> "Create"
-        else -> "Operation"
-    }
     val hostOpTarget = resolveLabel
         .removePrefix("clone ")
         .removePrefix("create ")
@@ -535,7 +544,7 @@ fun ProjectPicker(
                 // Android's sheet named itself; a dropdown anchored under the heading does not.
                 if (touch) {
                     Text(
-                        "Project",
+                        localized(Str.project_title),
                         color = cs.onSurface,
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
@@ -588,7 +597,7 @@ fun ProjectPicker(
                             Box(Modifier.weight(1f)) {
                                 if (search.isEmpty()) {
                                     Text(
-                                        "Search projects, repos, or type a path",
+                                        localized(Str.project_search_placeholder),
                                         color = cs.onSurfaceVariant,
                                         style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
                                         maxLines = 1,
@@ -606,7 +615,7 @@ fun ProjectPicker(
                             if (pickFolder != null) {
                                 Icon(
                                     Icons.Filled.FolderOpen,
-                                    contentDescription = "Choose a folder",
+                                    contentDescription = localized(Str.project_choose_folder),
                                     tint = cs.primary,
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(Radii.sm))
@@ -640,13 +649,12 @@ fun ProjectPicker(
                 if (hostOpContinues) {
                     Spacer(Modifier.height(Space.xs))
                     Text(
-                        buildString {
-                            append(hostOpVerb)
-                            if (hostOpTarget != null) {
-                                append(' ')
-                                append(hostOpTarget)
-                            }
-                            append(" continues on the host…")
+                        when {
+                            hostOpTarget != null && resolveLabel.startsWith("clone ") ->
+                                localized(Str.project_clone_continues, hostOpTarget)
+                            hostOpTarget != null && resolveLabel.startsWith("create ") ->
+                                localized(Str.project_create_continues, hostOpTarget)
+                            else -> localized(Str.project_op_continues)
                         },
                         color = cs.onSurfaceVariant,
                         style = MaterialTheme.typography.labelMedium,
@@ -661,7 +669,7 @@ fun ProjectPicker(
                         modifier = Modifier.testTag("launcher_forge_ready"),
                     ) {
                         Text(
-                            "Ready — ${formatWorkdir(path, home)}",
+                            localized(Str.project_ready, formatWorkdir(path, home)),
                             color = cs.primary,
                             style = MaterialTheme.typography.labelMedium,
                             modifier = Modifier.weight(1f),
@@ -670,7 +678,7 @@ fun ProjectPicker(
                             onClick = { pick(path) },
                             modifier = Modifier.testTag("launcher_forge_use_ready"),
                         ) {
-                            Text("Use", color = cs.primary)
+                            Text(localized(Str.project_use), color = cs.primary)
                         }
                     }
                 }
@@ -701,7 +709,7 @@ fun ProjectPicker(
                 query.isNotEmpty()
             if (nothingLocalMatch) {
                 Text(
-                    "No projects match \"${query}\".",
+                    localized(Str.project_no_match, query),
                     color = cs.onSurfaceVariant,
                     style = MaterialTheme.typography.labelMedium,
                     modifier = Modifier
@@ -711,7 +719,7 @@ fun ProjectPicker(
             }
             if (nothing && !nothingLocalMatch) {
                 Text(
-                    "Type a path or search your projects.",
+                    localized(Str.project_empty_hint),
                     color = cs.onSurfaceVariant,
                     style = MaterialTheme.typography.labelLarge,
                     modifier = Modifier.padding(
@@ -736,7 +744,7 @@ fun ProjectPicker(
                             modifier = Modifier.testTag("launcher_use_path"),
                         ) {
                             Icon(Icons.Filled.FolderOpen, null, tint = cs.primary, modifier = Modifier.size(Space.lg))
-                            Text("Use this path", color = cs.onSurface, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                            Text(localized(Str.project_use_path), color = cs.onSurface, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
                             StartEllipsizedText(
                                 query,
                                 style = MaterialTheme.typography.labelSmall.copy(color = cs.onSurfaceVariant, fontFamily = FontFamily.Monospace),
@@ -752,7 +760,7 @@ fun ProjectPicker(
                     val tiles = if (query.isEmpty()) locals.take(PROJECT_TILE_COUNT) else emptyList()
                     val listed = locals.drop(tiles.size)
                     if (tiles.isNotEmpty()) {
-                        add("h_recent" to { PickerSectionLabel("Jump back in") })
+                        add("h_recent" to { PickerSectionLabel(localized(Str.project_recent)) })
                         tiles.chunked(PROJECT_TILE_COLUMNS).forEachIndexed { i, row ->
                             add("tiles_$i" to {
                                 ProjectTileRow(
@@ -772,7 +780,7 @@ fun ProjectPicker(
                         }
                     }
                     if (listed.isNotEmpty()) {
-                        add("h_projects" to { PickerSectionLabel(if (tiles.isEmpty()) "Projects" else "Everything else") })
+                        add("h_projects" to { PickerSectionLabel(localized(if (tiles.isEmpty()) Str.project_projects else Str.project_everything_else)) })
                     }
                     listed.forEach { o ->
                         add("l_${o.path}" to {
@@ -797,7 +805,7 @@ fun ProjectPicker(
                                     modifier = Modifier.weight(1f),
                                 )
                                 o.activity(pickerCatalog, activity)?.let { ActivityLine(it, nowMs) }
-                                if (selected) Icon(Icons.Filled.Check, "Current project", Modifier.size(Space.lg), tint = cs.primary)
+                                if (selected) Icon(Icons.Filled.Check, localized(Str.project_current), Modifier.size(Space.lg), tint = cs.primary)
                             }
                         })
                     }
@@ -806,7 +814,7 @@ fun ProjectPicker(
                 cloudGroups.forEach { (conn, repos) ->
                     add("h_${conn.id}" to {
                         PickerSectionLabel(
-                            "Clone from ${conn.host} · ${conn.account.login}",
+                            localized(Str.project_clone_from, conn.host, conn.account.login),
                             modifier = Modifier.testTag("forge_group_${conn.id}"),
                         )
                     })
@@ -834,9 +842,9 @@ fun ProjectPicker(
                                     modifier = Modifier.weight(1f),
                                 )
                                 if (repo.private) {
-                                    Icon(Icons.Filled.Lock, "Private", tint = cs.onSurfaceVariant, modifier = Modifier.size(Space.md))
+                                    Icon(Icons.Filled.Lock, localized(Str.project_private), tint = cs.onSurfaceVariant, modifier = Modifier.size(Space.md))
                                 }
-                                Text("Clone", color = cs.primary, style = MaterialTheme.typography.labelMedium)
+                                Text(localized(Str.project_clone), color = cs.primary, style = MaterialTheme.typography.labelMedium)
                             }
                         })
                     }
@@ -854,7 +862,7 @@ fun ProjectPicker(
                             .testTag("launcher_forge_load_more"),
                     ) {
                         Text(
-                            "Load more (${cloudRepos.size - cloudVisible} remaining)",
+                            localized(Str.project_load_more, cloudRepos.size - cloudVisible),
                             color = cs.primary,
                             style = MaterialTheme.typography.labelLarge,
                         )
@@ -878,7 +886,7 @@ fun ProjectPicker(
                             color = cs.primary,
                         )
                         Text(
-                            "Searching repos…",
+                            localized(Str.project_searching),
                             color = cs.onSurfaceVariant,
                             style = MaterialTheme.typography.labelLarge,
                         )
@@ -887,7 +895,7 @@ fun ProjectPicker(
                 }
 
                 if (creates.isNotEmpty()) {
-                    add("h_create" to { PickerSectionLabel("Create new") })
+                    add("h_create" to { PickerSectionLabel(localized(Str.project_create_new)) })
                     creates.forEach { c ->
                         add("cr_${c.createTarget}" to {
                             PickerRow(
@@ -937,7 +945,7 @@ fun ProjectPicker(
                 cloudGroups.isEmpty() && locals.isEmpty() && !showTypedPath
             ) {
                 Text(
-                    "No repos match \"${query}\".",
+                    localized(Str.project_no_repos, query),
                     color = cs.onSurfaceVariant,
                     style = MaterialTheme.typography.labelMedium,
                     modifier = Modifier
@@ -972,10 +980,10 @@ fun ProjectPicker(
                         Text(
                             when {
                                 resolveLabel.startsWith("clone ") ->
-                                    "Cloning ${resolveLabel.removePrefix("clone ")}…"
+                                    localized(Str.project_cloning, resolveLabel.removePrefix("clone "))
                                 resolveLabel.startsWith("create ") ->
-                                    "Creating ${resolveLabel.removePrefix("create ")}…"
-                                else -> "Working…"
+                                    localized(Str.project_creating, resolveLabel.removePrefix("create "))
+                                else -> localized(Str.project_working)
                             },
                             color = cs.onSurfaceVariant,
                             style = MaterialTheme.typography.labelMedium,
@@ -984,7 +992,7 @@ fun ProjectPicker(
                         // Honest: broker clone/create is not abortable — Hide only drops the
                         // overlay; the host keeps working (Agents install cancel parity).
                         Text(
-                            "Continues on the host if you hide.",
+                            localized(Str.project_hide_hint),
                             color = cs.onSurfaceVariant,
                             style = MaterialTheme.typography.labelSmall,
                             modifier = Modifier.testTag("launcher_forge_hide_hint"),
@@ -993,7 +1001,7 @@ fun ProjectPicker(
                             onClick = { hideResolveProgress() },
                             modifier = Modifier.testTag("launcher_forge_hide"),
                         ) {
-                            Text("Hide", color = cs.primary)
+                            Text(localized(Str.project_hide), color = cs.primary)
                         }
                     }
                 }

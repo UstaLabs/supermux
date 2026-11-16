@@ -12,6 +12,8 @@ import dev.supermux.android.MainActivity
 import dev.supermux.android.push.SupermuxMessagingService
 import dev.supermux.ui.update.formatUpdateBytes
 import dev.supermux.ui.update.formatUpdateProgress
+import dev.supermux.ui.i18n.Str
+import dev.supermux.ui.i18n.localized
 
 /**
  * Status-bar notifications for APK self-update: indeterminate/percent progress while
@@ -25,9 +27,6 @@ object AppUpdateNotifier {
     const val CHANNEL_ALERT_ID = "app_update_alerts"
     const val NOTIFICATION_ID = 71_001
 
-    private const val CHANNEL_PROGRESS_NAME = "App update download"
-    private const val CHANNEL_ALERT_NAME = "App update alerts"
-
     fun ensureChannels(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val mgr = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -35,10 +34,10 @@ object AppUpdateNotifier {
             mgr.createNotificationChannel(
                 NotificationChannel(
                     CHANNEL_PROGRESS_ID,
-                    CHANNEL_PROGRESS_NAME,
+                    localized(Str.host_app_android_update_channel_progress),
                     NotificationManager.IMPORTANCE_LOW,
                 ).apply {
-                    description = "Shows download progress when installing an app update"
+                    description = localized(Str.host_app_android_update_channel_progress_description)
                     setShowBadge(false)
                 },
             )
@@ -47,10 +46,10 @@ object AppUpdateNotifier {
             mgr.createNotificationChannel(
                 NotificationChannel(
                     CHANNEL_ALERT_ID,
-                    CHANNEL_ALERT_NAME,
+                    localized(Str.host_app_android_update_channel_alerts),
                     NotificationManager.IMPORTANCE_DEFAULT,
                 ).apply {
-                    description = "Alerts when an app update is ready to install, or fails"
+                    description = localized(Str.host_app_android_update_channel_alerts_description)
                 },
             )
         }
@@ -71,15 +70,15 @@ object AppUpdateNotifier {
             0
         }
         val text = if (total != null) {
-            "$pct% · ${formatBytes(bytesReceived)} / ${formatBytes(total)}"
+            localized(Str.host_app_android_update_progress, pct, formatBytes(bytesReceived), formatBytes(total))
         } else if (bytesReceived > 0) {
             formatBytes(bytesReceived)
         } else {
-            "Starting download…"
+            localized(Str.host_app_android_update_starting)
         }
         val builder = NotificationCompat.Builder(context, CHANNEL_PROGRESS_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("Downloading update")
+            .setContentTitle(localized(Str.host_app_android_update_downloading))
             .setContentText(text)
             .setProgress(if (known) 100 else 0, pct, !known)
             .setOngoing(true)
@@ -108,8 +107,8 @@ object AppUpdateNotifier {
         )
         val builder = NotificationCompat.Builder(context, if (alert) CHANNEL_ALERT_ID else CHANNEL_PROGRESS_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
-            .setContentTitle("Update downloaded")
-            .setContentText("Tap to install")
+            .setContentTitle(localized(Str.host_app_android_update_downloaded))
+            .setContentText(localized(Str.host_app_android_update_tap_install))
             .setProgress(0, 0, false)
             .setOngoing(false)
             .setOnlyAlertOnce(true)
@@ -127,10 +126,10 @@ object AppUpdateNotifier {
     fun showError(context: Context, message: String) {
         if (!canPost(context)) return
         ensureChannels(context)
-        val body = message.ifBlank { "Download or install failed" }
+        val body = message.ifBlank { localized(Str.host_app_android_update_failed_body) }
         val builder = NotificationCompat.Builder(context, CHANNEL_ALERT_ID)
             .setSmallIcon(android.R.drawable.stat_notify_error)
-            .setContentTitle("Update failed")
+            .setContentTitle(localized(Str.host_app_android_update_failed))
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setProgress(0, 0, false)

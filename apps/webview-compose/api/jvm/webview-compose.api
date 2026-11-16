@@ -115,6 +115,14 @@ public final class dev/supermux/webview/DialogResult$Text : dev/supermux/webview
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class dev/supermux/webview/DownloadFailure : java/lang/Enum {
+	public static final field FormPost Ldev/supermux/webview/DownloadFailure;
+	public static final field Other Ldev/supermux/webview/DownloadFailure;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/supermux/webview/DownloadFailure;
+	public static fun values ()[Ldev/supermux/webview/DownloadFailure;
+}
+
 public final class dev/supermux/webview/DownloadRequest {
 	public static final field $stable I
 	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Long;)V
@@ -124,6 +132,15 @@ public final class dev/supermux/webview/DownloadRequest {
 	public final fun getSuggestedFileName ()Ljava/lang/String;
 	public final fun getUrl ()Ljava/lang/String;
 	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/DownloadTarget {
+	public static final field $stable I
+	public fun <init> (Ljava/lang/String;Lkotlin/jvm/functions/Function1;)V
+	public synthetic fun <init> (Ljava/lang/String;Lkotlin/jvm/functions/Function1;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getOnStarted ()Lkotlin/jvm/functions/Function1;
+	public final fun getPath ()Ljava/lang/String;
 	public fun toString ()Ljava/lang/String;
 }
 
@@ -175,6 +192,20 @@ public final class dev/supermux/webview/InspectorResult$Unsupported : dev/superm
 	public fun equals (Ljava/lang/Object;)Z
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/LoadFailure : java/lang/Enum {
+	public static final field BadAnswer Ldev/supermux/webview/LoadFailure;
+	public static final field CannotConnect Ldev/supermux/webview/LoadFailure;
+	public static final field ConnectionLost Ldev/supermux/webview/LoadFailure;
+	public static final field NameNotResolved Ldev/supermux/webview/LoadFailure;
+	public static final field Other Ldev/supermux/webview/LoadFailure;
+	public static final field SignInRequired Ldev/supermux/webview/LoadFailure;
+	public static final field TimedOut Ldev/supermux/webview/LoadFailure;
+	public static final field TooManyRedirects Ldev/supermux/webview/LoadFailure;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/supermux/webview/LoadFailure;
+	public static fun values ()[Ldev/supermux/webview/LoadFailure;
 }
 
 public abstract interface class dev/supermux/webview/LoadingState {
@@ -450,6 +481,95 @@ public final class dev/supermux/webview/WebDialog$Prompt : dev/supermux/webview/
 	public fun toString ()Ljava/lang/String;
 }
 
+public abstract interface class dev/supermux/webview/WebDownload {
+	public abstract fun cancel ()V
+	public abstract fun getCanPause ()Z
+	public abstract fun getPath ()Ljava/lang/String;
+	public abstract fun getRequest ()Ldev/supermux/webview/DownloadRequest;
+	public abstract fun getState ()Lkotlinx/coroutines/flow/StateFlow;
+	public abstract fun pause ()V
+	public abstract fun resume ()V
+}
+
+public abstract interface class dev/supermux/webview/WebDownloadState {
+	public abstract fun getReceived ()J
+	public abstract fun getTotal ()Ljava/lang/Long;
+}
+
+public final class dev/supermux/webview/WebDownloadState$Cancelled : dev/supermux/webview/WebDownloadState {
+	public static final field $stable I
+	public fun <init> (JLjava/lang/Long;)V
+	public final fun component1 ()J
+	public final fun component2 ()Ljava/lang/Long;
+	public final fun copy (JLjava/lang/Long;)Ldev/supermux/webview/WebDownloadState$Cancelled;
+	public static synthetic fun copy$default (Ldev/supermux/webview/WebDownloadState$Cancelled;JLjava/lang/Long;ILjava/lang/Object;)Ldev/supermux/webview/WebDownloadState$Cancelled;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getReceived ()J
+	public fun getTotal ()Ljava/lang/Long;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebDownloadState$Done : dev/supermux/webview/WebDownloadState {
+	public static final field $stable I
+	public fun <init> (J)V
+	public final fun component1 ()J
+	public final fun copy (J)Ldev/supermux/webview/WebDownloadState$Done;
+	public static synthetic fun copy$default (Ldev/supermux/webview/WebDownloadState$Done;JILjava/lang/Object;)Ldev/supermux/webview/WebDownloadState$Done;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getReceived ()J
+	public fun getTotal ()Ljava/lang/Long;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebDownloadState$Failed : dev/supermux/webview/WebDownloadState {
+	public static final field $stable I
+	public fun <init> (Ljava/lang/String;JLjava/lang/Long;Ldev/supermux/webview/DownloadFailure;)V
+	public synthetic fun <init> (Ljava/lang/String;JLjava/lang/Long;Ldev/supermux/webview/DownloadFailure;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()J
+	public final fun component3 ()Ljava/lang/Long;
+	public final fun component4 ()Ldev/supermux/webview/DownloadFailure;
+	public final fun copy (Ljava/lang/String;JLjava/lang/Long;Ldev/supermux/webview/DownloadFailure;)Ldev/supermux/webview/WebDownloadState$Failed;
+	public static synthetic fun copy$default (Ldev/supermux/webview/WebDownloadState$Failed;Ljava/lang/String;JLjava/lang/Long;Ldev/supermux/webview/DownloadFailure;ILjava/lang/Object;)Ldev/supermux/webview/WebDownloadState$Failed;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public final fun getReason ()Ldev/supermux/webview/DownloadFailure;
+	public fun getReceived ()J
+	public fun getTotal ()Ljava/lang/Long;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebDownloadState$Paused : dev/supermux/webview/WebDownloadState {
+	public static final field $stable I
+	public fun <init> (JLjava/lang/Long;)V
+	public final fun component1 ()J
+	public final fun component2 ()Ljava/lang/Long;
+	public final fun copy (JLjava/lang/Long;)Ldev/supermux/webview/WebDownloadState$Paused;
+	public static synthetic fun copy$default (Ldev/supermux/webview/WebDownloadState$Paused;JLjava/lang/Long;ILjava/lang/Object;)Ldev/supermux/webview/WebDownloadState$Paused;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getReceived ()J
+	public fun getTotal ()Ljava/lang/Long;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebDownloadState$Running : dev/supermux/webview/WebDownloadState {
+	public static final field $stable I
+	public fun <init> (JLjava/lang/Long;)V
+	public final fun component1 ()J
+	public final fun component2 ()Ljava/lang/Long;
+	public final fun copy (JLjava/lang/Long;)Ldev/supermux/webview/WebDownloadState$Running;
+	public static synthetic fun copy$default (Ldev/supermux/webview/WebDownloadState$Running;JLjava/lang/Long;ILjava/lang/Object;)Ldev/supermux/webview/WebDownloadState$Running;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getReceived ()J
+	public fun getTotal ()Ljava/lang/Long;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public abstract interface class dev/supermux/webview/WebError {
 	public abstract fun getUrl ()Ljava/lang/String;
 }
@@ -485,9 +605,12 @@ public final class dev/supermux/webview/WebError$Http : dev/supermux/webview/Web
 
 public final class dev/supermux/webview/WebError$Network : dev/supermux/webview/WebError {
 	public static final field $stable I
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ldev/supermux/webview/LoadFailure;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ldev/supermux/webview/LoadFailure;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getDescription ()Ljava/lang/String;
+	public final fun getReason ()Ldev/supermux/webview/LoadFailure;
 	public fun getUrl ()Ljava/lang/String;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
