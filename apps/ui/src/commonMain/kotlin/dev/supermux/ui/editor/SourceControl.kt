@@ -1367,15 +1367,15 @@ private fun Graph(state: SourceControlState, scope: kotlinx.coroutines.Coroutine
         }
         if (!state.graphOpen) return@Column
         val base = h.base
-        if (base != null && h.incoming > 0) GraphNode(localized(Str.scm_incoming_from, base), localizedPlural(Plurals.scm_commits_n, h.incoming, h.incoming), localized(Str.scm_merge_link)) { scope.launch { state.getLatest() } }
-        if (st?.upstream != null && st.behind > 0) GraphNode(localized(Str.scm_incoming), localized(Str.scm_from_origin, st.behind, st.upstream!!), localized(Str.scm_pull)) { scope.launch { state.sync("pull"); state.refresh() } }
+        if (base != null && h.incoming > 0) GraphNode(localized(Str.scm_incoming_from, base), localizedPlural(Plurals.scm_commits_n, h.incoming, h.incoming), localized(Str.scm_merge_link), "scm_graph_incoming_base") { scope.launch { state.getLatest() } }
+        if (st?.upstream != null && st.behind > 0) GraphNode(localized(Str.scm_incoming), localized(Str.scm_from_origin, st.behind, st.upstream!!), localized(Str.scm_pull), "scm_graph_incoming_upstream") { scope.launch { state.sync("pull"); state.refresh() } }
         h.chat.forEachIndexed { i, c -> GraphCommit(c, own = true, refs = if (i == 0) listOfNotNull(h.branch) else emptyList()) }
         h.baseCommits.forEachIndexed { i, c -> GraphCommit(c, own = false, refs = if (i == 0 && base != null) listOf(base) else emptyList()) }
     }
 }
 
 @Composable
-private fun GraphNode(title: String, sub: String, action: String, onAction: () -> Unit) {
+private fun GraphNode(title: String, sub: String, action: String, tag: String, onAction: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(start = 18.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Lane(color = LocalSemantics.current.info, filled = true)
@@ -1383,7 +1383,7 @@ private fun GraphNode(title: String, sub: String, action: String, onAction: () -
             Text("↓ $title", fontSize = 12.5.sp, color = cs.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(sub, fontSize = 11.sp, color = cs.onSurfaceVariant)
         }
-        Text(action, fontSize = 12.sp, color = cs.primary, modifier = Modifier.clickable(onClick = onAction).padding(4.dp))
+        Text(action, fontSize = 12.sp, color = cs.primary, modifier = Modifier.clickable(onClick = onAction).padding(4.dp).testTag(tag))
     }
 }
 

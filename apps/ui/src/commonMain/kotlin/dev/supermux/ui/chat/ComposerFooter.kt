@@ -191,14 +191,7 @@ fun ComposerFooter(
                         trailingChevron = false,
                         tag = "footer_git_sync",
                         // VS Code's tooltips: what a click does, against which upstream.
-                        hint = failed ?: when {
-                            !published -> localized(Str.scm_publish_branch)
-                            sync?.upstream == null -> null
-                            behind > 0 && ahead > 0 -> localized(Str.scm_tt_pull_push, behind, ahead, sync.upstream!!)
-                            behind > 0 -> localizedPlural(Plurals.scm_tt_pull, behind, behind, sync.upstream!!)
-                            ahead > 0 -> localizedPlural(Plurals.scm_tt_push, ahead, ahead, sync.upstream!!)
-                            else -> localized(Str.scm_tt_sync)
-                        },
+                        hint = failed ?: footerSyncHint(published, sync?.upstream, ahead, behind),
                         error = failed != null,
                         onClick = {
                             when {
@@ -314,4 +307,14 @@ private fun FooterHint(text: String, content: @Composable () -> Unit) {
         state = androidx.compose.material3.rememberTooltipState(),
         content = content,
     )
+}
+
+/** #72 v5: the footer's sync chip tooltip, VS Code's words: what a click does, against which upstream. */
+internal fun footerSyncHint(published: Boolean, upstream: String?, ahead: Int, behind: Int): String? = when {
+    !published -> localized(Str.scm_publish_branch)
+    upstream == null -> null
+    behind > 0 && ahead > 0 -> localized(Str.scm_tt_pull_push, behind, ahead, upstream)
+    behind > 0 -> localizedPlural(Plurals.scm_tt_pull, behind, behind, upstream)
+    ahead > 0 -> localizedPlural(Plurals.scm_tt_push, ahead, ahead, upstream)
+    else -> localized(Str.scm_tt_sync)
 }
