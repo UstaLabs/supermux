@@ -12,10 +12,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.ui.draw.clip
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -210,29 +206,8 @@ fun AppletScreen(fleet: FleetStore, hostId: String, name: String, onBack: () -> 
     val listed by (fleet.appForRecord(hostId)?.applets ?: none).collectAsState()
     val title = listed?.firstOrNull { it.name == name }?.title?.takeIf { it.isNotBlank() } ?: name
     androidx.compose.foundation.layout.Column(Modifier.fillMaxSize().background(cs.background).testTag("applet_screen_$name")) {
-        androidx.compose.foundation.layout.Row(
-            Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                Modifier.size(44.dp).clip(androidx.compose.foundation.shape.CircleShape).clickable(onClick = onBack).testTag("applet_screen_back"),
-                contentAlignment = Alignment.Center,
-            ) {
-                androidx.compose.material3.Icon(
-                    androidx.compose.material.icons.Icons.AutoMirrored.Outlined.ArrowBack,
-                    contentDescription = localized(Str.shell_back),
-                    tint = cs.onSurface,
-                )
-            }
-            Text(
-                title,
-                fontSize = 17.sp,
-                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                color = cs.onSurface,
-                maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-            )
-        }
+        // The app's own phone top bar: its back glyph and the title, as the other phone pages have.
+        dev.supermux.ui.settings.kit.KitTopBar(title, onBack = onBack, backTag = "applet_screen_back", titleTag = "applet_screen_title")
         AppletPage(fleet, hostId, name, Modifier.weight(1f), onOpenChat = openChat)
     }
 }
