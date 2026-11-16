@@ -53,6 +53,17 @@ interface AppletWidgets {
 val LocalAppletWidgets = staticCompositionLocalOf<AppletWidgets?> { null }
 
 /**
+ * Asks every open applet menu and "Add widget" sheet to close: an applet opened from outside the app (a widget, a
+ * control) must not come up under a sheet left open from before (seen on iOS: the how-to stayed over the applet).
+ */
+object AppletSheets {
+    private val _closeRequests = kotlinx.coroutines.flow.MutableStateFlow(0)
+    val closeRequests: kotlinx.coroutines.flow.StateFlow<Int> = _closeRequests
+
+    fun closeAll() { _closeRequests.value++ }
+}
+
+/**
  * The active host's applets as the sidebar and All applets use them; null when there is nothing to show: no opener on
  * this platform, a host whose broker has no applets, or not connected yet.
  */

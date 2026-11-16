@@ -53,6 +53,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -216,6 +217,15 @@ private fun AppletCell(a: AppletDto, iconSize: Dp, labelSize: Float, actions: Ap
     var menuAt by remember { mutableStateOf<Offset?>(null) }
     // iPhone: "Add widget" shows how (only he can place a widget); it outlives the menu that asked for it.
     var widgetHowTo by remember { mutableStateOf(false) }
+    // An applet opened from outside the app closes both (AppletSheets).
+    val closeRequest by AppletSheets.closeRequests.collectAsState()
+    val seenClose = remember { closeRequest }
+    LaunchedEffect(closeRequest) {
+        if (closeRequest != seenClose) {
+            menuAt = null
+            widgetHowTo = false
+        }
+    }
     val needs = a.needsYou.isNotEmpty() || a.status != "ok"
     Box(
         Modifier

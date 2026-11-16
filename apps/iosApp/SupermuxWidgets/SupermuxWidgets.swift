@@ -60,8 +60,9 @@ struct AppletsWidgetView: View {
 
     var body: some View {
         let pins = entry.host?.pinned ?? []
-        let icon: CGFloat = family == .systemLarge ? 56 : 44
-        VStack(alignment: .leading, spacing: 8) {
+        // Medium: two rows of four must fit under the header inside the system's margins.
+        let icon: CGFloat = family == .systemLarge ? 56 : 38
+        VStack(alignment: .leading, spacing: family == .systemLarge ? 10 : 6) {
             HStack(spacing: 5) {
                 Image(systemName: "square.grid.2x2.fill").font(.system(size: 10, weight: .semibold))
                 Text("Applets").font(.system(size: 12, weight: .semibold))
@@ -76,7 +77,7 @@ struct AppletsWidgetView: View {
                     .multilineTextAlignment(.center)
                 Spacer(minLength: 0)
             } else {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 4), spacing: family == .systemLarge ? 18 : 8) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 4), spacing: family == .systemLarge ? 18 : 4) {
                     ForEach(pins, id: \.name) { a in
                         if let host = entry.host, let url = AppletSnapshot.url(host: host.hostId, name: a.name) {
                             Link(destination: url) { AppletCell(applet: a, size: icon) }
