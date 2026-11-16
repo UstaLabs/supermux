@@ -1405,6 +1405,7 @@ class FleetStore(
     fun closeTerminal(sessionId: String, terminalId: String) { appFor(sessionId)?.closeTerminal(sessionId, terminalId) }
 
     suspend fun gitFetch(id: String): GitOpResult? = appFor(id)?.gitFetch(id)
+    suspend fun gitPr(id: String): dev.supermux.net.PrRead? = appFor(id)?.gitPr(id)
     suspend fun gitPull(id: String): GitOpResult? = appFor(id)?.gitPull(id)
     suspend fun gitPush(id: String): GitOpResult? = appFor(id)?.gitPush(id)
     suspend fun gitPublish(id: String): GitOpResult? = appFor(id)?.gitPublish(id)
@@ -1625,6 +1626,9 @@ class FleetStore(
             ?: Result.failure(IllegalStateException("host offline"))
     suspend fun workspaceFsWrite(workspaceId: String, path: String, content: String): Boolean =
         appForWorkspace(workspaceId)?.workspaceFsWrite(workspaceId, path, content) == true
+    /** #72: the Source Control seam of the host owning [workspaceId], or null when no host has it. */
+    fun sourceControl(workspaceId: String, sessionId: String?): SourceControlApi? = appForWorkspace(workspaceId)?.sourceControl(workspaceId, sessionId)
+
     suspend fun workspaceStage(workspaceId: String, repo: String, paths: List<String>, staged: Boolean): Boolean =
         appForWorkspace(workspaceId)?.workspaceStage(workspaceId, repo, paths, staged) == true
     suspend fun workspaceFsDiff(workspaceId: String, base: String? = null): FsDiffResult? =

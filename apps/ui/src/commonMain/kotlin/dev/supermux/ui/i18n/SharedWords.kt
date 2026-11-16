@@ -4,6 +4,7 @@
 // (SessionHeaderMenus.kt), the working line and its duration (ChatPanel.kt).
 package dev.supermux.ui.i18n
 
+import dev.supermux.proto.stateString
 import dev.supermux.chat.ChatTime
 import dev.supermux.host.HOST_FALLBACK
 import dev.supermux.proto.ViewDto
@@ -27,7 +28,14 @@ fun timeAgoText(ago: TimeAgo): String = when (ago) {
 }
 
 /** A view's tab / accessibility label ([viewTitleOf]): its own name, or the kind's word. */
-fun viewTitle(view: ViewDto, sessionName: (String) -> String? = { null }): String =
+fun viewTitle(view: ViewDto, sessionName: (String) -> String? = { null }): String {
+    val title = kindTitle(view, sessionName)
+    // #72: a Source Control diff tab, as VS Code names it: "App.jsx (Working Tree)" / "App.jsx (Index)".
+    if (view.kind != "editor" || view.stateString("mode") != "scmdiff") return title
+    return "$title (${localized(if (view.stateString("side") == "index") Str.scm_side_index else Str.scm_side_worktree)})"
+}
+
+private fun kindTitle(view: ViewDto, sessionName: (String) -> String?): String =
     when (val t = viewTitleOf(view, sessionName)) {
         is ViewTitle.Name -> t.text
         is ViewTitle.Port -> localized(Str.words_view_port, t.port)
@@ -37,7 +45,8 @@ fun viewTitle(view: ViewDto, sessionName: (String) -> String? = { null }): Strin
                 ViewTitle.Word.CHAT -> Str.shell_kind_chat
                 ViewTitle.Word.TERMINAL -> Str.shell_kind_terminal
                 ViewTitle.Word.FILE -> Str.notify_file
-                ViewTitle.Word.CHANGES -> Str.shell_kind_changes
+                // #72 v4: the Changes view is VS Code's Source Control, and its tab says so.
+                ViewTitle.Word.CHANGES -> Str.scm_title
                 ViewTitle.Word.FILES -> Str.shell_kind_files
                 ViewTitle.Word.DISPLAY -> Str.shell_kind_display
                 ViewTitle.Word.PAGE -> Str.words_view_page

@@ -263,8 +263,8 @@ class FileCardDownloadTest {
         val media = HostMedia(fails = true)
         card(FakePlatform(), center, media)
         onNodeWithTag("attachment_chip").performClick()
-        settle { onAllNodesWithText("Download failed — tap to retry").fetchSemanticsNodes().isNotEmpty() }
-        onNodeWithText("Download failed — tap to retry").assertIsDisplayed()
+        settle { onAllNodesWithText("Download failed — click to retry").fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithText("Download failed — click to retry").assertIsDisplayed()
         assertIs<DownloadState.Failed>(center.items.value.single().state)
 
         onNodeWithTag("attachment_chip").performClick()
@@ -285,7 +285,7 @@ class FileCardDownloadTest {
         assertEquals(listOf("f1"), media.cancelled.toList())
         // The bar's Pause is no failure: the card says Paused, and its ring resumes it.
         onNodeWithText("Paused", useUnmergedTree = true).assertIsDisplayed()
-        onNodeWithText("Download failed — tap to retry").assertDoesNotExist()
+        onNodeWithText("Download failed — click to retry").assertDoesNotExist()
     }
 
     // ── the ring on the card's icon (#95, round 3: no menu — the ring toggles, ✕ beside it) ──────

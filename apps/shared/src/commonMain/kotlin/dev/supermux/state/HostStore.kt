@@ -1362,6 +1362,9 @@ class HostStore(
     // apply here; the real BrokerApi has ONE flat result shape for all four ops.
 
     /** POST /sessions/<id>/git/fetch. Null on any failure. */
+    /** #72: the chat's branch's pull / merge request (the footer's #12 ✓ / ✗). */
+    suspend fun gitPr(id: String): dev.supermux.net.PrRead? = runApi("gitPr") { api.gitPr("sessions", id) }
+
     suspend fun gitFetch(id: String): GitOpResult? =
         runApi("gitFetch") { api.gitFetch(id) }
 
@@ -1738,6 +1741,10 @@ class HostStore(
         } ?: false
 
     /** #72: puts whole files into the next commit, or takes them out → true on success. */
+    /** #72: the Source Control pane's calls for [workspaceId] and the chat in it ([sessionId]). */
+    // Source Control's network and agent calls (push, pull, gh, the agent-written PR text) on the 2-minute client.
+    fun sourceControl(workspaceId: String, sessionId: String?): SourceControlApi = SourceControlApi(api, workspaceId, sessionId, finishJobs, net = apiDictate)
+
     suspend fun workspaceStage(workspaceId: String, repo: String, paths: List<String>, staged: Boolean): Boolean =
         runApi("workspaceStage") { api.workspaceStage(workspaceId, repo, paths, staged); true } ?: false
 
@@ -1985,6 +1992,14 @@ class HostStore(
                     ),
                 )
             }.onFailure { println("[HostStore] savePendingChatDraft failed: $it") }
+        }
+    }
+
+    /** Replace a view's state (the broker stores it whole): #72 keeps a Source Control preview tab. */
+    fun setWorkspaceViewState(workspaceId: String, viewId: String, state: JsonObject) {
+        stateScope.launch {
+            runCatching { api.patchView(workspaceId, viewId, PatchViewBody(state = state)) }
+                .onFailure { println("[HostStore] setWorkspaceViewState failed: $it") }
         }
     }
 

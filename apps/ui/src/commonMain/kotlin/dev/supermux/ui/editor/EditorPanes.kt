@@ -480,6 +480,10 @@ fun DiffPane(
     retainKey: String? = null,
     /** #72: whole files into the next commit, or out of it (see [DiffView]); null: no boxes. */
     stageFiles: (suspend (repo: String, paths: List<String>, staged: Boolean) -> Boolean)? = null,
+    /** #72 Source Control: only this file (repo, path), open, with [baseBlobFor] as its base; null: every file. */
+    onlyFile: Pair<String, String>? = null,
+    /** #72: the base blob a [onlyFile] diff starts from (its staged version for "(Working Tree)"); null keeps HEAD's. */
+    baseBlobFor: String? = null,
 ) {
     val scope = rememberCoroutineScope()
     val reviewState = reviewWalkthrough ?: walkthrough
@@ -551,7 +555,12 @@ fun DiffPane(
             )
         } else {
           DiffView(
-            repos = diff.diffRepos,
+            repos = onlyFile?.let { (r, p) ->
+                diff.diffRepos.filter { it.repo == r }.map { repo ->
+                    repo.copy(files = repo.files.filter { it.path == p }.map { f -> if (baseBlobFor != null) f.copy(baseBlob = baseBlobFor) else f })
+                }
+            } ?: diff.diffRepos,
+            autoExpandAll = onlyFile != null,
             comments = diff.diffComments,
             base = diff.diffBase,
             refs = diff.diffRefs,

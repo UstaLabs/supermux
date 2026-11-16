@@ -14,6 +14,15 @@
 // the tree holds nothing. It opens Changes; Fetch/Pull/Push are in the chat's ⋮ menu.
 package dev.supermux.ui.chat
 
+import androidx.compose.material3.PlainTooltip
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.material.icons.automirrored.filled.CallMerge
+import dev.supermux.ui.i18n.Plurals
+import dev.supermux.ui.i18n.localizedPlural
+import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -69,6 +78,10 @@ fun ComposerFooter(
     modifier: Modifier = Modifier,
     /** Opens the Changes view; null on a host that has none, where the sign is only a caption. */
     onOpenChanges: (() -> Unit)? = null,
+    /** #72: the ⟳ / ☁ item: sync (pull, then push) or publish this chat's branch; null = only a caption. */
+    onGitSync: (suspend (op: String) -> dev.supermux.net.GitOpResult?)? = null,
+    /** #72: the branch's PR / MR (#12 ✓ / ✗ next to the branch); null = none shown. */
+    onGitPr: (suspend () -> dev.supermux.net.PrRead?)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -140,18 +153,85 @@ fun ComposerFooter(
             }
         }
 
-        // Git: a quiet sign of what this session's work tree holds, only when it holds something
-        // (#72). Clicking it opens Changes; the git commands themselves live in the chat's ⋮ menu.
-        val sign = composerGitSign(session.git)
-        if (sign != null) {
+        // Git, as VS Code's status bar has it (#72 v4): the branch you are on (always, even with no changes), its
+        // ⟳ ↓↑ against origin (a click syncs) or ☁ Publish, and "N changed" (a click opens Source Control).
+        val git = session.git
+        if (git != null) {
+            var syncing by remember { mutableStateOf(false) }
+            // A failed sync is never silent: the chip says so (hover: why) until the next try.
+            var failed by remember(session.id) { mutableStateOf<String?>(null) }
+            // An older broker sends no branch: a plain checkout's compareRef is its upstream ("origin/main") once published.
+            val branch = git.branch ?: session.session_branch
+                ?: git.compareRef.takeIf { git.mode == "remote" }?.let { if (git.unpublished == true) it else it.substringAfter('/') } // platform-ok: a git ref name
             Row(
                 Modifier.weight(1f).padding(start = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.End,
             ) {
-                FooterChip(
+                if (branch != null) FooterChip(
+                    icon = { tint -> Icon(Icons.AutoMirrored.Filled.CallSplit, null, tint = tint, modifier = Modifier.size(12.dp)) },
+                    label = branch,
+                    trailingChevron = false,
+                    tag = "footer_git_branch",
+                    onClick = onOpenChanges,
+                )
+                val sync = git.sync
+                val published = sync != null || (git.mode == "remote" && git.unpublished != true)
+                if (onGitSync != null && branch != null) {
+                    val ahead = sync?.ahead ?: git.ahead.takeIf { git.mode == "remote" } ?: 0
+                    val behind = sync?.behind ?: git.behind.takeIf { git.mode == "remote" } ?: 0
+                    FooterChip(
+                        icon = { tint -> Icon(if (published) Icons.Filled.Sync else Icons.Filled.CloudUpload, null, tint = tint, modifier = Modifier.size(12.dp)) },
+                        label = when {
+                            syncing -> "…"
+                            failed != null -> localized(Str.scm_sync_failed_short)
+                            !published -> localized(Str.scm_publish_short)
+                            else -> listOfNotNull(behind.takeIf { it > 0 }?.let { "$it↓" }, ahead.takeIf { it > 0 }?.let { "$it↑" }).joinToString(" ")
+                        },
+                        trailingChevron = false,
+                        tag = "footer_git_sync",
+                        // VS Code's tooltips: what a click does, against which upstream.
+                        hint = failed ?: footerSyncHint(published, sync?.upstream, ahead, behind),
+                        error = failed != null,
+                        onClick = {
+                            when {
+                                syncing -> Unit
+                                // Publish goes through Source Control: it asks where when it must (no remote: GitHub / GitLab / a URL;
+                                // several remotes: which), as VS Code's quick picks do; one remote: straight there.
+                                git.hasRemote == false || !published -> { failed = null; dev.supermux.ui.editor.ScmRequests.askPublish(session.id); onOpenChanges?.invoke() }
+                                failed != null -> { failed = null; onOpenChanges?.invoke() }
+                                else -> scope.launch {
+                                    syncing = true
+                                    val ok = { r: dev.supermux.net.GitOpResult? -> r != null && r.status in setOf("pushed", "up_to_date", "clean", "ok", "") }
+                                    val r = if (!published) onGitSync("publish") else onGitSync("pull").takeIf { !ok(it) } ?: onGitSync("push")
+                                    failed = if (ok(r)) null else localized(Str.scm_failed, r?.message ?: r?.status ?: localized(Str.scm_offline))
+                                    syncing = false
+                                }
+                            }
+                        },
+                    )
+                }
+                // The branch's pull / merge request, as the GitHub Pull Requests extension puts it in the status bar.
+                var pr by remember(session.id) { mutableStateOf<dev.supermux.net.PrInfo?>(null) }
+                if (onGitPr != null && branch != null) LaunchedEffect(session.id, branch) {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                        while (true) { pr = onGitPr()?.pr?.takeIf { it.state == "open" }; kotlinx.coroutines.delay(30_000) }
+                    }
+                }
+                pr?.let { p ->
+                    val bad = p.checks.count { it.state == "bad" }
+                    val run = p.checks.count { it.state == "run" }
+                    FooterChip(
+                        icon = { tint -> Icon(Icons.AutoMirrored.Filled.CallMerge, null, tint = tint, modifier = Modifier.size(12.dp)) },
+                        label = (if (p.forge == "gitlab") "!" else "#") + p.number + when { bad > 0 -> " ✗$bad"; run > 0 -> " ⟳"; p.checks.isNotEmpty() -> " ✓"; else -> "" }, // i18n-ok: GitHub's / GitLab's number signs and status marks
+                        trailingChevron = false,
+                        tag = "footer_git_pr",
+                        onClick = onOpenChanges,
+                    )
+                }
+                if (git.dirty > 0) FooterChip(
                     icon = { tint -> Icon(NewTabGlyphs.Changes, null, tint = tint, modifier = Modifier.size(12.dp)) },
-                    label = sign.label(),
+                    label = localizedPlural(Plurals.git_sign_changed, git.dirty, git.dirty),
                     trailingChevron = false,
                     tag = "footer_git_sign",
                     onClick = onOpenChanges,
@@ -177,9 +257,14 @@ private fun FooterChip(
     trailingChevron: Boolean,
     tag: String,
     onClick: (() -> Unit)?,
+    /** #72: shown on hover (why a sync failed). */
+    hint: String? = null,
+    /** #72: the chip says something went wrong. */
+    error: Boolean = false,
 ) {
     val cs = MaterialTheme.colorScheme
-    Row(
+    val tone = if (error) cs.error else cs.onSurfaceVariant
+    val chip: @Composable () -> Unit = { Row(
         Modifier
             .clip(RoundedCornerShape(Radii.pill))
             .then(
@@ -191,11 +276,11 @@ private fun FooterChip(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
-        icon(cs.onSurfaceVariant)
+        icon(tone)
         Text(
             label,
             fontSize = 11.sp,
-            color = cs.onSurfaceVariant,
+            color = tone,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f, fill = false),
@@ -208,5 +293,28 @@ private fun FooterChip(
                 modifier = Modifier.size(12.dp),
             )
         }
-    }
+    } }
+    if (hint == null) chip() else FooterHint(hint, chip)
+}
+
+/** #72: why a footer chip says something went wrong, on hover. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun FooterHint(text: String, content: @Composable () -> Unit) {
+    androidx.compose.material3.TooltipBox(
+        positionProvider = androidx.compose.material3.TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        tooltip = { PlainTooltip(modifier = Modifier.widthIn(max = 320.dp)) { Text(text, fontSize = 12.sp) } },
+        state = androidx.compose.material3.rememberTooltipState(),
+        content = content,
+    )
+}
+
+/** #72 v5: the footer's sync chip tooltip, VS Code's words: what a click does, against which upstream. */
+internal fun footerSyncHint(published: Boolean, upstream: String?, ahead: Int, behind: Int): String? = when {
+    !published -> localized(Str.scm_publish_branch)
+    upstream == null -> null
+    behind > 0 && ahead > 0 -> localized(Str.scm_tt_pull_push, behind, ahead, upstream)
+    behind > 0 -> localizedPlural(Plurals.scm_tt_pull, behind, behind, upstream)
+    ahead > 0 -> localizedPlural(Plurals.scm_tt_push, ahead, ahead, upstream)
+    else -> localized(Str.scm_tt_sync)
 }

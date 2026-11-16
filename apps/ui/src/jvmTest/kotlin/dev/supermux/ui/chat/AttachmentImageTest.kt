@@ -246,6 +246,6 @@ class AttachmentImageTest {
         waitUntil(timeoutMillis = 5_000L) {
             onAllNodesWithTag("attachment_chip").fetchSemanticsNodes().isNotEmpty()
         }
-        onNodeWithText("Download failed — tap to retry").assertIsDisplayed()
+        onNodeWithText("Download failed — click to retry").assertIsDisplayed()
     }
 }

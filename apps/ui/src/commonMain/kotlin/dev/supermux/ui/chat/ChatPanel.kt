@@ -343,6 +343,10 @@ class ChatActions(
         { dev.supermux.state.AccountResult.Failed(null, null, "Not available on this client") },
     /** Opens Settings ▸ Providers & accounts (the Account list's link when the session's account is unavailable); null = no link. */
     val openAccounts: (() -> Unit)? = null,
+    /** #72: the footer's ⟳ / ☁: fetch | pull | push | publish on this chat's branch; null = no sync here. */
+    val gitSync: (suspend (op: String) -> dev.supermux.net.GitOpResult?)? = null,
+    /** #72: the chat's branch's pull / merge request, for the footer's #12 ✓ / ✗; null = none here. */
+    val gitPr: (suspend () -> dev.supermux.net.PrRead?)? = null,
     /** Opens the agent's own sign-in, Settings ▸ Providers & accounts (the link when the system login's sign-in expired); null = none. */
     val openSignIn: (() -> Unit)? = null,
     /** #92: the wait for a usage-limit reset — drop it, or resume now. */
@@ -401,6 +405,8 @@ fun rememberChatActions(
             setAccount = { id -> app.setSessionAccount(session.id, id) },
             openAccounts = openAccounts,
             openSignIn = openSignIn,
+            gitSync = { op -> when (op) { "pull" -> app.gitPull(session.id); "push" -> app.gitPush(session.id); "publish" -> app.gitPublish(session.id); else -> app.gitFetch(session.id) } },
+            gitPr = { app.gitPr(session.id) },
             cancelLimitWait = { app.cancelLimitWait(session.id) },
             resumeLimitWait = { app.resumeLimitWait(session.id) },
         )
@@ -1300,7 +1306,7 @@ fun ChatPanel(
                     scope.launch { refreshCatalogs() }
                 },
                 tray = {
-                    ComposerFooter(session = session, onOpenChanges = onOpenChanges)
+                    ComposerFooter(session = session, onOpenChanges = onOpenChanges, onGitSync = actions.gitSync, onGitPr = actions.gitPr)
                 },
                 modifier = Modifier.fillMaxWidth(),
             )

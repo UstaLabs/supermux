@@ -14,6 +14,22 @@
 // The shared host takes desktop's [previewModeFor] lambda, which Android simply does not pass.
 package dev.supermux.ui.shell
 
+import dev.supermux.net.BlobText
+import dev.supermux.ui.editor.scmDiffTab
+import dev.supermux.ui.editor.ScmDiffTab
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Icon
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import dev.supermux.ui.editor.ScmGroup
+import dev.supermux.ui.editor.SourceControlPane
+import dev.supermux.ui.editor.SourceControlState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.CompositionLocalProvider
 import dev.supermux.ui.browser.trackClickModifiers
@@ -167,6 +183,11 @@ fun ViewHost(
      */
     onOpenFile: (path: String, line: Int?, endLine: Int?) -> Unit = { _, _, _ -> },
     /**
+     * #72: open a Source Control file's diff (repo, path, the blob it is compared from; null: HEAD's) as a tab next to
+     * the chat, as VS Code does. Null (a phone: no panes): the diff opens inside the Source Control pane.
+     */
+    onOpenScmDiff: ((tab: ScmDiffTab, keep: Boolean) -> Unit)? = null,
+    /**
      * A Files pane renamed (`old → new`) or deleted (`old → null`) an entry; ABSOLUTE host paths.
      * The workspace retargets or flags the file tabs open under it (WorkspaceSession.applyEntryMoved).
      */
@@ -315,6 +336,23 @@ fun ViewHost(
                     onWalkthroughClosed = onWalkthroughClosed,
                     onClose = onCloseView,
                     onOpenFile = onOpenFile,
+                    onOpenScmDiff = onOpenScmDiff,
+                    onOpenChat = onSelectSession,
+                    modifier = modifier.testTag("editor-$workdir"),
+                )
+                // #72: one Source Control file's diff, as a tab next to the chat.
+                "scmdiff" -> DiffPaneForWorkspace(
+                    actions = actions,
+                    documents = documents,
+                    workspaceId = workspaceId,
+                    viewId = view.id,
+                    base = "head",
+                    lspSessionId = primarySessionId,
+                    walkthroughSessionId = null,
+                    onWalkthroughClosed = {},
+                    onClose = onCloseView,
+                    onOpenFile = onOpenFile,
+                    file = ScmOpenFile(view.stateString("repo").orEmpty(), view.stateString("path").orEmpty(), view.stateString("base"), view.stateString("work")),
                     modifier = modifier.testTag("editor-$workdir"),
                 )
                 else -> ExplorerPaneForWorkspace(
@@ -768,6 +806,12 @@ private fun DiffPaneForWorkspace(
     onClose: () -> Unit,
     onOpenFile: (path: String, line: Int?, endLine: Int?) -> Unit,
     modifier: Modifier,
+    /** #72: a Source Control file's diff as a tab next to the chat; null: inside the pane. */
+    onOpenScmDiff: ((tab: ScmDiffTab, keep: Boolean) -> Unit)? = null,
+    /** #72: this view IS one file's diff (a "scmdiff" tab): no Source Control list, no way back. */
+    file: ScmOpenFile? = null,
+    /** #72: another chat, by id ("Open that chat" in the branch picker). */
+    onOpenChat: (String) -> Unit = {},
 ) {
     // Same resolution rule as the file pane: review and walkthrough are session-keyed, and a
     // stale id would offer comment/submit affordances that can only no-op.
@@ -784,6 +828,41 @@ private fun DiffPaneForWorkspace(
     // The holder is null where the host installed no walkthrough seam (the builder checks the cap).
     val walkthrough = selectedWalkthroughId?.let { actions.walkthroughState(it) }
     val reviewWalkthrough = reviewSessionId?.let { actions.walkthroughState(it) }
+    // #72 v4: the workspace's Changes view IS VS Code's Source Control; a file's diff opens in it, with a way back.
+    val sourceControl = if (file != null) null else remember(workspaceId, reviewSessionId) { actions.sourceControl(workspaceId, reviewSessionId)?.let { SourceControlState(it) } }
+    var openFile by remember(workspaceId) { mutableStateOf<ScmOpenFile?>(null) }
+    // The review of everything since the chat started (comments, the base menu, the agent's walkthrough) stays one
+    // click away, and opens by itself when a chat opens its walkthrough. Kept through a rotation like the base (#89).
+    val scmMode = rememberRetained("scm:$workspaceId:$viewId") { ScmMode() }
+    val reviewing = scmMode.review || walkthroughSessionId != null
+    if (sourceControl != null && openFile == null && !reviewing) {
+        SourceControlPane(
+            onReview = { scmMode.review = true },
+            state = sourceControl,
+            onOpenDiff = { repo, f, group, keep ->
+                val tab = scmDiffTab(repo, f, group)
+                if (onOpenScmDiff != null) onOpenScmDiff(tab, keep) else openFile = ScmOpenFile(repo, f.path, tab.base, tab.work)
+            },
+            onOpenFile = { repo, path -> onOpenFile(repoPath(repo, path), null, null) },
+            onOpenChat = onOpenChat,
+            modifier = modifier.fillMaxSize(),
+        )
+        return
+    }
+    val shown = file ?: openFile
+    if ((sourceControl != null || file != null) && shown != null) {
+        LaunchedEffect(shown) {
+            diff.diffBase = "head"
+            diff.reloadDiff { spec -> actions.workspaceFsDiff(workspaceId, spec) }
+        }
+    }
+    Column(modifier.fillMaxSize()) {
+    // platform-ok: a git path, repo-relative, always / on every OS
+    if (sourceControl != null && shown != null) ScmBackRow(shown.path.substringAfterLast('/')) { openFile = null }
+    else if (sourceControl != null && reviewing) ScmBackRow(localized(Str.scm_review)) {
+        scmMode.review = false
+        if (walkthroughSessionId != null) onWalkthroughClosed()
+    }
     DiffPane(
         diff = diff,
         walkthrough = walkthrough,
@@ -796,7 +875,15 @@ private fun DiffPaneForWorkspace(
         },
         getReviewComments = { reviewSessionId?.let { actions.reviewComments(it) }.orEmpty() },
         readWalkthroughFile = { repo, path ->
-            actions.workspaceFsRead(workspaceId, repoPath(repo, path))
+            // "(Index)": the working side is the staged blob, not the file on disk.
+            val work = shown?.work
+            if (work != null && shown.repo == repo && shown.path == path) {
+                when (val b = actions.workspaceChangesBlob?.invoke(workspaceId, repo, work, false)) {
+                    is BlobText.Text -> Result.success(b.text)
+                    is BlobText.Failed -> Result.failure(IllegalStateException(b.message))
+                    else -> Result.failure(IllegalStateException(localized(Str.editor_file_unavailable)))
+                }
+            } else actions.workspaceFsRead(workspaceId, repoPath(repo, path))
         },
         onOpenWalkthroughFile = { repo, path, line ->
             onOpenFile(repoPath(repo, path), line, null)
@@ -813,15 +900,42 @@ private fun DiffPaneForWorkspace(
         onWalkthroughClosed = onWalkthroughClosed,
         onReviewSubmit = { reviewSessionId?.let { actions.reviewSubmit(it) } },
         onClose = onClose,
-        writeDiffFile = { repo, path, text -> actions.workspaceFsWrite(workspaceId, repoPath(repo, path), text) },
+        // An "(Index)" diff shows the staged version: nothing on disk to write back.
+        writeDiffFile = if (shown?.work != null) null else { repo, path, text -> actions.workspaceFsWrite(workspaceId, repoPath(repo, path), text) },
         diffDocuments = documents,
         baseText = actions.workspaceChangesBlob?.let { f -> { repo, sha, force -> f(workspaceId, repo, sha, force) } },
         // The review drafts outlive the workspace's composition, which a rotation rebuilds (#89).
         retainKey = "diff:$workspaceId:$viewId",
         // #72: the "in the next commit" boxes wait for the commit bar (car 4b); a box with no way to commit is half a feature.
         stageFiles = null,
-        modifier = modifier.fillMaxSize(),
+        onlyFile = shown?.let { it.repo to it.path },
+        baseBlobFor = shown?.base,
+        modifier = Modifier.weight(1f).fillMaxSize(),
     )
+    }
+}
+
+/** #72: whether the Changes view shows the review instead of Source Control (retained through a rotation). */
+private class ScmMode {
+    var review by mutableStateOf(false)
+}
+
+/** #72: the Source Control file whose diff is open in its pane, and the blob it is compared from (null: HEAD's). */
+private data class ScmOpenFile(val repo: String, val path: String, val base: String?, val work: String? = null)
+
+/** #72: back from a file's diff to the Source Control list. */
+@Composable
+private fun ScmBackRow(name: String, onBack: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth().background(cs.surfaceContainer).clickable(onClick = onBack).heightIn(min = 34.dp)
+            .padding(horizontal = Space.sm).testTag("scm_back"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = localized(Str.scm_back), tint = cs.onSurfaceVariant, modifier = Modifier.size(18.dp))
+        Text(localized(Str.scm_title), fontSize = 12.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(start = Space.sm))
+        Text(" · $name", fontSize = 12.sp, color = cs.onSurface, maxLines = 1)
+    }
 }
 
 /**
