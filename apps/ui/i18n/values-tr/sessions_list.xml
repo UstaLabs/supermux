@@ -171,4 +171,5 @@
     <string name="applets_widget_ios_step2">Düzenle'ye, ardından Widget Ekle'ye dokunun</string>
     <string name="applets_widget_ios_step3">supermux'ı bulun ve “Appletler”i ya da tek biri için “Applet”i seçin</string>
     <string name="applets_widget_ios_note">iOS widget'ları yalnızca sizin eklemenize izin veriyor; supermux sizin yerinize ekleyemez.</string>
+    <string name="applets_window_no_engine">Bu cihaz applet sayfalarını gösteremiyor: web motoru eksik ya da çok eski. Güncelleyin (Android'de: Play Store'dan Android System WebView), sonra appleti yeniden açın.</string>
 </resources>

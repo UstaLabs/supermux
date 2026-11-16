@@ -15,6 +15,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
@@ -64,17 +65,34 @@ import kotlinx.coroutines.launch
 
 private val HOST_KEY = stringPreferencesKey("applet_host")
 private val NAME_KEY = stringPreferencesKey("applet_name")
+/**
+ * When the snapshot was last redrawn into this widget. Glance redraws a widget whose session is still open only when
+ * its state changes, so every redraw ([redrawAll]) bumps this, and the content reads the snapshot inside composition.
+ */
+private val DRAWN_KEY = longPreferencesKey("snapshot_drawn")
+
+/** Redraws every widget of [widget]'s kind from the snapshot. */
+internal suspend fun redrawAll(context: Context, widget: GlanceAppWidget) {
+    val now = System.currentTimeMillis()
+    for (id in GlanceAppWidgetManager(context).getGlanceIds(widget.javaClass)) {
+        updateAppWidgetState(context, id) { it[DRAWN_KEY] = now }
+        widget.update(context, id)
+    }
+}
 
 /** "Applets": the pinned applets of the app's host. */
 class AppletsGridWidget : GlanceAppWidget() {
     override val sizeMode = SizeMode.Single
+    override val stateDefinition: GlanceStateDefinition<*> = PreferencesGlanceStateDefinition
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         AppletWidgetStore.refreshIfStale(context)
-        val host = AppletWidgetStore.active(context)
-        val pins = host?.pinned().orEmpty()
-        val icons = pins.associate { it.name to AppletWidgetStore.icon(context, host!!.hostId, it.name) }
         provideContent {
+            // Read here, keyed on the redraw stamp: a redraw while the session is open recomposes with the new snapshot.
+            val drawn = currentState<Preferences>()[DRAWN_KEY]
+            val host = androidx.compose.runtime.remember(drawn) { AppletWidgetStore.active(context) }
+            val pins = host?.pinned().orEmpty()
+            val icons = androidx.compose.runtime.remember(drawn, host) { pins.associate { it.name to AppletWidgetStore.icon(context, host!!.hostId, it.name) } }
             GlanceTheme {
                 Column(
                     WidgetFrame.padding(horizontal = 12.dp, vertical = 12.dp),
@@ -143,7 +161,8 @@ class AppletWidget : GlanceAppWidget() {
             val prefs = currentState<Preferences>()
             val hostId = prefs[HOST_KEY]
             val name = prefs[NAME_KEY]
-            val host = hostId?.let { AppletWidgetStore.host(context, it) }
+            val drawn = prefs[DRAWN_KEY]
+            val host = androidx.compose.runtime.remember(drawn, hostId) { hostId?.let { AppletWidgetStore.host(context, it) } }
             val a = host?.applets?.firstOrNull { it.name == name }
             GlanceTheme {
                 when {
