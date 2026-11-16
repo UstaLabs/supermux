@@ -94,6 +94,8 @@ import kotlinx.coroutines.launch
 
 /** What the sidebar's Applets block and the All applets page need: the host's applets and what they can do. */
 class AppletsActions(
+    /** Where the applet screens come from (only the hosts that open applets have them). */
+    val screens: AppletScreens,
     /** The active host's applets, pins included. */
     val applets: List<AppletDto>,
     /** The active host's name, for the All applets page ("on GMKtec"). */

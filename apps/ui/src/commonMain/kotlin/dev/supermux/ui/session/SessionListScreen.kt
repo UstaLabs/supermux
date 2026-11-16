@@ -1760,7 +1760,7 @@ fun SessionListScreen(
             needsYouItems()
             agentsItems()
             // #117: on a phone the applets sit above the sessions, as on a home screen.
-            if (applets != null && !selecting) appletsZone(applets, phone = true)
+            if (applets != null && !selecting) applets.screens.zone(this, applets, phone = true)
             stickyHeader(key = "chrome:section") {
                 Box(Modifier.fillMaxWidth().background(cs.surfaceContainerHigh)) { sectionHeader() }
             }
@@ -1771,7 +1771,7 @@ fun SessionListScreen(
             agentsItems()
             // #117: between Agents and Workspaces, 3×3 in a sidebar whatever the input (an unfolded Fold cut the
             // phone's four-across labels short); long-press still opens the menu on touch.
-            if (applets != null && !selecting) appletsZone(applets, phone = false)
+            if (applets != null && !selecting) applets.screens.zone(this, applets, phone = false)
             stickyHeader(key = "chrome:section") {
                 Box(Modifier.fillMaxWidth().background(cs.surfaceContainerHigh)) { sectionHeader() }
             }

@@ -70,13 +70,15 @@ object AppletSheets {
 @Composable
 fun rememberAppletsActions(fleet: FleetStore, hostId: String?, hostName: String, showAll: () -> Unit, info: (AppletDto, String) -> Unit): AppletsActions? {
     val opener = LocalAppletOpener.current ?: return null
+    val screens = LocalAppletScreens.current ?: return null
     val installer = LocalAppletInstaller.current
     val widgets = LocalAppletWidgets.current
     val applets by fleet.activeApplets.collectAsState()
     val list = applets ?: return null
     val host = hostId ?: return null
-    return remember(list, host, hostName, opener, installer, widgets, showAll, info) {
+    return remember(list, host, hostName, opener, screens, installer, widgets, showAll, info) {
         AppletsActions(
+            screens = screens,
             applets = list,
             hostName = hostName,
             open = { a -> opener.open(host, a) },
