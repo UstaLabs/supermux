@@ -366,8 +366,9 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
             androidx.compose.runtime.CompositionLocalProvider(
                 dev.supermux.ui.session.LocalAppletOpener provides appletCover.opener,
                 dev.supermux.ui.session.LocalAppletScreens provides dev.supermux.ui.session.NativeAppletScreens,
-                // The widget extension needs iOS 18 (its control and App Intents); before that there are none to add.
-                dev.supermux.ui.session.LocalAppletWidgets provides IosAppletWidgets.takeIf { iosMajorVersion() >= 18 },
+                // Add widget only where the widgets exist: iOS 18 (their control and App Intents) and a build that carries
+                // the extension (a signed build without its App Store / Ad Hoc profile leaves it out).
+                dev.supermux.ui.session.LocalAppletWidgets provides IosAppletWidgets.takeIf { iosHasAppletWidgets() },
             ) {
             androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) {
             SupermuxApp(
