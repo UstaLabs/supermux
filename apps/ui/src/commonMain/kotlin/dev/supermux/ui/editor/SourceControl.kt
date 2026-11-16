@@ -706,17 +706,18 @@ fun SourceControlPane(
     // A phone has no hover: every row action stays shown.
     val touch = LocalWindowWidthClass.current == WindowWidthClass.Compact
     // Real time, off the UI's frame clock: a poll on it would keep a UI test from ever going idle.
-    // The footer's ☁ Publish asked: with no remote that is the pick, else the branch is published.
-    val wanted by ScmRequests.publish.collectAsState()
-    LaunchedEffect(wanted) {
-        val (id, at) = wanted ?: return@LaunchedEffect
-        println("[SourceControl] publish asked for $id; this pane is ${state.api.sessionId}")
-        if (state.api.sessionId != null && state.api.sessionId != id) return@LaunchedEffect
-        if (kotlin.time.Clock.System.now().toEpochMilliseconds() - at > 10_000) return@LaunchedEffect
-        ScmRequests.publish.value = null
-        if (state.status == null) state.refresh()
-        state.sync("publish")
-        state.refresh()
+    // The footer's ☁ Publish asked: with no remote that is the pick, else the branch is published. Collected, not keyed:
+    // clearing the ask (so another pane doesn't take it) must not cancel the work it starts.
+    LaunchedEffect(state) {
+        ScmRequests.publish.collect { wanted ->
+            val (id, at) = wanted ?: return@collect
+            if (state.api.sessionId != null && state.api.sessionId != id) return@collect
+            if (kotlin.time.Clock.System.now().toEpochMilliseconds() - at > 10_000) return@collect
+            ScmRequests.publish.value = null
+            if (state.status == null) state.refresh()
+            state.sync("publish")
+            state.refresh()
+        }
     }
     LaunchedEffect(state) {
         withContext(Dispatchers.Default) {

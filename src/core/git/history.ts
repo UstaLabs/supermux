@@ -27,12 +27,16 @@ export async function history(dir: string, base: string | null, limit = 50): Pro
   // A base that is the branch itself (a chat working on the branch it started from) is no base: its list is the
   // branch's own commits, as with none.
   const hasBase = !!base && base !== "HEAD" && base !== branch && (await verify(dir, base))
-  const chatRange = hasBase ? [`${base}..HEAD`] : ["HEAD"]
+  // The base as last fetched (origin/main when main has an upstream): where a teammate's pushes show, and what Get
+  // latest merges (it fetches it first). The local base only when it has no upstream.
+  const baseUp = hasBase ? await gitAsync(dir, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", `${base}@{upstream}`]).catch(() => "") : ""
+  const baseRef = baseUp && (await verify(dir, baseUp)) ? baseUp : base
+  const chatRange = hasBase ? [`${baseRef}..HEAD`] : ["HEAD"]
   const [chatOut, baseOut, upstream, incomingOut] = await Promise.all([
     gitAsync(dir, ["log", FORMAT, `-n${limit}`, ...chatRange], { trim: false }),
-    hasBase ? gitAsync(dir, ["log", FORMAT, `-n${Math.min(limit, 20)}`, base!], { trim: false }) : Promise.resolve(""),
+    hasBase ? gitAsync(dir, ["log", FORMAT, `-n${Math.min(limit, 20)}`, baseRef!], { trim: false }) : Promise.resolve(""),
     gitAsync(dir, ["rev-parse", "--verify", "--quiet", "@{upstream}"]).catch(() => ""),
-    hasBase ? gitAsync(dir, ["rev-list", "--count", `HEAD..${base}`]).catch(() => "0") : Promise.resolve("0"),
+    hasBase ? gitAsync(dir, ["rev-list", "--count", `HEAD..${baseRef}`]).catch(() => "0") : Promise.resolve("0"),
   ])
   let chat = parse(chatOut)
   if (upstream) {
