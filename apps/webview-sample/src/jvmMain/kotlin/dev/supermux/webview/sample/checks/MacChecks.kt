@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -34,6 +36,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
 import dev.supermux.webview.Activation
 import dev.supermux.webview.DarkMode
 import dev.supermux.webview.WebContent
@@ -102,6 +105,15 @@ hostBridge.handle('state', function () {
   var f = document.getElementById('field');
   return { presses: 0, value: f.value, focused: document.activeElement === f, keys: keys };
 });
+</script></body></html>""",
+    )
+
+    /** Records each load and visibility change, as an applet that refreshes its data when shown would hear them. */
+    private val VISIBILITY_PAGE = WebContent.Html(
+        """<!doctype html><html><head><title>visibility</title></head><body style="background:#e8f0fe"><script>
+var loads = 1, seen = [document.visibilityState];
+document.addEventListener('visibilitychange', function () { seen.push(document.visibilityState); });
+hostBridge.handle('state', function () { return { loads: loads, seen: seen.join(',') }; });
 </script></body></html>""",
     )
 
@@ -455,6 +467,48 @@ button{display:block;width:100%;height:15vh;margin-top:8vh}</style></head>
                 MacEngineTesting.escape(mac.window)
                 waitFor("Escape reaching the page from its body") { pageKeys().split("<esc>").size == 3 }
                 assertEquals("", stage.text, "no key reached Compose's field")
+            }
+        },
+        // #117: a pinned applet preloads in a hidden view and its window takes the page over. The page is never
+        // reloaded for being shown, so the way an applet refreshes its data then is the page's own visibilitychange:
+        // it must hear hidden while preloaded and visible once a view on screen adopts it.
+        Check("mac-a-preloaded-page-hears-it-is-visible-when-shown") {
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+            val runtime = WebViewRuntime(RuntimeConfig(maxLive = 2, maxIdle = 0, snapshotCacheBytes = 16L shl 20, scope = scope))
+            val state = WebViewState(VISIBILITY_PAGE)
+            var shown by mutableStateOf(false)
+            suspend fun pageState() = state.bridge.call("state") as JsonObject
+            compose {
+                ProvideWebViewRuntime(runtime) {
+                    if (shown) {
+                        WebView(state, Modifier.size(360.dp, 300.dp), settings = WebSettings(darkMode = DarkMode.Light), activation = Activation.Eager)
+                    } else {
+                        // Laid out at a page's size, far outside the window: live, never on screen.
+                        Box(Modifier.size(0.dp)) {
+                            WebView(
+                                state,
+                                Modifier.offset { IntOffset(-20_000, 0) }.requiredSize(360.dp, 300.dp),
+                                settings = WebSettings(darkMode = DarkMode.Light),
+                                activation = Activation.Preload,
+                            )
+                        }
+                    }
+                }
+            }
+            try {
+                waitFor("the preloaded page announced") { state.bridge.isReady }
+                assertEquals("hidden", pageState()["seen"]!!.jsonPrimitive.content, "a preloaded page is hidden")
+                shown = true
+                // The bridge reconnects to the view that took the page over: ask once it is back.
+                waitFor("the shown page hearing it is visible") {
+                    state.bridge.isReady && runCatching { pageState()["seen"]!!.jsonPrimitive.content }.getOrNull()?.endsWith("visible") == true
+                }
+                assertEquals(1, pageState()["loads"]!!.jsonPrimitive.int, "the page was taken over, not loaded again")
+            } finally {
+                compose(null)
+                runtime.clear()
+                delay(300)
+                scope.cancel()
             }
         },
         Check("mac-focus-follows-the-press") {
