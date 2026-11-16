@@ -21,6 +21,9 @@ interface AppletScreens {
 
     /** Applet info for [name], at [initialTab]; [openChat] shows a chat in the main window. */
     @Composable fun Info(fleet: FleetStore, actions: AppletsActions, name: String, phone: Boolean, initialTab: String?, onBack: () -> Unit, openChat: (String) -> Unit)
+
+    /** Host [hostId]'s first pinned applets, loaded ahead so they open at once. */
+    @Composable fun Preloads(fleet: FleetStore, hostId: String?)
 }
 
 val LocalAppletScreens = staticCompositionLocalOf<AppletScreens?> { null }
@@ -42,4 +45,7 @@ object NativeAppletScreens : AppletScreens {
         }
         dev.supermux.ui.applets.AppletInfoScreen(name, info, phone = phone, onBack = onBack, initialTab = initialTab)
     }
+
+    @Composable
+    override fun Preloads(fleet: FleetStore, hostId: String?) = dev.supermux.ui.applets.AppletPreloads(fleet, hostId)
 }
