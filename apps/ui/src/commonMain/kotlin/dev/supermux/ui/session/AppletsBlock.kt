@@ -44,6 +44,7 @@ import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.MoreHoriz
+import androidx.compose.material.icons.outlined.OpenInBrowser
 import androidx.compose.material.icons.outlined.Widgets
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -102,6 +103,8 @@ class AppletsActions(
     val hostName: String,
     /** Opens the applet in its own window (desktop) or activity (Android). */
     val open: (AppletDto) -> Unit,
+    /** Opens it in a window of its own where [open] shows it in place (iPad); null: no such menu item. */
+    val openInWindow: ((AppletDto) -> Unit)? = null,
     /** Shows the All applets page. */
     val showAll: () -> Unit,
     /** Shows Applet info, at a tab ("secrets" for what he must fix; blank = Overview). */
@@ -375,6 +378,9 @@ private fun AppletMenu(a: AppletDto, actions: AppletsActions, anchor: Offset, sh
     val full = actions.applets.count { it.pin != null } >= MAX_APPLET_PINS
     val items = buildList {
         add(AppletMenuItem(Icons.AutoMirrored.Outlined.OpenInNew, localized(Str.applets_menu_open), tag = "open") { actions.open(a); null })
+        actions.openInWindow?.let { inWindow ->
+            add(AppletMenuItem(Icons.Outlined.OpenInBrowser, localized(Str.applets_menu_open_window), tag = "open_window") { inWindow(a); null })
+        }
         actions.installer?.let { inst ->
             if (inst.isInstalled(a)) {
                 add(AppletMenuItem(Icons.Outlined.Check, localized(if (inst.phone) Str.applets_menu_on_home else Str.applets_menu_installed), tag = "installed", dim = true) { null })
