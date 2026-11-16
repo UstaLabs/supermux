@@ -133,6 +133,7 @@ public final class dev/supermux/webview/testing/MacEngineTesting {
 	public final fun copy (Ljava/awt/Window;FFFF)Ldev/supermux/webview/testing/Copied;
 	public final fun copyPoints (Ljava/awt/Window;FFFF)Ldev/supermux/webview/testing/Copied;
 	public final fun describePage (Ljava/awt/Window;)Ljava/lang/String;
+	public final fun escape (Ljava/awt/Window;)V
 	public final fun firstResponder (Ljava/awt/Window;)Ljava/lang/String;
 	public final fun frameSyncState (Ljava/awt/Window;)Ljava/lang/String;
 	public final fun getBackdrop ()Z
