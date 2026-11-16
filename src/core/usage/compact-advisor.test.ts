@@ -127,3 +127,19 @@ test("a chat whose size isn't known yet is left alone; every change says why", a
   a.compacted("busy")
   expect(advice.at(-1)).toEqual(["busy", null, "compacted"])
 })
+
+// Found in the by-hand e2e (2026-11-16): an idle chat whose own last turn was cheap kept a 95% threshold while the
+// busy chat's turns were moving the shared meter 25 points each, so at 75% and 80% only the busy chat was advised.
+test("the margin is the account's: an idle chat whose own turns were cheap is judged by what the account's turns cost", async () => {
+  const { a, advice } = teamOf({ busy: "acct-1", idle: "acct-1" }, { busy: 300_000, idle: 400_000 })
+  a.noteRateLimits("busy", "claude", claude(0.50))
+  // The idle chat's own turn moved nothing.
+  a.turnStarted("idle"); await a.turnCompleted("idle", "claude", 400_000)
+  // The busy chat's turn costs 25 points: ×3 = 75 → threshold 70% for every chat on the account.
+  a.turnStarted("busy")
+  a.noteRateLimits("busy", "claude", claude(0.75))
+  await a.turnCompleted("busy", "claude", 300_000)
+  await flushAsync()
+  const shown = advice.filter(([, x]) => x !== null).map(([id]) => id).sort()
+  expect(shown).toEqual(["busy", "idle"])
+})
