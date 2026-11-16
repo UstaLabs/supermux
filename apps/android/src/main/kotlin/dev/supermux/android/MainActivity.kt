@@ -364,6 +364,7 @@ class MainActivity : ComponentActivity() {
                 }
                 androidx.compose.runtime.CompositionLocalProvider(
                     dev.supermux.ui.session.LocalAppletOpener provides appletOpener,
+                    dev.supermux.ui.session.LocalAppletScreens provides dev.supermux.ui.session.NativeAppletScreens,
                     dev.supermux.ui.session.LocalAppletInstaller provides appletInstaller,
                     dev.supermux.ui.session.LocalAppletWidgets provides appletWidgets,
                 ) {

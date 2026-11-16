@@ -2072,6 +2072,7 @@ fun main(args: Array<String>) {
                         LocalAvatarsLive provides (windowVisible && !windowState.isMinimized && screenSeen && !windowCovered),
                         // #117: applets open in their own windows here.
                         dev.supermux.ui.session.LocalAppletOpener provides dev.supermux.desktop.applets.DesktopApplets.opener,
+                        dev.supermux.ui.session.LocalAppletScreens provides dev.supermux.ui.session.NativeAppletScreens,
                         dev.supermux.ui.session.LocalAppletInstaller provides dev.supermux.desktop.applets.DesktopApplets.installer,
                     ) {
                         // Card #54: the Load Timings panel (View ▸ Load Timings) floats over the app.
