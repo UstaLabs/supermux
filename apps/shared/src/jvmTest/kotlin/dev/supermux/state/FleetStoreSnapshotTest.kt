@@ -20,6 +20,7 @@ import io.ktor.http.headersOf
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -40,12 +41,19 @@ class FleetStoreSnapshotTest {
     private fun e(id: String) = LogEntry(id = id, ts = id, direction = "outbound", text = "m$id")
     private fun s(id: String) = SessionInfo(id = id, name = id, agent = "claude", workdir = "/w")
 
-    private fun fleet(scope: CoroutineScope, cache: HostSnapshotStore) = FleetStore(
+    private fun fleet(
+        scope: CoroutineScope,
+        cache: HostSnapshotStore,
+        answer: (path: String) -> Pair<HttpStatusCode, ByteArray> = { HttpStatusCode.OK to "{}".encodeToByteArray() },
+    ) = FleetStore(
         store = PairedHostStore(FakePersistence(mutableListOf(PairedHost(recordId = "h1", displayName = "h1", token = "t", directUrl = "http://h1")))) { "rec" },
         scope = scope,
         deps = testDeps(),
         appFactory = { url, token, onConn ->
-            val http = HttpClient(MockEngine { respond("{}", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json")) })
+            val http = HttpClient(MockEngine { req ->
+                val (code, body) = answer(req.url.encodedPath)
+                respond(body, code, headersOf(HttpHeaders.ContentType, "application/json"))
+            })
             HostStore(url, token, scope, testDeps(http = http), connectOnInit = false, onConnectionChange = onConn, apiOverride = BrokerApi(url, token, http))
         },
         snapshots = cache,
@@ -99,6 +107,55 @@ class FleetStoreSnapshotTest {
         )
         f.writeSnapshots()
         assertEquals(mapOf("a" to "1"), cache.get("h1")!!.lastRead)
+        f.close()
+    }
+
+    private fun applet(id: String, pin: Int?) = dev.supermux.net.AppletDto(id = id, name = id, title = id.uppercase(), iconUrl = "/applets/$id/icon", pin = pin, updatedAt = "t1")
+
+    @OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class)
+    @Test fun cachedAppletsAndTheirIconsAreThereWhileTheHostIsOutOfReach() = runTest(UnconfinedTestDispatcher()) {
+        // #117: the grid, All applets and the widgets draw from the cache at launch; the host answers nothing.
+        val png = byteArrayOf(1, 2, 3)
+        val cache = HostSnapshotStore(FakeSnapshots(mutableListOf(
+            HostSnapshot(
+                "h1", listOf(s("a")),
+                applets = listOf(applet("today", 0), applet("notes", 1)),
+                appletIcons = mapOf("today" to kotlin.io.encoding.Base64.encode(png)),
+            ),
+        )))
+        val f = fleet(this, cache) { HttpStatusCode.ServiceUnavailable to ByteArray(0) }
+        val app = f.appForRecord("h1")!!
+        assertEquals(listOf("today", "notes"), app.applets.value?.map { it.name })
+        assertEquals(png.toList(), app.appletIconBytes(applet("today", 0))?.toList())
+        // A snapshot from the host doesn't wipe them when its applet list can't be fetched.
+        app.reduce(ServerFrame.Snapshot(sessions = listOf(s("a"))))
+        assertEquals(listOf("today", "notes"), app.applets.value?.map { it.name })
+        f.close()
+    }
+
+    @OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class)
+    @Test fun writeSnapshotsCachesTheAppletsAndTheirIcons() = runTest(UnconfinedTestDispatcher()) {
+        val cache = HostSnapshotStore(FakeSnapshots())
+        val list = """[{"id":"today","name":"today","title":"Today","iconUrl":"/applets/today/icon","pin":0,"updatedAt":"t1"}]"""
+        val f = fleet(this, cache) { path ->
+            when (path) {
+                "/applets" -> HttpStatusCode.OK to list.encodeToByteArray()
+                "/applets/today/icon" -> HttpStatusCode.OK to byteArrayOf(9, 8)
+                else -> HttpStatusCode.OK to "{}".encodeToByteArray()
+            }
+        }
+        val app = f.appForRecord("h1")!!
+        app.reduce(ServerFrame.Snapshot(sessions = listOf(s("a"))))
+        app.refreshApplets()
+        // The list arrives on the store's own scope, in real time.
+        val listed = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            kotlinx.coroutines.withTimeout(10_000) { app.applets.first { it != null }!! }
+        }
+        app.appletIconBytes(listed.single())
+        f.writeSnapshots()
+        val snap = cache.get("h1")!!
+        assertEquals(listOf("today"), snap.applets?.map { it.name })
+        assertEquals(listOf<Byte>(9, 8), kotlin.io.encoding.Base64.decode(snap.appletIcons.getValue("today")).toList())
         f.close()
     }
 }

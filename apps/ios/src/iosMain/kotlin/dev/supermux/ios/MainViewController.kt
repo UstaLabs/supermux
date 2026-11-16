@@ -3,6 +3,8 @@ package dev.supermux.ios
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -341,21 +343,43 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
                 }
             }
 
-            // #117: an applet opens as a screen of the app (Route.Applet), left with back or the edge swipe like any
-            // full screen. Opened from outside (a widget, a control, Spotlight), any menu or sheet left open closes.
+            // #117 (Ahmet's model): from INSIDE supermux an applet is a full screen of the app, left with the edge
+            // swipe (Route.Applet). From OUTSIDE (a widget, Control Center, Spotlight, a supermux://applet link) it is
+            // the app on an iPhone — full screen, nothing behind it, no swipe; leaving is the home gesture, and the
+            // next launch shows supermux — and its own window on an iPad, as an applet on a Mac.
+            LaunchedEffect(fleet) { IosWindows.fleet = fleet }
+            val ownWindows = remember { bridge.supportsExtraWindows() }
+            var outsideApplet by remember { mutableStateOf<Pair<String, String>?>(null) }
             val openApplet: (String, String) -> Unit = remember(ui) {
-                { h, n -> dev.supermux.ui.session.AppletSheets.closeAll(); ui.openApplet(h, n) }
-            }
-            val appletOpener = remember(ui) { dev.supermux.ui.session.AppletOpener { h, a -> ui.openApplet(h, a.name) } }
-            // W1: a widget's supermux://applet/<host>/<name> link, or what a control / Spotlight left in the App Group.
-            LaunchedEffect(openedUrl) {
-                openedUrl?.let { dev.supermux.ui.applets.parseAppletUri(it) }?.let { (h, n) ->
-                    openApplet(h, n)
-                    IosAppState.consumeOpenedUrl()
+                { h, n ->
+                    dev.supermux.ui.session.AppletSheets.closeAll()
+                    if (ownWindows) bridge.openExtraWindow(dev.supermux.ui.applets.appletUri(h, n)) else outsideApplet = h to n
                 }
             }
-            LaunchedEffect(foreground) {
-                if (foreground) IosAppletWidgetStore.takePendingOpen()?.let { (h, n) -> openApplet(h, n) }
+            // Gone once the app goes to the background, so a launch from the supermux icon shows supermux. Collected
+            // from the flow itself: a backgrounded app doesn't recompose, so an effect keyed on `foreground` would only
+            // see the change after the app is back in front (seen on the simulator: the applet stayed).
+            LaunchedEffect(Unit) { IosAppState.foreground.collect { if (!it) outsideApplet = null } }
+            val appletOpener = remember(ui) { dev.supermux.ui.session.AppletOpener { h, a -> ui.openApplet(h, a.name) } }
+            val appletWindowOpener = remember {
+                if (ownWindows) dev.supermux.ui.session.AppletOpener { h, a -> bridge.openExtraWindow(dev.supermux.ui.applets.appletUri(h, a.name)) } else null
+            }
+            // W1: a widget's supermux://applet/<host>/<name> link, or what a control / Spotlight left in the App Group.
+            // Collected from the flows themselves, not keyed on recomposition: on an iPad the main window can be in the
+            // background while an applet window is in front, and a backgrounded window doesn't recompose (seen on the
+            // simulator: a link only brought back the window already open).
+            LaunchedEffect(Unit) {
+                IosAppState.openedUrl.collect { url ->
+                    url?.let { dev.supermux.ui.applets.parseAppletUri(it) }?.let { (h, n) ->
+                        IosAppState.consumeOpenedUrl()
+                        openApplet(h, n)
+                    }
+                }
+            }
+            LaunchedEffect(Unit) {
+                IosAppState.foreground.collect { now ->
+                    if (now) IosAppletWidgetStore.takePendingOpen()?.let { (h, n) -> openApplet(h, n) }
+                }
             }
             // ...and the widgets follow the host picker's applets whenever the app sees them change.
             LaunchedEffect(fleet) {
@@ -369,6 +393,7 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
             }
             androidx.compose.runtime.CompositionLocalProvider(
                 dev.supermux.ui.session.LocalAppletOpener provides appletOpener,
+                dev.supermux.ui.session.LocalAppletWindowOpener provides appletWindowOpener,
                 dev.supermux.ui.session.LocalAppletScreens provides dev.supermux.ui.session.NativeAppletScreens,
                 // Add widget only where the widgets exist: iOS 18 (their control and App Intents) and a build that carries
                 // the extension (a signed build without its App Store / Ad Hoc profile leaves it out).
@@ -413,6 +438,20 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
                 // No `chatFallback`: that slot IS the host-specific escape hatch, and iOS has no
                 // screen to put in it. `UnavailableSessionPane` (H3.7) is what covers its absence.
             )
+            // An applet opened from outside, on an iPhone: the app is the applet until it goes to the background.
+            outsideApplet?.let { (h, n) ->
+                androidx.compose.foundation.layout.Box(
+                    androidx.compose.ui.Modifier
+                        .fillMaxSize()
+                        .background(androidx.compose.material3.MaterialTheme.colorScheme.background)
+                        .windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.safeDrawing),
+                ) {
+                    dev.supermux.ui.applets.AppletPage(
+                        fleet, h, n, androidx.compose.ui.Modifier.fillMaxSize(),
+                        onOpenChat = { id -> outsideApplet = null; ui.selectSession(id) },
+                    )
+                }
+            }
             }
             }
         }

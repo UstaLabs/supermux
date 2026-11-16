@@ -28,6 +28,9 @@ object IosWindows {
     /** The main window's shell state while it is composed; null otherwise. */
     var mainUi by mutableStateOf<ShellUiState?>(null)
 
+    /** The main window's fleet, once built: an applet window (its own scene) draws its applet through it. */
+    var fleet by mutableStateOf<dev.supermux.state.FleetStore?>(null)
+
     /**
      * The one main window that owns the fleet. iPadOS lets the user open a SECOND window of the
      * main scene (App Exposé's "+"); that one must not build a second `FleetStore` — two sets of

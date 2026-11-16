@@ -22,6 +22,12 @@ fun interface AppletOpener {
 val LocalAppletOpener = staticCompositionLocalOf<AppletOpener?> { null }
 
 /**
+ * Opens an applet in a window of its own where the app usually shows it in place: an iPad (a new scene, beside the app
+ * in Split View or under Stage Manager). Null elsewhere: the menu then has no "Open in new window".
+ */
+val LocalAppletWindowOpener = staticCompositionLocalOf<AppletOpener?> { null }
+
+/**
  * Puts an applet on this device's own launcher: a Home screen shortcut on a phone, an app in the Start menu /
  * Applications / the app menu on a desktop (S1). Null where this device can't: the menu then has no such item.
  */
@@ -73,15 +79,17 @@ fun rememberAppletsActions(fleet: FleetStore, hostId: String?, hostName: String,
     val screens = LocalAppletScreens.current ?: return null
     val installer = LocalAppletInstaller.current
     val widgets = LocalAppletWidgets.current
+    val windowOpener = LocalAppletWindowOpener.current
     val applets by fleet.activeApplets.collectAsState()
     val list = applets ?: return null
     val host = hostId ?: return null
-    return remember(list, host, hostName, opener, screens, installer, widgets, showAll, info) {
+    return remember(list, host, hostName, opener, screens, installer, widgets, windowOpener, showAll, info) {
         AppletsActions(
             screens = screens,
             applets = list,
             hostName = hostName,
             open = { a -> opener.open(host, a) },
+            openInWindow = windowOpener?.let { w -> { a -> w.open(host, a) } },
             showAll = showAll,
             info = info,
             pin = { a, on -> fleet.pinApplet(a.name, on) },
