@@ -5,27 +5,6 @@
         <item quantity="one">%1$d değişiklik</item>
         <item quantity="other">%1$d değişiklik</item>
     </plurals>
-    <plurals name="git_sign_not_in_base">
-        <item quantity="one">%1$d commit %2$s dalında yok</item>
-        <item quantity="other">%1$d commit %2$s dalında yok</item>
-    </plurals>
-    <plurals name="git_sign_base_moved">
-        <item quantity="one">%2$s dalında %1$d yeni</item>
-        <item quantity="other">%2$s dalında %1$d yeni</item>
-    </plurals>
-    <plurals name="git_sign_to_push">
-        <item quantity="one">%1$d gönderilecek</item>
-        <item quantity="other">%1$d gönderilecek</item>
-    </plurals>
-    <plurals name="git_sign_to_pull">
-        <item quantity="one">%1$d çekilecek</item>
-        <item quantity="other">%1$d çekilecek</item>
-    </plurals>
-    <plurals name="git_in_next_commit">
-        <item quantity="one">%2$d dosyadan %1$d tanesi sonraki commit'te</item>
-        <item quantity="other">%2$d dosyadan %1$d tanesi sonraki commit'te</item>
-    </plurals>
-    <string name="git_include_in_commit">Sonraki commit'te</string>
     <!-- #72 v4 Kaynak Denetimi, VS Code'un Türkçe sözcükleriyle. -->
     <string name="scm_title">Kaynak Denetimi</string>
     <string name="scm_refresh">Yenile</string>
@@ -141,7 +120,6 @@
     <string name="scm_merge_into_go">%1$s dalına birleştir</string>
     <string name="scm_merge_nothing">Birleştirilecek bir şey yok: temel dalda bu commit'ler zaten var.</string>
     <string name="scm_merge_uncommitted">Bu sohbette commit edilmemiş değişiklikler var: önce onları commit edin.</string>
-    <string name="scm_merging">%1$s, %2$s dalına birleştiriliyor. Çakışmaları çözün, hazırlayın, sonra Devam edin.</string>
     <string name="scm_merging_into">%1$s dalına birleştiriliyor…</string>
     <string name="scm_more">Diğer Eylemler…</string>
     <string name="scm_no_changes_synced">Değişiklik yok. Her şey commit edildi ve %1$s ile eşit.</string>
@@ -156,7 +134,6 @@
     <string name="scm_sync_changes">Değişiklikleri Eşitle</string>
     <string name="scm_sync_counts">%2$s karşısında %1$s</string>
     <string name="scm_sync_in">%1$s ile eşit</string>
-    <string name="scm_sync_local">yalnızca yerel</string>
     <string name="scm_sync_unpublished">yayımlanmadı</string>
     <string name="scm_undo_last">Son Commit'i Geri Al</string>
     <string name="scm_undo_latest">En yeniyi almayı geri al</string>
