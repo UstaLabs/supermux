@@ -1742,7 +1742,8 @@ class HostStore(
 
     /** #72: puts whole files into the next commit, or takes them out → true on success. */
     /** #72: the Source Control pane's calls for [workspaceId] and the chat in it ([sessionId]). */
-    fun sourceControl(workspaceId: String, sessionId: String?): SourceControlApi = SourceControlApi(api, workspaceId, sessionId, finishJobs)
+    // Source Control's network and agent calls (push, pull, gh, the agent-written PR text) on the 2-minute client.
+    fun sourceControl(workspaceId: String, sessionId: String?): SourceControlApi = SourceControlApi(api, workspaceId, sessionId, finishJobs, net = apiDictate)
 
     suspend fun workspaceStage(workspaceId: String, repo: String, paths: List<String>, staged: Boolean): Boolean =
         runApi("workspaceStage") { api.workspaceStage(workspaceId, repo, paths, staged); true } ?: false

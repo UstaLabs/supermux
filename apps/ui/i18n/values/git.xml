@@ -332,4 +332,15 @@
         <item quantity="one">Push %1$d commit to %2$s</item>
         <item quantity="other">Push %1$d commits to %2$s</item>
     </plurals>
+    <string name="scm_merge_conflicts">There are merge conflicts. Resolve them, then Continue.</string>
+    <string name="scm_pull_dirty">Your local changes would be overwritten by the pull. Commit or discard them first.</string>
+    <string name="scm_push_rejected">Can't push refs to remote. Try running Pull first to integrate your changes.</string>
+    <string name="scm_auth_failed">Failed to authenticate to the remote.</string>
+    <string name="scm_pull_failed">Couldn't pull from %1$s.</string>
+    <string name="scm_push_failed">Couldn't push to %1$s.</string>
+    <string name="scm_publish_branch_failed">Couldn't publish %1$s.</string>
+    <string name="scm_fetch_failed">Couldn't fetch.</string>
+    <string name="scm_no_changes_to_commit">There are no changes to commit.</string>
+    <string name="scm_merge_in_progress">A merge is in progress. Resolve the conflicts, stage them, then Continue.</string>
+    <string name="scm_pr_text_failed">Couldn't write a title and description: write your own.</string>
 </resources>

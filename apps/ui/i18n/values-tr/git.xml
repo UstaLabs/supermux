@@ -332,4 +332,15 @@
         <item quantity="one">%2$s üzerine %1$d commit gönder</item>
         <item quantity="other">%2$s üzerine %1$d commit gönder</item>
     </plurals>
+    <string name="scm_merge_conflicts">Birleştirme çakışmaları var. Çözüp Devam Et'e basın.</string>
+    <string name="scm_pull_dirty">Yerel değişiklikleriniz çekmeyle ezilir. Önce commit edin ya da atın.</string>
+    <string name="scm_push_rejected">Uzak depoya gönderilemiyor. Önce Çek ile değişiklikleri alın.</string>
+    <string name="scm_auth_failed">Uzak depoda kimlik doğrulanamadı.</string>
+    <string name="scm_pull_failed">%1$s üzerinden çekilemedi.</string>
+    <string name="scm_push_failed">%1$s üzerine gönderilemedi.</string>
+    <string name="scm_publish_branch_failed">%1$s yayımlanamadı.</string>
+    <string name="scm_fetch_failed">Getirilemedi.</string>
+    <string name="scm_no_changes_to_commit">Commit edilecek değişiklik yok.</string>
+    <string name="scm_merge_in_progress">Bir birleştirme sürüyor. Çakışmaları çözün, hazırlayın, sonra Devam Et.</string>
+    <string name="scm_pr_text_failed">Başlık ve açıklama yazılamadı: kendiniz yazın.</string>
 </resources>

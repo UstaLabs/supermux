@@ -296,6 +296,7 @@ class SourceControlState(val api: SourceControlApi) {
     /** The button: VS Code's rules. Nothing staged asks (or follows Always / Never); no message asks; then the ▾ pick. */
     suspend fun commit(all: Boolean = false) {
         note = null
+        if (!merging && !amend && changedCount == 0) { note = localized(Str.scm_no_changes_to_commit); return }
         if (!merging && !amend && stagedCount == 0 && !all) {
             when (smart) {
                 "always" -> return commit(all = true)
@@ -316,7 +317,7 @@ class SourceControlState(val api: SourceControlApi) {
                 message = ""; amend = false
                 when (post) {
                     ScmPost.Push -> sync(if (status?.upstream == null) "publish" else "push")
-                    ScmPost.Sync -> { sync("pull"); sync(if (status?.upstream == null) "publish" else "push") }
+                    ScmPost.Sync -> syncChanges()
                     ScmPost.Commit -> Unit
                 }
             }
@@ -324,20 +325,39 @@ class SourceControlState(val api: SourceControlApi) {
         refresh()
     }
 
-    /** Pull / push / publish / fetch, with VS Code's outcome in the note line. With no remote, Publish asks where to. */
-    suspend fun sync(op: String) {
-        if ((op == "publish" || op == "push") && status?.hasRemote == false) { openPublish(); return }
+    /**
+     * Pull / push / publish / fetch. With no remote, Publish asks where to; with several, which one. A failure says what
+     * failed (VS Code's words where it has them), the tool's own text under Details. Returns whether it went through.
+     */
+    suspend fun sync(op: String): Boolean {
+        if ((op == "publish" || op == "push") && status?.hasRemote == false) { openPublish(); return false }
         // Several remotes: which one (VS Code's quick pick); one: straight there.
-        if (op == "publish" && status?.upstream == null && (status?.remotes?.size ?: 0) > 1) { picking = false; closePublish(); pickingRemote = true; return }
-        busy = true
+        if (op == "publish" && status?.upstream == null && (status?.remotes?.size ?: 0) > 1) { picking = false; closePublish(); pickingRemote = true; return false }
+        busy = true; note = null
         val r = api.sync(op)
         busy = false
+        val up = status?.upstream ?: status?.branch.orEmpty()
         problem = when {
             r == null -> localized(Str.scm_offline)
             r.status in setOf("pushed", "up_to_date", "clean", "ok", "fetched", "") -> null
-            r.status == "conflict" -> localized(Str.scm_conflict_first, r.files.joinToString(", "))
-            else -> failed(r.message ?: r.status)
+            r.status == "conflict" -> withDetails(localized(Str.scm_merge_conflicts), r.files.joinToString("\n").ifEmpty { null })
+            r.status == "dirty" -> withDetails(localized(Str.scm_pull_dirty), r.files.joinToString("\n").ifEmpty { null })
+            r.status == "rejected_non_ff" -> failed(r.message ?: r.status, localized(Str.scm_push_rejected))
+            r.status == "auth_failed" -> failed(r.message ?: r.status, localized(Str.scm_auth_failed))
+            else -> failed(r.message ?: r.status, when (op) {
+                "pull" -> localized(Str.scm_pull_failed, up)
+                "push" -> localized(Str.scm_push_failed, up)
+                "publish" -> localized(Str.scm_publish_branch_failed, status?.branch.orEmpty())
+                else -> localized(Str.scm_fetch_failed)
+            })
         }
+        return problem == null
+    }
+
+    /** VS Code's Sync Changes: pull, then push only when the pull went through (a conflict stops it there). */
+    suspend fun syncChanges() {
+        if (sync("pull")) sync(if (status?.upstream == null) "publish" else "push")
+        refresh()
     }
 
     // ── Publish Branch with no remote: VS Code's quick pick (GitHub / GitLab, private / public, or Add Remote…) ──
@@ -378,7 +398,7 @@ class SourceControlState(val api: SourceControlApi) {
     /** Publish Branch to the remote picked. */
     suspend fun publishToRemote(remote: String) {
         pickingRemote = false
-        busy = true
+        busy = true; note = null
         val r = api.publishTo(remote)
         busy = false
         problem = when {
@@ -478,6 +498,7 @@ class SourceControlState(val api: SourceControlApi) {
 
     /** VS Code's Accept Current / Incoming / Both, for the whole file (side: mine | theirs | both); then it is staged. */
     suspend fun resolve(path: String, side: String) {
+        note = null
         val r = api.resolve(repo, path, side)
         problem = if (r == null) localized(Str.scm_offline) else if (r.ok) null else failed(r.message ?: r.reason ?: "")
         refresh()
@@ -554,7 +575,7 @@ class SourceControlState(val api: SourceControlApi) {
         val f = prForm ?: return
         if (f.title.isBlank()) return
         val always = prPush == "always"
-        busy = true; prProblem = null; prAsk = null
+        busy = true; prProblem = null; prAsk = null; note = null
         val r = api.createPr(f.title.trim(), f.body, f.target, f.draft, publish = publish || always, push = push || always, skipPush = skipPush)
         busy = false
         when (r?.status) {
@@ -689,6 +710,7 @@ fun SourceControlPane(
     val wanted by ScmRequests.publish.collectAsState()
     LaunchedEffect(wanted) {
         val (id, at) = wanted ?: return@LaunchedEffect
+        println("[SourceControl] publish asked for $id; this pane is ${state.api.sessionId}")
         if (state.api.sessionId != null && state.api.sessionId != id) return@LaunchedEffect
         if (kotlin.time.Clock.System.now().toEpochMilliseconds() - at > 10_000) return@LaunchedEffect
         ScmRequests.publish.value = null
@@ -733,7 +755,7 @@ fun SourceControlPane(
                 val nothing = repos.all { it.files.isEmpty() } && state.last == null && !state.merging && state.ask == null && !state.publishDue
                 if (!nothing) item(key = "commit") { CommitBox(state, scope) }
                 item(key = "banners") { Banners(state, scope) }
-                if (repos.all { it.files.isEmpty() }) item(key = "empty") {
+                if (repos.all { it.files.isEmpty() } && !state.merging) item(key = "empty") {
                     val st = state.status
                     // Out of sync or unpublished: the button above already says what to do.
                     if (st?.upstream != null && st.ahead == 0 && st.behind == 0) Note(mono(localized(Str.scm_no_changes_synced, st.upstream!!), st.upstream!!))
@@ -844,10 +866,12 @@ private fun CommitBox(state: SourceControlState, scope: kotlinx.coroutines.Corou
         }
         val act: suspend () -> Unit = when {
             publish -> { -> state.sync("publish"); state.refresh() }
-            syncN -> { -> state.sync("pull"); state.sync("push"); state.refresh() }
+            syncN -> { -> state.syncChanges() }
             else -> { -> state.commit() }
         }
-        val enabled = !state.busy && !(state.merging && state.conflicts > 0)
+        // VS Code's button: off while committing, while a merge still has conflicts, and with nothing to commit.
+        val nothing = !state.merging && !state.amend && state.changedCount == 0 && !publish && !syncN
+        val enabled = !state.busy && !(state.merging && state.conflicts > 0) && !nothing
         var menu by remember { mutableStateOf(false) }
         Row(
             Modifier.padding(top = 10.dp).fillMaxWidth().height(30.dp).clip(RoundedCornerShape(6.dp))
@@ -916,7 +940,7 @@ private fun WhereLine(state: SourceControlState, scope: kotlinx.coroutines.Corou
         Text(
             mono(text, up), fontSize = 12.sp, color = if (op != null) cs.primary else cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f, fill = false).then(
-                if (op == null) Modifier else Modifier.clickable { scope.launch { if (op == "publish") state.sync("publish") else { state.sync("pull"); state.sync("push") }; state.refresh() } },
+                if (op == null) Modifier else Modifier.clickable { scope.launch { if (op == "publish") { state.sync("publish"); state.refresh() } else state.syncChanges() } },
             ).testTag("scm_where_sync"),
         )
     }
@@ -951,7 +975,8 @@ private fun Banners(state: SourceControlState, scope: kotlinx.coroutines.Corouti
                 Icon(Icons.Filled.Warning, null, tint = LocalSemantics.current.warning, modifier = Modifier.size(15.dp))
                 Column(Modifier.padding(start = 8.dp)) {
                     // Abort Merge runs on in the sentence, as the prototype's link does.
-                    val said = mono(localized(Str.scm_merging, state.base ?: "", state.status?.branch ?: ""), state.base ?: "", state.status?.branch ?: "", bold = true)
+                    // No names: a pull merges the branch's own upstream, Get latest its base; git knows which, the banner needn't.
+                    val said = androidx.compose.ui.text.AnnotatedString(localized(Str.scm_merge_in_progress))
                     val abort = localized(Str.scm_abort_merge)
                     Text(
                         androidx.compose.ui.text.buildAnnotatedString {
@@ -1238,7 +1263,7 @@ private fun PrFormView(state: SourceControlState, scope: kotlinx.coroutines.Coro
             modifier = field.heightIn(min = 110.dp).padding(8.dp).testTag("scm_pr_body_input"),
         )
         Text(
-            if (f.loading) localized(Str.scm_pr_writing) else localized(if (f.by == "agent") Str.scm_pr_by_agent else Str.scm_pr_by_commits),
+            when { f.loading -> localized(Str.scm_pr_writing); f.by == "agent" -> localized(Str.scm_pr_by_agent); f.by == "commits" -> localized(Str.scm_pr_by_commits); else -> localized(Str.scm_pr_text_failed) },
             fontSize = 11.5.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp),
         )
         Row(Modifier.padding(top = 8.dp).clickable { state.prForm = f.copy(draft = !f.draft) }.testTag("scm_pr_draft"), verticalAlignment = Alignment.CenterVertically) {
@@ -1647,7 +1672,7 @@ private fun MoreMenu(state: SourceControlState, scope: kotlinx.coroutines.Corout
             }
             SubHead(localized(Str.scm_sub_pullpush), sub == "pullpush") { sub = if (sub == "pullpush") null else "pullpush" }
             if (sub == "pullpush") {
-                MenuItem(localized(Str.scm_sync), Str.scm_hint_sync, indent = true) { go { state.sync("pull"); state.sync("push"); state.refresh() } }
+                MenuItem(localized(Str.scm_sync), Str.scm_hint_sync, indent = true) { go { state.syncChanges() } }
                 MenuItem(localized(Str.scm_pull), Str.scm_hint_pull, indent = true) { go { state.sync("pull"); state.refresh() } }
                 MenuItem(localized(Str.scm_push), Str.scm_hint_push, indent = true) { go { state.sync(if (state.status?.upstream == null) "publish" else "push"); state.refresh() } }
                 MenuItem(localized(Str.scm_fetch), Str.scm_hint_fetch, indent = true) { go { state.sync("fetch"); state.refresh() } }

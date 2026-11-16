@@ -32,6 +32,12 @@ class SourceControlApi(
     val sessionId: String?,
     /** The host's finish jobs (Merge into the base runs as one; its outcome arrives on the socket). */
     val finishJobs: kotlinx.coroutines.flow.StateFlow<Map<String, dev.supermux.proto.FinishJobDto>>? = null,
+    /**
+     * The calls that go over the network or wait on an agent (push, pull, fetch, gh / glab, the agent-written PR text):
+     * a client with a longer deadline than [api]'s 15 s, as dictation and session starts have (HostStore). A push to a
+     * real remote, or the agent writing a description, often takes longer.
+     */
+    private val net: BrokerApi = api,
 ) {
 
     private suspend fun <T> call(op: String, block: suspend () -> T): T? =
@@ -74,11 +80,11 @@ class SourceControlApi(
     suspend fun status(): GitRemoteStatus? = call("status") { api.gitStatus(ws, workspaceId) }
 
     /** op: fetch | publish | push | pull */
-    suspend fun sync(op: String): GitOpResult? = call(op) { api.gitOp(ws, workspaceId, op) }
+    suspend fun sync(op: String): GitOpResult? = call(op) { net.gitOp(ws, workspaceId, op) }
 
-    suspend fun history(repo: String): GitHistory? = call("history") { api.gitHistory(ws, workspaceId, repo) }
+    suspend fun history(repo: String): GitHistory? = call("history") { sessionId?.let { s -> api.gitHistory("sessions", s, repo) } ?: api.gitHistory(ws, workspaceId, repo) }
 
-    suspend fun latest(): LatestResult? = sessionId?.let { s -> call("latest") { api.gitLatest(s) } }
+    suspend fun latest(): LatestResult? = sessionId?.let { s -> call("latest") { net.gitLatest(s) } }
 
     suspend fun undoLatest(before: String, after: String): GitWriteResult? =
         sessionId?.let { s -> call("undoLatest") { api.gitLatestUndo(s, before, after) } }
@@ -88,17 +94,17 @@ class SourceControlApi(
     suspend fun switchBranch(name: String, create: Boolean): GitSwitchResult? =
         sessionId?.let { s -> call("switch") { api.gitSwitch(s, name, create) } }
 
-    suspend fun pr(fresh: Boolean = false): PrRead? = call("pr") { api.gitPr(ws, workspaceId, fresh) }
+    suspend fun pr(fresh: Boolean = false): PrRead? = call("pr") { net.gitPr(ws, workspaceId, fresh) }
 
     suspend fun createPr(title: String, body: String, target: String, draft: Boolean, publish: Boolean = false, push: Boolean = false, skipPush: Boolean = false): PrCreateResult? =
-        call("createPr") { api.gitPrCreate(ws, workspaceId, PrCreateRequest(title, body, target, draft, publish, push, skipPush)) }
+        call("createPr") { net.gitPrCreate(ws, workspaceId, PrCreateRequest(title, body, target, draft, publish, push, skipPush)) }
 
-    suspend fun prReady(number: Int): GitWriteResult? = call("prReady") { api.gitPrReady(ws, workspaceId, number) }
+    suspend fun prReady(number: Int): GitWriteResult? = call("prReady") { net.gitPrReady(ws, workspaceId, number) }
 
     /** The Create form's title and description (by the agent, else the commits'); [target] null = the chat's base. */
-    suspend fun prText(target: String?): PrText? = call("prText") { api.gitPrText(ws, workspaceId, target) }
+    suspend fun prText(target: String?): PrText? = call("prText") { net.gitPrText(ws, workspaceId, target) }
 
-    suspend fun checkLog(checkUrl: String): PrCheckLog? = call("checkLog") { api.gitPrCheckLog(ws, workspaceId, checkUrl) }
+    suspend fun checkLog(checkUrl: String): PrCheckLog? = call("checkLog") { net.gitPrCheckLog(ws, workspaceId, checkUrl) }
 
     /** Merge into the chat's base: fast-forward, in your folder; the chat stays (keep). Follow [finishJobs]. */
     suspend fun mergeIntoBase(): Boolean = sessionId?.let { s -> call("mergeIntoBase") { api.finish(s, "merge", keep = true); true } } ?: false
@@ -112,13 +118,13 @@ class SourceControlApi(
     suspend fun addRemote(name: String, url: String): GitWriteResult? = call("addRemote") { api.gitAddRemote(ws, workspaceId, name, url) }
 
     suspend fun publishNew(forge: String, visibility: String, name: String? = null): dev.supermux.net.PublishNewResult? =
-        call("publishNew") { api.gitPublishNew(ws, workspaceId, forge, visibility, name) }
+        call("publishNew") { net.gitPublishNew(ws, workspaceId, forge, visibility, name) }
 
     /** Publish Branch to a remote picked (several remotes). */
-    suspend fun publishTo(remote: String): GitOpResult? = call("publishTo") { api.gitPublishTo(ws, workspaceId, remote) }
+    suspend fun publishTo(remote: String): GitOpResult? = call("publishTo") { net.gitPublishTo(ws, workspaceId, remote) }
 
     /** Can a PR/MR into [target] be opened; null target: origin's default branch. */
-    suspend fun prBase(target: String?, fresh: Boolean = false): dev.supermux.net.PrBaseCheck? = call("prBase") { api.gitPrBase(ws, workspaceId, target, fresh) }
+    suspend fun prBase(target: String?, fresh: Boolean = false): dev.supermux.net.PrBaseCheck? = call("prBase") { net.gitPrBase(ws, workspaceId, target, fresh) }
 
 
     /** "Ask the agent to fix" / "Send to the agent": a message to the chat's agent. */
