@@ -478,8 +478,6 @@ fun DiffPane(
     baseText: (suspend (repo: String, sha: String, force: Boolean) -> BlobText)? = null,
     /** Names the review drafts kept through a rotation or a width change (see [DiffView], #89). */
     retainKey: String? = null,
-    /** #72: whole files into the next commit, or out of it (see [DiffView]); null: no boxes. */
-    stageFiles: (suspend (repo: String, paths: List<String>, staged: Boolean) -> Boolean)? = null,
     /** #72 Source Control: only this file (repo, path), open, with [baseBlobFor] as its base; null: every file. */
     onlyFile: Pair<String, String>? = null,
     /** #72: the base blob a [onlyFile] diff starts from (its staged version for "(Working Tree)"); null keeps HEAD's. */
@@ -592,7 +590,6 @@ fun DiffPane(
             documents = diffDocuments,
             baseText = baseText,
             retainKey = retainKey,
-            stage = stageFiles,
         )
         }
     }

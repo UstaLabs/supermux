@@ -907,7 +907,6 @@ private fun DiffPaneForWorkspace(
         // The review drafts outlive the workspace's composition, which a rotation rebuilds (#89).
         retainKey = "diff:$workspaceId:$viewId",
         // #72: the "in the next commit" boxes wait for the commit bar (car 4b); a box with no way to commit is half a feature.
-        stageFiles = null,
         onlyFile = shown?.let { it.repo to it.path },
         baseBlobFor = shown?.base,
         modifier = Modifier.weight(1f).fillMaxSize(),
