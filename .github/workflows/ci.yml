@@ -36,7 +36,9 @@ on:
     # Branches only — no tags. A release tag points at a commit this workflow already tested on
     # main/dev, and the duplicate run competed with release.yml for the same macOS runners
     # (the free plan allows five at once).
-    branches: ["**"]
+    # Never-landing branches skip CI: release.yml dry runs (dryrun-*) build the same commit already
+    # tested on its own branch, and hot-run branches (hotrun-*) carry local-only trace commits.
+    branches: ["**", "!dryrun-*", "!hotrun-*", "!mux/hotrun-*"]
     paths-ignore: ["**.md", "docs/**", "assets/**", "LICENSE"]
   pull_request:
     branches: [main, dev]
