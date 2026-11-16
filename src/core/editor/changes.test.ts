@@ -246,3 +246,19 @@ describe("createRepoCache", () => {
     expect(scans).toBe(3)
   })
 })
+
+// #72: Accept Current that leaves a conflicted file as HEAD had it shows no change, but the merge is still on: the
+// repo must stay listed (merging), or Source Control loses its Continue.
+test("a repo mid-merge stays listed when its conflicts were settled as HEAD's", async () => {
+  const g = (d: string, ...a: string[]) => execFileSync("git", ["-C", d, ...a], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim()
+  const d = mkdtempSync(join(tmpdir(), "mux-merging-"))
+  g(d, "init", "-q", "-b", "main"); g(d, "config", "user.email", "t@t"); g(d, "config", "user.name", "t"); g(d, "config", "core.autocrlf", "false")
+  writeFileSync(join(d, "a.txt"), "one\n"); g(d, "add", "."); g(d, "commit", "-qm", "base")
+  g(d, "switch", "-q", "-c", "theirs"); writeFileSync(join(d, "a.txt"), "theirs\n"); g(d, "commit", "-qam", "theirs")
+  g(d, "switch", "-q", "main"); writeFileSync(join(d, "a.txt"), "mine\n"); g(d, "commit", "-qam", "mine")
+  try { g(d, "merge", "theirs") } catch { /* the conflict */ }
+  g(d, "checkout", "--ours", "--", "a.txt"); g(d, "add", "a.txt")          // Accept Current
+  const { repos } = await listChanges(d, {}, undefined, "head")
+  expect(repos).toHaveLength(1)
+  expect(repos[0]).toMatchObject({ repo: "", merging: true, files: [] })
+}, 30_000)

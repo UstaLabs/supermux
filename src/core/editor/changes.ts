@@ -278,7 +278,8 @@ export async function listChanges(
     const baseSha = await resolveSpecBase(r.absPath, spec, baseCommits[r.relPath], createdAt)
     return repoChanges(r.absPath, r.relPath, baseSha)
   })
-  return { repos: perRepo.filter((r) => r.files.length > 0 || r.error) }
+  // A repo mid-merge stays even with nothing left to show (its conflicts settled as HEAD's): its Continue must not vanish.
+  return { repos: perRepo.filter((r) => r.files.length > 0 || r.error || r.merging) }
 }
 
 export const BLOB_LIMIT = 1024 * 1024
