@@ -60,6 +60,7 @@ import dev.supermux.webview.WebViewPhase
 import dev.supermux.webview.WebViewState
 import dev.supermux.webview.runtime.ProvideWebViewRuntime
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.first
 
 /** The scheme an applet opens by on every OS: `supermux://applet/<host record id>/<applet name>` (shortcuts, S1). */
 const val APPLET_URI_PREFIX = "supermux://applet/"
@@ -160,6 +161,14 @@ fun AppletPage(app: HostStore, name: String, modifier: Modifier = Modifier, onOp
     }
     AppletPageLoader(model, onOpenChat)
     val state = model.state
+    // How long opening took, from this window to a live, loaded page, and whether a preload had it ready: the log's.
+    LaunchedEffect(model) {
+        val opened = kotlin.time.TimeSource.Monotonic.markNow()
+        val preloaded = state.phase == WebViewPhase.Live && state.url != null
+        androidx.compose.runtime.snapshotFlow { state.phase == WebViewPhase.Live && state.url != null && state.loading == dev.supermux.webview.LoadingState.Idle }
+            .first { it }
+        println("[AppletPage] $name shown in ${opened.elapsedNow().inWholeMilliseconds} ms (${if (preloaded) "preloaded" else "cold"})")
+    }
     val platform = LocalPlatform.current
     val openExternal by rememberUpdatedState<(String) -> Unit>({ url -> platform.openUrl(url) })
     val client = remember { AppletClient { openExternal(it) } }
