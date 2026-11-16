@@ -345,7 +345,7 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
             val appletCover = remember { dev.supermux.ui.applets.AppletCoverState() }
             // W1: a widget's supermux://applet/<host>/<name> link, or what a control / Spotlight left in the App Group.
             LaunchedEffect(openedUrl) {
-                openedUrl?.let(dev.supermux.ui.applets::parseAppletUri)?.let { (h, n) ->
+                openedUrl?.let { dev.supermux.ui.applets.parseAppletUri(it) }?.let { (h, n) ->
                     appletCover.show(h, n)
                     IosAppState.consumeOpenedUrl()
                 }
