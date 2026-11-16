@@ -730,6 +730,8 @@ internal class WebViewHost(
     private suspend fun step(): Long? {
         val now = runtime.clock()
         val current = engine
+        // A view that preloads off screen, never shown yet, counts its hidden time from its first decision.
+        if (!visible && hiddenSince == null && activation == Activation.Preload) hiddenSince = now
         val decision = decideActivation(
             ActivationInputs(
                 activation = activation,

@@ -26,7 +26,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.size
+import dev.supermux.net.pinned
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -107,21 +112,84 @@ fun AppletPage(fleet: FleetStore?, hostId: String, name: String, modifier: Modif
 }
 
 /**
+ * One applet page: its web view state and where it loads from, shared by its preload ([AppletPreloads]) and the window
+ * that shows it, so the window takes over a preloaded page as it is, already painted (#117: applets open at once).
+ * Main thread only.
+ */
+internal class AppletPageModel(val app: HostStore, val name: String) {
+    val state = WebViewState(BLANK)
+    /** The applet's own origin, known once the key says where the page loads from: the bridge talks only to it. */
+    var origin by mutableStateOf<String?>(null)
+    var problem by mutableStateOf<String?>(null)
+    val settings: WebSettings get() = origin?.let { APPLET_SETTINGS.copy(bridgeOrigins = setOf(it.lowercase())) } ?: APPLET_SETTINGS
+}
+
+/** The applet pages this process has, by host and name, and which of them a window shows now. Main thread only. */
+internal object AppletPageModels {
+    private val models = mutableMapOf<Pair<HostStore, String>, AppletPageModel>()
+    /** The pages a window shows, and in how many: a preload leaves those alone. */
+    val showing = mutableStateMapOf<AppletPageModel, Int>()
+
+    fun of(app: HostStore, name: String): AppletPageModel = models.getOrPut(app to name) { AppletPageModel(app, name) }
+
+    /** Drops the pages of hosts this device no longer has (unpaired): nothing of theirs stays reachable. */
+    fun keepOnly(apps: Set<HostStore>) {
+        models.keys.removeAll { it.first !in apps }
+    }
+}
+
+/**
  * The applet [name] of host [app], filling its window. The page's bridge (its own origin only) answers the page API's
  * native calls: agent.ask after his click on a button, and openChat for the "Sent to …" link it shows; [onOpenChat]
- * brings that chat up in the main window.
+ * brings that chat up in the main window. It shows the page its preload loaded when there is one; a second window of the
+ * same applet has a page of its own.
  */
 @Composable
 fun AppletPage(app: HostStore, name: String, modifier: Modifier = Modifier, onOpenChat: (String) -> Unit = {}, noEngine: String? = null) {
     val cs = MaterialTheme.colorScheme
     val webViews = LocalAppWebViews.current ?: AppWebViews.app
-    val state = remember(app, name) { WebViewState(BLANK) }
+    val model = remember(app, name) {
+        AppletPageModels.of(app, name).takeIf { it !in AppletPageModels.showing } ?: AppletPageModel(app, name)
+    }
+    androidx.compose.runtime.DisposableEffect(model) {
+        AppletPageModels.showing[model] = (AppletPageModels.showing[model] ?: 0) + 1
+        onDispose {
+            val n = (AppletPageModels.showing[model] ?: 1) - 1
+            if (n <= 0) AppletPageModels.showing.remove(model) else AppletPageModels.showing[model] = n
+        }
+    }
+    AppletPageLoader(model, onOpenChat)
+    val state = model.state
+    val platform = LocalPlatform.current
+    val openExternal by rememberUpdatedState<(String) -> Unit>({ url -> platform.openUrl(url) })
+    val client = remember { AppletClient { openExternal(it) } }
+    Box(modifier.fillMaxSize().background(cs.background).testTag("applet_page_$name")) {
+        ProvideWebViewRuntime(webViews.runtime) {
+            WebView(state, Modifier.fillMaxSize(), settings = model.settings, client = client, activation = Activation.Eager)
+        }
+        model.problem?.let { AppletMessage(it, Modifier.background(cs.background)) }
+        // No engine can show pages here (on Android: a System WebView too old for the engine's needs): say so, never a
+        // blank window. Why is the log's.
+        (state.phase as? WebViewPhase.Unavailable)?.let { unavailable ->
+            LaunchedEffect(unavailable) {
+                println("[AppletPage] no web engine: ${unavailable.reason}${unavailable.detail?.let { ": $it" }.orEmpty()}")
+            }
+            AppletMessage(noEngine ?: localized(Str.applets_window_no_engine), Modifier.background(cs.background))
+        }
+    }
+}
+
+/**
+ * What a page needs while a view of it is composed, a window's or its preload's: the bridge's native calls, and once an
+ * engine is live, the key put in (renewed first when due) and the page loaded.
+ */
+@Composable
+private fun AppletPageLoader(model: AppletPageModel, onOpenChat: (String) -> Unit) {
+    val app = model.app
+    val name = model.name
+    val state = model.state
     val keeper = remember(app) { PreviewKeeper.of(app) }
     val sink = remember(state) { PreviewKeeper.Sink<PreviewCookieDto> { state.navigator.putPreviewKeys(it) } }
-    var problem by remember(app, name) { mutableStateOf<String?>(null) }
-    // The bridge talks only to the applet's own origin, known once the key says where the page loads from.
-    var origin by remember(app, name) { mutableStateOf<String?>(null) }
-    val settings = remember(origin) { origin?.let { APPLET_SETTINGS.copy(bridgeOrigins = setOf(it.lowercase())) } ?: APPLET_SETTINGS }
     val openChat by rememberUpdatedState(onOpenChat)
     androidx.compose.runtime.DisposableEffect(state, app, name) {
         val offAsk = state.bridge.handleAfterButtonClick("ask") { params, clicked -> askAnswer(app, name, params, clicked) }
@@ -141,10 +209,10 @@ fun AppletPage(app: HostStore, name: String, modifier: Modifier = Modifier, onOp
             // The key, renewed first when due; put in again here: a key the store already had may predate /a/.
             val key = keeper.ready(sink)
             if (key == null) {
-                problem = localized(Str.applets_window_no_key)
+                model.problem = localized(Str.applets_window_no_key)
             } else {
-                problem = null
-                origin = originOf(key.url)
+                model.problem = null
+                model.origin = originOf(key.url)
                 sink.put(key)
                 if (state.content !is WebContent.Url) state.load(WebContent.Url(appletPageUrl(key, name)))
             }
@@ -153,21 +221,48 @@ fun AppletPage(app: HostStore, name: String, modifier: Modifier = Modifier, onOp
             detach()
         }
     }
-    val platform = LocalPlatform.current
-    val openExternal by rememberUpdatedState<(String) -> Unit>({ url -> platform.openUrl(url) })
-    val client = remember { AppletClient { openExternal(it) } }
-    Box(modifier.fillMaxSize().background(cs.background).testTag("applet_page_$name")) {
+}
+
+/** How many pinned applets are kept loaded ahead: the pool's spare slots, on a phone's four as on a desktop's eight. */
+private const val PRELOADS = 2
+
+/**
+ * The first pinned applets of host [hostId], loaded ahead in hidden web views, so opening one is a switch to a painted
+ * page rather than an engine start and a load (#117). They rank lowest in the pool, so any view that needs a slot takes
+ * theirs first, and each lets its engine go after the pool's hidden time; one a window shows is left to the window, and
+ * picks its page up again when the window closes. Laid out the size of the window, far outside it: live, never seen.
+ */
+@Composable
+fun AppletPreloads(fleet: FleetStore, hostId: String?) {
+    val views by fleet.hostViews.collectAsState()
+    LaunchedEffect(views) { AppletPageModels.keepOnly(views.mapNotNull { fleet.appForRecord(it.recordId) }.toSet()) }
+    val applets by fleet.activeApplets.collectAsState()
+    val app = remember(views, hostId) { fleet.appForRecord(hostId) } ?: return
+    val names = applets.orEmpty().pinned().filter { it.status == "ok" && it.url.isNotEmpty() }.take(PRELOADS).map { it.name }
+    if (names.isEmpty()) return
+    val webViews = LocalAppWebViews.current ?: AppWebViews.app
+    val client = remember { AppletClient { } }
+    Box(Modifier.size(0.dp)) {
+        val window = androidx.compose.ui.platform.LocalWindowInfo.current.containerSize
+        val density = androidx.compose.ui.platform.LocalDensity.current
+        val w = with(density) { window.width.coerceAtLeast(1).toDp() }
+        val h = with(density) { window.height.coerceAtLeast(1).toDp() }
         ProvideWebViewRuntime(webViews.runtime) {
-            WebView(state, Modifier.fillMaxSize(), settings = settings, client = client, activation = Activation.Eager)
-        }
-        problem?.let { AppletMessage(it, Modifier.background(cs.background)) }
-        // No engine can show pages here (on Android: a System WebView too old for the engine's needs): say so, never a
-        // blank window. Why is the log's.
-        (state.phase as? WebViewPhase.Unavailable)?.let { unavailable ->
-            LaunchedEffect(unavailable) {
-                println("[AppletPage] no web engine: ${unavailable.reason}${unavailable.detail?.let { ": $it" }.orEmpty()}")
+            for (name in names) {
+                androidx.compose.runtime.key(name) {
+                    val model = AppletPageModels.of(app, name)
+                    if (model !in AppletPageModels.showing) {
+                        AppletPageLoader(model) {}
+                        WebView(
+                            model.state,
+                            Modifier.offset { androidx.compose.ui.unit.IntOffset(-4 * window.width - 10_000, 0) }.requiredSize(w, h),
+                            settings = model.settings,
+                            client = client,
+                            activation = Activation.Preload,
+                        )
+                    }
+                }
             }
-            AppletMessage(noEngine ?: localized(Str.applets_window_no_engine), Modifier.background(cs.background))
         }
     }
 }

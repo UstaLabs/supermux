@@ -189,6 +189,14 @@ public sealed interface Activation {
 
     /** A snapshot until tapped. For very long lists. */
     public data object OnInteraction : Activation
+
+    /**
+     * Live from the moment it is composed, even where nothing shows it: it loads its page ahead of being shown, so the
+     * view of the same state that shows it later takes the page over as it is (it parks when this view leaves). Off
+     * screen it ranks lowest, so any view that needs the slot takes its engine first, and it lets the engine go
+     * `hiddenReleaseMillis` after it was composed, as a hidden view does. On screen it is [Eager].
+     */
+    public data object Preload : Activation
 }
 
 @Immutable

@@ -57,6 +57,20 @@ class ActivationTest {
         assertFalse(decideActivation(inputs(visible = false)).wantLive)
     }
 
+    @Test fun aPreloadingViewGoesLiveOffScreenAtTheLowestPriorityUntilItsHiddenTimeIsUp() {
+        val cold = decideActivation(inputs(Activation.Preload, visible = false, now = 10_000, hiddenSince = 10_000))
+        assertTrue(cold.wantLive)
+        assertEquals(PRIORITY_HIDDEN, cold.priority)
+        assertEquals(610_000, cold.reevaluateAt)
+        // Taken for another view and its time up: it waits to be shown, as any hidden view.
+        assertFalse(decideActivation(inputs(Activation.Preload, visible = false, now = 610_000, hiddenSince = 10_000)).wantLive)
+        assertFalse(decideActivation(inputs(Activation.Preload, visible = false, live = true, now = 610_000, hiddenSince = 10_000)).wantLive)
+        // On screen it is an Eager pane.
+        val shown = decideActivation(inputs(Activation.Preload, lastMovedAt = 10_000))
+        assertTrue(shown.wantLive)
+        assertEquals(PRIORITY_VISIBLE_EAGER, shown.priority)
+    }
+
     @Test fun onInteractionWaitsForATap() {
         assertFalse(decideActivation(inputs(Activation.OnInteraction)).wantLive)
         assertTrue(decideActivation(inputs(Activation.OnInteraction, interacted = true)).wantLive)
