@@ -25,11 +25,11 @@ function team() {
   const remote = tmp("mux-team-remote-"); execFileSync("git", ["init", "-q", "--bare", "-b", "main", remote])
   const seed = tmp("mux-team-seed-"); execFileSync("git", ["init", "-q", "-b", "main", seed]); ident(seed, "Lead")
   commit(seed, "README.md", "team\n", "Initial commit"); git(seed, "remote", "add", "origin", remote); git(seed, "push", "-q", "-u", "origin", "main")
-  const me = tmp("mux-team-me-"); execFileSync("git", ["clone", "-q", remote, me]); ident(me)
+  const me = tmp("mux-team-me-"); execFileSync("git", ["clone", "-q", "-c", "core.autocrlf=false", remote, me]); ident(me)
   return { remote, me }
 }
 /** A teammate's own clone, to push from. */
-function teammate(remote: string) { const d = tmp("mux-team-mate-"); execFileSync("git", ["clone", "-q", remote, d]); ident(d, "Grace"); return d }
+function teammate(remote: string) { const d = tmp("mux-team-mate-"); execFileSync("git", ["clone", "-q", "-c", "core.autocrlf=false", remote, d]); ident(d, "Grace"); return d }
 /** A fake gh / glab for the create calls (the network part); git itself stays real. */
 function fakeGh(answer: (args: string[]) => { ok: boolean; out: string }): Exec & { calls: string[][] } {
   const calls: string[][] = []
@@ -119,7 +119,7 @@ test("several remotes: the status lists them, and Publish goes to the one picked
 
 test("a fork's PR branch (no origin at all): status, push and pull use the branch's own remote", async () => {
   const { remote } = team()
-  const contributor = tmp("mux-team-contrib-"); execFileSync("git", ["clone", "-q", "-o", "contributor", remote, contributor]); ident(contributor, "Linus")
+  const contributor = tmp("mux-team-contrib-"); execFileSync("git", ["clone", "-q", "-c", "core.autocrlf=false", "-o", "contributor", remote, contributor]); ident(contributor, "Linus")
   git(contributor, "switch", "-q", "-c", "their-fix"); commit(contributor, "f.txt", "f\n", "Their fix"); git(contributor, "push", "-q", "-u", "contributor", "their-fix")
   commit(contributor, "f.txt", "f2\n", "Review follow-up")
   const s = remoteStatus(contributor)

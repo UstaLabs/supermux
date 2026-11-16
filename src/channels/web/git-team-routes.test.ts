@@ -27,7 +27,7 @@ async function team() {
   const seed = tmp("mux-tr-seed-"); execFileSync("git", ["init", "-q", "-b", "main", seed]); ident(seed, "Lead")
   write(seed, "notes.md", "line one\nline two\n"); git(seed, "add", "."); git(seed, "commit", "-qm", "Initial commit")
   git(seed, "remote", "add", "origin", origin); git(seed, "push", "-q", "-u", "origin", "main")
-  const repo = tmp("mux-tr-me-"); execFileSync("git", ["clone", "-q", origin, repo]); ident(repo, "Ada")
+  const repo = tmp("mux-tr-me-"); execFileSync("git", ["clone", "-q", "-c", "core.autocrlf=false", origin, repo]); ident(repo, "Ada")
   const chat = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "search box" })
   ident(chat.worktreeDir, "Ada")
   const devicesFile = join(tmp("mux-tr-dev-"), "devices.json")
@@ -48,7 +48,7 @@ async function team() {
     return { status: r.status, body: await r.json().catch(() => null) as any }
   }
   /** A teammate's clone, to push from. */
-  const teammate = () => { const d = tmp("mux-tr-mate-"); execFileSync("git", ["clone", "-q", origin, d]); ident(d, "Grace"); return d }
+  const teammate = () => { const d = tmp("mux-tr-mate-"); execFileSync("git", ["clone", "-q", "-c", "core.autocrlf=false", origin, d]); ident(d, "Grace"); return d }
   return { origin, repo, wt: chat.worktreeDir, branch: chat.sessionBranch, call, teammate }
 }
 
