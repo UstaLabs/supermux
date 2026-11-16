@@ -523,7 +523,7 @@ fun AppletsScreen(actions: AppletsActions, phone: Boolean, onBack: () -> Unit) {
                 Text(localized(Str.sessions_applets_title), fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface)
             }
         } else {
-            Row(Modifier.fillMaxWidth().height(40.dp).padding(start = 8.dp, end = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().appletPageHeader(), verticalAlignment = Alignment.CenterVertically) {
                 // Back, as every full-pane page has at every width (Escape works too).
                 Box(
                     Modifier.size(28.dp).clip(RoundedCornerShape(6.dp)).clickable(onClick = onBack).testTag("applets_back"),
@@ -563,10 +563,25 @@ fun AppletsScreen(actions: AppletsActions, phone: Boolean, onBack: () -> Unit) {
                             localized(if (phone) Str.applets_hint_phone else Str.applets_hint_desktop),
                             fontSize = 13.sp,
                             color = cs.onSurfaceVariant,
+                            // Wraps within the page: the icon keeps its place and the text takes the rest of the width.
+                            modifier = Modifier.weight(1f),
                         )
                     }
                 }
             }
         }
     }
+}
+
+/**
+ * A desktop full-pane page's top row (All applets, Applet info): in the window's top band, clear of the OS's own
+ * controls — the macOS traffic lights at the start, Windows' caption buttons at the end — as Settings and What's
+ * new keep clear of them. 40 dp tall, or the band's height where that is taller.
+ */
+@Composable
+internal fun Modifier.appletPageHeader(): Modifier {
+    val controls = dev.supermux.ui.adaptive.LocalWindowControlsInsets.current
+    return this
+        .height(maxOf(40.dp, controls.band))
+        .padding(start = 8.dp + controls.start, end = 16.dp + controls.end)
 }

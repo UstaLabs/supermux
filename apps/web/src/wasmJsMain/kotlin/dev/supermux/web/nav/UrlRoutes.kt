@@ -65,6 +65,7 @@ fun pathFor(route: Route, selectedId: String?): String = when (route) {
     // #117: the web build shows no applets until #114; an address naming the page goes back to where it was.
     Route.Applets -> "/applets"
     is Route.AppletInfo -> "/applets/${route.name}"
+    is Route.Applet -> "/applets/${route.name}"
     is Route.WhatsNew -> "/whats-new/${route.version}"
 }
 

@@ -346,6 +346,7 @@ class ShellUiState {
     fun openDisplays() = navigate(Route.Displays)
     fun openApplets() = navigate(Route.Applets)
     fun openAppletInfo(name: String, tab: String = "") = navigate(Route.AppletInfo(name, tab))
+    fun openApplet(hostId: String, name: String) = navigate(Route.Applet(hostId, name))
     fun openAddHost() = navigate(Route.AddHost)
 
     /** Icon-anchored Usage card. Toggle when already open; otherwise open. */

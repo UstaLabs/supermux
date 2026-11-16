@@ -174,4 +174,6 @@
     <string name="applets_widget_ios_note">iOS only lets you add widgets yourself; supermux can't place one for you.</string>
     <string name="applets_window_no_engine">This device can't show applet pages: its web engine is missing or too old. Update it, then open the applet again.</string>
     <string name="applets_window_no_engine_android">This phone can't show applet pages: its Android System WebView is too old. Update it from the Play Store, then open the applet again.</string>
+    <string name="applets_stub_not_running_title">supermux isn't running</string>
+    <string name="applets_stub_not_running_body">Open supermux, then open this applet again.</string>
 </resources>

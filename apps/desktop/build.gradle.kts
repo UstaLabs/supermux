@@ -391,8 +391,8 @@ compose.desktop {
                 // NSAllowsArbitraryLoadsInWebContent (#117): web views (applets, the Browser tab) load plain-http hosts —
                 // a broker on the LAN or a Tailscale address is http — which App Transport Security otherwise blocks,
                 // leaving a blank page (seen with an applet on http://100.x). The app's own connections are unaffected.
-                // CFBundleURLTypes (#117): supermux:// — an installed applet's stub app opens
-                // supermux://applet/<host>/<name>, which macOS hands to this app (Main.kt's open-URI handler).
+                // No supermux: URL scheme here (#117): the iPhone app (which runs on Apple-silicon Macs) and every stray
+                // build claim it too, and macOS picks one. An installed applet's stub talks to its own supermux instead.
                 infoPlist {
                     extraKeysRawXml = """
                         <key>NSMicrophoneUsageDescription</key>
@@ -406,15 +406,6 @@ compose.desktop {
                             <key>NSAllowsArbitraryLoadsInWebContent</key>
                             <true/>
                         </dict>
-                        <key>CFBundleURLTypes</key>
-                        <array>
-                            <dict>
-                                <key>CFBundleURLName</key>
-                                <string>dev.supermux.desktop.applet</string>
-                                <key>CFBundleURLSchemes</key>
-                                <array><string>supermux</string></array>
-                            </dict>
-                        </array>
                     """.trimIndent()
                 }
                 // Signing is OPT-IN so unsigned local/CI dry-run builds keep working untouched:

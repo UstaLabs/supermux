@@ -33,6 +33,8 @@ internal class DesktopAppletInstaller(
     private val sys: OsEnv = SystemOsEnv,
     /** The app's own launcher (jpackage's), which the Linux and Windows shortcuts start; null in a dev run. */
     private val appPath: String? = System.getProperty("jpackage.app-path"),
+    /** Where this supermux takes applets from later launches (AppletHandOff); the macOS stub talks to it first. */
+    private val handOffSocket: () -> Path? = { null },
 ) : AppletInstaller {
 
     private val os: DesktopOs get() = sys.os
@@ -83,7 +85,9 @@ internal class DesktopAppletInstaller(
 
     override fun isInstalled(hostId: String, applet: AppletDto): Boolean = when (os) {
         DesktopOs.LINUX -> Files.exists(linuxDesktopFile(hostId, applet.name))
-        DesktopOs.MACOS -> Files.exists(macApp(applet).resolve("Contents/Info.plist"))
+        // A stub made the old way (it opened the supermux: scheme, which the iPhone app on a Mac answers too) doesn't
+        // count: the menu offers Install again, which rewrites it.
+        DesktopOs.MACOS -> runCatching { Files.readString(macApp(applet).resolve("Contents/MacOS/applet")).contains(MAC_STUB_MARK) }.getOrDefault(false)
         DesktopOs.WINDOWS -> Files.exists(windowsLink(applet))
     }
 
@@ -133,13 +137,14 @@ internal class DesktopAppletInstaller(
 
     private fun installMac(hostId: String, applet: AppletDto, title: String, png: ByteArray): String? {
         val app = macApp(applet)
+        // Rewritten whole: an older stub (or a renamed applet's leftovers) never mixes with this one.
+        if (Files.exists(app)) app.toFile().deleteRecursively()
         val contents = app.resolve("Contents")
         Files.createDirectories(contents.resolve("MacOS"))
         Files.createDirectories(contents.resolve("Resources"))
         val uri = appletUri(hostId, applet.name)
-        // The stub: opening the address hands it to supermux (it owns the scheme), which opens or fronts the window.
         val exe = contents.resolve("MacOS/applet")
-        Files.writeString(exe, "#!/bin/sh\nexec /usr/bin/open '${uri.replace("'", "")}'\n")
+        Files.writeString(exe, macStub(uri, handOffSocket()?.toString(), macBundle(appPath)))
         exe.toFile().setExecutable(true)
         // The icon: the PNG made into an .icns with macOS's own sips.
         val pngFile = Files.createTempFile("applet-icon", ".png")
@@ -258,5 +263,43 @@ internal class DesktopAppletInstaller(
             }
         }
         return Color(hue(h + 1f / 3), hue(h), hue(h - 1f / 3))
+    }
+
+    /**
+     * The macOS stub's script. It opens the applet in the supermux that installed it, never in "whatever app owns the
+     * supermux: scheme" (on a Mac that can be the iPhone app, or any stray build: Ahmet's opened onboarding). First it
+     * hands the address to that supermux's own socket (a running one takes it — the hot run too); with none running it
+     * starts the exact app bundle it came from; a dev run, which has no bundle, says to open supermux first.
+     */
+    internal fun macStub(uri: String, socket: String?, bundle: String?): String {
+        fun q(s: String) = "'" + s.replace("'", "'\\''") + "'"
+        val title = localized(Str.applets_stub_not_running_title).replace("\"", "")
+        val body = localized(Str.applets_stub_not_running_body).replace("\"", "")
+        return buildString {
+            append("#!/bin/sh\n")
+            append("# $MAC_STUB_MARK\n")
+            append("U=").append(q(uri)).append("\n")
+            if (socket != null) {
+                append("S=").append(q(socket)).append("\n")
+                append("if [ -S \"\$S\" ] && printf 'open %s\\n' \"\$U\" | /usr/bin/nc -U -w 3 \"\$S\" 2>/dev/null | grep -q ok; then exit 0; fi\n")
+            }
+            if (bundle != null) {
+                append("exec /usr/bin/open -a ").append(q(bundle)).append(" --args --applet=\"\$U\"\n")
+            } else {
+                append("exec /usr/bin/osascript -e ").append(q("display alert \"$title\" message \"$body\"")).append("\n")
+            }
+        }
+    }
+
+    /** The .app bundle around jpackage's launcher (…/Supermux Desktop.app/Contents/MacOS/Supermux Desktop); null in a dev run. */
+    internal fun macBundle(launcher: String?): String? {
+        val l = launcher ?: return null
+        val i = l.indexOf(".app/")
+        return if (i < 0) null else l.substring(0, i + 4)
+    }
+
+    companion object {
+        /** In every stub this build writes; one without it is from before and gets rewritten. */
+        internal const val MAC_STUB_MARK = "supermux applet stub v2"
     }
 }

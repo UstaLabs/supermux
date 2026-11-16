@@ -56,10 +56,19 @@ class DesktopAppletInstallerTest {
     @Test fun mac_install_makes_a_signed_stub_app_that_opens_the_applet_and_reports_a_signing_failure() = runBlocking {
         val home = Files.createTempDirectory("applet-home")
         val sys = FakeOs(DesktopOs.MACOS, home)
-        val i = DesktopAppletInstaller(sys, appPath = null)
+        val i = DesktopAppletInstaller(
+            sys,
+            appPath = "/Applications/Supermux Desktop.app/Contents/MacOS/Supermux Desktop",
+            handOffSocket = { home.resolve("cfg/applets.sock") },
+        )
         assertNull(i.install("host-1", applet, null))
         val app = home.resolve("Applications/Supermux Applets/Issues.app")
-        assertTrue(Files.readString(app.resolve("Contents/MacOS/applet")).contains("/usr/bin/open 'supermux://applet/host-1/issues'"))
+        val stub = Files.readString(app.resolve("Contents/MacOS/applet"))
+        // Its own supermux, never the supermux: scheme: the socket first, then that exact bundle.
+        assertTrue("U='supermux://applet/host-1/issues'" in stub, stub)
+        assertTrue("/usr/bin/nc -U -w 3" in stub && "applets.sock" in stub, stub)
+        assertTrue("exec /usr/bin/open -a '/Applications/Supermux Desktop.app' --args --applet=" in stub, stub)
+        assertFalse("open 'supermux://" in stub, stub)
         assertTrue(Files.readString(app.resolve("Contents/Info.plist")).contains("<string>Issues</string>"))
         assertTrue(sys.ran.any { it.first() == "/usr/bin/codesign" })
         assertTrue(i.isInstalled("host-1", applet))
@@ -79,5 +88,26 @@ class DesktopAppletInstallerTest {
         assertTrue("Supermux Applets" in script && "Issues.lnk" in script, script)
         assertTrue("--applet=supermux://applet/host-1/issues" in script, script)
         assertEquals(1, Files.list(home.resolve("AppData/Local/supermux/applet-icons")).use { it.count() })
+    }
+
+    @Test fun an_old_mac_stub_is_not_installed_and_a_dev_run_stub_says_to_open_supermux() = runBlocking {
+        val home = Files.createTempDirectory("applet-home")
+        val sys = FakeOs(DesktopOs.MACOS, home)
+        val app = home.resolve("Applications/Supermux Applets/Issues.app/Contents/MacOS")
+        Files.createDirectories(app)
+        Files.writeString(app.resolve("applet"), "#!/bin/sh\nexec /usr/bin/open 'supermux://applet/host-1/issues'\n")
+        val i = DesktopAppletInstaller(sys, appPath = null, handOffSocket = { home.resolve("applets-dev.sock") })
+        assertFalse(i.isInstalled("host-1", applet))
+        assertNull(i.install("host-1", applet, null))
+        assertTrue(i.isInstalled("host-1", applet))
+        val stub = Files.readString(app.resolve("applet"))
+        assertTrue("applets-dev.sock" in stub && "osascript" in stub && "open -a" !in stub, stub)
+    }
+
+    @Test fun the_bundle_is_found_around_the_launcher() {
+        val i = DesktopAppletInstaller(FakeOs(DesktopOs.MACOS, Files.createTempDirectory("h")))
+        assertEquals("/Applications/Supermux Desktop.app", i.macBundle("/Applications/Supermux Desktop.app/Contents/MacOS/Supermux Desktop"))
+        assertNull(i.macBundle(null))
+        assertNull(i.macBundle("/usr/bin/java"))
     }
 }

@@ -1758,21 +1758,21 @@ fun SessionListScreen(
             item(key = "chrome:new_session") { newSessionCard() }
             // Banners and "can't reach the host" come before the Agents, as on wide hosts.
             item(key = "chrome:above") { aboveList() }
+            // #117: the applets first, at the top of the list (Ahmet), as on a home screen.
+            if (applets != null && !selecting) applets.screens.zone(this, applets, phone = true)
             needsYouItems()
             agentsItems()
-            // #117: on a phone the applets sit above the sessions, as on a home screen.
-            if (applets != null && !selecting) applets.screens.zone(this, applets, phone = true)
             stickyHeader(key = "chrome:section") {
                 Box(Modifier.fillMaxWidth().background(cs.surfaceContainerHigh)) { sectionHeader() }
             }
         } else {
             // Wide hosts: the Agents scroll with the list, and the Workspaces header pins once
             // they have scrolled away (search, select and the menu stay reachable).
+            // #117: the applets at the top of the sidebar, above the Agents (Ahmet); 3×3 in a sidebar whatever the
+            // input (an unfolded Fold cut the phone's four-across labels short); long-press still opens the menu on touch.
+            if (applets != null && !selecting) applets.screens.zone(this, applets, phone = false)
             needsYouItems()
             agentsItems()
-            // #117: between Agents and Workspaces, 3×3 in a sidebar whatever the input (an unfolded Fold cut the
-            // phone's four-across labels short); long-press still opens the menu on touch.
-            if (applets != null && !selecting) applets.screens.zone(this, applets, phone = false)
             stickyHeader(key = "chrome:section") {
                 Box(Modifier.fillMaxWidth().background(cs.surfaceContainerHigh)) { sectionHeader() }
             }

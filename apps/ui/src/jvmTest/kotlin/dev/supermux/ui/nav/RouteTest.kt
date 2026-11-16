@@ -63,6 +63,13 @@ class RouteTest {
     }
 
     @Test
+    fun an_applet_screen_round_trips_with_its_host_and_name() {
+        val route = Route.Applet(hostId = "rec-1", name = "today")
+        assertEquals(route, roundTrip(route))
+        assertEquals("applet", Route.Applet.serializer().descriptor.serialName)
+    }
+
+    @Test
     fun every_object_route_round_trips_as_itself() {
         val objects = listOf(
             Route.Home, Route.AddHost, Route.Usage, Route.Devices,

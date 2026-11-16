@@ -9,9 +9,6 @@ package dev.supermux.ui.applets
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -199,47 +196,18 @@ private fun AppletMessage(text: String, modifier: Modifier = Modifier) {
 }
 
 /**
- * Where a host with one window (iOS) shows an applet: full screen over the app, the page and a Done to leave it — an
- * iPhone's idiom for a full-screen cover. [AppletCover] draws it; the host's [AppletOpener] fills [open].
+ * An applet as a screen of the app, where a host has one window (iPhone, iPad): pushed like any full screen, with the
+ * app's own back — the arrow here, the edge swipe from the route's layer — never a modal "Done" (Ahmet, 2026-11-16).
  */
-class AppletCoverState {
-    var open by mutableStateOf<Pair<String, String>?>(null)
-        private set
-
-    val opener = dev.supermux.ui.session.AppletOpener { hostId, applet -> open = hostId to applet.name }
-
-    /** Opens [name] of [hostId] from outside the app (a widget, a control, Spotlight); open menus and sheets close. */
-    fun show(hostId: String, name: String) {
-        open = hostId to name
-        dev.supermux.ui.session.AppletSheets.closeAll()
-    }
-
-    fun close() { open = null }
-}
-
 @Composable
-fun AppletCover(state: AppletCoverState, fleet: FleetStore, onOpenChat: (String) -> Unit = {}) {
-    val (hostId, name) = state.open ?: return
+fun AppletScreen(fleet: FleetStore, hostId: String, name: String, onBack: () -> Unit, openChat: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
-    androidx.compose.foundation.layout.Column(
-        Modifier
-            .fillMaxSize()
-            .background(cs.background)
-            .windowInsetsPadding(WindowInsets.safeDrawing)
-            .testTag("applet_cover"),
-    ) {
-        androidx.compose.foundation.layout.Row(
-            Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                localized(Str.applets_cover_done),
-                color = cs.primary,
-                fontSize = 17.sp,
-                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                modifier = Modifier.clickable { state.close() }.padding(vertical = 6.dp).testTag("applet_cover_done"),
-            )
-        }
-        AppletPage(fleet, hostId, name, Modifier.weight(1f), onOpenChat = { id -> state.close(); onOpenChat(id) })
+    val none = remember { kotlinx.coroutines.flow.MutableStateFlow<List<dev.supermux.net.AppletDto>?>(null) }
+    val listed by (fleet.appForRecord(hostId)?.applets ?: none).collectAsState()
+    val title = listed?.firstOrNull { it.name == name }?.title?.takeIf { it.isNotBlank() } ?: name
+    androidx.compose.foundation.layout.Column(Modifier.fillMaxSize().background(cs.background).testTag("applet_screen_$name")) {
+        // The app's own phone top bar: its back glyph and the title, as the other phone pages have.
+        dev.supermux.ui.settings.kit.KitTopBar(title, onBack = onBack, backTag = "applet_screen_back", titleTag = "applet_screen_title")
+        AppletPage(fleet, hostId, name, Modifier.weight(1f), onOpenChat = openChat)
     }
 }

@@ -100,3 +100,13 @@ internal object IosAppletWidgets : AppletWidgets {
 
 /** The running iOS's major version (17 for 17.4). */
 internal fun iosMajorVersion(): Int = platform.UIKit.UIDevice.currentDevice.systemVersion.substringBefore('.').toIntOrNull() ?: 0
+
+/**
+ * Whether this build can show applet widgets: iOS 18 or later, and the SupermuxWidgets extension really is in the app
+ * (a signed build made without the extension's profile drops it; then "Add widget" would explain widgets that aren't there).
+ */
+internal fun iosHasAppletWidgets(): Boolean {
+    if (iosMajorVersion() < 18) return false
+    val plugins = platform.Foundation.NSBundle.mainBundle.builtInPlugInsPath ?: return false
+    return platform.Foundation.NSFileManager.defaultManager.fileExistsAtPath("$plugins/SupermuxWidgets.appex")
+}
