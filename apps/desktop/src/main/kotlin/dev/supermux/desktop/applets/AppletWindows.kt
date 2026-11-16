@@ -33,8 +33,35 @@ internal object DesktopApplets {
 
     val opener = AppletOpener { hostId, applet: AppletDto -> open(hostId, applet.name, applet.title.ifBlank { applet.name }) }
 
+    /**
+     * Where this supermux takes applets from later launches and from installed applets' stubs (AppletHandOff): the
+     * packaged app's (Main listens on it), or a dev run's own (the hot run listens here, from first use), so a stub
+     * a dev run installed opens in that run, and never in the installed app with other state, or the other way round.
+     */
+    private val packaged = System.getProperty("jpackage.app-path") != null
+    val handOffSocket: java.nio.file.Path =
+        dev.supermux.desktop.auth.DesktopTokenStore.defaultPath().parent.resolve(if (packaged) "applets.sock" else "applets-dev.sock")
+
+    private val listening = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * A dev run starts listening on its socket (once): at first use, and again before an install writes a stub — a
+     * hot reload doesn't re-run this object's init, so the install is what makes sure a stub has someone to talk to.
+     */
+    fun ensureListening() {
+        if (packaged || !listening.compareAndSet(false, true)) return
+        val ok = AppletHandOff.listen(
+            handOffSocket,
+            onOpen = { host, name -> javax.swing.SwingUtilities.invokeLater { open(host, name, name) } },
+            onActivate = { activateRequests.tryEmit(Unit) },
+        )
+        if (!ok) listening.set(false)
+    }
+
+    init { ensureListening() }
+
     /** Install on this Mac / PC / computer. */
-    val installer = DesktopAppletInstaller()
+    val installer = DesktopAppletInstaller(handOffSocket = { ensureListening(); handOffSocket })
 
     /** A second launch of the installed app asked for the main window (AppletHandOff). */
     val activateRequests = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 4)
