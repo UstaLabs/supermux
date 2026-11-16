@@ -365,14 +365,21 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
                 if (ownWindows) dev.supermux.ui.session.AppletOpener { h, a -> bridge.openExtraWindow(dev.supermux.ui.applets.appletUri(h, a.name)) } else null
             }
             // W1: a widget's supermux://applet/<host>/<name> link, or what a control / Spotlight left in the App Group.
-            LaunchedEffect(openedUrl) {
-                openedUrl?.let { dev.supermux.ui.applets.parseAppletUri(it) }?.let { (h, n) ->
-                    openApplet(h, n)
-                    IosAppState.consumeOpenedUrl()
+            // Collected from the flows themselves, not keyed on recomposition: on an iPad the main window can be in the
+            // background while an applet window is in front, and a backgrounded window doesn't recompose (seen on the
+            // simulator: a link only brought back the window already open).
+            LaunchedEffect(Unit) {
+                IosAppState.openedUrl.collect { url ->
+                    url?.let { dev.supermux.ui.applets.parseAppletUri(it) }?.let { (h, n) ->
+                        IosAppState.consumeOpenedUrl()
+                        openApplet(h, n)
+                    }
                 }
             }
-            LaunchedEffect(foreground) {
-                if (foreground) IosAppletWidgetStore.takePendingOpen()?.let { (h, n) -> openApplet(h, n) }
+            LaunchedEffect(Unit) {
+                IosAppState.foreground.collect { now ->
+                    if (now) IosAppletWidgetStore.takePendingOpen()?.let { (h, n) -> openApplet(h, n) }
+                }
             }
             // ...and the widgets follow the host picker's applets whenever the app sees them change.
             LaunchedEffect(fleet) {
