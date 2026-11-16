@@ -315,7 +315,9 @@ val distDir = layout.buildDirectory.dir("dist/wasmJs/productionExecutable")
 // 3 DTOs, 14 strings × 2).
 // 2026-11-15 (#152 spacing, Tally/Ahmet): +1 KiB, measured 9130 KiB on train6 43753321986: the launcher row's spacing
 // as the prototype's (the row's own layout under the composer, the summary's 16 dp icon column).
-val maxGzipBytes = 9131L * 1024
+// 2026-11-16 (#146 account-wide advice, Tally): +1 KiB, measured 9131 KiB (over by <1 KiB) on train9 43774096668: the
+// sidebar row's amber compact-advice dot (WorkspaceStatusMark) and its string in both catalogs.
+val maxGzipBytes = 9132L * 1024
 
 // THE NATIVE EDITOR'S SYNTAX MODULE IS OUTSIDE THAT CEILING, with a ceiling of its own (M5).
 // `supermux-syntax.wasm` is 7.45 MB raw / 2.69 MB gzipped (editor-syntax/native/README.md): counted

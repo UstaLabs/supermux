@@ -26,6 +26,7 @@ import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.unit.dp
 import dev.supermux.proto.AgentStatus
+import dev.supermux.proto.CompactAdviceDto
 import dev.supermux.proto.GitLiteStatusDto
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
@@ -51,13 +52,14 @@ class WorkspaceRowTest {
 
     private val git = GitLiteStatusDto(mode = "base", compareRef = "main", ahead = 2, dirty = 1)
 
-    private fun session(id: String, name: String = id, git: GitLiteStatusDto? = null) =
-        SessionInfo(id = id, name = name, workdir = "/home/u/projects/app", agent = "claude", git = git)
+    private fun session(id: String, name: String = id, git: GitLiteStatusDto? = null, advice: CompactAdviceDto? = null) =
+        SessionInfo(id = id, name = name, workdir = "/home/u/projects/app", agent = "claude", git = git, compactAdvice = advice)
 
     private fun model(
         name: String = "Fix it",
         git: GitLiteStatusDto? = null,
         agentState: Map<String, AgentStatus> = emptyMap(),
+        advice: CompactAdviceDto? = null,
     ): WorkspaceRowModel {
         val w = workspaceDto(
             id = "w1",
@@ -67,7 +69,7 @@ class WorkspaceRowTest {
         )
         return deriveWorkspaceRow(
             w = w,
-            sessionsById = mapOf("s1" to session("s1", name, git)),
+            sessionsById = mapOf("s1" to session("s1", name, git, advice)),
             agentState = agentState,
             lastBySession = emptyMap(),
             lastRead = emptyMap(),
@@ -112,6 +114,32 @@ class WorkspaceRowTest {
                 }
             }
         }
+    }
+
+    // ── #146: a chat advised to compact before the usage-limit wait ───────────────────────────
+
+    private val nearWall = CompactAdviceDto(usedPct = 88, resetsAt = 1_791_651_000_000)
+
+    @Test fun adviceShowsTheAmberDot_inThePlaceOfTheIdleMark() = runComposeUiTest {
+        assertTrue(model(advice = nearWall).compactAdvice)
+        assertTrue(!model().compactAdvice)
+        setContent { Row(InputMode.Pointer, model = model(advice = nearWall)) }
+        onNodeWithTag("session_rail_compact", useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithTag("session_rail_neutral", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test fun adviceWithoutIt_theRowIsUnchanged() = runComposeUiTest {
+        setContent { Row(InputMode.Touch, contextMenu = false, model = model()) }
+        onNodeWithTag("session_rail_neutral", useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithTag("session_rail_compact", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test fun aWorkingChat_keepsItsSpinner_overTheAdvice() = runComposeUiTest {
+        setContent {
+            Row(InputMode.Pointer, model = model(advice = nearWall, agentState = mapOf("s1" to AgentStatus(phase = "running", working = true))))
+        }
+        onNodeWithTag("session_rail_working", useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithTag("session_rail_compact", useUnmergedTree = true).assertDoesNotExist()
     }
 
     // ── Touch (a phone: no platform context menu) ────────────────────────────────────────────

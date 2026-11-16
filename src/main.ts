@@ -1282,7 +1282,20 @@ function compactionText(c: { status: string; before?: number; after?: number; er
 const compactAdvisor = new CompactAdvisor({
   now: () => Date.now(),
   autoEnabled: () => accountsSettings().compactBeforeWait,
-  onAdvice: (id, advice) => webChannel?.broadcastToAll({ type: "compact_advice", session: id, advice }),
+  onAdvice: (id, advice, change) => {
+    // Every set/clear is logged, so whether the advice reached a chat can be proven later (#146, 2026-11-16).
+    log.info(advice ? "compact_advice_set" : "compact_advice_clear", {
+      session: id, account: change.account, usedPct: change.usedPct, threshold: change.threshold, reason: change.reason,
+    })
+    webChannel?.broadcastToAll({ type: "compact_advice", session: id, advice })
+  },
+  // The 5-hour meter is the account's: a reading from one chat re-judges the advice shown in every chat on it.
+  accountOf: (id) => {
+    const s = registry.get(id)
+    return s?.agent === "claude" ? sessionAccountFields(s).account : undefined
+  },
+  sessionsOn: (account) => registry.list().filter((s) => s.agent === "claude" && sessionAccountFields(s).account === account).map((s) => s.id),
+  contextOf: (id) => contextUsage.get(id)?.used,
   // Team seats: auto-switch would carry the chat to another seat of the same Anthropic org (cache warm there).
   teammateCanTakeOver: async (id, threshold) => {
     const s = registry.get(id)
