@@ -36,12 +36,14 @@ on:
     # Branches only — no tags. A release tag points at a commit this workflow already tested on
     # main/dev, and the duplicate run competed with release.yml for the same macOS runners
     # (the free plan allows five at once).
-    # Never-landing branches skip CI: release.yml dry runs (dryrun-*) build the same commit already
-    # tested on its own branch, and hot-run branches (hotrun-*) carry local-only trace commits.
-    branches: ["**", "!dryrun-*", "!hotrun-*", "!mux/hotrun-*"]
+    # Full CI runs once per car, on the merge train (Ahmet's testing rhythm, 2026-11-16): dev/main and the
+    # train*/hotfix* branches the train pushes. Feature branches (mux/*), dry runs and hot runs don't trigger it;
+    # sessions check scoped while building, and a one-off full run can still be started by hand (workflow_dispatch).
+    branches: [dev, main, "train*", "hotfix*"]
     paths-ignore: ["**.md", "docs/**", "assets/**", "LICENSE"]
   pull_request:
     branches: [main, dev]
+  workflow_dispatch:
 
 # A push storm should leave one run standing, not six.
 concurrency:
