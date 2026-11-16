@@ -88,6 +88,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -898,7 +899,7 @@ private fun CommitBox(state: SourceControlState, scope: kotlinx.coroutines.Corou
                 .background(if (enabled) cs.primary else cs.primary.copy(alpha = 0.5f)),
         ) {
             Row(
-                Modifier.weight(1f).fillMaxHeight().then(if (enabled) Modifier.clickable { scope.launch { act() } } else Modifier).testTag("scm_commit"),
+                Modifier.weight(1f).fillMaxHeight().clickable(enabled = enabled, role = Role.Button) { scope.launch { act() } }.testTag("scm_commit"),
                 horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(if (publish) Icons.Filled.CloudUpload else if (syncN) Icons.Filled.Sync else Icons.Filled.Check, null, tint = cs.onPrimary, modifier = Modifier.size(16.dp))
