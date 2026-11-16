@@ -172,4 +172,5 @@
     <string name="applets_widget_ios_step2">Tap Edit, then Add Widget</string>
     <string name="applets_widget_ios_step3">Find supermux and pick “Applets”, or “Applet” for one</string>
     <string name="applets_widget_ios_note">iOS only lets you add widgets yourself; supermux can't place one for you.</string>
+    <string name="applets_window_no_engine">This device can't show applet pages: its web engine is missing or too old. Update it (on Android: Android System WebView from the Play Store), then open the applet again.</string>
 </resources>

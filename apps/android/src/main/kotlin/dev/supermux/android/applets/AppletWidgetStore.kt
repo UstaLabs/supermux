@@ -8,7 +8,6 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Log
-import androidx.glance.appwidget.updateAll
 import dev.supermux.android.host.HostStores
 import dev.supermux.auth.SecureTokenStoreContext
 import dev.supermux.net.AppletDto
@@ -93,8 +92,8 @@ internal object AppletWidgetStore {
 
     /** Redraws every supermux widget on the Home screen from the snapshot. */
     suspend fun updateWidgets(context: Context) {
-        runCatching { AppletsGridWidget().updateAll(context) }.onFailure { Log.w(TAG, "grid update failed", it) }
-        runCatching { AppletWidget().updateAll(context) }.onFailure { Log.w(TAG, "applet update failed", it) }
+        runCatching { redrawAll(context, AppletsGridWidget()) }.onFailure { Log.w(TAG, "grid update failed", it) }
+        runCatching { redrawAll(context, AppletWidget()) }.onFailure { Log.w(TAG, "applet update failed", it) }
     }
 
     /**
