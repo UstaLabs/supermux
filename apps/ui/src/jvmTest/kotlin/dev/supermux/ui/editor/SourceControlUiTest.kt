@@ -6,10 +6,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isEnabled
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
@@ -123,9 +125,9 @@ class SourceControlUiTest {
         pane(host)
         click("scm_pr_create")
         waitUntil(timeoutMillis = 5_000) { onAllNodes(hasTestTag("scm_pr_title_input")).fetchSemanticsNodes().isNotEmpty() }
-        onNodeWithText("Add a search box").assertExists()             // the agent's title, written for dev
+        waitUntil(timeoutMillis = 5_000) { onAllNodes(hasTestTag("scm_pr_title_input") and hasText("Add a search box")).fetchSemanticsNodes().isNotEmpty() } // the agent's title, written for dev
         click("scm_pr_create_go")
-        onNodeWithText("You have 2 unpushed commits on feature/search.").assertExists()
+        waitUntil(timeoutMillis = 5_000) { onAllNodes(hasText("You have 2 unpushed commits on feature/search.")).fetchSemanticsNodes().isNotEmpty() }
         click("scm_pr_ask_confirm")                                    // Push Commits
         sent(host, "\"push\":true")
         waitUntil(timeoutMillis = 5_000) { onAllNodes(hasTestTag("scm_pr_form")).fetchSemanticsNodes().isEmpty() }
@@ -175,6 +177,7 @@ class SourceControlUiTest {
         val host = Host(files = conflict, merging = true)
         pane(host)
         onNodeWithTag("scm_merging").assertExists()
+        onNodeWithTag("scm_row_merge_src/App.jsx").performMouseInput { moveTo(center) }   // the links show on hover, as in VS Code
         click("scm_accept_current_src/App.jsx")
         sent(host, "\"side\":\"mine\"")
     }
