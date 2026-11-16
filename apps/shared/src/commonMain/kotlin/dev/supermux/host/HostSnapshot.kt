@@ -41,4 +41,11 @@ data class HostSnapshot(
     val recentLogs: Map<String, List<LogEntry>> = emptyMap(),
     /** Card #121: each chat's read mark (ISO), so a saved chat does not show unread until the snapshot says so. */
     val lastRead: Map<String, String> = emptyMap(),
+    /**
+     * #117: the host's applets as last listed (pins included), so the sidebar grid, All applets and the phone widgets
+     * draw at launch and offline, as sessions do. Null: never listed (or a broker without applets).
+     */
+    val applets: List<dev.supermux.net.AppletDto>? = null,
+    /** #117: each applet's icon (PNG/SVG bytes, base64) by applet id, so they draw offline too. */
+    val appletIcons: Map<String, String> = emptyMap(),
 )

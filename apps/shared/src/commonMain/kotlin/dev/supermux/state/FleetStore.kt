@@ -758,7 +758,7 @@ class FleetStore(
      */
     @OptIn(kotlinx.coroutines.FlowPreview::class)
     suspend fun keepSnapshots(periodMs: Long = 20_000) {
-        combine(sessions, workspaces, projects, messages, lastRead) { _, _, _, _, _ -> }
+        combine(combine(sessions, workspaces, projects, messages, lastRead) { _, _, _, _, _ -> }, activeApplets) { _, _ -> }
             .sample(periodMs)
             .collect { writeSnapshots() }
     }
@@ -790,13 +790,16 @@ class FleetStore(
                     lastMessages = mine.mapNotNull { s -> logs[s.id]?.lastOrNull()?.let { s.id to it } }.toMap(),
                     recentLogs = recentLogs(mine, logs),
                     lastRead = lastReadByHost[host.recordId].orEmpty().filterKeys { id -> mine.any { it.id == id } },
+                    // #117: the applets as last listed, and their icons, keyed by this host and the applet's id.
+                    applets = conns[host.recordId]?.app?.applets?.value,
+                    appletIcons = conns[host.recordId]?.app?.cachedAppletIcons().orEmpty(),
                 )
             }
         }
         snapshotWrites.withLock {
             withContext(Dispatchers.Default) {
                 cache.retainOnly(records.map { it.recordId })
-                rows.forEach { cache.replace(it.recordId, it.sessions, it.fetchedAt, it.brokerVersion, it.workspaces, it.projects, it.lastMessages, it.recentLogs, it.lastRead) }
+                rows.forEach { cache.replace(it.recordId, it.sessions, it.fetchedAt, it.brokerVersion, it.workspaces, it.projects, it.lastMessages, it.recentLogs, it.lastRead, it.applets, it.appletIcons) }
             }
         }
     }

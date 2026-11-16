@@ -10,6 +10,10 @@ package dev.supermux.ui.applets
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import dev.supermux.webview.webViewOverlay
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
@@ -196,18 +200,31 @@ private fun AppletMessage(text: String, modifier: Modifier = Modifier) {
 }
 
 /**
- * An applet as a screen of the app, where a host has one window (iPhone, iPad): pushed like any full screen, with the
- * app's own back — the arrow here, the edge swipe from the route's layer — never a modal "Done" (Ahmet, 2026-11-16).
+ * An applet as a screen of the app, where a host has one window (iPhone, iPad): only the applet's page, full screen
+ * inside the safe area — no bar, no Done, like its own window on a Mac or its own activity on Android (Ahmet). It is
+ * left by the app's left-edge swipe (the route's layer) or the system's own gestures.
  */
 @Composable
 fun AppletScreen(fleet: FleetStore, hostId: String, name: String, onBack: () -> Unit, openChat: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
-    val none = remember { kotlinx.coroutines.flow.MutableStateFlow<List<dev.supermux.net.AppletDto>?>(null) }
-    val listed by (fleet.appForRecord(hostId)?.applets ?: none).collectAsState()
-    val title = listed?.firstOrNull { it.name == name }?.title?.takeIf { it.isNotBlank() } ?: name
-    androidx.compose.foundation.layout.Column(Modifier.fillMaxSize().background(cs.background).testTag("applet_screen_$name")) {
-        // The app's own phone top bar: its back glyph and the title, as the other phone pages have.
-        dev.supermux.ui.settings.kit.KitTopBar(title, onBack = onBack, backTag = "applet_screen_back", titleTag = "applet_screen_title")
-        AppletPage(fleet, hostId, name, Modifier.weight(1f), onOpenChat = openChat)
+    Box(Modifier.fillMaxSize().background(cs.background).testTag("applet_screen_$name")) {
+        AppletPage(fleet, hostId, name, Modifier.fillMaxSize(), onOpenChat = openChat)
+        if (dev.supermux.ui.widgets.iosStyleBackSwipe) {
+            // The edge swipe is the only way out, so the page must never take the edge's touches. A thin strip over
+            // the page's left edge keeps them in Compose (the app's edge-back gesture), whatever the page does there;
+            // it consumes nothing, so a tap or a swipe that isn't the back gesture still reaches nothing harmful.
+            Box(
+                Modifier
+                    .align(Alignment.CenterStart)
+                    .fillMaxHeight()
+                    .width(EDGE_STRIP)
+                    .webViewOverlay()
+                    .pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent() } }
+                    .testTag("applet_screen_edge"),
+            )
+        }
     }
 }
+
+/** How wide the left edge is kept for the back swipe, over the applet's page (iOS's own edge is about this). */
+private val EDGE_STRIP = 18.dp

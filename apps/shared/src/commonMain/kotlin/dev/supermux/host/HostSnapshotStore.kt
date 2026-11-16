@@ -40,8 +40,10 @@ class HostSnapshotStore(private val persistence: SnapshotPersistence) {
         lastMessages: Map<String, LogEntry> = emptyMap(),
         recentLogs: Map<String, List<LogEntry>> = emptyMap(),
         lastRead: Map<String, String> = emptyMap(),
+        applets: List<dev.supermux.net.AppletDto>? = null,
+        appletIcons: Map<String, String> = emptyMap(),
     ) {
-        byRecord[recordId] = HostSnapshot(recordId, sessions, fetchedAt, brokerVersion, workspaces, projects, lastMessages, recentLogs, lastRead)
+        byRecord[recordId] = HostSnapshot(recordId, sessions, fetchedAt, brokerVersion, workspaces, projects, lastMessages, recentLogs, lastRead, applets, appletIcons)
         flush()
     }
 

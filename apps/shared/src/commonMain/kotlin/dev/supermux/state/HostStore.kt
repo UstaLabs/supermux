@@ -636,6 +636,19 @@ class HostStore(
     private val _applets = MutableStateFlow<List<AppletDto>?>(null)
     val applets: StateFlow<List<AppletDto>?> = _applets.asStateFlow()
     private var appletsJob: Job? = null
+    /**
+     * Each applet's icon as last fetched, by applet id, with the [AppletDto.updatedAt] it was fetched for: served while
+     * the host is out of reach, and written to the offline cache with the list (FleetStore.writeSnapshots).
+     */
+    private val appletIcons = mutableMapOf<String, Pair<String, ByteArray>>()
+    /** Guards [appletIcons] (a SynchronizedObject: Kotlin/Native's synchronized takes nothing else). */
+    private val appletIconsLock = SynchronizedObject()
+
+    /** The icons [appletIcons] holds, base64 by applet id, for the offline cache. */
+    @OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class)
+    fun cachedAppletIcons(): Map<String, String> = synchronized(appletIconsLock) {
+        appletIcons.mapValues { (_, v) -> kotlin.io.encoding.Base64.encode(v.second) }
+    }
 
     // ── Accounts state (slice A3b) — the calls live with the other settings calls below.
     private val _accounts = MutableStateFlow<List<AccountDto>?>(null)
@@ -2219,6 +2232,7 @@ class HostStore(
      * opens (the desktop has nothing else to show for the ~5 s a launch takes). Only into an empty,
      * not-yet-synced store; the first live snapshot replaces every part of it.
      */
+    @OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class)
     fun seedFromCache(snap: dev.supermux.host.HostSnapshot) {
         var seeded = false
         _state.update { st ->
@@ -2236,8 +2250,19 @@ class HostStore(
                 )
             }
         }
+        // #117: the applets grid and its icons too, until the host lists them again.
+        if (_applets.value == null && snap.applets != null) {
+            _applets.value = snap.applets
+            val byId = snap.applets.associateBy { it.id }
+            synchronized(appletIconsLock) {
+                for ((id, b64) in snap.appletIcons) {
+                    val a = byId[id] ?: continue
+                    if (appletIcons[id] == null) runCatching { kotlin.io.encoding.Base64.decode(b64) }.getOrNull()?.let { appletIcons[id] = a.updatedAt to it }
+                }
+            }
+        }
         if (seeded) {
-            PerfTrace.milestone("cache.seeded", "sessions" to snap.sessions.size, "workspaces" to snap.workspaces.size, "host" to baseUrl)
+            PerfTrace.milestone("cache.seeded", "sessions" to snap.sessions.size, "workspaces" to snap.workspaces.size, "applets" to (snap.applets?.size ?: 0), "host" to baseUrl)
         }
     }
 
@@ -2465,7 +2490,14 @@ class HostStore(
             e.message ?: "couldn't change the pins"
         }
 
-    suspend fun appletIconBytes(applet: AppletDto): ByteArray? = runApi("appletIcon") { api.appletIconBytes(applet) }
+    /** An applet's icon: fetched (and remembered) while the host answers, the remembered one while it doesn't. */
+    suspend fun appletIconBytes(applet: AppletDto): ByteArray? {
+        val held = synchronized(appletIconsLock) { appletIcons[applet.id] }
+        if (held != null && held.first == applet.updatedAt) return held.second
+        val fresh = runApi("appletIcon") { api.appletIconBytes(applet) }
+        if (fresh != null) synchronized(appletIconsLock) { appletIcons[applet.id] = applet.updatedAt to fresh }
+        return fresh ?: held?.second
+    }
 
     /** Applet info's facts; null when the host can't say (offline, or the applet is gone). */
     suspend fun appletDetail(name: String): dev.supermux.net.AppletDetailDto? = runApi("appletDetail") { api.appletDetail(name) }
