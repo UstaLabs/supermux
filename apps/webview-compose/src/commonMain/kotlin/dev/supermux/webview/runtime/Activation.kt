@@ -46,14 +46,15 @@ internal data class ActivationDecision(val wantLive: Boolean, val priority: Int,
 internal fun decideActivation(i: ActivationInputs): ActivationDecision {
     val priority = activationPriority(i.activation, i.visible, i.focused, i.keepRunningWhileHidden)
     if (!i.visible) {
-        if (!i.live) return ActivationDecision(false, priority, null)
-        if (i.keepRunningWhileHidden) return ActivationDecision(true, priority, null)
+        if (i.live && i.keepRunningWhileHidden) return ActivationDecision(true, priority, null)
+        // A cold hidden view stays cold, but one that preloads, until its hidden time is up.
+        if (!i.live && i.activation != Activation.Preload) return ActivationDecision(false, priority, null)
         val until = (i.hiddenSince ?: i.now) plusSaturated i.hiddenReleaseMillis
         return if (i.now < until) ActivationDecision(true, priority, until) else ActivationDecision(false, priority, null)
     }
     if (i.live) return ActivationDecision(true, priority, null)
     return when (val a = i.activation) {
-        Activation.Eager -> ActivationDecision(true, priority, null)
+        Activation.Eager, Activation.Preload -> ActivationDecision(true, priority, null)
         Activation.OnInteraction -> ActivationDecision(i.interacted, priority, null)
         is Activation.WhenVisible -> {
             val settledAt = i.lastMovedAt plusSaturated a.settleMillis
@@ -69,7 +70,7 @@ internal fun decideActivation(i: ActivationInputs): ActivationDecision {
  */
 internal fun activationPriority(activation: Activation, visible: Boolean, focused: Boolean, keepsRunning: Boolean = false): Int = when {
     focused && visible -> PRIORITY_FOCUSED
-    visible && activation is Activation.Eager -> PRIORITY_VISIBLE_EAGER
+    visible && (activation is Activation.Eager || activation is Activation.Preload) -> PRIORITY_VISIBLE_EAGER
     visible || keepsRunning -> PRIORITY_VISIBLE
     else -> PRIORITY_HIDDEN
 }

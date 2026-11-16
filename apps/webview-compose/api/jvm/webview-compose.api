@@ -17,6 +17,14 @@ public final class dev/supermux/webview/Activation$OnInteraction : dev/supermux/
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class dev/supermux/webview/Activation$Preload : dev/supermux/webview/Activation {
+	public static final field $stable I
+	public static final field INSTANCE Ldev/supermux/webview/Activation$Preload;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class dev/supermux/webview/Activation$WhenVisible : dev/supermux/webview/Activation {
 	public static final field $stable I
 	public fun <init> ()V

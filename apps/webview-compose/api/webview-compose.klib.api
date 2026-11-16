@@ -430,6 +430,12 @@ sealed interface dev.supermux.webview/Activation { // dev.supermux.webview/Activ
         final fun hashCode(): kotlin/Int // dev.supermux.webview/Activation.OnInteraction.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // dev.supermux.webview/Activation.OnInteraction.toString|toString(){}[0]
     }
+
+    final object Preload : dev.supermux.webview/Activation { // dev.supermux.webview/Activation.Preload|null[0]
+        final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview/Activation.Preload.equals|equals(kotlin.Any?){}[0]
+        final fun hashCode(): kotlin/Int // dev.supermux.webview/Activation.Preload.hashCode|hashCode(){}[0]
+        final fun toString(): kotlin/String // dev.supermux.webview/Activation.Preload.toString|toString(){}[0]
+    }
 }
 
 sealed interface dev.supermux.webview/DialogResult { // dev.supermux.webview/DialogResult|null[0]
@@ -1613,6 +1619,7 @@ final val dev.supermux.webview/LocalWebSurfaceHints // dev.supermux.webview/Loca
     final fun <get-LocalWebSurfaceHints>(): androidx.compose.runtime/ProvidableCompositionLocal<dev.supermux.webview/WebSurfaceHints> // dev.supermux.webview/LocalWebSurfaceHints.<get-LocalWebSurfaceHints>|<get-LocalWebSurfaceHints>(){}[0]
 final val dev.supermux.webview/dev_supermux_webview_Activation_Eager$stableprop // dev.supermux.webview/dev_supermux_webview_Activation_Eager$stableprop|#static{}dev_supermux_webview_Activation_Eager$stableprop[0]
 final val dev.supermux.webview/dev_supermux_webview_Activation_OnInteraction$stableprop // dev.supermux.webview/dev_supermux_webview_Activation_OnInteraction$stableprop|#static{}dev_supermux_webview_Activation_OnInteraction$stableprop[0]
+final val dev.supermux.webview/dev_supermux_webview_Activation_Preload$stableprop // dev.supermux.webview/dev_supermux_webview_Activation_Preload$stableprop|#static{}dev_supermux_webview_Activation_Preload$stableprop[0]
 final val dev.supermux.webview/dev_supermux_webview_Activation_WhenVisible$stableprop // dev.supermux.webview/dev_supermux_webview_Activation_WhenVisible$stableprop|#static{}dev_supermux_webview_Activation_WhenVisible$stableprop[0]
 final val dev.supermux.webview/dev_supermux_webview_ConsoleMessage$stableprop // dev.supermux.webview/dev_supermux_webview_ConsoleMessage$stableprop|#static{}dev_supermux_webview_ConsoleMessage$stableprop[0]
 final val dev.supermux.webview/dev_supermux_webview_DeviceEmulation$stableprop // dev.supermux.webview/dev_supermux_webview_DeviceEmulation$stableprop|#static{}dev_supermux_webview_DeviceEmulation$stableprop[0]
@@ -1750,6 +1757,7 @@ final fun dev.supermux.webview/WebView(dev.supermux.webview/WebViewState, androi
 final fun dev.supermux.webview/defaultNavigationDecision(dev.supermux.webview/NavigationRequest, dev.supermux.webview/WebContent): dev.supermux.webview/NavigationDecision // dev.supermux.webview/defaultNavigationDecision|defaultNavigationDecision(dev.supermux.webview.NavigationRequest;dev.supermux.webview.WebContent){}[0]
 final fun dev.supermux.webview/dev_supermux_webview_Activation_Eager$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_Activation_Eager$stableprop_getter|dev_supermux_webview_Activation_Eager$stableprop_getter(){}[0]
 final fun dev.supermux.webview/dev_supermux_webview_Activation_OnInteraction$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_Activation_OnInteraction$stableprop_getter|dev_supermux_webview_Activation_OnInteraction$stableprop_getter(){}[0]
+final fun dev.supermux.webview/dev_supermux_webview_Activation_Preload$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_Activation_Preload$stableprop_getter|dev_supermux_webview_Activation_Preload$stableprop_getter(){}[0]
 final fun dev.supermux.webview/dev_supermux_webview_Activation_WhenVisible$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_Activation_WhenVisible$stableprop_getter|dev_supermux_webview_Activation_WhenVisible$stableprop_getter(){}[0]
 final fun dev.supermux.webview/dev_supermux_webview_ConsoleMessage$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_ConsoleMessage$stableprop_getter|dev_supermux_webview_ConsoleMessage$stableprop_getter(){}[0]
 final fun dev.supermux.webview/dev_supermux_webview_DeviceEmulation$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_DeviceEmulation$stableprop_getter|dev_supermux_webview_DeviceEmulation$stableprop_getter(){}[0]

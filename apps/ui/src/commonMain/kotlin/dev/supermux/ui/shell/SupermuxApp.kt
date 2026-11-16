@@ -973,6 +973,8 @@ fun SupermuxApp(
                         showAll = remember(ui) { { ui.openApplets() } },
                         info = remember(ui) { { a, tab -> ui.openAppletInfo(a.name, tab) } },
                     )
+                    // Its first pinned applets, loaded ahead where the platform opens applets: they open at once.
+                    if (appletsActions != null) dev.supermux.ui.applets.AppletPreloads(fleet, activeHostId)
 
                     // The sidebar, drawn by Home on a wide host and by the Compact list layer.
                     val sidebarList: @Composable (standalone: Boolean, listState: LazyListState?) -> Unit =
