@@ -317,7 +317,12 @@ val distDir = layout.buildDirectory.dir("dist/wasmJs/productionExecutable")
 // as the prototype's (the row's own layout under the composer, the summary's 16 dp icon column).
 // 2026-11-16 (#146 account-wide advice, Tally): +1 KiB, measured 9131 KiB (over by <1 KiB) on train9 43774096668: the
 // sidebar row's amber compact-advice dot (WorkspaceStatusMark) and its string in both catalogs.
-val maxGzipBytes = 9132L * 1024
+// 2026-11-16 (#72 Source Control, Tally/Ahmet): +94 KiB over #146's 9132, measured on car A 0fbbd5b84, run
+// 43794726113 (9225 KiB against dev's 9131): VS Code's Source Control pane (~2,000 lines of Compose: groups, commit
+// box, conflicts, Graph, publish picks, the pull request section), ~300 strings in each catalog, its API. No new
+// library or icon set. The waste check before raising it removed #72's dead code (the include box, the composer git
+// sign, DiffView's stage plumbing). CI re-measures it on dev a204a08de.
+val maxGzipBytes = 9226L * 1024
 
 // THE NATIVE EDITOR'S SYNTAX MODULE IS OUTSIDE THAT CEILING, with a ceiling of its own (M5).
 // `supermux-syntax.wasm` is 7.45 MB raw / 2.69 MB gzipped (editor-syntax/native/README.md): counted
