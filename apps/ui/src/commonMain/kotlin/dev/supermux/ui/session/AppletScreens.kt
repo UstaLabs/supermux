@@ -16,6 +16,9 @@ interface AppletScreens {
     /** All applets. */
     @Composable fun All(actions: AppletsActions, phone: Boolean, onBack: () -> Unit)
 
+    /** The applet [name] of host [hostId] as a screen of the app (one-window hosts): a back row, then the page. */
+    @Composable fun Page(fleet: FleetStore, hostId: String, name: String, onBack: () -> Unit, openChat: (String) -> Unit)
+
     /** Applet info for [name], at [initialTab]; [openChat] shows a chat in the main window. */
     @Composable fun Info(fleet: FleetStore, actions: AppletsActions, name: String, phone: Boolean, initialTab: String?, onBack: () -> Unit, openChat: (String) -> Unit)
 }
@@ -27,6 +30,10 @@ object NativeAppletScreens : AppletScreens {
 
     @Composable
     override fun All(actions: AppletsActions, phone: Boolean, onBack: () -> Unit) = AppletsScreen(actions, phone, onBack)
+
+    @Composable
+    override fun Page(fleet: FleetStore, hostId: String, name: String, onBack: () -> Unit, openChat: (String) -> Unit) =
+        dev.supermux.ui.applets.AppletScreen(fleet, hostId, name, onBack, openChat)
 
     @Composable
     override fun Info(fleet: FleetStore, actions: AppletsActions, name: String, phone: Boolean, initialTab: String?, onBack: () -> Unit, openChat: (String) -> Unit) {

@@ -341,17 +341,21 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
                 }
             }
 
-            // #117: an applet opens full screen over the app, with a Done to leave it.
-            val appletCover = remember { dev.supermux.ui.applets.AppletCoverState() }
+            // #117: an applet opens as a screen of the app (Route.Applet), left with back or the edge swipe like any
+            // full screen. Opened from outside (a widget, a control, Spotlight), any menu or sheet left open closes.
+            val openApplet: (String, String) -> Unit = remember(ui) {
+                { h, n -> dev.supermux.ui.session.AppletSheets.closeAll(); ui.openApplet(h, n) }
+            }
+            val appletOpener = remember(ui) { dev.supermux.ui.session.AppletOpener { h, a -> ui.openApplet(h, a.name) } }
             // W1: a widget's supermux://applet/<host>/<name> link, or what a control / Spotlight left in the App Group.
             LaunchedEffect(openedUrl) {
                 openedUrl?.let { dev.supermux.ui.applets.parseAppletUri(it) }?.let { (h, n) ->
-                    appletCover.show(h, n)
+                    openApplet(h, n)
                     IosAppState.consumeOpenedUrl()
                 }
             }
             LaunchedEffect(foreground) {
-                if (foreground) IosAppletWidgetStore.takePendingOpen()?.let { (h, n) -> appletCover.show(h, n) }
+                if (foreground) IosAppletWidgetStore.takePendingOpen()?.let { (h, n) -> openApplet(h, n) }
             }
             // ...and the widgets follow the host picker's applets whenever the app sees them change.
             LaunchedEffect(fleet) {
@@ -364,7 +368,7 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
                 }
             }
             androidx.compose.runtime.CompositionLocalProvider(
-                dev.supermux.ui.session.LocalAppletOpener provides appletCover.opener,
+                dev.supermux.ui.session.LocalAppletOpener provides appletOpener,
                 dev.supermux.ui.session.LocalAppletScreens provides dev.supermux.ui.session.NativeAppletScreens,
                 // Add widget only where the widgets exist: iOS 18 (their control and App Intents) and a build that carries
                 // the extension (a signed build without its App Store / Ad Hoc profile leaves it out).
@@ -409,7 +413,6 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
                 // No `chatFallback`: that slot IS the host-specific escape hatch, and iOS has no
                 // screen to put in it. `UnavailableSessionPane` (H3.7) is what covers its absence.
             )
-            dev.supermux.ui.applets.AppletCover(appletCover, fleet, onOpenChat = { id -> ui.selectSession(id) })
             }
             }
         }

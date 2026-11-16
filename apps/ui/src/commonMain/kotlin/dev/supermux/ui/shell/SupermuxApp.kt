@@ -1430,6 +1430,23 @@ fun SupermuxApp(
                                 }
                             }
 
+                            entry<Route.Applet>(
+                                metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
+                            ) { route ->
+                                EscapeBox("applet_overlay", onEscape = { ui.goBack() }) {
+                                    val screens = dev.supermux.ui.session.LocalAppletScreens.current
+                                    if (screens != null) {
+                                        screens.Page(
+                                            fleet, route.hostId, route.name,
+                                            onBack = { ui.goBack() },
+                                            openChat = { id -> ui.goBack(); ui.selectSession(id) },
+                                        )
+                                    } else {
+                                        LaunchedEffect(Unit) { ui.goBack() }
+                                    }
+                                }
+                            }
+
                             entry<Route.AppletInfo>(
                                 metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
                             ) { route ->
