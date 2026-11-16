@@ -404,7 +404,7 @@ fun main(args: Array<String>) {
             }
         }
     }
-    appletLaunch?.let(dev.supermux.ui.applets::parseAppletUri)?.let { (host, name) -> dev.supermux.desktop.applets.DesktopApplets.open(host, name, name) }
+    appletLaunch?.let { dev.supermux.ui.applets.parseAppletUri(it) }?.let { (host, name) -> dev.supermux.desktop.applets.DesktopApplets.open(host, name, name) }
     // The hostname lookup can stall ~5 s on macOS: start it now, off the UI thread, so the supervisor and the pairing
     // screens find it done (#29).
     DesktopHostBootstrap.prefetchHostName()
