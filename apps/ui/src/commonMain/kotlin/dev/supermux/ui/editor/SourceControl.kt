@@ -218,6 +218,11 @@ class SourceControlState(val api: SourceControlApi) {
     var busy by mutableStateOf(false)
     /** A short "Committed 2 files." under the button; cleared by the next action. */
     var note by mutableStateOf<String?>(null)
+    /** When the user last acted: a finished merge job's outcome line shows only until then (like [note]). */
+    var actedAt by mutableStateOf(0.0)
+
+    /** The start of any action: the last note and a finished job's outcome make way for what comes next. */
+    private fun acting() { note = null; actedAt = kotlin.time.Clock.System.now().toEpochMilliseconds().toDouble() }
     var status by mutableStateOf<dev.supermux.net.GitRemoteStatus?>(null)
     /** The last commit on this chat's branch (for Amend), and whether origin already has it. */
     var last by mutableStateOf<dev.supermux.net.LogCommit?>(null)
@@ -295,6 +300,7 @@ class SourceControlState(val api: SourceControlApi) {
 
     /** The button: VS Code's rules. Nothing staged asks (or follows Always / Never); no message asks; then the ▾ pick. */
     suspend fun commit(all: Boolean = false) {
+        acting()
         note = null
         if (!merging && !amend && changedCount == 0) { note = localized(Str.scm_no_changes_to_commit); return }
         if (!merging && !amend && stagedCount == 0 && !all) {
@@ -330,6 +336,7 @@ class SourceControlState(val api: SourceControlApi) {
      * failed (VS Code's words where it has them), the tool's own text under Details. Returns whether it went through.
      */
     suspend fun sync(op: String): Boolean {
+        acting()
         if ((op == "publish" || op == "push") && status?.hasRemote == false) { openPublish(); return false }
         // Several remotes: which one (VS Code's quick pick); one: straight there.
         if (op == "publish" && status?.upstream == null && (status?.remotes?.size ?: 0) > 1) { picking = false; closePublish(); pickingRemote = true; return false }
@@ -397,6 +404,7 @@ class SourceControlState(val api: SourceControlApi) {
 
     /** Publish Branch to the remote picked. */
     suspend fun publishToRemote(remote: String) {
+        acting()
         pickingRemote = false
         busy = true; note = null
         val r = api.publishTo(remote)
@@ -411,6 +419,7 @@ class SourceControlState(val api: SourceControlApi) {
 
     /** VS Code's "Publish to GitHub": a new repository on the forge, made from this folder, and the branch pushed to it. */
     suspend fun publishTo(forge: String, visibility: String) {
+        acting()
         val name = publishInput.trim()
         val host = if (forge == "gitlab") "GitLab" else "GitHub" // i18n-ok: product names
         if (name.isNotEmpty() && !SCM_REPO_NAME.matches(name)) { publishError = localized(Str.scm_publish_bad_name); return }
@@ -435,6 +444,7 @@ class SourceControlState(val api: SourceControlApi) {
 
     /** Add Remote…: origin at the URL typed; then Publish Branch pushes there. */
     suspend fun addRemote() {
+        acting()
         val url = publishInput.trim()
         if (url.isEmpty()) return
         publishRunning = "remote"; publishError = null; publishDetails = null
@@ -469,6 +479,7 @@ class SourceControlState(val api: SourceControlApi) {
     // ── the base (U4): Get latest, its conflicts, Merge into the base ──
 
     suspend fun getLatest() {
+        acting()
         note = null; busy = true
         val r = api.latest()
         busy = false
@@ -484,6 +495,7 @@ class SourceControlState(val api: SourceControlApi) {
     }
 
     suspend fun undoLatest() {
+        acting()
         val l = latest ?: return
         val r = api.undoLatest(l.before ?: return, l.after ?: return)
         latest = null
@@ -498,6 +510,7 @@ class SourceControlState(val api: SourceControlApi) {
 
     /** VS Code's Accept Current / Incoming / Both, for the whole file (side: mine | theirs | both); then it is staged. */
     suspend fun resolve(path: String, side: String) {
+        acting()
         note = null
         val r = api.resolve(repo, path, side)
         problem = if (r == null) localized(Str.scm_offline) else if (r.ok) null else failed(r.message ?: r.reason ?: "")
@@ -505,6 +518,7 @@ class SourceControlState(val api: SourceControlApi) {
     }
 
     suspend fun abortMerge() {
+        acting()
         val r = api.abortMerge(repo)
         problem = if (r == null) localized(Str.scm_offline) else if (r.ok) null else failed(r.message ?: r.reason ?: "")
         if (r?.ok == true) note = localized(Str.scm_merge_aborted)
@@ -524,6 +538,7 @@ class SourceControlState(val api: SourceControlApi) {
 
     /** Switch (or, [create], make and switch to) a branch; the chat follows it. Each refusal is said plainly. */
     suspend fun switchTo(name: String, create: Boolean) {
+        acting()
         ask = null; picking = false; heldBy = null; note = null
         val r = api.switchBranch(name, create)
         problem = when (r?.status) {
@@ -572,6 +587,7 @@ class SourceControlState(val api: SourceControlApi) {
      * [publish] / [push] / [skipPush] are the answers, "Always" ([prPush]) answers them for good.
      */
     suspend fun createPr(publish: Boolean = false, push: Boolean = false, skipPush: Boolean = false) {
+        acting()
         val f = prForm ?: return
         if (f.title.isBlank()) return
         val always = prPush == "always"
@@ -647,6 +663,7 @@ class SourceControlState(val api: SourceControlApi) {
     private fun forgeName(): String = if (pr?.forge == "gitlab" || pr?.pr?.forge == "gitlab") "GitLab" else "GitHub" // i18n-ok: product names
 
     suspend fun undoLastCommit() {
+        acting()
         val r = api.uncommit(repo)
         when {
             r == null -> problem = localized(Str.scm_offline)
@@ -995,7 +1012,8 @@ private fun Banners(state: SourceControlState, scope: kotlinx.coroutines.Corouti
             Text(localized(Str.scm_undo_latest), fontSize = 12.sp, color = cs.primary, modifier = Modifier.padding(bottom = 8.dp).clickable { scope.launch { state.undoLatest() } }.testTag("scm_undo_latest"))
         }
         val jobs = state.api.finishJobs?.collectAsState()?.value
-        val job = state.api.sessionId?.let { jobs?.get(it) }?.takeIf { it.action == "merge" }
+        // A finished job's outcome shows until the next action (as a note does); a running one always.
+        val job = state.api.sessionId?.let { jobs?.get(it) }?.takeIf { it.action == "merge" && (it.status == "running" || (it.endedAt ?: it.startedAt) > state.actedAt) }
         if (job != null) {
             val o = job.outcome
             val text = when {

@@ -50,6 +50,8 @@ class SourceControlUiTest {
         val merging: Boolean = false,
         val incoming: Int = 0,
         val prCreate: List<Pair<HttpStatusCode, String>> = emptyList(),
+        /** POST …/git/pull's answer. */
+        val pull: String = """{"status":"clean"}""",
     ) {
         val sent = mutableListOf<String>()
         private var creates = 0
@@ -61,7 +63,9 @@ class SourceControlUiTest {
                 val (code, b) = when {
                     p.endsWith("/changes") -> HttpStatusCode.OK to """{"repos":[{"repo":"","baseSha":"h","files":$files,"merging":$merging}]}"""
                     p.endsWith("/git/status") -> HttpStatusCode.OK to status
-                    p.endsWith("/git/history") -> HttpStatusCode.OK to history.format(incoming)
+                    // As the broker: only the chat's (session) route knows its base; the workspace's has none.
+                    p.endsWith("/git/history") && p.startsWith("/sessions/") -> HttpStatusCode.OK to history.format(incoming)
+                    p.endsWith("/git/history") -> HttpStatusCode.OK to history.format(incoming).replace("\"base\":\"dev\"", "\"base\":null")
                     p.endsWith("/git/pr/base") -> HttpStatusCode.OK to """{"target":"dev","onRemote":true,"ahead":1}"""
                     p.endsWith("/git/pr/text") -> HttpStatusCode.OK to """{"title":"Add a search box","body":"- a box above the grid","by":"agent"}"""
                     p.endsWith("/git/pr") && req.method.value == "POST" -> prCreate.getOrElse(creates++) { HttpStatusCode.OK to """{"status":"opened","url":"https://github.com/acme/shop/pull/7","number":7}""" }
@@ -69,7 +73,8 @@ class SourceControlUiTest {
                     p.endsWith("/git/branches") -> HttpStatusCode.OK to """{"current":"feature/search","local":[{"name":"feature/search","openIn":{"kind":"this"}},{"name":"dev","isDefault":true}],"remote":[{"name":"origin/dev"},{"name":"origin/release"}]}"""
                     p.endsWith("/git/switch") -> HttpStatusCode.OK to """{"status":"switched","branch":"fix/typo"}"""
                     p.endsWith("/git/latest") -> HttpStatusCode.OK to """{"status":"clean","commits":2,"from":"dev","before":"aaaaaaa","after":"bbbbbbb"}"""
-                    p.endsWith("/git/publish") || p.endsWith("/git/push") || p.endsWith("/git/pull") -> HttpStatusCode.OK to """{"status":"pushed"}"""
+                    p.endsWith("/git/pull") -> HttpStatusCode.OK to pull
+                    p.endsWith("/git/publish") || p.endsWith("/git/push") -> HttpStatusCode.OK to """{"status":"pushed"}"""
                     p.endsWith("/git/resolve") -> HttpStatusCode.OK to """{"ok":true}"""
                     else -> HttpStatusCode.OK to "{}"
                 }
@@ -193,5 +198,31 @@ class SourceControlUiTest {
         click("scm_where_sync")                                        // syncs: pull then push, against origin
         sent(host, "/git/pull")
         sent(host, "/git/push")
+    }
+
+    /** Found clicking through: Sync pushed after its pull stopped on a conflict. VS Code's Sync stops there. */
+    @Test fun syncStopsAtAPullConflictAndSaysSo() = runComposeUiTest {
+        val host = Host(status = """{"isRepo":true,"hasRemote":true,"remotes":["origin"],"branch":"feature/search","upstream":"origin/feature/search","ahead":1,"behind":1}""",
+            pull = """{"status":"conflict","files":["notes.md"]}""")
+        pane(host)
+        click("scm_commit")                                            // the main button: Sync Changes 1↓ 1↑
+        sent(host, "/git/pull")
+        onNodeWithText("There are merge conflicts. Resolve them, then Continue.").assertExists()
+        assertTrue(host.sent.none { it.contains("/git/push") }, host.sent.joinToString())
+    }
+
+    /** VS Code: nothing to commit, the button is off. */
+    @Test fun commitIsOffWithNothingToCommit() = runComposeUiTest {
+        pane(Host())
+        waitUntil(timeoutMillis = 5_000) { onAllNodes(hasTestTag("scm_commit")).fetchSemanticsNodes().isNotEmpty() }
+        assertTrue(onAllNodes(hasTestTag("scm_commit") and isEnabled()).fetchSemanticsNodes().isEmpty())
+    }
+
+    /** Found clicking through: the history came from the workspace, which has no base, so the base line never showed. */
+    @Test fun theHistoryIsTheChatsOwnSoItsBaseShows() = runComposeUiTest {
+        val host = Host()
+        val state = pane(host)
+        assertTrue(state.base == "dev")
+        onNodeWithTag("scm_base_line").assertExists()
     }
 }
