@@ -95,11 +95,11 @@ private val APPLET_SETTINGS = WebSettings(profile = BROWSER_PROFILE, inspectable
  * hosts (a cold start from a shortcut) waits for them; a host this device no longer has is said, never a blank window.
  */
 @Composable
-fun AppletPage(fleet: FleetStore?, hostId: String, name: String, modifier: Modifier = Modifier, onOpenChat: (String) -> Unit = {}) {
+fun AppletPage(fleet: FleetStore?, hostId: String, name: String, modifier: Modifier = Modifier, onOpenChat: (String) -> Unit = {}, noEngine: String? = null) {
     val views by (fleet?.hostViews ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyList<dev.supermux.host.HostView>()) }).collectAsState()
     val app = remember(fleet, views, hostId) { fleet?.appForRecord(hostId) }
     when {
-        app != null -> AppletPage(app, name, modifier, onOpenChat)
+        app != null -> AppletPage(app, name, modifier, onOpenChat, noEngine)
         fleet != null && views.isNotEmpty() && views.none { it.recordId == hostId } -> AppletMessage(localized(Str.applets_window_no_host), modifier)
         else -> Box(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background))
     }
@@ -111,7 +111,7 @@ fun AppletPage(fleet: FleetStore?, hostId: String, name: String, modifier: Modif
  * brings that chat up in the main window.
  */
 @Composable
-fun AppletPage(app: HostStore, name: String, modifier: Modifier = Modifier, onOpenChat: (String) -> Unit = {}) {
+fun AppletPage(app: HostStore, name: String, modifier: Modifier = Modifier, onOpenChat: (String) -> Unit = {}, noEngine: String? = null) {
     val cs = MaterialTheme.colorScheme
     val webViews = LocalAppWebViews.current ?: AppWebViews.app
     val state = remember(app, name) { WebViewState(BLANK) }
@@ -166,7 +166,7 @@ fun AppletPage(app: HostStore, name: String, modifier: Modifier = Modifier, onOp
             LaunchedEffect(unavailable) {
                 println("[AppletPage] no web engine: ${unavailable.reason}${unavailable.detail?.let { ": $it" }.orEmpty()}")
             }
-            AppletMessage(localized(Str.applets_window_no_engine), Modifier.background(cs.background))
+            AppletMessage(noEngine ?: localized(Str.applets_window_no_engine), Modifier.background(cs.background))
         }
     }
 }

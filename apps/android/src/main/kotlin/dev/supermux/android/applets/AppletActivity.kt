@@ -66,7 +66,11 @@ class AppletActivity : ComponentActivity() {
                     Modifier.fillMaxSize().semantics { testTagsAsResourceId = true },
                     color = MaterialTheme.colorScheme.background,
                 ) {
-                    AppletPage(fleet, hostId, name, Modifier.windowInsetsPadding(WindowInsets.safeDrawing), onOpenChat = ::openChat)
+                    AppletPage(
+                        fleet, hostId, name, Modifier.windowInsetsPadding(WindowInsets.safeDrawing), onOpenChat = ::openChat,
+                        // What to update is Android's own: the System WebView, from the Play Store.
+                        noEngine = dev.supermux.ui.i18n.localized(dev.supermux.ui.i18n.Str.applets_window_no_engine_android),
+                    )
                 }
             }
         }
