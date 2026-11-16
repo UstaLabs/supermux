@@ -203,8 +203,9 @@ import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discov
 import { followAdapterModels, LearnedModels } from "./core/models/learned"
 import { discoverGrokModels } from "./core/agents/grok/model-discovery"
 import { grokHasScheduledTasks } from "./core/agents/grok/scheduled-tasks"
-import { keeperAgentRunning, keeperPidOf } from "../packages/supermux-core/src/keeper/index.js"
-import { checkPeer } from "./core/session-manager/peer-identity"
+import { keeperAgentRunning, keeperInfoOf } from "../packages/supermux-core/src/keeper/index.js"
+import { checkOperator, checkPeer } from "./core/session-manager/peer-identity"
+import { userInfo } from "node:os"
 import { discoverAntigravityModels } from "./core/agents/antigravity/model-discovery"
 import { refreshModelCache, seedModelCache, SharedRefreshes, type ModelDiscoverers } from "./core/models/refresh"
 import { listOpenCodeProviders, setOpenCodeApiKey, startOpenCodeOAuth, finishOpenCodeOAuth } from "./core/agents/opencode/auth-ops"
@@ -4075,6 +4076,24 @@ if (muxShimMode() === "host") {
   }, 2_000).unref()
 }
 
+/**
+ * #156: the session whose root process (its keeper, or a persistent-runtime session's own pid) `pid` is, if any. A
+ * snapshot reused for 5 s: one operator command walks a handful of pids.
+ */
+let rootPids: { at: number; map: Map<number, string> } | undefined
+function sessionOfRootPid(pid: number): string | undefined {
+  if (!rootPids || Date.now() - rootPids.at > 5000) {
+    const map = new Map<number, string>()
+    for (const s of registry.list()) {
+      if (s.status === "archived") continue
+      const root = isPersistentRuntimeSession(s) ? s.pid || undefined : keeperInfoOf(join(STATE_DIR, "core", s.agent), s.id)?.pid
+      if (root) map.set(root, s.name)
+    }
+    rootPids = { at: Date.now(), map }
+  }
+  return rootPids.map.get(pid)
+}
+
 const server = await startSocketServer({
   socketsDir: SOCKETS_DIR,
   onStatusChange: (session_id, connected, last_pong_at) => {
@@ -4094,9 +4113,17 @@ const server = await startSocketServer({
     mode: (["off", "log", "enforce"] as const).find((m) => m === process.env.MUX_PEER_AUTH) ?? "log",
     check: async (session_id, socket) => {
       const s = registry.get(session_id)
-      const root = !s ? undefined : isPersistentRuntimeSession(s) ? (s.pid || undefined) : await keeperPidOf(join(STATE_DIR, "core", s.agent), s.id)
-      return checkPeer(socket, root)
+      if (!s) return checkPeer(socket, undefined)
+      if (isPersistentRuntimeSession(s)) return checkPeer(socket, s.pid || undefined, { rootSubreaper: false })
+      const keeper = keeperInfoOf(join(STATE_DIR, "core", s.agent), s.id)
+      return checkPeer(socket, keeper?.pid, { rootSubreaper: keeper?.subreaper })
     },
+  },
+  // #156: `supermux` from outside any session (a timer, a script, a terminal) acts as the machine's OWNER: recorded as
+  // the OS user (team-ready), shown to the user as "You (from a script)". A session's own process is refused there.
+  operator: {
+    check: (socket) => checkOperator(socket, sessionOfRootPid),
+    handle: (op, peer) => sessionManager.handleOperator(op, { id: `owner:${userInfo().username}`, name: "You (from a script)", pid: peer.pid, uid: peer.uid }),
   },
 })
 

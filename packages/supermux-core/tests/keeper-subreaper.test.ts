@@ -19,6 +19,7 @@ test.if(process.platform === 'linux')('a detached grandchild is re-parented to t
       const { spawn } = await import('node:child_process')
       const { readFileSync } = await import('node:fs')
       const reap = await becomeChildSubreaper(() => false, 1e9)
+      if (!reap.active) throw new Error('the subreaper is not active')
       spawn('bash', ['-c', 'setsid ${orphan} </dev/null >/dev/null 2>&1 & exit 0'], { stdio: 'ignore' })
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
       await sleep(150)

@@ -68,6 +68,15 @@ const log = makeLogger("session-manager")
 
 /** How long a settled orchestration call's result is shared with identical calls. */
 export const ORCH_DEDUP_MS = 10_000
+/**
+ * #156: the operator socket. `supermux` run outside any session (a timer, a script, a terminal) acts as the machine's
+ * OWNER, never as a session: these ops, nothing that needs a session of its own (spawn, delegate, ports, cards…).
+ */
+export const OPERATOR_SESSION = "operator"
+export const OPERATOR_OPS = new Set(["list_sessions", "find_sessions", "read_session", "memory_search", "list_proxies", "cli_adoption", "message_session"])
+/** Who acted through the operator socket: the OS user who owns this broker (team-ready: the id names the user). */
+export type OperatorActor = { id: string; name: string; pid?: number; uid?: number | null }
+
 /** Orchestration ops that only read: never served from a settled call (see orchestration()). */
 export const READ_OPS = new Set(["list_sessions", "find_sessions", "read_session", "memory_search", "list_models", "list_devices", "list_proxies", "browser_comments"])
 /** Why the session tools refuse a draft (a launcher chat nothing has been sent in): its id is temporary too. */
@@ -669,6 +678,12 @@ export class SessionManager {
     }
   }
 
+  /** #156: an op from the operator socket, i.e. the machine's owner from a script (no dedup: one explicit command). */
+  handleOperator(op: ToolOperation, actor: OperatorActor): Promise<OpResult> {
+    log.info("operator_call", { op_name: op.name, owner: actor.id, pid: actor.pid, uid: actor.uid })
+    return this.runOrchestration(OPERATOR_SESSION, op, actor).catch((err: unknown): OpResult => ({ ok: false, error: `handler threw: ${err instanceof Error ? err.message : String(err)}` }))
+  }
+
   /**
    * An orchestration tool call from session `fromSession`, shared by the external shim's socket and
    * the host MCP server. Single-flight per session + op + args for ORCH_DEDUP_MS after it settles:
@@ -702,9 +717,12 @@ export class SessionManager {
     return p
   }
 
-  private async runOrchestration(fromSession: string, op: ToolOperation): Promise<OpResult> {
+  private async runOrchestration(fromSession: string, op: ToolOperation, operator?: OperatorActor): Promise<OpResult> {
+    if (operator && !OPERATOR_OPS.has(op.name)) {
+      return { ok: false, error: `not allowed from outside a session: ${op.name} acts for a session. From a script, supermux can list, find, read and search sessions, message them, and list links.` }
+    }
     // Permission check — fromSession is UUID
-    const s = this.registry.get(fromSession)  // Look up by UUID
+    const s = operator ? undefined : this.registry.get(fromSession)  // Look up by UUID
     // The ops listed here are open to every session. Any other op needs can_orchestrate, which
     // personal assistants have: today that leaves mute_session, set_active and get_active (spec §4).
     // A new tool meant for every session must be added here.
@@ -714,7 +732,7 @@ export class SessionManager {
       const applets = this.ports.orchestration.appletOp
       return applets ? await applets(s.id, op.name, op.args) : { ok: false, error: "applets are not available on this broker" }
     }
-    if (!s?.can_orchestrate && !NO_ORCHESTRATE_REQUIRED.has(op.name)) {
+    if (!operator && !s?.can_orchestrate && !NO_ORCHESTRATE_REQUIRED.has(op.name)) {
       return { ok: false, error: "permission denied (can_orchestrate=false)" }
     }
     try {
@@ -758,7 +776,9 @@ export class SessionManager {
         }
       }
       case "message_session": {
-        if (!s) return { ok: false, error: "unknown session" }
+        // From the operator socket the sender is the owner ("You (from a script)"), never a session.
+        const sender = operator ? { name: operator.name, id: operator.id } : s ? { name: s.name, id: s.id } : undefined
+        if (!sender) return { ok: false, error: "unknown session" }
         const inbox = this.ports.getInbox?.()
         if (!inbox) return { ok: false, error: "inbox is not ready" }
         const to = op.args.to
@@ -772,7 +792,7 @@ export class SessionManager {
         const drafts = (to as string[]).filter((id) => { const r = this.registry.get(id); return !!r && isDraftSession(r) })
         if (drafts.length) return { ok: false, error: `draft session id: ${drafts.join(", ")} (${DRAFT_HAS_NO_AGENT})` }
         const text = stringArg(op.args, "text")
-        return { ok: true, value: inbox.send({ name: s.name, id: s.id }, to as string[], text, stopNow ? "stop" : op.args.interrupt ? "interrupt" : "queue") }
+        return { ok: true, value: inbox.send(sender, to as string[], text, stopNow ? "stop" : op.args.interrupt ? "interrupt" : "queue") }
       }
       case "kill_session": {
         if (!s) return { ok: false, error: "unknown session" }
@@ -827,7 +847,7 @@ export class SessionManager {
         return { ok: true, value: "ok" }
       }
       case "list_sessions": {
-        if (!s) return { ok: false, error: "unknown session" }
+        if (!s && !operator) return { ok: false, error: "unknown session" }
         // Children included (spec §4): this is the agents' list, not a client one.
         const sessions = this.registry.list().filter((x) => !x.internal && !isDraftSession(x))
         return {
@@ -1030,9 +1050,9 @@ export class SessionManager {
       // #156: the CLI's `supermux port ls`. No MCP tool lists links, so an agent asked to change "the fold preview
       // link" had no way to find its name (0/3 with MCP in the eval, 3/3 with this).
       case "list_proxies": {
-        if (!s) return { ok: false, error: "unknown session" }
+        if (!s && !operator) return { ok: false, error: "unknown session" }
         const base = { baseDomain: process.env.MUX_PROXY_BASE_DOMAIN, publicUrl: this.ports.orchestration.exposedProxyLinksBaseUrl() }
-        return { ok: true, value: this.registry.listProxies().map((p) => ({ domain: p.domain, port: p.port, isPublic: p.isPublic, sessionName: p.sessionName, mine: p.sessionId === s.id, createdAt: p.createdAt, url: buildProxyPublicUrl(p.domain, base) })) }
+        return { ok: true, value: this.registry.listProxies().map((p) => ({ domain: p.domain, port: p.port, isPublic: p.isPublic, sessionName: p.sessionName, mine: p.sessionId === s?.id, createdAt: p.createdAt, url: buildProxyPublicUrl(p.domain, base) })) }
       }
       // #156: who knows the CLI yet, and is any moved MCP tool still in use (`supermux api cli_adoption`).
       case "cli_adoption": {

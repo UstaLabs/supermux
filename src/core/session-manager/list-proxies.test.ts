@@ -65,3 +65,23 @@ test("cli_adoption: who knows the CLI, who doesn't yet, and when a moved tool wa
     expect(v.sessions.find((s: any) => s.name === "fresh")).toMatchObject({ knows: true, cliCalls: 1 })
   } finally { unbind() }
 })
+
+test("operator socket: the owner can list and message sessions, as 'You (from a script)'; session-only ops are refused (#156)", async () => {
+  const db = openDb(":memory:")
+  runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+  const registry = new Registry(db)
+  const ports = fakePorts(db, { frames: [] })
+  const sent: Array<{ from: unknown; to: string[]; text: string }> = []
+  ports.getInbox = () => ({ send: (from: unknown, to: string[], text: string) => { sent.push({ from, to, text }); return { ids: {} } } }) as any
+  const m = new SessionManager(registry, ports)
+  const target = registry.register({ name: "Trend Scout", workdir: "/tmp", pid: 0, agent: "claude", connected: false })
+  const owner = { id: "owner:ahmet", name: "You (from a script)", pid: 4242, uid: 1000 }
+  const ls = await m.handleOperator({ name: "list_sessions", args: {} }, owner)
+  expect((ls.value as any[]).map((s) => s.name)).toEqual(["Trend Scout"])
+  const msg = await m.handleOperator({ name: "message_session", args: { to: [target.id], text: "daily run done", interrupt: false } }, owner)
+  expect(msg.ok).toBe(true)
+  expect(sent).toEqual([{ from: { name: "You (from a script)", id: "owner:ahmet" }, to: [target.id], text: "daily run done" }])
+  const spawn = await m.handleOperator({ name: "spawn_session", args: { workdir: "/tmp" } }, owner)
+  expect(spawn.ok).toBe(false)
+  expect(spawn.error).toContain("not allowed from outside a session")
+})

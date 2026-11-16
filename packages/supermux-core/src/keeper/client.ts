@@ -478,6 +478,19 @@ export async function keeperPidOf(stateDirectory: string, sessionId: string): Pr
   return status && alive(status.keeperPid) && trustedSocket(dir, socketOf(dir, status)) ? status.keeperPid : undefined
 }
 
+/**
+ * The session's live keeper: its pid, and whether it is a child subreaper (undefined: a keeper from before supermux #156
+ * that doesn't say). Synchronous (a file read). The broker's peer check needs both.
+ */
+export function keeperInfoOf(stateDirectory: string, sessionId: string): { pid: number; subreaper: boolean | undefined } | undefined {
+  const dir = keeperDirectory(stateDirectory, sessionId, false)
+  if (!dir) return undefined
+  const text = readPrivateFile(join(dir, 'status.json'))
+  let status: KeeperStatus | undefined
+  try { status = text === undefined ? undefined : JSON.parse(text) as KeeperStatus } catch { return undefined }
+  return status && status.keeperPid > 0 && alive(status.keeperPid) ? { pid: status.keeperPid, subreaper: status.subreaper } : undefined
+}
+
 /** The pid of the session's running agent, from its keeper's status (synchronous: a file read), or undefined. */
 export function agentPidOf(stateDirectory: string, sessionId: string): number | undefined {
   const dir = keeperDirectory(stateDirectory, sessionId, false)

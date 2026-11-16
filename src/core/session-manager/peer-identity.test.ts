@@ -4,7 +4,7 @@ import { spawn } from "node:child_process"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { checkPeer, descendsFrom, parentOf, peerOf } from "./peer-identity"
+import { checkOperator, checkPeer, descendsFrom, parentOf, peerOf } from "./peer-identity"
 
 const posix = process.platform === "linux" || process.platform === "darwin"
 const dir = mkdtempSync(join(tmpdir(), "sm-peer-"))
@@ -32,7 +32,7 @@ test.if(posix)("a child of the session's root passes; the same process under ano
   expect(ok.ok).toBe(true)
   const other = spawn("sleep", ["5"], { stdio: "ignore" })
   try {
-    const bad = await withChildPeer((s) => checkPeer(s, other.pid!))
+    const bad = await withChildPeer((s) => checkPeer(s, other.pid!, { rootSubreaper: true }))
     expect(bad.ok).toBe(false)
     expect(bad.why).toContain("is not part of this session")
   } finally { other.kill() }
@@ -56,4 +56,26 @@ test.if(posix)("parents: this process descends from its parent, not from an unre
 test("a peer the OS cannot name (a pre-#156 Windows named pipe; another host OS) passes, saying why", async () => {
   const fake = { _handle: { fd: 3 } } as unknown as Socket
   expect(await checkPeer(fake, 1, { platform: "win32" })).toEqual({ ok: true, peer: null, why: "peer unknown on win32" })
+})
+
+test.if(posix)("a keeper from before #156 (no subreaper flag): outside its tree is unverifiable, so allowed with the reason", async () => {
+  const other = spawn("sleep", ["5"], { stdio: "ignore" })
+  try {
+    const old = await withChildPeer((s) => checkPeer(s, other.pid!))           // rootSubreaper undefined
+    expect(old).toMatchObject({ ok: true })
+    expect(old.why).toContain("unverifiable")
+    const fresh = await withChildPeer((s) => checkPeer(s, other.pid!, { rootSubreaper: true }))
+    expect(fresh.ok).toBe(false)
+  } finally { other.kill() }
+})
+
+test.if(posix)("operator socket: a process outside every session acts as the owner; a session's process is refused, named", async () => {
+  const outside = await withChildPeer((s) => checkOperator(s, () => undefined))
+  expect(outside.ok).toBe(true)
+  // this test process stands for a session's keeper: its child is inside "Trend Scout"
+  const inside = await withChildPeer((s) => checkOperator(s, (pid) => (pid === process.pid ? "Trend Scout" : undefined)))
+  expect(inside.ok).toBe(false)
+  expect(inside.why).toContain('part of session "Trend Scout"')
+  const foreign = await withChildPeer((s) => checkOperator(s, () => undefined, { uid: 12345 }))
+  expect(foreign.ok).toBe(false)
 })

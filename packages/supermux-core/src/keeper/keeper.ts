@@ -86,8 +86,9 @@ type BunFfi = {
  * a time; the agent's own exit is never touched. Any failure is harmless: detached processes then lose their session.
  * Returns a function that reaps now and reports how many (tests); a no-op elsewhere.
  */
-export async function becomeChildSubreaper(isAgent: (pid: number) => boolean, everyMs = 60_000): Promise<() => number> {
-  if (host.os() !== 'linux') return () => 0
+export async function becomeChildSubreaper(isAgent: (pid: number) => boolean, everyMs = 60_000): Promise<(() => number) & { active: boolean }> {
+  const off = Object.assign(() => 0, { active: false })
+  if (host.os() !== 'linux') return off
   try {
     // Through a variable: this package typechecks with Node's types only, which have no 'bun:ffi' (a Bun builtin).
     const ffiModule = 'bun:ffi'
@@ -96,7 +97,7 @@ export async function becomeChildSubreaper(isAgent: (pid: number) => boolean, ev
       prctl: { args: [FFIType.i32, FFIType.u64, FFIType.u64, FFIType.u64, FFIType.u64], returns: FFIType.i32 },
       waitpid: { args: [FFIType.i32, FFIType.ptr, FFIType.i32], returns: FFIType.i32 },
     })
-    if (libc.symbols.prctl(36 /* PR_SET_CHILD_SUBREAPER */, 1, 0, 0, 0) !== 0) return () => 0
+    if (libc.symbols.prctl(36 /* PR_SET_CHILD_SUBREAPER */, 1, 0, 0, 0) !== 0) return off
     const status = new Int32Array(1)
     const reap = (): number => {
       let n = 0
@@ -112,8 +113,8 @@ export async function becomeChildSubreaper(isAgent: (pid: number) => boolean, ev
       return n
     }
     setInterval(reap, everyMs).unref()
-    return reap
-  } catch { return () => 0 /* not under Bun, or no libc.so.6: carry on without */ }
+    return Object.assign(reap, { active: true })
+  } catch { return off /* not under Bun, or no libc.so.6: carry on without */ }
 }
 
 async function main() {
@@ -136,7 +137,7 @@ async function main() {
   // descendant: the broker tells a session's processes by their ancestry (supermux #156). Linux only; elsewhere a no-op.
   // (The agent is spawned below; until then no pid is the agent's.)
   let agentPidForReaper = 0
-  await becomeChildSubreaper((pid) => pid === agentPidForReaper)
+  const subreaper = (await becomeChildSubreaper((pid) => pid === agentPidForReaper)).active
 
   // The client made the directory and passes its real path: a directory of this user's, with no link to it or in it.
   const verify = () => assertRealDirectory(sessionDir)
@@ -270,6 +271,7 @@ async function main() {
     const status: KeeperStatus & { journalRewrites: number } = {
       keeperPid: process.pid,
       agentPid: agent.pid ?? 0,
+      subreaper,
       startedAt,
       lastSeq,
       firstSeq,
