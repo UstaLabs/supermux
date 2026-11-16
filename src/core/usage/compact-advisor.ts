@@ -15,7 +15,6 @@ export type AdviceChange = { account: string; usedPct?: number; threshold?: numb
 type State = {
   account?: string
   turnStartPct?: number
-  costs: number[]
   advice?: CompactAdviceView
   autoDone?: number
   cacheLifeMs?: number
@@ -27,6 +26,11 @@ export class CompactAdvisor {
   private readonly sessions = new Map<string, State>()
   /** Each account's 5-hour window as its chats last read it. */
   private readonly windows = new Map<string, LimitWindow>()
+  /**
+   * What the account's last turns cost (any chat's), the margin every chat on it is judged by: the meter is shared,
+   * so an idle chat whose own turns were cheap still hits the wall when a busy one burns it (the by-hand e2e).
+   */
+  private readonly costs = new Map<string, number[]>()
 
   constructor(private readonly deps: {
     now: () => number
@@ -76,18 +80,31 @@ export class CompactAdvisor {
     if (s) s.turnStartPct = this.windowOf(s)?.usedPct
   }
 
-  /** At a chat's own turn end: what the turn cost, the advice, and (only here) the automatic Compact. */
+  /**
+   * At a chat's own turn end: what the turn cost (the account's margin moves, so the other chats on it are re-judged
+   * for display), its advice, and (only here, only for this chat) the automatic Compact.
+   */
   async turnCompleted(sessionId: string, _agent: string, contextUsed: number | undefined): Promise<void> {
     const s = this.sessions.get(sessionId)
     if (!s) return
     const w = this.windowOf(s)
-    if (s.turnStartPct != null && w && w.usedPct >= s.turnStartPct) {
-      s.costs.push(w.usedPct - s.turnStartPct)
-      if (s.costs.length > 3) s.costs.shift()
+    let costMoved = false
+    if (s.account && s.turnStartPct != null && w && w.usedPct >= s.turnStartPct) {
+      const costs = this.costs.get(s.account) ?? []
+      costs.push(w.usedPct - s.turnStartPct)
+      if (costs.length > 3) costs.shift()
+      this.costs.set(s.account, costs)
+      costMoved = true
     }
     s.turnStartPct = undefined
     if (contextUsed != null) s.contextUsed = contextUsed
     await this.evaluate(sessionId, "turn-end", true)
+    if (!costMoved || !s.account) return
+    for (const id of this.deps.sessionsOn?.(s.account) ?? []) {
+      if (id === sessionId) continue
+      this.state(id).account = s.account
+      void this.evaluate(id, "account-reading", false)
+    }
   }
 
   /** A compaction ended: whatever was advised is done (the next reading or turn end advises again if it must). */
@@ -115,7 +132,7 @@ export class CompactAdvisor {
     s.contextUsed = contextUsed
     const window = this.windowOf(s)
     const advice = adviseCompact({
-      agent: "claude", contextUsed, window, now: this.deps.now(), recentTurnCosts: s.costs,
+      agent: "claude", contextUsed, window, now: this.deps.now(), recentTurnCosts: (s.account && this.costs.get(s.account)) || [],
       cacheLifeMs: s.cacheLifeMs ?? DEFAULT_CACHE_LIFE_MS,
     })
     // A teammate seat in the same org would take the chat over warm: then the wall costs nothing to wait out.
@@ -144,7 +161,7 @@ export class CompactAdvisor {
 
   private state(sessionId: string): State {
     let s = this.sessions.get(sessionId)
-    if (!s) this.sessions.set(sessionId, (s = { costs: [] }))
+    if (!s) this.sessions.set(sessionId, (s = {}))
     return s
   }
 }
