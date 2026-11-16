@@ -25,6 +25,8 @@
 #include <WebView2.h>
 #include <WebView2EnvironmentOptions.h>
 #include <atomic>
+#include <map>
+#include <string>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -33,8 +35,8 @@
 #include <vector>
 #include "logic.h"
 
-/** WinGlue.ABI; Gradle's stageWindowsGlue reads it from here. Change both together. 2: WinGlue.close. */
-#define WV_ABI_VERSION 2
+/** WinGlue.ABI; Gradle's stageWindowsGlue reads it from here. Change both together. 2: WinGlue.close. 3: downloads. */
+#define WV_ABI_VERSION 3
 
 namespace wv {
 
@@ -61,7 +63,7 @@ enum Ev : int {
     kResource = 16,       // epoch: the document's, or for a main-frame navigation's own document, the navigation's; id: the request; a: URL; b: method
     kDialog = 17,         // id: the question; flags: COREWEBVIEW2_SCRIPT_DIALOG_KIND; a: message; b: default text; c: URI
     kPermission = 18,     // id: the question; flags: COREWEBVIEW2_PERMISSION_KIND | 0x100 user initiated; a: URI
-    kDownload = 19,       // a: URL; b: MIME type; c: the suggested file name
+    kDownload = 19,       // id: the question (where to save it); flags: total bytes or -1; a: URL; b: MIME type; c: the suggested file name
     kNewWindow = 20,      // flags: 1 user initiated; a: URL
     kProcessFailed = 21,  // flags: COREWEBVIEW2_PROCESS_FAILED_KIND
     kDevToolsEvent = 22,  // a: the event's name; b: its JSON
@@ -69,7 +71,15 @@ enum Ev : int {
     kBrowserExited = 24,  // page 0: the environment's browser process is gone
     kScriptReady = 25,    // epoch: the script's; flags: HRESULT
     kLog = 26,            // a: a diagnostic line
+    kDownloadProgress = 27,  // page 0; id: the download; flags: bytes received; a: total bytes or -1
+    kDownloadState = 28,     // page 0; id: the download; flags: 0 done, 1 paused, 2 failed, 3 cancelled; a: why it failed; b: bytes received
 };
+
+// Implemented in downloads.cpp (#157): the process's downloads, which outlive their page. UI thread.
+void adoptDownload(int64_t id, winrt::com_ptr<ICoreWebView2DownloadOperation> const& operation);
+void pauseDownload(int64_t id);
+void resumeDownload(int64_t id);
+void cancelDownload(int64_t id);
 
 /** The page's configure flags (WinGlue.configure). */
 constexpr int kConfScripts = 1;      // JavaScript on

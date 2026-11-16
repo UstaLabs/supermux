@@ -101,7 +101,7 @@ class WebClientTest {
         assertEquals(DialogResult.Confirmed, client.onDialog(WebDialog.BeforeUnload("leave?")))
         assertNull(client.onFileChooser(FileChooserRequest(listOf("image/*"), allowMultiple = false)))
         assertFalse(client.onPermission(PermissionRequest("https://a.test", setOf(PermissionKind.Camera))))
-        assertFalse(client.onDownload(DownloadRequest("https://a.test/f.zip", "f.zip", null, null)))
+        assertNull(client.onDownload(DownloadRequest("https://a.test/f.zip", "f.zip", null, null)))
         assertEquals(NewWindowDecision.Block, client.onNewWindow(NewWindowRequest("https://a.test/", isUserGesture = true)))
         assertEquals(
             NavigationDecision.OpenExternally,

@@ -36,6 +36,15 @@ internal sealed interface WpeEvent {
     /** The page asked for a window; it got none. */
     data class NewWindow(val url: String?, val gesture: Boolean) : WpeEvent
 
+    /** WebKit has a download's response and waits to hear where to save it ([WpeNative.download]). */
+    data class Download(val download: Long, val url: String?, val mime: String?, val filename: String?, val length: Long?) : WpeEvent
+
+    /** A download's bytes so far, and its size once known: the process's (view 0), as [DownloadState] is. */
+    data class DownloadProgress(val download: Long, val received: Long, val total: Long?) : WpeEvent
+
+    /** [state]: a `WpeNative.DOWNLOAD_DONE`…; [message] why it failed. */
+    data class DownloadState(val download: Long, val state: Int, val received: Long, val message: String?) : WpeEvent
+
     /** WebKit found the page's web process unresponsive (it didn't answer in 3 s), or answering again. */
     data class Responsive(val responsive: Boolean) : WpeEvent
 
@@ -89,6 +98,14 @@ internal sealed interface WpeEvent {
             WpeNative.CLIPBOARD -> s1?.let { Clipboard(it) }
             WpeNative.OPTION_MENU -> optionMenu(a, s1, s2)
             WpeNative.OPTION_MENU_CLOSED -> OptionMenuClosed(a)
+            WpeNative.DOWNLOAD_EVENT -> Download(
+                a, s1,
+                s2?.substringBefore('\n')?.takeIf { it.isNotEmpty() },
+                s2?.substringAfter('\n', "")?.takeIf { it.isNotEmpty() },
+                b.takeIf { it >= 0 },
+            )
+            WpeNative.DOWNLOAD_PROGRESS -> DownloadProgress(a, b, s1?.toLongOrNull()?.takeIf { it >= 0 })
+            WpeNative.DOWNLOAD_STATE -> DownloadState(a, b.toInt(), s2?.toLongOrNull() ?: 0L, s1?.takeIf { it.isNotEmpty() })
             else -> null
         }
 

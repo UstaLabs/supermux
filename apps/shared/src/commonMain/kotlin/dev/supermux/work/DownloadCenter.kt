@@ -46,6 +46,15 @@ interface DownloadSource {
     suspend fun fetch(progress: (received: Long, total: Long?) -> Unit): DownloadedFile?
 
     fun cancel() {}
+
+    /**
+     * The user's Cancel ([DownloadCenter.dismiss]) of a download that hasn't finished: stopped for good. [running]: it
+     * was still fetching (else paused or failed). By default a running one is stopped as [cancel] does; a source that
+     * keeps what arrived for a resume (a page's download, #157) throws it away here.
+     */
+    fun dismiss(running: Boolean) {
+        if (running) cancel()
+    }
 }
 
 /** What a finished download is for: a file to open, save or share, or an app update to install. */
@@ -178,11 +187,11 @@ class DownloadCenter(private val scope: CoroutineScope) {
     fun dismiss(key: String) {
         val (source, job) = synchronized(lock) {
             val entry = entries.remove(key) ?: return
-            val running = stateOf(key) is DownloadState.Running
+            val state = stateOf(key)
             listed.update { all -> all.filter { it.key != key } }
-            (if (running) entry.source else null) to entry.job
+            (if (state !is DownloadState.Done) entry.source to (state is DownloadState.Running) else null) to entry.job
         }
-        source?.cancel()
+        source?.let { (it, running) -> it.dismiss(running) }
         job?.cancel()
     }
 
@@ -204,11 +213,16 @@ class DownloadCenter(private val scope: CoroutineScope) {
 
     /** The bar's ✕: forget everything that is no longer running. */
     fun clearFinished() {
-        synchronized(lock) {
-            val finished = listed.value.filter { it.state !is DownloadState.Running }.map { it.key }.toSet()
-            entries.keys.removeAll(finished)
-            listed.update { all -> all.filter { it.key !in finished } }
+        val unfinished = synchronized(lock) {
+            val finished = listed.value.filter { it.state !is DownloadState.Running }
+            val stopped = finished.filter { it.state !is DownloadState.Done }.mapNotNull { entries[it.key]?.source }
+            val keys = finished.map { it.key }.toSet()
+            entries.keys.removeAll(keys)
+            listed.update { all -> all.filter { it.key !in keys } }
+            stopped
         }
+        // A paused or failed one is gone for good: a source keeping what arrived for a resume lets it go.
+        unfinished.forEach { it.dismiss(running = false) }
     }
 
     /** The fleet is closing: cancel every download, each source told at once, as with the user's Cancel. */

@@ -38,7 +38,7 @@ internal fun mediaCacheBase(os: DesktopOs, env: (String) -> String?, home: Strin
 }
 
 /** Create [dir] and make it `0700` where POSIX permissions exist: other users must not read chat files. */
-private fun ownerOnlyDir(dir: Path) {
+internal fun ownerOnlyDir(dir: Path) {
     Files.createDirectories(dir)
     if (dir.fileSystem.supportedFileAttributeViews().contains("posix")) {
         Files.setPosixFilePermissions(dir, PosixFilePermissions.fromString("rwx------"))

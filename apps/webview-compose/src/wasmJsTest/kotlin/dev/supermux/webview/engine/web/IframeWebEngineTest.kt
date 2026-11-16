@@ -502,8 +502,8 @@ class IframeWebEngineTest {
         val cases = listOf(
             Triple(demo("<p>x</p>"), true, setOf("allow-scripts")),
             Triple(demo("<p>x</p>"), false, emptySet()),
-            Triple(WebContent.Url(otherOriginUrl()), true, setOf("allow-scripts", "allow-same-origin", "allow-forms")),
-            Triple(WebContent.Url(otherOriginUrl()), false, setOf("allow-same-origin", "allow-forms")),
+            Triple(WebContent.Url(otherOriginUrl()), true, setOf("allow-scripts", "allow-same-origin", "allow-forms", "allow-downloads")),
+            Triple(WebContent.Url(otherOriginUrl()), false, setOf("allow-same-origin", "allow-forms", "allow-downloads")),
             Triple(WebContent.Bundle(WebOrigin("plugin-c"), WebResourceProvider { null }), true, emptySet()),
         )
         for ((content, javaScript, expected) in cases) {

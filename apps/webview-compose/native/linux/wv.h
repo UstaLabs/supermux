@@ -47,8 +47,14 @@ enum {
                                 s2 the element's area "x,y,width,height" in view coordinates */
     WV_EV_OPTION_MENU_CLOSED = 25, /* a: the request of a menu WebKit closed itself */
     WV_EV_COOKIE_SET = 26,   /* a: request, b: 1 the cookie is in the view's network session / 0 refused or failed */
+    WV_EV_DOWNLOAD = 27,           /* a: the download (where to save it: WV_OP_DOWNLOAD answers), b: length or -1, s1: URL,
+                                    * s2: "MIME\nsuggested file name" */
+    WV_EV_DOWNLOAD_PROGRESS = 28,  /* view 0; a: the download, b: bytes received, s1: total bytes or -1 */
+    WV_EV_DOWNLOAD_STATE = 29,     /* view 0; a: the download, b: WV_DOWNLOAD_DONE…, s1: why it failed, s2: bytes received */
 };
 enum { WV_OPTION_ENABLED = 1, WV_OPTION_SELECTED = 2, WV_OPTION_GROUP_LABEL = 4, WV_OPTION_GROUP_CHILD = 8 };
+enum { WV_DOWNLOAD_DONE = 0, WV_DOWNLOAD_PAUSED = 1, WV_DOWNLOAD_FAILED = 2, WV_DOWNLOAD_CANCELLED = 3 };
+enum { WV_DOWNLOAD_ANSWER = 0, WV_DOWNLOAD_PAUSE = 1, WV_DOWNLOAD_RESUME = 2, WV_DOWNLOAD_CANCEL = 3 };
 enum { WV_PERM_CAMERA = 1, WV_PERM_MICROPHONE = 2, WV_PERM_GEOLOCATION = 4, WV_PERM_NOTIFICATIONS = 8, WV_PERM_OTHER = 16 };
 
 enum { WV_INIT_CPU = 1, WV_INIT_NO_SANDBOX = 2, WV_INIT_GLOBAL_CONTEXT = 4 };
@@ -104,7 +110,7 @@ enum {
     WV_OP_CREATE = 1, WV_OP_DESTROY, WV_OP_REGISTER_SCHEME, WV_OP_CONFIGURE, WV_OP_SET_DARK, WV_OP_LOAD, WV_OP_NAVIGATE,
     WV_OP_EVALUATE, WV_OP_CALL_ASYNC, WV_OP_DECIDE, WV_OP_SAVE_STATE, WV_OP_RESTORE_STATE, WV_OP_SET_SIZE,
     WV_OP_SET_VISIBLE, WV_OP_SET_FOCUS, WV_OP_POINTER, WV_OP_SCROLL, WV_OP_KEY, WV_OP_IME, WV_OP_FINISH_SCHEME,
-    WV_OP_TERMINATE, WV_OP_CLEAR_DATA, WV_OP_ANSWER, WV_OP_CLIPBOARD, WV_OP_SET_COOKIE,
+    WV_OP_TERMINATE, WV_OP_CLEAR_DATA, WV_OP_ANSWER, WV_OP_CLIPBOARD, WV_OP_SET_COOKIE, WV_OP_DOWNLOAD,
 };
 typedef struct _WvSync WvSync;
 typedef struct {
@@ -122,6 +128,11 @@ WvOp *wv_op_new(int op, int64_t view);
 void wv_op_post(WvOp *op);                       /* runs it on the WebKit thread, later */
 int64_t wv_op_call(WvOp *op, GBytes **bytes);    /* runs it there and waits; -1 if called on the WebKit thread */
 WvFrames *wv_frames_lookup(int64_t view);        /* a reference, or NULL; any thread */
+int64_t wv_web_id(WebKitWebView *web);            /* the view's id, 0 for one that isn't ours or has gone */
+
+/* ---- wv_downloads.c: the process's downloads (#157), which outlive their view (WebKit thread) ---- */
+void wv_downloads_watch(WebKitNetworkSession *session);    /* once per session */
+void wv_download_op(int64_t id, int action, const char *path); /* WV_DOWNLOAD_ANSWER (path; NULL drops it), PAUSE… */
 
 /* ---- wv_client.c: the page's requests the JVM answers (WebKit thread) ---- */
 void wv_client_connect(WebKitWebView *web, int64_t view);

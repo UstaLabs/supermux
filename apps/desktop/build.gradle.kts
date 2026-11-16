@@ -396,7 +396,11 @@ compose.desktop {
                 infoPlist {
                     extraKeysRawXml = """
                         <key>NSMicrophoneUsageDescription</key>
-                        <string>Supermux uses the microphone for voice dictation.</string>
+                        <string>Supermux uses the microphone for voice dictation, and for websites in Browser tabs you allow to use it.</string>
+                        <key>NSCameraUsageDescription</key>
+                        <string>Supermux lets websites in Browser tabs use the camera when you allow it.</string>
+                        <key>NSLocationUsageDescription</key>
+                        <string>Supermux shares your location only with websites in Browser tabs you allow.</string>
                         <key>NSLocalNetworkUsageDescription</key>
                         <string>Supermux connects to your agents' host and paired devices on your network.</string>
                         <key>NSAppSleepDisabled</key>

@@ -91,6 +91,7 @@ class AndroidPlatform(
     private val captureHost: CaptureHost = CaptureHost(),
     saveHost: SaveHost = SaveHost(),
     permissionHost: PermissionHost = PermissionHost(),
+    pagePickHost: PagePickHost = PagePickHost(),
     /** What this window can do; the assistant overlay's windows have no camera or save dialog. */
     override val caps: Caps = ANDROID_CAPS,
 ) : Platform {
@@ -187,6 +188,8 @@ class AndroidPlatform(
     override val clipboard: ClipboardAccess = AndroidClipboardAccess(context)
 
     override val files: FileAccess = AndroidFileAccess(context, saveHost)
+
+    override val page: dev.supermux.ui.platform.PageDevice = AndroidPageDevice(context, pagePickHost, permissionHost)
 
     /**
      * The mic, with the on-device live transcript attached; the per-device dictation mode
@@ -648,9 +651,10 @@ fun rememberAndroidPlatform(): AndroidPlatform {
     val captureHost = rememberCaptureHost()
     val saveHost = rememberSaveHost()
     val permissionHost = rememberPermissionHost()
+    val pagePickHost = rememberPagePickHost()
     val haptics = remember(view) { AndroidHaptics(view) }
-    return remember(context, host, qrHost, captureHost, saveHost, permissionHost, haptics) {
-        AndroidPlatform(context, host, qrHost, haptics, captureHost, saveHost, permissionHost)
+    return remember(context, host, qrHost, captureHost, saveHost, permissionHost, pagePickHost, haptics) {
+        AndroidPlatform(context, host, qrHost, haptics, captureHost, saveHost, permissionHost, pagePickHost)
     }
 }
 

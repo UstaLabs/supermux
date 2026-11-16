@@ -61,6 +61,7 @@ internal object WinPages {
             is WinEvent.Environment -> environments.remove(event.request)?.complete(event)
             WinEvent.Memory -> onMemory()
             WinEvent.BrowserExited -> onBrowserExited()
+            is WinEvent.DownloadProgress, is WinEvent.DownloadState -> WinDownloads.on(event)
             is WinEvent.Log -> System.err.println("webview-windows: ${event.line}")
             else -> handlers[page]?.invoke(event)
         }

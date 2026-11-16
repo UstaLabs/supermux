@@ -173,6 +173,21 @@ class IosPlatform(
     override val files: FileAccess = IosFileAccess(bridge)
 
     /**
+     * A page's downloads land in the app's caches, as #95's do, for the downloads list to save or share. WKWebView shows
+     * its own picker for a file input, and iOS asks for the camera, mic and location itself when a page first uses them.
+     */
+    override val page: dev.supermux.ui.platform.PageDevice = object : dev.supermux.ui.platform.PageDevice {
+        override val downloadsDir: String by lazy {
+            val caches = platform.Foundation.NSSearchPathForDirectoriesInDomains(
+                platform.Foundation.NSCachesDirectory.toULong(),
+                platform.Foundation.NSUserDomainMask.toULong(),
+                true,
+            ).firstOrNull() as? String ?: platform.Foundation.NSTemporaryDirectory()
+            "$caches/supermux-downloads"
+        }
+    }
+
+    /**
      * A Compose snackbar at the root, NOT a system alert.
      *
      * iOS has no Toast: an app that wants a transient line draws it. `UIAlertController` would be

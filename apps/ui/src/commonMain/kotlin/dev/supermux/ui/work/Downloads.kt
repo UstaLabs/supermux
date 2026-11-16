@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import dev.supermux.webview.webViewOverlay
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -273,6 +274,9 @@ private fun DownloadsPopover(position: PopupPositionProvider, onDismiss: () -> U
                 .width(min(PanelTokens.PopoverWidth, window.width - PanelTokens.Margin * 2))
                 .heightIn(max = min(PanelTokens.PopoverMaxHeight, window.height - PanelTokens.Margin * 2))
                 .testTag("activity_popover")
+                // It can stand over a Browser tab's page, and on macOS a press goes to what is natively under the
+                // pointer: a popover the page isn't told about loses every click there to the page (#157).
+                .webViewOverlay(RoundedCornerShape(PanelTokens.PopoverCorner))
                 // The list holds the focus (its arrows and ↵); Esc passes through here on the way.
                 .onPreviewKeyEvent { e ->
                     if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {

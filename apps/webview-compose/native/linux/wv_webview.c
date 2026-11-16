@@ -61,6 +61,12 @@ WvFrames *wv_frames_lookup(int64_t view)
 
 static WvWeb *web_of(int64_t id) { return webs ? g_hash_table_lookup(webs, KEY(id)) : NULL; }
 
+int64_t wv_web_id(WebKitWebView *web)
+{
+    WvWeb *w = web ? g_object_get_data(G_OBJECT(web), "wv-web") : NULL;
+    return w && web_of(w->id) == w ? w->id : 0;
+}
+
 /* ---------------------------------------------------------------------------------------------------- signals */
 
 static void on_load_changed(WebKitWebView *web, WebKitLoadEvent event, WvWeb *w)
@@ -280,6 +286,7 @@ static void keep_damage_regions(WebKitSettings *settings)
 static int64_t web_create(WvOp *op)
 {
     WebKitNetworkSession *session = session_for((int)op->i[0], op->s[0]);
+    wv_downloads_watch(session);
     WebKitSettings *settings = webkit_settings_new();
     keep_damage_regions(settings);
     webkit_settings_set_javascript_can_open_windows_automatically(settings, FALSE);
@@ -763,6 +770,9 @@ static gboolean op_run(gpointer data)
         break;
     case WV_OP_CLIPBOARD:
         wv_clipboard_set_system(op->s[0]);
+        break;
+    case WV_OP_DOWNLOAD:
+        wv_download_op(op->i[0], (int)op->i[1], op->s[0]);
         break;
     default:
         if (!w)

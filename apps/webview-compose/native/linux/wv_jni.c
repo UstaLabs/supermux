@@ -327,6 +327,15 @@ static void n_answer(JNIEnv *env, jclass c, jlong view, jlong request, jboolean 
     wv_op_post(op);
 }
 
+static void n_download(JNIEnv *env, jclass c, jlong download, jint action, jstring path)
+{
+    WvOp *op = wv_op_new(WV_OP_DOWNLOAD, 0);
+    op->i[0] = download;
+    op->i[1] = action;
+    op->s[0] = wv_utf8(env, path);
+    wv_op_post(op);
+}
+
 static void n_clipboard(JNIEnv *env, jclass c, jstring text)
 {
     WvOp *op = wv_op_new(WV_OP_CLIPBOARD, 0);
@@ -380,6 +389,7 @@ static const JNINativeMethod methods[] = {
     { "setCookie", "(JJLjava/lang/String;Ljava/lang/String;)V", (void *)n_set_cookie },
     { "answer", "(JJZLjava/lang/String;[Ljava/lang/String;)V", (void *)n_answer },
     { "clipboard", "(Ljava/lang/String;)V", (void *)n_clipboard },
+    { "download", "(JILjava/lang/String;)V", (void *)n_download },
 #ifdef WV_GLBENCH
     { "uploadBench", "(IIIII[J)Ljava/lang/String;", (void *)n_upload_bench },
 #endif

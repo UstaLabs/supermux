@@ -107,7 +107,7 @@ internal class BlockingClient : dev.supermux.webview.engine.EngineClient {
 
     override suspend fun onPermission(request: dev.supermux.webview.PermissionRequest): Boolean = false
 
-    override suspend fun onDownload(request: dev.supermux.webview.DownloadRequest): Boolean = false
+    override suspend fun onDownload(request: dev.supermux.webview.DownloadRequest): dev.supermux.webview.DownloadTarget? = null
 
     override fun onNewWindow(request: dev.supermux.webview.NewWindowRequest): dev.supermux.webview.NewWindowDecision =
         dev.supermux.webview.NewWindowDecision.Block

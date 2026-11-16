@@ -26,7 +26,11 @@ internal sealed interface WinEvent {
     data class Resource(val epoch: Int, val request: Long, val url: String, val method: String) : WinEvent
     data class Dialog(val epoch: Int, val question: Long, val kind: Int, val message: String?, val defaultText: String?, val uri: String?) : WinEvent
     data class Permission(val epoch: Int, val question: Long, val kind: Int, val user: Boolean, val uri: String?) : WinEvent
-    data class Download(val epoch: Int, val url: String?, val mime: String?, val fileName: String?) : WinEvent
+    /** WebView2 holds the download until [question] is answered with where to save it ([WinGlue.answer]). */
+    data class Download(val epoch: Int, val question: Long, val url: String?, val mime: String?, val fileName: String?, val total: Long?) : WinEvent
+    data class DownloadProgress(val download: Long, val received: Long, val total: Long?) : WinEvent
+    /** [state]: 0 done, 1 paused, 2 failed ([message]), 3 cancelled. */
+    data class DownloadState(val download: Long, val state: Int, val received: Long, val message: String?) : WinEvent
     data class NewWindow(val epoch: Int, val url: String?, val user: Boolean) : WinEvent
     data class ProcessFailed(val kind: Int) : WinEvent
     data class DevToolsEvent(val epoch: Int, val name: String, val json: String?) : WinEvent
@@ -67,7 +71,9 @@ internal sealed interface WinEvent {
             WinGlue.RESOURCE -> if (a != null && b != null) Resource(epoch, id, a, b) else null
             WinGlue.DIALOG -> Dialog(epoch, id, flags.toInt(), a, b, c)
             WinGlue.PERMISSION -> Permission(epoch, id, (flags and 0xFF).toInt(), flags and 0x100L != 0L, a)
-            WinGlue.DOWNLOAD -> Download(epoch, a, b, c)
+            WinGlue.DOWNLOAD -> Download(epoch, id, a, b, c?.ifEmpty { null }, flags.takeIf { it >= 0 })
+            WinGlue.DOWNLOAD_PROGRESS -> DownloadProgress(id, flags, a?.toLongOrNull()?.takeIf { it >= 0 })
+            WinGlue.DOWNLOAD_STATE -> DownloadState(id, flags.toInt(), b?.toLongOrNull() ?: 0L, a?.ifEmpty { null })
             WinGlue.NEW_WINDOW -> NewWindow(epoch, a, flags and 1L != 0L)
             WinGlue.PROCESS_FAILED -> ProcessFailed(flags.toInt())
             WinGlue.DEVTOOLS_EVENT -> a?.let { DevToolsEvent(epoch, it, b) }

@@ -125,6 +125,14 @@ internal class FakePageGlue(override val token: Long = 1) : PageGlue {
         calls += "answerResponse $question $allow"
     }
 
+    override fun downloadPolicy(question: Long) {
+        calls += "downloadPolicy $question"
+    }
+
+    override fun downloadResponse(question: Long) {
+        calls += "downloadResponse $question"
+    }
+
     override fun answerDialog(question: Long, confirmed: Boolean, text: String?) {
         calls += "answerDialog $question $confirmed $text"
     }

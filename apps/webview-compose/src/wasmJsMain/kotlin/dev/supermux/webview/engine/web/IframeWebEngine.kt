@@ -97,8 +97,8 @@ private const val HANDSHAKE_GRACE_MILLIS = 500
  *   ("Not allowed to load local resource"), its own included, so a demo couldn't `location.reload()` or move to a
  *   `#fragment`. A page too long for a `data:` URL loads from a `blob:` one, where it can't do those two, and that URL is
  *   revoked when its navigation ends: the document is replaced, or the engine released. `Url` is `src` in
- *   `sandbox="allow-scripts allow-same-origin allow-forms"`: its real origin, no popups, no top navigation, no dialogs,
- *   no downloads. Scripts off drops `allow-scripts`. What the web can't show is refused with a message page and an
+ *   `sandbox="allow-scripts allow-same-origin allow-forms allow-downloads"`: its real origin, no popups, no top
+ *   navigation, no dialogs; the browser saves its downloads itself (#157). Scripts off drops `allow-scripts`. What the web can't show is refused with a message page and an
  *   [EngineEvent.Error]: `Bundle` (spec §7), `Url` with headers or in an `Ephemeral` engine (the browser can do neither),
  *   a `Url` on the app's own origin (it could script the app), as the browser's own URL parser reads it, and `http:`
  *   in an `https:` app. A `Url` page that reaches the app's origin anyway (a redirect, a navigation of its own) loses
@@ -145,8 +145,10 @@ private const val HANDSHAKE_GRACE_MILLIS = 500
  *   nothing to replay: it loads afresh when it gets one back.
  * - **What the web can't do,** where the contract allows a no-op: no snapshots (cross-origin pixels can't be read), no
  *   `evaluate`, no saved engine state (pages keep theirs through `$saveState`), no back or forward (cross-origin
- *   history can't be reached), no stop. Dialogs, file choosers, permissions and downloads are denied by the sandbox
- *   and never reach [client].
+ *   history can't be reached), no stop. Dialogs, file choosers, permissions and downloads never reach [client]: the
+ *   browser shows a file input's own picker and saves a `Url` page's downloads itself; dialogs are denied by the
+ *   sandbox, and so are permissions, which are never delegated (`allow=`): the browser would ask in the app's name,
+ *   and a grant would then hold for every site a tab shows.
  */
 internal class IframeWebEngine(
     val config: EngineConfig,
@@ -798,7 +800,8 @@ internal class IframeWebEngine(
                 }
                 is WebContent.Url -> {
                     val scripts = if (setup.javaScriptEnabled) "allow-scripts " else ""
-                    attribute(iframe, "sandbox", scripts + "allow-same-origin allow-forms")
+                    // Downloads (#157): the browser saves them itself, from the user's own click, as from any page.
+                    attribute(iframe, "sandbox", scripts + "allow-same-origin allow-forms allow-downloads")
                     attribute(iframe, "referrerpolicy", "strict-origin-when-cross-origin")
                     setSrc(iframe, content.url)
                 }

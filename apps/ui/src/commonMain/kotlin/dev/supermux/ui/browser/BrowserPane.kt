@@ -56,6 +56,12 @@ import dev.supermux.webview.InspectorResult
 import dev.supermux.webview.LoadingState
 import dev.supermux.webview.NewWindowDecision
 import dev.supermux.webview.NewWindowRequest
+import dev.supermux.webview.LoadFailure
+import dev.supermux.webview.WebError
+import dev.supermux.webview.PermissionRequest
+import dev.supermux.webview.FileChooserRequest
+import dev.supermux.webview.DownloadTarget
+import dev.supermux.webview.DownloadRequest
 import dev.supermux.webview.runtime.ProvideWebViewRuntime
 import dev.supermux.webview.WebClient
 import dev.supermux.webview.WebContent
@@ -119,12 +125,25 @@ internal suspend fun dev.supermux.webview.WebNavigator.putPreviewKeys(key: Previ
     return previews && applets
 }
 
-/** A tab's answers to its page: a new window asked for with the user's press opens as a link does. */
-private class BrowserClient(private val newWindow: (String) -> Unit, private val unusedKey: (KeyEvent) -> Boolean = { false }) : WebClient {
+/**
+ * A tab's answers to its page: a new window asked for with the user's press opens as a link does; downloads, file
+ * inputs and permissions go through [hooks] (#157).
+ */
+private class BrowserClient(
+    private val hooks: PageHooks,
+    private val newWindow: (String) -> Unit,
+    private val unusedKey: (KeyEvent) -> Boolean = { false },
+) : WebClient {
     override fun onNewWindow(request: NewWindowRequest): NewWindowDecision {
         if (request.isUserGesture) newWindow(request.url)
         return NewWindowDecision.Block
     }
+
+    override suspend fun onDownload(request: DownloadRequest): DownloadTarget? = hooks.download(request)
+
+    override suspend fun onFileChooser(request: FileChooserRequest): List<String>? = hooks.chooseFiles(request)
+
+    override suspend fun onPermission(request: PermissionRequest): Boolean = hooks.permission(request)
 
     /** A key the page had first and left unused (Android, #122 page-first keys): the app's shortcuts, as after Compose. */
     override fun onUnusedKey(event: KeyEvent): Boolean = unusedKey(event)
@@ -328,7 +347,9 @@ fun BrowserPane(
     // answers one press with a burst opens one).
     val windows = remember { Channel<String>(capacity = 4, onBufferOverflow = BufferOverflow.DROP_LATEST) }
     val shortcuts by rememberUpdatedState(LocalShortcutDispatcher.current)
-    val client = remember { BrowserClient(newWindow = { windows.trySend(it) }, unusedKey = { shortcuts?.onBubble(it) == true }) }
+    val hooks = rememberPageHooks(PageSource(view.id, view.title.orEmpty()))
+    val client = remember(hooks) { BrowserClient(hooks, newWindow = { windows.trySend(it) }, unusedKey = { shortcuts?.onBubble(it) == true }) }
+    val asking by hooks.prompt.collectAsState()
     LaunchedEffect(Unit) {
         var last: TimeSource.Monotonic.ValueTimeMark? = null
         for (url in windows) {
@@ -527,6 +548,7 @@ fun BrowserPane(
             onChange = { device = it }, onClose = { deviceOn = false },
         )
         if (pick.on) PickStrip(touch = phone, onDone = { pick.on = false; pick.closeComment() })
+        asking?.let { PermissionStrip(it, touch = phone) }
         notice?.let { text ->
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp).testTag("browser-notice"), verticalAlignment = Alignment.CenterVertically) {
                 Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
@@ -545,6 +567,20 @@ fun BrowserPane(
                     }
                     if (deviceOn && !phone) DeviceStage(device, fit = fitting, onScale = { stageScale = it }) { pageAndPicks() }
                     else Box(Modifier.fillMaxSize().testTag("browser-viewport")) { pageAndPicks() }
+                    // A page that didn't load says why, where it would have been, and can be tried again: a blank tab
+                    // told nothing (a refused connection, a name that doesn't resolve, plain http the OS refused).
+                    // Over the page, as one of its overlays: on macOS the page is a native view under the canvas.
+                    loadFailure(state.error)?.let { why ->
+                        Box(
+                            Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).webViewOverlay(),
+                        ) {
+                            BrowserMessage(
+                                localized(Str.browser_load_failed, why),
+                                "browser-load-failed",
+                                localized(Str.browser_try_again) to { state.navigator.reload() },
+                            )
+                        }
+                    }
                     (state.phase as? WebViewPhase.Unavailable)?.let { unavailable ->
                         // Why is the log's, not the person's (#137: a released Windows build told them to run winvm.sh).
                         LaunchedEffect(unavailable) {
@@ -577,6 +613,26 @@ fun BrowserPane(
         }
     }
     }
+}
+
+/**
+ * Why the page didn't load, or null when it did. An HTTP error status is a page the server sent, which the page shows
+ * itself; the rest left nothing to show.
+ */
+internal fun loadFailure(error: WebError?): String? = when (error) {
+    is WebError.Network -> when (error.reason) {
+        LoadFailure.CannotConnect -> localized(Str.browser_fail_cannot_connect)
+        LoadFailure.ConnectionLost -> localized(Str.browser_fail_connection_lost)
+        LoadFailure.NameNotResolved -> localized(Str.browser_fail_name)
+        LoadFailure.TimedOut -> localized(Str.browser_fail_timed_out)
+        LoadFailure.BadAnswer -> localized(Str.browser_fail_bad_answer)
+        LoadFailure.TooManyRedirects -> localized(Str.browser_fail_redirects)
+        LoadFailure.SignInRequired -> localized(Str.browser_fail_sign_in)
+        else -> error.description
+    }
+    is WebError.Certificate -> error.description
+    is WebError.BlockedByPolicy -> localized(Str.browser_load_blocked)
+    else -> null
 }
 
 /** [content] with the window's overlay registry, or one of its own where the window provides none. */

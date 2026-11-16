@@ -36,6 +36,19 @@ internal object WpeNative {
     const val OPTION_MENU = 24
     const val OPTION_MENU_CLOSED = 25
     const val COOKIE_SET = 26
+    const val DOWNLOAD_EVENT = 27
+    const val DOWNLOAD_PROGRESS = 28
+    const val DOWNLOAD_STATE = 29
+
+    // A download's states (DOWNLOAD_STATE's b) and the JVM's actions on one (download's action).
+    const val DOWNLOAD_DONE = 0
+    const val DOWNLOAD_PAUSED = 1
+    const val DOWNLOAD_FAILED = 2
+    const val DOWNLOAD_CANCELLED = 3
+    const val DOWNLOAD_ANSWER = 0
+    const val DOWNLOAD_PAUSE = 1
+    const val DOWNLOAD_RESUME = 2
+    const val DOWNLOAD_CANCEL = 3
 
     // WV_OPTION_*.
     const val OPTION_ENABLED = 1
@@ -164,4 +177,10 @@ internal object WpeNative {
 
     /** What the system's clipboard holds, for the pages' pastes ([WpeClipboard]): its text, or null for none. */
     @JvmStatic external fun clipboard(text: String?)
+
+    /**
+     * A download's action (#157): [DOWNLOAD_ANSWER] saves it to [path] (null drops it), or [DOWNLOAD_PAUSE],
+     * [DOWNLOAD_RESUME], [DOWNLOAD_CANCEL]. The process's, by the glue's id: downloads outlive their view.
+     */
+    @JvmStatic external fun download(download: Long, action: Int, path: String?)
 }

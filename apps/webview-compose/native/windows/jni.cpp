@@ -357,3 +357,15 @@ WV_JNI(void, answer)(JNIEnv* e, jclass, jlong token, jlong question, jint verdic
     auto t = fromJava(e, text);
     onPage(token, [=](wv::WvPage& page) { page.answer(question, verdict, t); });
 }
+
+// --- Downloads (#157): the process's, by the app's id; they outlive their page. ---
+
+WV_JNI(void, pauseDownload)(JNIEnv*, jclass, jlong download) {
+    wv::UiThread::get().post([=] { wv::pauseDownload(download); });
+}
+WV_JNI(void, resumeDownload)(JNIEnv*, jclass, jlong download) {
+    wv::UiThread::get().post([=] { wv::resumeDownload(download); });
+}
+WV_JNI(void, cancelDownload)(JNIEnv*, jclass, jlong download) {
+    wv::UiThread::get().post([=] { wv::cancelDownload(download); });
+}

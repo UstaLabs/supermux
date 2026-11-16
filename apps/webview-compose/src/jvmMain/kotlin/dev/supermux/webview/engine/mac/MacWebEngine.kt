@@ -15,6 +15,7 @@ import androidx.compose.ui.graphics.asComposeImageBitmap
 import androidx.compose.ui.graphics.toArgb
 import dev.supermux.webview.DialogResult
 import dev.supermux.webview.DownloadRequest
+import dev.supermux.webview.DownloadTarget
 import dev.supermux.webview.FileChooserRequest
 import dev.supermux.webview.NavigationDecision
 import dev.supermux.webview.NewWindowDecision
@@ -971,7 +972,10 @@ internal class MacWebEngine(
 
     /** Every upcall of this page, on the main thread ([MacPages]). */
     internal fun onGlueEvent(event: GlueEvent) {
-        if (released) return
+        if (released) {
+            if (event is GlueEvent.Download) MacDownloads.answer(event.download, null)
+            return
+        }
         when (event) {
             // It changes no state: push's epoch filter is all that keeps an earlier document's start from the subscriber.
             is GlueEvent.Started -> push(event.epoch, EngineEvent.Progress(START_PROGRESS))
@@ -986,6 +990,7 @@ internal class MacWebEngine(
             is GlueEvent.Dialog -> onDialog(event)
             is GlueEvent.Media -> askPermission(event.question, PermissionRequest(WebKitUrls.libraryOrigin(event.protocol, event.host, event.port, bundle), event.kinds))
             is GlueEvent.OpenPanel -> onOpenPanel(event)
+            is GlueEvent.Download -> onDownload(event)
             is GlueEvent.TaskStart -> onTaskStart(event)
             is GlueEvent.TaskStop -> tasks.remove(event.task)?.cancel()
             is GlueEvent.Result -> requests.remove(event.request)?.resume(event)
@@ -993,7 +998,8 @@ internal class MacWebEngine(
             is GlueEvent.Tick -> requests.remove(event.request)?.resume(event)
             GlueEvent.Crashed -> onRendererGone()
             is GlueEvent.Pointer -> onPointer(event)
-            is GlueEvent.Created, GlueEvent.Memory -> Unit
+            is GlueEvent.Created, GlueEvent.Memory, is GlueEvent.DownloadProgress, is GlueEvent.DownloadDone,
+            is GlueEvent.DownloadStopped -> Unit
         }
     }
 
@@ -1098,8 +1104,8 @@ internal class MacWebEngine(
         val javaScript = setup?.javaScriptEnabled ?: true
         val url = action.url
         if (action.download && url != null) {
-            askAboutDownload(DownloadRequest(WebKitUrls.toLibraryUrl(url, bundle), null, null, null))
-            glue.answerPolicy(action.question, false, javaScript)
+            // WebKit fetches it, and asks where to save it once it has the response (DOWNLOAD): the client hears then.
+            if (client != null) glue.downloadPolicy(action.question) else glue.answerPolicy(action.question, false, javaScript)
             return
         }
         val gesture = userGesture(spend = false)
@@ -1190,12 +1196,8 @@ internal class MacWebEngine(
             glue.answerResponse(response.question, true)
             return
         }
-        // A download. The client hears of it; the engine saves nothing, either way (D13).
-        val url = response.url
-        if (url != null) {
-            askAboutDownload(DownloadRequest(WebKitUrls.toLibraryUrl(url, bundle), response.suggestedFilename, response.mimeType, response.length))
-        }
-        glue.answerResponse(response.question, false)
+        // A download (#157): WebKit saves it with the page's session, where the client says (DOWNLOAD).
+        if (client != null && response.url != null) glue.downloadResponse(response.question) else glue.answerResponse(response.question, false)
     }
 
     private fun onNewWindow(request: GlueEvent.NewWindow) {
@@ -1384,16 +1386,29 @@ internal class MacWebEngine(
         tasks.clear()
     }
 
-    /** Tells the client of a download, which the engine has already cancelled: nothing waits on the answer. */
-    private fun askAboutDownload(request: DownloadRequest) {
-        val asked = client ?: return
+    /**
+     * WebKit has a download's response and asks where to save it: the client says, or it is dropped (no client, a
+     * client that throws, a reset or release first). WebKit holds the transfer until the answer.
+     */
+    private fun onDownload(event: GlueEvent.Download) {
+        val asked = client
+        val url = event.url
+        if (asked == null || url == null) {
+            MacDownloads.answer(event.download, null)
+            return
+        }
+        val request = DownloadRequest(WebKitUrls.toLibraryUrl(url, bundle), event.suggestedFilename, event.mimeType, event.length)
         leaseScope().launch {
+            var target: DownloadTarget? = null
             try {
-                asked.onDownload(request)
+                target = asked.onDownload(request)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 // A client that throws has said no.
+            } finally {
+                val to = target
+                if (to == null) MacDownloads.answer(event.download, null) else MacDownloads.start(event.download, request, to)
             }
         }
     }

@@ -702,7 +702,11 @@ internal class LinuxWebEngine(
     // --- The glue's events ---
 
     internal fun onEvent(event: WpeEvent) {
-        if (released) return
+        if (released) {
+            // WebKit waits for a download's destination: one the view can't ask about anymore is dropped.
+            if (event is WpeEvent.Download) LinuxDownloads.answer(event.download, null)
+            return
+        }
         when (event) {
             is WpeEvent.Load -> onLoad(event)
             is WpeEvent.LoadFailed -> onFailed(event)
@@ -729,10 +733,11 @@ internal class LinuxWebEngine(
             is WpeEvent.Dialog -> onDialog(event)
             is WpeEvent.Permission -> onPermission(event)
             is WpeEvent.FileChooser -> onFileChooser(event)
+            is WpeEvent.Download -> onDownload(event)
             is WpeEvent.NewWindow -> onNewWindow(event)
             is WpeEvent.Responsive -> onResponsive(event.responsive)
             // The process's, not a view's: WpeHost hands it to WpeClipboard.
-            is WpeEvent.Clipboard -> Unit
+            is WpeEvent.Clipboard, is WpeEvent.DownloadProgress, is WpeEvent.DownloadState -> Unit
             is WpeEvent.OptionMenu -> onOptionMenu(event)
             is WpeEvent.OptionMenuClosed -> if (optionMenu?.request == event.request) optionMenu = null
         }
@@ -1031,9 +1036,8 @@ internal class LinuxWebEngine(
         val url = event.url
         val verdict = navigation.atResponse(event, bundle)
         if (event.mainFrame && (event.attachment || !event.canShow)) {
-            // A download. The client hears of it; the engine saves nothing, either way (as Android's DownloadListener).
-            view.decide(event.decision, WpeNative.IGNORE)
-            if (url != null) askAboutDownload(DownloadRequest(WebKitUrls.toLibraryUrl(url, bundle), event.filename, event.mime, null))
+            // A download (#157): WebKit fetches it with the page's session, and asks where to save it (Download).
+            view.decide(event.decision, if (client != null && url != null) WpeNative.DOWNLOAD else WpeNative.IGNORE)
             return
         }
         val allowed = when (verdict) {
@@ -1211,17 +1215,15 @@ internal class LinuxWebEngine(
 
     // --- Client requests ---
 
-    /** Tells the client of a download, which the engine has already refused: nothing waits on the answer. */
-    private fun askAboutDownload(request: DownloadRequest) {
-        val asked = client ?: return
-        CoroutineScope(scope.coroutineContext + lease).launch {
-            try {
-                asked.onDownload(request)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                // A client that throws has said no.
-            }
+    /**
+     * WebKit has a download's response and waits to hear where to save it: the client says, or it is dropped (no
+     * client, one that throws or says no, a reset or release first).
+     */
+    private fun onDownload(event: WpeEvent.Download) {
+        val url = event.url ?: return LinuxDownloads.answer(event.download, null)
+        val request = DownloadRequest(WebKitUrls.toLibraryUrl(url, bundle), event.filename, event.mime, event.length)
+        ask({ LinuxDownloads.answer(event.download, null) }, { it.onDownload(request) }) { target ->
+            LinuxDownloads.start(event.download, request, target)
         }
     }
 
@@ -1308,7 +1310,7 @@ internal class LinuxWebEngine(
      */
     private fun <T : Any> ask(
         byDefault: () -> Unit,
-        question: suspend (EngineClient) -> T,
+        question: suspend (EngineClient) -> T?,
         holdsPage: Boolean = false,
         answer: (T) -> Unit,
     ) {

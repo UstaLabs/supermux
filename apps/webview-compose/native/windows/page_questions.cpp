@@ -3,7 +3,7 @@ using Microsoft::WRL::Callback;
 
 namespace wv {
 namespace {
-constexpr int kQuestionDialog = 0, kQuestionPermission = 1, kQuestionBeforeUnload = 2;
+constexpr int kQuestionDialog = 0, kQuestionPermission = 1, kQuestionBeforeUnload = 2, kQuestionDownload = 3;
 }  // namespace
 
 void WvPage::registerQuestionEvents() {
@@ -49,17 +49,27 @@ void WvPage::registerQuestionEvents() {
         }), &t);
     webview_->add_DownloadStarting(WV_HANDLER(ICoreWebView2DownloadStartingEventHandler, ICoreWebView2*,
         ICoreWebView2DownloadStartingEventArgs*, {
-            args->put_Cancel(TRUE);    // the engine saves nothing (D18)
-            args->put_Handled(TRUE);   // and shows no download UI
+            args->put_Handled(TRUE);   // no download UI: the app lists it (#157)
             winrt::com_ptr<ICoreWebView2DownloadOperation> operation;
             CoString uri, mime, path;
+            INT64 total = -1;
             if (SUCCEEDED(args->get_DownloadOperation(operation.put())) && operation) {
                 operation->get_Uri(uri.put());
                 operation->get_MimeType(mime.put());
+                operation->get_TotalBytesToReceive(&total);
             }
             args->get_ResultFilePath(path.put());
             const std::wstring file = path.str();
-            emit(self->token_, kDownload, self->documentEpoch_, 0, 0, uri.str(), mime.str(), file.substr(file.find_last_of(L"\\/") + 1));
+            // WebView2 saves it with the page's session, where the app says: it holds the download until the answer.
+            winrt::com_ptr<ICoreWebView2Deferral> deferral;
+            if (FAILED(args->GetDeferral(deferral.put()))) {
+                args->put_Cancel(TRUE);
+                return S_OK;
+            }
+            winrt::com_ptr<IUnknown> held;
+            held.copy_from(args);
+            const int64_t id = self->questions_.open(Question{kQuestionDownload, held, deferral});
+            emit(self->token_, kDownload, self->documentEpoch_, id, total, uri.str(), mime.str(), file.substr(file.find_last_of(L"\\/") + 1));
         }), &t);
     webview_->add_NewWindowRequested(WV_HANDLER(ICoreWebView2NewWindowRequestedEventHandler, ICoreWebView2*,
         ICoreWebView2NewWindowRequestedEventArgs*, {
@@ -120,6 +130,16 @@ void WvPage::answer(int64_t question, int verdict, std::wstring text) {
         try {
             if (q.kind == kQuestionPermission) {
                 q.args.as<ICoreWebView2PermissionRequestedEventArgs>()->put_State(verdict ? COREWEBVIEW2_PERMISSION_STATE_ALLOW : COREWEBVIEW2_PERMISSION_STATE_DENY);
+            } else if (q.kind == kQuestionDownload) {
+                // verdict: the app's id for the download, 0 to drop it; text: where to save it.
+                auto starting = q.args.as<ICoreWebView2DownloadStartingEventArgs>();
+                if (verdict && !text.empty() && SUCCEEDED(starting->put_ResultFilePath(text.c_str()))) {
+                    starting->put_Cancel(FALSE);
+                    winrt::com_ptr<ICoreWebView2DownloadOperation> operation;
+                    if (SUCCEEDED(starting->get_DownloadOperation(operation.put())) && operation) adoptDownload(verdict, operation);
+                } else {
+                    starting->put_Cancel(TRUE);
+                }
             } else if (verdict) {
                 auto dialog = q.args.as<ICoreWebView2ScriptDialogOpeningEventArgs>();
                 dialog->put_ResultText(text.c_str());
@@ -132,11 +152,12 @@ void WvPage::answer(int64_t question, int verdict, std::wstring text) {
     });
 }
 
-/** The safe defaults (WebEngine.client's KDoc): dialogs dismissed, a beforeunload leaves the page, permissions denied. */
+/** The safe defaults (WebEngine.client's KDoc): dialogs dismissed, a beforeunload leaves the page, permissions and downloads denied. */
 void WvPage::answerQuestionsByDefault() {
     questions_.answerAll([](Question& q) {
         try {
             if (q.kind == kQuestionPermission) q.args.as<ICoreWebView2PermissionRequestedEventArgs>()->put_State(COREWEBVIEW2_PERMISSION_STATE_DENY);
+            else if (q.kind == kQuestionDownload) q.args.as<ICoreWebView2DownloadStartingEventArgs>()->put_Cancel(TRUE);
             else if (q.kind == kQuestionBeforeUnload) q.args.as<ICoreWebView2ScriptDialogOpeningEventArgs>()->Accept();
         } catch (winrt::hresult_error const&) {
         }

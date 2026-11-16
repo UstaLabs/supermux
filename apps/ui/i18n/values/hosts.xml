@@ -189,4 +189,8 @@
 
     <!-- iOS -->
     <string name="host_app_ios_already_open">supermux is already open in another window.</string>
+    <!-- Android: the notification while a download runs with the app closed (#157) -->
+    <string name="host_app_android_downloads_channel">Downloads</string>
+    <string name="host_app_android_downloads_one">Downloading %1$s</string>
+    <string name="host_app_android_downloads_many">Downloading %1$d files</string>
 </resources>

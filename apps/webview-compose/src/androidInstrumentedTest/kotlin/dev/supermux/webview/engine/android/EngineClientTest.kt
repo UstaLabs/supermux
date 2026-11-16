@@ -3,6 +3,7 @@ package dev.supermux.webview.engine.android
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.supermux.webview.DialogResult
 import dev.supermux.webview.DownloadRequest
+import dev.supermux.webview.DownloadTarget
 import dev.supermux.webview.FileChooserRequest
 import dev.supermux.webview.NavigationDecision
 import dev.supermux.webview.NavigationRequest
@@ -50,9 +51,9 @@ internal class RecordingClient(
         return permission
     }
 
-    override suspend fun onDownload(request: DownloadRequest): Boolean {
+    override suspend fun onDownload(request: DownloadRequest): DownloadTarget? {
         asked += request
-        return false
+        return null
     }
 
     override fun onNewWindow(request: NewWindowRequest): NewWindowDecision {

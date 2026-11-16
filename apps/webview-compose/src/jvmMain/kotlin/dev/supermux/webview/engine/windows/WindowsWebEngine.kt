@@ -30,6 +30,7 @@ import dev.supermux.webview.bridge.UserInputSource
 import dev.supermux.webview.bridge.inputClock
 import dev.supermux.webview.WebDialog
 import dev.supermux.webview.WebError
+import dev.supermux.webview.LoadFailure
 import dev.supermux.webview.WebProfile
 import dev.supermux.webview.WebResource
 import dev.supermux.webview.engine.EmbeddingMode
@@ -472,7 +473,7 @@ internal class WindowsWebEngine(
      * document, a reset or a release first, the page gets [byDefault], the safe answer. Exactly one of them runs.
      * (LinuxWebEngine.ask.)
      */
-    private fun <T : Any> ask(byDefault: () -> Unit, question: suspend (EngineClient) -> T, holdsPage: Boolean = false, answer: (T) -> Unit) {
+    private fun <T : Any> ask(byDefault: () -> Unit, question: suspend (EngineClient) -> T?, holdsPage: Boolean = false, answer: (T) -> Unit) {
         val pending = Pending(byDefault, holdsPage)
         val asked = client
         if (asked == null || released || resetting) return pending.answerByDefault()
@@ -535,10 +536,14 @@ internal class WindowsWebEngine(
         ask(deny, { it.onPermission(request) }) { granted -> page.answer(event.question, if (granted) 1 else 0, null) }
     }
 
-    /** A download: WebView2 saved nothing (the glue cancelled it), and the client hears of it. */
+    /**
+     * A download (#157): WebView2 holds it until the client says where to save it, then saves it with the page's session
+     * ([WinDownloads]). No client, a client that throws or says no, a reset or release first: dropped.
+     */
     private fun onDownload(event: WinEvent.Download) {
-        if (!ofDocument(event.epoch)) return
-        val url = event.url ?: return
+        val drop = { page.answer(event.question, 0, null) }
+        if (!ofDocument(event.epoch)) return drop()
+        val url = event.url ?: return drop()
         // The lease's own load turned into a download: no document comes, so the load ends here.
         if (provisional && committedEpoch != queue.epoch) {
             provisional = false
@@ -546,16 +551,12 @@ internal class WindowsWebEngine(
             push(queue.epoch, EngineEvent.Progress(null))
             push(queue.epoch, EngineEvent.Error(WebError.BlockedByPolicy(url)))
         }
-        val asked = client ?: return
-        val request = DownloadRequest(url, event.fileName, event.mime, null)
-        CoroutineScope(scope.coroutineContext + lease).launch {
-            try {
-                asked.onDownload(request)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                // A client that throws has said no.
-            }
+        val request = DownloadRequest(url, event.fileName, event.mime?.ifEmpty { null }, event.total)
+        ask(drop, { it.onDownload(request) }) { target ->
+            val path = windowsPath(target.path)
+            val id = WinDownloads.start(request, path, target)
+            page.answer(event.question, id, path)
+            WinDownloads.started(id)
         }
     }
 
@@ -1415,7 +1416,7 @@ internal class WindowsWebEngine(
             val error = if (event.webError in WinGlue.ERROR_CERTIFICATE_FIRST..WinGlue.ERROR_CERTIFICATE_LAST) {
                 WebError.Certificate(url, "certificate error ${event.webError}")
             } else {
-                WebError.Network(url, "load failed (WebView2 status ${event.webError})")
+                WebError.Network(url, "load failed (WebView2 status ${event.webError})", loadFailureOf(event.webError))
             }
             push(queue.epoch, EngineEvent.Error(error))
             return
@@ -1691,4 +1692,25 @@ internal class WindowsWebEngine(
             .joinToString("\r\n") { (name, value) -> "$name: $value" }
             .ifEmpty { null }
     }
+}
+
+/**
+ * [path] with Windows' own separators. A client may join a path with `/` (shared code does); given such a path, WebView2
+ * made the download's folder but the file never came (#157, on the Windows VM).
+ */
+internal fun windowsPath(path: String): String = path.replace('/', '\\')
+
+/**
+ * What a failed load's COREWEBVIEW2_WEB_ERROR_STATUS (6–18) is, for the app to say in its own words. WebView2 reports a
+ * port nothing listens on as 9, CONNECTION_ABORTED (seen on the Windows VM): it never connected.
+ */
+internal fun loadFailureOf(status: Int): LoadFailure = when (status) {
+    6, 9, 12 -> LoadFailure.CannotConnect
+    7 -> LoadFailure.TimedOut
+    8 -> LoadFailure.BadAnswer
+    10, 11 -> LoadFailure.ConnectionLost
+    13 -> LoadFailure.NameNotResolved
+    15 -> LoadFailure.TooManyRedirects
+    17, 18 -> LoadFailure.SignInRequired
+    else -> LoadFailure.Other
 }

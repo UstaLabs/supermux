@@ -64,6 +64,12 @@ public enum class UnavailableReason {
 }
 
 /**
+ * Why a page didn't load ([WebError.Network.reason]), where the engine can say: [Other] where it can't, or only in its
+ * own words. Open to new reasons: a `when` over one needs an `else` branch.
+ */
+public enum class LoadFailure { Other, CannotConnect, ConnectionLost, NameNotResolved, TimedOut, BadAnswer, TooManyRedirects, SignInRequired }
+
+/**
  * Why the main frame failed to load ([WebViewState.error]).
  *
  * Open to new kinds: a later version may add one, so a `when` over an error needs an `else` branch. Without one, code
@@ -76,14 +82,24 @@ public enum class UnavailableReason {
 public sealed interface WebError {
     public val url: String?
 
-    /** The network failed: no connection, a name that doesn't resolve, a reset. */
-    public class Network(override val url: String?, public val description: String) : WebError {
+    /**
+     * The network failed: no connection, a name that doesn't resolve, a reset. [reason] names it where the engine can,
+     * for the app to say in its own words; [description] is the engine's, in English or the OS's language.
+     */
+    public class Network(
+        override val url: String?,
+        public val description: String,
+        public val reason: LoadFailure = LoadFailure.Other,
+    ) : WebError {
+        @Deprecated("Kept for binary compatibility", level = DeprecationLevel.HIDDEN)
+        public constructor(url: String?, description: String) : this(url, description, LoadFailure.Other)
+
         override fun equals(other: Any?): Boolean =
-            this === other || other is Network && url == other.url && description == other.description
+            this === other || other is Network && url == other.url && description == other.description && reason == other.reason
 
-        override fun hashCode(): Int = 31 * (url?.hashCode() ?: 0) + description.hashCode()
+        override fun hashCode(): Int = 31 * (31 * (url?.hashCode() ?: 0) + description.hashCode()) + reason.hashCode()
 
-        override fun toString(): String = "Network(url=$url, description=$description)"
+        override fun toString(): String = "Network(url=$url, description=$description, reason=$reason)"
     }
 
     /** The server's certificate was refused. Engines never bypass it. */

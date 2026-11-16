@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "crypto"
 import { statSync } from "fs"
-import { readJsonOr, writeJsonAtomic } from "../../shared/atomic-json"
+import { readJsonOr, requirePath, writeJsonAtomic } from "../../shared/atomic-json"
 
 export interface DeviceRecord {
   token_hash: string
@@ -45,6 +45,8 @@ export class DeviceStore {
   private readonly clock: () => number
 
   constructor(private readonly path: string, opts: { clock?: () => number } = {}) {
+    // Fails at construction, not at the first write: a store without a file would lose every device it mints.
+    requirePath(path, "DeviceStore")
     this.clock = opts.clock ?? Date.now
   }
 

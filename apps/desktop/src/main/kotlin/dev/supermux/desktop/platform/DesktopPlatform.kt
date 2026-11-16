@@ -172,6 +172,8 @@ class DesktopPlatform : Platform {
 
     override val files: FileAccess = DesktopFileAccess()
 
+    override val page: dev.supermux.ui.platform.PageDevice = DesktopPageDevice(files::probeMime)
+
     override val mic: MicCapture = DesktopMicCapture()
 
     /**
@@ -268,21 +270,6 @@ internal fun awtPickDirectory(title: String): String? {
         isAcceptAllFileFilterUsed = false
     }
     return if (chooser.showOpenDialog(null) == javax.swing.JFileChooser.APPROVE_OPTION) chooser.selectedFile?.absolutePath else null
-}
-
-/**
- * THE desktop save dialog: a modal AWT [FileDialog] in SAVE mode, pre-filled with [defaultName].
- * Returns the chosen target file, or null when the user cancelled. Not (yet) on the shared
- * [Platform] interface — no shared screen saves a file in cluster A; the timeline's attachment
- * download is the only caller and it moves in cluster D.
- */
-internal fun awtSaveFile(defaultName: String): File? {
-    val dialog = FileDialog(null as Frame?, "Save attachment", FileDialog.SAVE)
-    dialog.file = defaultName
-    dialog.isVisible = true
-    val dir = dialog.directory ?: return null
-    val fileName = dialog.file ?: return null
-    return File(dir, fileName)
 }
 
 /** Best-effort content type; `application/octet-stream` when the OS cannot tell. The ONE mime

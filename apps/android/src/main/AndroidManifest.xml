@@ -7,6 +7,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- QR pairing scan (zxing-android-embedded also declares this; explicit here). -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- A web page in a Browser tab may ask for the location (#157); the user answers per site first. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <!-- The assistant overlay (#62, experimental, off by default): the default Agent as a chat head
          over other apps. "Display over other apps" is granted by the user on a system page, and the
          foreground service that owns the windows needs these types. -->
@@ -17,6 +20,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <!-- The audio player playing on in the background (#118 car 3a, platform/AudioPlaybackService.kt). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- Attachment camera capture is delegated to the system camera app (TakePicture);
          the camera is optional so non-camera devices can still install. -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
@@ -159,6 +163,11 @@
              plays on in the background with the media notification and the lock screen's controls. Exported, with
              the session intent filter, as Media3 requires: the system's controllers (the notification, a headset,
              a watch) bind it. -->
+        <!-- Keeps a running download (and the fleet that owns it) alive when the app's screen goes (#157). -->
+        <service
+            android:name=".platform.DownloadKeepService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
         <service
             android:name=".platform.AudioPlaybackService"
             android:exported="true"

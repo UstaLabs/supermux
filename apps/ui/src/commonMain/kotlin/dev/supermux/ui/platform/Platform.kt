@@ -108,6 +108,9 @@ interface Platform {
     /** Images on the system clipboard, for paste-to-attach. Gated by [Caps.clipboardImages]. */
     val clipboard: ClipboardAccess
 
+    /** What a web page in a Browser tab or an applet may reach here: downloads, file pickers, OS grants (#157). */
+    val page: PageDevice get() = PageDevice.None
+
     /** "Save as…" / "Open with…" for bytes the app already holds. [FileAccess.saveAs] is gated by
      *  [Caps.saveAs]; opening externally works everywhere. */
     val files: FileAccess

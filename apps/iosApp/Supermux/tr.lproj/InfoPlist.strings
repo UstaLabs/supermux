@@ -1,7 +1,8 @@
 /* #123: the permission prompts, Turkish. */
 
-"NSCameraUsageDescription" = "supermux, sunucunuzun gösterdiği eşleştirme karekodunu tarar.";
-"NSMicrophoneUsageDescription" = "supermux, ajanlarınıza gönderdiğiniz sesli mesajları kaydeder.";
+"NSCameraUsageDescription" = "supermux, sunucunuzun gösterdiği eşleştirme karekodunu tarar ve izin verdiğinizde Tarayıcı sekmesindeki bir sitenin kamerayı kullanmasını sağlar.";
+"NSMicrophoneUsageDescription" = "supermux, ajanlarınıza gönderdiğiniz sesli mesajları kaydeder ve izin verdiğinizde Tarayıcı sekmesindeki bir sitenin mikrofonu kullanmasını sağlar.";
+"NSLocationWhenInUseUsageDescription" = "Tarayıcı sekmesindeki bir site konumunuzu isteyebilir; supermux konumunuzu yalnızca izin verdiğiniz sitelerle paylaşır.";
 "NSPhotoLibraryAddUsageDescription" = "supermux, kaydetmeyi seçtiğiniz fotoğraf ve videoları Fotoğraflar'a kaydeder.";
 "NSSpeechRecognitionUsageDescription" = "supermux, sesinizi düzenlenebilir metne çevirmek için cihazdaki konuşma tanımayı kullanır.";
 "NSLocalNetworkUsageDescription" = "Supermux, kendi bilgisayarınızda çalışan sunucuya yerel ağ adresiyle (örneğin 192.168.1.50) ulaştığınızda ona bağlanır. Ağınızdaki diğer cihazları taramaz ve onlar hakkında bilgi toplamaz.";

@@ -9,6 +9,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
 import dev.supermux.webview.DialogResult
 import dev.supermux.webview.DownloadRequest
+import dev.supermux.webview.DownloadTarget
 import dev.supermux.webview.FileChooserRequest
 import dev.supermux.webview.NavigationDecision
 import dev.supermux.webview.NavigationRequest
@@ -17,6 +18,8 @@ import dev.supermux.webview.NewWindowRequest
 import dev.supermux.webview.PermissionRequest
 import dev.supermux.webview.WebContent
 import dev.supermux.webview.WebDialog
+import dev.supermux.webview.WebDownload
+import dev.supermux.webview.WebDownloadState
 import dev.supermux.webview.WebError
 import dev.supermux.webview.WebOrigin
 import dev.supermux.webview.WebProfile
@@ -69,6 +72,7 @@ class MacWebEngineTest {
         var navigation: NavigationDecision = NavigationDecision.Block,
         var newWindow: NewWindowDecision = NewWindowDecision.Block,
         val dialog: CompletableDeferred<DialogResult> = CompletableDeferred(DialogResult.Dismissed),
+        var download: DownloadTarget? = null,
     ) : EngineClient {
         val asked = mutableListOf<Any>()
         override fun onNavigation(request: NavigationRequest): NavigationDecision = navigation.also { asked += request }
@@ -82,9 +86,18 @@ class MacWebEngineTest {
 
         override suspend fun onPermission(request: PermissionRequest): Boolean = true.also { asked += request }
 
-        override suspend fun onDownload(request: DownloadRequest): Boolean = false.also { asked += request }
+        override suspend fun onDownload(request: DownloadRequest): DownloadTarget? = download.also { asked += request }
 
         override fun onNewWindow(request: NewWindowRequest): NewWindowDecision = newWindow.also { asked += request }
+    }
+
+    /** The glue's download calls, recorded. */
+    private class RecordingDownloads : MacDownloads.Ops {
+        val calls = mutableListOf<String>()
+        override fun answer(download: Long, path: String?) { calls += "answer $download $path" }
+        override fun pause(download: Long) { calls += "pause $download" }
+        override fun resume(download: Long) { calls += "resume $download" }
+        override fun cancel(download: Long) { calls += "cancel $download" }
     }
 
     /**
@@ -1166,26 +1179,56 @@ class MacWebEngineTest {
         assertEquals(listOf("answerDialog 7 false null", "release"), calls.takeLast(2), "$calls")
     }
 
-    @Test fun anAttachmentAndADownloadLinkAreDownloadsTheClientHearsOf() = runTest {
+    @Test fun anAttachmentAndADownloadLinkAreWebKitDownloadsTheClientPlaces() = runTest {
+        val downloads = RecordingDownloads()
+        val previous = MacDownloads.ops
+        MacDownloads.ops = downloads
+        try {
+            val rig = Rig(this)
+            val client = RecordingClient()
+            rig.engine.client = client
+            rig.live()
+            rig.send(
+                GlueEvent.Response(5, "https://c1.invalid/a.txt", forMainFrame = true, canShow = true, status = 200, length = 10,
+                    mimeType = "text/plain", suggestedFilename = "a.txt", disposition = "attachment; filename=a.txt"),
+            )
+            assertEquals("downloadResponse 5", rig.glue.last("downloadResponse"), "WebKit saves it")
+            rig.send(GlueEvent.Policy(6, "https://c1.invalid/b.zip", mainFrame = true, opensWindow = false, download = true, kind = NavigationKind.Link))
+            assertEquals("downloadPolicy 6", rig.glue.last("downloadPolicy"))
+            // WebKit asks where, with the response's name and type: the client says no.
+            rig.send(GlueEvent.Download(1, "https://c1.invalid/a.txt", "text/plain", "a.txt", 10))
+            runCurrent()
+            assertEquals(listOf(DownloadRequest("https://c1.invalid/a.txt", "a.txt", "text/plain", 10)), client.asked.filterIsInstance<DownloadRequest>())
+            assertEquals(listOf("answer 1 null"), downloads.calls, "dropped")
+            // Then yes: saved there, and the transfer is the app's.
+            var started: WebDownload? = null
+            client.download = DownloadTarget("/tmp/dl/b.zip") { started = it }
+            rig.send(GlueEvent.Download(2, "https://c1.invalid/b.zip", "application/zip", "b.zip", null))
+            runCurrent()
+            assertEquals("answer 2 /tmp/dl/b.zip", downloads.calls.last())
+            val transfer = assertNotNull(started)
+            MacDownloads.on(GlueEvent.DownloadProgress(2, 512, 1024))
+            assertEquals(WebDownloadState.Running(512, 1024), transfer.state.value)
+            transfer.pause()
+            assertEquals("pause 2", downloads.calls.last())
+            MacDownloads.on(GlueEvent.DownloadStopped(2, DownloadStop.Paused, 512, null))
+            assertEquals(WebDownloadState.Paused(512, 1024), transfer.state.value)
+            transfer.resume()
+            assertEquals("resume 2", downloads.calls.last())
+            MacDownloads.on(GlueEvent.DownloadDone(2, 1024))
+            assertEquals(WebDownloadState.Done(1024), transfer.state.value)
+            transfer.cancel()
+            assertEquals("resume 2", downloads.calls.last(), "a finished download is not cancelled")
+        } finally {
+            MacDownloads.ops = previous
+        }
+    }
+
+    @Test fun aDownloadWithNoClientIsCancelledByWebKit() = runTest {
         val rig = Rig(this)
-        val client = RecordingClient()
-        rig.engine.client = client
         rig.live()
-        rig.send(
-            GlueEvent.Response(5, "https://c1.invalid/a.txt", forMainFrame = true, canShow = true, status = 200, length = 10,
-                mimeType = "text/plain", suggestedFilename = "a.txt", disposition = "attachment; filename=a.txt"),
-        )
-        assertEquals("answerResponse 5 false", rig.glue.last("answerResponse"), "saved nowhere")
         rig.send(GlueEvent.Policy(6, "https://c1.invalid/b.zip", mainFrame = true, opensWindow = false, download = true, kind = NavigationKind.Link))
         assertEquals("answerPolicy 6 false", rig.glue.last("answerPolicy"))
-        runCurrent()
-        assertEquals(
-            listOf(
-                DownloadRequest("https://c1.invalid/a.txt", "a.txt", "text/plain", 10),
-                DownloadRequest("https://c1.invalid/b.zip", null, null, null),
-            ),
-            client.asked.filterIsInstance<DownloadRequest>(),
-        )
     }
 
     /** A main-frame error lifts the cover: the page shows what WebKit has, and takes input. */

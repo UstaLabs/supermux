@@ -17,6 +17,9 @@ internal data class WebKitPage(
     }
 }
 
+/** How a download stopped. */
+internal enum class DownloadStop { Paused, Failed, Cancelled }
+
 /** Which JavaScript dialog the page opened. */
 internal enum class DialogKind { Alert, Confirm, Prompt }
 
@@ -94,6 +97,17 @@ internal sealed interface GlueEvent {
 
     data object Memory : GlueEvent
 
+    /** A download of the page's (#157), asking where to save it: [MacGlue.answerDownload] answers. */
+    data class Download(val download: Long, val url: String?, val mimeType: String?, val suggestedFilename: String?, val length: Long?) : GlueEvent
+
+    /** A download's bytes so far, and its size once known. The process's (page 0), as are the two below. */
+    data class DownloadProgress(val download: Long, val received: Long, val total: Long?) : GlueEvent
+
+    data class DownloadDone(val download: Long, val size: Long) : GlueEvent
+
+    /** It stopped: paused, failed ([message]) or cancelled. */
+    data class DownloadStopped(val download: Long, val stop: DownloadStop, val received: Long, val message: String?) : GlueEvent
+
     companion object {
         const val CREATED: Int = 1
         const val STARTED: Int = 2
@@ -116,6 +130,10 @@ internal sealed interface GlueEvent {
         const val CRASHED: Int = 19
         const val POINTER: Int = 20
         const val MEMORY: Int = 21
+        const val DOWNLOAD: Int = 22
+        const val DOWNLOAD_PROGRESS: Int = 23
+        const val DOWNLOAD_DONE: Int = 24
+        const val DOWNLOAD_STOPPED: Int = 25
 
         /** `COMMITTED`, `FINISHED`, `STATE`: WebKit is loading. */
         const val LOADING: Int = 1
@@ -197,6 +215,19 @@ internal sealed interface GlueEvent {
             CRASHED -> Crashed
             POINTER -> Pointer(x, y)
             MEMORY -> Memory
+            DOWNLOAD -> Download(id, a, b?.ifEmpty { null }, c?.ifEmpty { null }, x.toLong().takeIf { it >= 0 })
+            DOWNLOAD_PROGRESS -> DownloadProgress(id, x.toLong(), y.toLong().takeIf { it > 0 })
+            DOWNLOAD_DONE -> DownloadDone(id, x.toLong())
+            DOWNLOAD_STOPPED -> DownloadStopped(
+                id,
+                stop = when {
+                    flags and 1 != 0 -> DownloadStop.Paused
+                    flags and 4 != 0 -> DownloadStop.Cancelled
+                    else -> DownloadStop.Failed
+                },
+                received = x.toLong(),
+                message = a,
+            )
             else -> null
         }
 

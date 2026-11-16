@@ -2,6 +2,11 @@ package dev.supermux.webview.engine.linux
 
 import dev.supermux.webview.DialogResult
 import dev.supermux.webview.DownloadRequest
+import dev.supermux.webview.DownloadTarget
+import kotlinx.coroutines.test.runCurrent
+import kotlin.test.assertNotNull
+import dev.supermux.webview.WebDownloadState
+import dev.supermux.webview.WebDownload
 import dev.supermux.webview.FileChooserRequest
 import dev.supermux.webview.NavigationDecision
 import dev.supermux.webview.NavigationRequest
@@ -51,6 +56,7 @@ internal class RecordingClient : EngineClient {
     var files: List<String>? = null
     var permission = false
     var newWindow = NewWindowDecision.Block
+    var download: DownloadTarget? = null
 
     /** Holds every suspending answer until completed: a client that hasn't answered yet. */
     var gate: CompletableDeferred<Unit>? = null
@@ -74,9 +80,9 @@ internal class RecordingClient : EngineClient {
         gate?.await()
         return permission
     }
-    override suspend fun onDownload(request: DownloadRequest): Boolean {
+    override suspend fun onDownload(request: DownloadRequest): DownloadTarget? {
         asked += request
-        return false
+        return download
     }
     override fun onNewWindow(request: NewWindowRequest): NewWindowDecision {
         asked += request
@@ -245,13 +251,51 @@ class LinuxWebEngineTest {
         rig.close()
     }
 
-    @Test fun aDownloadIsRefusedAndTheClientTold() = runTest {
+    @Test fun aDownloadIsWebKitsToSaveWhereTheClientSays() = runTest {
+        val acts = mutableListOf<String>()
+        val previous = LinuxDownloads.act
+        LinuxDownloads.act = { id, action, path -> acts += "$id $action $path" }
+        try {
+            val rig = EngineRig(this)
+            rig.warm()
+            rig.show(WebContent.Url("https://a.example/"), "https://a.example/")
+            rig.engine.onEvent(WpeEvent.Response(7, "https://a.example/f.zip", mainFrame = true, canShow = false, attachment = true, status = 200, mime = "application/zip", filename = "f.zip"))
+            assertEquals(WpeNative.DOWNLOAD, rig.view.decisions[7], "WebKit downloads it with the page's session")
+            // It asks where: the client says no, then yes.
+            rig.engine.onEvent(WpeEvent.Download(3, "https://a.example/f.zip", "application/zip", "f.zip", 2048))
+            runCurrent()
+            assertContains(rig.client.asked, DownloadRequest("https://a.example/f.zip", "f.zip", "application/zip", 2048))
+            assertEquals("3 ${WpeNative.DOWNLOAD_ANSWER} null", acts.last(), "dropped")
+            var started: WebDownload? = null
+            rig.client.download = DownloadTarget("/tmp/dl/f.zip") { started = it }
+            rig.engine.onEvent(WpeEvent.Download(4, "https://a.example/f.zip", "application/zip", "f.zip", 2048))
+            runCurrent()
+            assertEquals("4 ${WpeNative.DOWNLOAD_ANSWER} /tmp/dl/f.zip", acts.last())
+            val transfer = assertNotNull(started)
+            LinuxDownloads.on(WpeEvent.DownloadProgress(4, 1024, 2048))
+            assertEquals(WebDownloadState.Running(1024, 2048), transfer.state.value)
+            transfer.pause()
+            assertEquals("4 ${WpeNative.DOWNLOAD_PAUSE} null", acts.last())
+            LinuxDownloads.on(WpeEvent.DownloadState(4, WpeNative.DOWNLOAD_PAUSED, 1024, null))
+            assertEquals(WebDownloadState.Paused(1024, 2048), transfer.state.value)
+            transfer.resume()
+            assertEquals("4 ${WpeNative.DOWNLOAD_RESUME} null", acts.last())
+            assertEquals(WebDownloadState.Running(0, 2048), transfer.state.value, "WebKit keeps nothing: it starts over")
+            LinuxDownloads.on(WpeEvent.DownloadState(4, WpeNative.DOWNLOAD_DONE, 2048, null))
+            assertEquals(WebDownloadState.Done(2048), transfer.state.value)
+            rig.close()
+        } finally {
+            LinuxDownloads.act = previous
+        }
+    }
+
+    @Test fun aDownloadWithNoClientIsRefused() = runTest {
         val rig = EngineRig(this)
         rig.warm()
         rig.show(WebContent.Url("https://a.example/"), "https://a.example/")
+        rig.engine.client = null
         rig.engine.onEvent(WpeEvent.Response(7, "https://a.example/f.zip", mainFrame = true, canShow = false, attachment = true, status = 200, mime = "application/zip", filename = "f.zip"))
         assertEquals(WpeNative.IGNORE, rig.view.decisions[7])
-        assertContains(rig.client.asked, DownloadRequest("https://a.example/f.zip", "f.zip", "application/zip", null))
         rig.close()
     }
 

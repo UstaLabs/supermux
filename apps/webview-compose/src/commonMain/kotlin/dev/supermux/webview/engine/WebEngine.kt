@@ -10,6 +10,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import dev.supermux.webview.ConsoleMessage
 import dev.supermux.webview.DialogResult
 import dev.supermux.webview.DownloadRequest
+import dev.supermux.webview.DownloadTarget
 import dev.supermux.webview.FileChooserRequest
 import dev.supermux.webview.NavigationDecision
 import dev.supermux.webview.NavigationRequest
@@ -158,7 +159,7 @@ public interface EngineClient {
     public suspend fun onDialog(dialog: WebDialog): DialogResult
     public suspend fun onFileChooser(request: FileChooserRequest): List<String>?
     public suspend fun onPermission(request: PermissionRequest): Boolean
-    public suspend fun onDownload(request: DownloadRequest): Boolean
+    public suspend fun onDownload(request: DownloadRequest): DownloadTarget?
     public fun onNewWindow(request: NewWindowRequest): NewWindowDecision
 
     /** A key the page left unused, for the app's shortcuts ([dev.supermux.webview.WebClient.onUnusedKey]). Main thread. */

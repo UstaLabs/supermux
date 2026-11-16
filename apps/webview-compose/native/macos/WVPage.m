@@ -309,9 +309,9 @@ static CGImageRef WVLargestImage(NSImage *image) {
         return;
     }
     jlong question = [self ask:WVQuestionPolicy
-        answer:^(BOOL allow, BOOL javaScript) {
+        answer:^(WKNavigationActionPolicy policy, BOOL javaScript) {
             preferences.allowsContentJavaScript = javaScript;
-            decisionHandler(allow ? WKNavigationActionPolicyAllow : WKNavigationActionPolicyCancel, preferences);
+            decisionHandler(policy, preferences);
         }
         byDefault:^{
             decisionHandler(WKNavigationActionPolicyCancel, preferences);
@@ -329,8 +329,8 @@ static CGImageRef WVLargestImage(NSImage *image) {
         return;
     }
     jlong question = [self ask:WVQuestionResponse
-        answer:^(BOOL allow) {
-            decisionHandler(allow ? WKNavigationResponsePolicyAllow : WKNavigationResponsePolicyCancel);
+        answer:^(WKNavigationResponsePolicy policy) {
+            decisionHandler(policy);
         }
         byDefault:^{
             decisionHandler(WKNavigationResponsePolicyCancel);
@@ -348,6 +348,16 @@ static CGImageRef WVLargestImage(NSImage *image) {
     double length = response.expectedContentLength >= 0 ? (double)response.expectedContentLength : -1;
     WVPost(_token, WVEventResponse, _epoch, question, flags, length, 0, response.URL.absoluteString, response.MIMEType,
            response.suggestedFilename, disposition, nil);
+}
+
+- (void)webView:(WKWebView *)webView navigationAction:(WKNavigationAction *)navigationAction
+    didBecomeDownload:(WKDownload *)download {
+    WVAdoptDownload(download, _released ? 0 : _token);
+}
+
+- (void)webView:(WKWebView *)webView navigationResponse:(WKNavigationResponse *)navigationResponse
+    didBecomeDownload:(WKDownload *)download {
+    WVAdoptDownload(download, _released ? 0 : _token);
 }
 
 - (void)webView:(WKWebView *)webView didStartProvisionalNavigation:(WKNavigation *)navigation {
@@ -765,18 +775,18 @@ static CGImageRef WVLargestImage(NSImage *image) {
                                              }];
 }
 
-- (void)answerPolicy:(jlong)ident allow:(BOOL)allow javaScript:(BOOL)javaScript {
+- (void)answerPolicy:(jlong)ident policy:(WKNavigationActionPolicy)policy javaScript:(BOOL)javaScript {
     WVQuestion *question = [self take:ident kind:WVQuestionPolicy];
     if (!question) return;
-    void (^answer)(BOOL, BOOL) = question.answer;
-    answer(allow, javaScript);
+    void (^answer)(WKNavigationActionPolicy, BOOL) = question.answer;
+    answer(policy, javaScript);
 }
 
-- (void)answerResponse:(jlong)ident allow:(BOOL)allow {
+- (void)answerResponse:(jlong)ident policy:(WKNavigationResponsePolicy)policy {
     WVQuestion *question = [self take:ident kind:WVQuestionResponse];
     if (!question) return;
-    void (^answer)(BOOL) = question.answer;
-    answer(allow);
+    void (^answer)(WKNavigationResponsePolicy) = question.answer;
+    answer(policy);
 }
 
 - (void)answerDialog:(jlong)ident confirmed:(BOOL)confirmed text:(NSString *)text {
@@ -1118,7 +1128,15 @@ JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_answerPolicy
     WVPage *page = WVPageOf(handle);
     BOOL yes = allow == JNI_TRUE, scripts = javaScript == JNI_TRUE;
     WVOnMain(NO, ^{
-        [page answerPolicy:question allow:yes javaScript:scripts];
+        [page answerPolicy:question policy:(yes ? WKNavigationActionPolicyAllow : WKNavigationActionPolicyCancel) javaScript:scripts];
+    });
+}
+
+JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_downloadPolicy(
+    JNIEnv *env, jclass type, jlong handle, jlong question) {
+    WVPage *page = WVPageOf(handle);
+    WVOnMain(NO, ^{
+        [page answerPolicy:question policy:WKNavigationActionPolicyDownload javaScript:NO];
     });
 }
 
@@ -1127,7 +1145,15 @@ JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_answerRespon
     WVPage *page = WVPageOf(handle);
     BOOL yes = allow == JNI_TRUE;
     WVOnMain(NO, ^{
-        [page answerResponse:question allow:yes];
+        [page answerResponse:question policy:(yes ? WKNavigationResponsePolicyAllow : WKNavigationResponsePolicyCancel)];
+    });
+}
+
+JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_downloadResponse(
+    JNIEnv *env, jclass type, jlong handle, jlong question) {
+    WVPage *page = WVPageOf(handle);
+    WVOnMain(NO, ^{
+        [page answerResponse:question policy:WKNavigationResponsePolicyDownload];
     });
 }
 

@@ -1,6 +1,7 @@
 package dev.supermux.webview.engine.windows
 
 import dev.supermux.webview.WebContent
+import dev.supermux.webview.LoadFailure
 import dev.supermux.webview.WebError
 import dev.supermux.webview.WebOrigin
 import dev.supermux.webview.WebProfile
@@ -222,7 +223,7 @@ class WindowsWebEngineTest {
         rig.engine.onEvent(WinEvent.Completed(rig.page.epoch, link, false, 13, 0, "https://a.example/gone"))
         rig.engine.onEvent(WinEvent.Message(rig.page.epoch, "fedcba9876543210 msg {\"t\":\"event\",\"n\":\"x\"}"))
         assertTrue(rig.events.none { it is EngineEvent.PageMessage }, "${rig.events}")
-        assertEquals(EngineEvent.Error(WebError.Network("https://a.example/gone", "load failed (WebView2 status 13)")), rig.events.last { it is EngineEvent.Error })
+        assertEquals(EngineEvent.Error(WebError.Network("https://a.example/gone", "load failed (WebView2 status 13)", LoadFailure.NameNotResolved)), rig.events.last { it is EngineEvent.Error })
         rig.close()
     }
 

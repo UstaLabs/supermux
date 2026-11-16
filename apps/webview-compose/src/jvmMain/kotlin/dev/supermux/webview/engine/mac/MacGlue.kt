@@ -11,9 +11,10 @@ internal object MacGlue {
     /**
      * The ABI this library speaks: `WV_ABI_VERSION` in `native/macos/WVGlue.h`. Change both together. 3: [setBackdrop]. 4:
      * [place]'s window, [syncFrames], [frameRecorded], [testFrameSync]. 5: [createPage]'s floor at a host of the bundles'
-     * scheme, [testWebProcess]. 6: [find], [clearFind], [setPageZoom], [setCookie]. 7: [setUnderlay].
+     * scheme, [testWebProcess]. 6: [find], [clearFind], [setPageZoom], [setCookie]. 7: [setUnderlay]. 8: downloads ([downloadPolicy], [downloadResponse], [answerDownload], [pauseDownload],
+     * [resumeDownload], [cancelDownload]).
      */
-    const val ABI: Int = 7
+    const val ABI: Int = 8
 
     /** The loaded glue's ABI; -1 if it couldn't find [onEvent] when it loaded. */
     @JvmStatic external fun abiVersion(): Int
@@ -131,6 +132,22 @@ internal object MacGlue {
     @JvmStatic external fun answerPolicy(page: Long, question: Long, allow: Boolean, javaScript: Boolean)
 
     @JvmStatic external fun answerResponse(page: Long, question: Long, allow: Boolean)
+
+    /** Answers a policy question with WebKit's download: the page's session saves it (#157). */
+    @JvmStatic external fun downloadPolicy(page: Long, question: Long)
+
+    @JvmStatic external fun downloadResponse(page: Long, question: Long)
+
+    // --- Downloads (WVDownloads.m): the process's, by the glue's id; they outlive their page. ---
+
+    /** Where a `DOWNLOAD` goes, an absolute path, or null to cancel it. */
+    @JvmStatic external fun answerDownload(download: Long, path: String?)
+
+    @JvmStatic external fun pauseDownload(download: Long)
+
+    @JvmStatic external fun resumeDownload(download: Long)
+
+    @JvmStatic external fun cancelDownload(download: Long)
 
     @JvmStatic external fun answerDialog(page: Long, question: Long, confirmed: Boolean, text: String?)
 

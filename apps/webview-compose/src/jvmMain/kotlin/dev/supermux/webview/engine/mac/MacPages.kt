@@ -35,6 +35,9 @@ internal object MacPages {
                 if (release != null && event.handle != 0L) release(event.handle)
             }
             GlueEvent.Memory -> onMemoryPressure()
+            is GlueEvent.DownloadProgress, is GlueEvent.DownloadDone, is GlueEvent.DownloadStopped -> MacDownloads.on(event)
+            // Its page has gone: nobody can say where it goes.
+            is GlueEvent.Download -> handlers[page]?.invoke(event) ?: MacDownloads.answer(event.download, null)
             else -> handlers[page]?.invoke(event)
         }
     }

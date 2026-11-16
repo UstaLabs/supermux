@@ -187,4 +187,8 @@
 
     <!-- iOS -->
     <string name="host_app_ios_already_open">supermux başka bir pencerede zaten açık.</string>
+    <!-- Android: the notification while a download runs with the app closed (#157) -->
+    <string name="host_app_android_downloads_channel">İndirmeler</string>
+    <string name="host_app_android_downloads_one">%1$s indiriliyor</string>
+    <string name="host_app_android_downloads_many">%1$d dosya indiriliyor</string>
 </resources>
