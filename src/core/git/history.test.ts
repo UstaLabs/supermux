@@ -59,6 +59,23 @@ test("a base that is the branch itself is no base: the branch's own commits, not
   expect(h.incoming).toBe(0)
 }, REAL_GIT_MS)
 
+test("the base as last fetched: a teammate's push to origin/<base> is incoming, though the local base hasn't moved", async () => {
+  const d = repo()
+  const origin = mkdtempSync(join(tmpdir(), "mux-history-origin-"))
+  execFileSync("git", ["init", "-q", "--bare", "-b", "dev", origin])
+  git(d, "remote", "add", "origin", origin); git(d, "push", "-q", "-u", "origin", "dev")
+  commit(d, "b.txt", "b\n", "Add search box")
+  const mate = mkdtempSync(join(tmpdir(), "mux-history-mate-"))
+  execFileSync("git", ["clone", "-q", "-c", "core.autocrlf=false", origin, mate])
+  git(mate, "config", "user.email", "g@t"); git(mate, "config", "user.name", "Grace")
+  commit(mate, "m.txt", "m\n", "Main moves on"); git(mate, "push", "-q")
+  git(d, "fetch", "-q", "origin")
+  const h = await history(d, "dev")
+  expect(h.incoming).toBe(1)
+  expect(h.baseCommits[0]!.subject).toBe("Main moves on")
+  expect(h.chat.map((c) => c.subject)).toEqual(["Add search box"])
+}, REAL_GIT_MS)
+
 test("pushed commits say so", async () => {
   const d = repo()
   const remote = mkdtempSync(join(tmpdir(), "mux-history-remote-"))
