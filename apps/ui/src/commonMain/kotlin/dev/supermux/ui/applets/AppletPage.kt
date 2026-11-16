@@ -208,8 +208,11 @@ class AppletCoverState {
 
     val opener = dev.supermux.ui.session.AppletOpener { hostId, applet -> open = hostId to applet.name }
 
-    /** Opens [name] of [hostId] from outside the app (a widget, a control, Spotlight). */
-    fun show(hostId: String, name: String) { open = hostId to name }
+    /** Opens [name] of [hostId] from outside the app (a widget, a control, Spotlight); open menus and sheets close. */
+    fun show(hostId: String, name: String) {
+        open = hostId to name
+        dev.supermux.ui.session.AppletSheets.closeAll()
+    }
 
     fun close() { open = null }
 }
