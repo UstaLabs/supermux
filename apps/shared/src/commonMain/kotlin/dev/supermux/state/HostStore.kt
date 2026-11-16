@@ -641,10 +641,12 @@ class HostStore(
      * the host is out of reach, and written to the offline cache with the list (FleetStore.writeSnapshots).
      */
     private val appletIcons = mutableMapOf<String, Pair<String, ByteArray>>()
+    /** Guards [appletIcons] (a SynchronizedObject: Kotlin/Native's synchronized takes nothing else). */
+    private val appletIconsLock = SynchronizedObject()
 
     /** The icons [appletIcons] holds, base64 by applet id, for the offline cache. */
     @OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class)
-    fun cachedAppletIcons(): Map<String, String> = synchronized(appletIcons) {
+    fun cachedAppletIcons(): Map<String, String> = synchronized(appletIconsLock) {
         appletIcons.mapValues { (_, v) -> kotlin.io.encoding.Base64.encode(v.second) }
     }
 
@@ -2237,7 +2239,7 @@ class HostStore(
         if (_applets.value == null && snap.applets != null) {
             _applets.value = snap.applets
             val byId = snap.applets.associateBy { it.id }
-            synchronized(appletIcons) {
+            synchronized(appletIconsLock) {
                 for ((id, b64) in snap.appletIcons) {
                     val a = byId[id] ?: continue
                     if (appletIcons[id] == null) runCatching { kotlin.io.encoding.Base64.decode(b64) }.getOrNull()?.let { appletIcons[id] = a.updatedAt to it }
@@ -2475,10 +2477,10 @@ class HostStore(
 
     /** An applet's icon: fetched (and remembered) while the host answers, the remembered one while it doesn't. */
     suspend fun appletIconBytes(applet: AppletDto): ByteArray? {
-        val held = synchronized(appletIcons) { appletIcons[applet.id] }
+        val held = synchronized(appletIconsLock) { appletIcons[applet.id] }
         if (held != null && held.first == applet.updatedAt) return held.second
         val fresh = runApi("appletIcon") { api.appletIconBytes(applet) }
-        if (fresh != null) synchronized(appletIcons) { appletIcons[applet.id] = applet.updatedAt to fresh }
+        if (fresh != null) synchronized(appletIconsLock) { appletIcons[applet.id] = applet.updatedAt to fresh }
         return fresh ?: held?.second
     }
 
