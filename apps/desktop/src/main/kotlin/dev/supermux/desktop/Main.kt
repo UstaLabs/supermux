@@ -376,7 +376,35 @@ private val desktopBindTts: (
 //                                  disk — never posted to a real session), or "1" for a built-in
 //                                  2×2 PNG fixture. Overlay only; no broker traffic. Off by default.
 //                                  [main]
-fun main() {
+fun main(args: Array<String>) {
+    // #117: an applet's shortcut starts supermux with the applet's address. A packaged supermux already running for this
+    // user takes it (or a plain second launch: its window comes forward) and this process ends here. Hot runs and dev
+    // builds (no jpackage launcher) neither hand off nor listen, so they keep running beside the installed app.
+    val appletLaunch = dev.supermux.desktop.applets.AppletHandOff.appletArg(args)
+    val packaged = System.getProperty("jpackage.app-path") != null
+    val handOffSocket = DesktopTokenStore.defaultPath().parent.resolve("applets.sock")
+    if (packaged && dev.supermux.desktop.applets.AppletHandOff.handOff(handOffSocket, appletLaunch?.let { "open $it" } ?: "activate")) {
+        kotlin.system.exitProcess(0)
+    }
+    if (packaged) {
+        dev.supermux.desktop.applets.AppletHandOff.listen(
+            handOffSocket,
+            onOpen = { host, name -> javax.swing.SwingUtilities.invokeLater { dev.supermux.desktop.applets.DesktopApplets.open(host, name, name) } },
+            onActivate = { dev.supermux.desktop.applets.DesktopApplets.activateRequests.tryEmit(Unit) },
+        )
+    }
+    // macOS hands supermux:// addresses (an installed applet's stub app) to the running app as an Apple event.
+    runCatching {
+        val desktop = java.awt.Desktop.getDesktop()
+        if (desktop.isSupported(java.awt.Desktop.Action.APP_OPEN_URI)) {
+            desktop.setOpenURIHandler { e ->
+                dev.supermux.ui.applets.parseAppletUri(e.uri.toString())?.let { (host, name) ->
+                    javax.swing.SwingUtilities.invokeLater { dev.supermux.desktop.applets.DesktopApplets.open(host, name, name) }
+                }
+            }
+        }
+    }
+    appletLaunch?.let { dev.supermux.ui.applets.parseAppletUri(it) }?.let { (host, name) -> dev.supermux.desktop.applets.DesktopApplets.open(host, name, name) }
     // The hostname lookup can stall ~5 s on macOS: start it now, off the UI thread, so the supervisor and the pairing
     // screens find it done (#29).
     DesktopHostBootstrap.prefetchHostName()
@@ -593,6 +621,9 @@ fun main() {
             windowVisible = true
             windowState.isMinimized = false
         }
+        // #117: a second launch of the installed app (AppletHandOff) brings this window forward.
+        LaunchedEffect(Unit) { dev.supermux.desktop.applets.DesktopApplets.activateRequests.collect { showWindow() } }
+
         // supervisor.quit() can block for the child's stop grace, so it runs off the UI thread.
         fun quitNow(lingerMs: Long = 0) {
             if (quitting) return
@@ -999,6 +1030,15 @@ fun main() {
             // Every chrome's registry (macOS's too): the whole window's top band drags with it.
             val chromeRegions = chrome.regions
             if (isMacOs()) LaunchedEffect(window) { installMacTrackpadMagnify(window.rootPane) }
+            // Started from an applet's shortcut: this window comes up after the applet's and would cover it (seen on
+            // macOS). Once it is on screen, the applet goes back on top: what he clicked is what he sees.
+            if (appletLaunch != null) {
+                LaunchedEffect(window) {
+                    while (!window.isShowing) kotlinx.coroutines.delay(100)
+                    kotlinx.coroutines.delay(300)
+                    dev.supermux.desktop.applets.DesktopApplets.raiseAll()
+                }
+            }
             // Live tear-off: a tab dragged out of another window can land in this one.
             DisposableEffect(window) {
                 val mainHostId = desktopWindows.registry.main().id
@@ -2030,6 +2070,10 @@ fun main() {
                         LocalHostingSessions provides fleetFacts.localSessions,
                         // Cards #108/#132: living avatars and decorative loops stand still while nobody can see them.
                         LocalAvatarsLive provides (windowVisible && !windowState.isMinimized && screenSeen && !windowCovered),
+                        // #117: applets open in their own windows here.
+                        dev.supermux.ui.session.LocalAppletOpener provides dev.supermux.desktop.applets.DesktopApplets.opener,
+                        dev.supermux.ui.session.LocalAppletScreens provides dev.supermux.ui.session.NativeAppletScreens,
+                        dev.supermux.ui.session.LocalAppletInstaller provides dev.supermux.desktop.applets.DesktopApplets.installer,
                     ) {
                         // Card #54: the Load Timings panel (View ▸ Load Timings) floats over the app.
                         androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) {
@@ -2220,6 +2264,13 @@ fun main() {
             if (mdImageSrc != null) {
                 MdImageVerifyOverlay(source = mdImageSrc)
             }
+
+        // #117: applet windows, each its own OS window with only the applet's page in it.
+        dev.supermux.desktop.applets.AppletWindows(pairedFleet, onOpenChat = { id -> pairedUi?.selectSession(id); showWindow() }) { content ->
+            ProvideDesktopAdaptiveLocals {
+                DesktopTheme(appearance = ui.appearance, textScale = appTextScale, uiPrefs = desktopUiPrefs) { content() }
+            }
+        }
 
         // Extra claimed layout windows. Close unclaims only — never exitApplication.
         // Each extra uses the bind for ITS workspace so switching sessions does not

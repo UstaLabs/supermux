@@ -5,7 +5,7 @@ import {
   spawn as nodeSpawn, spawnSync as nodeSpawnSync, type ChildProcess, type SpawnOptions, type SpawnSyncOptions,
   type SpawnSyncReturns,
 } from "node:child_process"
-import { accessSync, constants, readdirSync, readlinkSync, statSync } from "node:fs"
+import { accessSync, constants, readdirSync, readFileSync, readlinkSync, statSync } from "node:fs"
 import { posix, win32 } from "node:path"
 
 /** Whether a process with [pid] exists. `EPERM` (it exists but is someone else's) is alive; only `ESRCH` is gone. */
@@ -394,4 +394,52 @@ export function holders(path: string, options: { platform?: NodeJS.Platform; run
     }
   }
   return found
+}
+
+/**
+ * How the OS's own shell runs [line], a whole command line as a person or agent wrote it (an applet's `run`, #117):
+ * `/bin/sh -c` on macOS and Linux, `cmd.exe /d /s /c` on Windows with the line passed verbatim, so cmd reads it as
+ * written.
+ */
+export function shellLine(line: string, options: { env?: CommandEnvironment; platform?: NodeJS.Platform } = {}): WindowsLaunch {
+  const platform = options.platform ?? process.platform
+  if (platform === "win32") {
+    return { command: envValue(options.env ?? process.env, "ComSpec", "win32") || "cmd.exe", args: ["/d", "/s", "/c", `"${line}"`], windowsVerbatimArguments: true }
+  }
+  return { command: "/bin/sh", args: ["-c", line] }
+}
+
+/** Starts [line] through [shellLine], from [spawnDefaults] overridden by [options] (a test passes its own spawn). */
+export function spawnShellLine(line: string, options: SpawnOptions & { platform?: NodeJS.Platform; spawn?: SpawnLike } = {}): ChildProcess {
+  const { platform, spawn = nodeSpawn as unknown as SpawnLike, ...spawnOptions } = options
+  const plan = shellLine(line, { env: (spawnOptions.env ?? process.env) as CommandEnvironment, ...(platform ? { platform } : {}) })
+  return spawn(plan.command, plan.args, {
+    ...spawnDefaults(),
+    ...spawnOptions,
+    ...(plan.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+  })
+}
+
+/**
+ * A fingerprint of when [pid] started, so a pid the OS has since reused is never taken for the process it once was:
+ * Linux, the start time in clock ticks from /proc/<pid>/stat; macOS, `ps -o lstart=`; Windows, the process's start as a
+ * file time from PowerShell. Null whenever it can't be read, which a caller treats as "not provably the same process".
+ */
+export function startToken(pid: number, deps: { platform?: NodeJS.Platform; readFile?: (path: string) => string; run?: RunSync } = {}): string | null {
+  const platform = deps.platform ?? process.platform
+  try {
+    if (platform === "linux") {
+      const stat = (deps.readFile ?? ((p: string) => readFileSync(p, "utf8")))(`/proc/${pid}/stat`)
+      // pid (comm) state ppid … starttime is field 22: comm may hold spaces and parentheses, so count after the last ")".
+      return stat.slice(stat.lastIndexOf(")") + 1).trim().split(/\s+/)[19] || null
+    }
+    if (platform === "win32") {
+      const r = (deps.run ?? runSync)(["powershell", "-NoProfile", "-Command", `(Get-Process -Id ${pid}).StartTime.ToFileTimeUtc()`])
+      return r.exitCode === 0 ? r.stdout.trim() || null : null
+    }
+    const r = (deps.run ?? runSync)(["ps", "-o", "lstart=", "-p", String(pid)])
+    return r.exitCode === 0 ? r.stdout.trim() || null : null
+  } catch {
+    return null
+  }
 }

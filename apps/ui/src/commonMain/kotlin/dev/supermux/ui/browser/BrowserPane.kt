@@ -101,6 +101,24 @@ internal fun PreviewCookieDto.toWebCookie(): WebCookie = WebCookie(
     secure = secure, httpOnly = httpOnly, sameSite = sameSite, maxAgeSeconds = maxAge,
 )
 
+/**
+ * #117: the same preview key for /a/ on the host the key was minted for, where applets are served (in both proxy modes,
+ * until #114 gives them their own origins). The applet route takes this cookie and never the device token.
+ */
+internal fun PreviewCookieDto.forApplets(): PreviewCookieDto {
+    val scheme = url.indexOf("://")
+    val slash = if (scheme < 0) -1 else url.indexOf('/', scheme + 3)
+    val origin = if (slash < 0) url.trimEnd('/') else url.substring(0, slash) // platform-ok: url
+    return copy(url = "$origin/a/", path = "/a/", domain = null)
+}
+
+/** Puts the host's preview key into this engine's (the Browser profile's) store: for /p/ previews and for /a/ applets. */
+internal suspend fun dev.supermux.webview.WebNavigator.putPreviewKeys(key: PreviewCookieDto): Boolean {
+    val previews = setCookie(key.toWebCookie())
+    val applets = setCookie(key.forApplets().toWebCookie())
+    return previews && applets
+}
+
 /** A tab's answers to its page: a new window asked for with the user's press opens as a link does. */
 private class BrowserClient(private val newWindow: (String) -> Unit, private val unusedKey: (KeyEvent) -> Boolean = { false }) : WebClient {
     override fun onNewWindow(request: NewWindowRequest): NewWindowDecision {
@@ -222,7 +240,7 @@ fun BrowserPane(
     }
     // While live, this engine is one the host's preview keeper renews the key through (#155): the Browser profile's store
     // is shared, so a key put in through any engine is every tab's.
-    val previewSink = remember(state) { PreviewKeeper.Sink<PreviewCookieDto> { state.navigator.setCookie(it.toWebCookie()) } }
+    val previewSink = remember(state) { PreviewKeeper.Sink<PreviewCookieDto> { state.navigator.putPreviewKeys(it) } }
     // The key is renewed the moment an engine is up (#155), while the routes are still being asked for, not when the first
     // preview loads: a page waits on the renewal under way instead of starting its own.
     LaunchedEffect(live, actions.preview) {

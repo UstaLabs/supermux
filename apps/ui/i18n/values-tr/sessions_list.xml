@@ -125,4 +125,53 @@
         <item quantity="one">%1$d ajan</item>
         <item quantity="other">%1$d ajan</item>
     </plurals>
+    <!-- #117: appletler — kenar çubuğundaki Appletler bölümü, menüsü ve Tüm appletler sayfası. -->
+    <string name="sessions_applets_title">Appletler</string>
+    <string name="sessions_applets_all">Tüm appletler</string>
+    <string name="applets_menu_open">Aç</string>
+    <string name="applets_menu_pin">Kenar çubuğuna sabitle</string>
+    <string name="applets_menu_unpin">Sabitlemeyi kaldır</string>
+    <string name="applets_menu_updated">%1$s önce güncellendi</string>
+    <string name="applets_menu_expired">%1$s süresi doldu</string>
+    <string name="applets_menu_needed">%1$s gerekli</string>
+    <string name="applets_page_host">%1$s üzerinde</string>
+    <string name="applets_hint_desktop">Yeni bir tane yapmak için herhangi bir oturuma “bunu applet yap” deyin. Diğer seçenekler için bir applete sağ tıklayın ya da ⋯ simgesine tıklayın.</string>
+    <string name="applets_hint_phone">Yeni bir tane yapmak için herhangi bir oturuma “bunu applet yap” deyin. Diğer seçenekler için bir applete basılı tutun.</string>
+    <string name="applets_window_no_host">Bu appletin makinesi artık bu cihazla eşli değil. Makineyi yeniden eşleyin, sonra appleti supermux'tan açın.</string>
+    <string name="applets_window_no_key">Bu applet açılamıyor: makinesi bu cihaza onun için bir anahtar vermedi. Makinenin çevrimiçi olduğunu kontrol edip appleti yeniden açın.</string>
+    <string name="applets_menu_info">Applet bilgisi</string>
+    <string name="applets_cover_done">Bitti</string>
+    <string name="applets_save_not_yet">Appletten dosya kaydetmek bu sürümde henüz yok.</string>
+    <string name="applets_menu_add_home">Ana ekrana ekle</string>
+    <string name="applets_menu_on_home">Ana ekranda</string>
+    <string name="applets_menu_install">Bu bilgisayara yükle</string>
+    <string name="applets_menu_installed">Yüklü</string>
+    <string name="applets_install_no_home">Bu telefonun ana ekranı uygulamalardan kısayol almıyor.</string>
+    <string name="applets_install_refused">Ana ekran kısayolu almadı.</string>
+    <string name="applets_where_home">Ana ekran</string>
+    <string name="applets_updated_just_now">Az önce güncellendi</string>
+    <string name="applets_where_applications">Uygulamalar</string>
+    <string name="applets_where_start_menu">Başlat menüsü</string>
+    <string name="applets_where_app_menu">Uygulama menüsü</string>
+    <string name="applets_menu_install_mac">Bu Mac'e yükle</string>
+    <string name="applets_menu_install_pc">Bu bilgisayara yükle</string>
+    <string name="applets_install_failed">Yüklenemedi.</string>
+    <string name="applets_install_dev_build">supermux'un bu kopyası applet yükleyemiyor (yüklü bir kopya değil).</string>
+    <string name="applets_install_comment">Bir supermux appleti</string>
+    <!-- #117 W1: Home screen widgets. -->
+    <string name="applets_menu_add_widget">Widget ekle</string>
+    <string name="applets_widget_empty">Burada görmek için supermux'ta applet sabitleyin.</string>
+    <string name="applets_widget_signed_out">Appletlerinizi görmek için supermux'ı açın.</string>
+    <string name="applets_widget_choose">Bir applet seçin</string>
+    <string name="applets_widget_gone">Bu applet artık yok. Başka birini seçin.</string>
+    <string name="applets_widget_needs_you">Sizi bekliyor</string>
+    <string name="applets_widget_no_home">Bu ana ekran uygulamalardan widget almıyor.</string>
+    <string name="applets_widget_none">Bu makinede henüz applet yok.</string>
+    <string name="applets_widget_ios_title">Appletler widget'ını ekleyin</string>
+    <string name="applets_widget_ios_step1">Ana Ekranınızda boş bir yere dokunup basılı tutun</string>
+    <string name="applets_widget_ios_step2">Düzenle'ye, ardından Widget Ekle'ye dokunun</string>
+    <string name="applets_widget_ios_step3">supermux'ı bulun ve “Appletler”i ya da tek biri için “Applet”i seçin</string>
+    <string name="applets_widget_ios_note">iOS widget'ları yalnızca sizin eklemenize izin veriyor; supermux sizin yerinize ekleyemez.</string>
+    <string name="applets_window_no_engine">Bu cihaz applet sayfalarını gösteremiyor: web motoru eksik ya da çok eski. Güncelleyin, sonra appleti yeniden açın.</string>
+    <string name="applets_window_no_engine_android">Bu telefon applet sayfalarını gösteremiyor: Android System WebView çok eski. Play Store'dan güncelleyin, sonra appleti yeniden açın.</string>
 </resources>

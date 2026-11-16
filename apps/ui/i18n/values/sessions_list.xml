@@ -125,4 +125,53 @@
         <item quantity="one">%1$d agent</item>
         <item quantity="other">%1$d agents</item>
     </plurals>
+    <!-- #117: applets — the sidebar's Applets block, its menu, and the All applets page. -->
+    <string name="sessions_applets_title">Applets</string>
+    <string name="sessions_applets_all">All applets</string>
+    <string name="applets_menu_open">Open</string>
+    <string name="applets_menu_pin">Pin to sidebar</string>
+    <string name="applets_menu_unpin">Unpin</string>
+    <string name="applets_menu_updated">Updated %1$s ago</string>
+    <string name="applets_menu_expired">%1$s expired</string>
+    <string name="applets_menu_needed">%1$s needed</string>
+    <string name="applets_page_host">on %1$s</string>
+    <string name="applets_hint_desktop">To make a new one, ask any session: “make this an applet”. Right-click or ⋯ an applet for more.</string>
+    <string name="applets_hint_phone">To make a new one, ask any session: “make this an applet”. Long-press an applet for more.</string>
+    <string name="applets_window_no_host">This applet's machine isn't paired with this device any more. Pair the machine again, then open the applet from supermux.</string>
+    <string name="applets_window_no_key">This applet can't open: its machine didn't give this device a key for it. Check that the machine is online, then open the applet again.</string>
+    <string name="applets_menu_info">Applet info</string>
+    <string name="applets_cover_done">Done</string>
+    <string name="applets_save_not_yet">Saving files from an applet isn't available in this version yet.</string>
+    <string name="applets_menu_add_home">Add to Home screen</string>
+    <string name="applets_menu_on_home">On Home screen</string>
+    <string name="applets_menu_install">Install on this computer</string>
+    <string name="applets_menu_installed">Installed</string>
+    <string name="applets_install_no_home">This phone's Home screen doesn't take shortcuts from apps.</string>
+    <string name="applets_install_refused">The Home screen didn't take the shortcut.</string>
+    <string name="applets_where_home">Home screen</string>
+    <string name="applets_updated_just_now">Updated just now</string>
+    <string name="applets_where_applications">Applications</string>
+    <string name="applets_where_start_menu">Start menu</string>
+    <string name="applets_where_app_menu">App menu</string>
+    <string name="applets_menu_install_mac">Install on this Mac</string>
+    <string name="applets_menu_install_pc">Install on this PC</string>
+    <string name="applets_install_failed">Couldn't install it.</string>
+    <string name="applets_install_dev_build">This build of supermux can't install applets (it isn't an installed copy).</string>
+    <string name="applets_install_comment">A supermux applet</string>
+    <!-- #117 W1: Home screen widgets. -->
+    <string name="applets_menu_add_widget">Add widget</string>
+    <string name="applets_widget_empty">Pin applets in supermux to see them here.</string>
+    <string name="applets_widget_signed_out">Open supermux to see your applets.</string>
+    <string name="applets_widget_choose">Choose an applet</string>
+    <string name="applets_widget_gone">This applet is gone. Choose another.</string>
+    <string name="applets_widget_needs_you">Needs you</string>
+    <string name="applets_widget_no_home">This Home screen doesn't take widgets from apps.</string>
+    <string name="applets_widget_none">No applets on this machine yet.</string>
+    <string name="applets_widget_ios_title">Add the Applets widget</string>
+    <string name="applets_widget_ios_step1">Touch and hold an empty spot on your Home Screen</string>
+    <string name="applets_widget_ios_step2">Tap Edit, then Add Widget</string>
+    <string name="applets_widget_ios_step3">Find supermux and pick “Applets”, or “Applet” for one</string>
+    <string name="applets_widget_ios_note">iOS only lets you add widgets yourself; supermux can't place one for you.</string>
+    <string name="applets_window_no_engine">This device can't show applet pages: its web engine is missing or too old. Update it, then open the applet again.</string>
+    <string name="applets_window_no_engine_android">This phone can't show applet pages: its Android System WebView is too old. Update it from the Play Store, then open the applet again.</string>
 </resources>

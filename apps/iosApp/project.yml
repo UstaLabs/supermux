@@ -67,6 +67,10 @@ targets:
       # Notification Content Extension: the custom expanded (long-press) view. iOS-only.
       - target: SupermuxNotifContent
         embed: true
+      # #117 W1: the applet widgets (Home screen, Control Center, Lock Screen). release.yml drops these lines from a
+      # signed build until its App Store profile exists (IOS_PP_WIDGETS_BASE64).
+      - target: SupermuxWidgets
+        embed: true
     info:
       path: Supermux/Info.plist
       properties:
@@ -118,6 +122,9 @@ targets:
         # :ui links :editor-syntax (api), so SupermuxKit carries the grammars' code and the app
         # bundle must carry their tables (see apps/editor-syntax/native/README.md).
         SUPERMUX_EDITOR_SYNTAX_TABLES: "YES"
+        # #117: AppletIntents.swift, compiled into the app and the widget extension, hands an opened applet straight
+        # to the shell when it runs in the app.
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) SUPERMUX_APP"
         # APNs (aps-environment) + shared Keychain access group so the NSE can read
         # the same push keypair this app generates.
         CODE_SIGN_ENTITLEMENTS: Supermux/Supermux.entitlements
@@ -284,6 +291,38 @@ targets:
       configs:
         Release:
           PROVISIONING_PROFILE_SPECIFIER: "Supermux Notif Content App Store"
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+          "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Distribution"
+
+  SupermuxWidgets:
+    # #117 W1: the applet widgets — "Applets" (the pinned grid), "Applet" (one applet and its summary) and the
+    # "Open applet" control — drawn from the snapshot the app writes into the App Group. iOS 18: the control and
+    # its App Intent; the app hides "Add widget" below that (IosAppletWidgets.kt).
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: SupermuxWidgets
+      # Shared with the app: the snapshot reader and the applet App Intents (Spotlight lives in the app).
+      - path: Supermux/Applets/AppletSnapshot.swift
+      - path: Supermux/Applets/AppletIntents.swift
+    info:
+      path: SupermuxWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: supermux
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.supermux.app.widgets
+        IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+        CODE_SIGN_ENTITLEMENTS: SupermuxWidgets/SupermuxWidgets.entitlements
+        APPLICATION_EXTENSION_API_ONLY: "YES"
+      configs:
+        Release:
+          PROVISIONING_PROFILE_SPECIFIER: "Supermux Widgets App Store"
           CODE_SIGN_IDENTITY: "Apple Distribution"
           "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Distribution"
 

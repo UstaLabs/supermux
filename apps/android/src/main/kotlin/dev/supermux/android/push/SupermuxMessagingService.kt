@@ -29,6 +29,7 @@ import io.ktor.client.engine.cio.CIO
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlin.math.absoluteValue
 import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
@@ -103,6 +104,16 @@ class SupermuxMessagingService : FirebaseMessagingService() {
             return
         }
         postNotification(note)
+        // An applet said something: its Home screen widgets (W1) ask the broker for what's true now.
+        if (note.applet != null) {
+            val app = applicationContext
+            appScope.launch {
+                runCatching {
+                    dev.supermux.android.applets.AppletWidgetStore.refreshIfStale(app, force = true)
+                    dev.supermux.android.applets.AppletWidgetStore.updateWidgets(app)
+                }
+            }
+        }
     }
 
     private fun postNotification(note: PushRouter.Notification) {

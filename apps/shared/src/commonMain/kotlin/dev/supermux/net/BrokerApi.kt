@@ -3500,6 +3500,116 @@ class BrokerApi(
     suspend fun updatePA(id: String, isDefault: Boolean? = null, name: String? = null) =
         patchJson("$httpBase/api/pas/${urlEncode(id)}", UpdatePABody(isDefault, name))
 
+    /** GET /applets (#117): this host's applets, with their pins. */
+    suspend fun applets(): List<AppletDto> =
+        getJson("$httpBase/applets")
+
+    /** GET an applet's icon ([AppletDto.iconUrl]) with this client's bearer: raw bytes, null on non-2xx. */
+    suspend fun appletIconBytes(applet: AppletDto): ByteArray? {
+        val path = applet.iconUrl ?: return null
+        val resp = http.get("$httpBase$path?v=${urlEncode(applet.updatedAt)}") { authHeader() }
+        return if (resp.status.isSuccess()) resp.bodyAsBytes() else null
+    }
+
+    /**
+     * POST /applets/<name>/pin or /unpin: the host's one list of sidebar applets. The broker's reason when it
+     * refuses (the grid is full, the applet is gone) is the error message.
+     */
+    suspend fun pinApplet(name: String, pinned: Boolean) {
+        val resp = http.post("$httpBase/applets/${urlEncode(name)}/${if (pinned) "pin" else "unpin"}") { authHeader() }
+        if (!resp.status.isSuccess()) {
+            val body = resp.bodyAsText()
+            throw IllegalStateException(
+                runCatching { json.parseToJsonElement(body).jsonObject["error"]?.jsonPrimitive?.contentOrNull }.getOrNull() ?: "HTTP ${resp.status.value}",
+            )
+        }
+    }
+
+    /** GET /applets/<name>: Applet info. */
+    suspend fun appletDetail(name: String): AppletDetailDto =
+        getJson("$httpBase/applets/${urlEncode(name)}")
+
+    /** One owner call on an applet; the broker's reason when it refuses is the exception's message. */
+    private suspend fun appletCall(resp: HttpResponse): String {
+        val body = resp.bodyAsText()
+        if (!resp.status.isSuccess()) {
+            throw IllegalStateException(
+                runCatching { json.parseToJsonElement(body).jsonObject["error"]?.jsonPrimitive?.contentOrNull }.getOrNull() ?: "HTTP ${resp.status.value}",
+            )
+        }
+        return body
+    }
+
+    /** POST /applets/<name>/jobs/<job>/run: runs it now and waits for its end. */
+    suspend fun runAppletJob(name: String, job: String): AppletJobRunDto =
+        json.decodeFromString(AppletJobRunDto.serializer(), appletCall(http.post("$httpBase/applets/${urlEncode(name)}/jobs/${urlEncode(job)}/run") { authHeader() }))
+
+    /** GET /applets/<name>/jobs/<job>/runs: its last runs, newest first. */
+    suspend fun appletJobRuns(name: String, job: String): List<AppletJobRunDto> =
+        getJson("$httpBase/applets/${urlEncode(name)}/jobs/${urlEncode(job)}/runs")
+
+    /** PUT /applets/<name>/secrets/<secret> (owner only): the value goes to the applet's server and jobs, never back here. */
+    suspend fun setAppletSecret(name: String, secret: String, value: String, expiresAt: String? = null) {
+        appletCall(http.put("$httpBase/applets/${urlEncode(name)}/secrets/${urlEncode(secret)}") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(AppletValueBody.serializer(), AppletValueBody(value, expiresAt)))
+        })
+    }
+
+    suspend fun removeAppletSecret(name: String, secret: String) {
+        appletCall(http.delete("$httpBase/applets/${urlEncode(name)}/secrets/${urlEncode(secret)}") { authHeader() })
+    }
+
+    /** PUT /applets/<name>/settings/<key>: a value for one of the applet's own options. */
+    suspend fun setAppletSetting(name: String, key: String, value: String) {
+        appletCall(http.put("$httpBase/applets/${urlEncode(name)}/settings/${urlEncode(key)}") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(AppletValueBody.serializer(), AppletValueBody(value)))
+        })
+    }
+
+    /** PATCH /applets/<name> {title}: Settings ▸ Name. */
+    suspend fun setAppletTitle(name: String, title: String) {
+        appletCall(http.patch("$httpBase/applets/${urlEncode(name)}") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(AppletTitleBody.serializer(), AppletTitleBody(title)))
+        })
+    }
+
+    /** POST /applets/<name>/stop or /start. */
+    suspend fun setAppletStopped(name: String, stopped: Boolean) {
+        appletCall(http.post("$httpBase/applets/${urlEncode(name)}/${if (stopped) "stop" else "start"}") { authHeader() })
+    }
+
+    /** POST /applets/<name>/ask: supermux.agent.ask, after his click in the applet's window. */
+    suspend fun askApplet(name: String, text: String, agent: String? = null): AppletAskResponse =
+        json.decodeFromString(AppletAskResponse.serializer(), appletCall(http.post("$httpBase/applets/${urlEncode(name)}/ask") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(AppletAskBody.serializer(), AppletAskBody(text, agent)))
+        }))
+
+    /** POST /applets/<name>/chat: the applet's own chat ("Change it in a chat"), made if needed. */
+    suspend fun appletChat(name: String): AppletAskResponse =
+        json.decodeFromString(AppletAskResponse.serializer(), appletCall(http.post("$httpBase/applets/${urlEncode(name)}/chat") { authHeader() }))
+
+    /** POST /applets/<name>/installs {where}: this device put the applet on its launcher. */
+    suspend fun addAppletInstall(name: String, where: String) {
+        appletCall(http.post("$httpBase/applets/${urlEncode(name)}/installs") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(AppletWhereBody.serializer(), AppletWhereBody(where)))
+        })
+    }
+
+    /** DELETE /applets/<name> (owner only): gone from every device, kept 30 days. */
+    suspend fun deleteApplet(name: String) {
+        appletCall(http.delete("$httpBase/applets/${urlEncode(name)}") { authHeader() })
+    }
+
     /** GET /proxies */
     suspend fun proxies(): List<ProxyDto> =
         getJson("$httpBase/proxies")

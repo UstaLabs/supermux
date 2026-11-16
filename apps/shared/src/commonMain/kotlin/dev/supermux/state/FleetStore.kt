@@ -468,6 +468,30 @@ class FleetStore(
             .flatMapLatest { app -> app?.accounts ?: flowOf(null) }
             .stateIn(fleetScope, SharingStarted.Eagerly, null)
 
+    /**
+     * #117: the ACTIVE host's applets ([HostStore.applets]): the list follows the host picker, one host at a time.
+     * Null while unknown, or when that host's broker has no applets (the app then shows no Applets section).
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val activeApplets: StateFlow<List<dev.supermux.net.AppletDto>?> =
+        combine(hostApps, _activeHost) { _, _ -> activeApp() }
+            .distinctUntilChanged()
+            .flatMapLatest { app -> app?.applets ?: flowOf(null) }
+            .stateIn(fleetScope, SharingStarted.Eagerly, null)
+
+    /** Pins or unpins one of the active host's applets; null on success, else the broker's reason. */
+    suspend fun pinApplet(name: String, pinned: Boolean): String? = activeApp()?.pinApplet(name, pinned) ?: "not connected to this host"
+
+    suspend fun appletIconBytes(applet: dev.supermux.net.AppletDto): ByteArray? = activeApp()?.appletIconBytes(applet)
+
+    suspend fun appletDetail(name: String): dev.supermux.net.AppletDetailDto? = activeApp()?.appletDetail(name)
+
+    suspend fun appletJobRuns(name: String, job: String): List<dev.supermux.net.AppletJobRunDto>? = activeApp()?.appletJobRuns(name, job)
+
+    /** An owner action on one of the active host's applets ([HostStore.appletAction]). */
+    suspend fun <T> appletAction(block: suspend (dev.supermux.net.BrokerApi) -> T): Result<T> =
+        activeApp()?.appletAction(block) ?: Result.failure(IllegalStateException("not connected to this machine"))
+
     /** The ACTIVE host's accounts auto-switch setting ([HostStore.accountsAutoSwitch]). */
     @OptIn(ExperimentalCoroutinesApi::class)
     val activeAccountsAutoSwitch: StateFlow<Boolean?> =

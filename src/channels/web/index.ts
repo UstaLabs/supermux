@@ -17,6 +17,9 @@ import { CardSendGuard } from "../../core/show-html/card-send"
 import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
 import { PayloadTooLargeError, EmptyUploadError, OffsetConflictError, UploadOverflowError, UploadNotFoundError } from "../../core/files/store"
 import { buildProxyPublicUrl, extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie, portFromSlug } from "./proxy"
+import { deviceViaId, handleAppletRequest, matchAppletPath, type AppletCaller } from "./applet-route"
+import { handleAppletApi } from "./applet-api"
+import { isOwnerOnly } from "../../core/applets/manifest"
 import { AUTH_COOKIE, PREVIEW_COOKIE, authToken, authedViaBearer, bearerToken, buildAuthCookie, buildClearCookie, crossSiteRefusal, previewCookieSpec, previewCookieToken, sameOriginOk } from "./cookies"
 import { browserStateError } from "../../core/workspace/browser-state"
 
@@ -575,6 +578,8 @@ export interface WebChannelOpts {
   proxyMainHost?: string
   proxyLookup?: (domain: string) => { port: number; sessionName: string; isPublic: boolean } | undefined
   proxyAuth?: (token: string) => boolean
+  /** #117: the host's applets, served at /a/<name>/. */
+  applets?: import("../../core/applets/service").AppletService
   /** The base URL named proxies' links are built on (main.ts: the relay's, else MUX_WEB_PUBLIC_URL); GET /proxies/by-port builds on it too. Defaults to [publicUrl]. */
   proxyLinksBaseUrl?: () => string | undefined
   internalSecret?: string
@@ -1195,10 +1200,28 @@ export class WebChannel implements Channel {
     // Path-based proxy (active only when no base domain is configured). A digits slug is a port and needs no lookup.
     const pathMatch = !this.opts.proxyBaseDomain ? matchProxyPath(url.pathname) : null
     const pm = pathMatch && (this.opts.proxyLookup || portFromSlug(pathMatch.slug) !== undefined) ? pathMatch : undefined
+    // #117: /a/<name>/ on the app's own host, in both proxy modes (per-applet origins come with #114).
+    const am = this.opts.applets && !sub ? matchAppletPath(url.pathname) : null
     // Before any route, so a new route can't miss it (cookies.ts explains the rules).
     const appOrigins = [this.opts.publicUrl, this.getRelayUrl?.(), hostOrigin(req)]
-    if (crossSiteRefusal(req, { appOrigins, proxied: Boolean(sub || pm) })) {
+    if (crossSiteRefusal(req, { appOrigins, proxied: Boolean(sub || pm || am) })) {
       return new Response("bad origin", { status: 403 })
+    }
+    if (am) return this.handleAppletRoute(req, server)
+    // #117: an applet's server or job calling supermux.* with its own token (never a device credential).
+    if (this.opts.applets && url.pathname === "/applet-api/notify" && req.method === "POST") {
+      const v = this.opts.applets.appletForToken(req.headers.get("x-supermux-applet-token") ?? "")
+      if (!v) return this.json({ error: "not an applet token" }, 401)
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>
+      const r = await this.opts.applets.notify(v.row.name, b.title, b.body)
+      return r.ok ? this.json({ ok: true }) : this.json({ error: r.error }, 400)
+    }
+    // ...and telling supermux its widget summary changed, so phone widgets follow now rather than within 15 minutes.
+    if (this.opts.applets && url.pathname === "/applet-api/widget" && req.method === "POST") {
+      const v = this.opts.applets.appletForToken(req.headers.get("x-supermux-applet-token") ?? "")
+      if (!v) return this.json({ error: "not an applet token" }, 401)
+      const r = await this.opts.applets.refreshWidget(v.row.name)
+      return r.ok ? this.json({ ok: true, summary: r.summary }) : this.json({ error: r.error }, 400)
     }
     if (sub) {
       return this.handleProxyRoute(req, sub, server)
@@ -2720,6 +2743,47 @@ export class WebChannel implements Channel {
     if (port === undefined) return this.opts.proxyLookup?.(slug)
     if (port === null || port === this.boundPort || port === this.opts.port) return undefined
     return { port, sessionName: `port ${port}`, isPublic: false }
+  }
+
+  /**
+   * Who asks for an applet: a native client's bearer device token, or the preview-only cookie (#105) the native applet
+   * window sets for /a/. NEVER the device cookie: in path mode the applet shares the app's origin, so a page that got
+   * the cookie would hold the owner's whole API. The web client hides applets until #114 gives them their own origins.
+   */
+  private appletCaller(req: Request): AppletCaller | undefined {
+    const bearer = bearerToken(req)
+    const dev = bearer ? this.store.verify(bearer) : undefined
+    if (dev) return { kind: "device", id: deviceViaId(dev.token_hash), name: dev.name }
+    const preview = previewCookieToken(req)
+    const pdev = preview ? this.store.verifyPreview(preview) : undefined
+    return pdev ? { kind: "device", id: deviceViaId(pdev.token_hash), name: pdev.name } : undefined
+  }
+
+  private async handleAppletRoute(req: Request, server: import("bun").Server<WSData>): Promise<Response | undefined> {
+    const applets = this.opts.applets!
+    if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+      // A server applet's own socket: same checks as its pages, then the proxy's websocket bridge.
+      const url = new URL(req.url)
+      const m = matchAppletPath(url.pathname)
+      const v = m?.rest ? applets.get(m.name) : undefined
+      const caller = this.appletCaller(req)
+      if (!m || !m.rest || !v?.manifest?.run || !caller) return new Response("not found", { status: 404 })
+      if (caller.kind !== "device" && isOwnerOnly(m.rest, v.manifest.ownerOnly)) return new Response("forbidden", { status: 403 })
+      const port = applets.supervisor.port(v.row.id)
+      if (!port) return new Response("applet not running", { status: 503 })
+      const wsProtocol = req.headers.get("sec-websocket-protocol")
+      const selectedProtocol = wsProtocol?.split(",")[0]?.trim()
+      const upgraded = server.upgrade(req, {
+        data: { proxyUpstream: { port, sessionName: `applet ${m.name}` }, proxyPath: m.rest + url.search, proxyWsProtocol: wsProtocol } as any,
+        ...(selectedProtocol ? { headers: { "Sec-WebSocket-Protocol": selectedProtocol } } : {}),
+      })
+      return upgraded ? undefined : new Response("ws upgrade failed", { status: 500 })
+    }
+    return handleAppletRequest(req, {
+      applets,
+      caller: (r) => this.appletCaller(r),
+      own: { cookies: [AUTH_COOKIE, PREVIEW_COOKIE], isOwnBearer: (t) => !!this.store.verify(t) },
+    })
   }
 
   private async handleProxyRoute(
@@ -5337,6 +5401,11 @@ export class WebChannel implements Channel {
           publicUrl: previewLinksBase(this.opts, req),
         }),
       })
+    }
+    // #117: the host's applets, for this device's Applets grid and Applet info. Agents use `supermux applet …` instead.
+    if (path === "/applets" || path.startsWith("/applets/")) {
+      if (!this.opts.applets) return this.json({ error: "applets are not available on this host" }, 404)
+      return handleAppletApi(req, { applets: this.opts.applets, device: auth.device.name, json: (b, st) => this.json(b, st) })
     }
     if (method === "GET" && path === "/proxies") {
       const proxies = this.opts.listProxies?.() ?? []

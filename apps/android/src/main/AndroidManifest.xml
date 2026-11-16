@@ -74,6 +74,54 @@
             android:taskAffinity="${applicationId}.window"
             android:autoRemoveFromRecents="true"
             android:windowSoftInputMode="adjustResize" />
+        <!-- #117: an applet in its own task (applets/AppletActivity.kt). documentLaunchMode="intoExisting" keys
+             the task on the intent's data, the applet's supermux://applet/<host>/<name>: opening it again
+             brings its Recents card back ("always" made a new card per tap, verified on the Fold). Not exported:
+             shortcuts and widgets (S1/W1) start it from inside the app's own package. -->
+        <activity
+            android:name=".applets.AppletActivity"
+            android:theme="@style/Theme.Supermux.Main"
+            android:exported="false"
+            android:hardwareAccelerated="true"
+            android:resizeableActivity="true"
+            android:documentLaunchMode="intoExisting"
+            android:taskAffinity="${applicationId}.applet"
+            android:autoRemoveFromRecents="true"
+            android:windowSoftInputMode="adjustResize" />
+        <!-- #117 W1: the Home screen widgets (applets/AppletWidgets.kt): "Applets", the pinned grid, and "Applet",
+             one applet with its summary. The one-applet widget's setup is optional: pinned from an applet's menu it
+             arrives set up; placed from the widget picker it asks which applet on its first tap. -->
+        <receiver
+            android:name=".applets.AppletsGridWidgetReceiver"
+            android:label="@string/widget_applets_label"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/applets_grid_widget" />
+        </receiver>
+        <receiver
+            android:name=".applets.AppletWidgetReceiver"
+            android:label="@string/widget_applet_label"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/applet_widget" />
+        </receiver>
+        <receiver
+            android:name=".applets.AppletWidgetPinnedReceiver"
+            android:exported="false" />
+        <activity
+            android:name=".applets.AppletWidgetConfigActivity"
+            android:theme="@style/Theme.Supermux.Main"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity="${applicationId}.widgetconfig">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
         <!-- Native push: receives FCM data-only messages (relay `data:{d:<ciphertext>}`). -->
         <service
             android:name=".push.SupermuxMessagingService"

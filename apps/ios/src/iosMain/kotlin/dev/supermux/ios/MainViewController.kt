@@ -341,6 +341,35 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
                 }
             }
 
+            // #117: an applet opens full screen over the app, with a Done to leave it.
+            val appletCover = remember { dev.supermux.ui.applets.AppletCoverState() }
+            // W1: a widget's supermux://applet/<host>/<name> link, or what a control / Spotlight left in the App Group.
+            LaunchedEffect(openedUrl) {
+                openedUrl?.let { dev.supermux.ui.applets.parseAppletUri(it) }?.let { (h, n) ->
+                    appletCover.show(h, n)
+                    IosAppState.consumeOpenedUrl()
+                }
+            }
+            LaunchedEffect(foreground) {
+                if (foreground) IosAppletWidgetStore.takePendingOpen()?.let { (h, n) -> appletCover.show(h, n) }
+            }
+            // ...and the widgets follow the host picker's applets whenever the app sees them change.
+            LaunchedEffect(fleet) {
+                kotlinx.coroutines.flow.combine(fleet.activeHost, fleet.activeApplets) { h, a -> h to a }.collect { (hostId, applets) ->
+                    if (hostId != null && applets != null) {
+                        runCatching {
+                            IosAppletWidgetStore.save(hostId, applets, icon = { fleet.appForRecord(hostId)?.appletIconBytes(it) }, reload = { bridge.reloadWidgets() })
+                        }
+                    }
+                }
+            }
+            androidx.compose.runtime.CompositionLocalProvider(
+                dev.supermux.ui.session.LocalAppletOpener provides appletCover.opener,
+                dev.supermux.ui.session.LocalAppletScreens provides dev.supermux.ui.session.NativeAppletScreens,
+                // The widget extension needs iOS 18 (its control and App Intents); before that there are none to add.
+                dev.supermux.ui.session.LocalAppletWidgets provides IosAppletWidgets.takeIf { iosMajorVersion() >= 18 },
+            ) {
+            androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) {
             SupermuxApp(
                 fleet = fleet,
                 ui = ui,
@@ -379,6 +408,9 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
                 // No `chatFallback`: that slot IS the host-specific escape hatch, and iOS has no
                 // screen to put in it. `UnavailableSessionPane` (H3.7) is what covers its absence.
             )
+            dev.supermux.ui.applets.AppletCover(appletCover, fleet, onOpenChat = { id -> ui.selectSession(id) })
+            }
+            }
         }
     }
 }

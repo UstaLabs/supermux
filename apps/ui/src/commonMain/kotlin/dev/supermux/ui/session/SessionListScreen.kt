@@ -295,6 +295,8 @@ fun SessionListScreen(
     archivedAgents: List<dev.supermux.net.ArchivedDto> = emptyList(),
     /** Create / rename / archive / make default / change character; null hides those entries. */
     agentsActions: AgentsActions? = null,
+    /** #117: the host picker's host's applets; null when it has none or can't have them (no Applets block then). */
+    applets: AppletsActions? = null,
     /** Agent session id → its avatar (rememberAgentAvatars); an Agent without one draws the default. */
     agentAvatars: Map<String, AvatarRig> = emptyMap(),
     initialGroupByProject: Boolean = true,
@@ -1758,6 +1760,8 @@ fun SessionListScreen(
             item(key = "chrome:above") { aboveList() }
             needsYouItems()
             agentsItems()
+            // #117: on a phone the applets sit above the sessions, as on a home screen.
+            if (applets != null && !selecting) applets.screens.zone(this, applets, phone = true)
             stickyHeader(key = "chrome:section") {
                 Box(Modifier.fillMaxWidth().background(cs.surfaceContainerHigh)) { sectionHeader() }
             }
@@ -1766,6 +1770,9 @@ fun SessionListScreen(
             // they have scrolled away (search, select and the menu stay reachable).
             needsYouItems()
             agentsItems()
+            // #117: between Agents and Workspaces, 3×3 in a sidebar whatever the input (an unfolded Fold cut the
+            // phone's four-across labels short); long-press still opens the menu on touch.
+            if (applets != null && !selecting) applets.screens.zone(this, applets, phone = false)
             stickyHeader(key = "chrome:section") {
                 Box(Modifier.fillMaxWidth().background(cs.surfaceContainerHigh)) { sectionHeader() }
             }

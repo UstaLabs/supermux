@@ -26,6 +26,8 @@ import { ProjectService } from "./core/project/service"
 import { ProjectImages } from "./core/project/images"
 import { propagateSessionRename } from "./core/workspace/name"
 import { makeReadAdvancer } from "./core/session-manager/read-status"
+import { AppletService } from "./core/applets/service"
+import { handleAppletOp } from "./core/applets/ops"
 import { ProxyLivenessMonitor, type ProxyStatus } from "./core/proxy/liveness"
 import { exposedLinksPublicUrl, hostRelayUrl } from "./core/relay/public-url"
 
@@ -1461,6 +1463,8 @@ const sessionManager = new SessionManager(registry, {
     telegramApi: telegram ? { token: TG_TOKEN!, getFile: (id: string) => telegram.getFile(id) } : undefined,
   },
   orchestration: {
+    // #117: `supermux applet …` from any session's shell.
+    appletOp: (sessionId, name, args) => handleAppletOp(appletService, name, args, { sessionId, publicUrl: exposedProxyLinksBaseUrl() }),
     // spawn_session: the app's create path, so the new session gets its workspace and the full frames.
     spawnSession: async (args) => {
       const trace = startTraces.begin()
@@ -2414,6 +2418,40 @@ const worktreeService = new WorktreeService({
 const proxyLivenessMonitor = new ProxyLivenessMonitor({
   listTargets: () => registry.listProxies().map((p) => ({ domain: p.domain, port: p.port })),
   onChange: (domain, status) => webChannel?.broadcastToAll({ type: "proxy_status", domain, status }),
+})
+// #117: the host's applets (~/.mux/applets/<name>/), served at /a/<name>/ and kept running with no session involved.
+// Started after webChannel.start(); servers outlive a broker restart and are adopted by the next one.
+const appletService = new AppletService({
+  db, appletsDir: join(MUX_HOME, "applets"), stateDir: join(STATE_DIR, "applets"), backupsDir: join(MUX_HOME, "backups", "applets"),
+  rescanMs: 15_000, jobTickMs: 30_000, maintenanceMs: 10 * 60_000, widgetMs: 15 * 60_000, settings,
+  brokerUrl: () => (webChannel?.boundPort ? `http://127.0.0.1:${webChannel.boundPort}` : undefined),
+  actorName: (by) => by.startsWith("agent:") ? registry.get(by.slice("agent:".length))?.name : undefined,
+  // supermux.agent.ask: the applet's own chat (a visible session in its folder), or the named Agent's.
+  ask: async (applet, text, opts) => {
+    let target = opts.agent ? registry.resolveName(opts.agent) : (opts.chatId ? registry.get(opts.chatId) : undefined)
+    if (opts.agent && (!target || target.role !== "personal_assistant")) throw new Error(`no Agent named "${opts.agent}"`)
+    if (!target) {
+      const made = await createSessionWithWorkspace({ workdir: applet.folder, name: `${applet.title} applet`, worktree: false, asleep: true })
+      target = registry.get(made.id)
+      if (!target) throw new Error("the chat could not be made")
+    }
+    // Answered as soon as the message is in the chat: waking the agent can take a while, and the page is waiting.
+    const chat = target
+    if (!text) return { sessionId: chat.id, name: chat.name }
+    void deliverUserMessage(chat.id, text).then((sent) => { if (!sent.ok) log.warn("applet_ask_not_delivered", { session: chat.name, reason: sent.reason }) })
+    return { sessionId: chat.id, name: chat.name }
+  },
+  // supermux.notify: every device, like a broker notice; the applet's title is the sender.
+  notify: async (applet, title, body) => {
+    await firePushToAll({
+      sender: pushSender, nativeSender, nativeDevices,
+      devices: () => pushStore.all().map((s) => s.device),
+      payload: { session: applet.title, text: body ? `${title}: ${body}` : title, ts: new Date().toISOString(), applet: applet.name },
+      trigger: "applet_notify",
+    })
+  },
+  // No payload: a device showing applets reloads GET /applets (older apps skip the unknown frame).
+  onChange: () => webChannel?.broadcastToAll({ type: "applets_changed" }),
 })
 // loginManager is declared here (before webChannel opts, which close over it) and
 // assigned after webChannel is constructed (so its onChange can reference webChannel).
@@ -3520,6 +3558,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       return { port: entry.port, sessionName: entry.sessionName, isPublic: entry.isPublic }
     },
     proxyAuth: (token: string) => !!proxyDeviceStore.verify(token),
+    applets: appletService,
     proxyLinksBaseUrl: exposedProxyLinksBaseUrl,
     listProxies: () => registry.listProxies().map((e) => proxyWsPayload(e, proxyLivenessMonitor.getStatus(e.domain))),
     createProxy: (args) => {
@@ -5207,6 +5246,7 @@ telemetry.start()
 // meaningful with a web channel, but harmless otherwise; onChange no-ops when
 // webChannel is undefined.
 proxyLivenessMonitor.start()
+void appletService.start().catch((err) => log.warn("applets_start_failed", { err: err?.message ?? String(err) }))
 worktreeService.start()
 if (!IS_TEST_BROKER) {
   // The lists learned last run answer GET /models at once; the refresh below replaces them.
@@ -5329,6 +5369,9 @@ async function gracefulShutdown(signal: string) {
   try {
     proxyLivenessMonitor.stop()
   } catch (err: any) { log.warn("proxy_liveness_stop_failed", { err: err?.message }) }
+  try {
+    appletService.shutdown()
+  } catch (err: any) { log.warn("applets_shutdown_failed", { err: err?.message }) }
   try {
     if (webChannel) await webChannel.stop()
   } catch (err: any) { log.warn("webChannel_stop_failed", { err: err?.message }) }

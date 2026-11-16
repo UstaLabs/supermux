@@ -62,6 +62,9 @@ fun pathFor(route: Route, selectedId: String?): String = when (route) {
     Route.Devices, Route.Proxies -> pathFor(canonicalRoute(route), selectedId)
     Route.Archived -> "/archived"
     Route.Displays -> "/displays"
+    // #117: the web build shows no applets until #114; an address naming the page goes back to where it was.
+    Route.Applets -> "/applets"
+    is Route.AppletInfo -> "/applets/${route.name}"
     is Route.WhatsNew -> "/whats-new/${route.version}"
 }
 
@@ -87,6 +90,7 @@ fun parsePath(pathAndQuery: String): UrlTarget {
         segs[0] == "archived" -> UrlTarget.Screen(Route.Archived)
         segs[0] == "proxies" -> UrlTarget.Screen(canonicalRoute(Route.Proxies))
         segs[0] == "displays" -> UrlTarget.Screen(Route.Displays)
+        segs[0] == "applets" -> UrlTarget.Screen(Route.Applets)
         segs[0] == "whats-new" && segs.size == 2 -> UrlTarget.Screen(Route.WhatsNew(segs[1]))
         segs[0] == "settings" && segs.size == 1 -> UrlTarget.Screen(Route.Settings())
         segs[0] == "settings" -> UrlTarget.Screen(

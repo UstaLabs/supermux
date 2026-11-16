@@ -94,6 +94,16 @@ sealed interface Route {
     @SerialName("displays")
     data object Displays : Route
 
+    /** #117: All applets, a plain icon grid of the host picker's host's applets. */
+    @Serializable
+    @SerialName("applets")
+    data object Applets : Route
+
+    /** #117: one applet's Applet info, at [tab] (overview, data, jobs, secrets, settings; blank = overview). */
+    @Serializable
+    @SerialName("applet_info")
+    data class AppletInfo(val name: String = "", val tab: String = "") : Route
+
     // Appearance and the updater's page are General's rows since #97 (`openSettings(General)`,
     // `ShellUiState.openAppUpdate`); a saved back stack naming them decodes to Home.
 }
