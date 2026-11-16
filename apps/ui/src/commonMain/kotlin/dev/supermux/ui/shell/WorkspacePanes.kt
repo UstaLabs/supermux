@@ -9,6 +9,7 @@
 // The pane CONTENT is one `ViewHost` call for every width; only the chrome around it differs.
 package dev.supermux.ui.shell
 
+import dev.supermux.ui.editor.ScmDiffTab
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.Animatable
@@ -159,6 +160,7 @@ import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 import dev.supermux.workspace.openSingletonView
 import dev.supermux.workspace.setActiveViewInGroup
+import dev.supermux.workspace.splitGroup
 import dev.supermux.ui.panes.PaneStripEnd
 import androidx.compose.material.icons.outlined.Tab
 import dev.supermux.ui.i18n.Str
@@ -525,6 +527,7 @@ private fun WorkspacePanesBody(
                             state = tabState,
                             dot = if (v.tabUnread(tabState.selected, unreadSessions)) LocalSemantics.current.success else null,
                             labelFont = GeistFontFamily,
+                            italic = v?.isScmDiffPreview() == true,
                             onClose = { _ -> onCloseCandidate(v) },
                             icon = {
                                 val agent = v?.chatSessionId()?.let { sid -> app.sessions.value.firstOrNull { it.id == sid }?.agent }
@@ -1273,14 +1276,20 @@ private fun WorkspacePaneContent(
                 val existing = openSingletonView(layout, viewsById, NewViewKind.DIFF)
                 if (existing != null) {
                     val (diffViewId, ownerGroup) = existing
-                    layoutSync.edit { setActiveViewInGroup(it, ownerGroup, diffViewId) }
+                    val chatGroup = groupIdOf(layout, viewId)
+                    // #72 v4: Source Control lives in its own pane to the chat's right. One already open as a tab in the
+                    // chat's own pane (opened before this rule) moves out beside it; one elsewhere is shown where it is.
+                    if (ownerGroup == chatGroup) {
+                        @OptIn(ExperimentalUuidApi::class)
+                        val pane = Uuid.random().toString()
+                        layoutSync.edit { splitGroup(it, ownerGroup, diffViewId, "row", pane) }
+                    } else layoutSync.edit { setActiveViewInGroup(it, ownerGroup, diffViewId) }
                     ui.windows.expandClaim(hostId, setOf(diffViewId), layoutSync.tree)
                 } else {
                     val groupId = groupIdOf(layout, viewId)
                     if (groupId != null) {
-                        app.addWorkspaceView(current.id, NewViewKind.DIFF, groupId) { newViewId ->
-                            ui.windows.expandClaim(hostId, setOf(newViewId), layoutSync.tree)
-                        }
+                        // #72 v4: Source Control beside the chat, not a tab over it (Ahmet).
+                        addChangesBeside(hostId, current, groupId, layoutSync, app, ui)
                     } else {
                         // A phone workspace has no groups to split: post the pane and let the
                         // broker's view order place it in the tab strip.
@@ -1292,8 +1301,26 @@ private fun WorkspacePaneContent(
                     }
                 }
             }
+            // #72: a Source Control file's diff opens as a tab in the chat's pane (VS Code's editor), reusing the tab
+            // already showing that file. A phone has no groups: the diff opens inside Source Control instead.
+            // VS Code's preview tab: a single click replaces the previous preview; a double click keeps the tab.
+            val openScmDiff: ((ScmDiffTab, Boolean) -> Unit)? = groupIdOf(layout, viewId)?.let { ownGroup ->
+                { tab, keep ->
+                    val open = viewsById.values.firstOrNull { it.isScmDiffOf(tab) }
+                    val openGroup = open?.let { groupIdOf(layout, it.id) }
+                    if (open != null && openGroup != null) {
+                        layoutSync.edit { setActiveViewInGroup(it, openGroup, open.id) }
+                        if (keep && open.isScmDiffPreview()) app.setWorkspaceViewState(current.id, open.id, scmDiffState(tab, preview = false))
+                    } else {
+                        if (!keep) viewsById.values.filter { it.isScmDiffPreview() }.forEach { app.closeWorkspaceView(current.id, it.id) }
+                        val chatGroup = viewsById.values.filter { it.kind == "chat" }.firstNotNullOfOrNull { groupIdOf(layout, it.id) }
+                        app.addWorkspaceView(current.id, "editor", scmDiffState(tab, preview = !keep), groupId = chatGroup ?: ownGroup)
+                    }
+                }
+            }
             ProvideKeyScope(paneScope) {
             ViewHost(
+                onOpenScmDiff = openScmDiff,
                 previewModeFor = { previewModes[it] == true },
                 view = v,
                 workspaceId = current.id,
@@ -1570,6 +1597,36 @@ private fun ViewTabIcon(v: ViewDto?, agent: String?, selected: Boolean) {
     }
     Icon(glyph, contentDescription = null, tint = if (selected) cs.onSurface else cs.onSurfaceVariant, modifier = Modifier.size(15.dp))
 }
+
+/**
+ * #72: the Changes view (Source Control) beside the chat: made in the chat's pane, then moved into a pane of its own to
+ * its right (the v4 design). A phone has no panes to split and keeps its own route.
+ */
+@OptIn(ExperimentalUuidApi::class)
+private fun addChangesBeside(hostId: String, current: WorkspaceDto, groupId: String, layoutSync: WorkspaceLayoutState, app: HostStore, ui: ShellUiState) {
+    val pane = Uuid.random().toString()
+    app.addWorkspaceView(current.id, NewViewKind.DIFF, groupId) { id ->
+        layoutSync.edit { splitGroup(it, groupId, id, "row", pane) }
+        ui.windows.expandClaim(hostId, setOf(id), layoutSync.tree)
+    }
+}
+
+/** #72: a "scmdiff" tab's state: one file's "(Working Tree)" or "(Index)" diff, and whether it is a preview. */
+private fun scmDiffState(tab: ScmDiffTab, preview: Boolean) = kotlinx.serialization.json.buildJsonObject {
+    put("mode", kotlinx.serialization.json.JsonPrimitive("scmdiff"))
+    put("repo", kotlinx.serialization.json.JsonPrimitive(tab.repo))
+    put("path", kotlinx.serialization.json.JsonPrimitive(tab.path))
+    put("side", kotlinx.serialization.json.JsonPrimitive(tab.side))
+    tab.base?.let { put("base", kotlinx.serialization.json.JsonPrimitive(it)) }
+    tab.work?.let { put("work", kotlinx.serialization.json.JsonPrimitive(it)) }
+    if (preview) put("preview", kotlinx.serialization.json.JsonPrimitive(true))
+}
+
+private fun ViewDto.isScmDiffOf(tab: ScmDiffTab): Boolean =
+    kind == "editor" && stateString("mode") == "scmdiff" && stateString("repo").orEmpty() == tab.repo &&
+        stateString("path") == tab.path && (stateString("side") ?: "worktree") == tab.side
+
+private fun ViewDto.isScmDiffPreview(): Boolean = kind == "editor" && stateString("mode") == "scmdiff" && stateString("preview") == "true"
 
 /**
  * The workspace's split buttons (and ⌘\ / ⌘⌥\): a New tab, made in the top-right pane, then moved into a pane of

@@ -82,6 +82,8 @@ fun DefaultTabChip(
     dot: Color? = null,
     /** What the tab holds, at 16 dp before the label: an agent's mark, a terminal, a file. */
     icon: (@Composable () -> Unit)? = null,
+    /** A preview tab (VS Code's): the next single click replaces it; its title is in italics. */
+    italic: Boolean = false,
 ) {
     val hover = remember { MutableInteractionSource() }
     val hovered by hover.collectIsHoveredAsState()
@@ -106,7 +108,7 @@ fun DefaultTabChip(
         } else if (dot != null) {
             Box(Modifier.padding(end = 6.dp).size(6.dp).background(dot, CircleShape).testTag("tab-dot-$itemId"))
         }
-        TabTitle(title, state, labelFont, emphasis = dot != null)
+        TabTitle(title, state, labelFont, emphasis = dot != null, italic = italic)
         TabClose(
             visible = state.selected || hovered,
             onClick = { onClose(itemId) },
@@ -160,7 +162,7 @@ internal fun TabIcon(badge: Color?, icon: @Composable () -> Unit) {
  * otherwise, and fading out at the end rather than cut short with an ellipsis.
  */
 @Composable
-internal fun RowScope.TabTitle(title: String, state: TabSlotState, font: FontFamily, emphasis: Boolean = false) {
+internal fun RowScope.TabTitle(title: String, state: TabSlotState, font: FontFamily, emphasis: Boolean = false, italic: Boolean = false) {
     val cs = MaterialTheme.colorScheme
     val touch = !dev.supermux.ui.adaptive.LocalPointerAvailable.current
     var clipped by remember { mutableStateOf(false) }
@@ -170,6 +172,7 @@ internal fun RowScope.TabTitle(title: String, state: TabSlotState, font: FontFam
         fontFamily = font,
         fontSize = if (touch) 13.sp else 12.sp,
         fontWeight = FontWeight.Medium,
+        fontStyle = if (italic) androidx.compose.ui.text.font.FontStyle.Italic else null,
         maxLines = 1,
         softWrap = false,
         overflow = TextOverflow.Clip,

@@ -122,7 +122,9 @@ data class GitLiteStatusDto(
 )
 
 @Serializable
-data class GitSyncDto(val ahead: Int = 0, val behind: Int = 0)
+data class GitSyncDto(val ahead: Int = 0, val behind: Int = 0,
+    /** #72 v5: the upstream by name ("origin/feature"), for VS Code's tooltip; null: an older broker. */
+    val upstream: String? = null)
 
 @Serializable
 data class LogEntry(

@@ -2224,7 +2224,8 @@ private fun AttachmentFileCard(
     val family = remember(att.name, att.mime, label) { fileFamily(fileExtension(att.name ?: label), att.mime) }
     val meta = remember(att.name, att.mime, att.size, label) { fileMetaLine(att.name ?: label, att.mime, att.size) }
     val cantOpen = localized(Str.chatline_media_cant_open)
-    val downloadFailed = localized(Str.chatline_media_download_failed)
+    // A pointer clicks, a finger taps: desktop never says "tap" (#72, Ahmet).
+    val downloadFailed = localized(if (dev.supermux.ui.adaptive.LocalPointerAvailable.current) Str.chatline_media_download_failed_click else Str.chatline_media_download_failed)
     val paused = localized(Str.chatline_media_paused)
     // What the phone says after a save; true when something was saved.
     fun saved(file: SavedFile?): Boolean {

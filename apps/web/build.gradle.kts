@@ -321,8 +321,13 @@ val distDir = layout.buildDirectory.dir("dist/wasmJs/productionExecutable")
 // (list, info, jobs, secrets, settings, data, pins, installs, widget summary, applets_changed) and ~140 strings × 2.
 // The applet SCREENS are not in it: web hides applets until #114, and they're reached only through LocalAppletScreens,
 // which only the native hosts provide, so dead-code elimination drops them (that took 9191 → 9135 KiB).
-// 2026-11-16 (train14, Muxie): #146 + #117 together, placeholder 9137 KiB until the train measures; set to measured at landing.
-val maxGzipBytes = 9137L * 1024
+// 2026-11-16 (#72 Source Control, Tally/Ahmet): +94 KiB over #146's 9132, measured on car A 0fbbd5b84, run
+// 43794726113 (9225 KiB against dev's 9131): VS Code's Source Control pane (~2,000 lines of Compose: groups, commit
+// box, conflicts, Graph, publish picks, the pull request section), ~300 strings in each catalog, its API. No new
+// library or icon set. The waste check before raising it removed #72's dead code (the include box, the composer git
+// sign, DiffView's stage plumbing). CI re-measures it on dev a204a08de.
+// 2026-11-16 (train13, Muxie): #146 + #117 + #72 car A together measured 9235 KiB on train13 43811939722 (9236: 9235.x rounds over 9235).
+val maxGzipBytes = 9236L * 1024
 
 // THE NATIVE EDITOR'S SYNTAX MODULE IS OUTSIDE THAT CEILING, with a ceiling of its own (M5).
 // `supermux-syntax.wasm` is 7.45 MB raw / 2.69 MB gzipped (editor-syntax/native/README.md): counted
