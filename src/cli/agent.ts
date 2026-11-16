@@ -129,6 +129,10 @@ with a whole backup (everything added since would be lost), and never edit a bac
 Page API: include <script src="_supermux/api.js"></script> (the template has it; _supermux/ is reserved), then supermux.notify(title, body) (a push to
 their devices), supermux.agent.ask(text) and supermux.save(blob, name) (these two only in supermux's applet
 window, after a click). Each returns a promise of {ok, reason}.
+Showing fresh data: supermux keeps an applet's page alive. Pinned applets are loaded ahead in the background, and a
+closed window's page is kept, so opening the applet shows the page as it was, at once, with no reload. Refresh your
+data when the page is shown: document.addEventListener("visibilitychange", () => { if (document.visibilityState
+=== "visible") refresh() }). It turns "visible" each time its window opens.
 Notify the user from a server or job: POST $SUPERMUX_URL/applet-api/notify with header
 X-Supermux-Applet-Token: $SUPERMUX_APPLET_TOKEN and {"title": "…", "body": "…"} (a push to their devices).
 Phone widget: the "widget" path (a file in public/, or your server's route) answers
