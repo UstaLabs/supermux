@@ -86,7 +86,10 @@ class BrokerApiSourceControlTest {
     @Test fun create_text_ready_and_a_check_log() = runTest {
         val c = api("""{"status":"opened","url":"https://github.com/a/b/pull/13","number":13}""").gitPrCreate("sessions", "s1", PrCreateRequest("T", "B", "dev", draft = true))
         assertEquals(13, c.number)
-        assertEquals("""{"title":"T","body":"B","target":"dev","draft":true}""", seen.last().third)
+        // The answers to the extension's questions ride along (none given: the host asks first).
+        assertEquals("""{"title":"T","body":"B","target":"dev","draft":true,"publish":false,"push":false,"skipPush":false}""", seen.last().third)
+        api("""{"status":"opened","url":"u","number":14}""").gitPrCreate("sessions", "s1", PrCreateRequest("T", "B", "dev", draft = false, push = true))
+        assertTrue(seen.last().third.contains("\"push\":true"))
         val t = api("""{"title":"Search by name","body":"## What","by":"agent"}""").gitPrText("sessions", "s1", null)
         assertEquals("agent", t.by)
         assertEquals("{}", seen.last().third)
