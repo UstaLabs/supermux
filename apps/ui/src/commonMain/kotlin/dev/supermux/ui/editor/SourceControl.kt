@@ -753,7 +753,9 @@ fun SourceControlPane(
             repos == null -> Unit
             else -> LazyColumn(Modifier.fillMaxSize()) {
                 // Nothing to commit and nothing to amend: no message box (the prototype's clean state).
-                val nothing = repos.all { it.files.isEmpty() } && state.last == null && !state.merging && state.ask == null && !state.publishDue
+                // (Something to push or pull is not "nothing": the button is Sync Changes then.)
+                val syncDue = state.status?.let { it.upstream != null && (it.ahead > 0 || it.behind > 0) } == true
+                val nothing = repos.all { it.files.isEmpty() } && state.last == null && !state.merging && state.ask == null && !state.publishDue && !syncDue
                 if (!nothing) item(key = "commit") { CommitBox(state, scope) }
                 item(key = "banners") { Banners(state, scope) }
                 if (repos.all { it.files.isEmpty() } && !state.merging) item(key = "empty") {
