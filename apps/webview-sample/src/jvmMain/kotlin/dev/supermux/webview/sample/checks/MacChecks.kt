@@ -92,6 +92,7 @@ hostBridge.handle('state', function () {
 <body><input id="field" autocomplete="off" spellcheck="false"><script>
 var keys = '';
 document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape') { keys += '<esc>'; return; }
   if (!e.metaKey) return;
   var k = e.key.toLowerCase();
   keys += k;
@@ -436,6 +437,24 @@ button{display:block;width:100%;height:15vh;margin-top:8vh}</style></head>
                 }
             } finally {
                 java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().removeKeyEventDispatcher(listener)
+            }
+        },
+        // A page's own Escape (close a panel, clear a search) as in a browser: the key reaches the page, from its field and
+        // from its body, and Compose doesn't take it on the way.
+        Check("mac-escape-reaches-the-page") {
+            val stage = Stage(content = KEYS_PAGE)
+            withPage(stage) { mac ->
+                val page = assertNotNull(stage.page)
+                suspend fun pageKeys() = pageState(stage)["keys"]!!.jsonPrimitive.content
+                pressAt(mac, page, 83f, 28f)
+                waitFor("the field focused") { pageState(stage)["focused"]!!.jsonPrimitive.boolean }
+                MacEngineTesting.escape(mac.window)
+                waitFor("Escape reaching the page from its field") { pageKeys().contains("<esc>") }
+                pressAt(mac, page, 300f, 250f)
+                waitFor("the field left") { !pageState(stage)["focused"]!!.jsonPrimitive.boolean }
+                MacEngineTesting.escape(mac.window)
+                waitFor("Escape reaching the page from its body") { pageKeys().split("<esc>").size == 3 }
+                assertEquals("", stage.text, "no key reached Compose's field")
             }
         },
         Check("mac-focus-follows-the-press") {

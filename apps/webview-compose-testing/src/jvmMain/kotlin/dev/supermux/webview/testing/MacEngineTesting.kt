@@ -38,6 +38,11 @@ public object MacEngineTesting {
         handle(window)?.let { MacGlue.testKeys(it, text, command = false) }
     }
 
+    /** The Escape key, alone. */
+    public fun escape(window: Window) {
+        handle(window)?.let { MacGlue.testKeys(it, "\u001b", command = false) }
+    }
+
     /** ⌘ and a lowercase letter. */
     public fun command(window: Window, key: Char) {
         handle(window)?.let { MacGlue.testKeys(it, key.toString(), command = true) }

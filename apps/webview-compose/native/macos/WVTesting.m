@@ -120,6 +120,8 @@ JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_testKeys(
     WVOnMain(NO, ^{
         for (NSUInteger i = 0; i < keys.length; i++) {
             unichar c = [keys characterAtIndex:i];
+            // Escape (U+001B) has a key code of its own, as on any layout.
+            if (c == 0x1b && !flags) { WVPostKey(w, [NSString stringWithCharacters:&c length:1], kVK_Escape, 0); continue; }
             if (c < 'a' || c > 'z') continue; // lowercase ASCII letters only: their key codes need no layout table
             // As a keyboard does: ⌘ goes down on its own first (the page sees a keydown for Meta), the letter right after.
             if (flags) WVPostFlags(w, kVK_Command, flags);
