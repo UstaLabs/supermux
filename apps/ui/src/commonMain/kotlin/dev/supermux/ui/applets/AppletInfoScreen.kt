@@ -4,6 +4,7 @@
 // Tabs with nothing in them (no jobs, no secrets) don't show. Every action says why it failed, where he clicked.
 package dev.supermux.ui.applets
 
+import dev.supermux.ui.session.appletPageHeader
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -152,7 +153,10 @@ fun AppletInfoScreen(name: String, actions: AppletInfoActions, phone: Boolean, o
     var tab by remember(name) { mutableStateOf(InfoTab.entries.firstOrNull { it.name.equals(initialTab, ignoreCase = true) } ?: InfoTab.Overview) }
     Column(Modifier.fillMaxSize().background(cs.surface).testTag("applet_info_$name")) {
         // The top: back on a phone; the crumb on a desktop.
-        Row(Modifier.fillMaxWidth().height(if (phone) 52.dp else 40.dp).padding(start = if (phone) 4.dp else 8.dp, end = if (phone) 4.dp else 16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.fillMaxWidth().then(if (phone) Modifier.height(52.dp).padding(horizontal = 4.dp) else Modifier.appletPageHeader()),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             if (phone) {
                 Box(Modifier.size(44.dp).clip(CircleShape).clickable(onClick = onBack).testTag("applet_info_back"), contentAlignment = Alignment.Center) {
                     Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = localized(Str.shell_back), tint = cs.onSurface)

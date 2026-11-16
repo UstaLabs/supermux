@@ -377,6 +377,10 @@ private val desktopBindTts: (
 //                                  2×2 PNG fixture. Overlay only; no broker traffic. Off by default.
 //                                  [main]
 fun main(args: Array<String>) {
+    // macOS names the app in the menu bar from the bundle (CFBundleName "Supermux Desktop"); a run that isn't
+    // packaged (the hot run, `./gradlew run`) has none and showed the main class, "MainKt". Same name either way.
+    // Must be set before AWT starts. Other OSes ignore the property.
+    if (System.getProperty("apple.awt.application.name") == null) System.setProperty("apple.awt.application.name", "Supermux Desktop")
     // #117: an applet's shortcut starts supermux with the applet's address. A packaged supermux already running for this
     // user takes it (or a plain second launch: its window comes forward) and this process ends here. Hot runs and dev
     // builds (no jpackage launcher) neither hand off nor listen, so they keep running beside the installed app.
