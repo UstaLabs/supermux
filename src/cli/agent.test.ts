@@ -155,10 +155,7 @@ test("broker refusals map to exit codes; JSON errors carry a code", async () => 
   expect((await run(["port", "expose", "70000"])).code).toBe(1)
 })
 
-test("outside a session, or with the broker gone, it is exit 5", async () => {
-  const none = await run(["session", "ls"], { env: {} })
-  expect(none.code).toBe(5)
-  expect(none.err).toContain("not inside a supermux session")
+test("with the broker gone it is exit 5", async () => {
   const gone = await run(["session", "ls"], { env: { MUX_SESSION_ID: "99999999-0000-4000-8000-000000000000", MUX_SOCKETS_DIR: dir } })
   expect(gone.code).toBe(5)
 })
@@ -218,4 +215,19 @@ test("applet list: every row the same shape in --json; owner-only verbs exit 4, 
   expect(JSON.parse(j.out)).toEqual([{ name: "a", title: "A", state: "running", url: "u", needs_you: [], error: null, updated_by: null, updated_at: null }])
   expect((await run(["applet", "delete", "a"])).code).toBe(4)
   expect((await run(["applet", "zz", "list-cards"])).code).toBe(3)
+})
+
+test("outside any session (no MUX_SESSION_ID) it talks to the operator socket in the sockets dir (#156)", async () => {
+  const seen: string[] = []
+  const op = createServer((sock) => {
+    let buf: Buffer = Buffer.alloc(0)
+    sock.on("data", (c: Buffer) => { buf = Buffer.concat([buf, c]); for (const m of decodeFrames(buf).messages as any[]) { seen.push(m.op.name); sock.write(encodeFrame({ kind: "result", call_id: m.call_id, ok: true, value: SESSIONS })) } })
+  })
+  await new Promise<void>((r) => op.listen(localEndpoint("operator", { socketsDir: dir }), () => r()))
+  try {
+    const r = await run(["session", "ls", "--json", "name"], { env: { MUX_SOCKETS_DIR: dir } })
+    expect(r.code).toBe(0)
+    expect(seen).toEqual(["list_sessions"])
+    expect(calls).toHaveLength(0)   // the session socket was not used
+  } finally { op.close() }
 })

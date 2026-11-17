@@ -58,6 +58,11 @@ export type KeeperStatus = {
   /** The last problem the keeper went on through, such as a journal or status write the OS refused. */
   warning?: string
   reaped?: boolean
+  /**
+   * The keeper is a child subreaper (Linux): a process its agent detaches stays its descendant. Missing on a keeper
+   * started before supermux #156, and off where the OS has none (macOS, Windows).
+   */
+  subreaper?: boolean
   /** The socket the keeper listens on (see keeperSocketPath). Absent: an older keeper, listening on `<keeper dir>/keeper.sock`. */
   socket?: string
 }

@@ -120,31 +120,59 @@ async function windowsParents(): Promise<Map<number, number>> {
   return m
 }
 
-/** True when `pid` is `root` or one of its descendants (walks parents; at most 64 steps). */
-export async function descendsFrom(pid: number, root: number, platform: NodeJS.Platform = host.os()): Promise<boolean> {
+/** `pid` and its ancestors, nearest first (at most 64; Windows: a dead parent's pid ends the walk). */
+export async function ancestors(pid: number, platform: NodeJS.Platform = host.os()): Promise<number[]> {
   const win = platform === "win32" ? await windowsParents() : undefined
+  const chain: number[] = []
   let p = pid
   for (let i = 0; i < 64; i++) {
-    if (p === root) return true
-    if (p <= (win ? 0 : 1)) return false
+    chain.push(p)
+    if (p <= (win ? 0 : 1)) break
     const ppid = win ? win.get(p) : (await parentOf(p, platform))?.ppid
-    // Windows keeps a dead parent's pid on its children: a pid with no live process ends the walk.
-    if (ppid === undefined || ppid === p) return false
+    if (ppid === undefined || ppid === p) break
     p = ppid
   }
-  return false
+  return chain
+}
+
+/** True when `pid` is `root` or one of its descendants. */
+export async function descendsFrom(pid: number, root: number, platform: NodeJS.Platform = host.os()): Promise<boolean> {
+  return (await ancestors(pid, platform)).includes(root)
 }
 
 /**
  * The check for one connection to session `sessionId`'s socket. `root`: the pid that owns the session's processes (its
  * keeper; a persistent-runtime Claude session's own pid), or undefined when it is unknown (then it passes, with why).
  */
-export async function checkPeer(socket: Socket, root: number | undefined, opts: { platform?: NodeJS.Platform; uid?: number } = {}): Promise<PeerCheck> {
+export async function checkPeer(socket: Socket, root: number | undefined, opts: { platform?: NodeJS.Platform; uid?: number; rootSubreaper?: boolean } = {}): Promise<PeerCheck> {
   const platform = opts.platform ?? host.os()
   const peer = await peerOf(socket, platform)
   if (!peer) return { ok: true, peer: null, why: `peer unknown on ${platform}` }
   const uid = opts.uid ?? process.getuid?.()
   if (peer.uid !== null && uid !== undefined && peer.uid !== uid) return { ok: false, peer, why: `process ${peer.pid} belongs to another OS user (uid ${peer.uid})` }
   if (root === undefined) return { ok: true, peer, why: "session root unknown" }
-  return (await descendsFrom(peer.pid, root, platform)) ? { ok: true, peer } : { ok: false, peer, why: `process ${peer.pid} is not part of this session (not under its process ${root})` }
+  if (await descendsFrom(peer.pid, root, platform)) return { ok: true, peer }
+  // A keeper from before #156 (it doesn't say it is a subreaper): a process its agent detached left its tree, so outside
+  // the tree is not proof of a stranger. Allowed, and said why.
+  if (opts.rootSubreaper === undefined) return { ok: true, peer, why: `unverifiable: process ${peer.pid} is outside this session's tree, and its keeper predates #156` }
+  return { ok: false, peer, why: `process ${peer.pid} is not part of this session (not under its process ${root})` }
+}
+
+/**
+ * The operator socket (#156): the machine's owner from outside any session (a timer, a script, a terminal). The kernel
+ * must name the peer (no guessing who acts as the owner), it must be the broker's own OS user, and it must not be a
+ * session's process: a session acts as itself, on its own socket. `sessionOf(pid)`: the session a pid is a keeper or
+ * agent root of.
+ */
+export async function checkOperator(socket: Socket, sessionOf: (pid: number) => string | undefined, opts: { platform?: NodeJS.Platform; uid?: number } = {}): Promise<PeerCheck> {
+  const platform = opts.platform ?? host.os()
+  const peer = await peerOf(socket, platform)
+  if (!peer) return { ok: false, peer: null, why: `the OS did not name the connecting process (${platform})` }
+  const uid = opts.uid ?? process.getuid?.()
+  if (peer.uid !== null && uid !== undefined && peer.uid !== uid) return { ok: false, peer, why: `process ${peer.pid} belongs to another OS user (uid ${peer.uid})` }
+  for (const p of await ancestors(peer.pid, platform)) {
+    const session = sessionOf(p)
+    if (session) return { ok: false, peer, why: `process ${peer.pid} is part of session "${session}", which acts as itself: run supermux from that session's shell, with its MUX_SESSION_ID` }
+  }
+  return { ok: true, peer }
 }

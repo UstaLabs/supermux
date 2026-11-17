@@ -1,7 +1,7 @@
 import { createServer, Server, Socket } from "net"
 import { mkdirSync, chmodSync, existsSync, unlinkSync } from "fs"
 import { host } from "@supermux/platform"
-import { isFileEndpoint, legacyPipeEndpoint, localEndpoint } from "../local-endpoint"
+import { isFileEndpoint, legacyPipeEndpoint, localEndpoint, OPERATOR_ENDPOINT_ID } from "../local-endpoint"
 import { encodeFrame, decodeFrames } from "../../shared/frame-codec"
 import { makeLogger } from "../../shared/log"
 import { TickGap } from "../power/wake"
@@ -86,6 +86,14 @@ export async function startSocketServer(opts: {
   peerAuth?: PeerAuth
   /** Also serve each session's pre-#156 Windows named pipe (default: on Windows). */
   serveLegacyPipe?: boolean
+  /**
+   * #156: the operator socket, <sockets>/operator.sock: `supermux` from outside any session (a timer, a script) acts as
+   * the machine's owner. Every connection is checked (always enforced: nothing older uses it).
+   */
+  operator?: {
+    check: (socket: Socket) => Promise<{ ok: boolean; why?: string; peer?: { pid: number; uid: number | null } | null }>
+    handle: (op: OrchestrationFrame["op"], peer: { pid: number; uid: number | null }) => Promise<OpResult>
+  }
 }): Promise<SocketServer> {
   files.mkdirPrivate(opts.socketsDir)
   // #156: Windows moved from named pipes to AF_UNIX files. Agents (and their shims) started before keep reconnecting to
@@ -167,7 +175,7 @@ export async function startSocketServer(opts: {
         }
         if (!v.ok) {
           // Not this session's process: no liveness, no registration, every op refused with the reason.
-          if (m.kind === "outbound" || m.kind === "orchestration") socket.write(encodeFrame({ kind: "result", call_id: m.call_id, ok: false, error: `not allowed: ${"why" in v ? v.why : "not part of this session"}. Run supermux from your own session's shell.` }))
+          if (m.kind === "outbound" || m.kind === "orchestration") socket.write(encodeFrame({ kind: "result", call_id: m.call_id, ok: false, error: `not allowed: ${"why" in v ? v.why : "not part of this session"}. From inside a session, run supermux from that session's own shell; from outside any session (a timer, a script), run it WITHOUT MUX_SESSION_ID: it then acts as you.` }))
           else if (m.kind === "register") socket.end()
           continue
         }
@@ -235,6 +243,38 @@ export async function startSocketServer(opts: {
     socket.on("error", (e) => log.warn("socket_error", { session_id, err: e.message }))
   }
 
+  // #156: the operator socket (one, bound at start).
+  let operatorServer: Server | undefined
+  if (opts.operator) {
+    const operator = opts.operator
+    const endpoint = localEndpoint(OPERATOR_ENDPOINT_ID, { socketsDir: opts.socketsDir })
+    const file = isFileEndpoint(endpoint)
+    if (file && existsSync(endpoint)) unlinkSync(endpoint)
+    operatorServer = createServer((socket) => {
+      const verdict = operator.check(socket).catch((err: unknown) => ({ ok: false, why: `the check failed: ${err instanceof Error ? err.message : String(err)}`, peer: null }))
+      let buf: Buffer = Buffer.alloc(0)
+      socket.on("data", async (chunk: Buffer) => {
+        buf = Buffer.concat([buf, chunk])
+        const { messages, rest } = decodeFrames(buf)
+        buf = rest
+        const v = await verdict
+        if (!v.ok) log.warn("operator_denied", { pid: v.peer?.pid, uid: v.peer?.uid, why: v.why })
+        for (const raw of messages) {
+          let m: SocketFrame
+          try { m = parseSocketFrame(raw) } catch { continue }
+          if (m.kind !== "outbound" && m.kind !== "orchestration") { if (m.kind === "register") socket.end(); continue }
+          const r: OpResult = v.ok && v.peer ? await operator.handle(m.op, v.peer) : { ok: false, error: `not allowed: ${v.why ?? "unknown caller"}` }
+          socket.write(encodeFrame({ kind: "result", call_id: m.call_id, ...r }))
+        }
+      })
+      socket.on("error", () => {})
+    })
+    await new Promise<void>((res, rej) => {
+      operatorServer!.once("error", rej)
+      operatorServer!.listen(endpoint, () => { if (file) files.makePrivate(endpoint); res() })
+    })
+  }
+
   // Broker side does not pre-bind: a session_id is bound when broker spawns
   // that session. Outer code calls `bind(session_id)` before launching the agent.
   async function ensureBound(session_id: string): Promise<void> {
@@ -260,7 +300,7 @@ export async function startSocketServer(opts: {
     },
     async close() {
       for (const set of conns.values()) for (const s of set) s.destroy()
-      for (const srv of [...servers.values(), ...legacyServers.values()]) await new Promise<void>(r => srv.close(() => r()))
+      for (const srv of [...servers.values(), ...legacyServers.values(), ...(operatorServer ? [operatorServer] : [])]) await new Promise<void>(r => srv.close(() => r()))
       conns.clear()
       servers.clear()
       legacyServers.clear()

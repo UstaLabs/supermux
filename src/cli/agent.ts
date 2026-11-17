@@ -16,7 +16,8 @@ import { connect } from "node:net"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { encodeFrame, decodeFrames } from "../shared/frame-codec"
-import { localEndpoints } from "../core/local-endpoint"
+import { localEndpoint, localEndpoints, OPERATOR_ENDPOINT_ID } from "../core/local-endpoint"
+import { SOCKETS_DIR } from "../shared/paths"
 import { listTools } from "../shim/tools"
 
 export interface AgentCliIo {
@@ -28,6 +29,8 @@ export interface AgentCliIo {
   stdin: () => string
   /** Broker call timeout, ms. */
   timeoutMs?: number
+  /** The broker's sockets dir when MUX_SOCKETS_DIR is unset (tests); default: the broker's own. */
+  socketsDir?: string
   /** Runs a program with the terminal's own stdio (an applet's bin); its exit code. */
   exec?: (file: string, args: string[], opts: { cwd: string; env: Record<string, string | undefined> }) => number
 }
@@ -67,6 +70,7 @@ const FULL_REF = "supermux — the whole reference (you are signed in as this se
   REF.map(([, , u]) => LINE(u)).join("\n") +
   "\nAll commands: --json for JSON (--json a,b picks fields); '-' as TEXT reads stdin; <cmd> --help adds one example.\n" +
   "Background work (delegate, council, msg replies) arrives in your inbox as new turns: never wait or poll for it.\n" +
+  "Outside any session (a timer, a script) it acts as you: session ls/show/find/read, msg, memory search, port ls.\n" +
   "Exit: 0 ok, 1 failed, 2 usage, 3 not found, 4 denied, 5 broker unreachable."
 const CARD_RULES = `Page rules: one self-contained page (inline CSS/JS; CDN libraries fine; no local files, localhost or localStorage).
 Colours only from var(--sm-fg) var(--sm-muted-fg) var(--sm-card) var(--sm-border) var(--sm-muted) var(--sm-primary)
@@ -188,10 +192,13 @@ export async function runAgentCli(argv: string[], io: AgentCliIo): Promise<numbe
   const help = (topic: string, v?: string): never => { io.out(helpText(topic, v)); throw new Exit(0) }
 
   // On Windows: the AF_UNIX file, then the pre-#156 named pipe (a broker that has not restarted onto #156 serves only it).
-  const socks = io.env.MUX_SESSION_ID && io.env.MUX_SOCKETS_DIR ? localEndpoints(io.env.MUX_SESSION_ID, { socketsDir: io.env.MUX_SOCKETS_DIR }) : []
+  // Inside a session: its own socket (MUX_SESSION_ID). Outside any session (a timer, a script, a terminal): the operator
+  // socket, which acts as the machine's owner (#156). The sockets dir: MUX_SOCKETS_DIR, else the broker's default.
+  const socketsDir = io.env.MUX_SOCKETS_DIR || io.socketsDir || SOCKETS_DIR
+  const socks = io.env.MUX_SESSION_ID ? localEndpoints(io.env.MUX_SESSION_ID, { socketsDir }) : [localEndpoint(OPERATOR_ENDPOINT_ID, { socketsDir })]
   const sock = socks[0]
   async function call(name: string, args: Record<string, unknown>, timeoutMs?: number): Promise<any> {
-    if (!sock) { io.err("supermux: not inside a supermux session (MUX_SESSION_ID and MUX_SOCKETS_DIR are unset)"); throw new Exit(5) }
+    if (!sock) { io.err("supermux: no broker socket"); throw new Exit(5) }
     let r: { ok: boolean; value?: unknown; error?: string } | "unreachable" | "timeout" = "unreachable"
     for (const endpoint of socks) {
       r = await callOn(endpoint, name, args, timeoutMs)
