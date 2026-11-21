@@ -777,12 +777,6 @@ fun ChatPanel(
                 place.offset = offset
             }
     }
-    // #104: an html card caps itself at a share of the chat's RESTING visible height: the transcript's with the chrome
-    // shown, latched only while the chrome is at rest (below, where the chrome is). Not the height of the moment: the
-    // chrome auto-hide changes that every frame of its 200 ms slide, which resized every card at its cap each frame, and
-    // iOS re-lays out and repaints a WKWebView at each new size, so scrolling stuttered.
-    var chatViewportPx by remember(listState) { mutableIntStateOf(0) }
-    val chatViewportHeight = if (chatViewportPx > 0) with(density) { chatViewportPx.toDp() } else androidx.compose.ui.unit.Dp.Unspecified
     // The find bar (open, its query, its scope) outlives this composition: a rotation or a width
     // change closed it and dropped what was typed (#89).
     val find = rememberRetained("chat.find:${session.id}") { ChatFindState() }
@@ -1016,12 +1010,6 @@ fun ChatPanel(
         label = "chatChrome", // i18n-ok: an animation label
     )
     LaunchedEffect(chromeCollapsed) { onChromeHiddenChange(chromeCollapsed) }
-    // The cards' cap ([chatViewportPx]): the transcript's height only while the chrome is shown and still. A wide view
-    // never hides it, so there the cap follows every resize as it always did.
-    LaunchedEffect(listState) {
-        snapshotFlow { if (chromeFraction >= 1f) listState.layoutInfo.viewportSize.height else 0 }
-            .collect { if (it > 0) chatViewportPx = it }
-    }
     // The list's bottom inset follows the chrome: with the composer tucked away the last row would sit on the window's
     // edge, so it gets the breathing room the composer's own padding gave it. Read as the list MEASURES (it asks for its
     // padding then), so the slide relayouts the list each frame without recomposing the transcript.
@@ -1320,7 +1308,6 @@ fun ChatPanel(
                 LocalChatTitle provides session.name,
                 LocalLiveReveals provides reveals,
                 LocalHtmlCards provides actions.htmlCards,
-                LocalChatViewportHeight provides chatViewportHeight,
             ) {
             LocalChatCompositionProbe.current?.let { probe -> androidx.compose.runtime.SideEffect { probe("transcript") } }
             LazyColumn(
