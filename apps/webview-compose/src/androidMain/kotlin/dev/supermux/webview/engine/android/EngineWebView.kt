@@ -15,6 +15,7 @@ import androidx.core.view.NestedScrollingChildHelper
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import dev.supermux.webview.engine.SideSwipe
+import dev.supermux.webview.engine.VerticalHandOff
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -68,8 +69,20 @@ internal class EngineWebView(
     private val side = SideSwipe()
     private var lastRawX = 0f
     private var lastRawY = 0f
-    private var sideVelocity: VelocityTracker? = null
+    /** The finger's velocity on the screen, which the parents' fling follows. */
+    private var screenVelocity: VelocityTracker? = null
     private var pageCancelled = false
+
+    /** This gesture's vertical hand-off, and how far the finger went up or down, in px, before the parents took it. */
+    private val vertical = VerticalHandOff()
+    private var pendingY = 0f
+
+    /** The page's answers for this gesture, asked at the down: whether it claims a drag up ([0]) and down ([1]). */
+    private val claimsWay = arrayOfNulls<Boolean>(2)
+
+    /** A gesture that ended before the page answered: what the finger went and its fling, for when it does. */
+    private class Late(val gesture: Int, val way: Int, val dy: Float, val fling: Float)
+    private var late: Late? = null
     /** Where the finger went down, in this view's px: the page is asked what is there. */
     private var downX = 0f
     private var downY = 0f
@@ -125,16 +138,34 @@ internal class EngineWebView(
             downY = event.y
             lastRawX = event.rawX
             lastRawY = event.rawY
-            sideVelocity?.recycle()
-            sideVelocity = VelocityTracker.obtain()
+            screenVelocity?.recycle()
+            screenVelocity = VelocityTracker.obtain()
+            vertical.down()
+            pendingY = 0f
+            late = null
+            claimsWay.fill(null)
             // The gesture stays the page's: what it can't take reaches the parents through nested scrolling.
             val axes = ViewCompat.SCROLL_AXIS_VERTICAL or ViewCompat.SCROLL_AXIS_HORIZONTAL
             if (startNestedScroll(axes, ViewCompat.TYPE_TOUCH)) {
                 parent?.requestDisallowInterceptTouchEvent(true)
+                // Asked now, both ways, so the answer is usually in before the finger passes the touch slop.
+                askPageVertically(-1)
+                askPageVertically(1)
             }
         }
         if (!touching) return super.onTouchEvent(event)
-        if (sideSwiping(event)) return true
+        val dx = event.rawX - lastRawX
+        lastRawX = event.rawX
+        val dy = event.rawY - lastRawY
+        lastRawY = event.rawY
+        screenVelocity?.let { tracker ->
+            val onScreen = MotionEvent.obtain(event)
+            onScreen.setLocation(event.rawX, event.rawY)
+            tracker.addMovement(onScreen)
+            onScreen.recycle()
+        }
+        if (handingOffVertically(event, dy)) return true
+        if (sideSwiping(event, dx, dy)) return true
         // The touch where it would be had the view stayed where it was at the down.
         getLocationInWindow(nowAt)
         val steady = MotionEvent.obtain(event)
@@ -168,27 +199,12 @@ internal class EngineWebView(
      * gesture, it is theirs: the page gets one cancel, the parents every move and, at the end, the fling, always, so
      * they settle where it leaves them. True when the event was theirs.
      */
-    private fun sideSwiping(event: MotionEvent): Boolean {
-        val dx = event.rawX - lastRawX
-        lastRawX = event.rawX
-        val dy = event.rawY - lastRawY
-        lastRawY = event.rawY
+    private fun sideSwiping(event: MotionEvent, dx: Float, dy: Float): Boolean {
+        if (vertical.taken) return false
         if (event.actionMasked == MotionEvent.ACTION_MOVE) side.moved(dx, dy, event.pointerCount)
         if (event.actionMasked == MotionEvent.ACTION_POINTER_DOWN) side.moved(0f, 0f, event.pointerCount)
-        sideVelocity?.let { tracker ->
-            val onScreen = MotionEvent.obtain(event)
-            onScreen.setLocation(event.rawX, event.rawY)
-            tracker.addMovement(onScreen)
-            onScreen.recycle()
-        }
         if (!side.taken) return false
-        if (!pageCancelled) {
-            pageCancelled = true
-            val cancel = MotionEvent.obtain(event)
-            cancel.action = MotionEvent.ACTION_CANCEL
-            super.onTouchEvent(cancel)
-            cancel.recycle()
-        }
+        cancelPage(event)
         when (event.actionMasked) {
             MotionEvent.ACTION_MOVE -> {
                 // Nested scrolling's dx is the content's: a finger moving left scrolls it right.
@@ -198,7 +214,7 @@ internal class EngineWebView(
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 var fling = 0f
                 if (event.actionMasked == MotionEvent.ACTION_UP) {
-                    sideVelocity?.let { tracker ->
+                    screenVelocity?.let { tracker ->
                         tracker.computeCurrentVelocity(1000, maxFling.toFloat())
                         fling = -tracker.xVelocity
                     }
@@ -210,12 +226,121 @@ internal class EngineWebView(
         return true
     }
 
+    /**
+     * Feeds [vertical] the finger's move ([dy], on the screen). A mostly vertical drag the page doesn't claim (nothing
+     * under the finger handles touches or scrolls that way, and the document can't scroll that way either) is the
+     * parents' once the page says so: they get the finger's moves on the screen, from the first, and its fling. Not
+     * WebView's overscroll: it comes a move late, so the last move before the finger lifts was lost, and over a view
+     * taller than the screen it reports a scroll range for a page laid out exactly as tall as its view, scaled one way
+     * and not the other, so a drag up moved the list 38 % of the finger, and a flick never flung it (#162). True when the
+     * event was theirs.
+     */
+    private fun handingOffVertically(event: MotionEvent, dy: Float): Boolean {
+        if (side.taken) return false
+        if (!vertical.taken) {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_MOVE -> {
+                    vertical.moved(event.rawX - lastRawX, dy, event.pointerCount)
+                    pendingY += dy
+                }
+                MotionEvent.ACTION_POINTER_DOWN -> vertical.moved(0f, 0f, event.pointerCount)
+            }
+            if (!hasNestedScrollingParent(ViewCompat.TYPE_TOUCH)) return false
+            vertical.ask()?.let { way -> claimsWay[slot(way)]?.let { vertical.answered(way, it) } }
+            if (!vertical.mayOffer()) {
+                if (event.actionMasked == MotionEvent.ACTION_UP && vertical.awaiting) {
+                    // The finger lifted before the page answered: the answer decides then.
+                    screenVelocity?.let { tracker ->
+                        tracker.computeCurrentVelocity(1000, maxFling.toFloat())
+                        late = Late(vertical.gesture, vertical.way, pendingY, -tracker.yVelocity)
+                    }
+                }
+                return false
+            }
+            takeVertically(event)
+        } else if (event.actionMasked == MotionEvent.ACTION_MOVE) {
+            val n = vertical.whole(-dy)
+            if (n != 0) dispatchNestedScroll(0, 0, 0, n, null, ViewCompat.TYPE_TOUCH, consumed)
+        }
+        when (event.actionMasked) {
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (event.actionMasked == MotionEvent.ACTION_UP) {
+                    screenVelocity?.let { tracker ->
+                        tracker.computeCurrentVelocity(1000, maxFling.toFloat())
+                        val fling = -tracker.yVelocity
+                        if (abs(fling) >= minFling && !dispatchNestedPreFling(0f, fling)) dispatchNestedFling(0f, fling, false)
+                    }
+                }
+                endTouch()
+            }
+        }
+        return true
+    }
+
+    /** The parents take this gesture's vertical drag: the page gets a cancel, they get what the finger went so far. */
+    private fun takeVertically(event: MotionEvent?) {
+        vertical.take()
+        cancelPage(event)
+        val n = vertical.whole(-pendingY)
+        pendingY = 0f
+        if (n != 0) dispatchNestedScroll(0, 0, 0, n, null, ViewCompat.TYPE_TOUCH, consumed)
+    }
+
+    /** Ends the page's part of this gesture, once: [event] as a cancel, or a cancel made now when there is none. */
+    private fun cancelPage(event: MotionEvent?) {
+        if (pageCancelled) return
+        pageCancelled = true
+        val now = android.os.SystemClock.uptimeMillis()
+        val cancel = if (event != null) MotionEvent.obtain(event) else MotionEvent.obtain(now, now, MotionEvent.ACTION_CANCEL, downX, downY, 0)
+        cancel.action = MotionEvent.ACTION_CANCEL
+        super.onTouchEvent(cancel)
+        cancel.recycle()
+    }
+
+    private fun slot(way: Int) = if (way < 0) 0 else 1
+
+    /**
+     * Asks the page whether it claims a vertical drag the [way] the finger goes ([VerticalHandOff.claimsOrScrollsQuestion])
+     * at the point it went down. Until it answers, nothing is handed on; once it says no, the parents take the gesture,
+     * even if the finger has stopped, or, if it has lifted, get what it went and its fling then. Only a plain false counts
+     * as no: a page that runs no script (a browser tab with scripts off) keeps it.
+     */
+    private fun askPageVertically(way: Int) {
+        val gesture = vertical.gesture
+        @Suppress("DEPRECATION")
+        val cssPx = scale
+        evaluateJavascript(VerticalHandOff.claimsOrScrollsQuestion(downX / cssPx, downY / cssPx, way)) { result ->
+            if (gone || vertical.gesture != gesture) return@evaluateJavascript
+            val claims = result?.trim() != "false"
+            claimsWay[slot(way)] = claims
+            if (vertical.way != way || !vertical.awaiting) return@evaluateJavascript
+            vertical.answered(way, claims)
+            if (touching) {
+                if (!vertical.taken && !side.taken && vertical.mayOffer() && hasNestedScrollingParent(ViewCompat.TYPE_TOUCH)) {
+                    takeVertically(null)
+                }
+            } else {
+                late?.takeIf { it.gesture == gesture && it.way == way && !claims }?.let(::finishLate)
+                late = null
+            }
+        }
+    }
+
+    /** A gesture the page didn't claim, answered after the finger lifted: the parents get its drag and fling now. */
+    private fun finishLate(gesture: Late) {
+        if (!startNestedScroll(ViewCompat.SCROLL_AXIS_VERTICAL, ViewCompat.TYPE_TOUCH)) return
+        val n = vertical.whole(-gesture.dy)
+        if (n != 0) dispatchNestedScroll(0, 0, 0, n, null, ViewCompat.TYPE_TOUCH, consumed)
+        stopNestedScroll(ViewCompat.TYPE_TOUCH)
+        if (abs(gesture.fling) >= minFling && !dispatchNestedPreFling(0f, gesture.fling)) dispatchNestedFling(0f, gesture.fling, false)
+    }
+
     private fun endTouch() {
         touching = false
         velocity?.recycle()
         velocity = null
-        sideVelocity?.recycle()
-        sideVelocity = null
+        screenVelocity?.recycle()
+        screenVelocity = null
         stopNestedScroll(ViewCompat.TYPE_TOUCH)
     }
 
@@ -244,7 +369,8 @@ internal class EngineWebView(
                 return false
             }
         }
-        if (touching && deltaY != 0 && hasNestedScrollingParent(ViewCompat.TYPE_TOUCH)) {
+        // Only a drag the page claimed (its own scrolling, up to its edge): any other is handingOffVertically's.
+        if (touching && deltaY != 0 && vertical.claimed && hasNestedScrollingParent(ViewCompat.TYPE_TOUCH)) {
             // WebView reports it multiplied by its scale, the density times the page's zoom: over a page that can't
             // scroll, each 24.6 px move came as 64 or 65 px on the phone (WebView 156, 2.625 px a dp), and the list ran
             // ahead of the finger. The parents get it in the finger's px, the fraction carried to the next.
