@@ -5,7 +5,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -117,7 +119,7 @@ object WindowsChecks {
 
     private val shared: List<Check> = LinuxChecks.all.filter { it.name !in WPE_ONLY }
 
-    val all: List<Check> get() = shared + bridge + focus + popups + ime + lessons + keepAlive + questions
+    val all: List<Check> get() = shared + bridge + focus + popups + ime + lessons + keepAlive + questions + tall
 
     /** A focus scene of [engine]'s, its places on screen measured from this check's window. */
     private fun CheckScope.focusScene(engine: WebEngine, script: String = "") = FocusScene(engine, script, ::contentOrigin)
@@ -776,6 +778,32 @@ object WindowsChecks {
 
 
     /** The V-questions that only running WebView2 answers (the plan's V4, V5, V7), as checks. */
+    /**
+     * #162: an html card is as tall as its page, so a surface may be far taller than the window, and than a GPU texture
+     * (16,384 px a side on D3D11). WebView2's capture covers the whole surface: its bottom, scrolled into view, must
+     * still draw.
+     */
+    private val tall: List<Check> = listOf(3_000, 8_000, 20_000).map { px ->
+        Check("a-surface-$px-px-tall-draws-its-bottom") {
+            val band = "<div style='position:absolute;left:0;right:0;bottom:0;height:600px;background:#ff0000'></div>"
+            val scene = SceneEngine(engine(), solidPage("tall $px", "#ffffff", body = band), ::contentOrigin)
+            compose {
+                // At the window's scale: 1 dp is 1 px only on a 100 % display, so the page's px are counted, not dp.
+                val dp = with(LocalDensity.current) { px.toDp() }
+                Box(Modifier.padding(start = 20.dp, top = 20.dp).size(300.dp, 400.dp).clipToBounds()) {
+                    scene.Surface(Modifier.requiredSize(300.dp, dp).offset(y = -(dp - 400.dp) / 2))
+                }
+            }
+            scene.awaitPainted()
+            assertEquals("\"$px\"", scene.engine.evaluate("String(Math.round(innerHeight * devicePixelRatio))"), "the page's height in px")
+            val r = scene.rect
+            eventually("the bottom band drawn where it shows") {
+                LinuxChecks.near(0xff0000, screenPixel(r.x + r.width / 2, r.y + r.height / 2), 24) &&
+                    LinuxChecks.near(0xff0000, screenPixel(r.x + 10, r.y + r.height - 10), 24)
+            }
+        }
+    }
+
     private val questions: List<Check> = listOf(
         Check("a-back-navigation-is-a-new-document") {
             // V4: going back makes a new document: its bridge announces itself anew, with a nonce of its own.
