@@ -69,6 +69,7 @@ jobs:
       terminal: ${{ steps.f.outputs.terminal }}
       webview: ${{ steps.f.outputs.webview }}
       webview_lib: ${{ steps.f.outputs.webview_lib }}
+      linux_glue: ${{ steps.f.outputs.linux_glue }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -143,6 +144,9 @@ jobs:
               - 'apps/terminal-core/**'
               - 'apps/terminal-compose/**'
               - 'apps/gradle/**'
+            # The Linux engine's WPE glue (C). No other lane compiles it; see the linux-glue job.
+            linux_glue:
+              - 'apps/webview-compose/native/linux/**'
             # The protocol seam. Any touch here runs every lane — see rule 1.
             wire:
               - 'src/shared/**'
@@ -979,3 +983,39 @@ jobs:
           name: ios-xcresult
           path: apps/iosApp/build/ios-tests.xcresult
           retention-days: 7
+
+  # ── The Linux engine's WPE glue (C) ────────────────────────────────────────
+  # Ahmet, 2026-11-22: nothing else compiles apps/webview-compose/native/linux (the WPE runtime is built by
+  # hand on `desktop`), so a C error there went unseen. This compiles every wv_*.c against Debian sid's WPE
+  # WebKit 2.0 headers (wpe-platform included; 2.54.x, the runtime's pin) with warnings as errors, then links
+  # the glue with -z defs so an unknown WPE symbol fails here too. It doesn't run anything.
+  linux-glue:
+    needs: changes
+    if: >-
+      github.event_name == 'pull_request' ||
+      needs.changes.outputs.linux_glue == 'true' ||
+      needs.changes.outputs.wire == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container: debian:sid
+    steps:
+      - uses: actions/checkout@v4
+      - name: WPE WebKit 2.0 headers, libsoup 3, a JDK for jni.h
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends gcc libc6-dev pkg-config \
+            libwpewebkit-2.0-dev libsoup-3.0-dev default-jdk-headless
+          pkg-config --modversion wpe-webkit-2.0 wpe-platform-2.0
+      - name: Compile and link the glue (-Wall -Wextra -Werror)
+        working-directory: apps/webview-compose/native/linux
+        run: |
+          JDK="$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")"
+          gcc -std=gnu11 -O2 -fPIC -shared -fvisibility=hidden \
+            -Wall -Wextra -Werror -Wno-unused-parameter -Wno-missing-field-initializers \
+            -DWV_JNI_CLASS='"dev/supermux/webview/engine/linux/WpeNative"' \
+            -I. -I"$JDK/include" -I"$JDK/include/linux" \
+            $(pkg-config --cflags wpe-webkit-2.0 wpe-platform-2.0 glib-2.0 gio-2.0 libsoup-3.0) \
+            wv_*.c -o /tmp/libwebview-wpe.so \
+            $(pkg-config --libs wpe-webkit-2.0 wpe-platform-2.0 glib-2.0 gobject-2.0 gio-2.0 libsoup-3.0) -Wl,-z,defs
+          nm -D --defined-only /tmp/libwebview-wpe.so | grep -q JNI_OnLoad
+          echo "glue: $(stat -c %s /tmp/libwebview-wpe.so) bytes, exports JNI_OnLoad"
