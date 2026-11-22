@@ -74,8 +74,8 @@ class FleetStoreRoutingTest {
                     // the background; their replies land on the engine's own thread, often after a
                     // test cleared `calls`, and would read as stray calls to the wrong host. Not
                     // routing: the catalog is skipped, the archive refreshes go to `archiveCalls`.
-                    // ...and the applets list (#117), refetched at every Snapshot the same way.
-                    if (req.url.encodedPath == "/agents/models" || req.url.encodedPath == "/applets") {
+                    // ...and the applets list (#117) and the notification settings (#163), refetched at every Snapshot the same way.
+                    if (req.url.encodedPath == "/agents/models" || req.url.encodedPath == "/applets" || req.url.encodedPath == "/notifications") {
                         return@MockEngine respond("{}", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
                     }
                     if (req.url.encodedPath == "/archived-sessions" || req.url.encodedPath == "/archived-workspaces") {
