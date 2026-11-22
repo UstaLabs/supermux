@@ -10,10 +10,16 @@ import { files } from "@supermux/platform"
 
 const log = makeLogger("socket-server")
 
+/** The inode of the file at `path`; undefined when it is gone or can't be stat'ed (an AF_UNIX socket on Windows: EACCES). */
+function inodeOf(path: string): number | undefined {
+  try { return statSync(path).ino } catch { return undefined }
+}
+
 /** Is a broker already serving sockets dir `socketsDir`? Its operator socket answers there. */
 export async function socketsDirInUse(socketsDir: string): Promise<boolean> {
   const endpoint = localEndpoint(OPERATOR_ENDPOINT_ID, { socketsDir })
-  return isFileEndpoint(endpoint) && existsSync(endpoint) && await answers(endpoint)
+  // Probed by connecting, never by stat: Windows can't stat an AF_UNIX socket file.
+  return isFileEndpoint(endpoint) && await answers(endpoint)
 }
 
 /** Does a server answer at socket file `endpoint`? (A file left by a broker that exited refuses.) */
@@ -294,9 +300,9 @@ export async function startSocketServer(opts: {
       socket.on("error", () => {})
     })
     const listen = async (): Promise<boolean> => {
-      if (file && existsSync(endpoint)) {
+      if (file) {
         if (await answers(endpoint)) { log.warn("operator_socket_in_use", { endpoint }); return false }
-        unlinkSync(endpoint)
+        try { unlinkSync(endpoint) } catch { /* none left behind */ }
       }
       const srv = serve()
       await new Promise<void>((res, rej) => {
@@ -304,16 +310,17 @@ export async function startSocketServer(opts: {
         srv.listen(endpoint, () => { if (file) files.makePrivate(endpoint); res() })
       })
       operatorServer = srv
-      ino = file ? statSync(endpoint).ino : undefined
+      ino = file ? inodeOf(endpoint) : undefined
       return true
     }
     await listen()
-    if (file) {
+    // Windows can't stat an AF_UNIX socket file (EACCES): no inode to watch there, so no healing (the boot guard and the
+    // probe before unlinking still hold).
+    if (file && ino !== undefined) {
       let healing = false
       healTimer = setInterval(async () => {
         if (healing) return
-        let now: number | undefined
-        try { now = statSync(endpoint).ino } catch { /* gone */ }
+        const now = inodeOf(endpoint)
         if (operatorServer && now === ino) return
         healing = true
         try {
