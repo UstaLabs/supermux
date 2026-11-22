@@ -69,8 +69,12 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import dev.supermux.webview.WebCookie
+import dev.supermux.webview.engine.cdpClearStorageParams
 import dev.supermux.webview.engine.cdpCookieSet
+import dev.supermux.webview.engine.cdpCookiesToDelete
+import dev.supermux.webview.engine.cdpGetCookiesParams
 import dev.supermux.webview.engine.cdpSetCookieParams
+import dev.supermux.webview.engine.hostsOf
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -1053,6 +1057,28 @@ internal class WindowsWebEngine(
         val params = cdpSetCookieParams(cookie, System.currentTimeMillis() / 1000) ?: return false
         val result = call(EVAL_MILLIS) { page.devtools(it, "Network.setCookie", params) } ?: return false
         return result.ok && cdpCookieSet(result.json)
+    }
+
+    /**
+     * From the page's profile, through the DevTools protocol: [origins]' cookies by name (a parent domain's stay:
+     * another site's login), their storage per origin, and the HTTP cache whole (WebView2 can't clear it per origin,
+     * and it is only a cache).
+     */
+    override suspend fun clearSiteData(origins: Set<String>): Boolean {
+        if (released || crashed) return false
+        val hosts = hostsOf(origins).toSet()
+        val found = call(EVAL_MILLIS) { page.devtools(it, "Network.getCookies", cdpGetCookiesParams(origins)) } ?: return false
+        if (!found.ok) return false
+        for (params in cdpCookiesToDelete(found.json, hosts)) {
+            val deleted = call(EVAL_MILLIS) { page.devtools(it, "Network.deleteCookies", params) } ?: return false
+            if (!deleted.ok) return false
+        }
+        for (origin in origins) {
+            val cleared = call(EVAL_MILLIS) { page.devtools(it, "Storage.clearDataForOrigin", cdpClearStorageParams(origin)) } ?: return false
+            if (!cleared.ok) return false
+        }
+        val cache = call(EVAL_MILLIS) { page.devtools(it, "Network.clearBrowserCache", "{}") } ?: return false
+        return cache.ok
     }
 
     /** The app's shortcuts while the page has the keyboard: offered to Compose first (D15). */

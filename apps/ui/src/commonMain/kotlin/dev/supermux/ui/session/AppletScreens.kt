@@ -27,6 +27,9 @@ interface AppletScreens {
 
     /** An applet's icon (#163: Settings › Notifications lists applets; the web build, which shows none, links no icon code). */
     @Composable fun Icon(a: dev.supermux.net.AppletDto, size: androidx.compose.ui.unit.Dp, load: suspend (dev.supermux.net.AppletDto) -> ByteArray?)
+
+    /** Wipes what the app's web views keep of each host as it is forgotten (unpaired). */
+    @Composable fun ForgetUnpairedSites(fleet: FleetStore)
 }
 
 val LocalAppletScreens = staticCompositionLocalOf<AppletScreens?> { null }
@@ -55,4 +58,7 @@ object NativeAppletScreens : AppletScreens {
     @Composable
     override fun Icon(a: dev.supermux.net.AppletDto, size: androidx.compose.ui.unit.Dp, load: suspend (dev.supermux.net.AppletDto) -> ByteArray?) =
         AppletIcon(a, size, load)
+
+    @Composable
+    override fun ForgetUnpairedSites(fleet: FleetStore) = dev.supermux.ui.applets.ForgetUnpairedSites(fleet)
 }

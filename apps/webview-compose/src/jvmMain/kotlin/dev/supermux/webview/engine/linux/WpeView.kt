@@ -37,6 +37,7 @@ internal interface WpeView : FrameSource {
     fun clearData(request: Long)
     /** Puts a cookie ([header], a `Set-Cookie` value for [url]) in the view's network session; answered by a CookieSet. */
     fun setCookie(request: Long, url: String, header: String)
+    fun clearSite(request: Long, hosts: List<String>)
     /** Answers the page's request [request] (a dialog, a permission, a file chooser): see `wv_client.c`. */
     fun answer(request: Long, allow: Boolean, text: String?, files: List<String>?)
     fun terminate()
@@ -79,6 +80,7 @@ internal class NativeWpeView(override val id: Long) : WpeView {
     override fun finishScheme(request: Long, status: Int, mime: String?, data: ByteArray?) = WpeNative.finishScheme(request, status, mime, data)
     override fun clearData(request: Long) = WpeNative.clearData(id, request)
     override fun setCookie(request: Long, url: String, header: String) = WpeNative.setCookie(id, request, url, header)
+    override fun clearSite(request: Long, hosts: List<String>) = WpeNative.clearSite(id, request, hosts.joinToString(","))
     override fun answer(request: Long, allow: Boolean, text: String?, files: List<String>?) =
         WpeNative.answer(id, request, allow, text, files?.toTypedArray())
     override fun terminate() = WpeNative.terminate(id)

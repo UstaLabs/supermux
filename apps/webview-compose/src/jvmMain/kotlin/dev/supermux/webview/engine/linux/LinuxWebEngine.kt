@@ -36,6 +36,7 @@ import dev.supermux.webview.WebResource
 import dev.supermux.webview.bridge.InputStamp
 import dev.supermux.webview.bridge.UserInputSource
 import dev.supermux.webview.bridge.inputClock
+import dev.supermux.webview.engine.hostsOf
 import dev.supermux.webview.engine.EmbeddingMode
 import dev.supermux.webview.engine.EngineClient
 import dev.supermux.webview.engine.EngineConfig
@@ -532,6 +533,26 @@ internal class LinuxWebEngine(
         val done = CompletableDeferred<Boolean>()
         clears[request] = done
         view.setCookie(request, cookie.url, header)
+        return try {
+            withTimeoutOrNull(WIPE_MILLIS) { done.await() } ?: false
+        } finally {
+            clears.remove(request)
+        }
+    }
+
+    /**
+     * From this engine's network session (a Named profile's is its engines' shared one): [origins]' cookies (a parent
+     * domain's stay: another site's login), then every other kind of data of the sites they belong to. WebKit keeps
+     * storage and cache per site (its registrable domain, or the IP).
+     */
+    override suspend fun clearSiteData(origins: Set<String>): Boolean {
+        if (released || crashed) return false
+        val hosts = hostsOf(origins)
+        if (hosts.isEmpty()) return true
+        val request = nextRequest++
+        val done = CompletableDeferred<Boolean>()
+        clears[request] = done
+        view.clearSite(request, hosts)
         return try {
             withTimeoutOrNull(WIPE_MILLIS) { done.await() } ?: false
         } finally {

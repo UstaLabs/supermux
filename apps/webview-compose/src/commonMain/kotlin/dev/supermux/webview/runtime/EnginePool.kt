@@ -268,6 +268,9 @@ public class EnginePool internal constructor(
 
     internal fun holds(holder: LeaseHolder): Boolean = holder in live
 
+    /** The content keys of the pages parked live. Main thread. */
+    internal fun parkedContentKeys(): Set<String> = parked.mapTo(HashSet()) { it.page.key.contentKey }
+
     /** Who holds a lease now: the views the runtime tells when it forgets pages, and tests. */
     internal val leaseHolders: List<LeaseHolder> get() = live.keys.toList()
 

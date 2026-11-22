@@ -372,6 +372,30 @@ button{display:block;width:100%;height:15vh;margin-top:8vh}</style></head>
                 server.stop(0)
             }
         },
+        // #117: unpairing a host wipes what the shared profile keeps of it: its cookies (the applets' key) go, another
+        // site's login, a Browser tab's, stays.
+        Check("mac-clearing-a-sites-data-takes-its-cookies-and-keeps-another-sites-login") {
+            val server = cookieEcho()
+            try {
+                val profile = WebProfile.Named("checks-clear-${ProcessHandle.current().pid()}")
+                val stage = Stage(profile = profile)
+                withPage(stage) { _ ->
+                    val gone = "http://127.0.0.1:${server.address.port}"
+                    val other = "http://localhost:${server.address.port}"
+                    assertTrue(stage.state.navigator.setCookie(WebCookie(name = "cmux_preview", value = "key", url = "$gone/", secure = false)))
+                    assertTrue(stage.state.navigator.setCookie(WebCookie(name = "login", value = "keep", url = "$other/", secure = false)))
+                    assertTrue(stage.runtime.clearSiteData(profile, setOf(gone)), "the engine cleared the origin")
+                    stage.state.navigator.load("$gone/")
+                    waitFor("the gone host's echo") { stage.state.title?.startsWith("req=") == true && stage.state.url?.startsWith(gone) == true }
+                    assertTrue("cmux_preview" !in stage.state.title!!, "the host's key is gone: ${stage.state.title}")
+                    stage.state.navigator.load("$other/")
+                    waitFor("the other site's echo") { stage.state.url?.startsWith(other) == true && stage.state.title?.startsWith("req=") == true }
+                    assertTrue("login=keep" in stage.state.title!!, "the other site's login stays: ${stage.state.title}")
+                }
+            } finally {
+                server.stop(0)
+            }
+        },
         Check("mac-the-page-takes-its-presses-and-a-marked-overlay-its-own") {
             val stage = Stage()
             withPage(stage) { mac ->

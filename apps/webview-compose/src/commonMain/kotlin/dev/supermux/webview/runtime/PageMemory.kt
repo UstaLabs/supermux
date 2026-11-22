@@ -130,6 +130,9 @@ public class PageMemoryStore internal constructor(
      */
     internal fun peek(page: PageKey): PageMemory? = entries[page]?.memory
 
+    /** The content keys pages are remembered for. */
+    internal fun contentKeys(): Set<String> = entries.keys.mapTo(HashSet()) { it.contentKey }
+
     /** Forgets the content of [contentKey], in every profile. */
     internal fun forget(contentKey: String) {
         entries.keys.filter { it.contentKey == contentKey }.forEach(::drop)

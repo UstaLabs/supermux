@@ -133,6 +133,11 @@ internal object AppletPageModels {
 
     fun of(app: HostStore, name: String): AppletPageModel = models.getOrPut(app to name) { AppletPageModel(app, name) }
 
+    /** Drops [app]'s pages: its host was forgotten. */
+    fun forgetHost(app: HostStore) {
+        models.keys.removeAll { it.first === app }
+    }
+
     /** Drops the pages of hosts this device no longer has (unpaired): nothing of theirs stays reachable. */
     fun keepOnly(apps: Set<HostStore>) {
         models.keys.removeAll { it.first !in apps }
@@ -178,6 +183,10 @@ fun AppletPage(app: HostStore, name: String, modifier: Modifier = Modifier, onOp
             WebView(state, Modifier.fillMaxSize(), settings = model.settings, client = client, activation = Activation.Eager)
         }
         model.problem?.let { AppletMessage(it, Modifier.background(cs.background)) }
+        // A page that couldn't load says why, never a blank window (#117: a direct-http host the platform refused).
+        appletLoadFailure(state.error)?.let { reason ->
+            AppletMessage(localized(Str.applets_window_load_failed, reason), Modifier.background(cs.background))
+        }
         // No engine can show pages here (on Android: a System WebView too old for the engine's needs): say so, never a
         // blank window. Why is the log's.
         (state.phase as? WebViewPhase.Unavailable)?.let { unavailable ->
@@ -230,6 +239,24 @@ private fun AppletPageLoader(model: AppletPageModel, onOpenChat: (String) -> Uni
             awaitCancellation()
         } finally {
             detach()
+        }
+    }
+}
+
+/**
+ * As each host is forgotten (unpaired), what the app's web views keep of it goes (#117): its applets' pages and the
+ * runtime's memory of them, and from the shared Browser profile its cookies (the applets' key among them), storage and
+ * cache, at its relay's and direct URL's origins and its last key's. Other sites' logins in Browser tabs stay.
+ */
+@Composable
+fun ForgetUnpairedSites(fleet: FleetStore) {
+    val webViews = LocalAppWebViews.current ?: AppWebViews.app
+    LaunchedEffect(fleet, webViews) {
+        fleet.forgotten.collect { host ->
+            val origins = host.origins + listOfNotNull(host.app?.let { PreviewKeeper.forget(it) })
+            host.app?.let(AppletPageModels::forgetHost)
+            val cleared = webViews.runtime.clearSiteData(BROWSER_PROFILE, origins)
+            println("[AppletPage] forgot host ${host.recordId}: ${origins.size} origin(s), cleared=$cleared") // i18n-ok: a log line, never shown
         }
     }
 }
@@ -294,6 +321,16 @@ private suspend fun askAnswer(app: HostStore, name: String, params: kotlinx.seri
             onFailure = { e -> refusal(e.message ?: "the message didn't go") },
         )
     }
+}
+
+/**
+ * Why the page couldn't load, in the engine's words, or null when it loaded or the server answered (an HTTP error
+ * status is a page of the broker's own, shown as it is).
+ */
+internal fun appletLoadFailure(error: dev.supermux.webview.WebError?): String? = when (error) {
+    is dev.supermux.webview.WebError.Network -> error.description.trim().trimEnd('.') + "."
+    is dev.supermux.webview.WebError.Certificate -> error.description.trim().trimEnd('.') + "."
+    else -> null
 }
 
 /** A sentence in the middle of the window: why the applet can't show. */

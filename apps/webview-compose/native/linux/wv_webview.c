@@ -668,6 +668,132 @@ static void web_clear_data(WvWeb *w, WvOp *op)
         NULL, on_cleared, c);
 }
 
+/* What one site clear has in flight: the cookies it deletes, then the other data of the hosts' sites. */
+typedef struct {
+    int64_t view, request;
+    gchar **hosts;
+    WebKitNetworkSession *session;
+    int pending;
+    gboolean ok;
+} WvSiteClear;
+
+static gboolean site_host(WvSiteClear *c, const char *name)
+{
+    if (!name)
+        return FALSE;
+    const char *bare = name[0] == '.' ? name + 1 : name;
+    for (gchar **h = c->hosts; *h; h++)
+        if (g_ascii_strcasecmp(*h, bare) == 0)
+            return TRUE;
+    return FALSE;
+}
+
+/* WebKit keeps storage and cache per site (its registrable domain, or the IP): a host is of [site] when it is it or
+ * under it. */
+static gboolean site_of_hosts(WvSiteClear *c, const char *site)
+{
+    if (!site)
+        return FALSE;
+    for (gchar **h = c->hosts; *h; h++) {
+        if (g_ascii_strcasecmp(*h, site) == 0)
+            return TRUE;
+        gchar *suffix = g_strconcat(".", site, NULL);
+        gboolean under = g_str_has_suffix(*h, suffix);
+        g_free(suffix);
+        if (under)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+static void site_done(WvSiteClear *c)
+{
+    if (--c->pending > 0)
+        return;
+    wv_emit(c->view, WV_EV_DATA_CLEARED, c->request, c->ok ? 1 : 0, NULL, NULL);
+    g_strfreev(c->hosts);
+    g_object_unref(c->session);
+    g_free(c);
+}
+
+static void on_site_removed(GObject *source, GAsyncResult *result, gpointer data)
+{
+    WvSiteClear *c = data;
+    GError *error = NULL;
+    if (!webkit_website_data_manager_remove_finish(WEBKIT_WEBSITE_DATA_MANAGER(source), result, &error))
+        c->ok = FALSE;
+    g_clear_error(&error);
+    site_done(c);
+}
+
+static void on_site_fetched(GObject *source, GAsyncResult *result, gpointer data)
+{
+    WvSiteClear *c = data;
+    GError *error = NULL;
+    GList *all = webkit_website_data_manager_fetch_finish(WEBKIT_WEBSITE_DATA_MANAGER(source), result, &error);
+    if (error)
+        c->ok = FALSE;
+    g_clear_error(&error);
+    GList *theirs = NULL;
+    for (GList *l = all; l; l = l->next)
+        if (site_of_hosts(c, webkit_website_data_get_name(l->data)))
+            theirs = g_list_prepend(theirs, l->data);
+    if (theirs) {
+        c->pending++;
+        webkit_website_data_manager_remove(WEBKIT_WEBSITE_DATA_MANAGER(source),
+            WEBKIT_WEBSITE_DATA_ALL & ~WEBKIT_WEBSITE_DATA_COOKIES, theirs, NULL, on_site_removed, c);
+        g_list_free(theirs);
+    }
+    g_list_free_full(all, (GDestroyNotify)webkit_website_data_unref);
+    site_done(c);
+}
+
+static void on_site_cookie_deleted(GObject *source, GAsyncResult *result, gpointer data)
+{
+    WvSiteClear *c = data;
+    GError *error = NULL;
+    if (!webkit_cookie_manager_delete_cookie_finish(WEBKIT_COOKIE_MANAGER(source), result, &error))
+        c->ok = FALSE;
+    g_clear_error(&error);
+    site_done(c);
+}
+
+static void on_site_cookies(GObject *source, GAsyncResult *result, gpointer data)
+{
+    WvSiteClear *c = data;
+    GError *error = NULL;
+    GList *cookies = webkit_cookie_manager_get_all_cookies_finish(WEBKIT_COOKIE_MANAGER(source), result, &error);
+    if (error)
+        c->ok = FALSE;
+    g_clear_error(&error);
+    for (GList *l = cookies; l; l = l->next) {
+        if (!site_host(c, soup_cookie_get_domain(l->data)))
+            continue;
+        c->pending++;
+        webkit_cookie_manager_delete_cookie(WEBKIT_COOKIE_MANAGER(source), l->data, NULL, on_site_cookie_deleted, c);
+    }
+    g_list_free_full(cookies, (GDestroyNotify)soup_cookie_free);
+    /* Then the other data: storage, cache and the rest, never cookies. */
+    c->pending++;
+    webkit_website_data_manager_fetch(webkit_network_session_get_website_data_manager(c->session),
+        WEBKIT_WEBSITE_DATA_ALL & ~WEBKIT_WEBSITE_DATA_COOKIES, NULL, on_site_fetched, c);
+    site_done(c);
+}
+
+/* i[0] request, s[0] the hosts, comma-separated. From this view's network session: the cookies whose domain is one of
+ * them (a parent domain's stay: another site's login), then every other kind of data of the sites they belong to. */
+static void web_clear_site(WvWeb *w, WvOp *op)
+{
+    WvSiteClear *c = g_new0(WvSiteClear, 1);
+    c->view = w->id;
+    c->request = op->i[0];
+    c->hosts = g_strsplit(op->s[0] ? op->s[0] : "", ",", -1);
+    c->session = g_object_ref(webkit_web_view_get_network_session(w->web));
+    c->ok = TRUE;
+    c->pending = 1;
+    webkit_cookie_manager_get_all_cookies(webkit_network_session_get_cookie_manager(c->session), NULL, on_site_cookies, c);
+}
+
 static void on_cookie_added(GObject *source, GAsyncResult *result, gpointer data)
 {
     WvClear *c = data;
@@ -807,6 +933,7 @@ static gboolean op_run(gpointer data)
         case WV_OP_TERMINATE: webkit_web_view_terminate_web_process(w->web); break;
         case WV_OP_CLEAR_DATA: web_clear_data(w, op); break;
         case WV_OP_SET_COOKIE: web_set_cookie(w, op); break;
+        case WV_OP_CLEAR_SITE: web_clear_site(w, op); break;
         case WV_OP_ANSWER: wv_client_answer(op->i[0], op->i[1] != 0, op->s[0], op->strv); break;
         default: break;
         }

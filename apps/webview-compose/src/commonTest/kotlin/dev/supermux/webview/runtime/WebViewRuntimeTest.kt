@@ -16,6 +16,7 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -288,6 +289,36 @@ class WebViewRuntimeTest {
         assertEquals(1, runtime.snapshots.decodedCount)
         assertNotNull(runtime.snapshots[SnapshotKey(other.key, WebProfile.Default, 10, 10, false, 1f)])
         assertEquals(epoch, runtime.memoryEpoch)
+    }
+
+    @Test fun clearingAnOriginForgetsItsPagesAndHasAnEngineOfTheProfileClearItsSiteData() = runTest {
+        val runtime = runtime(RuntimeConfig(maxLive = 2, maxIdle = 0, snapshotCacheBytes = 4_000))
+        val profile = WebProfile.Named("browser")
+        val gone = WebContent.Url("https://h-gone.relay.test/a/issues/")
+        val goneToo = WebContent.Url("https://H-GONE.relay.test:443/a/notes/?x=1", headers = mapOf("Authorization" to "Bearer k"))
+        val other = WebContent.Url("https://h-other.relay.test/a/issues/")
+        val memory = PageMemory(null, null, null, null, false, null, false)
+        for (page in listOf(gone, goneToo, other)) {
+            runtime.pages.remember(PageKey(profile, page.key), memory)
+            runtime.snapshot(page.key, profile)
+        }
+        assertTrue(runtime.clearSiteData(profile, setOf("https://h-gone.relay.test/", "not an origin")))
+        // Only the other host's page is left, in page memory and in snapshots.
+        assertEquals(1, runtime.pages.count)
+        assertNotNull(runtime.pages.recall(PageKey(profile, other.key)))
+        assertEquals(1, runtime.snapshots.count)
+        // An engine of that profile cleared the origin, normalized, and was released.
+        val engine = factory.created.single()
+        assertEquals(profile, engine.config.profile)
+        assertEquals(listOf(setOf("https://h-gone.relay.test")), engine.clearedSites)
+        assertTrue(engine.released)
+    }
+
+    @Test fun clearingSiteDataSaysSoWhenTheEngineCant() = runTest {
+        val runtime = runtime(RuntimeConfig(maxLive = 2, maxIdle = 0, snapshotCacheBytes = 4_000))
+        factory.behavior = factory.behavior.copy(clearsSiteData = false)
+        assertFalse(runtime.clearSiteData(WebProfile.Default, setOf("https://h.test")))
+        assertTrue(factory.created.single().released)
     }
 
     @Test fun aConfigRefusesSizesThatCantWork() {

@@ -143,6 +143,10 @@ internal class FakeWpeView(override val id: Long = 1) : WpeView {
         calls += "setCookie $request $url $header"
     }
 
+    override fun clearSite(request: Long, hosts: List<String>) {
+        calls += "clearSite $request ${hosts.joinToString(",")}"
+    }
+
     override fun answer(request: Long, allow: Boolean, text: String?, files: List<String>?) {
         answers[request] = Triple(allow, text, files)
     }

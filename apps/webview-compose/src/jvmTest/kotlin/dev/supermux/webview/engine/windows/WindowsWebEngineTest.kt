@@ -363,6 +363,36 @@ class WindowsWebEngineTest {
         rig.close()
     }
 
+    /**
+     * #117: a host's site data goes through CDP: its own cookies by name (a parent domain's login stays), its storage per
+     * origin, then the whole HTTP cache.
+     */
+    @Test fun aHostsSiteDataGoesThroughCdpKeepingAParentDomainsCookie() = runTest {
+        val rig = WinRig(this, WebProfile.Named("supermux-browser"))
+        rig.warm()
+        var result: Boolean? = null
+        rig.scope.launch { result = rig.engine.clearSiteData(setOf("https://h-a.relay.test")) }
+        assertEquals("{\"urls\":[\"https://h-a.relay.test/\"]}", rig.page.devtools.last { it.second == "Network.getCookies" }.third)
+        rig.engine.onEvent(
+            WinEvent.Result(
+                rig.page.devtoolsRequest("Network.getCookies"),
+                true,
+                "{\"cookies\":[{\"name\":\"cmux_preview\",\"domain\":\"h-a.relay.test\",\"path\":\"/\"},{\"name\":\"login\",\"domain\":\".relay.test\",\"path\":\"/\"}]}",
+            ),
+        )
+        assertEquals(
+            listOf("{\"name\":\"cmux_preview\",\"domain\":\"h-a.relay.test\",\"path\":\"/\"}"),
+            rig.page.devtools.filter { it.second == "Network.deleteCookies" }.map { it.third },
+            "only the host's own cookie",
+        )
+        rig.engine.onEvent(WinEvent.Result(rig.page.devtoolsRequest("Network.deleteCookies"), true, "{}"))
+        assertTrue("\"origin\":\"https://h-a.relay.test\"" in rig.page.devtools.last { it.second == "Storage.clearDataForOrigin" }.third)
+        rig.engine.onEvent(WinEvent.Result(rig.page.devtoolsRequest("Storage.clearDataForOrigin"), true, "{}"))
+        rig.engine.onEvent(WinEvent.Result(rig.page.devtoolsRequest("Network.clearBrowserCache"), true, "{}"))
+        assertEquals(true, result)
+        rig.close()
+    }
+
     /** #122 2b: device mode on Windows is Chrome's own, through CDP; null takes it off. */
     @Test fun aDeviceIsEmulatedThroughCdpAndTakenOff() = runTest {
         val rig = WinRig(this, WebProfile.Default)
