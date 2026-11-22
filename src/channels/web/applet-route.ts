@@ -1,3 +1,4 @@
+import { createHash } from "crypto"
 import { existsSync, realpathSync, statSync } from "fs"
 import { connect } from "net"
 import { isAbsolute, join, relative } from "path"
@@ -75,14 +76,48 @@ export function resolveStaticFile(root: string, rest: string): string | null {
   }
 }
 
-function serveStaticApplet(folder: string, rest: string, method: string): Response {
+/**
+ * How an applet's GETs may be kept (Ahmet: applets open at once with their last state, then refresh). Private: only this
+ * device's web view keeps them, never the relay. max-age=0 + stale-while-revalidate: the saved copy shows at once while
+ * the engine asks again in the background, and an ETag makes that a cheap 304. Writes and streams stay no-store.
+ */
+export const APPLET_GET_CACHE = "private, max-age=0, stale-while-revalidate=604800"
+
+/** True when [req]'s If-None-Match names [etag] (or `*`). */
+function etagMatches(req: Request | undefined, etag: string): boolean {
+  const inm = req?.headers.get("if-none-match")
+  if (!inm) return false
+  return inm.split(",").map((t) => t.trim().replace(/^W\//, "")).some((t) => t === "*" || t === etag.replace(/^W\//, ""))
+}
+
+function serveStaticApplet(folder: string, rest: string, method: string, req?: Request): Response {
   if (method !== "GET" && method !== "HEAD") return page(405, "Not allowed", "This applet has only static files, so it can only be read.")
   const file = resolveStaticFile(join(folder, "public"), rest)
   if (!file) return page(404, "Not found", "This applet has no such page.")
   const f = Bun.file(file)
-  return new Response(method === "HEAD" ? null : f, {
-    headers: { "content-type": f.type || "application/octet-stream", "cache-control": "no-cache" },
-  })
+  // A file's size and last change name its version: a strong ETag without reading it.
+  const st = statSync(file)
+  const etag = `"${st.size.toString(16)}-${Math.floor(st.mtimeMs).toString(16)}"`
+  const headers = { "content-type": f.type || "application/octet-stream", "cache-control": APPLET_GET_CACHE, etag }
+  if (etagMatches(req, etag)) return new Response(null, { status: 304, headers })
+  return new Response(method === "HEAD" ? null : f, { headers })
+}
+
+/**
+ * A data API GET (static applets' collections, kv, files) made cacheable the same way: a weak ETag over its body, 304
+ * when the copy the engine holds is current. Anything else (writes, errors, the event stream) passes as it is.
+ */
+async function cacheableDataGet(req: Request, res: Response): Promise<Response> {
+  const method = req.method.toUpperCase()
+  if ((method !== "GET" && method !== "HEAD") || res.status !== 200) return res
+  if ((res.headers.get("content-type") ?? "").startsWith("text/event-stream")) return res
+  const body = new Uint8Array(await res.arrayBuffer())
+  const etag = `W/"${createHash("sha1").update(body).digest("hex").slice(0, 20)}"`
+  const headers = new Headers(res.headers)
+  headers.set("cache-control", APPLET_GET_CACHE)
+  headers.set("etag", etag)
+  if (etagMatches(req, etag)) return new Response(null, { status: 304, headers })
+  return new Response(method === "HEAD" ? null : body, { status: 200, headers })
 }
 
 /** Resolves once something accepts on [port], or after [ms]: a server that was just (re)started gets a moment. */
@@ -154,10 +189,15 @@ export const SUPERMUX_API_JS = `(function () {
 })();
 `
 
+/** The page API script's version: it changes only with a supermux release. */
+const SUPERMUX_API_ETAG = `"${createHash("sha1").update(SUPERMUX_API_JS).digest("hex").slice(0, 20)}"`
+
 async function supermuxApi(req: Request, rest: string, name: string, caller: AppletCaller, deps: AppletRouteDeps): Promise<Response> {
   const method = req.method.toUpperCase()
   if (rest === "/api.js" && (method === "GET" || method === "HEAD")) {
-    return new Response(method === "HEAD" ? null : SUPERMUX_API_JS, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-cache" } })
+    const headers = { "content-type": "text/javascript; charset=utf-8", "cache-control": APPLET_GET_CACHE, etag: SUPERMUX_API_ETAG }
+    if (etagMatches(req, SUPERMUX_API_ETAG)) return new Response(null, { status: 304, headers })
+    return new Response(method === "HEAD" ? null : SUPERMUX_API_JS, { headers })
   }
   if (rest === "/notify" && method === "POST") {
     if (caller.kind !== "device") return new Response(JSON.stringify({ error: "only the owner's devices can notify from a page" }), { status: 403, headers: { "content-type": "application/json" } })
@@ -190,8 +230,8 @@ export async function handleAppletRequest(req: Request, deps: AppletRouteDeps): 
   if (v.row.stoppedAt) return page(503, "This applet is stopped", "Start it again from Applet info in supermux.")
   if (!v.manifest.run) {
     // A static applet's data API (a server applet owns its whole route, /api included).
-    if (m.rest === "/api" || m.rest.startsWith("/api/")) return deps.applets.dataApi.handle(req, deps.applets.dataDir(v.folder, v.manifest), m.rest.slice(4))
-    return serveStaticApplet(v.folder, m.rest, req.method.toUpperCase())
+    if (m.rest === "/api" || m.rest.startsWith("/api/")) return cacheableDataGet(req, await deps.applets.dataApi.handle(req, deps.applets.dataDir(v.folder, v.manifest), m.rest.slice(4)))
+    return serveStaticApplet(v.folder, m.rest, req.method.toUpperCase(), req)
   }
 
   let port = deps.applets.supervisor.port(v.row.id)

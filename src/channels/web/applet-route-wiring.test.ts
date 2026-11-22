@@ -69,3 +69,65 @@ posix("GET /applets lists the host's applets for a paired device and nobody else
   const list = await (await fetch(`${base}/applets`, { headers: { authorization: `Bearer ${device}` } })).json() as { name: string; url: string; kind: string }[]
   expect(list.map((a) => [a.name, a.url, a.kind])).toEqual([["echo", "/a/echo/", "server"]])
 })
+
+test("a static applet's reads are kept by the device (SWR + ETag, 304 when current); writes and events never are", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mux-applet-swr-"))
+  cleanups.push(() => rmSync(root, { recursive: true, force: true }))
+  const dir = join(root, "applets", "notes")
+  mkdirSync(join(dir, "public"), { recursive: true })
+  writeFileSync(join(dir, "applet.json"), JSON.stringify({ title: "Notes" }))
+  writeFileSync(join(dir, "public", "index.html"), "<h1>notes</h1>")
+  const db = openDb(":memory:")
+  runMigrations(db, MIGRATIONS)
+  const applets = new AppletService({ db, appletsDir: join(root, "applets"), stateDir: join(root, "state"), backupsDir: join(root, "backups") })
+  await applets.scan()
+  const devicesFile = join(root, "devices.json")
+  const devices = new DeviceStore(devicesFile)
+  const channel = new WebChannel({
+    port: 0, devicesFile, publicUrl: "https://app.example.test",
+    getSessionsSnapshot: () => [], getSessionLog: () => [], setMute: () => {}, onSendFromWeb: () => {},
+    applets,
+  })
+  await channel.start()
+  cleanups.push(async () => { await channel.stop(); applets.shutdown() })
+  const b = `http://127.0.0.1:${channel.boundPort}`
+  const auth = { authorization: `Bearer ${devices.mint("phone").token}` }
+  const SWR = "private, max-age=0, stale-while-revalidate=604800"
+
+  for (const path of ["/a/notes/", "/a/notes/_supermux/api.js"]) {
+    const first = await fetch(b + path, { headers: auth })
+    expect(first.status).toBe(200)
+    expect(first.headers.get("cache-control")).toBe(SWR)
+    const etag = first.headers.get("etag")!
+    expect(etag).toBeTruthy()
+    await first.arrayBuffer()
+    const again = await fetch(b + path, { headers: { ...auth, "if-none-match": etag } })
+    expect(again.status).toBe(304)
+    expect(await again.text()).toBe("")
+  }
+  // A changed file is a new version.
+  const e1 = (await fetch(b + "/a/notes/", { headers: auth })).headers.get("etag")
+  writeFileSync(join(dir, "public", "index.html"), "<h1>notes, longer</h1>")
+  const changed = await fetch(b + "/a/notes/", { headers: { ...auth, "if-none-match": e1! } })
+  expect(changed.status).toBe(200)
+  expect(await changed.text()).toBe("<h1>notes, longer</h1>")
+
+  const put = await fetch(b + "/a/notes/api/kv/n", { method: "PUT", headers: { ...auth, "content-type": "application/json" }, body: "1" })
+  expect(put.headers.get("cache-control")).toBe("no-store")
+  const got = await fetch(b + "/a/notes/api/kv/n", { headers: auth })
+  expect(got.status).toBe(200)
+  expect(got.headers.get("cache-control")).toBe(SWR)
+  expect(await got.json()).toBe(1)
+  const kvTag = got.headers.get("etag")!
+  expect((await fetch(b + "/a/notes/api/kv/n", { headers: { ...auth, "if-none-match": kvTag } })).status).toBe(304)
+  await fetch(b + "/a/notes/api/kv/n", { method: "PUT", headers: { ...auth, "content-type": "application/json" }, body: "2" })
+  const after = await fetch(b + "/a/notes/api/kv/n", { headers: { ...auth, "if-none-match": kvTag } })
+  expect(after.status).toBe(200)
+  expect(await after.json()).toBe(2)
+
+  const ctl = new AbortController()
+  const events = await fetch(b + "/a/notes/api/collections/c/events", { headers: auth, signal: ctl.signal })
+  expect(events.headers.get("cache-control")).toBe("no-store")
+  expect(events.headers.get("etag")).toBeNull()
+  ctl.abort()
+})
