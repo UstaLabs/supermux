@@ -507,12 +507,17 @@ class FleetStore(
     fun notificationPrefsFor(sessionId: String): NotificationPrefs? = appFor(sessionId)?.notificationPrefs?.value
 
     /** #163: a change to the active host's notification settings; null on success, else why it failed. */
-    suspend fun patchNotificationPrefs(patch: NotificationPrefsPatch): String? =
-        activeApp()?.patchNotificationPrefs(patch) ?: "not connected to this machine"
+    // Not `app?.patch(…) ?: "…"`: the patch answers null on SUCCESS, which the elvis would turn into an error.
+    suspend fun patchNotificationPrefs(patch: NotificationPrefsPatch): String? {
+        val app = activeApp() ?: return "not connected to this machine"
+        return app.patchNotificationPrefs(patch)
+    }
 
     /** #163: one session's (or Agent's) own level on its host, or null to follow its group again. */
-    suspend fun setSessionNotifyLevel(sessionId: String, level: NotifyLevel?): String? =
-        appFor(sessionId)?.patchNotificationPrefs(NotificationPrefsPatch(session = mapOf(sessionId to level))) ?: "not connected to this machine"
+    suspend fun setSessionNotifyLevel(sessionId: String, level: NotifyLevel?): String? {
+        val app = appFor(sessionId) ?: return "not connected to this machine"
+        return app.patchNotificationPrefs(NotificationPrefsPatch(session = mapOf(sessionId to level)))
+    }
 
     /** #163: one of the active host's applets' own level, or null to follow the Applets level again. */
     suspend fun setAppletNotifyLevel(appletId: String, level: NotifyLevel?): String? =
