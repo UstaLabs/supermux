@@ -59,6 +59,16 @@
     <string name="search_memory_memory_next_kw">şimdi çalıştır</string>
     <string name="search_memory_memory_agent">Yapan</string>
     <string name="search_memory_memory_agent_kw">ajan model efor</string>
+    <string name="search_notifications_notify_agents">Ajanlar</string>
+    <string name="search_notifications_notify_agents_kw">bildirim uyarı zil sessiz</string>
+    <string name="search_notifications_notify_sessions">Oturumlar</string>
+    <string name="search_notifications_notify_sessions_kw">bildirim uyarı zil sessiz</string>
+    <string name="search_notifications_notify_applets">Appletler</string>
+    <string name="search_notifications_notify_applets_kw">bildirim uyarı zil</string>
+    <string name="search_notifications_notify_needs_you">Sizden bir şey gerektiğinde her zaman</string>
+    <string name="search_notifications_notify_needs_you_kw">soru izin</string>
+    <string name="search_notifications_notify_notices">Biten işler ve güncellemeler</string>
+    <string name="search_notifications_notify_notices_kw">worktree birleştirme hafıza</string>
     <string name="search_privacylabs_telemetry">Anonim kullanım istatistikleri gönder</string>
     <string name="search_privacylabs_telemetry_kw">analitik gizlilik istatistik</string>
     <string name="search_privacylabs_assistant_overlay">Asistan katmanı</string>

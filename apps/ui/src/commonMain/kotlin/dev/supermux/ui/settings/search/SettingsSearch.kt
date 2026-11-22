@@ -148,6 +148,27 @@ val SettingsSearchIndex: List<SettingsSearchEntry> = listOf(
         shownWhen = { it.mediaCache },
         text = SearchText(Str.search_general_cache, Str.search_general_cache_kw),
     ),
+    page(SettingsSection.Notifications, "notifications push alerts mute quiet bell"),
+    SettingsSearchEntry(
+        SettingsSection.Notifications, "notify-agents", "Agents", "push alert notify bell quiet",
+        text = SearchText(Str.search_notifications_notify_agents, Str.search_notifications_notify_agents_kw),
+    ),
+    SettingsSearchEntry(
+        SettingsSection.Notifications, "notify-sessions", "Sessions", "push alert notify bell quiet mute",
+        text = SearchText(Str.search_notifications_notify_sessions, Str.search_notifications_notify_sessions_kw),
+    ),
+    SettingsSearchEntry(
+        SettingsSection.Notifications, "notify-applets", "Applets", "push alert notify bell",
+        text = SearchText(Str.search_notifications_notify_applets, Str.search_notifications_notify_applets_kw),
+    ),
+    SettingsSearchEntry(
+        SettingsSection.Notifications, "notify-needs-you", "Always when something needs you", "question permission prompt break through",
+        text = SearchText(Str.search_notifications_notify_needs_you, Str.search_notifications_notify_needs_you_kw),
+    ),
+    SettingsSearchEntry(
+        SettingsSection.Notifications, "notify-notices", "Finished work & updates", "worktree merged curator memory",
+        text = SearchText(Str.search_notifications_notify_notices, Str.search_notifications_notify_notices_kw),
+    ),
     page(SettingsSection.KeyboardShortcuts, "keys hotkeys keybindings keymap").copy(shownWhen = { it.hardwareKeyboard }),
     // Generated from the commands, so the list never goes stale (#96 §6); a command without keys here has no row.
     *AppCommands.all.map { cmd ->

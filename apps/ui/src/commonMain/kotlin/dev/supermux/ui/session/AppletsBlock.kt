@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -222,6 +223,9 @@ private fun AppletCell(a: AppletDto, iconSize: Dp, labelSize: Float, actions: Ap
     var menuAt by remember { mutableStateOf<Offset?>(null) }
     // iPhone: "Add widget" shows how (only he can place a widget); it outlives the menu that asked for it.
     var widgetHowTo by remember { mutableStateOf(false) }
+    var notifyOpen by remember { mutableStateOf(false) }
+    val notifyTarget = remember(a.id) { dev.supermux.ui.notify.NotifyTarget(a.id, applet = true) }
+    val notifyItem = dev.supermux.ui.notify.notifyItemOrNull(notifyTarget)
     // An applet opened from outside the app closes both (AppletSheets).
     val closeRequest by AppletSheets.closeRequests.collectAsState()
     val seenClose = remember { closeRequest }
@@ -267,6 +271,13 @@ private fun AppletCell(a: AppletDto, iconSize: Dp, labelSize: Float, actions: Ap
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
             Box {
                 AppletIcon(a, iconSize, actions.loadIcon)
+                if (notifyItem?.effective == dev.supermux.proto.NotifyLevel.Off) {
+                    Box(
+                        Modifier.align(Alignment.BottomEnd).offset(x = 5.dp, y = 4.dp).size(18.dp)
+                            .border(2.dp, cs.surfaceContainerLow, CircleShape).clip(CircleShape).background(cs.surfaceContainerHighest),
+                        contentAlignment = Alignment.Center,
+                    ) { dev.supermux.ui.notify.NotifyOffMark(size = 12.dp) }
+                }
                 if (needs) {
                     Box(
                         Modifier
@@ -306,8 +317,13 @@ private fun AppletCell(a: AppletDto, iconSize: Dp, labelSize: Float, actions: Ap
             }
         }
         menuAt?.let { at ->
-            AppletMenu(a, actions, anchor = at, sheet = !pointer, onDismiss = { menuAt = null }, onWidgetHowTo = { widgetHowTo = true })
+            AppletMenu(
+                a, actions, anchor = at, sheet = !pointer, onDismiss = { menuAt = null }, onWidgetHowTo = { widgetHowTo = true },
+                onNotify = if (notifyItem != null) ({ notifyOpen = true }) else null,
+            )
         }
+        // #163: its Notifications choices, opened from its menu.
+        if (notifyOpen) dev.supermux.ui.notify.NotifyTargetMenu(notifyTarget, onDismiss = { notifyOpen = false })
         if (widgetHowTo) AppletWidgetHowTo(actions, onDismiss = { widgetHowTo = false })
     }
 }
@@ -371,7 +387,16 @@ private class AppletMenuItem(val icon: ImageVector, val label: String, val warn:
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AppletMenu(a: AppletDto, actions: AppletsActions, anchor: Offset, sheet: Boolean, onDismiss: () -> Unit, onWidgetHowTo: () -> Unit) {
+private fun AppletMenu(
+    a: AppletDto,
+    actions: AppletsActions,
+    anchor: Offset,
+    sheet: Boolean,
+    onDismiss: () -> Unit,
+    onWidgetHowTo: () -> Unit,
+    /** #163: opens the applet's Notifications choices; null where its broker has none. */
+    onNotify: (() -> Unit)? = null,
+) {
     val scope = rememberCoroutineScope()
     var error by remember { mutableStateOf<String?>(null) }
     val pinned = a.pin != null
@@ -395,6 +420,7 @@ private fun AppletMenu(a: AppletDto, actions: AppletsActions, anchor: Offset, sh
         }
         if (pinned) add(AppletMenuItem(Icons.Outlined.GridView, localized(Str.applets_menu_unpin), tag = "unpin") { actions.pin(a, false) })
         else if (!full) add(AppletMenuItem(Icons.Outlined.GridView, localized(Str.applets_menu_pin), tag = "pin") { actions.pin(a, true) })
+        onNotify?.let { open -> add(AppletMenuItem(dev.supermux.ui.settings.kit.KitGlyphs.Bell, localized(Str.notify_menu_ellipsis), tag = "notify") { open(); null }) }
         add(AppletMenuItem(Icons.Outlined.Info, localized(Str.applets_menu_info), tag = "info") { actions.info(a, ""); null })
     }
     val needs = a.needsYou

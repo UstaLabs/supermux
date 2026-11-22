@@ -60,6 +60,16 @@
     <string name="search_memory_memory_next_kw"></string>
     <string name="search_memory_memory_agent">Done by</string>
     <string name="search_memory_memory_agent_kw"></string>
+    <string name="search_notifications_notify_agents">Agents</string>
+    <string name="search_notifications_notify_agents_kw">push alert notify bell quiet</string>
+    <string name="search_notifications_notify_sessions">Sessions</string>
+    <string name="search_notifications_notify_sessions_kw">push alert notify bell quiet mute</string>
+    <string name="search_notifications_notify_applets">Applets</string>
+    <string name="search_notifications_notify_applets_kw">push alert notify bell</string>
+    <string name="search_notifications_notify_needs_you">Always when something needs you</string>
+    <string name="search_notifications_notify_needs_you_kw">question permission prompt break through</string>
+    <string name="search_notifications_notify_notices">Finished work &amp; updates</string>
+    <string name="search_notifications_notify_notices_kw">worktree merged curator memory</string>
     <string name="search_privacylabs_telemetry">Send anonymous usage statistics</string>
     <string name="search_privacylabs_telemetry_kw"></string>
     <string name="search_privacylabs_assistant_overlay">Assistant overlay</string>

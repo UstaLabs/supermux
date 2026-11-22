@@ -1057,17 +1057,20 @@ class SettingsHubTest {
 
     // ── Keyboard shortcuts (#97 unit L, #96) ───────────────────────────────────────────────────
 
-    @Test fun keyboard_shortcuts_is_the_second_row_with_a_hardware_keyboard() = runComposeUiTest {
-        assertEquals(SettingsSection.KeyboardShortcuts, SettingsSection.entries[1])
+    // #163: Notifications sits second (the approved design), so Keyboard shortcuts follows it.
+    @Test fun keyboard_shortcuts_follows_notifications_with_a_hardware_keyboard() = runComposeUiTest {
+        assertEquals(SettingsSection.Notifications, SettingsSection.entries[1])
+        assertEquals(SettingsSection.KeyboardShortcuts, SettingsSection.entries[2])
         assertEquals("Every shortcut on this keyboard", en(SettingsSection.KeyboardShortcuts.descRes(labs = true)))
         setPlatformContent(widthClass = WindowWidthClass.Expanded) {
             SettingsHub(section = null, onSectionChange = {}, onBack = {}) { p, _ -> Text("page ${p.section}") }
         }
         waitForIdle()
         val general = onNodeWithTag("settings_section_general").fetchSemanticsNode().boundsInRoot
+        val notifications = onNodeWithTag("settings_section_notifications").fetchSemanticsNode().boundsInRoot
         val keys = onNodeWithTag("settings_section_keyboardshortcuts").fetchSemanticsNode().boundsInRoot
         val providers = onNodeWithTag("settings_section_providers").fetchSemanticsNode().boundsInRoot
-        assertTrue(general.top < keys.top && keys.top < providers.top, "rail order: $general, $keys, $providers")
+        assertTrue(general.top < notifications.top && notifications.top < keys.top && keys.top < providers.top, "rail order: $general, $notifications, $keys, $providers")
     }
 
     @Test fun without_a_hardware_keyboard_there_is_no_shortcuts_row_or_result() = runComposeUiTest {

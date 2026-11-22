@@ -416,6 +416,13 @@ fun ChatScreen(
                     val prefsScope = rememberCoroutineScope()
                     val chatDetailLevel by uiPrefs.chatDetailLevel.collectAsState(ChatDetailLevel.MEDIUM)
                     var detailSubmenu by remember { mutableStateOf(false) }
+                    var chatNotifyOpen by remember { mutableStateOf(false) }
+                    if (chatNotifyOpen) {
+                        dev.supermux.ui.notify.NotifyTargetMenu(
+                            dev.supermux.ui.notify.NotifyTarget(session.id, agent = session.role == "personal_assistant"),
+                            onDismiss = { chatNotifyOpen = false },
+                        )
+                    }
                     Icon(
                         painter = painterResource(R.drawable.ic_more_vert),
                         contentDescription = localized(Str.shell_more),
@@ -478,7 +485,24 @@ fun ChatScreen(
                             }
                         }
                         val isMuted = session.mute ?: false
-                        DropdownMenuItem(
+                        // #163: Notifications where the broker has them (its choices open as a second menu), else Mute.
+                        val notifyTarget = dev.supermux.ui.notify.NotifyTarget(session.id, agent = session.role == "personal_assistant")
+                        val notifyItem = dev.supermux.ui.notify.notifyItemOrNull(notifyTarget)
+                        if (notifyItem != null) DropdownMenuItem(
+                            text = { Text(localized(Str.notify_menu_ellipsis)) },
+                            leadingIcon = {
+                                Icon(
+                                    if (notifyItem.effective == dev.supermux.proto.NotifyLevel.Off) dev.supermux.ui.settings.kit.KitGlyphs.BellOff else dev.supermux.ui.settings.kit.KitGlyphs.Bell,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            },
+                            onClick = {
+                                headerMenuExpanded = false
+                                chatNotifyOpen = true
+                            },
+                        ) else DropdownMenuItem(
                             text = { Text(localized(if (isMuted) Str.shell_unmute else Str.shell_mute)) },
                             leadingIcon = {
                                 Icon(

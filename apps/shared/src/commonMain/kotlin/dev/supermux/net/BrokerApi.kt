@@ -33,6 +33,8 @@ import dev.supermux.util.PerfTrace
 import dev.supermux.proto.ClientLogEntry
 import dev.supermux.proto.LayoutNodeDto
 import dev.supermux.proto.LogEntry
+import dev.supermux.proto.NotificationPrefs
+import dev.supermux.proto.NotificationPrefsPatch
 import dev.supermux.proto.ProjectDto
 import dev.supermux.proto.SlashCommand
 import dev.supermux.proto.ViewDto
@@ -2555,6 +2557,17 @@ class BrokerApi(
     /** POST /sessions/<id>/rename {"name": ...} */
     suspend fun rename(id: String, name: String) =
         postJson("$httpBase/sessions/$id/rename", RenameBody(name))
+
+    /** #163: GET /notifications, the person's notification settings. 404 from an older broker (throws). */
+    suspend fun getNotificationPrefs(): NotificationPrefs = getJson("$httpBase/notifications")
+
+    /** #163: PATCH /notifications with only what changed; answers the settings as kept. */
+    suspend fun patchNotificationPrefs(patch: NotificationPrefsPatch): NotificationPrefs =
+        decode(http.patch("$httpBase/notifications") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(patch.toJson().toString())
+        })
 
     /** POST /sessions/<id>/mute {"muted": ...} */
     suspend fun setMute(id: String, muted: Boolean) =
