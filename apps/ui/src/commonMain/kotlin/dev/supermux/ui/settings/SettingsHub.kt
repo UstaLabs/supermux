@@ -930,6 +930,7 @@ private fun railSections(hardwareKeyboard: Boolean): List<SettingsSection> = Set
 
 internal fun SettingsSection.glyph(): ImageVector = when (this) {
     SettingsSection.General -> KitGlyphs.Sliders
+    SettingsSection.Notifications -> KitGlyphs.Bell
     SettingsSection.KeyboardShortcuts -> KitGlyphs.Keyboard
     SettingsSection.Providers -> KitGlyphs.Bot
     SettingsSection.Voice -> KitGlyphs.Mic
@@ -942,6 +943,7 @@ internal fun SettingsSection.glyph(): ImageVector = when (this) {
 /** One-line "what is behind this row" on the phone's index (#97 spec §2.1). [labs]: this device has lab features. */
 internal fun SettingsSection.descRes(labs: Boolean): StringKey = when (this) {
     SettingsSection.General -> Str.settings_desc_general
+    SettingsSection.Notifications -> Str.settings_desc_notifications
     SettingsSection.KeyboardShortcuts -> Str.settings_desc_shortcuts
     SettingsSection.Providers -> Str.settings_desc_providers
     SettingsSection.Voice -> Str.settings_desc_voice

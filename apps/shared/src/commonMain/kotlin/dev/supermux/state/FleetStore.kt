@@ -35,6 +35,9 @@ import dev.supermux.proto.ClientFrame
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.ProjectDto
 import dev.supermux.proto.SessionInfo
+import dev.supermux.proto.NotificationPrefs
+import dev.supermux.proto.NotificationPrefsPatch
+import dev.supermux.proto.NotifyLevel
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.AddDeviceResponse
 import dev.supermux.net.AddViewBody
@@ -478,6 +481,42 @@ class FleetStore(
             .distinctUntilChanged()
             .flatMapLatest { app -> app?.applets ?: flowOf(null) }
             .stateIn(fleetScope, SharingStarted.Eagerly, null)
+
+    /**
+     * #163: the ACTIVE host's notification settings (Settings › Notifications, the applet menu). Null while unknown or
+     * on an older broker, which has none (the app then offers Mute as before).
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val activeNotificationPrefs: StateFlow<NotificationPrefs?> =
+        combine(hostApps, _activeHost) { _, _ -> activeApp() }
+            .distinctUntilChanged()
+            .flatMapLatest { app -> app?.notificationPrefs ?: flowOf(null) }
+            .stateIn(fleetScope, SharingStarted.Eagerly, null)
+
+    /**
+     * #163: every connected host's notification settings, one per host. Rows collect it to redraw when any changes and
+     * read their own host's through [notificationPrefsFor].
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val allNotificationPrefs: StateFlow<List<NotificationPrefs?>> =
+        hostApps.flatMapLatest { apps ->
+            if (apps.isEmpty()) flowOf(emptyList()) else combine(apps.map { it.notificationPrefs }) { it.toList() }
+        }.stateIn(fleetScope, SharingStarted.Eagerly, emptyList())
+
+    /** #163: the notification settings of the host that owns [sessionId]; null on an older broker. */
+    fun notificationPrefsFor(sessionId: String): NotificationPrefs? = appFor(sessionId)?.notificationPrefs?.value
+
+    /** #163: a change to the active host's notification settings; null on success, else why it failed. */
+    suspend fun patchNotificationPrefs(patch: NotificationPrefsPatch): String? =
+        activeApp()?.patchNotificationPrefs(patch) ?: "not connected to this machine"
+
+    /** #163: one session's (or Agent's) own level on its host, or null to follow its group again. */
+    suspend fun setSessionNotifyLevel(sessionId: String, level: NotifyLevel?): String? =
+        appFor(sessionId)?.patchNotificationPrefs(NotificationPrefsPatch(session = mapOf(sessionId to level))) ?: "not connected to this machine"
+
+    /** #163: one of the active host's applets' own level, or null to follow the Applets level again. */
+    suspend fun setAppletNotifyLevel(appletId: String, level: NotifyLevel?): String? =
+        patchNotificationPrefs(NotificationPrefsPatch(applet = mapOf(appletId to level)))
 
     /** Pins or unpins one of the active host's applets; null on success, else the broker's reason. */
     suspend fun pinApplet(name: String, pinned: Boolean): String? = activeApp()?.pinApplet(name, pinned) ?: "not connected to this host"

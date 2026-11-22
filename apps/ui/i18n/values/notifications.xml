@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #163: Settings › Notifications and the Notifications menu on an agent, a session or an applet. -->
+<resources>
+    <string name="notify_level_all">All</string>
+    <string name="notify_level_needs">Needs me</string>
+    <string name="notify_level_off">Off</string>
+    <string name="notify_level_on">On</string>
+    <string name="notify_default">Default · %1$s</string>
+    <string name="notify_default_short">Default</string>
+    <string name="notify_menu">Notifications</string>
+    <string name="notify_menu_ellipsis">Notifications…</string>
+    <string name="notify_open_settings">Notification settings…</string>
+    <string name="notify_off_mark">Notifications off</string>
+    <string name="notify_save_failed">Couldn’t change notifications: %1$s</string>
+    <string name="settings_notify_scope">Your account · on all your devices</string>
+    <string name="settings_notify_lede">What may notify you. Nothing does while you have that chat open on one of your devices.</string>
+    <string name="settings_notify_unavailable">This machine’s supermux can’t choose notifications yet. Update it to use this page.</string>
+    <string name="settings_notify_tip_title">Too many notifications?</string>
+    <string name="settings_notify_tip_text">Sessions can notify you only when they need you: a question or a permission request. Agents stay as they are.</string>
+    <string name="settings_notify_tip_yes">Sessions: Needs me</string>
+    <string name="settings_notify_tip_no">Keep all</string>
+    <string name="settings_notify_agents">Agents</string>
+    <string name="settings_notify_agents_desc">Your always-on named agents.</string>
+    <string name="settings_notify_sessions">Sessions</string>
+    <string name="settings_notify_sessions_desc">Every chat you start in a project.</string>
+    <string name="settings_notify_sessions_none">No session has its own setting.</string>
+    <string name="settings_notify_sessions_add">Set one session…</string>
+    <string name="settings_notify_sessions_hint_pointer">or right-click it ▸ Notifications</string>
+    <string name="settings_notify_sessions_hint_touch">or long-press it ▸ Notifications</string>
+    <string name="settings_notify_applets">Applets</string>
+    <string name="settings_notify_applets_desc">Notices an applet sends you, like a card that needs your answer.</string>
+    <string name="settings_notify_always">Always</string>
+    <string name="settings_notify_needs_you">Always when something needs you</string>
+    <string name="settings_notify_needs_you_desc">A question or permission request stops the agent until you answer. It notifies you even where you chose Off.</string>
+    <string name="settings_notify_notices">Finished work &amp; updates</string>
+    <string name="settings_notify_notices_desc">From supermux itself: a worktree merged or couldn’t be, memory tidied up.</string>
+    <string name="settings_notify_footer">“Needs me” means questions and permission requests.</string>
+    <string name="settings_notify_use_default">Use default</string>
+</resources>

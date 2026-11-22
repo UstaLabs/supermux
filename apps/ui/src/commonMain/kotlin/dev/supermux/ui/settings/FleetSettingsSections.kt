@@ -38,6 +38,8 @@ import dev.supermux.ui.accounts.rememberAccountsActions
 import dev.supermux.ui.settings.pages.VoicePage
 import dev.supermux.ui.settings.pages.WorktreesPage
 import dev.supermux.ui.settings.pages.rememberVoiceSettingsActions
+import dev.supermux.ui.settings.pages.NotificationsPage
+import dev.supermux.ui.settings.pages.rememberNotificationSettingsActions
 
 /**
  * Renders [place] against the fleet's active host. Called from the hub's `content` slot.
@@ -56,6 +58,11 @@ fun FleetSettingsSection(
         SettingsSection.General -> GeneralPage(
             // What these hosts paint when nothing is stored: the system's choice (spec §10.6).
             defaultAppearance = AppearanceMode.SYSTEM,
+            anchor = place.anchor,
+            onAnchorShown = scope.onAnchorShown,
+        )
+        SettingsSection.Notifications -> NotificationsPage(
+            actions = rememberNotificationSettingsActions(fleet),
             anchor = place.anchor,
             onAnchorShown = scope.onAnchorShown,
         )

@@ -14,6 +14,8 @@ import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.settings.MachineSub
 import dev.supermux.ui.settings.SettingsPlace
 import dev.supermux.ui.settings.GLOSSARY_SUB
+import dev.supermux.ui.settings.pages.NotificationsPage
+import dev.supermux.ui.settings.pages.rememberNotificationSettingsActions
 import dev.supermux.ui.settings.pages.CodingPage
 import dev.supermux.ui.settings.pages.GeneralPage
 import dev.supermux.ui.settings.pages.GlossaryPage
@@ -57,6 +59,11 @@ fun DesktopSettingsSection(
         SettingsSection.General -> GeneralPage(
             // Desktop opens dark when nobody has chosen — the same fallback `Main.kt` applies (spec §10.6).
             defaultAppearance = AppearanceMode.DARK,
+            anchor = place.anchor,
+            onAnchorShown = scope.onAnchorShown,
+        )
+        SettingsSection.Notifications -> NotificationsPage(
+            actions = rememberNotificationSettingsActions(host),
             anchor = place.anchor,
             onAnchorShown = scope.onAnchorShown,
         )

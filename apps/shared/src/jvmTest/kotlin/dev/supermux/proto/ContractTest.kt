@@ -29,6 +29,7 @@ class ContractTest {
             "accounts_changed", "account_login_state", "agents_changed", "accounts_settings", "session_state_account", "limit_wait",
             "reply_stream", "reply_stream_thinking", "reply_stream_end", "message_append_live", "activity_append_live", "snapshot_live",
             "proxy_created", "proxy_updated", "proxy_removed", "applets_changed",
+            "notification_prefs", "message_append_alert",
         )
         for (n in names) {
             val frame = json.decodeFromString<ServerFrame>(load(n))
@@ -112,6 +113,7 @@ class ContractTest {
                 is ServerFrame.FsErr -> {}
                 is ServerFrame.ReplyStream -> {}
                 is ServerFrame.ReplyStreamEnd -> {}
+                is ServerFrame.NotificationPrefsChanged -> assertEquals(NotifyLevel.Off, frame.prefs.overrides.session.values.single())
             }
         }
     }

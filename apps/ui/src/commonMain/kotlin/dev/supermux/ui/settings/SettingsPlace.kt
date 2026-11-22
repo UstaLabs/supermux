@@ -93,6 +93,7 @@ fun settingsTitle(place: SettingsPlace, machineName: String? = null, labs: Boole
 /** A section's own name. */
 fun SettingsSection.titleRes(): StringKey = when (this) {
     SettingsSection.General -> Str.settings_section_general
+    SettingsSection.Notifications -> Str.settings_section_notifications
     SettingsSection.KeyboardShortcuts -> Str.settings_section_shortcuts
     SettingsSection.Providers -> Str.settings_section_providers
     SettingsSection.Voice -> Str.settings_section_voice

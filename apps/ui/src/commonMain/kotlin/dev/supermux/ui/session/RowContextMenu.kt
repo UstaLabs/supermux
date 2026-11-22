@@ -1,10 +1,46 @@
 package dev.supermux.ui.session
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
+import dev.supermux.ui.notify.NotifyTarget
+import dev.supermux.ui.notify.NotifyTargetMenu
 
 /** One entry of a row's right-click menu. */
-data class RowContextMenuEntry(val label: String, val onClick: () -> Unit)
+data class RowContextMenuEntry(val label: String, val onClick: () -> Unit) {
+    /** #163: set by [notifications]: choosing the entry opens the Notifications choices for this target at the row. */
+    var notify: NotifyTarget? = null
+        private set
+
+    companion object {
+        /** "Notifications…": opens the agent's, session's or applet's Notifications choices where the row is. */
+        fun notifications(label: String, target: NotifyTarget): RowContextMenuEntry =
+            RowContextMenuEntry(label) {}.also { it.notify = target }
+    }
+}
+
+/**
+ * A right-click context menu around a list row ([PlatformRowContextMenu]); an entry made with
+ * [RowContextMenuEntry.notifications] opens the Notifications choices as a menu at the row (#163).
+ */
+@Composable
+fun RowContextMenu(
+    items: () -> List<RowContextMenuEntry>,
+    content: @Composable () -> Unit,
+) {
+    var notifyFor by remember { mutableStateOf<NotifyTarget?>(null) }
+    Box {
+        PlatformRowContextMenu(
+            items = { items().map { e -> e.notify?.let { t -> RowContextMenuEntry(e.label) { notifyFor = t } } ?: e } },
+            content = content,
+        )
+        notifyFor?.let { NotifyTargetMenu(it, onDismiss = { notifyFor = null }) }
+    }
+}
 
 /**
  * A right-click context menu around a list row.
@@ -15,7 +51,7 @@ data class RowContextMenuEntry(val label: String, val onClick: () -> Unit)
  * exactly as `ContextMenuArea` expects.
  */
 @Composable
-expect fun RowContextMenu(
+expect fun PlatformRowContextMenu(
     items: () -> List<RowContextMenuEntry>,
     content: @Composable () -> Unit,
 )

@@ -86,6 +86,8 @@ internal data class AgentEntry(
     val online: Boolean,
     val muted: Boolean,
     val preview: LogEntry?,
+    /** #163: its notifications are Off: the bell-off mark beside its name. */
+    val notifyOff: Boolean = false,
     /** Quiet for AGENT_DOZE_AFTER_MS (agentDozing): drawn asleep until something happens or it is hovered. */
     val dozing: Boolean = false,
     /** The Agent's own avatar; null draws the default blob. */
@@ -262,8 +264,13 @@ private fun AgentRow(
                         fontWeight = if (a.active || a.unread) FontWeight.SemiBold else FontWeight.Medium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f, fill = !a.notifyOff),
                     )
+                    if (a.notifyOff) {
+                        Spacer(Modifier.width(5.dp))
+                        dev.supermux.ui.notify.NotifyOffMark()
+                        Spacer(Modifier.weight(1f))
+                    }
                     val time = archivedRelTime(a.preview?.ts)
                     if (time.isNotEmpty()) {
                         Spacer(Modifier.width(6.dp))

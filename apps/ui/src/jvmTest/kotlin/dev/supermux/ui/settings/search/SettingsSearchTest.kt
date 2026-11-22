@@ -50,7 +50,7 @@ class SettingsSearchTest {
         val pages = SettingsSearchIndex.filter { it.anchor == null }.map { it.section }
         assertEquals(
             listOf(
-                SettingsSection.General, SettingsSection.KeyboardShortcuts, SettingsSection.Providers,
+                SettingsSection.General, SettingsSection.Notifications, SettingsSection.KeyboardShortcuts, SettingsSection.Providers,
                 SettingsSection.Voice, SettingsSection.Coding, SettingsSection.Memory, SettingsSection.PrivacyLabs,
             ),
             pages,

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #163: Ayarlar › Bildirimler ve bir ajanın, oturumun ya da appletin Bildirimler menüsü. values/notifications.xml ile aynı anahtarlar. -->
+<resources>
+    <string name="notify_level_all">Tümü</string>
+    <string name="notify_level_needs">Bana gerekince</string>
+    <string name="notify_level_off">Kapalı</string>
+    <string name="notify_level_on">Açık</string>
+    <string name="notify_default">Varsayılan · %1$s</string>
+    <string name="notify_default_short">Varsayılan</string>
+    <string name="notify_menu">Bildirimler</string>
+    <string name="notify_menu_ellipsis">Bildirimler…</string>
+    <string name="notify_open_settings">Bildirim ayarları…</string>
+    <string name="notify_off_mark">Bildirimler kapalı</string>
+    <string name="notify_save_failed">Bildirimler değiştirilemedi: %1$s</string>
+    <string name="settings_notify_scope">Hesabınız · tüm cihazlarınızda</string>
+    <string name="settings_notify_lede">Size neyin bildirim gönderebileceği. O sohbet cihazlarınızdan birinde açıkken hiçbir şey bildirim göndermez.</string>
+    <string name="settings_notify_unavailable">Bu makinedeki supermux henüz bildirim seçemiyor. Bu sayfayı kullanmak için güncelleyin.</string>
+    <string name="settings_notify_tip_title">Çok mu bildirim geliyor?</string>
+    <string name="settings_notify_tip_text">Oturumlar size yalnızca sizden bir şey gerektiğinde bildirim gönderebilir: bir soru ya da izin isteği. Ajanlar olduğu gibi kalır.</string>
+    <string name="settings_notify_tip_yes">Oturumlar: Bana gerekince</string>
+    <string name="settings_notify_tip_no">Hepsi kalsın</string>
+    <string name="settings_notify_agents">Ajanlar</string>
+    <string name="settings_notify_agents_desc">Hep açık, adı olan ajanlarınız.</string>
+    <string name="settings_notify_sessions">Oturumlar</string>
+    <string name="settings_notify_sessions_desc">Bir projede başlattığınız her sohbet.</string>
+    <string name="settings_notify_sessions_none">Kendi ayarı olan oturum yok.</string>
+    <string name="settings_notify_sessions_add">Bir oturum için ayarla…</string>
+    <string name="settings_notify_sessions_hint_pointer">ya da sağ tıklayın ▸ Bildirimler</string>
+    <string name="settings_notify_sessions_hint_touch">ya da basılı tutun ▸ Bildirimler</string>
+    <string name="settings_notify_applets">Appletler</string>
+    <string name="settings_notify_applets_desc">Bir appletin size gönderdiği bildirimler; örneğin cevabınızı bekleyen bir kart.</string>
+    <string name="settings_notify_always">Her zaman</string>
+    <string name="settings_notify_needs_you">Sizden bir şey gerektiğinde her zaman</string>
+    <string name="settings_notify_needs_you_desc">Bir soru ya da izin isteği, siz cevap verene kadar ajanı durdurur. Kapalı seçtiğiniz yerde bile size bildirim gönderir.</string>
+    <string name="settings_notify_notices">Biten işler ve güncellemeler</string>
+    <string name="settings_notify_notices_desc">supermux’ın kendisinden: bir worktree birleştirildi ya da birleştirilemedi, hafıza düzenlendi.</string>
+    <string name="settings_notify_footer">“Bana gerekince”, sorular ve izin istekleri demektir.</string>
+    <string name="settings_notify_use_default">Varsayılana dön</string>
+</resources>
