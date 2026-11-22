@@ -1,6 +1,6 @@
 // #163: Settings › Notifications is the person's, kept on the broker: a change on one device is every device's.
 import { afterEach, expect, test } from "bun:test"
-import { mkdtempSync } from "fs"
+import { mkdtempSync, writeFileSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
 import { WebChannel } from "./index"
@@ -16,8 +16,11 @@ async function boot() {
   const db = openDb(":memory:"); runMigrations(db, MIGRATIONS)
   const store = new NotificationPrefsStore(db)
   const devicesFile = join(mkdtempSync(join(tmpdir(), "mux-notif-dev-")), "devices.json")
+  // A served web client, as in production: a route missing from API_PREFIXES would get its index.html.
+  const staticDir = mkdtempSync(join(tmpdir(), "mux-notif-static-"))
+  writeFileSync(join(staticDir, "index.html"), "<!doctype html><html><body>SPA</body></html>")
   channel = new WebChannel({
-    port: 0, devicesFile, publicUrl: "http://localhost", updateChecker: null,
+    port: 0, devicesFile, publicUrl: "http://localhost", updateChecker: null, staticDir,
     getSessionsSnapshot: () => [], getSessionLog: () => [], setMute: () => {}, onSendFromWeb: () => {},
     notificationPrefs: { get: () => store.get("owner"), apply: (patch, by) => store.apply("owner", patch, by) },
   })
