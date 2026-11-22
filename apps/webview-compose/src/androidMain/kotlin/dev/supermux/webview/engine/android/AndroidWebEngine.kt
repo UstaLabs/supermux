@@ -88,6 +88,7 @@ import dev.supermux.webview.WebCookie
 import dev.supermux.webview.WebDialog
 import dev.supermux.webview.WebError
 import dev.supermux.webview.WebProfile
+import dev.supermux.webview.engine.hostsOf
 import dev.supermux.webview.engine.EmbeddingMode
 import dev.supermux.webview.engine.EngineClient
 import dev.supermux.webview.engine.EngineConfig
@@ -752,6 +753,40 @@ internal class AndroidWebEngine(
         } ?: return false
         if (stored) manager.flush()
         return stored
+    }
+
+    /**
+     * From this engine's profile (the process's stores where WebView has no profiles):
+     * - [origins]' cookies, expired by name at their hosts: a host-only cookie and one of the host's own domain go, a
+     *   parent domain's (another site's login) stays, as WebView keeps it under that domain;
+     * - their storage (local storage, IndexedDB…), through WebStorage per origin;
+     * - the HTTP cache whole: WebView can't clear it per origin, and it is only a cache.
+     */
+    override suspend fun clearSiteData(origins: Set<String>): Boolean {
+        if (!usableNow()) return false
+        val manager = cookieManager()
+        for (origin in origins) {
+            val host = hostsOf(setOf(origin)).firstOrNull() ?: continue
+            val names = manager.getCookie(origin).orEmpty().split(';').map { it.substringBefore('=').trim() }.filter { it.isNotEmpty() }.distinct()
+            for (name in names) {
+                for (header in listOf("$name=; Max-Age=0; Path=/", "$name=; Max-Age=0; Path=/; Domain=$host")) {
+                    withTimeoutOrNull(COOKIE_MILLIS) {
+                        suspendCancellableCoroutine<Boolean> { continuation ->
+                            manager.setCookie(origin, header) { ok -> if (continuation.isActive) continuation.resume(ok == true) }
+                        }
+                    }
+                }
+            }
+        }
+        manager.flush()
+        val storage = if (profileName != null && WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
+            WebViewCompat.getProfile(webView).webStorage
+        } else {
+            android.webkit.WebStorage.getInstance()
+        }
+        origins.forEach { storage.deleteOrigin(it) }
+        webView.clearCache(true)
+        return true
     }
 
     /** Debugging is process-wide ([Inspector]): a page whose lease asked for `inspectable` shows in chrome://inspect. */

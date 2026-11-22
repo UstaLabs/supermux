@@ -1479,6 +1479,18 @@ class MacWebEngineTest {
         assertTrue(inspector is InspectorResult.Elsewhere && "Develop" in inspector.hint, "$inspector")
     }
 
+    /** #117: a host's site data goes to the glue as its hosts, done when the glue answers. */
+    @Test fun aHostsSiteDataGoesToTheGlueAsItsHosts() = runTest {
+        val rig = Rig(this)
+        val cleared = async { rig.engine.clearSiteData(setOf("https://H-A.relay.test:8443", "http://192.168.1.5:9898")) }
+        rig.answer("clearSiteData") { GlueEvent.Result(it, true, "true", null) }
+        assertTrue(cleared.await())
+        assertTrue(rig.glue.last("clearSiteData")!!.endsWith(" h-a.relay.test,192.168.1.5"), rig.glue.last("clearSiteData"))
+        val failed = async { rig.engine.clearSiteData(setOf("https://h-a.relay.test")) }
+        rig.answer("clearSiteData") { GlueEvent.Result(it, false, null, null) }
+        assertFalse(failed.await())
+    }
+
     @Test fun afterReleaseTheBrowserOperationsReachNothing() = runTest {
         val rig = Rig(this)
         rig.engine.release()

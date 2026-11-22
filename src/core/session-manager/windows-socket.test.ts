@@ -47,7 +47,7 @@ test.if(windows)("a session is served on its AF_UNIX file AND on its pre-#156 na
 test.if(windows)("on the AF_UNIX file the kernel names the connecting process: a child passes, an unrelated root does not", async () => {
   const verdicts: Array<{ ok: boolean; why?: string; peer?: unknown }> = []
   let root = process.pid
-  const dir = await server({ mode: "enforce", check: async (_id, socket) => { const v = await checkPeer(socket, root); verdicts.push(v); return v } })
+  const dir = await server({ mode: "enforce", check: async (_id, socket) => { const v = await checkPeer(socket, root, { rootSubreaper: false }); verdicts.push(v); return v } })
   const file = localEndpoint(SID, { socketsDir: dir })
   const child = (path: string) => new Promise<number>((res) => {
     const p = spawn(process.execPath, ["-e", `const s=require("net").connect(${JSON.stringify(path)});s.on("connect",()=>s.write(Buffer.from([0,0,0,2,123,125])));setTimeout(()=>process.exit(0),500)`], { stdio: "ignore" })

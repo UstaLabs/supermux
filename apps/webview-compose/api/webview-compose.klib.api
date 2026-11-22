@@ -184,6 +184,7 @@ abstract interface dev.supermux.webview.engine/WebEngine { // dev.supermux.webvi
     open fun requestFocus() // dev.supermux.webview.engine/WebEngine.requestFocus|requestFocus(){}[0]
     open fun setVisible(kotlin/Boolean) // dev.supermux.webview.engine/WebEngine.setVisible|setVisible(kotlin.Boolean){}[0]
     open fun setZoom(kotlin/Float): kotlin/Boolean // dev.supermux.webview.engine/WebEngine.setZoom|setZoom(kotlin.Float){}[0]
+    open suspend fun clearSiteData(kotlin.collections/Set<kotlin/String>): kotlin/Boolean // dev.supermux.webview.engine/WebEngine.clearSiteData|clearSiteData(kotlin.collections.Set<kotlin.String>){}[0]
     open suspend fun find(kotlin/String, kotlin/Boolean): dev.supermux.webview/FindResult? // dev.supermux.webview.engine/WebEngine.find|find(kotlin.String;kotlin.Boolean){}[0]
     open suspend fun setCookie(dev.supermux.webview/WebCookie): kotlin/Boolean // dev.supermux.webview.engine/WebEngine.setCookie|setCookie(dev.supermux.webview.WebCookie){}[0]
 }
@@ -1177,6 +1178,7 @@ final class dev.supermux.webview.runtime/WebViewRuntime { // dev.supermux.webvie
     final fun onBackgroundTrim() // dev.supermux.webview.runtime/WebViewRuntime.onBackgroundTrim|onBackgroundTrim(){}[0]
     final fun onMemoryPressure() // dev.supermux.webview.runtime/WebViewRuntime.onMemoryPressure|onMemoryPressure(){}[0]
     final fun onMemoryRecovered() // dev.supermux.webview.runtime/WebViewRuntime.onMemoryRecovered|onMemoryRecovered(){}[0]
+    final suspend fun clearSiteData(dev.supermux.webview/WebProfile, kotlin.collections/Set<kotlin/String>): kotlin/Boolean // dev.supermux.webview.runtime/WebViewRuntime.clearSiteData|clearSiteData(dev.supermux.webview.WebProfile;kotlin.collections.Set<kotlin.String>){}[0]
 
     final object Companion { // dev.supermux.webview.runtime/WebViewRuntime.Companion|null[0]
         final val Default // dev.supermux.webview.runtime/WebViewRuntime.Companion.Default|{}Default[0]

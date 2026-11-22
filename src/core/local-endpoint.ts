@@ -13,6 +13,9 @@ export function safePipeComponent(value: string): string {
  */
 export const MAX_WINDOWS_SOCKET_PATH = 100
 
+/** The id of the operator socket (#156): `supermux` from outside any session, acting as the machine's owner. */
+export const OPERATOR_ENDPOINT_ID = "operator"
+
 /** The named pipe a session used on Windows before #156: still served for agents (and their shims) started before. */
 export function legacyPipeEndpoint(id: string): string {
   return `\\\\.\\pipe\\supermux-session-${safePipeComponent(id)}`

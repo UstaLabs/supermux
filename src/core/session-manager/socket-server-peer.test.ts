@@ -54,3 +54,30 @@ test("enforce, the session's own process: runs; a check that throws lets the op 
   const broken = await setup({ mode: "enforce", check: async () => { throw new Error("ffi missing") } })
   expect((await broken.ask("list_sessions")).value).toBe("ran")
 })
+
+test("the operator socket: a checked caller's ops go to the operator handler with its peer; a refused one gets the reason (#156)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "sm-op-"))
+  let allow = true
+  const handled: Array<{ op: string; pid: number }> = []
+  const server = await startSocketServer({
+    socketsDir: dir,
+    handler: { onRegister: async (m) => ({ name: "s", session_id: m.session_id }), onOutbound: async () => ({ ok: true }), onOrchestration: async () => ({ ok: true }) },
+    operator: {
+      check: async () => (allow ? { ok: true, peer: { pid: 7, uid: 1000 } } : { ok: false, why: 'process 7 is part of session "X"', peer: { pid: 7, uid: 1000 } }),
+      handle: async (op, peer) => { handled.push({ op: op.name, pid: peer.pid }); return { ok: true, value: "owner ran it" } },
+    },
+  })
+  cleanup.push(() => server.close(), () => rmSync(dir, { recursive: true, force: true }))
+  const ask = () => new Promise<any>((res) => {
+    const s = connect(localEndpoint("operator", { socketsDir: dir }))
+    let buf: Buffer = Buffer.alloc(0)
+    s.on("connect", () => s.write(encodeFrame({ kind: "orchestration", call_id: "cli-1", op: { name: "list_sessions", args: {} } })))
+    s.on("data", (c: Buffer) => { buf = Buffer.concat([buf, c]); for (const m of decodeFrames(buf).messages as any[]) if (m.kind === "result") { s.end(); res(m) } })
+  })
+  expect((await ask()).value).toBe("owner ran it")
+  expect(handled).toEqual([{ op: "list_sessions", pid: 7 }])
+  allow = false
+  const refused = await ask()
+  expect(refused.ok).toBe(false)
+  expect(refused.error).toContain('not allowed: process 7 is part of session "X"')
+})

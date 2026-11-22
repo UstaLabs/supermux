@@ -133,6 +133,11 @@ internal object AppletPageModels {
 
     fun of(app: HostStore, name: String): AppletPageModel = models.getOrPut(app to name) { AppletPageModel(app, name) }
 
+    /** Drops [app]'s pages: its host was forgotten. */
+    fun forgetHost(app: HostStore) {
+        models.keys.removeAll { it.first === app }
+    }
+
     /** Drops the pages of hosts this device no longer has (unpaired): nothing of theirs stays reachable. */
     fun keepOnly(apps: Set<HostStore>) {
         models.keys.removeAll { it.first !in apps }
@@ -230,6 +235,24 @@ private fun AppletPageLoader(model: AppletPageModel, onOpenChat: (String) -> Uni
             awaitCancellation()
         } finally {
             detach()
+        }
+    }
+}
+
+/**
+ * As each host is forgotten (unpaired), what the app's web views keep of it goes (#117): its applets' pages and the
+ * runtime's memory of them, and from the shared Browser profile its cookies (the applets' key among them), storage and
+ * cache, at its relay's and direct URL's origins and its last key's. Other sites' logins in Browser tabs stay.
+ */
+@Composable
+fun ForgetUnpairedSites(fleet: FleetStore) {
+    val webViews = LocalAppWebViews.current ?: AppWebViews.app
+    LaunchedEffect(fleet, webViews) {
+        fleet.forgotten.collect { host ->
+            val origins = host.origins + listOfNotNull(host.app?.let { PreviewKeeper.forget(it) })
+            host.app?.let(AppletPageModels::forgetHost)
+            val cleared = webViews.runtime.clearSiteData(BROWSER_PROFILE, origins)
+            println("[AppletPage] forgot host ${host.recordId}: site data of ${origins.size} origin(s) ${if (cleared) "cleared" else "NOT cleared"}")
         }
     }
 }

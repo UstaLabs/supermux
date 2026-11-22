@@ -50,6 +50,8 @@ import kotlinx.serialization.json.put
 public data class FakeEngineBehavior(
     /** Whether [FakeWebEngine.emulateDevice] applies (WebView2's device mode); false as most engines. */
     val emulatesDevices: Boolean = false,
+    /** Whether [FakeWebEngine.clearSiteData] can clear (true as the real engines). */
+    val clearsSiteData: Boolean = true,
     /** Emit [EngineEvent.FirstPaint] during every load, reload and restore. */
     val paintsOnLoad: Boolean = true,
     /** The page's content height in CSS px, reported after load (for WrapContentHeight); null = never reported. */
@@ -366,6 +368,17 @@ public class FakeWebEngine(
         record("cookie:${cookie.name}")
         if (!allowed("setCookie")) return false
         cookieJar += cookie
+        return true
+    }
+
+    /** The origins each [clearSiteData] removed, in order. */
+    public val clearedSites: MutableList<Set<String>> = mutableListOf()
+
+    override suspend fun clearSiteData(origins: Set<String>): Boolean {
+        record("clearSiteData:" + origins.sorted().joinToString(","))
+        if (!behavior.clearsSiteData || !allowed("clearSiteData")) return false
+        clearedSites += origins
+        cookieJar.removeAll { c -> origins.any { o -> o.substringAfter("://").substringBefore(':') == c.url.substringAfter("://").substringBefore('/').substringBefore(':') } }
         return true
     }
 

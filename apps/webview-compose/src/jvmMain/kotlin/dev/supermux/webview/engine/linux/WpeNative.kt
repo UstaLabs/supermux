@@ -173,6 +173,8 @@ internal object WpeNative {
     @JvmStatic external fun frameSeq(view: Long): Long
     @JvmStatic external fun clearData(view: Long, request: Long)
     @JvmStatic external fun setCookie(view: Long, request: Long, url: String, header: String)
+    /** [hosts]' cookies and their sites' other data out of the view's network session; a [DATA_CLEARED] when done. */
+    @JvmStatic external fun clearSite(view: Long, request: Long, hosts: String)
     @JvmStatic external fun answer(view: Long, request: Long, allow: Boolean, text: String?, files: Array<String>?)
 
     /** What the system's clipboard holds, for the pages' pastes ([WpeClipboard]): its text, or null for none. */

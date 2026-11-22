@@ -65,6 +65,20 @@ class LinuxWebEngineResetTest {
         rig.close()
     }
 
+    /** #117: a host's site data goes to the view as its hosts, done when WebKit answers. */
+    @Test fun aHostsSiteDataGoesToTheViewAsItsHosts() = runTest {
+        val rig = EngineRig(this, WebProfile.Named("supermux-browser"))
+        rig.warm()
+        var result: Boolean? = null
+        rig.scope.launch { result = rig.engine.clearSiteData(setOf("https://H-A.relay.test", "http://192.168.1.5:9898")) }
+        val call = rig.view.calls.last { it.startsWith("clearSite") }
+        assertTrue(call.endsWith(" h-a.relay.test,192.168.1.5"), call)
+        assertNull(result, "waiting for WebKit")
+        rig.engine.onEvent(WpeEvent.DataCleared(call.split(' ')[1].toLong(), true))
+        assertEquals(true, result)
+        rig.close()
+    }
+
     @Test fun aDefaultProfileIsNotWiped() = runTest {
         val rig = EngineRig(this, WebProfile.Default)
         rig.warm()

@@ -24,6 +24,9 @@ interface AppletScreens {
 
     /** Host [hostId]'s first pinned applets, loaded ahead so they open at once. */
     @Composable fun Preloads(fleet: FleetStore, hostId: String?)
+
+    /** Wipes what the app's web views keep of each host as it is forgotten (unpaired). */
+    @Composable fun ForgetUnpairedSites(fleet: FleetStore)
 }
 
 val LocalAppletScreens = staticCompositionLocalOf<AppletScreens?> { null }
@@ -48,4 +51,7 @@ object NativeAppletScreens : AppletScreens {
 
     @Composable
     override fun Preloads(fleet: FleetStore, hostId: String?) = dev.supermux.ui.applets.AppletPreloads(fleet, hostId)
+
+    @Composable
+    override fun ForgetUnpairedSites(fleet: FleetStore) = dev.supermux.ui.applets.ForgetUnpairedSites(fleet)
 }

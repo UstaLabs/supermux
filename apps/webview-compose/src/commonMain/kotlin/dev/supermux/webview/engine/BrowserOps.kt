@@ -87,3 +87,44 @@ internal fun cdpCookieSet(json: String?): Boolean {
     val success = answer["success"] as? JsonPrimitive ?: return true
     return success.content != "false"
 }
+
+/** The hosts of [origins] (`scheme://host[:port]`), lowercased and without ports, each once: what the engines clear. */
+internal fun hostsOf(origins: Set<String>): List<String> = origins
+    .mapNotNull { origin ->
+        val authority = origin.substringAfter("://", "").substringBefore('/').substringAfter('@')
+        val host = if (authority.startsWith("[")) authority.substringBefore(']') + "]" else authority.substringBefore(':')
+        host.lowercase().takeIf { it.isNotEmpty() }
+    }
+    .distinct()
+
+/** `Network.getCookies` parameters for [origins] (WebView2): every cookie a request to one of them would carry. */
+internal fun cdpGetCookiesParams(origins: Set<String>): String = buildJsonObject {
+    put("urls", kotlinx.serialization.json.JsonArray(origins.map { JsonPrimitive("$it/") }))
+}.toString()
+
+/**
+ * `Network.deleteCookies` parameters, one per cookie of `Network.getCookies`' answer [json] whose domain is one of
+ * [hosts] (a leading dot aside): a parent domain's cookie, another site's login, isn't among them.
+ */
+internal fun cdpCookiesToDelete(json: String?, hosts: Set<String>): List<String> {
+    val answer = json?.let { runCatching { Json.parseToJsonElement(it) }.getOrNull() } as? JsonObject ?: return emptyList()
+    val cookies = answer["cookies"] as? kotlinx.serialization.json.JsonArray ?: return emptyList()
+    return cookies.mapNotNull { element ->
+        val cookie = element as? JsonObject ?: return@mapNotNull null
+        val name = (cookie["name"] as? JsonPrimitive)?.content ?: return@mapNotNull null
+        val domain = (cookie["domain"] as? JsonPrimitive)?.content ?: return@mapNotNull null
+        val path = (cookie["path"] as? JsonPrimitive)?.content ?: "/"
+        if (domain.lowercase().removePrefix(".") !in hosts) return@mapNotNull null
+        buildJsonObject {
+            put("name", JsonPrimitive(name))
+            put("domain", JsonPrimitive(domain))
+            put("path", JsonPrimitive(path))
+        }.toString()
+    }
+}
+
+/** `Storage.clearDataForOrigin` parameters (WebView2): every storage of [origin] but cookies, which go by name. */
+internal fun cdpClearStorageParams(origin: String): String = buildJsonObject {
+    put("origin", JsonPrimitive(origin))
+    put("storageTypes", JsonPrimitive("local_storage,indexeddb,cache_storage,service_workers,file_systems,websql,shader_cache"))
+}.toString()
