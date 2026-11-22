@@ -183,6 +183,10 @@ fun AppletPage(app: HostStore, name: String, modifier: Modifier = Modifier, onOp
             WebView(state, Modifier.fillMaxSize(), settings = model.settings, client = client, activation = Activation.Eager)
         }
         model.problem?.let { AppletMessage(it, Modifier.background(cs.background)) }
+        // A page that couldn't load says why, never a blank window (#117: a direct-http host the platform refused).
+        appletLoadFailure(state.error)?.let { reason ->
+            AppletMessage(localized(Str.applets_window_load_failed, reason), Modifier.background(cs.background))
+        }
         // No engine can show pages here (on Android: a System WebView too old for the engine's needs): say so, never a
         // blank window. Why is the log's.
         (state.phase as? WebViewPhase.Unavailable)?.let { unavailable ->
@@ -317,6 +321,16 @@ private suspend fun askAnswer(app: HostStore, name: String, params: kotlinx.seri
             onFailure = { e -> refusal(e.message ?: "the message didn't go") },
         )
     }
+}
+
+/**
+ * Why the page couldn't load, in the engine's words, or null when it loaded or the server answered (an HTTP error
+ * status is a page of the broker's own, shown as it is).
+ */
+internal fun appletLoadFailure(error: dev.supermux.webview.WebError?): String? = when (error) {
+    is dev.supermux.webview.WebError.Network -> error.description.trim().trimEnd('.') + "."
+    is dev.supermux.webview.WebError.Certificate -> error.description.trim().trimEnd('.') + "."
+    else -> null
 }
 
 /** A sentence in the middle of the window: why the applet can't show. */
