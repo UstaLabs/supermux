@@ -323,7 +323,8 @@ private fun ItemList(modifier: Modifier = Modifier, content: @Composable () -> U
 private fun SessionItem(s: SessionInfo, p: NotificationPrefs, last: Boolean, onPick: (NotifyLevel?) -> Unit) {
     ItemRow(
         title = s.name,
-        subtitle = s.workdir.trimEnd('/').substringAfterLast('/') + (s.session_branch?.let { " · $it" } ?: ""),
+        // The project's folder, not the chat's worktree (a worktree's folder is a random id).
+        subtitle = (s.repo_root ?: s.workdir).trimEnd('/').substringAfterLast('/') + (s.session_branch?.let { " · $it" } ?: ""),
         item = p.sessionItem(s.id, agent = false)!!,
         tag = "notify_item_${s.id}",
         last = last,
