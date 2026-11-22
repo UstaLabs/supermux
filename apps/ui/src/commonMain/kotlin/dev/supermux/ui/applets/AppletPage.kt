@@ -252,7 +252,7 @@ fun ForgetUnpairedSites(fleet: FleetStore) {
             val origins = host.origins + listOfNotNull(host.app?.let { PreviewKeeper.forget(it) })
             host.app?.let(AppletPageModels::forgetHost)
             val cleared = webViews.runtime.clearSiteData(BROWSER_PROFILE, origins)
-            println("[AppletPage] forgot host ${host.recordId}: site data of ${origins.size} origin(s) ${if (cleared) "cleared" else "NOT cleared"}")
+            println("[AppletPage] forgot host ${host.recordId}: ${origins.size} origin(s), cleared=$cleared") // i18n-ok: a log line, never shown
         }
     }
 }
