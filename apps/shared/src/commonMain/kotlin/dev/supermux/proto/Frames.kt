@@ -835,8 +835,13 @@ sealed interface ServerFrame {
         val errorMessage: String? = null,
     ) : ServerFrame
 
+    /** [alert] (#163): whether the person's notification settings let this reply alert them; null from an older broker. */
     @Serializable @SerialName("message_append")
-    data class MessageAppend(val session: String, val entry: LogEntry) : ServerFrame
+    data class MessageAppend(val session: String, val entry: LogEntry, val alert: Boolean? = null) : ServerFrame
+
+    /** #163: the person's notification settings changed (on any device, or by an older mute path). */
+    @Serializable @SerialName("notification_prefs")
+    data class NotificationPrefsChanged(val prefs: NotificationPrefs) : ServerFrame
 
     /**
      * Card #76: more of a reply (or, `kind` "thinking", of the agent's thinking) while it is written. [at] is the

@@ -439,11 +439,17 @@ fun OverflowMenu(
     // it: an inert-menu host must still carry every action visibly.
     val renameWord = localized(Str.shell_rename)
     val muteWord = localized(if (muted) Str.shell_unmute else Str.shell_mute)
+    // #163: Notifications where the broker has them, in place of Mute.
+    val notifyTarget = dev.supermux.ui.notify.NotifyTarget(session.id, agent = session.role == "personal_assistant")
+    val notifyItem = dev.supermux.ui.notify.notifyItemOrNull(notifyTarget)
+    val notifyCtl = dev.supermux.ui.notify.LocalNotifyControls.current
+    var notifySubmenu by remember { mutableStateOf(false) }
+    val notifyWord = localized(Str.notify_menu_ellipsis)
     val killWord = localized(Str.shell_kill)
     val contextEntries: () -> List<RowContextMenuEntry> = {
         if (!showSessionRows) emptyList() else listOf(
             RowContextMenuEntry(renameWord) { renameText = session.name; showRename = true },
-            RowContextMenuEntry(muteWord) { onToggleMute(!muted) },
+            if (notifyItem != null) RowContextMenuEntry.notifications(notifyWord, notifyTarget) else RowContextMenuEntry(muteWord) { onToggleMute(!muted) },
             RowContextMenuEntry(killWord) { showKill = true },
         )
     }
@@ -516,17 +522,40 @@ fun OverflowMenu(
                         modifier = Modifier.testTag("overflow_rename"),
                         onClick = { expanded = false; renameText = session.name; showRename = true },
                     )
-                    DropdownMenuItem(
-                        text = { Text(muteWord) },
-                        modifier = Modifier.testTag("overflow_mute"),
-                        onClick = { expanded = false; onToggleMute(!muted) },
-                    )
+                    if (notifyItem != null) {
+                        DropdownMenuItem(
+                            text = {
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text(localized(Str.notify_menu))
+                                    Text(dev.supermux.ui.notify.notifyValueWord(notifyItem), color = cs.onSurfaceVariant)
+                                }
+                            },
+                            modifier = Modifier.testTag("overflow_notify"),
+                            onClick = { notifySubmenu = true },
+                        )
+                    } else {
+                        DropdownMenuItem(
+                            text = { Text(muteWord) },
+                            modifier = Modifier.testTag("overflow_mute"),
+                            onClick = { expanded = false; onToggleMute(!muted) },
+                        )
+                    }
                     DropdownMenuItem(
                         text = { Text(killWord, color = cs.error) },
                         modifier = Modifier.testTag("overflow_kill"),
                         onClick = { expanded = false; showKill = true },
                     )
                 }
+            }
+            if (notifyItem != null && notifyCtl != null) {
+                dev.supermux.ui.notify.NotifyLevelMenu(
+                    expanded = notifySubmenu,
+                    onDismiss = { notifySubmenu = false; expanded = false },
+                    item = notifyItem,
+                    tagPrefix = "overflow_notify",
+                    onPick = { notifyCtl.set(notifyTarget, it) },
+                    onOpenSettings = notifyCtl.openSettings,
+                )
             }
             DropdownMenu(
                 expanded = detailSubmenu,

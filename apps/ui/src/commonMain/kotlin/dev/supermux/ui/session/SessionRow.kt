@@ -424,6 +424,10 @@ private fun PointerSessionRow(
     val discardWord = localized(Str.sessions_row_discard)
     val renameWord = localized(Str.shell_rename)
     val muteWord = localized(if (s.mute == true) Str.shell_unmute else Str.shell_mute)
+    // #163: Notifications where its broker has them (and the bell-off mark when Off), else Mute as before.
+    val notifyTarget = dev.supermux.ui.notify.NotifyTarget(s.id, agent = s.role == "personal_assistant")
+    val notifyItem = dev.supermux.ui.notify.notifyItemOrNull(notifyTarget)
+    val notifyWord = localized(Str.notify_menu_ellipsis)
     val moveUpWord = localized(Str.sessions_row_move_up)
     val moveDownWord = localized(Str.sessions_row_move_down)
     val settleWord = localized(Str.sessions_row_settle)
@@ -435,7 +439,7 @@ private fun PointerSessionRow(
         )
         SectionKey.IN_PROGRESS -> buildList {
             add(RowContextMenuEntry(renameWord, onRename))
-            add(RowContextMenuEntry(muteWord, onToggleMute))
+            add(if (notifyItem != null) RowContextMenuEntry.notifications(notifyWord, notifyTarget) else RowContextMenuEntry(muteWord, onToggleMute))
             onMoveUp?.let { add(RowContextMenuEntry(moveUpWord, it)) }
             onMoveDown?.let { add(RowContextMenuEntry(moveDownWord, it)) }
             add(RowContextMenuEntry(settleWord, onKill))
@@ -480,8 +484,13 @@ private fun PointerSessionRow(
                             fontWeight = if (active || hasUnread) FontWeight.Bold else FontWeight.Medium,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.weight(1f, fill = notifyItem?.effective != dev.supermux.proto.NotifyLevel.Off),
                         )
+                        if (notifyItem?.effective == dev.supermux.proto.NotifyLevel.Off) {
+                            Spacer(Modifier.width(5.dp))
+                            dev.supermux.ui.notify.NotifyOffMark()
+                            Spacer(Modifier.weight(1f))
+                        }
                         if (runningAgents > 0) {
                             Spacer(Modifier.width(Space.sm))
                             RunningAgentsTag(runningAgents)

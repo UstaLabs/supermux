@@ -5,7 +5,7 @@ import androidx.compose.foundation.ContextMenuItem
 import androidx.compose.runtime.Composable
 
 @Composable
-actual fun RowContextMenu(
+actual fun PlatformRowContextMenu(
     items: () -> List<RowContextMenuEntry>,
     content: @Composable () -> Unit,
 ) {

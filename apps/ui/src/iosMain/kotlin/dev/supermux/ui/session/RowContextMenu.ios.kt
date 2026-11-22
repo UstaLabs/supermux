@@ -6,7 +6,7 @@ import androidx.compose.runtime.Composable
  *  exactly as on Android. (UIKit's long-press `UIContextMenuInteraction` is a different gesture and
  *  would fight the row's own long-press; a Compose-native version is a later cluster's call.) */
 @Composable
-actual fun RowContextMenu(
+actual fun PlatformRowContextMenu(
     items: () -> List<RowContextMenuEntry>,
     content: @Composable () -> Unit,
 ) {

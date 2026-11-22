@@ -610,7 +610,8 @@ fun SupermuxApp(
                 sessionName = target?.name ?: event.session,
                 selectedId = ui.selectedId,
                 windowFocused = appForeground,
-                muted = target?.mute ?: false,
+                // #163: the broker's own decision when it sends one; an older broker's mute otherwise.
+                muted = event.alert?.let { !it } ?: (target?.mute ?: false),
             )
         }
     }
@@ -895,7 +896,27 @@ fun SupermuxApp(
             dev.supermux.ui.platform.FolderOpener(manager, { sid -> isLocalHost(fleet.hostIdOfSession(sid)) }, shellPlatform::openFolder)
         }
     }
+    // #163: every row's Notifications menu and bell-off mark read the person's settings through this; a host whose
+    // broker has none gives null items, and those rows keep Mute.
+    val allNotify by fleet.allNotificationPrefs.collectAsState()
+    val activeNotify by fleet.activeNotificationPrefs.collectAsState()
+    val notifyScope = rememberCoroutineScope()
+    val notifyControls = remember(allNotify, activeNotify) {
+        dev.supermux.ui.notify.NotifyControls(
+            prefsForSession = { id -> fleet.notificationPrefsFor(id) },
+            appletPrefs = activeNotify,
+            set = { t, level ->
+                notifyScope.launch {
+                    val why = if (t.applet) fleet.setAppletNotifyLevel(t.id, level) else fleet.setSessionNotifyLevel(t.id, level)
+                    if (why != null) notices.show(localized(Str.notify_save_failed, why))
+                }
+            },
+            openSettings = { ui.openSettings(dev.supermux.ui.nav.SettingsSection.Notifications) },
+            version = allNotify,
+        )
+    }
     CompositionLocalProvider(
+        dev.supermux.ui.notify.LocalNotifyControls provides notifyControls,
         dev.supermux.ui.platform.LocalFolderOpener provides folderOpener,
         dev.supermux.ui.chat.LocalChatSearch provides chatSearch,
         dev.supermux.ui.retain.LocalRetainedUiState provides fleet.retainedUi,

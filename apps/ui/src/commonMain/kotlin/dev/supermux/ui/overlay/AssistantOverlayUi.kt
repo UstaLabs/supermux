@@ -323,10 +323,17 @@ fun OverlayReplies(fleet: FleetStore, agent: OverlayAgent?, ui: OverlayUiState) 
             ui.reveal = null
         }
     }
+    // #163: the bubble is a notification too, so it follows the person's settings. A stored reply carries the broker's
+    // own decision (`alert`); text still being written has none yet, so it pops up only while this Agent's replies
+    // all notify (its level is All).
+    val allNotify by fleet.allNotificationPrefs.collectAsState()
+    val quietWhileWriting = remember(allNotify, id) {
+        fleet.notificationPrefsFor(id)?.let { it.sessionLevel(id, agent = true) != dev.supermux.proto.NotifyLevel.All } ?: false
+    }
     // A reply being written: the bubble shows it, and follows it as more is written.
     LaunchedEffect(writing?.stream, writing?.text) {
         val w = writing ?: return@LaunchedEffect
-        if (ui.chatOpen || seen) return@LaunchedEffect
+        if (ui.chatOpen || seen || quietWhileWriting) return@LaunchedEffect
         val shown = ui.reply
         if (shown?.stream == w.stream) {
             if (!shown.done) ui.reply = shown.copy(text = w.text)
@@ -342,6 +349,11 @@ fun OverlayReplies(fleet: FleetStore, agent: OverlayAgent?, ui: OverlayUiState) 
     LaunchedEffect(id) {
         fleet.agentReplies.collect { ev ->
             if (ev.session != id || ui.chatOpen || seenNow) return@collect
+            if (ev.alert == false) {
+                // Kept quiet by the settings: nothing pops up (and a bubble of its live text, if any, goes).
+                if (ev.entry.stream != null && ui.reply?.stream == ev.entry.stream) { ui.reply = null; ui.reveal = null }
+                return@collect
+            }
             val text = ev.entry.text.orEmpty()
             if (messagePlainText(text).isEmpty()) return@collect
             val continues = ev.entry.stream != null && ui.reply?.stream == ev.entry.stream && ui.reveal?.finished == false

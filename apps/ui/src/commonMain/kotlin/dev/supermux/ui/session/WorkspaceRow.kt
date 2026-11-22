@@ -84,9 +84,11 @@ fun workspaceRowContextLabels(
     selectable: Boolean = false,
     /** The workspace's folder is on this computer: "Show folder", shown as "Show in Finder" and its kin (#149). */
     showFolder: Boolean = false,
+    /** #163: its broker has notification settings: "Notifications" replaces Mute / Unmute. */
+    notifications: Boolean = false,
 ): List<String> = buildList {
     add("Rename")
-    add(if (mute) "Unmute" else "Mute")
+    add(if (notifications) "Notifications" else if (mute) "Unmute" else "Mute")
     if (canMarkRead) add("Mark as read")
     if (selectable) add("Select")
     if (showFolder) add("Show folder")
@@ -123,6 +125,8 @@ fun WorkspaceRow(
     onRowBounds: ((androidx.compose.ui.geometry.Rect) -> Unit)? = null,
     host: HostView? = null,
     mute: Boolean = false,
+    /** #163: the primary chat, whose Notifications the menu offers (instead of Mute) where its broker has them. */
+    notify: dev.supermux.ui.notify.NotifyTarget? = null,
     /** Applied outside the clickable so the drag handle can own the gesture. */
     dragModifier: Modifier = Modifier,
     interactionSource: MutableInteractionSource? = null,
@@ -185,18 +189,23 @@ fun WorkspaceRow(
         "Rename" to localized(Str.shell_rename),
         "Mute" to localized(Str.shell_mute),
         "Unmute" to localized(Str.shell_unmute),
+        "Notifications" to localized(Str.notify_menu_ellipsis),
         "Mark as read" to localized(Str.sessions_row_mark_read),
         "Select" to localized(Str.sessions_row_select),
         "Archive" to localized(Str.sessions_row_archive),
     ) + listOfNotNull(folder?.let { "Show folder" to it.label })
     val newChatWord = localized(Str.sessions_row_new_chat_here)
+    val notifyItem = notify?.let { dev.supermux.ui.notify.notifyItemOrNull(it) }
     val labels = workspaceRowContextLabels(
         mute = mute,
+        notifications = notifyItem != null,
         canMarkRead = onMarkRead != null && model.unread,
         selectable = onSelect != null,
         showFolder = folder != null,
     )
-    fun entry(label: String) = RowContextMenuEntry(words[label] ?: label) {
+    fun entry(label: String) = if (label == "Notifications" && notify != null) {
+        RowContextMenuEntry.notifications(words.getValue(label), notify)
+    } else RowContextMenuEntry(words[label] ?: label) {
         when (label) {
             "Rename" -> onRename()
             "Mute", "Unmute" -> onToggleMute()
@@ -262,8 +271,13 @@ fun WorkspaceRow(
                                     fontWeight = if (active || unread) FontWeight.SemiBold else FontWeight.Normal,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f),
+                                    modifier = Modifier.weight(1f, fill = notifyItem?.effective != dev.supermux.proto.NotifyLevel.Off),
                                 )
+                                if (notifyItem?.effective == dev.supermux.proto.NotifyLevel.Off) {
+                                    Spacer(Modifier.width(5.dp))
+                                    dev.supermux.ui.notify.NotifyOffMark()
+                                    Spacer(Modifier.weight(1f))
+                                }
                                 if (trailing.isNotEmpty()) {
                                     Spacer(Modifier.width(8.dp))
                                     // Capped: a long project tag would otherwise push the ⋮ off the row.
@@ -510,12 +524,15 @@ internal fun RowOverflowMenu(
     val newChatWord = localized(Str.sessions_row_new_chat_here)
     Box {
         var menu by remember { mutableStateOf(false) }
+        // #163: "Notifications…" opens its choices as a second menu at the same ⋮.
+        var notifyFor by remember { mutableStateOf<dev.supermux.ui.notify.NotifyTarget?>(null) }
         Icon(
             imageVector = Icons.Filled.MoreVert,
             contentDescription = localized(Str.shell_more),
             tint = cs.onSurfaceVariant,
             modifier = Modifier.size(20.dp).clickable { menu = true },
         )
+        notifyFor?.let { dev.supermux.ui.notify.NotifyTargetMenu(it, onDismiss = { notifyFor = null }) }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             for (entry in entries) {
                 DropdownMenuItem(
@@ -527,7 +544,8 @@ internal fun RowOverflowMenu(
                     },
                     onClick = {
                         menu = false
-                        entry.onClick()
+                        val target = entry.notify
+                        if (target != null) notifyFor = target else entry.onClick()
                     },
                 )
             }

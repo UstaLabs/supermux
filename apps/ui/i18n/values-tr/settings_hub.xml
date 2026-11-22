@@ -10,6 +10,7 @@
     <string name="settings_section_voice">Ses</string>
     <string name="settings_section_coding">Kodlama</string>
     <string name="settings_section_memory">Hafıza</string>
+    <string name="settings_section_notifications">Bildirimler</string>
     <string name="settings_section_privacy_labs">Gizlilik ve deneyler</string>
     <string name="settings_section_privacy">Gizlilik</string>
     <string name="settings_section_machine">Makine</string>
@@ -24,6 +25,7 @@
     <string name="settings_desc_voice">Dikte, diller, sesli okuma</string>
     <string name="settings_desc_coding">GitHub ve GitLab, düzenleyici, kod zekâsı</string>
     <string name="settings_desc_memory">Ajanların öğrendiklerinin her gece düzenlenmesi</string>
+    <string name="settings_desc_notifications">Ajanlar, oturumlar ve appletler</string>
     <string name="settings_desc_privacy_labs">Kullanım istatistikleri, deneyler</string>
     <string name="settings_desc_privacy">Kullanım istatistikleri</string>
     <string name="settings_desc_machine">Durum, cihazlar, paylaşılan bağlantılar, disk</string>

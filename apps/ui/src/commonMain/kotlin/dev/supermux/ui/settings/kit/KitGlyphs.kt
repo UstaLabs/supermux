@@ -104,6 +104,9 @@ object KitGlyphs {
     val Phone by lazy { glyph("phone", rect(7f, 3f, 10f, 18f, 2f), "M11 17.5h2") }
     val More by lazy { glyph("more", circle(6f, 12f, 1f), circle(12f, 12f, 1f), circle(18f, 12f, 1f)) }
     val Lock by lazy { glyph("lock", rect(5.5f, 10.5f, 13f, 9.5f, 1.5f), "M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5") }
+    /** Notifications (#163): a bell; [BellOff] is the same bell struck through (a chat or applet set to Off). */
+    val Bell by lazy { glyph("bell", "M6.5 16.5V11a5.5 5.5 0 0 1 11 0v5.5l1.5 2h-14z", "M10 20.5a2.2 2.2 0 0 0 4 0") }
+    val BellOff by lazy { glyph("bellOff", "M6.5 16.5V11a5.5 5.5 0 0 1 11 0v5.5l1.5 2h-14z", "M10 20.5a2.2 2.2 0 0 0 4 0", "M4 4l16 16") }
     val Qr by lazy {
         glyph(
             "qr", rect(4f, 4f, 6f, 6f, 1f), rect(14f, 4f, 6f, 6f, 1f), rect(4f, 14f, 6f, 6f, 1f),
@@ -116,7 +119,7 @@ object KitGlyphs {
         listOf(
             Back, Chevron, ChevronDown, Close, Plus, Check, Search, Sliders, Keyboard, Mic, Terminal, Download,
             Laptop, Server, Bot, Memory, Branch, Code, Devices, Link, Tree, Shield, Flask, Restart, Disk, Gauge,
-            Trash, External, Globe, User, Key, Phone, Qr, Warn, Copy, More, Lock, Forward, ChevronUp, Minus, Camera, Rotate, Touch, Target,
+            Trash, External, Globe, User, Key, Phone, Qr, Warn, Copy, More, Lock, Forward, ChevronUp, Minus, Camera, Rotate, Touch, Target, Bell, BellOff,
         )
     }
 

@@ -24,6 +24,9 @@ interface AppletScreens {
 
     /** Host [hostId]'s first pinned applets, loaded ahead so they open at once. */
     @Composable fun Preloads(fleet: FleetStore, hostId: String?)
+
+    /** An applet's icon (#163: Settings › Notifications lists applets; the web build, which shows none, links no icon code). */
+    @Composable fun Icon(a: dev.supermux.net.AppletDto, size: androidx.compose.ui.unit.Dp, load: suspend (dev.supermux.net.AppletDto) -> ByteArray?)
 }
 
 val LocalAppletScreens = staticCompositionLocalOf<AppletScreens?> { null }
@@ -48,4 +51,8 @@ object NativeAppletScreens : AppletScreens {
 
     @Composable
     override fun Preloads(fleet: FleetStore, hostId: String?) = dev.supermux.ui.applets.AppletPreloads(fleet, hostId)
+
+    @Composable
+    override fun Icon(a: dev.supermux.net.AppletDto, size: androidx.compose.ui.unit.Dp, load: suspend (dev.supermux.net.AppletDto) -> ByteArray?) =
+        AppletIcon(a, size, load)
 }

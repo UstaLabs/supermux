@@ -6,7 +6,7 @@ import androidx.compose.runtime.Composable
 import dev.supermux.ui.widgets.PointerAnchoredMenu
 
 @Composable
-actual fun RowContextMenu(
+actual fun PlatformRowContextMenu(
     items: () -> List<RowContextMenuEntry>,
     content: @Composable () -> Unit,
 ) {
