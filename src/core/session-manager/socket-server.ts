@@ -1,5 +1,5 @@
 import { connect, createServer, Server, Socket } from "net"
-import { mkdirSync, chmodSync, existsSync, statSync, unlinkSync } from "fs"
+import { mkdirSync, chmodSync, existsSync, unlinkSync } from "fs"
 import { host } from "@supermux/platform"
 import { isFileEndpoint, legacyPipeEndpoint, localEndpoint, OPERATOR_ENDPOINT_ID } from "../local-endpoint"
 import { encodeFrame, decodeFrames } from "../../shared/frame-codec"
@@ -13,7 +13,8 @@ const log = makeLogger("socket-server")
 /** Is a broker already serving sockets dir `socketsDir`? Its operator socket answers there. */
 export async function socketsDirInUse(socketsDir: string): Promise<boolean> {
   const endpoint = localEndpoint(OPERATOR_ENDPOINT_ID, { socketsDir })
-  return isFileEndpoint(endpoint) && existsSync(endpoint) && await answers(endpoint)
+  // Probed by connecting, never by stat: Windows can't stat an AF_UNIX socket file.
+  return isFileEndpoint(endpoint) && await answers(endpoint)
 }
 
 /** Does a server answer at socket file `endpoint`? (A file left by a broker that exited refuses.) */
@@ -273,14 +274,15 @@ export async function startSocketServer(opts: {
     const operator = opts.operator
     const endpoint = localEndpoint(OPERATOR_ENDPOINT_ID, { socketsDir: opts.socketsDir })
     const file = isFileEndpoint(endpoint)
-    let ino: number | undefined
     const serve = () => createServer((socket) => {
-      const verdict = operator.check(socket).catch((err: unknown) => ({ ok: false, why: `the check failed: ${err instanceof Error ? err.message : String(err)}`, peer: null }))
+      // Checked on the first frame, so a bare connect (the heal's own probe) costs nothing.
+      let verdict: ReturnType<typeof operator.check> | undefined
       let buf: Buffer = Buffer.alloc(0)
       socket.on("data", async (chunk: Buffer) => {
         buf = Buffer.concat([buf, chunk])
         const { messages, rest } = decodeFrames(buf)
         buf = rest
+        verdict ??= operator.check(socket).catch((err: unknown) => ({ ok: false, why: `the check failed: ${err instanceof Error ? err.message : String(err)}`, peer: null }))
         const v = await verdict
         if (!v.ok) log.warn("operator_denied", { pid: v.peer?.pid, uid: v.peer?.uid, why: v.why })
         for (const raw of messages) {
@@ -294,9 +296,9 @@ export async function startSocketServer(opts: {
       socket.on("error", () => {})
     })
     const listen = async (): Promise<boolean> => {
-      if (file && existsSync(endpoint)) {
+      if (file) {
         if (await answers(endpoint)) { log.warn("operator_socket_in_use", { endpoint }); return false }
-        unlinkSync(endpoint)
+        try { unlinkSync(endpoint) } catch { /* none left behind */ }
       }
       const srv = serve()
       await new Promise<void>((res, rej) => {
@@ -304,20 +306,19 @@ export async function startSocketServer(opts: {
         srv.listen(endpoint, () => { if (file) files.makePrivate(endpoint); res() })
       })
       operatorServer = srv
-      ino = file ? statSync(endpoint).ino : undefined
       return true
     }
     await listen()
+    // The heal: connect to the file (never stat it: Windows can't stat an AF_UNIX socket file, EACCES). Nothing answers
+    // (the file is gone, or left by a broker that exited): bind again. Something answers (this broker, or another live
+    // one that took it): leave it.
     if (file) {
       let healing = false
       healTimer = setInterval(async () => {
         if (healing) return
-        let now: number | undefined
-        try { now = statSync(endpoint).ino } catch { /* gone */ }
-        if (operatorServer && now === ino) return
         healing = true
         try {
-          if (now !== undefined && await answers(endpoint)) return
+          if (await answers(endpoint)) return
           const old = operatorServer
           operatorServer = undefined
           if (old) await new Promise<void>((r) => old.close(() => r()))

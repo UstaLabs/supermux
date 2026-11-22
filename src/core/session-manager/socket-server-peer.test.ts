@@ -2,7 +2,6 @@
 import { afterEach, expect, test } from "bun:test"
 import { connect } from "node:net"
 import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs"
-import { host } from "@supermux/platform"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { encodeFrame, decodeFrames } from "../../shared/frame-codec"
@@ -12,8 +11,11 @@ import { socketsDirInUse, startSocketServer, type PeerAuth } from "./socket-serv
 const cleanup: Array<() => Promise<void> | void> = []
 afterEach(async () => { for (const c of cleanup.splice(0)) await c() })
 
+let n = 0
 async function setup(peerAuth: PeerAuth) {
   const dir = mkdtempSync(join(tmpdir(), "sm-sock-"))
+  // A Windows named pipe (the legacy one each session socket also serves there) is machine-wide: one name per test.
+  const sess = `sess-${process.pid}-${++n}`
   const ops: string[] = []
   const server = await startSocketServer({
     socketsDir: dir, peerAuth,
@@ -23,10 +25,10 @@ async function setup(peerAuth: PeerAuth) {
       onOrchestration: async (m) => { ops.push(m.op.name); return { ok: true, value: "ran" } },
     },
   })
-  await server.bind("sess")
+  await server.bind(sess)
   cleanup.push(() => server.close(), () => rmSync(dir, { recursive: true, force: true }))
   const ask = (name: string) => new Promise<any>((res, rej) => {
-    const s = connect(localEndpoint("sess", { socketsDir: dir }))
+    const s = connect(localEndpoint(sess, { socketsDir: dir }))
     let buf: Buffer = Buffer.alloc(0)
     s.on("error", rej)
     s.on("connect", () => s.write(encodeFrame({ kind: "orchestration", call_id: "cli-1", op: { name, args: {} } })))
@@ -99,7 +101,7 @@ const askOperator = (dir: string) => new Promise<any>((res) => {
   s.on("data", (c: Buffer) => { buf = Buffer.concat([buf, c]); for (const m of decodeFrames(buf).messages as any[]) if (m.kind === "result") { s.end(); res(m) } })
 })
 
-test.skipIf(host.os() === "win32")("a second broker on the same sockets dir never takes the operator socket from a live one (#156, 2026-11-22)", async () => {
+test("a second broker on the same sockets dir never takes the operator socket from a live one (#156, 2026-11-22)", async () => {
   const dir = mkdtempSync(join(tmpdir(), "sm-op2-"))
   const live = await operatorServer(dir, "live")
   const second = await operatorServer(dir, "second")
@@ -109,7 +111,7 @@ test.skipIf(host.os() === "win32")("a second broker on the same sockets dir neve
   expect((await askOperator(dir)).value).toBe("live")
 })
 
-test.skipIf(host.os() === "win32")("the live broker binds its operator socket again when the file is gone or left behind by a broker that exited (#156)", async () => {
+test("the live broker binds its operator socket again when the file is gone or left behind by a broker that exited (#156)", async () => {
   const dir = mkdtempSync(join(tmpdir(), "sm-op3-"))
   const live = await operatorServer(dir, "live", 30)
   cleanup.push(() => live.close(), () => rmSync(dir, { recursive: true, force: true }))
@@ -122,7 +124,7 @@ test.skipIf(host.os() === "win32")("the live broker binds its operator socket ag
   await until(async () => (await askOperator(dir)).value === "live")
 })
 
-test.skipIf(host.os() === "win32")("a sockets dir is in use while a broker answers there, not when its file is left behind (the boot guard, #156)", async () => {
+test("a sockets dir is in use while a broker answers there, not when its file is left behind (the boot guard, #156)", async () => {
   const dir = mkdtempSync(join(tmpdir(), "sm-op4-"))
   cleanup.push(() => rmSync(dir, { recursive: true, force: true }))
   expect(await socketsDirInUse(dir)).toBe(false)
