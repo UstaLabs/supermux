@@ -249,7 +249,7 @@ fun ForgetUnpairedSites(fleet: FleetStore) {
     val webViews = LocalAppWebViews.current ?: AppWebViews.app
     LaunchedEffect(fleet, webViews) {
         fleet.forgotten.collect { host ->
-            val origins = host.origins + listOfNotNull(host.app?.let(PreviewKeeper::forget))
+            val origins = host.origins + listOfNotNull(host.app?.let { PreviewKeeper.forget(it) })
             host.app?.let(AppletPageModels::forgetHost)
             val cleared = webViews.runtime.clearSiteData(BROWSER_PROFILE, origins)
             println("[AppletPage] forgot host ${host.recordId}: site data of ${origins.size} origin(s) ${if (cleared) "cleared" else "NOT cleared"}")
