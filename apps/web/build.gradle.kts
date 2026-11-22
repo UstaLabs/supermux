@@ -334,7 +334,8 @@ val distDir = layout.buildDirectory.dir("dist/wasmJs/productionExecutable")
 // 2026-11-16 (#157 landing, Muxie): +5 KiB for #157 on top of 9237 (measured 9240 KiB on train12 43830596937).
 // 2026-11-16 (#117 iOS model + offline cache, Muxie): +1 KiB ("Open in new window" × 2, cached applets), measured 9241 KiB on train14 43836099208.
 // 2026-11-17 (#117 preload + visible, Muxie): +1 KiB, measured 9242.x KiB on train13 43978603632 after the preload moved behind the native-only slot (it was 9247).
-val maxGzipBytes = 9243L * 1024
+// 2026-11-22 (#163 notification settings, Muxie): placeholder 9262 KiB; set to measured + 1 at landing.
+val maxGzipBytes = 9262L * 1024
 
 // THE NATIVE EDITOR'S SYNTAX MODULE IS OUTSIDE THAT CEILING, with a ceiling of its own (M5).
 // `supermux-syntax.wasm` is 7.45 MB raw / 2.69 MB gzipped (editor-syntax/native/README.md): counted
