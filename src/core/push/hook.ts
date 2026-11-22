@@ -4,6 +4,7 @@ import type { NativePushSender } from "./native-sender"
 import { channelOf, isWebChat } from "../routing/address"
 import { makeLogger, type Logger } from "../../shared/log"
 import { brokerLang, t, type BrokerLang } from "../i18n/messages"
+import type { PushVerdict } from "./notification-prefs"
 
 const defaultLog = makeLogger("core/push/hook")
 
@@ -31,7 +32,9 @@ export interface FirePushArgs {
   action: OutboundAction
   sessionName: string
   sessionId: string
-  isMuted: (id: string) => boolean
+  /** #163: the person's notification settings for this chat's reply (decidePush). Replaces [isMuted] when given. */
+  decide?: () => PushVerdict
+  isMuted?: (id: string) => boolean
   /** True for hidden internal RPC workers — they must never push to the user. */
   isInternal?: (id: string) => boolean
   /** All subscribed web device names — the fan-out target. */
@@ -66,16 +69,18 @@ export async function firePushForReply(args: FirePushArgs): Promise<void> {
     log.info("push_decision", { session: sessionName, sessionId, outcome, ...extra })
   if (!isWebChat(action.chat_id)) return decided("other_channel", { channel: channelOf(action.chat_id) })   // telegram/whatsapp notify on their own
   if (isInternal?.(sessionId)) return decided("internal") // hidden RPC worker → never push
-  if (isMuted(sessionId)) return decided("muted")
   const present = presentOn(sessionId)
   if (present.length > 0) return decided("present", { presentOn: present }) // present on some device → no push anywhere
+  const verdict = args.decide?.()
+  if (verdict && !verdict.send) return decided("settings", { rule: verdict.rule, level: verdict.level })
+  if (!verdict && isMuted?.(sessionId)) return decided("muted")
   const web = devices()
   const native = args.nativeSender && args.nativeDevices ? args.nativeDevices() : []
   if (web.length === 0 && native.length === 0) {
     log.warn("push_decision", { session: sessionName, sessionId, outcome: "no_targets" })
     return
   }
-  decided("sent", { web, native })
+  decided("sent", { web, native, ...(verdict ? { rule: verdict.rule } : {}) })
   const payload: PushPayload = {
     session: sessionName,
     sessionId,
@@ -104,6 +109,8 @@ export async function firePushForRequest(args: {
   sessionId: string
   request: { requestId: string; kind: "permission" | "question"; title: string; body: string; options: { id: string; label: string }[]; reason?: string }
   isInternal?: (id: string) => boolean
+  /** #163: the person's notification settings for a blocking request; it breaks through Off unless they turned that off. */
+  decide?: () => PushVerdict
   devices: () => string[]
   presentOn: (sessionId: string) => string[]
   nativeSender?: NativePushSender
@@ -118,13 +125,15 @@ export async function firePushForRequest(args: {
   if (args.isInternal?.(sessionId)) return decided("internal")
   const present = args.presentOn(sessionId)
   if (present.length > 0) return decided("present", { presentOn: present })
+  const verdict = args.decide?.()
+  if (verdict && !verdict.send) return decided("settings", { rule: verdict.rule, level: verdict.level })
   const web = args.devices()
   const native = args.nativeSender && args.nativeDevices ? args.nativeDevices() : []
   if (web.length === 0 && native.length === 0) {
     log.warn("push_decision", { session: sessionName, sessionId, trigger: "request", outcome: "no_targets" })
     return
   }
-  decided("sent", { web, native })
+  decided("sent", { web, native, ...(verdict ? { rule: verdict.rule } : {}) })
   const firstLine = request.body.split("\n").find((line) => line.trim())?.trim() ?? ""
   // The agent's own reason (a safety check) says more than the command does.
   const text = `${request.title} ${request.reason ? `(${request.reason}) ` : ""}${firstLine}`.trim()
@@ -141,8 +150,8 @@ export async function firePushForRequest(args: {
 }
 
 /**
- * A broker notice for the user rather than a session's reply (a finished
- * worktree, the nightly curator): no mute or presence gate, every device.
+ * A notice for the user rather than a session's reply (a finished worktree, the nightly curator, an applet's
+ * supermux.notify): no presence gate, every device; [decide] applies the person's notification settings (#163).
  */
 export async function firePushToAll(args: {
   sender: PushSender
@@ -155,17 +164,24 @@ export async function firePushToAll(args: {
   langOf?: (device: string) => string | undefined
   /** #123: the notice in a language. Web devices get it in theirs, native ones in English; absent → payload.text. */
   textFor?: (lang: BrokerLang) => string
+  /** #163: the person's notification settings (an applet's notice, a supermux notice). Absent: always sent. */
+  decide?: () => PushVerdict
   log?: Logger
 }): Promise<void> {
   const log = args.log ?? defaultLog
+  const subject = { session: args.payload.session, ...(args.payload.sessionId ? { sessionId: args.payload.sessionId } : {}), trigger: args.trigger }
+  const verdict = args.decide?.()
+  if (verdict && !verdict.send) {
+    log.info("push_decision", { ...subject, outcome: "settings", rule: verdict.rule, level: verdict.level })
+    return
+  }
   const web = args.devices()
   const native = args.nativeSender && args.nativeDevices ? args.nativeDevices() : []
-  const subject = { session: args.payload.session, ...(args.payload.sessionId ? { sessionId: args.payload.sessionId } : {}), trigger: args.trigger }
   if (web.length === 0 && native.length === 0) {
     log.warn("push_decision", { ...subject, outcome: "no_targets" })
     return
   }
-  log.info("push_decision", { ...subject, outcome: "sent", web, native })
+  log.info("push_decision", { ...subject, outcome: "sent", web, native, ...(verdict ? { rule: verdict.rule } : {}) })
   const textFor = args.textFor
   const worded = (lang: BrokerLang): PushPayload => (textFor ? { ...args.payload, text: textFor(lang) } : args.payload)
   for (const device of web) await args.sender.sendToDevice(device, worded(brokerLang(args.langOf?.(device))))

@@ -126,15 +126,15 @@ Backups: nightly automatic (about two weeks kept), plus \`backup\`. They are pla
 \`info\`. To get data back, copy back only what is missing from a backup into data/; never overwrite live data
 with a whole backup (everything added since would be lost), and never edit a backup.
 
-Page API: include <script src="_supermux/api.js"></script> (the template has it; _supermux/ is reserved), then supermux.notify(title, body) (a push to
-their devices), supermux.agent.ask(text) and supermux.save(blob, name) (these two only in supermux's applet
+Page API: include <script src="_supermux/api.js"></script> (the template has it; _supermux/ is reserved), then supermux.notify(title, body, {needsYou}) (a push
+to their devices; needsYou: true when it waits on them, so it still reaches someone who only wants what needs them), supermux.agent.ask(text) and supermux.save(blob, name) (these two only in supermux's applet
 window, after a click). Each returns a promise of {ok, reason}.
 Showing fresh data: supermux keeps an applet's page alive. Pinned applets are loaded ahead in the background, and a
 closed window's page is kept, so opening the applet shows the page as it was, at once, with no reload. Refresh your
 data when the page is shown: document.addEventListener("visibilitychange", () => { if (document.visibilityState
 === "visible") refresh() }). It turns "visible" each time its window opens.
 Notify the user from a server or job: POST $SUPERMUX_URL/applet-api/notify with header
-X-Supermux-Applet-Token: $SUPERMUX_APPLET_TOKEN and {"title": "…", "body": "…"} (a push to their devices).
+X-Supermux-Applet-Token: $SUPERMUX_APPLET_TOKEN and {"title": "…", "body": "…", "needsYou": false} (a push to their devices).
 Phone widget: the "widget" path (a file in public/, or your server's route) answers
 {"value": "3", "label": "open", "lines": ["2 waiting for testing"]}; supermux re-reads it every 15 minutes.
 After a change, POST $SUPERMUX_URL/applet-api/widget with the same header so widgets update now.
