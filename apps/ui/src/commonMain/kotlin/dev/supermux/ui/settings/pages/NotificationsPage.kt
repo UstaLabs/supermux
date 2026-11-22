@@ -57,7 +57,6 @@ import dev.supermux.ui.notify.notifyChoices
 import dev.supermux.ui.notify.res
 import dev.supermux.ui.notify.sessionItem
 import dev.supermux.ui.session.AgentAvatar
-import dev.supermux.ui.session.AppletIcon
 import dev.supermux.ui.session.AvatarRigView
 import dev.supermux.ui.session.rememberAgentAvatars
 import dev.supermux.ui.settings.SettingsPlace
@@ -278,7 +277,9 @@ private fun NotificationRows(actions: NotificationSettingsActions, p: Notificati
             description = localized(Str.settings_notify_applets_desc),
             optionTag = { "notify_applets_${it.wire}" },
         )
-        if (list.isNotEmpty()) {
+        // Each applet only where this app shows applets (not the web build until #114): its icon is native-only code.
+        val appletScreens = dev.supermux.ui.session.LocalAppletScreens.current
+        if (list.isNotEmpty() && appletScreens != null) {
             ItemList {
                 list.forEachIndexed { i, a ->
                     ItemRow(
@@ -286,7 +287,7 @@ private fun NotificationRows(actions: NotificationSettingsActions, p: Notificati
                         item = p.appletItem(a.id)!!,
                         tag = "notify_item_${a.id}",
                         last = i == list.lastIndex,
-                        leading = { AppletIcon(a, 22.dp, actions.loadAppletIcon) },
+                        leading = { appletScreens.Icon(a, 22.dp, actions.loadAppletIcon) },
                         onPick = { send(NotificationPrefsPatch(applet = mapOf(a.id to it))) },
                     )
                 }

@@ -37,7 +37,12 @@ class NotificationsPageTest {
     )
 
     @Test fun groups_items_and_switches_send_patches() = runComposeUiTest {
-        setPlatformContent { NotificationsPage(actions) }
+        // A host that shows applets (the web build provides no applet screens, and lists none here).
+        setPlatformContent {
+            androidx.compose.runtime.CompositionLocalProvider(dev.supermux.ui.session.LocalAppletScreens provides dev.supermux.ui.session.NativeAppletScreens) {
+                NotificationsPage(actions)
+            }
+        }
         onNodeWithText("Your account · on all your devices").assertIsDisplayed()
         onNodeWithTag("notify_sessions_off").performScrollTo().performClick()
         waitForIdle()
@@ -76,6 +81,12 @@ class NotificationsPageTest {
         waitForIdle()
         assertEquals(NotificationPrefsPatch(sessions = NotifyLevel.Needs, showTip = false), sent.last())
         onNodeWithTag("notify_tip").assertDoesNotExist()
+    }
+
+    @Test fun without_applet_screens_the_applets_group_shows_but_no_applet_is_listed() = runComposeUiTest {
+        setPlatformContent { NotificationsPage(actions) }
+        onNodeWithTag("notify_applets_off").performScrollTo().assertIsDisplayed()
+        onNodeWithTag("notify_item_a1").assertDoesNotExist()
     }
 
     @Test fun an_older_broker_says_so() = runComposeUiTest {
