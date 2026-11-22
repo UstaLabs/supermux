@@ -149,7 +149,8 @@ export interface AppletRouteDeps {
 /**
  * The page API an applet includes with `<script src="_supermux/api.js"></script>` (relative to its page). It defines
  * `window.supermux`:
- *   notify(title, body)      a push to his devices; plain fetch, so it works in any browser on a paired device
+ *   notify(title, body, {needsYou})  a push to his devices; plain fetch, so it works in any browser on a paired device.
+ *                            needsYou: true marks a notice that waits on him (it gets through "Needs me", #163)
  *   agent.ask(text, {agent}) a message to an agent about this applet; only in supermux's applet window, after a click
  *   save(blob | url, name)   saves a file through supermux's downloads; only in supermux's applet window
  *   openChat(sessionId)      shows a chat agent.ask answered with (its "Sent to …" link); supermux's window only
@@ -161,9 +162,9 @@ export const SUPERMUX_API_JS = `(function () {
   function fail(reason) { return Promise.resolve({ ok: false, reason: reason }); }
   function answer(r) { return r && r.ok === true ? r : { ok: false, reason: String((r && r.reason) || 'refused') }; }
   function err(e) { return { ok: false, reason: String((e && e.message) || e) }; }
-  function notify(title, body) {
+  function notify(title, body, opts) {
     return fetch('_supermux/notify', { method: 'POST', headers: { 'content-type': 'application/json' }, credentials: 'same-origin',
-      body: JSON.stringify({ title: String(title || ''), body: body == null ? '' : String(body) }) })
+      body: JSON.stringify({ title: String(title || ''), body: body == null ? '' : String(body), needsYou: !!(opts && opts.needsYou) }) })
       .then(function (r) { return r.json().then(function (j) { return r.ok ? { ok: true } : { ok: false, reason: String(j.error || r.status) }; }); }, err);
   }
   function ask(text, opts) {
@@ -202,7 +203,7 @@ async function supermuxApi(req: Request, rest: string, name: string, caller: App
   if (rest === "/notify" && method === "POST") {
     if (caller.kind !== "device") return new Response(JSON.stringify({ error: "only the owner's devices can notify from a page" }), { status: 403, headers: { "content-type": "application/json" } })
     const b = await req.json().catch(() => ({})) as Record<string, unknown>
-    const r = await deps.applets.notify(name, b.title, b.body)
+    const r = await deps.applets.notify(name, b.title, b.body, b.needsYou)
     return new Response(JSON.stringify(r.ok ? { ok: true } : { error: r.error }), { status: r.ok ? 200 : 400, headers: { "content-type": "application/json" } })
   }
   return new Response(JSON.stringify({ error: "no such supermux call" }), { status: 404, headers: { "content-type": "application/json" } })

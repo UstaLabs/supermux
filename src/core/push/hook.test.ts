@@ -259,3 +259,36 @@ test("a prompt is not pushed to a device already showing the session", async () 
   await firePushForRequest(args as any)
   expect(sent).toHaveLength(0)
 })
+
+// #163: every path asks the person's notification settings (decidePush) after presence and internal workers.
+test("a reply the settings keep quiet is logged with the rule that decided, and sent nowhere", async () => {
+  const rec = recorder()
+  const { args, nativeCalls } = baseArgs({ isMuted: undefined, decide: () => ({ send: false, rule: "group", level: "needs" }), log: rec.log })
+  await firePushForReply(args as any)
+  expect(nativeCalls).toEqual([])
+  expect(rec.lines.at(-1)?.extra).toMatchObject({ outcome: "settings", rule: "group", level: "needs" })
+})
+
+test("decide replaces the old mute flag, and presence still wins first", async () => {
+  const sent = baseArgs({ isMuted: () => true, decide: () => ({ send: true, rule: "override", level: "all" }) })
+  await firePushForReply(sent.args as any)
+  expect(sent.nativeCalls).toEqual(["phone"])
+  const rec = recorder()
+  const present = baseArgs({ decide: () => ({ send: true, rule: "group", level: "all" }), presentOn: () => ["mac"], log: rec.log })
+  await firePushForReply(present.args as any)
+  expect(present.nativeCalls).toEqual([])
+  expect(rec.lines.at(-1)?.extra).toMatchObject({ outcome: "present" })
+})
+
+test("a request and a notice obey decide too", async () => {
+  const calls: string[] = []
+  const nativeSender = { sendToDevice: async (d: string) => { calls.push(d); return { ok: true as const } } }
+  const request = { requestId: "r", kind: "permission" as const, title: "Allow", body: "x", options: [] }
+  const common = { sender: { sendToDevice: async () => ({ ok: true as const }) } as any, sessionName: "s", sessionId: "sid", devices: () => [], presentOn: () => [], nativeSender, nativeDevices: () => ["phone"] }
+  await firePushForRequest({ ...common, request, decide: () => ({ send: false, rule: "group", level: "off" }) })
+  await firePushToAll({ ...common, payload: { session: "Issues", text: "t", ts: "" }, trigger: "applet_notify", decide: () => ({ send: false, rule: "override", level: "off" }) })
+  expect(calls).toEqual([])
+  await firePushForRequest({ ...common, request, decide: () => ({ send: true, rule: "breakthrough", level: "off" }) })
+  await firePushToAll({ ...common, payload: { session: "Issues", text: "t", ts: "" }, trigger: "applet_notify" })
+  expect(calls).toEqual(["phone", "phone"])
+})
