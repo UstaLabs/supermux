@@ -7,7 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { encodeFrame, decodeFrames } from "../../shared/frame-codec"
 import { localEndpoint } from "../local-endpoint"
-import { startSocketServer, type PeerAuth } from "./socket-server"
+import { socketsDirInUse, startSocketServer, type PeerAuth } from "./socket-server"
 
 const cleanup: Array<() => Promise<void> | void> = []
 afterEach(async () => { for (const c of cleanup.splice(0)) await c() })
@@ -120,4 +120,15 @@ test.skipIf(host.os() === "win32")("the live broker binds its operator socket ag
   unlinkSync(path)
   writeFileSync(path, "") // a file nothing answers at
   await until(async () => (await askOperator(dir)).value === "live")
+})
+
+test.skipIf(host.os() === "win32")("a sockets dir is in use while a broker answers there, not when its file is left behind (the boot guard, #156)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "sm-op4-"))
+  cleanup.push(() => rmSync(dir, { recursive: true, force: true }))
+  expect(await socketsDirInUse(dir)).toBe(false)
+  const live = await operatorServer(dir, "live")
+  expect(await socketsDirInUse(dir)).toBe(true)
+  await live.close()
+  writeFileSync(localEndpoint("operator", { socketsDir: dir }), "")
+  expect(await socketsDirInUse(dir)).toBe(false)
 })

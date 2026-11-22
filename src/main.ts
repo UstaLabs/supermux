@@ -46,7 +46,7 @@ function proxyWsPayload(entry: ProxyEntry, status: ProxyStatus = "unknown") {
   }
 }
 
-import { startSocketServer } from "./core/session-manager/socket-server"
+import { socketsDirInUse, startSocketServer } from "./core/session-manager/socket-server"
 import { createSupervisor, isDraftSession, reconcileOnStartup } from "./core/session-manager/supervisor"
 import { claimBroker } from "./core/session-manager/broker-instance"
 import { writeStopToken } from "./core/session-manager/stop-token"
@@ -419,6 +419,14 @@ await claimBroker(STATE_DIR, PID_FILE).catch((error: unknown) => {
   process.exit(1)
 })
 process.on("exit", () => releasePidFile(PID_FILE))
+// The sockets dir is claimed too (#156): a broker started inside a session has its own state dir but inherits that
+// session's MUX_SOCKETS_DIR, the live one, and would serve sockets the live broker owns (2026-11-22).
+if (await socketsDirInUse(SOCKETS_DIR)) {
+  const message = `supermux: another broker already serves ${SOCKETS_DIR}. Started from inside a session? Give this one its own MUX_SOCKETS_DIR (or start it with env -i).`
+  log.error("sockets_dir_in_use", { socketsDir: SOCKETS_DIR, stateDir: STATE_DIR })
+  console.error(message)
+  process.exit(1)
+}
 // Windows, Q2: a .mux kept under a POSIX shell's $HOME (shared/paths.ts defaultMuxHome) is said, never moved silently.
 if (MUX_HOME_NOTE) log.warn("mux_home_under_shell_home", { muxHome: MUX_HOME, note: MUX_HOME_NOTE })
 // The per-boot token of the desktop app's graceful stop request (POST /internal/stop): on Windows, where every

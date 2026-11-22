@@ -10,8 +10,14 @@ import { files } from "@supermux/platform"
 
 const log = makeLogger("socket-server")
 
+/** Is a broker already serving sockets dir `socketsDir`? Its operator socket answers there. */
+export async function socketsDirInUse(socketsDir: string): Promise<boolean> {
+  const endpoint = localEndpoint(OPERATOR_ENDPOINT_ID, { socketsDir })
+  return isFileEndpoint(endpoint) && existsSync(endpoint) && await answers(endpoint)
+}
+
 /** Does a server answer at socket file `endpoint`? (A file left by a broker that exited refuses.) */
-function answers(endpoint: string, timeoutMs = 1000): Promise<boolean> {
+export function answers(endpoint: string, timeoutMs = 1000): Promise<boolean> {
   return new Promise((res) => {
     const s = connect(endpoint)
     const done = (ok: boolean) => { clearTimeout(t); s.destroy(); res(ok) }
