@@ -42,6 +42,7 @@ internal interface PageGlue {
 
     /** Puts a cookie in the page's data store; answered by a Result, ok once it's stored. */
     fun setCookie(request: Long, cookie: WebCookie)
+    fun clearSiteData(request: Long, hosts: Array<String>)
 
     /** Runs [script] in the page's own world, or WebKit's default client world; a `RESULT` with its JSON. */
     fun evaluate(request: Long, script: String, pageWorld: Boolean)
@@ -170,6 +171,7 @@ internal class NativePageGlue(override val token: Long, handle: Long) : PageGlue
             cookie.secure, cookie.httpOnly, cookie.sameSite, cookie.maxAgeSeconds ?: -1L,
         )
     }
+    override fun clearSiteData(request: Long, hosts: Array<String>) = live(Unit) { MacGlue.clearSiteData(it, request, hosts) }
     override fun evaluate(request: Long, script: String, pageWorld: Boolean) = live(Unit) { MacGlue.evaluate(it, request, script, pageWorld) }
     override fun deliver(body: String, json: String, target: String, eventName: String) =
         live(Unit) { MacGlue.deliver(it, body, json, target, eventName) }

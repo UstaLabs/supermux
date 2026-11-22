@@ -317,6 +317,14 @@ static void n_set_cookie(JNIEnv *env, jclass c, jlong view, jlong request, jstri
     wv_op_post(op);
 }
 
+static void n_clear_site(JNIEnv *env, jclass c, jlong view, jlong request, jstring hosts)
+{
+    WvOp *op = wv_op_new(WV_OP_CLEAR_SITE, view);
+    op->i[0] = request;
+    op->s[0] = wv_utf8(env, hosts);
+    wv_op_post(op);
+}
+
 static void n_answer(JNIEnv *env, jclass c, jlong view, jlong request, jboolean allow, jstring text, jobjectArray files)
 {
     WvOp *op = wv_op_new(WV_OP_ANSWER, view);
@@ -387,6 +395,7 @@ static const JNINativeMethod methods[] = {
     { "frameSeq", "(J)J", (void *)n_frame_seq },
     { "clearData", "(JJ)V", (void *)n_clear_data },
     { "setCookie", "(JJLjava/lang/String;Ljava/lang/String;)V", (void *)n_set_cookie },
+    { "clearSite", "(JJLjava/lang/String;)V", (void *)n_clear_site },
     { "answer", "(JJZLjava/lang/String;[Ljava/lang/String;)V", (void *)n_answer },
     { "clipboard", "(Ljava/lang/String;)V", (void *)n_clipboard },
     { "download", "(JILjava/lang/String;)V", (void *)n_download },

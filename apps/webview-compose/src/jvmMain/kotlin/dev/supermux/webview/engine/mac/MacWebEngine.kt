@@ -30,6 +30,7 @@ import dev.supermux.webview.WebError
 import dev.supermux.webview.WebOrigin
 import dev.supermux.webview.WebProfile
 import dev.supermux.webview.coverBackgroundOf
+import dev.supermux.webview.engine.hostsOf
 import dev.supermux.webview.engine.EmbeddingMode
 import dev.supermux.webview.engine.EngineClient
 import dev.supermux.webview.engine.EngineConfig
@@ -399,6 +400,13 @@ internal class MacWebEngine(
     override suspend fun setCookie(cookie: WebCookie): Boolean {
         if (released) return false
         val result = request { glue.setCookie(it, cookie) } as? GlueEvent.Result ?: return false
+        return result.ok
+    }
+
+    override suspend fun clearSiteData(origins: Set<String>): Boolean {
+        if (released) return false
+        val hosts = hostsOf(origins).toTypedArray()
+        val result = withTimeoutOrNull(WIPE_MILLIS) { request { glue.clearSiteData(it, hosts) } } as? GlueEvent.Result ?: return false
         return result.ok
     }
 

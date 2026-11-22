@@ -13,6 +13,7 @@ import dev.supermux.work.DownloadPurpose
 import dev.supermux.work.DownloadSource
 import dev.supermux.work.DownloadState
 import dev.supermux.work.DownloadedFile
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.TestScope
@@ -135,6 +136,25 @@ class FleetStoreTest {
         assertEquals(listOf("h2"), s.list().map { it.recordId })
         assertEquals("h2", f.activeHost.value)
         assertTrue(f.hostViews.value.map { it.recordId } == listOf("h2"))
+        f.close()
+    }
+
+    /** #117: a forgotten host is announced with the web origins its pages came from, so the app can wipe them. */
+    @Test fun forgetHostAnnouncesTheOriginsItsPagesCameFrom() = runTest(UnconfinedTestDispatcher()) {
+        val s = store(
+            PairedHost(recordId = "h1", displayName = "A", token = "t", relayUrl = "wss://h-a.relay.supermux.dev/ws", directUrl = "http://192.168.1.5:9898"),
+            PairedHost(recordId = "h2", displayName = "B", token = "t", relayUrl = "https://h-b.relay.supermux.dev"),
+        )
+        val f = fleet(s, this)
+        val app = f.appForRecord("h1")
+        val announced = mutableListOf<FleetStore.ForgottenHost>()
+        val listening = launch { f.forgotten.collect { announced += it } }
+        f.forgetHost("h1")
+        val host = announced.single()
+        assertEquals("h1", host.recordId)
+        assertEquals(setOf("https://h-a.relay.supermux.dev", "http://192.168.1.5:9898"), host.origins)
+        assertTrue(host.app === app, "the host's own store")
+        listening.cancel()
         f.close()
     }
 

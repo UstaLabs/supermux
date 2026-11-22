@@ -71,6 +71,10 @@ internal class FakePageGlue(override val token: Long = 1) : PageGlue {
         calls += "setCookie $request ${cookie.name} ${cookie.path} ${cookie.domain} ${cookie.httpOnly}"
     }
 
+    override fun clearSiteData(request: Long, hosts: Array<String>) {
+        calls += "clearSiteData $request ${hosts.joinToString(",")}"
+    }
+
     override fun evaluate(request: Long, script: String, pageWorld: Boolean) {
         calls += "evaluate $request ${if (pageWorld) "page" else "client"} $script"
     }

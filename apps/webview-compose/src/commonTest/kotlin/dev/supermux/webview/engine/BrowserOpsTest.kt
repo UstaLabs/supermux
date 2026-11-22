@@ -7,6 +7,30 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
 class BrowserOpsTest {
+    @Test fun onlyAHostsOwnCookiesAreDeletedNeverAParentDomains() {
+        val answer = """{"cookies":[
+            {"name":"cmux_preview","domain":"h-a.relay.test","path":"/"},
+            {"name":"own","domain":".h-a.relay.test","path":"/a"},
+            {"name":"login","domain":".relay.test","path":"/"},
+            {"name":"other","domain":"h-b.relay.test","path":"/"}]}"""
+        assertEquals(
+            listOf(
+                """{"name":"cmux_preview","domain":"h-a.relay.test","path":"/"}""",
+                """{"name":"own","domain":".h-a.relay.test","path":"/a"}""",
+            ),
+            cdpCookiesToDelete(answer, setOf("h-a.relay.test")),
+        )
+        assertEquals(emptyList(), cdpCookiesToDelete("not json", setOf("h-a.relay.test")))
+        assertEquals("""{"urls":["https://h-a.relay.test/"]}""", cdpGetCookiesParams(setOf("https://h-a.relay.test")))
+    }
+
+    @Test fun theHostsOfOriginsAreWhatEnginesClear() {
+        assertEquals(
+            listOf("h-a.relay.test", "192.168.1.5", "[::1]"),
+            hostsOf(setOf("https://H-A.relay.test", "http://192.168.1.5:9898", "https://h-a.relay.test:8443", "http://[::1]:80", "nonsense")),
+        )
+    }
+
     private val url = "https://host/p/"
 
     @Test fun aCookieHeaderHasEveryAttributeInOrder() {

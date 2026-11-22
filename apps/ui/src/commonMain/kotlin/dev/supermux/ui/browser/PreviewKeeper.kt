@@ -113,5 +113,11 @@ class PreviewKeeper<C : Any>(
         /** The process's one keeper for [app]'s host. */
         fun of(app: HostStore): PreviewKeeper<PreviewCookieDto> =
             keepers.getOrPut(app) { PreviewKeeper(mint = { app.api.previewToken().cookie }) }
+
+        /** Drops [app]'s keeper (its host was forgotten), and says where its last key was for: its origin, or null. */
+        fun forget(app: HostStore): String? = keepers.remove(app)?.key?.url?.let { url ->
+            val scheme = url.indexOf("://")
+            if (scheme < 0) null else url.indexOf('/', scheme + 3).let { slash -> if (slash < 0) url else url.substring(0, slash) }
+        }
     }
 }

@@ -12,9 +12,9 @@ internal object MacGlue {
      * The ABI this library speaks: `WV_ABI_VERSION` in `native/macos/WVGlue.h`. Change both together. 3: [setBackdrop]. 4:
      * [place]'s window, [syncFrames], [frameRecorded], [testFrameSync]. 5: [createPage]'s floor at a host of the bundles'
      * scheme, [testWebProcess]. 6: [find], [clearFind], [setPageZoom], [setCookie]. 7: [setUnderlay]. 8: downloads ([downloadPolicy], [downloadResponse], [answerDownload], [pauseDownload],
-     * [resumeDownload], [cancelDownload]).
+     * [resumeDownload], [cancelDownload]). 9: [clearSiteData].
      */
-    const val ABI: Int = 8
+    const val ABI: Int = 9
 
     /** The loaded glue's ABI; -1 if it couldn't find [onEvent] when it loaded. */
     @JvmStatic external fun abiVersion(): Int
@@ -104,6 +104,9 @@ internal object MacGlue {
         page: Long, request: Long, name: String, value: String, url: String, path: String, domain: String?,
         secure: Boolean, httpOnly: Boolean, sameSite: String, maxAgeSeconds: Long,
     )
+
+    /** Removes [hosts]' cookies and their sites' other data from the page's store; a [GlueEvent.Result] when done. */
+    @JvmStatic external fun clearSiteData(page: Long, request: Long, hosts: Array<String>)
 
     @JvmStatic external fun evaluate(page: Long, request: Long, script: String, pageWorld: Boolean)
 
