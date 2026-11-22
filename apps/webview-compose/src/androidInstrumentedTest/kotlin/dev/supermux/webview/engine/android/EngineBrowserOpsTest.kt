@@ -49,6 +49,20 @@ class EngineBrowserOpsTest {
         }
     }
 
+    /** #117: a host's cookies go, another site's login stays, in WebView's own store. */
+    @Test fun clearingAnOriginsSiteDataTakesItsCookiesAndKeepsAnotherSites() = TestServer().use { server ->
+        EngineHarness.run {
+            val gone = server.origin
+            val other = gone.replace("127.0.0.1", "localhost")
+            assertTrue(main { setCookie(WebCookie("cmux_preview", "tok123", "$gone/", path = "/", secure = false)) })
+            assertTrue(main { setCookie(WebCookie("login", "keep", "$other/", path = "/", secure = false)) })
+            assertTrue(main { clearSiteData(setOf(gone)) })
+            val manager = android.webkit.CookieManager.getInstance()
+            assertTrue(main { manager.getCookie(gone).orEmpty() }.isEmpty(), "the host's cookie is gone")
+            assertEquals("login=keep", main { manager.getCookie(other) })
+        }
+    }
+
     @Test fun aCookieThatCouldInjectAnAttributeIsRefused() = EngineHarness.run {
         assertFalse(main { setCookie(WebCookie("a", "b; Domain=evil.test", "http://127.0.0.1/", secure = false)) })
     }

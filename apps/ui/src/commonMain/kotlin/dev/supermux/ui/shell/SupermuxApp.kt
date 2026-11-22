@@ -976,6 +976,8 @@ fun SupermuxApp(
                     // Its first pinned applets, loaded ahead where the platform opens applets: they open at once. Through
                     // the native-only screens, so the web app (which shows no applets) doesn't carry the code.
                     appletsActions?.screens?.Preloads(fleet, activeHostId)
+                    // An unpaired host's site data goes from the app's web views, wherever the platform has them.
+                    dev.supermux.ui.session.LocalAppletScreens.current?.ForgetUnpairedSites(fleet)
 
                     // The sidebar, drawn by Home on a wide host and by the Compact list layer.
                     val sidebarList: @Composable (standalone: Boolean, listState: LazyListState?) -> Unit =

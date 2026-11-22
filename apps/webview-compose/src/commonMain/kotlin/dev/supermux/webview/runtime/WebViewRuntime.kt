@@ -8,7 +8,10 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import dev.supermux.webview.WebContent
+import dev.supermux.webview.WebProfile
+import dev.supermux.webview.engine.EngineConfig
 import dev.supermux.webview.engine.WebEngineFactory
+import dev.supermux.webview.engine.WebEngineResult
 import dev.supermux.webview.monotonicClock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -324,7 +327,10 @@ public class WebViewRuntime(public val config: RuntimeConfig = RuntimeConfig.pla
      * uninstalled plugin). States that no view shows now keep what they hold; at logout, use [clear].
      */
     public fun forget(content: WebContent) {
-        val key = content.key
+        forgetKey(content.key)
+    }
+
+    private fun forgetKey(key: String) {
         forgets++
         forgotten.addLast(key)
         if (forgotten.size > FORGETS_KEPT) forgotten.removeFirst()
@@ -332,6 +338,34 @@ public class WebViewRuntime(public val config: RuntimeConfig = RuntimeConfig.pla
         pages.forget(key)
         snapshots.forget(key)
         pagesForgotten()
+    }
+
+    /**
+     * Forgets everything of [origins] (`https://host[:port]`) in [profile], as when the server behind them is gone
+     * (supermux: a host unpaired):
+     * - the runtime's pages of them, in every profile: their page memory, their snapshots and the pages parked live;
+     * - what [profile] keeps of them, through an engine of its own made for it ([WebEngine.clearSiteData]): their
+     *   cookies (never a parent domain's), their storage and their HTTP cache (the profile's whole cache where the
+     *   engine can only clear it whole).
+     * True once the engine says it removed them; false where no engine can.
+     */
+    public suspend fun clearSiteData(profile: WebProfile, origins: Set<String>): Boolean {
+        val wanted = origins.mapNotNull(::originOf).toSet()
+        if (wanted.isEmpty()) return true
+        val keys = (pages.contentKeys() + snapshots.contentKeys() + pool.parkedContentKeys())
+            .filter { key -> urlOfContentKey(key)?.let(::originOf) in wanted }
+            .toSet()
+        for (key in keys) forgetKey(key)
+        val engine = (factory.create(EngineConfig(profile)) as? WebEngineResult.Created)?.engine ?: return false
+        return try {
+            engine.clearSiteData(wanted)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            false
+        } finally {
+            engine.release()
+        }
     }
 
     /**
@@ -374,4 +408,21 @@ public val LocalWebViewRuntime: ProvidableCompositionLocal<WebViewRuntime> =
 @Composable
 public fun ProvideWebViewRuntime(runtime: WebViewRuntime, content: @Composable () -> Unit) {
     CompositionLocalProvider(LocalWebViewRuntime provides runtime, content = content)
+}
+
+/** The URL of a [WebContent.Url]'s content key, or null for other content. */
+internal fun urlOfContentKey(key: String): String? = when {
+    key.startsWith("url:") -> key.removePrefix("url:")
+    key.startsWith("url-headers:") -> key.removePrefix("url-headers:").substringAfter(':')
+    else -> null
+}
+
+/** `scheme://host[:port]` of an http(s) URL or origin, lowercased, without a default port; null for anything else. */
+internal fun originOf(url: String): String? {
+    val scheme = url.substringBefore("://", "").lowercase()
+    if (scheme != "http" && scheme != "https") return null
+    val authority = url.substringAfter("://").substringBefore('/').substringBefore('?').substringBefore('#').substringAfter('@').lowercase()
+    if (authority.isEmpty()) return null
+    val defaultPort = if (scheme == "https") ":443" else ":80"
+    return "$scheme://${authority.removeSuffix(defaultPort)}"
 }

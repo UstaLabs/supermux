@@ -666,6 +666,58 @@ static CGImageRef WVLargestImage(NSImage *image) {
     }];
 }
 
+/**
+ * Removes what the page's store keeps for [hosts]: the cookies whose domain is one of them (a parent domain's stay:
+ * another site's login), then every other kind of data of the sites they belong to. WebKit keeps storage and cache per
+ * site (its registrable domain, or the IP), so that is as fine as it can go: a host under a shared domain clears that
+ * domain's storage and cache, never its cookies.
+ */
+- (void)clearSiteData:(NSArray<NSString *> *)hosts request:(jlong)request {
+    jlong token = _token;
+    if (_released || hosts.count == 0) {
+        WVPost(token, WVEventResult, 0, request, _released ? 0 : 1, 0, 0, nil, nil, nil, nil, nil);
+        return;
+    }
+    WKWebsiteDataStore *store = _webView.configuration.websiteDataStore;
+    NSMutableSet<NSString *> *names = [NSMutableSet set];
+    for (NSString *host in hosts) [names addObject:host.lowercaseString];
+    NSMutableSet<NSString *> *others = [[WKWebsiteDataStore allWebsiteDataTypes] mutableCopy];
+    [others removeObject:WKWebsiteDataTypeCookies];
+    dispatch_group_t group = dispatch_group_create();
+    dispatch_group_enter(group);
+    [store.httpCookieStore getAllCookies:^(NSArray<NSHTTPCookie *> *cookies) {
+        for (NSHTTPCookie *cookie in cookies) {
+            NSString *domain = cookie.domain.lowercaseString;
+            if ([domain hasPrefix:@"."]) domain = [domain substringFromIndex:1];
+            if (![names containsObject:domain]) continue;
+            dispatch_group_enter(group);
+            [store.httpCookieStore deleteCookie:cookie completionHandler:^{ dispatch_group_leave(group); }];
+        }
+        dispatch_group_leave(group);
+    }];
+    dispatch_group_enter(group);
+    [store fetchDataRecordsOfTypes:others completionHandler:^(NSArray<WKWebsiteDataRecord *> *records) {
+        NSMutableArray<WKWebsiteDataRecord *> *theirs = [NSMutableArray array];
+        for (WKWebsiteDataRecord *record in records) {
+            NSString *site = record.displayName.lowercaseString;
+            for (NSString *host in names) {
+                if ([host isEqualToString:site] || [host hasSuffix:[@"." stringByAppendingString:site]]) {
+                    [theirs addObject:record];
+                    break;
+                }
+            }
+        }
+        if (theirs.count == 0) {
+            dispatch_group_leave(group);
+            return;
+        }
+        [store removeDataOfTypes:others forDataRecords:theirs completionHandler:^{ dispatch_group_leave(group); }];
+    }];
+    dispatch_group_notify(group, dispatch_get_main_queue(), ^{
+        WVPost(token, WVEventResult, 0, request, 1, 0, 0, @"true", nil, nil, nil, nil);
+    });
+}
+
 - (void)evaluate:(NSString *)script request:(jlong)request pageWorld:(BOOL)pageWorld {
     jlong token = _token;
     if (_released || !script) {
@@ -1027,6 +1079,22 @@ JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_setCookie(
     if (maxAge >= 0) p[NSHTTPCookieMaximumAge] = [NSString stringWithFormat:@"%lld", (long long)maxAge];
     WVOnMain(NO, ^{
         [page setCookie:p request:request];
+    });
+}
+
+JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_clearSiteData(
+    JNIEnv *env, jclass type, jlong handle, jlong request, jobjectArray hosts) {
+    WVPage *page = WVPageOf(handle);
+    NSMutableArray<NSString *> *names = [NSMutableArray array];
+    jsize count = hosts ? (*env)->GetArrayLength(env, hosts) : 0;
+    for (jsize i = 0; i < count; i++) {
+        jstring host = (jstring)(*env)->GetObjectArrayElement(env, hosts, i);
+        NSString *name = WVString(env, host);
+        if (name.length) [names addObject:name];
+        (*env)->DeleteLocalRef(env, host);
+    }
+    WVOnMain(NO, ^{
+        [page clearSiteData:names request:request];
     });
 }
 

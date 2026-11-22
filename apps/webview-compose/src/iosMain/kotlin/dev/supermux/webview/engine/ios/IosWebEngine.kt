@@ -33,6 +33,7 @@ import dev.supermux.webview.WebProfile
 import dev.supermux.webview.bridge.InputStamp
 import dev.supermux.webview.bridge.UserInputSource
 import dev.supermux.webview.bridge.inputClock
+import dev.supermux.webview.engine.hostsOf
 import dev.supermux.webview.engine.EmbeddingMode
 import dev.supermux.webview.engine.EngineClient
 import dev.supermux.webview.engine.EngineConfig
@@ -78,6 +79,7 @@ import platform.Foundation.NSCharacterSet
 import platform.Foundation.NSData
 import platform.Foundation.NSDate
 import platform.Foundation.NSError
+import platform.Foundation.NSHTTPCookie
 import platform.Foundation.NSHTTPURLResponse
 import platform.Foundation.NSMutableURLRequest
 import platform.Foundation.NSNull
@@ -108,6 +110,9 @@ import platform.WebKit.WKSnapshotConfiguration
 import platform.WebKit.WKUserScript
 import platform.WebKit.WKUserScriptInjectionTime
 import platform.WebKit.WKWebView
+import platform.WebKit.WKWebsiteDataRecord
+import platform.WebKit.WKWebsiteDataStore
+import platform.WebKit.WKWebsiteDataTypeCookies
 import platform.WebKit.WKWebViewConfiguration
 import platform.WebKit.WKContentMode
 import platform.WebKit.WKWebpagePreferences
@@ -491,6 +496,39 @@ internal class IosWebEngine private constructor(
             webView.configuration.websiteDataStore.httpCookieStore.setCookie(httpCookie) { waiter.answer(true) }
         }
     } ?: false
+
+    /**
+     * From the view's data store: the cookies whose domain is one of [origins]' hosts (a parent domain's stay: another
+     * site's login), then every other kind of data of the sites they belong to. WebKit keeps storage and cache per site
+     * (its registrable domain, or the IP): a host under a shared domain clears that domain's storage and cache, never
+     * its cookies.
+     */
+    override suspend fun clearSiteData(origins: Set<String>): Boolean {
+        if (released) return false
+        val hosts = hostsOf(origins).toSet()
+        if (hosts.isEmpty()) return true
+        val store = webView.configuration.websiteDataStore
+        val cookiesGone = awaitWebKit<Boolean> { waiter ->
+            store.httpCookieStore.getAllCookies { all ->
+                val theirs = all.orEmpty().filterIsInstance<NSHTTPCookie>().filter { it.domain.lowercase().removePrefix(".") in hosts }
+                fun delete(i: Int) {
+                    if (i == theirs.size) waiter.answer(true) else store.httpCookieStore.deleteCookie(theirs[i]) { delete(i + 1) }
+                }
+                delete(0)
+            }
+        } ?: return false
+        val others = WKWebsiteDataStore.allWebsiteDataTypes().filterNot { it == WKWebsiteDataTypeCookies }.toSet()
+        val dataGone = awaitWebKit<Boolean> { waiter ->
+            store.fetchDataRecordsOfTypes(others) { records ->
+                val theirs = records.orEmpty().filterIsInstance<WKWebsiteDataRecord>().filter { record ->
+                    val site = record.displayName.lowercase()
+                    hosts.any { it == site || it.endsWith(".$site") }
+                }
+                if (theirs.isEmpty()) waiter.answer(true) else store.removeDataOfTypes(others, forDataRecords = theirs) { waiter.answer(true) }
+            }
+        } ?: return false
+        return cookiesGone && dataGone
+    }
 
     /** WebKit opens its inspector only from Safari on a Mac: an inspectable page (iOS 16.4) is listed in its Develop menu. */
     override fun openInspector(): InspectorResult =

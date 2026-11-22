@@ -506,6 +506,28 @@ class IosWebEngineTest {
         assertEquals(listOf(true, false), client.asked.filterIsInstance<NewWindowRequest>().map { it.isUserGesture })
     }
 
+    /** #117: a host's cookies go, another site's login and a parent domain's stay, in the view's own store. */
+    @Test fun clearingAnOriginsSiteDataTakesItsCookiesAndKeepsAnotherSites() {
+        val engine = engine()
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main)
+        var steps = 0
+        scope.launch {
+            engine.setCookie(dev.supermux.webview.WebCookie("cmux_preview", "t", "https://h-a.relay.test/"))
+            engine.setCookie(dev.supermux.webview.WebCookie("login", "keep", "https://other.test/"))
+            engine.setCookie(dev.supermux.webview.WebCookie("shared", "keep", "https://h-a.relay.test/", domain = ".relay.test"))
+            steps = if (engine.clearSiteData(setOf("https://h-a.relay.test"))) 1 else -1
+        }
+        assertTrue(pumpUntil(10.0) { steps != 0 })
+        assertEquals(1, steps)
+        var names: List<String>? = null
+        engine.webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { all ->
+            names = all.orEmpty().filterIsInstance<platform.Foundation.NSHTTPCookie>().map { it.name }.sorted()
+        }
+        assertTrue(pumpUntil { names != null })
+        assertEquals(listOf("login", "shared"), names)
+        engine.release()
+    }
+
     @Test fun aNewWindowAsksTheClient() {
         val engine = engine()
         val client = RecordingClient()

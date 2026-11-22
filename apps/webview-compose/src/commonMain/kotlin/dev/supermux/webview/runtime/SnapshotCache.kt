@@ -255,6 +255,9 @@ public class SnapshotCache internal constructor(
         decodes.remove(key)?.job?.cancel()
     }
 
+    /** The content keys snapshots are stored for. */
+    internal fun contentKeys(): Set<String> = entries.keys.mapTo(HashSet()) { it.contentKey }
+
     /** Removes every snapshot of the content of [contentKey], in every profile, size, theme and density. */
     internal fun forget(contentKey: String) {
         entries.keys.filter { it.contentKey == contentKey }.forEach(::remove)

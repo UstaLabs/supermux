@@ -399,6 +399,15 @@ class FleetStore(
 
     val hostFilter: Flow<String?> = deps.settings.string(SettingsKeys.HOST_FILTER).map { it?.takeIf(String::isNotBlank) }
 
+    /**
+     * Each host as it is forgotten (unpaired): what its pages were served from, so the app can wipe what its web views
+     * keep of them (#117). [app] is its store, already closed.
+     */
+    class ForgottenHost(val recordId: String, val origins: Set<String>, val app: HostStore?)
+
+    private val _forgotten = kotlinx.coroutines.flow.MutableSharedFlow<ForgottenHost>(extraBufferCapacity = 16)
+    val forgotten: kotlinx.coroutines.flow.SharedFlow<ForgottenHost> = _forgotten
+
     /** The paired fleet as the list/chips render it (identity + reachability + badge slot). */
     private val _hostViews = MutableStateFlow<List<HostView>>(emptyList())
     val hostViews: StateFlow<List<HostView>> = _hostViews.asStateFlow()
@@ -1239,6 +1248,8 @@ class FleetStore(
     /** Forget a host: drop its record/token, close its socket, and prune its cached sessions from
      *  the merged list. */
     fun forgetHost(recordId: String) {
+        val record = store.list().firstOrNull { it.recordId == recordId }
+        val app = conns[recordId]?.app
         publishing { pub ->
             store.remove(recordId)
             sessionsByHost.remove(recordId)
@@ -1263,6 +1274,7 @@ class FleetStore(
         publishing { stageAll(it) }
         // After the host's store is closed (and unbound), so nothing can write its files again.
         deps.media?.let { cache -> fleetScope.launch { cache.removeHost(recordId) } }
+        _forgotten.tryEmit(ForgottenHost(recordId, record?.let(::webOriginsOf).orEmpty(), app))
     }
 
     /**
@@ -2142,6 +2154,17 @@ class FleetStore(
     }.getOrDefault(false)
 
     companion object {
+        /** The http(s) origins [h]'s pages come from: its relay's and its direct URL's (ws → http, wss → https). */
+        fun webOriginsOf(h: PairedHost): Set<String> = listOfNotNull(h.relayUrl, h.directUrl)
+            .filter { it.isNotBlank() }
+            .mapNotNull { url ->
+                val scheme = url.substringBefore("://", "").lowercase()
+                val web = when (scheme) { "wss", "https" -> "https"; "ws", "http" -> "http"; else -> return@mapNotNull null }
+                val authority = url.substringAfter("://").substringBefore('/').substringBefore('?').lowercase()
+                authority.takeIf { it.isNotEmpty() }?.let { "$web://$it" }
+            }
+            .toSet()
+
         /** Transport preference for a paired host: relay first, else the direct/BYO URL (spec §3). */
         fun effectiveUrl(h: PairedHost): String? =
             h.relayUrl?.takeIf { it.isNotBlank() } ?: h.directUrl?.takeIf { it.isNotBlank() }

@@ -384,6 +384,16 @@ public interface WebEngine {
     /** Puts [cookie] in the view's profile, done when this returns true. False when the engine can't. */
     public suspend fun setCookie(cookie: WebCookie): Boolean = false
 
+    /**
+     * Removes what the view's profile keeps for [origins] (`https://host[:port]`), done when this returns true:
+     * - their cookies: those whose domain is one of their hosts, never a parent domain's, so another site's login stays;
+     * - their storage (local and session storage, IndexedDB, Cache Storage, service workers);
+     * - their HTTP cache, or, where the engine can only clear its cache whole, the profile's whole cache (only a cache).
+     * False when the engine can't. [WebViewRuntime.clearSiteData][dev.supermux.webview.runtime.WebViewRuntime.clearSiteData]
+     * is the app's way in.
+     */
+    public suspend fun clearSiteData(origins: Set<String>): Boolean = false
+
     /** Opens the engine's inspector on this page, or says where the user can. */
     public fun openInspector(): InspectorResult = InspectorResult.Unsupported
 
