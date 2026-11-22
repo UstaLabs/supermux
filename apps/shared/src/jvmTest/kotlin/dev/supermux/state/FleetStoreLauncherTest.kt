@@ -192,4 +192,27 @@ class FleetStoreLauncherTest {
         assertEquals("typed offline", f.draft("s1").first())
         f.close()
     }
+
+    // #163: a saved change answers null (success). The fleet's wrappers once turned that null into
+    // "not connected to this machine" with an elvis, so every successful pick showed an error.
+    @Test fun aSavedNotificationChangeIsNotReportedAsAnError() = runTest(UnconfinedTestDispatcher()) {
+        val prefs = """{"agents":"all","sessions":"needs","applets":"on","needsYou":true,"notices":true,"showTip":false,"overrides":{"session":{},"applet":{}}}"""
+        val f = fleet(this, bodyFor = { path ->
+            when (path) {
+                "GET /notifications" -> HttpStatusCode.OK to prefs
+                "PATCH /notifications" -> HttpStatusCode.OK to prefs.replace(""""session":{}""", """"session":{"s1":"off"}""")
+                else -> HttpStatusCode.OK to "{}"
+            }
+        })
+        advanceUntilIdle()
+        f.activeApp()!!.refreshNotificationPrefs()
+        // The load runs on the store's own scope: wait for it on a real dispatcher.
+        withContext(Dispatchers.Default) {
+            kotlinx.coroutines.withTimeout(5_000) { f.activeApp()!!.notificationPrefs.first { it != null } }
+        }
+        assertNull(f.setSessionNotifyLevel("s1", dev.supermux.proto.NotifyLevel.Off))
+        assertNull(f.patchNotificationPrefs(dev.supermux.proto.NotificationPrefsPatch(needsYou = false)))
+        assertEquals(dev.supermux.proto.NotifyLevel.Off, f.activeApp()!!.notificationPrefs.value?.overrides?.session?.get("s1"))
+        f.close()
+    }
 }
