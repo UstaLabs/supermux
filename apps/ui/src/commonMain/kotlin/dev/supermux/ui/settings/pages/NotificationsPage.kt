@@ -325,7 +325,7 @@ private fun SessionItem(s: SessionInfo, p: NotificationPrefs, last: Boolean, onP
     ItemRow(
         title = s.name,
         // The project's folder, not the chat's worktree (a worktree's folder is a random id).
-        subtitle = (s.repo_root ?: s.workdir).trimEnd('/').substringAfterLast('/') + (s.session_branch?.let { " · $it" } ?: ""),
+        subtitle = dev.supermux.fs.pathLeaf(s.repo_root ?: s.workdir) + (s.session_branch?.let { " · $it" } ?: ""),
         item = p.sessionItem(s.id, agent = false)!!,
         tag = "notify_item_${s.id}",
         last = last,
