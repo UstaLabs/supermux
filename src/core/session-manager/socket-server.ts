@@ -1,5 +1,5 @@
-import { createServer, Server, Socket } from "net"
-import { mkdirSync, chmodSync, existsSync, unlinkSync } from "fs"
+import { connect, createServer, Server, Socket } from "net"
+import { mkdirSync, chmodSync, existsSync, statSync, unlinkSync } from "fs"
 import { host } from "@supermux/platform"
 import { isFileEndpoint, legacyPipeEndpoint, localEndpoint, OPERATOR_ENDPOINT_ID } from "../local-endpoint"
 import { encodeFrame, decodeFrames } from "../../shared/frame-codec"
@@ -9,6 +9,23 @@ import { parseSocketFrame, type OrchestrationFrame, type OutboundFrame, type Reg
 import { files } from "@supermux/platform"
 
 const log = makeLogger("socket-server")
+
+/** Is a broker already serving sockets dir `socketsDir`? Its operator socket answers there. */
+export async function socketsDirInUse(socketsDir: string): Promise<boolean> {
+  const endpoint = localEndpoint(OPERATOR_ENDPOINT_ID, { socketsDir })
+  return isFileEndpoint(endpoint) && existsSync(endpoint) && await answers(endpoint)
+}
+
+/** Does a server answer at socket file `endpoint`? (A file left by a broker that exited refuses.) */
+export function answers(endpoint: string, timeoutMs = 1000): Promise<boolean> {
+  return new Promise((res) => {
+    const s = connect(endpoint)
+    const done = (ok: boolean) => { clearTimeout(t); s.destroy(); res(ok) }
+    const t = setTimeout(() => done(false), timeoutMs)
+    s.once("connect", () => done(true))
+    s.once("error", () => done(false))
+  })
+}
 
 export type RegisterReply = { name: string; session_id: string; council_member?: boolean; tools?: ShimTool[] }
 export type OpResult = { ok: boolean; value?: unknown; error?: string }
@@ -94,6 +111,8 @@ export async function startSocketServer(opts: {
     check: (socket: Socket) => Promise<{ ok: boolean; why?: string; peer?: { pid: number; uid: number | null } | null }>
     handle: (op: OrchestrationFrame["op"], peer: { pid: number; uid: number | null }) => Promise<OpResult>
   }
+  /** How often the broker checks that the operator socket file is still its own (tests make it short). */
+  operatorHealMs?: number
 }): Promise<SocketServer> {
   files.mkdirPrivate(opts.socketsDir)
   // #156: Windows moved from named pipes to AF_UNIX files. Agents (and their shims) started before keep reconnecting to
@@ -243,14 +262,19 @@ export async function startSocketServer(opts: {
     socket.on("error", (e) => log.warn("socket_error", { session_id, err: e.message }))
   }
 
-  // #156: the operator socket (one, bound at start).
+  // #156: the operator socket (one, bound at start). A broker started inside a session inherits its MUX_SOCKETS_DIR, so
+  // it shares this file with the live broker: it must never take the file from a broker that answers there (seen
+  // 2026-11-22: a short-lived one unlinked and re-bound it, exited, and left the live broker listening on a path nobody
+  // could reach, so the timers' `supermux msg` failed). And the live broker binds again when its file is gone or
+  // replaced and nothing answers there.
   let operatorServer: Server | undefined
+  let healTimer: ReturnType<typeof setInterval> | undefined
   if (opts.operator) {
     const operator = opts.operator
     const endpoint = localEndpoint(OPERATOR_ENDPOINT_ID, { socketsDir: opts.socketsDir })
     const file = isFileEndpoint(endpoint)
-    if (file && existsSync(endpoint)) unlinkSync(endpoint)
-    operatorServer = createServer((socket) => {
+    let ino: number | undefined
+    const serve = () => createServer((socket) => {
       const verdict = operator.check(socket).catch((err: unknown) => ({ ok: false, why: `the check failed: ${err instanceof Error ? err.message : String(err)}`, peer: null }))
       let buf: Buffer = Buffer.alloc(0)
       socket.on("data", async (chunk: Buffer) => {
@@ -269,10 +293,41 @@ export async function startSocketServer(opts: {
       })
       socket.on("error", () => {})
     })
-    await new Promise<void>((res, rej) => {
-      operatorServer!.once("error", rej)
-      operatorServer!.listen(endpoint, () => { if (file) files.makePrivate(endpoint); res() })
-    })
+    const listen = async (): Promise<boolean> => {
+      if (file && existsSync(endpoint)) {
+        if (await answers(endpoint)) { log.warn("operator_socket_in_use", { endpoint }); return false }
+        unlinkSync(endpoint)
+      }
+      const srv = serve()
+      await new Promise<void>((res, rej) => {
+        srv.once("error", rej)
+        srv.listen(endpoint, () => { if (file) files.makePrivate(endpoint); res() })
+      })
+      operatorServer = srv
+      ino = file ? statSync(endpoint).ino : undefined
+      return true
+    }
+    await listen()
+    if (file) {
+      let healing = false
+      healTimer = setInterval(async () => {
+        if (healing) return
+        let now: number | undefined
+        try { now = statSync(endpoint).ino } catch { /* gone */ }
+        if (operatorServer && now === ino) return
+        healing = true
+        try {
+          if (now !== undefined && await answers(endpoint)) return
+          const old = operatorServer
+          operatorServer = undefined
+          if (old) await new Promise<void>((r) => old.close(() => r()))
+          if (await listen()) log.warn("operator_socket_rebound", { endpoint })
+        } catch (e) {
+          log.warn("operator_socket_rebind_failed", { endpoint, err: e instanceof Error ? e.message : String(e) })
+        } finally { healing = false }
+      }, opts.operatorHealMs ?? 30_000)
+      healTimer.unref?.()
+    }
   }
 
   // Broker side does not pre-bind: a session_id is bound when broker spawns
@@ -299,6 +354,7 @@ export async function startSocketServer(opts: {
       await ensureBound(session_id)
     },
     async close() {
+      if (healTimer) clearInterval(healTimer)
       for (const set of conns.values()) for (const s of set) s.destroy()
       for (const srv of [...servers.values(), ...legacyServers.values(), ...(operatorServer ? [operatorServer] : [])]) await new Promise<void>(r => srv.close(() => r()))
       conns.clear()
