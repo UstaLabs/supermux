@@ -13,6 +13,7 @@ sealed interface UrlTarget {
 
 private val sectionSlugs = mapOf(
     SettingsSection.General to "general",
+    SettingsSection.Notifications to "notifications",
     SettingsSection.KeyboardShortcuts to "shortcuts",
     SettingsSection.Providers to "providers",
     SettingsSection.Voice to "voice",

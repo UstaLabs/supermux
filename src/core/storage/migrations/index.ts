@@ -59,6 +59,7 @@ import m051 from "./051_message_compaction.sql" with { type: "text" }
 import m052 from "./052_push_subscription_lang.sql" with { type: "text" }
 import m053 from "./053_session_source.sql" with { type: "text" }
 import m054 from "./054_applets.sql" with { type: "text" }
+import m055 from "./055_notifications.sql" with { type: "text" }
 
 export const MIGRATIONS: Migration[] = [
   { version: 1, name: "001_init", sql: m001 },
@@ -114,4 +115,5 @@ export const MIGRATIONS: Migration[] = [
   { version: 52, name: "052_push_subscription_lang", sql: m052 },
   { version: 53, name: "053_session_source", sql: m053 },
   { version: 54, name: "054_applets", sql: m054 },
+  { version: 55, name: "055_notifications", sql: m055 },
 ].sort((a, b) => a.version - b.version)

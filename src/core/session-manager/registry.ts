@@ -240,11 +240,24 @@ export class Registry {
     this.sessions.setConnectionStatus(id, connected, last_pong_at)
   }
 
+  /**
+   * Mute from the older paths (an older app's Mute, Telegram /mute, the mute_session tool). Since #163 a muted session
+   * is one whose notifications are Off: [onMuted] carries it into the notification settings.
+   */
   setMuted(id: string, muted: boolean): void {
     const s = this.sessions.getById(id)
     if (!s) throw new Error(`no such session: ${id}`)
     this.sessions.setMuted(id, muted)
+    this.onMuted?.(id, muted)
   }
+
+  /** #163: keeps the old `mute` column in step with a session's notification level, for older apps (no [onMuted]). */
+  mirrorMuted(id: string, muted: boolean): void {
+    if (this.sessions.getById(id)) this.sessions.setMuted(id, muted)
+  }
+
+  /** #163: told when an older path mutes or unmutes a session. */
+  onMuted?: (id: string, muted: boolean) => void
 
   setModel(id: string, model: string | undefined): void {
     const s = this.sessions.getById(id)

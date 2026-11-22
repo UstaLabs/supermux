@@ -39,6 +39,8 @@ import dev.supermux.ui.settings.GitHostingActions
 import dev.supermux.ui.settings.SettingsPlace
 import dev.supermux.ui.settings.SystemSettingsActions
 import dev.supermux.ui.settings.kit.KitAnchorKey
+import dev.supermux.ui.settings.pages.NotificationSettingsActions
+import dev.supermux.ui.settings.pages.NotificationsPage
 import dev.supermux.ui.settings.pages.CodingPage
 import dev.supermux.ui.settings.pages.CuratorSettingsActions
 import dev.supermux.ui.settings.pages.GeneralPage
@@ -158,6 +160,14 @@ class SettingsSearchAnchorsTest {
         val a = place.anchor
         when (place.section) {
             SettingsSection.General -> GeneralPage(anchor = a, cache = cacheOf(SizedStore(1)))
+            SettingsSection.Notifications -> NotificationsPage(
+                NotificationSettingsActions(
+                    prefs = kotlinx.coroutines.flow.MutableStateFlow(dev.supermux.proto.NotificationPrefs()),
+                    sessions = kotlinx.coroutines.flow.MutableStateFlow(emptyList()),
+                    applets = kotlinx.coroutines.flow.MutableStateFlow(emptyList()),
+                ),
+                anchor = a,
+            )
             SettingsSection.KeyboardShortcuts -> KeyboardShortcutsPage(anchor = a)
             SettingsSection.Providers -> ProvidersListHarness(agents, anchor = a)
             SettingsSection.Voice -> VoicePage(voice, anchor = a)

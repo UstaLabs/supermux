@@ -518,6 +518,8 @@ fun SessionListScreen(
     val onRename: (String, String) -> Unit = actions.rename
     val onKill: (String) -> Unit = { id -> actions.kill(id) { onKilled(id) } }
     val onMute: (String, Boolean) -> Unit = actions.setMute
+    // #163: the Notifications menu and the bell-off marks; null on a broker without notification settings (Mute then).
+    val notifyCtl = dev.supermux.ui.notify.LocalNotifyControls.current
     val onResume: (String) -> Unit = { id -> listScope.launch { actions.resume(id) } }
 
     // ── Reorder scopes ────────────────────────────────────────────────────────────────────────
@@ -783,6 +785,7 @@ fun SessionListScreen(
                     onRowBounds = tabDragState?.let { d -> { bounds -> d.registerWorkspace(w.id, bounds) } },
                     host = hostOf(model),
                     mute = primary?.mute == true,
+                    notify = model.primarySessionId?.let { dev.supermux.ui.notify.NotifyTarget(it, agent = primary?.role == "personal_assistant") },
                     dragModifier = dragModifier,
                     interactionSource = rowInteraction,
                     isDragging = isDragging,
@@ -902,6 +905,7 @@ fun SessionListScreen(
             active = if (openWorkspaceByWorkspaceId) w.id == activeId else sid != null && sid == activeId,
             online = s?.status == null || s.status == "active",
             muted = s?.mute == true,
+            notifyOff = sid != null && notifyCtl?.item(dev.supermux.ui.notify.NotifyTarget(sid, agent = true))?.effective == dev.supermux.proto.NotifyLevel.Off,
             preview = sid?.let { lastBySession[it] },
             dozing = !working && !workspaceUnread(w) && agentDozing(sid?.let { lastBySession[it]?.ts }, agentClock),
             rig = sid?.let { agentAvatars[it] },
@@ -918,6 +922,7 @@ fun SessionListScreen(
     val agentDefaultWord = localized(Str.sessions_agents_make_default)
     val muteWord = localized(Str.shell_mute)
     val unmuteWord = localized(Str.shell_unmute)
+    val notifyWord = localized(Str.notify_menu_ellipsis)
     val markReadWord = localized(Str.sessions_row_mark_read)
     val agentArchiveWord = localized(Str.sessions_agents_archive)
     fun agentContextEntries(w: WorkspaceDto): List<RowContextMenuEntry> {
@@ -934,7 +939,12 @@ fun SessionListScreen(
                     add(RowContextMenuEntry(agentDefaultWord) { listScope.launch { a.setDefault(sid) } })
                 }
             }
-            if (sid != null) add(RowContextMenuEntry(if (muted) unmuteWord else muteWord) { onMute(sid, !muted) })
+            if (sid != null) {
+                // #163: Notifications where the broker has them, else Mute as before.
+                val target = dev.supermux.ui.notify.NotifyTarget(sid, agent = true)
+                if (notifyCtl?.item(target) != null) add(RowContextMenuEntry.notifications(notifyWord, target))
+                else add(RowContextMenuEntry(if (muted) unmuteWord else muteWord) { onMute(sid, !muted) })
+            }
             if (workspaceUnread(w)) {
                 add(RowContextMenuEntry(markReadWord) { actions.markRead(batchMarkReadSessionIds(listOf(w), setOf(w.id))) })
             }

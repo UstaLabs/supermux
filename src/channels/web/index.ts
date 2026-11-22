@@ -51,6 +51,7 @@ import type { KeepAwakeSettings } from "../../core/settings/keep-awake-config"
 import { parseKeepAwakeBody } from "../../core/settings/keep-awake-config"
 import { normalizeExistingWorkdir, uniqueKnownWorkdirs } from "../../core/session-manager/workdir-paths"
 import { parseSessionSource, SourceRefused } from "../../core/session-manager/born-asleep"
+import { parsePatch } from "../../core/push/notification-prefs"
 import { branchPrefixSetting, launcherPrefs, OWNER, setBranchPrefixSetting, setLauncherPrefs, type UserPrefs, type WorkIn } from "../../core/settings/user-prefs"
 import { worktreesRoot } from "../../core/worktree/manager"
 
@@ -201,7 +202,7 @@ async function projectFolderName(workdir: string): Promise<string> {
 
 /** How long a read PR/MR is reused (#72): the pane polls while open; gh / glab calls take a second or two. */
 const PR_CACHE_MS = 15_000
-const API_PREFIXES = ["/api", "/ports", "/sessions", "/archived-sessions", "/archived-workspaces", "/projects", "/project-catalog", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/accounts", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views", "/worktrees", "/search", "/html", "/applets"]
+const API_PREFIXES = ["/api", "/ports", "/sessions", "/archived-sessions", "/archived-workspaces", "/projects", "/project-catalog", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/accounts", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views", "/worktrees", "/search", "/html", "/applets", "/notifications"]
 const MAX_CLIENT_LOG_RING = 800
 // randomUUID() shape: version 4, RFC 4122 variant. A client-minted view id must
 // match what the store would have generated itself — it ends up in layout trees
@@ -452,6 +453,13 @@ export interface WebChannelOpts {
   reviewSession?: (id: string) => { workdir: string; repoRoot?: string; baseCommits?: Record<string, string> } | undefined
   /** #152 B4: the user's own choices (the launcher's Local / Worktree per project, the branch prefix). */
   userPrefs?: UserPrefs
+  /** #163: whether a reply from this session may alert the person (decidePush), sent as message_append's `alert`. */
+  replyAlerts?: (sessionId: string) => boolean
+  /** #163: the person's notification settings (GET / PATCH /notifications); [by] is the actor's JSON. */
+  notificationPrefs?: {
+    get: () => import("../../core/push/notification-prefs").NotificationPrefs
+    apply: (patch: import("../../core/push/notification-prefs").NotificationPrefsPatch, by: string) => import("../../core/push/notification-prefs").NotificationPrefs
+  }
   spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; account?: string; worktree?: boolean; baseBranch?: string; inheritFrom?: string; workspaceId?: string; viewId?: string; firstMessage?: string; firstAttachments?: InboundAttachment[]; /** Card #75: the app's own id for the first message (`web-<uuid>`). */ firstMessageId?: string; device?: string; /** Card #75: the app's session-start trace (`x-mux-trace: S…/<req>`). */ perfTrace?: string; /** #152: what the launcher picked, and who asked (JSON). */ source?: import("../../core/session-manager/born-asleep").SessionSource; createdBy?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; repo_root?: string; session_branch?: string }>
   createDraft?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; draftPayload?: { text?: string; attachments?: unknown[] } }) => Promise<{ id: string; name: string; workdir: string; agent: AgentKind }>
   killSession?: (name: string) => Promise<void>
@@ -1034,7 +1042,10 @@ export class WebChannel implements Channel {
     // frame is always addressed. Refuse to send an unaddressed frame.
     if (!ctx) return { ok: false, error: "web send needs the stored entry (no OutboundContext)" }
 
-    this.broadcastToAll({ type: "message_append", session: ctx.sessionId, entry: ctx.entry })
+    // #163: whether the person's notification settings let this reply alert them; the overlay's bubble and the
+    // desktop's own notifications follow it, so every alert is the one decidePush.
+    const alert = this.opts.replyAlerts?.(ctx.sessionId)
+    this.broadcastToAll({ type: "message_append", session: ctx.sessionId, entry: ctx.entry, ...(alert === undefined ? {} : { alert }) })
 
     // No open socket is NOT a failure. The message is already in the transcript,
     // and the client reads it when it connects. The agent keeps running; it is
@@ -1213,7 +1224,7 @@ export class WebChannel implements Channel {
       const v = this.opts.applets.appletForToken(req.headers.get("x-supermux-applet-token") ?? "")
       if (!v) return this.json({ error: "not an applet token" }, 401)
       const b = await req.json().catch(() => ({})) as Record<string, unknown>
-      const r = await this.opts.applets.notify(v.row.name, b.title, b.body)
+      const r = await this.opts.applets.notify(v.row.name, b.title, b.body, b.needsYou)
       return r.ok ? this.json({ ok: true }) : this.json({ error: r.error }, 400)
     }
     // ...and telling supermux its widget summary changed, so phone widgets follow now rather than within 15 minutes.
@@ -4420,6 +4431,19 @@ export class WebChannel implements Channel {
       if (!name) return this.json({ error: "name required" }, 400)
       const r = switchBranch(workdir, name, { create: body.create === true, requireClean: body.requireClean === true })
       return this.json(this.withOpenIn(r, this.branchOwners(id)))
+    }
+    // #163: Settings › Notifications, the person's own (never the device's): every device gets the change at once.
+    if (path === "/notifications" && (method === "GET" || method === "PATCH")) {
+      const np = this.opts.notificationPrefs
+      if (!np) return this.json({ error: "not configured" }, 503)
+      if (method === "GET") return this.json(np.get())
+      const parsed = parsePatch(await req.json().catch(() => null))
+      if (!parsed.ok) return this.json({ error: parsed.error }, 400)
+      const auth = this.authenticate(req)
+      const by = JSON.stringify(auth.ok ? { kind: "device", name: auth.device.name } : { kind: "supermux" })
+      const prefs = np.apply(parsed.patch, by)
+      this.broadcastToAll({ type: "notification_prefs", prefs })
+      return this.json(prefs)
     }
     // #152: Settings › Worktrees' branch prefix, the user's own (never the device's): null = automatic, "" = none.
     if (path === "/settings/branch-prefix" && (method === "GET" || method === "PUT")) {

@@ -61,7 +61,7 @@ export interface AppletServiceDeps {
   /** The broker's own loopback address, given to applet servers and jobs as $SUPERMUX_URL. */
   brokerUrl?: () => string | undefined
   /** Pushes a notice to the owner's devices (supermux.notify). */
-  notify?: (applet: { name: string; title: string }, title: string, body: string) => Promise<void>
+  notify?: (applet: { id: string; name: string; title: string }, title: string, body: string, opts: { needsYou: boolean }) => Promise<void>
   /**
    * supermux.agent.ask: hands [text] to the applet's own chat ([chatId], made when absent or gone) or to the named
    * Agent's; answers which session took it.
@@ -167,13 +167,15 @@ export class AppletService {
   }
 
   /** supermux.notify: a push to the owner's devices, from the applet's page (via the app) or its server and jobs. */
-  async notify(name: string, title: unknown, body: unknown): Promise<Result<{}>> {
+  async notify(name: string, title: unknown, body: unknown, needsYou?: unknown): Promise<Result<{}>> {
     const v = this.get(name)
     if (!v) return { ok: false, error: `no applet named "${name}"` }
     if (typeof title !== "string" || !title.trim()) return { ok: false, error: "title is required" }
     if (body !== undefined && typeof body !== "string") return { ok: false, error: "body must be text" }
+    if (needsYou !== undefined && typeof needsYou !== "boolean") return { ok: false, error: "needsYou must be true or false" }
     if (!this.deps.notify) return { ok: false, error: "this machine can't send notifications" }
-    await this.deps.notify({ name: v.row.name, title: v.row.title }, title.trim().slice(0, 120), (body ?? "").trim().slice(0, 500))
+    // #163: needsYou marks a notice that waits on the person (a card that needs an answer): it gets through "Needs me".
+    await this.deps.notify({ id: v.row.id, name: v.row.name, title: v.row.title }, title.trim().slice(0, 120), (body ?? "").trim().slice(0, 500), { needsYou: needsYou === true })
     // Something happened: its widget's numbers likely moved too.
     void this.refreshWidget(v.row.name)
     return { ok: true }

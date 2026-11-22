@@ -10,6 +10,10 @@
 // reducer stays a faithful subset of AppViewModel's `when (frame)`.
 package dev.supermux.state
 
+import dev.supermux.proto.NotificationPrefsPatch
+
+import dev.supermux.proto.NotificationPrefs
+
 import dev.supermux.ui.isAbsoluteEditorPath
 import dev.supermux.state.AgentReplyEvent
 import dev.supermux.state.StagedUpload
@@ -636,6 +640,38 @@ class HostStore(
     private val _applets = MutableStateFlow<List<AppletDto>?>(null)
     val applets: StateFlow<List<AppletDto>?> = _applets.asStateFlow()
     private var appletsJob: Job? = null
+
+    // ── Notification settings (#163) ──────────────────────────────────────────────────────────
+    // The person's, kept on the broker: fetched at every snapshot, replaced by `notification_prefs` frames (a change on
+    // any device). Null while unknown or on an older broker, which has no such settings (the app then shows Mute).
+    private val _notificationPrefs = MutableStateFlow<NotificationPrefs?>(null)
+    val notificationPrefs: StateFlow<NotificationPrefs?> = _notificationPrefs.asStateFlow()
+    private var notificationPrefsJob: Job? = null
+
+    fun refreshNotificationPrefs() {
+        notificationPrefsJob?.cancel()
+        notificationPrefsJob = stateScope.launch {
+            runApi("notificationPrefs") { api.getNotificationPrefs() }?.let { _notificationPrefs.value = it }
+        }
+    }
+
+    /**
+     * Applies [patch] at once (the page and the menus show it), then keeps what the broker answers. Null on success,
+     * else why it failed; a failure puts the settings back as they were.
+     */
+    suspend fun patchNotificationPrefs(patch: NotificationPrefsPatch): String? {
+        val before = _notificationPrefs.value ?: return "not connected"
+        _notificationPrefs.value = patch.applyTo(before)
+        return try {
+            _notificationPrefs.value = api.patchNotificationPrefs(patch)
+            null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _notificationPrefs.value = before
+            e.message ?: "couldn't save"
+        }
+    }
     /**
      * Each applet's icon as last fetched, by applet id, with the [AppletDto.updatedAt] it was fetched for: served while
      * the host is out of reach, and written to the offline cache with the list (FleetStore.writeSnapshots).
@@ -870,6 +906,7 @@ class HostStore(
                 if (livePinned.isNotEmpty()) sendLivePins()
                 refreshAgentModels()
                 refreshApplets()
+                refreshNotificationPrefs()
                 if (accountsWanted) refreshAccounts()
                 if (!frame.partialLogs.isNullOrEmpty() || !frame.partialExtras.isNullOrEmpty()) prefetchRecentLogs()
                 // Anything may have been archived or resumed while we were away (card #54: this
@@ -889,10 +926,11 @@ class HostStore(
             }
             // A resumed session leaves the archive.
             is ServerFrame.SessionAdded -> if (_archivedSessions.value.any { it.id == frame.session.id }) refreshArchived("resumed")
+            is ServerFrame.NotificationPrefsChanged -> _notificationPrefs.value = frame.prefs
             is ServerFrame.MessageAppend -> {
                 frame.entry.message_id?.let { cardAnswers.value[it]?.complete("") }
                 if (frame.entry.direction == "outbound" && frame.entry.op == "reply") {
-                    _agentReplies.tryEmit(AgentReplyEvent(frame.session, frame.entry))
+                    _agentReplies.tryEmit(AgentReplyEvent(frame.session, frame.entry, frame.alert))
                 }
             }
             is ServerFrame.AgentState -> {

@@ -11,6 +11,7 @@
     <string name="settings_section_voice">Voice</string>
     <string name="settings_section_coding">Coding</string>
     <string name="settings_section_memory">Memory</string>
+    <string name="settings_section_notifications">Notifications</string>
     <string name="settings_section_privacy_labs">Privacy &amp; labs</string>
     <string name="settings_section_privacy">Privacy</string>
     <string name="settings_section_machine">Machine</string>
@@ -25,6 +26,7 @@
     <string name="settings_desc_voice">Dictation, languages, read aloud</string>
     <string name="settings_desc_coding">GitHub &amp; GitLab, editor, code intelligence</string>
     <string name="settings_desc_memory">Nightly tidy-up of what agents learn</string>
+    <string name="settings_desc_notifications">Agents, sessions and applets</string>
     <string name="settings_desc_privacy_labs">Usage statistics, experiments</string>
     <string name="settings_desc_privacy">Usage statistics</string>
     <string name="settings_desc_machine">Status, devices, shared links, disk</string>

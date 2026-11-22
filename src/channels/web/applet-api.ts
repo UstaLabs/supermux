@@ -135,7 +135,7 @@ export async function handleAppletApi(req: Request, opts: { applets: AppletServi
   }
   if (a === "notify" && !b && method === "POST") {
     const p = await body(req)
-    const r = await applets.notify(name, p.title, p.body)
+    const r = await applets.notify(name, p.title, p.body, p.needsYou)
     return r.ok ? json({ ok: true }) : json({ error: r.error }, 400)
   }
   if ((a === "stop" || a === "start") && !b && method === "POST") {

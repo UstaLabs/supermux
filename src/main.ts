@@ -55,7 +55,8 @@ import { ensureWindowId } from "./core/session-manager/window-id"
 import { resumedSessionPid } from "./core/session-manager/resume-pid"
 import { captureBaseCommits, spawnSession as spawnSessionHelper, spawnPA } from "./core/session-manager/spawn-helper"
 import { createAsleep, type CreateAsleepDeps, type SessionSource } from "./core/session-manager/born-asleep"
-import { UserPrefs } from "./core/settings/user-prefs"
+import { OWNER, UserPrefs } from "./core/settings/user-prefs"
+import { NotificationPrefsStore, decidePush, type NotificationPrefs, type PushSource, type PushTrigger } from "./core/push/notification-prefs"
 import { sessionSourceFields } from "./core/session-manager/source-fields"
 import { folderReady } from "./core/session-manager/folder-ready"
 import { SessionChain, deliverOnChain, ensureLiveWith, isLiveWith, type ChainDelivery, type LivenessDeps } from "./core/session-manager/session-chain"
@@ -508,6 +509,19 @@ const reviewStore = new ReviewStore(db)
 const browserCommentStore = new BrowserCommentStore(db)
 const walkthroughStore = new WalkthroughStore(db)
 const settings = new SettingsStore(db)
+// #163: what may notify the person, per account (the same on every device). Every push and the overlay's bubble go
+// through decidePush with it; presence and internal workers are checked before.
+const notificationPrefs = new NotificationPrefsStore(db)
+const sessionPushSource = (id: string): PushSource => ({ kind: "session", id, agent: registry.get(id)?.role === "personal_assistant" })
+const pushVerdict = (source: PushSource, trigger: PushTrigger, needsYou = false) => decidePush(notificationPrefs.get(OWNER), source, trigger, needsYou)
+// An older path muted or unmuted a session: muted is that session's Off; unmuting clears an Off (and only an Off).
+registry.onMuted = (id, muted) => {
+  const cur = notificationPrefs.get(OWNER).overrides.session[id]
+  if (muted && cur !== "off") notificationPrefs.setItem(OWNER, "session", id, "off", '{"kind":"supermux","via":"mute"}')
+  else if (!muted && cur === "off") notificationPrefs.setItem(OWNER, "session", id, null, '{"kind":"supermux","via":"mute"}')
+  else return
+  webChannel?.broadcastToAll({ type: "notification_prefs", prefs: notificationPrefs.get(OWNER) })
+}
 
 // Anonymous product telemetry (TELEMETRY.md). On by default; DO_NOT_TRACK=1, MUX_TELEMETRY=0 or the
 // in-app toggle turn it off. Dev builds send too, tagged env:"dev"; test brokers never send. Created this early because
@@ -1745,7 +1759,7 @@ async function onAssistantMessage(
       dispatchedCount++
       firePushForReply({
         sender: pushSender, action, sessionName, sessionId,
-        isMuted: () => !!registry.get(sessionId)?.mute,
+        decide: () => pushVerdict(sessionPushSource(sessionId), "reply"),
         isInternal: () => !!registry.get(sessionId)?.internal,
         devices: () => pushStore.all().map((s) => s.device),
         langOf: pushLangOf,
@@ -1939,6 +1953,7 @@ function fireFinishPush(sessionName: string, sessionId: string, job: FinishJob):
     textFor: (lang) => brokerText(lang, notice, vars),
     payload: { session: sessionName, sessionId, text: brokerText("en", notice, vars), ts: new Date().toISOString() },
     trigger: "finish",
+    decide: () => pushVerdict({ kind: "supermux" }, "notice"),
   }).catch((err) => log.warn("push_hook_failed", { err: err?.message ?? String(err) }))
 }
 
@@ -2256,6 +2271,7 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
       sender: pushSender, sessionName: session?.name ?? sessionId, sessionId,
       request: { requestId: ev.requestId, kind: ev.requestKind, title: ev.title, body: ev.body, options: ev.options, ...(ev.reason ? { reason: ev.reason } : {}) },
       isInternal: () => !!registry.get(sessionId)?.internal,
+      decide: () => pushVerdict(sessionPushSource(sessionId), "request"),
       devices: () => pushStore.all().map((s) => s.device),
       presentOn: (sid) => viewingTracker.presentDevicesFor(sid),
       nativeSender,
@@ -2442,12 +2458,13 @@ const appletService = new AppletService({
     return { sessionId: chat.id, name: chat.name }
   },
   // supermux.notify: every device, like a broker notice; the applet's title is the sender.
-  notify: async (applet, title, body) => {
+  notify: async (applet, title, body, opts) => {
     await firePushToAll({
       sender: pushSender, nativeSender, nativeDevices,
       devices: () => pushStore.all().map((s) => s.device),
       payload: { session: applet.title, text: body ? `${title}: ${body}` : title, ts: new Date().toISOString(), applet: applet.name },
       trigger: "applet_notify",
+      decide: () => pushVerdict({ kind: "applet", id: applet.id }, "applet", opts.needsYou),
     })
   },
   // No payload: a device showing applets reloads GET /applets (older apps skip the unknown frame).
@@ -3186,6 +3203,22 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     onSendFromWeb: () => {},                                // wired below via webChannel.on('inbound')
     fileStore,
     userPrefs: new UserPrefs(db),
+    replyAlerts: (id) => pushVerdict(sessionPushSource(id), "reply").send,
+    notificationPrefs: {
+      get: () => notificationPrefs.get(OWNER),
+      apply: (patch, by) => {
+        const prefs = notificationPrefs.apply(OWNER, patch, by)
+        // Older apps only know `mute`: a session at Off reads as muted, any other level as not.
+        for (const id of Object.keys(patch.session ?? {})) {
+          const muted = prefs.overrides.session[id] === "off"
+          if (!!registry.get(id)?.mute !== muted) {
+            registry.mirrorMuted(id, muted)
+            webChannel?.broadcastToAll({ type: "session_state", session: id, mute: muted })
+          }
+        }
+        return prefs
+      },
+    },
     htmlPages,
     findCard: (session, id) => messageLog.findCard(session, id),
     pushStore,
@@ -5327,6 +5360,7 @@ const modelRefreshInterval = IS_TEST_BROKER ? undefined : setInterval(() => {
           devices: () => pushStore.all().map((s) => s.device),
           payload: { session: "curator", text, ts: new Date().toISOString() },
           trigger: "curator",
+          decide: () => pushVerdict({ kind: "supermux" }, "notice"),
         })
       },
       reindex: () => { searchStore.rebuildKnowledge() },
