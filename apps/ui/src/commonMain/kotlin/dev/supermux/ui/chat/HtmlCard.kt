@@ -83,8 +83,6 @@ class HtmlCardHost(
 
 val LocalHtmlCards = staticCompositionLocalOf<HtmlCardHost?> { null }
 
-/** The chat's visible height, for a card's cap. Unspecified outside a chat. */
-val LocalChatViewportHeight = compositionLocalOf { Dp.Unspecified }
 
 /** Test-only: told each time a named part of the chat composes ("transcript", "card"), so a test can count recompositions. */
 internal val LocalChatCompositionProbe = staticCompositionLocalOf<((String) -> Unit)?> { null }
@@ -97,12 +95,10 @@ internal val CARD_THEME_VARIABLES: List<String> =
 internal const val CARD_SEND_MAX = 2000
 
 /**
- * A card's share of the chat at rest, and the least its cap is: as the webview sample caps a preview that follows its
- * page (560 dp), so a phone, whose 70 % is about 455 pt, shows a page of up to 560 whole rather than scrolling it
- * inside. Also the cap where the chat's height isn't known.
+ * A card is as tall as its page (#162): no cap of its own, so a long page scrolls with the chat and never inside the
+ * card. The library still bounds a page's reported size (32,000 css px) and what Compose can lay out.
  */
-private const val CARD_MAX_FRACTION = 0.7f
-private val CARD_MAX_FLOOR = 560.dp
+internal val CARD_MAX_HEIGHT: Dp = Dp.Infinity
 
 /** A card's height before its page reports, when the broker measured none. */
 private val CARD_DEFAULT_HEIGHT = 280.dp
@@ -187,10 +183,6 @@ internal const val CARD_TOUCH_EVENT = "touch"
 /** Whether a [CARD_TOUCH_EVENT] asks for the card to be a pane: `{pane: true}` and nothing else. */
 internal fun cardWantsPane(data: JsonElement): Boolean =
     ((data as? JsonObject)?.get("pane") as? JsonPrimitive)?.let { !it.isString && it.content == "true" } == true
-
-/** A card's cap for a chat of resting height [viewport]: 70 % of it, and never under 560 dp. */
-internal fun cardMaxHeight(viewport: Dp): Dp =
-    if (viewport == Dp.Unspecified) CARD_MAX_FLOOR else (viewport * CARD_MAX_FRACTION).coerceAtLeast(CARD_MAX_FLOOR)
 
 /**
  * The surface hints of a card's view (the webview sample's). An embed: a drag that starts on the page scrolls the chat
@@ -304,9 +296,8 @@ private sealed interface CardPage {
 }
 
 /**
- * An agent's html card: its title, then its page live. The page sizes to its content, capped at the larger of 560 dp and
- * 70 % of the chat at rest ([cardMaxHeight]; taller pages scroll inside), and the stored height is reserved until it
- * reports, so the list doesn't jump. An embed in the chat, or a pane once its page says it takes touches itself.
+ * An agent's html card: its title, then its page live. The card is as tall as its page and follows it as it changes
+ * ([CARD_MAX_HEIGHT]), and the stored height is reserved until it reports, so the list doesn't jump. An embed in the chat, or a pane once its page says it takes touches itself.
  */
 @Composable
 internal fun HtmlCardView(entryId: String, card: HtmlCardDto, modifier: Modifier = Modifier) {
@@ -316,8 +307,7 @@ internal fun HtmlCardView(entryId: String, card: HtmlCardDto, modifier: Modifier
     val currentTheme by rememberUpdatedState(theme)
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
     LocalChatCompositionProbe.current?.let { probe -> SideEffect { probe("card") } }
-    val max = cardMaxHeight(LocalChatViewportHeight.current)
-    val reserved = (cardStoredHeight(card, compact) ?: CARD_DEFAULT_HEIGHT).coerceAtMost(max)
+    val reserved = cardStoredHeight(card, compact) ?: CARD_DEFAULT_HEIGHT
     // Built once per card, with the theme of the moment, off the main thread (Html hashes its text); a later theme
     // change reaches the page over the bridge.
     val page by produceState<CardPage>(CardPage.Loading, card.id, host) {
@@ -332,7 +322,7 @@ internal fun HtmlCardView(entryId: String, card: HtmlCardDto, modifier: Modifier
             modifier = Modifier.padding(bottom = Space.xs),
         )
         when (val p = page) {
-            is CardPage.Ready -> CardPageView(entryId, p.content, card, theme, reserved, max, host)
+            is CardPage.Ready -> CardPageView(entryId, p.content, card, theme, reserved, host)
             CardPage.Loading -> Box(Modifier.fillMaxWidth().height(reserved).testTag("html-card-page:$entryId"))
             CardPage.Missing -> Box(Modifier.fillMaxWidth().height(reserved).testTag("html-card-page:$entryId"), contentAlignment = Alignment.Center) {
                 Text(localized(Str.chatcard_html_page_missing), style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
@@ -342,7 +332,7 @@ internal fun HtmlCardView(entryId: String, card: HtmlCardDto, modifier: Modifier
 }
 
 @Composable
-private fun CardPageView(entryId: String, content: WebContent.Html, card: HtmlCardDto, theme: CardTheme, reserved: Dp, max: Dp, host: HtmlCardHost?) {
+private fun CardPageView(entryId: String, content: WebContent.Html, card: HtmlCardDto, theme: CardTheme, reserved: Dp, host: HtmlCardHost?) {
     val provided = LocalAppWebViews.current
     val webViews by remember(provided) { derivedStateOf { provided ?: AppWebViews.app } }
     val state = rememberWebViewState(content)
@@ -385,7 +375,7 @@ private fun CardPageView(entryId: String, content: WebContent.Html, card: HtmlCa
                 Modifier.fillMaxWidth().testTag("html-card-page:$entryId"),
                 settings = settings,
                 client = CardClient,
-                sizing = WebSizing.WrapContentHeight(max = max, initial = reserved),
+                sizing = WebSizing.WrapContentHeight(max = CARD_MAX_HEIGHT, initial = reserved),
             )
         }
     }

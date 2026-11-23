@@ -20,6 +20,7 @@ import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.SupermuxTheme
 import dev.supermux.webview.LocalWebSurfaceHints
 import dev.supermux.webview.WebSurfaceHints
+import dev.supermux.webview.engine.EngineEvent
 import dev.supermux.webview.engine.WebEngine
 import dev.supermux.webview.engine.WebEngineFactory
 import dev.supermux.webview.engine.WebEngineResult
@@ -74,17 +75,16 @@ class HtmlCardPaneTest {
         val loaded: HintEngine? get() = engines.firstOrNull { e -> e.inner.calls.any { it.startsWith("load:") } }
     }
 
-    private fun ComposeUiTest.show(rig: Rig, chat: Dp, width: Dp = 360.dp, widthClass: WindowWidthClass = WindowWidthClass.Compact) {
+    private fun ComposeUiTest.show(rig: Rig, width: Dp = 360.dp, widthClass: WindowWidthClass = WindowWidthClass.Compact) {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         val runtime = WebViewRuntime(
             RuntimeConfig(maxLive = 2, snapshotCacheBytes = 8L shl 20, factory = rig.factory, scope = scope, clock = { mainClock.currentTime }),
         )
-        // Unbounded: the test window (768 px) would clip a card taller than it, which isn't the cap.
+        // Unbounded: the test window (768 px) would clip a card taller than it.
         setPlatformContent(widthClass = widthClass) {
             CompositionLocalProvider(
                 LocalAppWebViews provides AppWebViews(runtime),
                 LocalHtmlCards provides rig.host,
-                LocalChatViewportHeight provides chat,
             ) {
                 SupermuxTheme(appearance = AppearanceMode.DARK) { HtmlCardView("o1", card, Modifier.width(width).wrapContentHeight(unbounded = true)) }
             }
@@ -94,31 +94,35 @@ class HtmlCardPaneTest {
         waitForIdle()
     }
 
-    // --- The cap ---
-
-    @Test fun theCapIsTheLargerOf560AndSeventyPercentOfTheChat() {
-        assertEquals(560.dp, cardMaxHeight(650.dp))
-        assertEquals(560.dp, cardMaxHeight(800.dp))
-        assertEquals(840.dp, cardMaxHeight(1200.dp))
-    }
+    // --- Height: the page's, with no cap (#162) ---
 
     @Test fun onAPhoneA473DpPageShowsWhole() = runComposeUiTest {
         val rig = Rig(pageHeight = 473f)
-        show(rig, chat = 650.dp)
+        show(rig)
         // The view is as tall as its page: nothing scrolls inside.
         onNodeWithTag("html-card-page:o1").assertHeightIsEqualTo(473.dp)
     }
 
-    @Test fun onAPhoneATallerPageIsCappedAt560() = runComposeUiTest {
+    @Test fun onAPhoneAPageTallerThanTheScreenShowsWhole() = runComposeUiTest {
         val rig = Rig(pageHeight = 3000f)
-        show(rig, chat = 650.dp)
-        onNodeWithTag("html-card-page:o1").assertHeightIsEqualTo(560.dp)
+        show(rig)
+        onNodeWithTag("html-card-page:o1").assertHeightIsEqualTo(3000.dp)
     }
 
-    @Test fun onATallChatTheCapIsSeventyPercentOfIt() = runComposeUiTest {
-        val rig = Rig(pageHeight = 3000f)
-        show(rig, chat = 1200.dp, width = 600.dp, widthClass = WindowWidthClass.Expanded)
-        onNodeWithTag("html-card-page:o1").assertHeightIsEqualTo(840.dp)
+    @Test fun onADesktopAVeryLongPageShowsWhole() = runComposeUiTest {
+        val rig = Rig(pageHeight = 12000f)
+        show(rig, width = 600.dp, widthClass = WindowWidthClass.Expanded)
+        onNodeWithTag("html-card-page:o1").assertHeightIsEqualTo(12000.dp)
+    }
+
+    @Test fun aPageThatGrowsLaterGrowsItsCard() = runComposeUiTest {
+        val rig = Rig(pageHeight = 400f)
+        show(rig)
+        onNodeWithTag("html-card-page:o1").assertHeightIsEqualTo(400.dp)
+        runOnUiThread { rig.loaded!!.inner.emit(EngineEvent.ContentSize(360f, 2400f)) }
+        mainClock.advanceTimeBy(2_000)
+        waitForIdle()
+        onNodeWithTag("html-card-page:o1").assertHeightIsEqualTo(2400.dp)
     }
 
     // --- Pane or embed ---
@@ -144,7 +148,7 @@ class HtmlCardPaneTest {
 
     @Test fun aCardIsAnEmbedUntilItsPageAsksForTouches() = runComposeUiTest {
         val rig = Rig(pageHeight = 300f)
-        show(rig, chat = 650.dp)
+        show(rig)
         val engine = rig.loaded!!
         assertEquals(WebSurfaceHints(inScrollingList = true), runOnUiThread { engine.seen }, "an embed: a drag on it scrolls the chat")
         // The host asks the page whether it takes touches, as a view adopting a page it didn't load must.
@@ -158,7 +162,7 @@ class HtmlCardPaneTest {
 
     @Test fun anotherEventLeavesItAnEmbed() = runComposeUiTest {
         val rig = Rig(pageHeight = 300f)
-        show(rig, chat = 650.dp)
+        show(rig)
         val engine = rig.loaded!!
         runOnUiThread { engine.inner.postFromPage(CARD_TOUCH_EVENT, JsonObject(mapOf("pane" to JsonPrimitive(false)))) }
         runOnUiThread { engine.inner.postFromPage("other", JsonObject(mapOf("pane" to JsonPrimitive(true)))) }

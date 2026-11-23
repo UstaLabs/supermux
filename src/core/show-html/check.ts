@@ -21,7 +21,7 @@ declare const window: any
 declare function getComputedStyle(el: any): any
 type Element = any
 
-/** What stops a card: Ahmet's three. A page that grows with its frame is only a note: the card caps its height. */
+/** What stops a card: Ahmet's three. A page that grows with its frame is only a note: the card stops it about a screen tall. */
 export type Problem =
   | { kind: "script-error"; message: string }
   | { kind: "blank" }
@@ -397,7 +397,7 @@ async function measure(client: CdpClient, browserContextId: string, html: string
       new Promise((r) => setTimeout(r, 500)),
     ])).catch(() => {})
 
-    // A page that grows with its frame (vh units, height:100%, a 100vh child): the card would grow to its cap.
+    // A page that grows with its frame (vh units, height:100%, a 100vh child): the card would grow with it until the app stops it.
     const bottom = () => tab.inCard<number>(() => Math.max(document.documentElement.getBoundingClientRect().height,
       ...(Array.from(document.body?.querySelectorAll("*") ?? []) as Element[]).map((e) => e.getBoundingClientRect().bottom)))
     await setFrameHeight(tab, 600)
@@ -405,7 +405,7 @@ async function measure(client: CdpClient, browserContextId: string, html: string
     await setFrameHeight(tab, 1200)
     const at1200 = await bottom()
     const endless = at600 >= 480 && at1200 >= at600 + 400
-    if (endless) notes.push("the page's height follows its frame (vh units or height:100%): the card stops it at its cap")
+    if (endless) notes.push("the page's height follows its frame (vh units or height:100%): the card stops it about a screen tall; give it a fixed px height to show all of it")
 
     const phoneHeight = endless ? PHONE.height : await contentHeight(tab)
     const over = await overflow(tab, PHONE.width)

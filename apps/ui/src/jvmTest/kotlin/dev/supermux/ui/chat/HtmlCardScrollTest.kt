@@ -44,7 +44,7 @@ import kotlin.test.assertTrue
 class HtmlCardScrollTest {
     private val session = SessionInfo(id = "s1", name = "demo", workdir = "/home/u/proj", agent = "claude")
 
-    // A page far taller than the card's cap, so the cap is the card's height.
+    // A page far taller than the chat: the card is as tall as it (#162).
     private val card = HtmlCardDto("abc", "Sales by region", height = 300)
 
     private val entries: List<LogEntry> = (1..70).map {
@@ -143,7 +143,7 @@ class HtmlCardScrollTest {
         waitForIdle()
         // On the UI thread: the fake engines record their calls there.
         waitUntil(timeoutMillis = 5_000) { runOnUiThread { engines.created.any { e -> e.calls.any { it.startsWith("load:") } } } }
-        // Let the page's reported height settle the card at its cap.
+        // Let the page's reported height settle the card at it.
         mainClock.advanceTimeBy(2_000)
         waitForIdle()
 
