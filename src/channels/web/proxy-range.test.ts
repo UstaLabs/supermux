@@ -22,7 +22,7 @@ test("a range request goes through the proxy and its 206 comes back with Content
   const server = rangeServer(bytes)
   const res = await handleProxyRequest(
     new Request("http://broker.test/p/clips/clip.mp4", { headers: { range: "bytes=10-19" } }),
-    { port: server.port, sessionName: "s" },
+    { port: server.port!, sessionName: "s" },
     { prefix: "/p/clips", upstreamPath: "/clip.mp4" },
   )
   expect(res.status).toBe(206)
@@ -36,7 +36,7 @@ test("a whole file keeps its Content-Length through the proxy (a media player ne
   const server = rangeServer(new Uint8Array(1000))
   const res = await handleProxyRequest(
     new Request("http://broker.test/p/clips/clip.mp4"),
-    { port: server.port, sessionName: "s" },
+    { port: server.port!, sessionName: "s" },
     { prefix: "/p/clips", upstreamPath: "/clip.mp4" },
   )
   expect(res.status).toBe(200)
@@ -64,36 +64,36 @@ test("an upstream that ignores Range still gives WebKit its 206: the proxy answe
   const bytes = new Uint8Array(5 * 1024 * 1024).map((_, i) => (i * 7) % 253)
   const server = noRangeServer(bytes)
 
-  const probe = await proxied(server.port, "bytes=0-1") // WebKit's first media request
+  const probe = await proxied(server.port!, "bytes=0-1") // WebKit's first media request
   expect(probe.status).toBe(206)
   expect(probe.headers.get("content-range")).toBe(`bytes 0-1/${bytes.length}`)
   expect(probe.headers.get("content-length")).toBe("2")
   expect(probe.headers.get("accept-ranges")).toBe("bytes")
   expect(Array.from(new Uint8Array(await probe.arrayBuffer()))).toEqual([0, 7])
 
-  const mid = await proxied(server.port, "bytes=3000000-3000009")
+  const mid = await proxied(server.port!, "bytes=3000000-3000009")
   expect(mid.status).toBe(206)
   expect(Array.from(new Uint8Array(await mid.arrayBuffer()))).toEqual(Array.from(bytes.slice(3000000, 3000010)))
 
   // Open-ended: a piece of at most RANGE_PIECE_BYTES, its length known; the player asks on from where it ends.
-  const open = await proxied(server.port, "bytes=100-")
+  const open = await proxied(server.port!, "bytes=100-")
   expect(open.status).toBe(206)
   expect(open.headers.get("content-range")).toBe(`bytes 100-${100 + RANGE_PIECE_BYTES - 1}/${bytes.length}`)
   expect(open.headers.get("content-length")).toBe(String(RANGE_PIECE_BYTES))
   await open.arrayBuffer()
 
-  const tail = await proxied(server.port, "bytes=-4")
+  const tail = await proxied(server.port!, "bytes=-4")
   expect(tail.headers.get("content-range")).toBe(`bytes ${bytes.length - 4}-${bytes.length - 1}/${bytes.length}`)
   await tail.arrayBuffer()
 
-  const past = await proxied(server.port, `bytes=${bytes.length}-`)
+  const past = await proxied(server.port!, `bytes=${bytes.length}-`)
   expect(past.status).toBe(416)
   expect(past.headers.get("content-range")).toBe(`bytes */${bytes.length}`)
 })
 
 test("without a range the whole file goes through as before", async () => {
   const server = noRangeServer(new Uint8Array(1000))
-  const res = await proxied(server.port)
+  const res = await proxied(server.port!)
   expect(res.status).toBe(200)
   expect((await res.arrayBuffer()).byteLength).toBe(1000)
 })
