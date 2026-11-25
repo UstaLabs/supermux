@@ -16,6 +16,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.MenuBar
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.rememberWindowState
@@ -126,7 +127,7 @@ internal fun AppletWindows(fleet: FleetStore?, onOpenChat: (String) -> Unit, the
                     onDispose { DesktopApplets.unregister(a.key, window) }
                 }
                 // View ▸ Reload, as the Browser tab's: the page again, from the server.
-                androidx.compose.ui.window.MenuBar {
+                MenuBar {
                     Menu(dev.supermux.ui.i18n.localized(dev.supermux.ui.i18n.Str.host_app_desktop_menu_view)) {
                         Item(
                             dev.supermux.ui.i18n.localized(dev.supermux.ui.i18n.Str.browser_reload),
