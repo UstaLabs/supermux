@@ -86,6 +86,15 @@ public object MacEngineTesting {
         MacGlue.testScroll(handle, x / scale, y / scale, deltaY, phase, momentumPhase)
     }
 
+    /**
+     * One step of a user's drag of [window]'s bottom-right corner: [phase] 0 presses there, 1 drags it ([dx], [dy])
+     * points from where it was pressed (right and down), 2 lets go. AppKit takes it as a live resize. Call it off AppKit's
+     * thread and off the EDT: AppKit's thread sits in the resize's tracking loop from the press until the release. True
+     * when the window is in a live resize as the step is posted.
+     */
+    public fun resizeDrag(window: Window, phase: Int, dx: Float, dy: Float): Boolean =
+        handle(window)?.let { MacGlue.testResizeDrag(it, phase, dx, dy) } ?: false
+
     /** Paints what shows where neither Compose nor a page draws: the motion checks' tell. */
     public fun paintBacking(window: Window, argb: Int) {
         handle(window)?.let { MacGlue.testPaintBacking(it, argb) }
@@ -117,6 +126,16 @@ public object MacEngineTesting {
         get() = MacWebEngine.motionCoverEnabled
         set(value) {
             MacWebEngine.motionCoverEnabled = value
+        }
+
+    /**
+     * False: a page's view never follows its window's right and bottom edges in AppKit's own resize (#164), only
+     * Compose's layout of the new size: the live-resize measure's baseline.
+     */
+    public var followEdges: Boolean
+        get() = MacWebEngine.followEdges
+        set(value) {
+            MacWebEngine.followEdges = value
         }
 
     /** How many times a page's surface has been drawn with the motion cover in this process (the motion checks). */

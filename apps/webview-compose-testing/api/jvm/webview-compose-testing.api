@@ -141,14 +141,17 @@ public final class dev/supermux/webview/testing/MacEngineTesting {
 	public final fun firstResponder (Ljava/awt/Window;)Ljava/lang/String;
 	public final fun frameSyncState (Ljava/awt/Window;)Ljava/lang/String;
 	public final fun getBackdrop ()Z
+	public final fun getFollowEdges ()Z
 	public final fun getFrameSync ()Z
 	public final fun getMotionCover ()Z
 	public final fun getMotionCoverDraws ()I
 	public final fun isAvailable ()Z
 	public final fun paintBacking (Ljava/awt/Window;I)V
+	public final fun resizeDrag (Ljava/awt/Window;IFF)Z
 	public final fun routes (Ljava/awt/Window;FFZ)Ljava/lang/String;
 	public final fun scroll (Ljava/awt/Window;FFFII)V
 	public final fun setBackdrop (Z)V
+	public final fun setFollowEdges (Z)V
 	public final fun setFrameSync (Z)V
 	public final fun setMotionCover (Z)V
 	public final fun simulateMemoryPressure ()V
