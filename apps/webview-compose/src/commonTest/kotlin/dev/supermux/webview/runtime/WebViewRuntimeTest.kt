@@ -321,6 +321,16 @@ class WebViewRuntimeTest {
         assertTrue(factory.created.single().released)
     }
 
+    @Test fun prewarmingAProfileKeepsOneEmptyEngineOfItAndNoPage() = runTest {
+        val runtime = runtime(RuntimeConfig(maxLive = 2, maxIdle = 1, snapshotCacheBytes = 4_000))
+        val profile = WebProfile.Named("applets")
+        runtime.prewarm(profile)
+        runtime.prewarm(profile)
+        assertEquals(1, runtime.pool.idleCount, "one spare, not two")
+        assertEquals(profile, factory.created.single().config.profile)
+        assertEquals(0, runtime.pool.parkedCount, "a spare, never a page")
+    }
+
     @Test fun aConfigRefusesSizesThatCantWork() {
         assertFailsWith<IllegalArgumentException> { RuntimeConfig(maxLive = 0, snapshotCacheBytes = 0) }
         assertFailsWith<IllegalArgumentException> { RuntimeConfig(maxLive = 1, maxIdle = -1, snapshotCacheBytes = 0) }

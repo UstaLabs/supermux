@@ -22,8 +22,8 @@ interface AppletScreens {
     /** Applet info for [name], at [initialTab]; [openChat] shows a chat in the main window. */
     @Composable fun Info(fleet: FleetStore, actions: AppletsActions, name: String, phone: Boolean, initialTab: String?, onBack: () -> Unit, openChat: (String) -> Unit)
 
-    /** Host [hostId]'s first pinned applets, loaded ahead so they open at once. */
-    @Composable fun Preloads(fleet: FleetStore, hostId: String?)
+    /** A warm, empty engine for applets, so opening one skips the engine's start (every open still loads afresh). */
+    @Composable fun WarmEngine()
 
     /** An applet's icon (#163: Settings › Notifications lists applets; the web build, which shows none, links no icon code). */
     @Composable fun Icon(a: dev.supermux.net.AppletDto, size: androidx.compose.ui.unit.Dp, load: suspend (dev.supermux.net.AppletDto) -> ByteArray?)
@@ -53,7 +53,7 @@ object NativeAppletScreens : AppletScreens {
     }
 
     @Composable
-    override fun Preloads(fleet: FleetStore, hostId: String?) = dev.supermux.ui.applets.AppletPreloads(fleet, hostId)
+    override fun WarmEngine() = dev.supermux.ui.applets.AppletWarmEngine()
 
     @Composable
     override fun Icon(a: dev.supermux.net.AppletDto, size: androidx.compose.ui.unit.Dp, load: suspend (dev.supermux.net.AppletDto) -> ByteArray?) =

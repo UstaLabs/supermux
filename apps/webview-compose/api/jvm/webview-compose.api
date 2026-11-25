@@ -1405,6 +1405,8 @@ public final class dev/supermux/webview/runtime/WebViewRuntime {
 	public final fun onBackgroundTrim ()V
 	public final fun onMemoryPressure ()V
 	public final fun onMemoryRecovered ()V
+	public final fun prewarm (Ldev/supermux/webview/WebProfile;ZLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun prewarm$default (Ldev/supermux/webview/runtime/WebViewRuntime;Ldev/supermux/webview/WebProfile;ZLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun setOnError (Lkotlin/jvm/functions/Function1;)V
 }
 

@@ -77,11 +77,15 @@ export function resolveStaticFile(root: string, rest: string): string | null {
 }
 
 /**
- * How an applet's GETs may be kept (Ahmet: applets open at once with their last state, then refresh). Private: only this
- * device's web view keeps them, never the relay. max-age=0 + stale-while-revalidate: the saved copy shows at once while
- * the engine asks again in the background, and an ETag makes that a cheap 304. Writes and streams stay no-store.
+ * How an applet's GETs may be kept: as a page in the Browser tab (Ahmet), every open asks the server again. Private: only
+ * this device's web view keeps them, never the relay. no-cache: a kept copy is used only once the server says it is
+ * current, which the ETag makes a cheap 304; an agent's edit or new data shows on the next open. Writes and streams stay
+ * no-store.
  */
-export const APPLET_GET_CACHE = "private, max-age=0, stale-while-revalidate=604800"
+export const APPLET_GET_CACHE = "private, no-cache"
+
+/** A versioned file (asked for with `?v=`, which changes with its content): kept a year, never asked again. */
+export const APPLET_VERSIONED_CACHE = "private, max-age=31536000, immutable"
 
 /** True when [req]'s If-None-Match names [etag] (or `*`). */
 function etagMatches(req: Request | undefined, etag: string): boolean {
@@ -98,7 +102,8 @@ function serveStaticApplet(folder: string, rest: string, method: string, req?: R
   // A file's size and last change name its version: a strong ETag without reading it.
   const st = statSync(file)
   const etag = `"${st.size.toString(16)}-${Math.floor(st.mtimeMs).toString(16)}"`
-  const headers = { "content-type": f.type || "application/octet-stream", "cache-control": APPLET_GET_CACHE, etag }
+  const versioned = !!req && new URL(req.url).searchParams.has("v")
+  const headers = { "content-type": f.type || "application/octet-stream", "cache-control": versioned ? APPLET_VERSIONED_CACHE : APPLET_GET_CACHE, etag }
   if (etagMatches(req, etag)) return new Response(null, { status: 304, headers })
   return new Response(method === "HEAD" ? null : f, { headers })
 }

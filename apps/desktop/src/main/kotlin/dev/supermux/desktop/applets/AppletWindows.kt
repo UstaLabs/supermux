@@ -9,9 +9,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.awt.ComposeWindow
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.key as keyOf
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.MenuBar
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.rememberWindowState
@@ -108,20 +113,64 @@ internal fun AppletWindows(fleet: FleetStore?, onOpenChat: (String) -> Unit, the
             val none = androidx.compose.runtime.remember { kotlinx.coroutines.flow.MutableStateFlow<List<AppletDto>?>(null) }
             val listed by (fleet?.appForRecord(a.hostId)?.applets ?: none).collectAsState()
             val title = listed?.firstOrNull { it.name == a.name }?.title?.takeIf { it.isNotBlank() } ?: a.title
+            val reloads = androidx.compose.runtime.remember { AppletReloads() }
             Window(
                 onCloseRequest = { DesktopApplets.close(a.key) },
                 title = title,
                 icon = painterResource("supermux-icon.png"),
                 state = state,
+                // ⌘R / Ctrl+R from the page too: a ⌘ key the page leaves unused comes back to the window as a key event.
+                onPreviewKeyEvent = { e -> reloadKey(e) && reloads.request() },
             ) {
                 DisposableEffect(a.key, window) {
                     DesktopApplets.register(a.key, window)
                     onDispose { DesktopApplets.unregister(a.key, window) }
                 }
+                // View ▸ Reload, as the Browser tab's: the page again, from the server.
+                MenuBar {
+                    Menu(dev.supermux.ui.i18n.localized(dev.supermux.ui.i18n.Str.host_app_desktop_menu_view)) {
+                        Item(
+                            dev.supermux.ui.i18n.localized(dev.supermux.ui.i18n.Str.browser_reload),
+                            shortcut = androidx.compose.ui.input.key.KeyShortcut(
+                                androidx.compose.ui.input.key.Key.R,
+                                meta = dev.supermux.desktop.platform.isMacOs(),
+                                ctrl = !dev.supermux.desktop.platform.isMacOs(),
+                            ),
+                            onClick = { reloads.request() },
+                        )
+                    }
+                }
                 theme {
-                    AppletPage(fleet, a.hostId, a.name, onOpenChat = onOpenChat)
+                    AppletPage(fleet, a.hostId, a.name, onOpenChat = onOpenChat, reload = reloads.requests)
                 }
             }
         }
     }
+}
+
+/** An applet window's reload requests: the menu's and the key's, one reload for a press both see. */
+internal class AppletReloads(private val now: () -> Long = System::currentTimeMillis) {
+    private val flow = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 4)
+    val requests: kotlinx.coroutines.flow.SharedFlow<Unit> = flow
+    private var last = Long.MIN_VALUE / 2
+
+    /** Asks for a reload; one asked within [DEDUP_MILLIS] of the last is the same press. True: the key is handled. */
+    fun request(): Boolean {
+        val t = now()
+        if (t - last >= DEDUP_MILLIS) {
+            last = t
+            flow.tryEmit(Unit)
+        }
+        return true
+    }
+
+    companion object {
+        const val DEDUP_MILLIS = 400L
+    }
+}
+
+/** ⌘R on a Mac, Ctrl+R elsewhere, pressed (not released). */
+internal fun reloadKey(e: androidx.compose.ui.input.key.KeyEvent): Boolean {
+    if (e.type != androidx.compose.ui.input.key.KeyEventType.KeyDown || e.keyOf != androidx.compose.ui.input.key.Key.R) return false
+    return if (dev.supermux.desktop.platform.isMacOs()) e.isMetaPressed && !e.isCtrlPressed else e.isCtrlPressed && !e.isMetaPressed
 }

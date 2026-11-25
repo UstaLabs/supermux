@@ -1179,6 +1179,7 @@ final class dev.supermux.webview.runtime/WebViewRuntime { // dev.supermux.webvie
     final fun onMemoryPressure() // dev.supermux.webview.runtime/WebViewRuntime.onMemoryPressure|onMemoryPressure(){}[0]
     final fun onMemoryRecovered() // dev.supermux.webview.runtime/WebViewRuntime.onMemoryRecovered|onMemoryRecovered(){}[0]
     final suspend fun clearSiteData(dev.supermux.webview/WebProfile, kotlin.collections/Set<kotlin/String>): kotlin/Boolean // dev.supermux.webview.runtime/WebViewRuntime.clearSiteData|clearSiteData(dev.supermux.webview.WebProfile;kotlin.collections.Set<kotlin.String>){}[0]
+    final suspend fun prewarm(dev.supermux.webview/WebProfile, kotlin/Boolean = ...) // dev.supermux.webview.runtime/WebViewRuntime.prewarm|prewarm(dev.supermux.webview.WebProfile;kotlin.Boolean){}[0]
 
     final object Companion { // dev.supermux.webview.runtime/WebViewRuntime.Companion|null[0]
         final val Default // dev.supermux.webview.runtime/WebViewRuntime.Companion.Default|{}Default[0]
