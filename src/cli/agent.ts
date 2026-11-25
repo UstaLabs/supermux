@@ -133,10 +133,10 @@ with a whole backup (everything added since would be lost), and never edit a bac
 Page API: include <script src="_supermux/api.js"></script> (the template has it; _supermux/ is reserved), then supermux.notify(title, body, {needsYou}) (a push
 to their devices; needsYou: true when it waits on them, so it still reaches someone who only wants what needs them), supermux.agent.ask(text) and supermux.save(blob, name) (these two only in supermux's applet
 window, after a click). Each returns a promise of {ok, reason}.
-Showing fresh data: supermux keeps an applet's page alive. Pinned applets are loaded ahead in the background, and a
-closed window's page is kept, so opening the applet shows the page as it was, at once, with no reload. Refresh your
-data when the page is shown: document.addEventListener("visibilitychange", () => { if (document.visibilityState
-=== "visible") refresh() }). It turns "visible" each time its window opens.
+Opening an applet loads its page afresh from the server each time, as a page in a browser: a change to its files or
+its data shows on the next open (⌘R reloads an open window). Its GETs go out as "private, no-cache" with an ETag, so a
+copy the device kept is reused only when the server says it is current. Ask for a file with ?v=<its hash> and it is
+kept for a year without asking again: do that for scripts, styles and fonts that you rename when they change.
 Notify the user from a server or job: POST $SUPERMUX_URL/applet-api/notify with header
 X-Supermux-Applet-Token: $SUPERMUX_APPLET_TOKEN and {"title": "…", "body": "…", "needsYou": false} (a push to their devices).
 Phone widget: the "widget" path (a file in public/, or your server's route) answers

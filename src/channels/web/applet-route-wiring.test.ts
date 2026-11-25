@@ -70,7 +70,7 @@ posix("GET /applets lists the host's applets for a paired device and nobody else
   expect(list.map((a) => [a.name, a.url, a.kind])).toEqual([["echo", "/a/echo/", "server"]])
 })
 
-test("a static applet's reads are kept by the device (SWR + ETag, 304 when current); writes and events never are", async () => {
+test("a static applet's reads always ask the server again (no-cache + ETag, 304 when current), a versioned file is immutable; writes and events are never kept", async () => {
   const root = mkdtempSync(join(tmpdir(), "mux-applet-swr-"))
   cleanups.push(() => rmSync(root, { recursive: true, force: true }))
   const dir = join(root, "applets", "notes")
@@ -92,7 +92,7 @@ test("a static applet's reads are kept by the device (SWR + ETag, 304 when curre
   cleanups.push(async () => { await channel.stop(); applets.shutdown() })
   const b = `http://127.0.0.1:${channel.boundPort}`
   const auth = { authorization: `Bearer ${devices.mint("phone").token}` }
-  const SWR = "private, max-age=0, stale-while-revalidate=604800"
+  const SWR = "private, no-cache"
 
   for (const path of ["/a/notes/", "/a/notes/_supermux/api.js"]) {
     const first = await fetch(b + path, { headers: auth })
@@ -105,6 +105,9 @@ test("a static applet's reads are kept by the device (SWR + ETag, 304 when curre
     expect(again.status).toBe(304)
     expect(await again.text()).toBe("")
   }
+  const versioned = await fetch(b + "/a/notes/?v=abc123", { headers: auth })
+  expect(versioned.headers.get("cache-control")).toBe("private, max-age=31536000, immutable")
+  await versioned.arrayBuffer()
   // A changed file is a new version.
   const e1 = (await fetch(b + "/a/notes/", { headers: auth })).headers.get("etag")
   writeFileSync(join(dir, "public", "index.html"), "<h1>notes, longer</h1>")

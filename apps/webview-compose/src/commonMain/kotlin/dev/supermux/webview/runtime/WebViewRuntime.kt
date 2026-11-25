@@ -341,6 +341,14 @@ public class WebViewRuntime(public val config: RuntimeConfig = RuntimeConfig.pla
     }
 
     /**
+     * Keeps a warm, empty engine of [profile] in the pool, so the next view of it skips the engine's start: a spare with
+     * no page, never a page kept for later. Nothing when the pool has one already, has no room, or is short of memory.
+     */
+    public suspend fun prewarm(profile: WebProfile, mediaPlaybackRequiresGesture: Boolean = true) {
+        pool.prewarm(EngineConfig(profile, mediaPlaybackRequiresGesture))
+    }
+
+    /**
      * Forgets everything of [origins] (`https://host[:port]`) in [profile], as when the server behind them is gone
      * (supermux: a host unpaired):
      * - the runtime's pages of them, in every profile: their page memory, their snapshots and the pages parked live;

@@ -994,9 +994,9 @@ fun SupermuxApp(
                         showAll = remember(ui) { { ui.openApplets() } },
                         info = remember(ui) { { a, tab -> ui.openAppletInfo(a.name, tab) } },
                     )
-                    // Its first pinned applets, loaded ahead where the platform opens applets: they open at once. Through
+                    // A warm, empty engine where the platform opens applets, so opening one skips the engine's start. Through
                     // the native-only screens, so the web app (which shows no applets) doesn't carry the code.
-                    appletsActions?.screens?.Preloads(fleet, activeHostId)
+                    appletsActions?.screens?.WarmEngine()
                     // An unpaired host's site data goes from the app's web views, wherever the platform has them.
                     dev.supermux.ui.session.LocalAppletScreens.current?.ForgetUnpairedSites(fleet)
 
