@@ -16,6 +16,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.awt.awtEventOrNull
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.node.CompositionLocalConsumerModifierNode
 import androidx.compose.ui.node.DrawModifierNode
@@ -55,10 +56,11 @@ internal sealed interface SurfaceDraw {
     class Cover(val image: ImageBitmap, val scale: Float, val background: Color) : SurfaceDraw
 
     /**
-     * A hole down to [from] (window px from the slot's top), and past it the page's [background]: an embed grew past what
-     * WebKit has drawn, and its view shows its own white there until WebKit has (C2).
+     * A hole down to [fromTop] and across to [fromLeft] (window px from the slot's top-left), and past them the page's
+     * [background]: the slot grew past what WebKit has drawn, and its view shows its own white there until WebKit has
+     * (C2, #164). Infinite where it didn't grow.
      */
-    class Grown(val from: Float, val background: Color) : SurfaceDraw
+    class Grown(val fromTop: Float, val fromLeft: Float, val background: Color) : SurfaceDraw
 }
 
 /** What a [MacSurfaceNode] asks of its engine: `MacWebEngine`; tests fake it. Main thread. */
@@ -75,9 +77,10 @@ internal interface SurfaceHost {
 
     /**
      * The slot was laid out at [bounds], [visible] of it (both window px), in [window], whose backing scale is
-     * [scale] window px a point. True when what the node draws changed: it redraws in this frame.
+     * [scale] window px a point; [edges]: the window's edges it reaches ([SlotEdges]). True when what the node draws
+     * changed: it redraws in this frame.
      */
-    fun surfacePlaced(node: MacSurfaceNode, window: Long, bounds: Rect, visible: Rect, scale: Float): Boolean
+    fun surfacePlaced(node: MacSurfaceNode, window: Long, bounds: Rect, visible: Rect, scale: Float, edges: Int = 0): Boolean
 
     /** The slot is no longer placed. True when what the node draws changed. */
     fun surfaceUnplaced(node: MacSurfaceNode): Boolean
@@ -169,31 +172,32 @@ internal class MacSurfaceNode(var host: SurfaceHost, var inList: Boolean, var pr
         val topLeft = coordinates.positionInWindow()
         val bottomRight = coordinates.localToWindow(Offset(coordinates.size.width.toFloat(), coordinates.size.height.toFloat()))
         val bounds = Rect(topLeft, bottomRight)
-        report(bounds, coordinates.boundsInWindow())
+        val visible = coordinates.boundsInWindow()
+        report(bounds, visible, SlotEdges.of(visible, coordinates.findRootCoordinates().size))
     }
 
-    private fun report(bounds: Rect, visible: Rect) {
+    private fun report(bounds: Rect, visible: Rect, edges: Int) {
         val awtWindow = currentValueOf(LocalAwtWindow)
         val window = host.windowHandleOf(awtWindow)
         if (window == 0L) {
-            waitForWindow(bounds, visible)
+            waitForWindow(bounds, visible, edges)
             return
         }
         waitingForWindow?.cancel()
         waitingForWindow = null
         // Compose's window pixels are the window's backing pixels, whatever density the app lays itself out at (I3).
         val scale = host.scaleOf(awtWindow).takeIf { it > 0f } ?: currentValueOf(LocalDensity).density
-        if (host.surfacePlaced(this, window, bounds, visible, scale)) invalidateDraw()
+        if (host.surfacePlaced(this, window, bounds, visible, scale, edges)) invalidateDraw()
     }
 
     /** skiko's layer joins the window about the first frame (M8): until it has, the slot is reported again each frame. */
-    private fun waitForWindow(bounds: Rect, visible: Rect) {
+    private fun waitForWindow(bounds: Rect, visible: Rect, edges: Int) {
         waitingForWindow?.cancel()
         waitingForWindow = coroutineScope.launch {
             while (isAttached) {
                 withFrameNanos { }
                 if (host.windowHandleOf(currentValueOf(LocalAwtWindow)) != 0L) {
-                    report(bounds, visible)
+                    report(bounds, visible, edges)
                     return@launch
                 }
             }
@@ -210,9 +214,11 @@ internal class MacSurfaceNode(var host: SurfaceHost, var inList: Boolean, var pr
             is SurfaceDraw.Cover -> drawCover(draw.image, draw.scale, draw.background)
             is SurfaceDraw.Grown -> {
                 drawRect(Color.Transparent, blendMode = BlendMode.Clear)
-                if (draw.from < size.height) {
-                    drawRect(draw.background, topLeft = Offset(0f, draw.from), size = Size(size.width, size.height - draw.from))
-                }
+                // A pixel over what WebKit drew: its edge at a fraction of a pixel would leave a light seam.
+                val top = (draw.fromTop - 1f).coerceAtLeast(0f)
+                val left = (draw.fromLeft - 1f).coerceAtLeast(0f)
+                if (top < size.height) drawRect(draw.background, topLeft = Offset(0f, top), size = Size(size.width, size.height - top))
+                if (left < size.width) drawRect(draw.background, topLeft = Offset(left, 0f), size = Size(size.width - left, size.height))
             }
             SurfaceDraw.Nothing -> Unit
         }
@@ -244,6 +250,21 @@ internal class MacSurfaceNode(var host: SurfaceHost, var inList: Boolean, var pr
     }
 
     override fun onCancelPointerInput() = Unit
+}
+
+/**
+ * The window's edges a slot's visible part reaches (#164), as bits: [RIGHT], [BOTTOM]. A window resized by a drag resizes
+ * a page reaching its right or bottom edge with it, in AppKit's own resize, before Compose has laid out the new size: so
+ * the page is laid out again in step with the window, as Safari's is, never a frame or two after it.
+ */
+internal object SlotEdges {
+    const val RIGHT: Int = 1
+    const val BOTTOM: Int = 2
+
+    /** [visible]'s edges at those of the window's root, [root] px (within half a pixel). */
+    fun of(visible: Rect, root: IntSize): Int =
+        (if (visible.width > 0f && visible.right >= root.width - 0.5f) RIGHT else 0) or
+            (if (visible.height > 0f && visible.bottom >= root.height - 0.5f) BOTTOM else 0)
 }
 
 /** The backing scale of [window]'s screen, window px a point (AWT's transform there); 0 for no window. */

@@ -7,7 +7,7 @@
 #include <jni.h>
 
 /** MacGlue.ABI; Gradle's stageMacGlue reads it from here. Change both together. */
-#define WV_ABI_VERSION 9
+#define WV_ABI_VERSION 10
 
 /**
  * The upcalls: MacGlue.onEvent's `type`, and what its fields hold (the plan's Task 3 table; GlueEvent.kt decodes it).
@@ -120,7 +120,7 @@ static inline NSWindow *WVWindow(jlong handle) {
  * A placement of turn (WVNextPlacement) that placementSent announced: placed as placeSlot:… does, unless a later turn
  * was placed already.
  */
-- (void)placeSlot:(NSRect)slot shown:(NSRect)shown scale:(CGFloat)scale hidden:(BOOL)hidden turn:(long long)turn;
+- (void)placeSlot:(NSRect)slot shown:(NSRect)shown scale:(CGFloat)scale hidden:(BOOL)hidden edges:(int)edges turn:(long long)turn;
 /**
  * Any thread: a placement is on its way to AppKit's thread (with a frame of skiko's, perhaps a few frames away). While
  * one is and the view is hidden, its ticks wait for it.

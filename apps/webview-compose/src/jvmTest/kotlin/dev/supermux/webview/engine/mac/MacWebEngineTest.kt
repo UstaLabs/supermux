@@ -153,7 +153,21 @@ class MacWebEngineTest {
 
         fun tick(inWindow: Boolean = true) = answer("tick") { GlueEvent.Tick(it, inWindow) }
 
+        /** Every display tick asked so far answered, in the window. */
+        fun ticksAll() {
+            scope.runCurrent()
+            for (id in glue.ids("tick")) if (answered.add(id)) send(GlueEvent.Tick(id, true))
+            scope.runCurrent()
+        }
+
         fun repainted() = answer("repaint") { GlueEvent.Result(it, true, null, null) }
+
+        /** Every repaint asked so far answered: WebKit has drawn the page where it is now. */
+        fun repaintedAll() {
+            scope.runCurrent()
+            for (id in glue.ids("repaint")) if (answered.add(id)) send(GlueEvent.Result(id, true, null, null))
+            scope.runCurrent()
+        }
 
         fun relay(epoch: Int, body: String, mainFrame: Boolean = true) =
             send(GlueEvent.Relay(epoch, mainFrame, body, "https", "c1.invalid", 0))
@@ -166,9 +180,10 @@ class MacWebEngineTest {
             height: Float = 480f,
             visible: Rect? = null,
             scale: Float = 2f,
+            edges: Int = 0,
         ): Boolean {
             val bounds = Rect(x, y, x + width, y + height)
-            return engine.surfacePlaced(node, 7L, bounds, visible ?: bounds, scale).also { scope.runCurrent() }
+            return engine.surfacePlaced(node, 7L, bounds, visible ?: bounds, scale, edges).also { scope.runCurrent() }
         }
 
         /** The page's snapshot, as the runtime takes it: [width] × [height] px of one colour; it is the motion cover too. */
@@ -431,32 +446,65 @@ class MacWebEngineTest {
     }
 
     /**
-     * C2: a pane resized shows its last picture at its true size, top-left (never scaled to the new slot), and takes no
-     * presses until WebKit has drawn it at its new size.
+     * #164: a pane resized by a drag (a window, an applet window, a Browser tab, a divider) keeps the live page and its
+     * input at every step, laid out again in step with it, as Safari's is. What it grew by shows the page's own
+     * background until WebKit has drawn it there, never a still picture that jumps to the page once the drag stops.
      */
-    @Test fun aResizingSlotShowsTheMotionCoverAtItsTrueSizeAndTakesNoInputUntilItSettles() = runTest {
+    @Test fun aResizingSlotKeepsTheLivePageAndItsInputAndShowsItsBackgroundWhereItGrew() = runTest {
         val rig = Rig(this)
         rig.live()
         rig.snapshot(640, 480)
-        assertEquals("snapshot ${rig.glue.ids("snapshot").last()} 320.0", rig.glue.last("snapshot"), "640 px at 2x")
-        rig.place(width = 600f)
-        val cover = assertIs<SurfaceDraw.Cover>(rig.engine.drawFor(rig.node), "covered from the frame its size first changes (D2)")
-        assertEquals(1f, cover.scale, "drawn at its true size: 640 px for a page 320 points wide, at 2x")
-        assertFalse(rig.glue.lastInteractive)
+        val snapshots = rig.glue.ids("snapshot").size
+        val repaints = rig.glue.ids("repaint").size
+        rig.place(width = 700f, height = 520f)
+        val grown = assertIs<SurfaceDraw.Grown>(rig.engine.drawFor(rig.node), "live from the frame its size first changes")
+        assertEquals(640f, grown.fromLeft)
+        assertEquals(480f, grown.fromTop)
+        assertTrue(grown.background.alpha > 0f, "the page's own colour, from its last picture")
+        assertTrue(rig.glue.lastInteractive, "taking presses while it is resized")
+        assertTrue(rig.glue.ids("repaint").size > repaints, "WebKit is asked to draw the new size at once, not after the motion")
+        rig.repaintedAll()
+        rig.ticksAll()
+        assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node), "drawn at 700 × 520 px and shown: all of it live")
         advanceTimeBy(16)
-        rig.place(x = 40f, width = 560f, height = 600f)
-        advanceTimeBy(MacWebEngine.MOTION_SETTLE_MILLIS - 10)
-        runCurrent()
-        assertEquals(1f, assertIs<SurfaceDraw.Cover>(rig.engine.drawFor(rig.node), "still resizing").scale, "never magnified")
-        advanceTimeBy(20)
-        rig.repainted()
+        rig.place(width = 560f, height = 600f)
+        val taller = assertIs<SurfaceDraw.Grown>(rig.engine.drawFor(rig.node), "narrower shows nothing new; taller does")
+        assertEquals(Float.POSITIVE_INFINITY, taller.fromLeft)
+        assertEquals(520f, taller.fromTop)
+        rig.repaintedAll()
+        advanceTimeBy(MacWebEngine.MOTION_SETTLE_MILLIS + 10)
+        rig.repaintedAll()
         rig.tick()
         rig.tick()
         assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node))
         assertTrue(rig.glue.lastInteractive)
-        advanceTimeBy(1_000)
-        rig.place(x = 40f, y = 30f, width = 560f, height = 600f)
-        assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node), "settled: the next motion, a move, keeps the live page")
+        assertEquals(snapshots, rig.glue.ids("snapshot").size, "and takes no picture for a cover")
+    }
+
+    /**
+     * #164: a pane at the window's right and bottom edges is resized by AppKit with the window, before Compose lays it out:
+     * the glue is told which edges it follows, and what it grew by along them is WebKit's already, never the background.
+     */
+    @Test fun aPaneAtTheWindowsEdgesFollowsThemAndShowsNoBandAlongThem() = runTest {
+        val rig = Rig(this)
+        rig.live()
+        rig.snapshot(640, 480)
+        rig.place(width = 700f, height = 520f, edges = SlotEdges.RIGHT)
+        assertEquals(SlotEdges.RIGHT, rig.glue.lastEdges)
+        val grown = assertIs<SurfaceDraw.Grown>(rig.engine.drawFor(rig.node), "the bottom, not the right edge it follows")
+        assertEquals(Float.POSITIVE_INFINITY, grown.fromLeft)
+        assertEquals(480f, grown.fromTop)
+        rig.place(width = 760f, height = 560f, edges = SlotEdges.RIGHT or SlotEdges.BOTTOM)
+        assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node))
+        assertTrue(rig.glue.lastInteractive)
+    }
+
+    @Test fun slotEdgesAreTheWindowEdgesItsVisiblePartReaches() {
+        val root = androidx.compose.ui.unit.IntSize(1000, 800)
+        assertEquals(SlotEdges.RIGHT or SlotEdges.BOTTOM, SlotEdges.of(Rect(0f, 0f, 1000f, 800f), root))
+        assertEquals(SlotEdges.RIGHT, SlotEdges.of(Rect(200f, 0f, 999.6f, 600f), root))
+        assertEquals(0, SlotEdges.of(Rect(0f, 0f, 990f, 790f), root))
+        assertEquals(0, SlotEdges.of(Rect(1000f, 800f, 1000f, 800f), root), "nothing shows: no edge")
     }
 
     /** The cover keeps its size in points: on a window moved to a 1x screen it is half as many pixels. */
@@ -502,10 +550,13 @@ class MacWebEngineTest {
         val repaints = rig.glue.ids("repaint").size
         rig.place(height = 520f)
         val grown = assertIs<SurfaceDraw.Grown>(rig.engine.drawFor(rig.node), "the hole, and past 480 px the page's background")
-        assertEquals(480f, grown.from)
+        assertEquals(480f, grown.fromTop)
+        assertEquals(Float.POSITIVE_INFINITY, grown.fromLeft)
         assertTrue(grown.background.alpha > 0f, "the page's own colour, from its last picture")
         assertTrue(rig.glue.ids("repaint").size > repaints, "WebKit is asked to draw the new height at once, not after the motion")
         rig.repainted()
+        assertIs<SurfaceDraw.Grown>(rig.engine.drawFor(rig.node), "drawn, but not on screen before the display's next tick")
+        rig.ticksAll()
         assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node), "drawn at 520 px: all of it live")
         assertTrue(rig.glue.lastInteractive)
         rig.place(height = 500f)
@@ -642,20 +693,20 @@ class MacWebEngineTest {
         assertTrue(gone.synced.isEmpty(), "${gone.synced}")
     }
 
-    /** A pane's new height reflows its page (a footer, 100vh): it is covered meanwhile, and so is an embed's new width. */
-    @Test fun aPanesNewHeightAndAnEmbedsNewWidthAreCovered() = runTest {
+    /** #164: a pane's new height and an embed's new width keep the live page, laid out again as they change. */
+    @Test fun aPanesNewHeightAndAnEmbedsNewWidthStayLive() = runTest {
         val pane = Rig(this)
         pane.live()
         pane.snapshot()
         pane.place(height = 520f)
-        assertIs<SurfaceDraw.Cover>(pane.engine.drawFor(pane.node))
-        assertFalse(pane.glue.lastInteractive)
+        assertIs<SurfaceDraw.Grown>(pane.engine.drawFor(pane.node))
+        assertTrue(pane.glue.lastInteractive)
         val embed = Rig(this, inList = true)
         embed.live()
         embed.snapshot()
         embed.place(width = 600f)
-        assertIs<SurfaceDraw.Cover>(embed.engine.drawFor(embed.node))
-        assertFalse(embed.glue.lastInteractive)
+        assertEquals(SurfaceDraw.Hole, embed.engine.drawFor(embed.node), "narrower: nothing new shows")
+        assertTrue(embed.glue.lastInteractive)
     }
 
     /**
@@ -679,7 +730,7 @@ class MacWebEngineTest {
         val repaints = rig.glue.ids("repaint").size
         rig.place(width = 600f)
         assertEquals(repaints + 1, rig.glue.ids("repaint").size, "a new size draws the page again first")
-        assertFalse(rig.glue.lastInteractive)
+        assertTrue(rig.glue.lastInteractive, "and keeps taking input meanwhile (#164)")
         rig.repainted()
         rig.tick()
         rig.tick()
@@ -994,8 +1045,8 @@ class MacWebEngineTest {
         assertEquals(snapshots, rig.glue.ids("snapshot").size, "and no picture taken for a cover")
     }
 
-    /** The same page shown again at another size reflows: covered and drawn again before input, as any resize. */
-    @Test fun aRunningPageShownAgainAtAnotherSizeIsStillCoveredAndDrawnAgain() = runTest {
+    /** The same page shown again at another size is resized live, as any resize (#164), and drawn again there. */
+    @Test fun aRunningPageShownAgainAtAnotherSizeIsResizedLive() = runTest {
         val rig = Rig(this)
         rig.live()
         rig.snapshot()
@@ -1003,11 +1054,13 @@ class MacWebEngineTest {
         advanceTimeBy(1_000)
         runCurrent()
         val repaints = rig.glue.ids("repaint").size
-        rig.place(width = 600f)
-        assertEquals(repaints + 1, rig.glue.ids("repaint").size, "WebKit draws it at its new size first")
-        assertIs<SurfaceDraw.Cover>(rig.engine.drawFor(rig.node))
-        assertFalse(rig.glue.lastInteractive)
-        rig.repainted()
+        rig.place(width = 700f)
+        assertTrue(rig.glue.ids("repaint").size > repaints, "WebKit draws it at its new size at once")
+        assertEquals(640f, assertIs<SurfaceDraw.Grown>(rig.engine.drawFor(rig.node)).fromLeft)
+        assertTrue(rig.glue.lastInteractive)
+        rig.repaintedAll()
+        advanceTimeBy(MacWebEngine.MOTION_SETTLE_MILLIS + 10)
+        rig.repaintedAll()
         rig.tick()
         rig.tick()
         assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node))

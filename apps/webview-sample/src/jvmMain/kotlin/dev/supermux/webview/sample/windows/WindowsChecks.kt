@@ -77,6 +77,12 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.Base64
 import kotlin.math.abs
+import kotlin.math.roundToInt
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.coroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
 import kotlin.system.exitProcess
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -119,7 +125,7 @@ object WindowsChecks {
 
     private val shared: List<Check> = LinuxChecks.all.filter { it.name !in WPE_ONLY }
 
-    val all: List<Check> get() = shared + bridge + focus + popups + ime + lessons + keepAlive + questions + tall
+    val all: List<Check> get() = shared + bridge + focus + popups + ime + lessons + keepAlive + questions + tall + resize
 
     /** A focus scene of [engine]'s, its places on screen measured from this check's window. */
     private fun CheckScope.focusScene(engine: WebEngine, script: String = "") = FocusScene(engine, script, ::contentOrigin)
@@ -803,6 +809,51 @@ object WindowsChecks {
             }
         }
     }
+
+    /**
+     * #164: a pane resized by a drag (a window, a divider) has its page laid out again at every step, in step with it, as a
+     * browser's is. Waiting for the size to settle (C9) left the page at its old size for the whole drag, then jumped.
+     * The pane's width changes every frame for 1.5 s; the page's own width is asked as it goes.
+     */
+    private val resize: List<Check> = listOf(
+        Check("a-pane-resized-every-frame-relays-its-page-as-it-goes", timeoutMillis = 60_000) {
+            val bar = "<div style='position:fixed;right:0;top:0;bottom:0;width:12px;background:#ff0000'></div>"
+            val scene = SceneEngine(engine(), solidPage("resize", "#1e3a8a", body = bar), ::contentOrigin)
+            var extra by mutableStateOf(0.dp)
+            compose {
+                Box(Modifier.padding(start = 20.dp, top = 20.dp)) { scene.Surface(Modifier.size(300.dp + extra, 300.dp)) }
+            }
+            scene.awaitPainted()
+            val seen = mutableListOf<Pair<Int, Int>>()   // (surface px, the page's px) while it moves
+            val start = System.nanoTime()
+            coroutineScope {
+                launch {
+                    while (true) {
+                        val t = (System.nanoTime() - start) / 1e9
+                        if (t >= 1.5) break
+                        extra = (200 * kotlin.math.sin(Math.PI * t / 1.5)).dp
+                        delay(8)
+                    }
+                }
+                while ((System.nanoTime() - start) / 1e9 < 1.4) {
+                    val surface = scene.bounds?.width?.roundToInt() ?: continue
+                    val page = scene.engine.evaluate("String(Math.round(innerWidth * devicePixelRatio))")?.trim('"')?.toIntOrNull() ?: continue
+                    seen += surface to page
+                    delay(40)
+                }
+            }
+            val widths = seen.map { it.second }.distinct()
+            assertTrue(widths.size >= 4, "the page laid out at ${widths.size} widths while the pane moved, not as it went: $seen")
+            val followed = seen.count { (surface, page) -> abs(surface - page) <= 120 }
+            assertTrue(followed * 2 >= seen.size, "the page's width within 120 px of the pane's in only $followed of ${seen.size}: $seen")
+            eventually("the page at the pane's width once it stops") {
+                val surface = scene.bounds?.width?.roundToInt()
+                surface != null && scene.engine.evaluate("String(Math.round(innerWidth * devicePixelRatio))")?.trim('"')?.toIntOrNull() == surface
+            }
+            val r = scene.rect
+            eventually("its right-edge bar drawn at the pane's edge") { LinuxChecks.near(0xff0000, screenPixel(r.x + r.width - 4, r.y + r.height / 2), 24) }
+        },
+    )
 
     private val questions: List<Check> = listOf(
         Check("a-back-navigation-is-a-new-document") {

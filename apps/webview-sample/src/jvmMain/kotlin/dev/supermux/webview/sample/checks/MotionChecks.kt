@@ -59,8 +59,8 @@ import kotlin.math.min
  * - the window's backing (pure green, painted by Main.kt), which shows only where neither Compose nor a page draws,
  *   must show in none.
  *
- * The engine covers a page only while it is being resized (D2), so the motion cover must go up in the two resizes and
- * never while the list scrolls (a move keeps the live page).
+ * No motion covers the page (#164): a resized page is laid out again at every step, in step with its slot, and what it
+ * grew by shows the page's background until WebKit has drawn it, so the motion cover must never go up.
  */
 object MotionChecks {
     /** Deep blue, nothing green, and the red marker at CSS (16, 16), 24 × 24. */
@@ -334,23 +334,6 @@ object MotionChecks {
                 // window's own grey, which no count sees.
                 MacEngineTesting.paintBacking(mac.window, MacCheckPlatform.BACKING)
                 delay(500)
-                if (motion != Motion.ListScroll) {
-                    // The live page itself, uncovered, while it is redrawn at each new size: what the cover hides. Its
-                    // edges trail in strips of WKWebView's own light background, whatever its under-page colour (white,
-                    // WebKit's own, or the page's: tried on macOS 26). At least one copy must show them, or these copies
-                    // can't see what the motion does, and the cover's run proves nothing.
-                    MacEngineTesting.motionCover = false
-                    val live = try {
-                        measure(stage, motion, mac)
-                    } finally {
-                        MacEngineTesting.motionCover = true
-                    }
-                    println("MEASURE motion ${motion.label} without the cover: $live")
-                    if (live.copies < 30) throw AssertionError("too few copies to judge: $live")
-                    if (live.stripFrames == 0) {
-                        throw AssertionError("INCONCLUSIVE: without the cover no copy showed the page's edges trailing, so these copies can't see what this motion does: $live")
-                    }
-                }
                 val draws = MacEngineTesting.motionCoverDraws
                 val seen = measure(stage, motion, mac)
                 val coverDraws = MacEngineTesting.motionCoverDraws - draws
@@ -359,11 +342,7 @@ object MotionChecks {
                 assertEquals(0, seen.misplaced, "copies with the page's content out of its place ($seen)")
                 assertEquals(0, seen.gapFrames, "copies that show the window's backing ($seen)")
                 assertEquals(0, seen.stripFrames, "copies with light strips in the slot ($seen)")
-                if (motion == Motion.ListScroll) {
-                    assertEquals(0, coverDraws, "times the motion cover was drawn while the list scrolled: a move keeps the live page")
-                } else {
-                    assertTrue(coverDraws > 0, "the motion cover never went up while the page was resized")
-                }
+                assertEquals(0, coverDraws, "times the motion cover was drawn: a resize and a move keep the live page")
             } finally {
                 mac.windowState.size = startSize
                 compose(null)

@@ -28,7 +28,6 @@ import java.awt.event.ComponentEvent
 import java.util.Collections
 import java.util.WeakHashMap
 import kotlin.math.roundToInt
-import kotlinx.coroutines.delay
 import org.jetbrains.skiko.SkiaLayer
 
 /**
@@ -36,7 +35,7 @@ import org.jetbrains.skiko.SkiaLayer
  * `CaptureSurface` grown up:
  * - it draws the captured frames, pulled at the start of the Compose frame after WGC delivered one, 1:1 from the top-left
  *   and cut to the surface, from the store's own memory (D3, L9);
- * - it places WebView2 where it is: moves at once, sizes once settled, its window's scale, its window's frame as parent
+ * - it places WebView2 where it is, at once (a size too, #164), its window's scale, its window's frame as parent
  *   (W3, L26), and tells WebView2 when the window moves (popups, the IME window, W6; the capture's adapter, D24);
  * - it forwards the mouse with `SendMouseInput` and consumes it (D16, L27); in a list the wheel is the list's;
  * - it shows WebView2's cursor (W8), and hands keyboard focus over through the engine's FocusBroker (Task 25).
@@ -67,12 +66,6 @@ internal fun Wv2Surface(engine: WindowsWebEngine, modifier: Modifier) {
             }
         } finally {
             engine.onSurfaceAttached(false)
-        }
-    }
-    LaunchedEffect(engine) {
-        while (true) {
-            delay(if (engine.placementPending) 16L else 100L)
-            engine.settlePlacement(System.nanoTime())
         }
     }
     DisposableEffect(engine, window) {

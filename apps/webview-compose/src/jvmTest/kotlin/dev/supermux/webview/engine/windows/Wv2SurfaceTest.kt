@@ -56,16 +56,17 @@ class Wv2SurfaceTest {
         rig.close()
     }
 
-    @Test fun movesApplyAtOnceAndSizesOnceSettled() {
+    @Test fun movesAndSizesApplyAtOnce() {
         val rig = rig()
-        rig.engine.onSurfacePlaced(null, 10, 20, 300, 200, now = 0L)
+        rig.engine.onSurfacePlaced(null, 10, 20, 300, 200)
         assertEquals(listOf<Any>(1L, 2L, 10, 20, 300, 200, 1.5), rig.page.placed.last(), "the first place at once")
-        rig.engine.onSurfacePlaced(null, 10, 60, 300, 200, now = 1_000L)
+        rig.engine.onSurfacePlaced(null, 10, 60, 300, 200)
         assertEquals(60, rig.page.placed.last()[3], "a move at once")
-        rig.engine.onSurfacePlaced(null, 10, 60, 340, 260, now = 2_000L)
-        assertEquals(300, rig.page.placed.last()[4], "a size waits (C9)")
-        rig.engine.settlePlacement(2_000L + WinDefaults.SIZE_SETTLE_NANOS)
-        assertEquals(340, rig.page.placed.last()[4])
+        rig.engine.onSurfacePlaced(null, 10, 60, 340, 260)
+        assertEquals(listOf<Any>(1L, 2L, 10, 60, 340, 260, 1.5), rig.page.placed.last(), "a size at once: a drag's every step (#164)")
+        val placements = rig.page.placed.size
+        rig.engine.onSurfacePlaced(null, 10, 60, 340, 260)
+        assertEquals(placements, rig.page.placed.size, "the same place again goes nowhere")
         rig.engine.onSurfaceAttached(false)
         assertTrue("unplace" in rig.page.calls, "no surface: the parking window is its parent")
         rig.close()

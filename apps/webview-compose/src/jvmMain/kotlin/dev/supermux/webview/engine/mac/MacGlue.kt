@@ -12,9 +12,9 @@ internal object MacGlue {
      * The ABI this library speaks: `WV_ABI_VERSION` in `native/macos/WVGlue.h`. Change both together. 3: [setBackdrop]. 4:
      * [place]'s window, [syncFrames], [frameRecorded], [testFrameSync]. 5: [createPage]'s floor at a host of the bundles'
      * scheme, [testWebProcess]. 6: [find], [clearFind], [setPageZoom], [setCookie]. 7: [setUnderlay]. 8: downloads ([downloadPolicy], [downloadResponse], [answerDownload], [pauseDownload],
-     * [resumeDownload], [cancelDownload]). 9: [clearSiteData].
+     * [resumeDownload], [cancelDownload]). 9: [clearSiteData]. 10: [place]'s edges (#164), [testResizeDrag].
      */
-    const val ABI: Int = 9
+    const val ABI: Int = 10
 
     /** The loaded glue's ABI; -1 if it couldn't find [onEvent] when it loaded. */
     @JvmStatic external fun abiVersion(): Int
@@ -167,8 +167,9 @@ internal object MacGlue {
     @JvmStatic external fun detach(page: Long, window: Long)
 
     /**
-     * The slot, and the part of it that shows (I2), window px; [scale]: the window's backing scale, window px a point. In a
-     * [window] in sync ([syncFrames]), the view moves with the frame skiko draws of this layout, in its transaction.
+     * The slot, and the part of it that shows (I2), window px; [scale]: the window's backing scale, window px a point;
+     * [edges]: the window's edges it reaches (`SlotEdges`), which AppKit's resize moves it with at once. In a [window] in
+     * sync ([syncFrames]), the view moves with the frame skiko draws of this layout, in its transaction.
      */
     @JvmStatic external fun place(
         page: Long,
@@ -183,6 +184,7 @@ internal object MacGlue {
         shownHeight: Float,
         scale: Float,
         hidden: Boolean,
+        edges: Int,
     )
 
     /** [flags]: interactive 1, shown 2, wheel to the page 4. */
@@ -240,6 +242,12 @@ internal object MacGlue {
      * scale, or with [nominal] a pixel a point.
      */
     @JvmStatic external fun testCopyWindow(window: Long, x: Float, y: Float, width: Float, height: Float, nominal: Boolean): ByteArray?
+
+    /**
+     * A drag of the window's bottom-right corner, as a user's: [phase] 0 presses there, 1 drags it ([dx], [dy]) points
+     * from where it was pressed, 2 lets go. Waits for AppKit's thread; true when the window is in a live resize then.
+     */
+    @JvmStatic external fun testResizeDrag(window: Long, phase: Int, dx: Float, dy: Float): Boolean
 
     @JvmStatic external fun testPaintBacking(window: Long, argb: Int)
 

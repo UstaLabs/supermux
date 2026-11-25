@@ -200,6 +200,9 @@ internal class MacWebEngine(
 
     /** The window's backing scale, window px a point (I3): Compose's window pixels are the window's backing pixels. */
     private var scale = 0f
+
+    /** The window's edges the slot reaches ([SlotEdges]): AppKit's resize moves its view with them at once (#164). */
+    private var edges = 0
     private var placed = false
 
     /** The page has been drawn where its view is now, for two ticks, and nothing has moved since (D2). */
@@ -241,6 +244,9 @@ internal class MacWebEngine(
      * WebKit has drawn it ([followGrowth]); 0 until the slot is first still.
      */
     private var drawnHeight = 0f
+
+    /** The width WebKit has drawn the page at (window px), as [drawnHeight]. */
+    private var drawnWidth = 0f
     private var growthRepaint: Job? = null
     private var motionCoverAt = 0L
     private var refreshingCover = false
@@ -686,12 +692,14 @@ internal class MacWebEngine(
         motionNeedsCover = false
         motionCover = null
         drawnHeight = 0f
+        drawnWidth = 0f
         if (window != 0L && !released) glue.detach(window)
         window = 0L
         updateInput()
     }
 
-    override fun surfacePlaced(node: MacSurfaceNode, window: Long, bounds: Rect, visible: Rect, scale: Float): Boolean {
+    override fun surfacePlaced(node: MacSurfaceNode, window: Long, bounds: Rect, visible: Rect, scale: Float, edges: Int): Boolean {
+        val followed = if (followEdges) edges else 0
         if (released || surface !== node || window == 0L) return false
         val newWindow = window != this.window
         if (newWindow) {
@@ -702,9 +710,10 @@ internal class MacWebEngine(
             this.bounds = null
         }
         val nowPlaced = visible.width >= 1f && visible.height >= 1f && bounds.width >= 1f && bounds.height >= 1f
-        if (bounds == this.bounds && visible == this.visible && scale == this.scale && nowPlaced == placed) return false
+        if (bounds == this.bounds && visible == this.visible && scale == this.scale && nowPlaced == placed && followed == this.edges) return false
         val old = this.bounds
-        val newWidth = old == null || old.width != bounds.width || scale != this.scale
+        val newScale = old == null || scale != this.scale
+        val newWidth = old == null || old.width != bounds.width || newScale
         val newHeight = old == null || old.height != bounds.height
         // Shown again, a page told it was hidden (a lazy list's retained item: the runtime tells it at once, and suspends
         // its media) is drawn again before it shows, under the cover. One never told so ran on while its view was hidden
@@ -714,38 +723,47 @@ internal class MacWebEngine(
         // WebKit draws the page again at a new size or scale, in a new window, and once shown again after being told it
         // was hidden.
         val redraw = newWidth || newHeight || redrawnWhenShown || newWindow
-        // Its content reflows meanwhile, but for an embed's new height alone: a page as tall as its content only shows
-        // more or less of itself, and nothing it shows moves (C2).
-        val reflows = redraw && (newWidth || redrawnWhenShown || newWindow || !node.inList)
+        // The cover stands in while WebKit draws it again from nothing: shown again, a new window, a new scale. A new size
+        // alone keeps the page live (#164): a window or pane resized by a drag is laid out again at every step, in step
+        // with it, as Safari's is, and what WebKit hasn't drawn yet shows the page's background ([followGrowth]), never a
+        // still picture that jumps to the page once the drag stops.
+        val reflows = redraw && (redrawnWhenShown || newWindow || newScale)
         this.bounds = bounds
         this.visible = visible
         this.scale = scale
+        this.edges = followed
         if (redraw) needsRepaint = true
         placed = nowPlaced
         updateBackdrop()
-        glue.place(window, bounds, visible, scale, hidden = !nowPlaced)
+        glue.place(window, bounds, visible, scale, hidden = !nowPlaced, edges = followed)
         moved(reflows)
-        if (!reflows && newHeight && drawnHeight > 0f) {
-            if (bounds.height > drawnHeight) followGrowth() else drawnHeight = bounds.height
+        if (!reflows && drawnHeight > 0f && drawnWidth > 0f) {
+            if (bounds.height < drawnHeight) drawnHeight = bounds.height
+            if (bounds.width < drawnWidth) drawnWidth = bounds.width
+            if (bounds.height > drawnHeight || bounds.width > drawnWidth) followGrowth()
         }
         return true
     }
 
     /**
-     * An embed grew past what WebKit has drawn: until it has, the grown part shows the page's background ([drawFor]),
-     * not its view's own white. WebKit is asked at once (a repaint: two frames), and again while it keeps growing, so new
-     * content shows within frames, never only once the motion stops.
+     * The slot grew past what WebKit has drawn (an embed's new height, a window or pane resized): until it has, the grown
+     * part shows the page's background ([drawFor]), not its view's own white. WebKit is asked at once (a repaint: two
+     * frames), and again while it keeps growing, so the page follows within frames, never only once the motion stops.
      */
     private fun followGrowth() {
         if (growthRepaint?.isActive == true) return
         growthRepaint = scope.launch {
             while (!released) {
-                val height = bounds?.height ?: return@launch
+                val slot = bounds ?: return@launch
                 withTimeoutOrNull(REPAINT_MILLIS) { request { glue.repaint(it, WebKitScripts.REPAINT_BODY) } }
+                // WebKit's frames have been drawn, and are on screen at the display's next tick, not before.
+                ticksInWindow(1)
                 if (released) return@launch
-                if (height > drawnHeight) drawnHeight = height
+                if (slot.height > drawnHeight) drawnHeight = slot.height
+                if (slot.width > drawnWidth) drawnWidth = slot.width
                 surface?.redraw()
-                if ((bounds?.height ?: 0f) <= drawnHeight) return@launch
+                val now = bounds ?: return@launch
+                if (now.height <= drawnHeight && now.width <= drawnWidth) return@launch
             }
         }
     }
@@ -772,9 +790,16 @@ internal class MacWebEngine(
             return coverOf(cover)
         }
         val slot = bounds
-        if (slot != null && node.inList && shown && drawnHeight > 0f && slot.height > drawnHeight + 0.5f && setup?.transparentBackground != true) {
+        // Not along the window's edges the view follows in AppKit's own resize ([SlotEdges]): WebKit had that size first.
+        val grownDown = drawnHeight > 0f && slot != null && slot.height > drawnHeight + 0.5f && edges and SlotEdges.BOTTOM == 0
+        val grownAcross = drawnWidth > 0f && slot != null && slot.width > drawnWidth + 0.5f && edges and SlotEdges.RIGHT == 0
+        if (slot != null && shown && (grownDown || grownAcross) && setup?.transparentBackground != true) {
             val background = motionCoverBackground.takeIf { it.alpha > 0f } ?: if (setup?.dark == true) Color.Black else Color.White
-            return SurfaceDraw.Grown(drawnHeight, background)
+            return SurfaceDraw.Grown(
+                fromTop = if (grownDown) drawnHeight else Float.POSITIVE_INFINITY,
+                fromLeft = if (grownAcross) drawnWidth else Float.POSITIVE_INFINITY,
+                background = background,
+            )
         }
         return SurfaceDraw.Hole
     }
@@ -827,6 +852,7 @@ internal class MacWebEngine(
             still = true
             motionNeedsCover = false
             drawnHeight = bounds?.height ?: 0f
+            drawnWidth = bounds?.width ?: 0f
             updateInput()
             surface?.redraw()
             onSurfaceReady()
@@ -1559,6 +1585,9 @@ internal class MacWebEngine(
 
         /** False shows the live, lagging page while a slot moves: the motion checks' baseline (Task 15). */
         @Volatile internal var motionCoverEnabled: Boolean = true
+
+        /** False: a slot's view never follows the window's edges in AppKit's resize ([SlotEdges]): the checks' baseline. */
+        @Volatile internal var followEdges: Boolean = true
 
         /** False leaves no backdrop where a moving page was ([updateBackdrop]): the trackpad check's baseline. */
         @Volatile internal var backdropEnabled: Boolean = true

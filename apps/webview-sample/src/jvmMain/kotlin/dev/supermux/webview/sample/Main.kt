@@ -13,6 +13,7 @@ import dev.supermux.webview.sample.checks.MacCheckPlatform
 import dev.supermux.webview.sample.checks.MacChecks
 import dev.supermux.webview.sample.checks.Measurements
 import dev.supermux.webview.sample.checks.MotionChecks
+import dev.supermux.webview.sample.checks.ResizeChecks
 import dev.supermux.webview.sample.chat.ChatProbe
 import dev.supermux.webview.sample.chat.ChatRun
 import dev.supermux.webview.sample.chat.ChatState
@@ -105,8 +106,8 @@ fun main(args: Array<String>) {
                 }
                 val list = when {
                     measure -> Measurements.all
-                    only == null -> EngineChecks.all + MacChecks.all + ReviewChecks.all + MotionChecks.all + TrackpadChecks.all
-                    else -> EngineChecks.all + EngineChecks.onDemand + MacChecks.all + ReviewChecks.all + MotionChecks.all + TrackpadChecks.all
+                    only == null -> EngineChecks.all + MacChecks.all + ReviewChecks.all + MotionChecks.all + ResizeChecks.all + TrackpadChecks.all
+                    else -> EngineChecks.all + EngineChecks.onDemand + MacChecks.all + ReviewChecks.all + MotionChecks.all + ResizeChecks.all + TrackpadChecks.all + ResizeChecks.measure
                 }
                 CheckScreen(list, only, platform)
             } else if (perfLab) {

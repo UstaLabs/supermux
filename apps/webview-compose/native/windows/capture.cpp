@@ -512,11 +512,26 @@ bool FrameCapture::start(std::shared_ptr<GpuDevice> device, winrt::Windows::UI::
     return s->started;
 }
 
+/**
+ * The pool's textures for content of `need` px: at least that, in steps of kPoolStep, and kept while they still fit
+ * within a step and a half more, so a window resized by a drag (the page placed at every step, #164) recreates the pool
+ * every few steps, not every frame. Its frames' content is the visual's size; the rest of a texture goes unread.
+ */
+static int poolSide(int need, int current) {
+    constexpr int kPoolStep = 256;
+    if (current >= need && current <= need + kPoolStep + kPoolStep / 2) return current;
+    return (need + kPoolStep - 1) / kPoolStep * kPoolStep;
+}
+
 void FrameCapture::resize(int width, int height) {
     auto s = state_;
     std::lock_guard<std::mutex> frameLock(s->frameMutex);
-    if (!s->started || width <= 0 || height <= 0 || (s->poolSize.Width == width && s->poolSize.Height == height)) return;
-    s->poolSize = {width, height};
+    if (!s->started || width <= 0 || height <= 0) return;
+    const int poolWidth = poolSide(width, s->poolSize.Width);
+    const int poolHeight = poolSide(height, s->poolSize.Height);
+    s->needWhole = true;
+    if (s->poolSize.Width == poolWidth && s->poolSize.Height == poolHeight) return;
+    s->poolSize = {poolWidth, poolHeight};
     try {
         s->pool.Recreate(s->device->rtDevice(), kFormat, 2, s->poolSize);
     } catch (winrt::hresult_error const&) {
