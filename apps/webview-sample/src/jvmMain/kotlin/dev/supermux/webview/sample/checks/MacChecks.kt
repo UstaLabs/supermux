@@ -278,6 +278,41 @@ button{display:block;width:100%;height:15vh;margin-top:8vh}</style></head>
         start()
     }
 
+    /**
+     * A page with two looping autoplay videos of [TINY_VIDEO_MP4], served with byte ranges as WebKit wants: one muted,
+     * one with sound. Its title says which play.
+     */
+    private fun autoplayServer(): HttpServer = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+        createContext("/") { exchange ->
+            if (exchange.requestURI.path == "/clip.mp4") {
+                val all = TINY_VIDEO_MP4
+                val range = Regex("bytes=(\\d+)-(\\d*)").find(exchange.requestHeaders.getFirst("Range").orEmpty())
+                exchange.responseHeaders.add("Content-Type", "video/mp4")
+                exchange.responseHeaders.add("Accept-Ranges", "bytes")
+                if (range != null) {
+                    val first = range.groupValues[1].toInt()
+                    val last = range.groupValues[2].toIntOrNull()?.coerceAtMost(all.size - 1) ?: (all.size - 1)
+                    exchange.responseHeaders.add("Content-Range", "bytes $first-$last/${all.size}")
+                    exchange.sendResponseHeaders(206, (last - first + 1).toLong())
+                    exchange.responseBody.use { it.write(all, first, last - first + 1) }
+                } else {
+                    exchange.sendResponseHeaders(200, all.size.toLong())
+                    exchange.responseBody.use { it.write(all) }
+                }
+                return@createContext
+            }
+            val body = """<!doctype html><title>autoplay</title><body>
+<video id=m src="clip.mp4" autoplay muted loop playsinline width=160></video>
+<video id=s src="clip.mp4" autoplay loop playsinline width=160></video>
+<script>setInterval(function(){var m=document.getElementById('m'),s=document.getElementById('s');
+document.title='muted='+(m.paused?'paused':'playing')+' sound='+(s.paused?'paused':'playing')},300)</script></body>""".toByteArray()
+            exchange.responseHeaders.add("Content-Type", "text/html")
+            exchange.sendResponseHeaders(200, body.size.toLong())
+            exchange.responseBody.use { it.write(body) }
+        }
+        start()
+    }
+
     val all: List<Check> = listOf(
         Check("mac-find-says-found-or-not") {
             val stage = Stage()
@@ -533,6 +568,21 @@ button{display:block;width:100%;height:15vh;margin-top:8vh}</style></head>
                 runtime.clear()
                 delay(300)
                 scope.cancel()
+            }
+        },
+        // As in Safari and Chrome: a muted video plays by itself, one with sound waits for the user's gesture.
+        Check("mac-a-muted-video-autoplays-and-one-with-sound-waits") {
+            val server = autoplayServer()
+            try {
+                val stage = Stage(profile = WebProfile.Named("checks-autoplay"))
+                withPage(stage) { _ ->
+                    stage.state.navigator.load("http://127.0.0.1:${server.address.port}/")
+                    waitFor("the muted video playing", millis = 15_000) { stage.state.title?.startsWith("muted=playing") == true }
+                    delay(1_500)
+                    assertEquals("muted=playing sound=paused", stage.state.title, "the one with sound waits for a gesture")
+                }
+            } finally {
+                server.stop(0)
             }
         },
         Check("mac-focus-follows-the-press") {

@@ -220,7 +220,8 @@ static CGImageRef WVLargestImage(NSImage *image) {
         default:
             configuration.websiteDataStore = [WKWebsiteDataStore defaultDataStore];
     }
-    configuration.mediaTypesRequiringUserActionForPlayback = gesture ? WKAudiovisualMediaTypeAll : WKAudiovisualMediaTypeNone;
+    // As Safari and Chrome: media with sound waits for the user's gesture, a muted video may play by itself.
+    configuration.mediaTypesRequiringUserActionForPlayback = gesture ? WKAudiovisualMediaTypeAudio : WKAudiovisualMediaTypeNone;
     configuration.preferences.javaScriptCanOpenWindowsAutomatically = NO;
     _bundles = [[WVBundleHandler alloc] init];
     _bundles.page = self;

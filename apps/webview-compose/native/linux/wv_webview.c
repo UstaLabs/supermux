@@ -292,11 +292,16 @@ static int64_t web_create(WvOp *op)
     webkit_settings_set_javascript_can_open_windows_automatically(settings, FALSE);
     webkit_settings_set_allow_file_access_from_file_urls(settings, FALSE);
     webkit_settings_set_allow_universal_access_from_file_urls(settings, FALSE);
-    webkit_settings_set_media_playback_requires_user_gesture(settings, op->i[1] != 0);
+    /* As Safari and Chrome: media with sound waits for the user's gesture, a muted video may play by itself. The
+     * gesture setting would hold back muted video too; the autoplay policy holds back sound only. */
+    webkit_settings_set_media_playback_requires_user_gesture(settings, FALSE);
+    WebKitWebsitePolicies *policies = webkit_website_policies_new_with_policies(
+        "autoplay", op->i[1] != 0 ? WEBKIT_AUTOPLAY_ALLOW_WITHOUT_SOUND : WEBKIT_AUTOPLAY_ALLOW, NULL);
     WebKitUserContentManager *ucm = webkit_user_content_manager_new();
     WebKitWebView *web = WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW,
         "display", wv_host_display(), "web-context", wv_host_context(), "network-session", session,
-        "settings", settings, "user-content-manager", ucm, NULL));
+        "settings", settings, "user-content-manager", ucm, "website-policies", policies, NULL));
+    g_object_unref(policies);
     g_object_unref(settings);
     g_object_unref(session);
     WPEView *wpe = webkit_web_view_get_wpe_view(web);
