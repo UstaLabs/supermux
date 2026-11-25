@@ -62,7 +62,9 @@ public class WebSettings(
      */
     public val profile: WebProfile? = null,
     /**
-     * Whether a page's media needs the user's gesture to play. Engines take it when they are made (WebKit's media
+     * Whether a page's media with sound needs the user's gesture to play, as in Safari and Chrome: a muted video plays by
+     * itself either way (macOS and iOS: WebKit's audio-only policy; Linux: WPE's autoplay-without-sound policy;
+     * Android and Windows: Chromium's own, which lets muted video play). Engines take it when they are made (WebKit's media
      * playback policy), so, as a profile does ([WebProfile]), each value in use splits the engine pool and its spares:
      * views that differ in it never share an engine. On Windows, false is the profile's autoplay site setting in WebView2,
      * for each origin the engine shows, so engines of one profile on one origin share it, whatever their own setting

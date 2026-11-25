@@ -97,7 +97,7 @@ import platform.UIKit.UIColor
 import platform.UIKit.UIImage
 import platform.UIKit.UIScreen
 import platform.UIKit.UIUserInterfaceStyle
-import platform.WebKit.WKAudiovisualMediaTypeAll
+import platform.WebKit.WKAudiovisualMediaTypeAudio
 import platform.WebKit.WKAudiovisualMediaTypeNone
 import platform.WebKit.WKBackForwardListItem
 import platform.WebKit.WKContentWorld
@@ -1475,8 +1475,9 @@ internal class IosWebEngine private constructor(
             val relay = RelayHandler()
             val configuration = WKWebViewConfiguration()
             configuration.websiteDataStore = dataStoreFor(config.profile, namedStores = osAtLeast(17))
+            // As Safari: media with sound waits for the user's gesture, a muted video may play by itself.
             configuration.mediaTypesRequiringUserActionForPlayback =
-                if (config.mediaPlaybackRequiresGesture) WKAudiovisualMediaTypeAll else WKAudiovisualMediaTypeNone
+                if (config.mediaPlaybackRequiresGesture) WKAudiovisualMediaTypeAudio else WKAudiovisualMediaTypeNone
             configuration.allowsInlineMediaPlayback = true
             configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
             configuration.setURLSchemeHandler(bundles, forURLScheme = WebKitUrls.BUNDLE_SCHEME)
