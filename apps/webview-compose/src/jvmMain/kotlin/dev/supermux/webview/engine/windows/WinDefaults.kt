@@ -13,9 +13,6 @@ internal object WinDefaults {
     /** Warm spares: the desktop's 3, each a renderer on the floor. */
     const val MAX_IDLE: Int = 3
 
-    /** How long a size waits to settle before WebView2 is resized (the test's 150 ms, C9). */
-    const val SIZE_SETTLE_NANOS: Long = 150_000_000L
-
     /** How long the glue's UI thread waits for Compose's answer to an accelerator (D15). */
     const val KEY_OFFER_MILLIS: Long = 50L
 

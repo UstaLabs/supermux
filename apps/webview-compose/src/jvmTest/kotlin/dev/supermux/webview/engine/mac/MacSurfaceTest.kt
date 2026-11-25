@@ -62,7 +62,7 @@ class MacSurfaceTest {
             detached++
         }
 
-        override fun surfacePlaced(node: MacSurfaceNode, window: Long, bounds: Rect, visible: Rect, scale: Float): Boolean {
+        override fun surfacePlaced(node: MacSurfaceNode, window: Long, bounds: Rect, visible: Rect, scale: Float, edges: Int): Boolean {
             placed += window to bounds
             placedScale = scale
             return true

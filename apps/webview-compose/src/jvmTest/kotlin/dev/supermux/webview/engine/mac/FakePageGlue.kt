@@ -165,7 +165,10 @@ internal class FakePageGlue(override val token: Long = 1) : PageGlue {
         calls += "detach $window"
     }
 
-    override fun place(window: Long, slot: Rect, visible: Rect, scale: Float, hidden: Boolean) {
+    var lastEdges: Int = 0
+
+    override fun place(window: Long, slot: Rect, visible: Rect, scale: Float, hidden: Boolean, edges: Int) {
+        lastEdges = edges
         placedIn += window
         calls += "place ${slot.left} ${slot.top} ${slot.width} ${slot.height} in ${visible.left} ${visible.top} " +
             "${visible.width} ${visible.height} at $scale hidden=$hidden"

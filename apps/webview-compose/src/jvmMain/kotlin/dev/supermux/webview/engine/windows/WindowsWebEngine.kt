@@ -917,10 +917,11 @@ internal class WindowsWebEngine(
     /** Where surfaces are, for WebView2 (SurfaceWindows); tests set a fake. */
     internal var windows: SurfaceWindows = AwtSurfaceWindows
 
-    private var placement = BoundsDebouncer(WinDefaults.SIZE_SETTLE_NANOS)
-    private var placedAt: SurfaceWindows.Placement? = null
+    /** The surface's rectangle in its window's Compose root, in pixels, as WebView2 last got it. */
+    private data class Bounds(val x: Int, val y: Int, val width: Int, val height: Int)
 
-    internal val placementPending: Boolean get() = placement.hasPending
+    private var appliedBounds: Bounds? = null
+    private var placedAt: SurfaceWindows.Placement? = null
 
     internal fun onSurfaceAttached(attached: Boolean) {
         val before = surfaces
@@ -931,32 +932,27 @@ internal class WindowsWebEngine(
             // No surface shows the page: the parking window is its parent until one does.
             if (!pageClosed) page.unplace()
             placedAt = null
-            placement = BoundsDebouncer(WinDefaults.SIZE_SETTLE_NANOS)
+            appliedBounds = null
         }
         if (surfaces > 0) startHeartbeat() else stopHeartbeat()
     }
 
     /**
-     * The surface is at ([x], [y]) in its window's Compose root, [width] × [height] pixels: moves go to WebView2 at once,
-     * sizes once they settle (C9), and a new window or scale at once (another monitor, L26).
+     * The surface is at ([x], [y]) in its window's Compose root, [width] × [height] pixels: WebView2 gets it at once, a
+     * move, a new size, a new window or scale (another monitor, L26) alike. A size too: a window resized by a drag has
+     * its page laid out again at every step, in step with it (#164), as a browser's is, where waiting for the size to
+     * settle (C9) left the page at its old size for the whole drag, and jumping to the new one after it.
      */
-    internal fun onSurfacePlaced(window: java.awt.Window?, x: Int, y: Int, width: Int, height: Int, now: Long = System.nanoTime()) {
+    internal fun onSurfacePlaced(window: java.awt.Window?, x: Int, y: Int, width: Int, height: Int) {
         if (pageClosed || width <= 0 || height <= 0) return
         val where = windows.of(window) ?: return
         val moved = placedAt?.let { it.frame != where.frame || it.canvas != where.canvas || it.scale != where.scale } ?: true
         placedAt = where
-        if (moved) placement = BoundsDebouncer(WinDefaults.SIZE_SETTLE_NANOS)
-        placement.update(BoundsDebouncer.Rect(x, y, width, height), now)?.let(::applyPlacement)
-    }
-
-    internal fun settlePlacement(now: Long) {
-        if (!pageClosed) placement.poll(now)?.let(::applyPlacement)
-    }
-
-    private fun applyPlacement(rect: BoundsDebouncer.Rect) {
-        val where = placedAt ?: return
-        page.place(where.frame, where.canvas, rect.x, rect.y, rect.width, rect.height, where.scale)
-        onSurfacePlacedForTests(rect.width, rect.height)
+        val bounds = Bounds(x, y, width, height)
+        if (!moved && bounds == appliedBounds) return
+        appliedBounds = bounds
+        page.place(where.frame, where.canvas, x, y, width, height, where.scale)
+        onSurfacePlacedForTests(width, height)
     }
 
     /** The window moved: WebView2's popups and IME window follow, and the capture its monitor's adapter (D24). */

@@ -312,3 +312,35 @@ JNIEXPORT jlong JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_testWindowN
     });
     return (jlong)number;
 }
+
+/**
+ * A user's drag of the window's bottom-right corner, step by step: phase 0 presses there, 1 drags the corner to (dx, dy)
+ * points from where it was pressed (right and down), 2 lets go. Into the app's own queue, as every input here: AppKit's
+ * resize tracking takes it as a live resize (inLiveResize, its event-tracking run loop), the cursor doesn't move. Returns
+ * whether the window is in a live resize as the step is posted.
+ */
+static NSPoint gResizeStart;
+JNIEXPORT jboolean JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_testResizeDrag(
+    JNIEnv *env, jclass type, jlong window, jint phase, jfloat dx, jfloat dy) {
+    NSWindow *w = WVWindow(window);
+    __block BOOL live = NO;
+    dispatch_block_t post = ^{
+        live = w.inLiveResize;
+        if (phase == 0) {
+            NSRect frame = w.frame;
+            // A point in on the corner, in screen coordinates (bottom-left origin).
+            gResizeStart = NSMakePoint(NSMaxX(frame) - 2, NSMinY(frame) + 2);
+        }
+        NSPoint onScreen = NSMakePoint(gResizeStart.x + (phase == 0 ? 0 : dx), gResizeStart.y - (phase == 0 ? 0 : dy));
+        NSEventType kind = phase == 0 ? NSEventTypeLeftMouseDown : phase == 1 ? NSEventTypeLeftMouseDragged : NSEventTypeLeftMouseUp;
+        // The window's frame now, whatever the resize has made of it: the event's place in the window's coordinates.
+        NSPoint at = [w convertPointFromScreen:onScreen];
+        NSEvent *event = [NSEvent mouseEventWithType:kind location:at modifierFlags:0
+                                           timestamp:NSProcessInfo.processInfo.systemUptime windowNumber:w.windowNumber
+                                             context:nil eventNumber:0 clickCount:1 pressure:phase == 2 ? 0.0f : 1.0f];
+        [NSApp postEvent:event atStart:NO];
+    };
+    // AppKit's thread is inside the resize's tracking loop from the press on; dispatch_sync reaches it there too.
+    if ([NSThread isMainThread]) post(); else dispatch_sync(dispatch_get_main_queue(), post);
+    return live ? JNI_TRUE : JNI_FALSE;
+}

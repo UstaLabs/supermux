@@ -151,6 +151,7 @@ static NSArray<NSString *> *WVTrailModes(void) {
     CGFloat _density;
     NSRect _slot;                    // the page's slot, window px from the content's top-left
     NSRect _shownPart;                   // the part of it that shows, the same
+    int _edges;                      // the content's edges the shown part reached in its layout: 1 right, 2 bottom
     CGFloat _scale;                  // window px a point; 0 until placed
     BOOL _hiddenWanted;
     BOOL _unplaced;                  // attached to a window, and not placed there since
@@ -272,11 +273,12 @@ static NSArray<NSString *> *WVTrailModes(void) {
     atomic_fetch_add(&_onTheWay, 1);
 }
 
-- (void)placeSlot:(NSRect)slot shown:(NSRect)shown scale:(CGFloat)scale hidden:(BOOL)hidden turn:(long long)turn {
+- (void)placeSlot:(NSRect)slot shown:(NSRect)shown scale:(CGFloat)scale hidden:(BOOL)hidden edges:(int)edges turn:(long long)turn {
     atomic_fetch_sub(&_onTheWay, 1);
     // A later placement got here first (it took the other way): this one is stale.
     if (turn <= _turn) return;
     _turn = turn;
+    _edges = edges;
     [self placeSlot:slot shown:shown scale:scale hidden:hidden];
 }
 
@@ -290,10 +292,25 @@ static NSArray<NSString *> *WVTrailModes(void) {
     if (!content || _scale <= 0) return;
     CGFloat s = _scale;
     CGFloat height = content.bounds.size.height;
-    NSRect shown = NSMakeRect(_shownPart.origin.x / s, _shownPart.origin.y / s, _shownPart.size.width / s, _shownPart.size.height / s);
+    // A slot that reached the content's right or bottom edge in its layout reaches it still: while the window is resized,
+    // AppKit resizes the content view, and this, before Compose has laid out the new size, so WebKit lays the page out
+    // again in AppKit's own resize, in step with the window, as Safari's does (#164). Compose's placement of that size
+    // follows, the same.
+    NSRect slotPx = _slot, shownPx = _shownPart;
+    if (_edges & 1) {
+        CGFloat grown = content.bounds.size.width * s - NSMaxX(_shownPart);
+        slotPx.size.width = MAX(0, slotPx.size.width + grown);
+        shownPx.size.width = MAX(0, shownPx.size.width + grown);
+    }
+    if (_edges & 2) {
+        CGFloat grown = height * s - NSMaxY(_shownPart);
+        slotPx.size.height = MAX(0, slotPx.size.height + grown);
+        shownPx.size.height = MAX(0, shownPx.size.height + grown);
+    }
+    NSRect shown = NSMakeRect(shownPx.origin.x / s, shownPx.origin.y / s, shownPx.size.width / s, shownPx.size.height / s);
     NSRect frame = NSMakeRect(shown.origin.x, height - NSMaxY(shown), shown.size.width, shown.size.height);
-    NSRect inner = NSMakeRect((_slot.origin.x - _shownPart.origin.x) / s, (_slot.origin.y - _shownPart.origin.y) / s,
-                              _slot.size.width / s, _slot.size.height / s);
+    NSRect inner = NSMakeRect((slotPx.origin.x - shownPx.origin.x) / s, (slotPx.origin.y - shownPx.origin.y) / s,
+                              slotPx.size.width / s, slotPx.size.height / s);
     BOOL moved = !NSEqualPoints(inner.origin, _webView.frame.origin);
     // Hidden only while the slot isn't placed (D1), or isn't placed in this window yet: a stale view never shows through
     // another page's hole.
