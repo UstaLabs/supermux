@@ -311,9 +311,82 @@ export async function handleProxyRequest(
     responseHeaders.append("set-cookie", pathOpts ? rewriteSetCookiePath(c, pathOpts.prefix) : c)
   }
 
+  const ranged = await answerRange(req, upstreamRes, responseHeaders)
+  if (ranged) return ranged
+
   return new Response(upstreamRes.body, {
     status: upstreamRes.status,
     statusText: upstreamRes.statusText,
     headers: responseHeaders,
   })
+}
+
+/** The most a range answer carries at once: a media player asks again for the rest, as it does of any server. */
+export const RANGE_PIECE_BYTES = 2 * 1024 * 1024
+
+/** `bytes=a-b`, `bytes=a-` or `bytes=-n` against [size] → [first, last] inclusive, or null (several ranges, nonsense). */
+export function parseByteRange(header: string | null, size: number): [number, number] | null {
+  const m = /^\s*bytes\s*=\s*(\d*)\s*-\s*(\d*)\s*$/i.exec(header ?? "")
+  if (!m || (m[1] === "" && m[2] === "") || size <= 0) return null
+  if (m[1] === "") {
+    const n = Math.min(Number(m[2]), size)
+    return n > 0 ? [size - n, size - 1] : null
+  }
+  const first = Number(m[1])
+  if (first >= size) return null
+  const last = m[2] === "" ? size - 1 : Math.min(Number(m[2]), size - 1)
+  return last >= first ? [first, last] : null
+}
+
+/**
+ * A range request the upstream answered with the whole file (Python's http.server and most dev servers ignore Range):
+ * answered here instead, as a 206 of at most [RANGE_PIECE_BYTES] with Content-Range and Content-Length. WebKit (macOS,
+ * iOS) plays a <video> or <audio> only from 206s, where Chromium takes a plain 200. Bun sends a proxied stream chunked,
+ * losing its length, so the piece is read into memory: it goes out with its length. Null when there is nothing to do: a
+ * request without a single byte range, an upstream that answered the range itself, or a body whose size or encoding
+ * makes byte offsets meaningless.
+ */
+async function answerRange(req: Request, upstreamRes: Response, headers: Headers): Promise<Response | null> {
+  if (req.method !== "GET" || upstreamRes.status !== 200 || !upstreamRes.body) return null
+  if (headers.has("content-encoding") || headers.has("content-range")) return null
+  const size = Number(headers.get("content-length"))
+  if (!Number.isSafeInteger(size) || size <= 0) return null
+  const wanted = req.headers.get("range")
+  if (!wanted) return null
+  const range = parseByteRange(wanted, size)
+  if (!range) {
+    await upstreamRes.body.cancel().catch(() => {})
+    const h = new Headers(headers)
+    h.set("content-range", `bytes */${size}`)
+    h.delete("content-length")
+    return new Response(null, { status: 416, headers: h })
+  }
+  const first = range[0]
+  const last = Math.min(range[1], first + RANGE_PIECE_BYTES - 1)
+  const piece = new Uint8Array(last - first + 1)
+  const reader = upstreamRes.body.getReader()
+  let at = 0
+  let filled = 0
+  try {
+    while (filled < piece.length) {
+      const { done, value } = await reader.read()
+      if (done) break
+      const end = at + value.byteLength
+      if (end > first) {
+        const from = Math.max(0, first - at)
+        const take = value.subarray(from, Math.min(value.byteLength, from + piece.length - filled))
+        piece.set(take, filled)
+        filled += take.byteLength
+      }
+      at = end
+    }
+  } finally {
+    await reader.cancel().catch(() => {})
+  }
+  if (filled < piece.length) return null
+  const h = new Headers(headers)
+  h.set("content-range", `bytes ${first}-${last}/${size}`)
+  h.set("content-length", String(piece.length))
+  h.set("accept-ranges", "bytes")
+  return new Response(piece, { status: 206, headers: h })
 }
