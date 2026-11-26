@@ -4,14 +4,14 @@ import { makeLogger } from "../../shared/log"
 const log = makeLogger("applets/widget-push")
 
 /**
- * #165: tells the owner's phones an applet's widget changed. Android gets a silent FCM data message and redraws at once.
- * iOS is left out for now: the relay sends every iOS push as an alert, so it would show an empty notification; an
- * iPhone widget follows on its timeline, when the app opens and after any tap on it. A busy applet is coalesced to one
- * push per [gapMs], sent at the end of the gap, so the last state always arrives.
+ * #165: tells the owner's phones an applet's widget changed: a push that shows nothing. Android (an FCM data message)
+ * redraws at once. iOS gets a background push through the relay's /push/silent, which iOS delivers when it chooses;
+ * a relay without that route is never sent a normal push instead (it would show an empty alert). A busy applet is
+ * coalesced to one push per [gapMs], sent at the end of the gap, so the last state always arrives.
  */
 export function createWidgetPusher(opts: {
   devices: () => { device: string; platform: "ios" | "android" }[]
-  send: (device: string, payload: WidgetRefreshPayload) => Promise<unknown>
+  send: (device: string, payload: WidgetRefreshPayload, platform: "ios" | "android") => Promise<unknown>
   hostId?: () => string | undefined
   gapMs?: number
   now?: () => number
@@ -25,12 +25,12 @@ export function createWidgetPusher(opts: {
     last.set(applet, now())
     // A device that caused the change already has the new widget; it is spared only when it alone caused it.
     const skip = except.size === 1 ? [...except][0] : undefined
-    const targets = opts.devices().filter((d) => d.platform === "android" && d.device !== skip).map((d) => d.device)
+    const targets = opts.devices().filter((d) => d.device !== skip)
     if (!targets.length) return
     log.info("applet_widget_push", { applet, devices: targets.length })
     const hostId = opts.hostId?.()
     const payload: WidgetRefreshPayload = { widget: applet, ...(hostId ? { hostId } : {}), ts: new Date(now()).toISOString() }
-    for (const d of targets) void opts.send(d, payload).catch(() => {})
+    for (const d of targets) void opts.send(d.device, payload, d.platform).catch(() => {})
   }
 
   return {

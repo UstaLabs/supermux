@@ -37,9 +37,11 @@ function route(core: RelayCore) {
       const result = await core.register(b.platform, b.pushToken)
       return json({ status: "pending", routingToken: result.routingToken }, 202)
     }
-    if (pathname === "/push") {
+    if (pathname === "/push" || pathname === "/push/silent") {
       if (typeof b?.routingToken !== "string" || typeof b?.ciphertext !== "string") return json({ error: "fields" }, 400)
-      return json(await core.push(b.routingToken, b.ciphertext))
+      // #165: /push/silent wakes the app without an alert (an applet widget changed). A broker only learns this
+      // route exists by calling it: an older relay answers 404, never an alert.
+      return json(await core.push(b.routingToken, b.ciphertext, pathname === "/push/silent" ? { silent: true } : undefined))
     }
     if (pathname === "/unregister") {
       if (typeof b?.routingToken !== "string") return json({ error: "routingToken" }, 400)

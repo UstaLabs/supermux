@@ -8,6 +8,8 @@ export interface PlatformPushAdapter {
 
 export interface NativePushSender {
   sendToDevice(device: string, payload: PushPayload | WidgetRefreshPayload): Promise<{ ok: true } | { ok: false; gone: boolean }>
+  /** #165: a push that wakes the app without showing anything; absent or refused where the relay can't send one. */
+  sendSilentToDevice?(device: string, payload: WidgetRefreshPayload): Promise<{ ok: true } | { ok: false; gone: boolean }>
 }
 
 export function createNativePushSender(opts: {

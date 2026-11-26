@@ -2445,10 +2445,11 @@ const proxyLivenessMonitor = new ProxyLivenessMonitor({
   listTargets: () => registry.listProxies().map((p) => ({ domain: p.domain, port: p.port })),
   onChange: (domain, status) => webChannel?.broadcastToAll({ type: "proxy_status", domain, status }),
 })
-// #165: "an applet's widget changed" → a silent push to the owner's Android devices (see widget-push.ts for iOS).
+// #165: "an applet's widget changed" → a push that shows nothing, to the owner's phones (see widget-push.ts).
 const widgetPusher = createWidgetPusher({
   devices: () => deviceTokenStore.all().filter((r) => r.routing_token).map((r) => ({ device: r.device, platform: r.platform })),
-  send: (device, payload) => nativeSender.sendToDevice(device, payload),
+  // iOS: only ever silent (/push/silent); a relay without it gets nothing rather than a normal, visible push.
+  send: (device, payload, platform) => platform === "ios" ? (nativeSender.sendSilentToDevice?.(device, payload) ?? Promise.resolve()) : nativeSender.sendToDevice(device, payload),
   // Read when a push goes out: the host identity is loaded further down.
   hostId: () => hostIdentity.hostId,
 })

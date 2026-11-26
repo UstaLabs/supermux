@@ -40,6 +40,7 @@ test("silent send uses background push-type with content-available, no alert", a
   })
   await a.send("tok", { ciphertext: "blob" } as any, { silent: true })
   expect(capturedHeaders["apns-push-type"]).toBe("background")
+  expect(capturedHeaders["apns-priority"]).toBe("5")
   expect(capturedBody.aps["content-available"]).toBe(1)
   expect(capturedBody.aps.alert).toBeUndefined()
   expect(capturedBody.aps["mutable-content"]).toBeUndefined()
