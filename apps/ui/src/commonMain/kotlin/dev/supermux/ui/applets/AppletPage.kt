@@ -121,7 +121,7 @@ internal fun originOf(url: String): String {
 
 /** The applet's page on the origin the key was minted for, so the cookie and the page always agree. */
 internal fun appletPageUrl(key: PreviewCookieDto, name: String, at: String? = null): String =
-    "${originOf(key.url)}/a/$name/" + (appletAt(at)?.removePrefix("/") ?: "")
+    "${originOf(key.url)}/a/$name/" + (appletAt(at)?.removePrefix("/") ?: "") // platform-ok: url
 
 /** An applet's answers to its page: a link that opens a new window, with his click, opens in the system browser. */
 private class AppletClient(private val external: (String) -> Unit) : WebClient {
