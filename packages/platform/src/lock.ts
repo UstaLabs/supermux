@@ -138,7 +138,11 @@ async function listenTcpLock(identity: string, name: string): Promise<Server> {
       server.on("error", () => {})
       return server
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error
+      const code = (error as NodeJS.ErrnoException).code
+      // A port the OS keeps for itself (Windows' excluded port ranges) refuses the bind with EACCES although nothing
+      // listens there: like a taken one, it is passed over, and the same for every process taking this lock.
+      if (code === "EACCES") continue
+      if (code !== "EADDRINUSE") throw error
       if ((await probeTcpIdentity(port)) === identity) throw new AlreadyRunning(name)
     }
   }
