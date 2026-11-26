@@ -20,6 +20,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -44,6 +45,12 @@ class FleetStoreRoutingTest {
         val archiveCalls: Map<String, MutableList<String>>,
     )
 
+    /**
+     * The calls under [path]. Every Snapshot also refetches things in the background (models, applets, notification
+     * settings, …) and the list grows with the app; one landing after a test cleared [Fixture.calls] is not routing.
+     */
+    private fun List<String>.about(path: String): List<String> = filter { path in it }
+
     /** MockEngine answers on a real dispatcher, so wait on wall-clock time, not virtual time. */
     private suspend fun await(what: String, cond: () -> Boolean) {
         withContext(Dispatchers.Default) {
@@ -56,11 +63,9 @@ class FleetStoreRoutingTest {
         PairedHost(recordId = id, displayName = id, token = "t-$id", directUrl = "http://$id")
 
     private fun fixture(scope: kotlinx.coroutines.CoroutineScope): Fixture {
-        val calls = mapOf("a" to mutableListOf<String>(), "b" to mutableListOf<String>())
-        val archiveCalls = mapOf(
-            "a" to java.util.Collections.synchronizedList(mutableListOf<String>()),
-            "b" to java.util.Collections.synchronizedList(mutableListOf<String>()),
-        )
+        // Written on MockEngine's threads, read on the test's.
+        val calls = mapOf("a" to CopyOnWriteArrayList<String>(), "b" to CopyOnWriteArrayList<String>())
+        val archiveCalls = mapOf("a" to CopyOnWriteArrayList<String>(), "b" to CopyOnWriteArrayList<String>())
         val store = PairedHostStore(FakePersistence(mutableListOf(hostRecord("a"), hostRecord("b")))) { "rec" }
         val apps = mutableMapOf<String, HostStore>()
         val fleet = FleetStore(
@@ -119,7 +124,7 @@ class FleetStoreRoutingTest {
         await("host B should have received the interrupt, got ${f.calls.getValue("b")}") {
             f.calls.getValue("b").any { it.contains("/sessions/s-b/interrupt") }
         }
-        assertEquals(emptyList(), f.calls.getValue("a").toList(), "host A must not be called for host B's session")
+        assertEquals(emptyList(), f.calls.getValue("a").about("/sessions/"), "host A must not be called for host B's session")
         f.fleet.close()
     }
 
@@ -132,7 +137,7 @@ class FleetStoreRoutingTest {
         advanceUntilIdle()
 
         await("host B owns w-b, got ${f.calls.getValue("b")}") { f.calls.getValue("b").any { it.contains("w-b") } }
-        assertEquals(emptyList(), f.calls.getValue("a").toList(), "host A must not be called for host B's workspace")
+        assertEquals(emptyList(), f.calls.getValue("a").about("/workspaces/"), "host A must not be called for host B's workspace")
         f.fleet.close()
     }
 
@@ -145,8 +150,8 @@ class FleetStoreRoutingTest {
 
         f.fleet.worktreeForSessionWorkdir("s-b", "/b")
 
-        assertEquals(listOf("GET /worktrees/by-workdir"), f.calls.getValue("b").toList())
-        assertEquals(emptyList(), f.calls.getValue("a").toList(), "host A must not be asked about host B's session")
+        assertEquals(listOf("GET /worktrees/by-workdir"), f.calls.getValue("b").about("/worktrees/"))
+        assertEquals(emptyList(), f.calls.getValue("a").about("/worktrees/"), "host A must not be asked about host B's session")
         f.fleet.close()
     }
 
@@ -157,8 +162,8 @@ class FleetStoreRoutingTest {
 
         f.fleet.worktreeForWorkspaceWorkdir("w-b", "/b")
 
-        assertEquals(listOf("GET /worktrees/by-workdir"), f.calls.getValue("b").toList())
-        assertEquals(emptyList(), f.calls.getValue("a").toList(), "host A must not be asked about host B's workspace")
+        assertEquals(listOf("GET /worktrees/by-workdir"), f.calls.getValue("b").about("/worktrees/"))
+        assertEquals(emptyList(), f.calls.getValue("a").about("/worktrees/"), "host A must not be asked about host B's workspace")
         f.fleet.close()
     }
 
@@ -186,7 +191,7 @@ class FleetStoreRoutingTest {
             f.calls.getValue("b").any { it.contains("/sessions/s-b/resume") } &&
                 f.archiveCalls.getValue("b").any { it.contains("/archived-sessions") }
         }
-        assertEquals(emptyList(), f.calls.getValue("a").toList())
+        assertEquals(emptyList(), f.calls.getValue("a").about("/sessions/"))
         f.fleet.close()
     }
 
@@ -199,8 +204,8 @@ class FleetStoreRoutingTest {
         f.fleet.revoke("box")
         advanceUntilIdle()
 
-        await("active host B should take the host-global call") { f.calls.getValue("b").isNotEmpty() }
-        assertEquals(emptyList(), f.calls.getValue("a").toList())
+        await("active host B should take the host-global call, got ${f.calls.getValue("b")}") { f.calls.getValue("b").about("/devices/").isNotEmpty() }
+        assertEquals(emptyList(), f.calls.getValue("a").about("/devices/"))
         f.fleet.close()
     }
 
@@ -230,7 +235,7 @@ class FleetStoreRoutingTest {
         advanceUntilIdle()
 
         await("host B owns w-b, got ${f.calls.getValue("b")}") { "PATCH /workspaces/reorder" in f.calls.getValue("b") }
-        assertEquals(emptyList(), f.calls.getValue("a").toList(), "host A owns none of the dropped rows")
+        assertEquals(emptyList(), f.calls.getValue("a").about("/workspaces/"), "host A owns none of the dropped rows")
         f.fleet.close()
     }
 }

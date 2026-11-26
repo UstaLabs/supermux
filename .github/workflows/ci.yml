@@ -513,7 +513,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ui-fixture-logs
-          path: /tmp/supermux-test-broker.*/**/*.log
+          path: |
+            /tmp/supermux-test-broker.*/**/*.log
+            /tmp/supermux-test-broker.*/**/*.png
           retention-days: 7
 
   # ── Kotlin, host-side only: no emulator, no display server ─────────────────
