@@ -86,9 +86,12 @@ switch (sub) {
     const { runAgentCli } = await import("./cli/agent")
     const { readFileSync } = await import("node:fs")
     const { spawnProcessSync } = await import("./core/process/launcher")
+    const { writeAll } = await import("./cli/write-all")
     process.exit(await runAgentCli(process.argv.slice(2), {
       env: process.env, cwd: process.cwd(),
-      out: (s) => process.stdout.write(s + "\n"), err: (s) => process.stderr.write(s + "\n"),
+      // Written synchronously: process.exit() right after an async write drops whatever a pipe hasn't taken yet, so
+      // `supermux … --json | python3` got the first 64 KiB only (#156, 2026-11-26).
+      out: (s) => writeAll(1, s + "\n"), err: (s) => writeAll(2, s + "\n"),
       stdin: () => readFileSync(0, "utf8"),
       // `supermux applet APPLET CMD …` (#117): the applet's own command, in this terminal.
       exec: (file, args, opts) => spawnProcessSync([file, ...args], { cwd: opts.cwd, env: opts.env, stdin: "inherit", stdout: "inherit", stderr: "inherit" }).exitCode ?? 1,
