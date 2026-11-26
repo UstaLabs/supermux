@@ -360,8 +360,9 @@ export function parseWidget(raw: unknown, opts: { title: string; actions?: strin
   }
   // Older apps draw only the v1 summary: the small size's first figure, else the Lock Screen circle's.
   const glance = fig ?? (acc.circular ? { value: acc.circular.text, ...(acc.circular.label ? { label: acc.circular.label } : {}) } : null)
+  // A document that also carries the v1 fields keeps them as they are for older apps.
   const summary: WidgetSummary | null = isV2
-    ? (glance ? { value: glance.value.slice(0, 12), ...(glance.label ? { label: glance.label.slice(0, 40) } : {}), ...(rows.length ? { lines: rows.slice(0, 3).map((x) => x.title.slice(0, 80)) } : {}) } : null)
+    ? parseWidgetSummary(raw) ?? (glance ? { value: glance.value.slice(0, 12), ...(glance.label ? { label: glance.label.slice(0, 40) } : {}), ...(rows.length ? { lines: rows.slice(0, 3).map((x) => x.title.slice(0, 80)) } : {}) } : null)
     : parseWidgetSummary(raw)
   return { doc, summary, problems: r.problems }
 }

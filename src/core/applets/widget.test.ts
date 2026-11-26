@@ -116,3 +116,9 @@ test("toggles, Lock Screen circular action, and size limits", () => {
   expect(p.doc.layouts.circular).toEqual({ text: "2/4", ring: 1, label: "habits", action: { action: "toggle", args: { id: "ride" } } })
   expect(parseWidget({ v: 2, layouts: { small: [{ type: "text", text: "x".repeat(60_000) }] } }, { title: "X" })).toBeNull()
 })
+
+test("a document with both forms keeps its own v1 summary for older apps", () => {
+  const p = parseWidget({ value: 31, label: "waiting", lines: ["0 interviews"], v: 2, layouts: { small: [{ type: "stat", value: "31", label: "waiting to hear" }] } }, { title: "Job Hunt" })!
+  expect(p.summary).toEqual({ value: "31", label: "waiting", lines: ["0 interviews"] })
+  expect(p.doc.layouts.small).toEqual([{ type: "stat", value: "31", label: "waiting to hear" }])
+})
