@@ -38,3 +38,17 @@ test("an unexpected error answers JSON 500 instead of an HTML error page", async
   expect(res.status).toBe(500)
   expect(await res.json()).toEqual({ ok: false, gone: false, reason: "relay_error" })
 })
+
+test("#165: POST /push/silent sends the same sealed blob as a silent push; /push stays an alert", async () => {
+  const sent: { silent: boolean }[] = []
+  const a = { send: (_t: string, _p: any, o?: { silent?: boolean }) => { sent.push({ silent: o?.silent === true }); return Promise.resolve({ ok: true as const }) } }
+  const codec = createTokenCodec({ currentKeyId: "k1", keys: new Map([["k1", randomBytes(32)]]) })
+  const core = createRelayCore({ codec, apns: a, fcm: a, limiter: createInMemoryRateLimiter(), ttlSeconds: 3600, ratePerMin: 100, globalRatePerMin: 1000 })
+  const h = makeRelayHandler(core)
+  const { routingToken } = await (await h(req("/register", { platform: "ios", pushToken: "t" }))).json() as { routingToken: string }
+  sent.length = 0
+  expect(await (await h(req("/push/silent", { routingToken, ciphertext: "x" }))).json()).toEqual({ ok: true })
+  expect(await (await h(req("/push", { routingToken, ciphertext: "x" }))).json()).toEqual({ ok: true })
+  expect(sent).toEqual([{ silent: true }, { silent: false }])
+  expect((await h(req("/push/silent", { routingToken }))).status).toBe(400)
+})

@@ -110,6 +110,8 @@ export function createApnsAdapter(cfg: ApnsConfig, h2post: H2Post = defaultH2Pos
           authorization: `bearer ${jwt}`,
           "apns-topic": cfg.bundleId,
           "apns-push-type": isSilent ? "background" : "alert",
+          // Apple refuses a background push sent at priority 10.
+          ...(isSilent ? { "apns-priority": "5" } : {}),
         },
         body,
       })

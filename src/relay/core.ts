@@ -7,7 +7,8 @@ export type PushOutcome = { ok: true } | { ok: false; gone: boolean; reason?: st
 
 export interface RelayCore {
   register(platform: "ios" | "android", pushToken: string): Promise<{ routingToken: string; status: "pending" }>
-  push(routingToken: string, ciphertext: string): Promise<PushOutcome>
+  /** [silent] (#165): a background push that wakes the app without showing anything (iOS content-available). */
+  push(routingToken: string, ciphertext: string, opts?: { silent?: boolean }): Promise<PushOutcome>
   unregister(routingToken: string): void
 }
 export function createRelayCore(o: {
@@ -36,7 +37,7 @@ export function createRelayCore(o: {
       log.info("relay_register", { platform, bootstrap: bootstrap.ok ? "ok" : (bootstrap.reason ?? "failed") })
       return { routingToken, status: "pending" }
     },
-    async push(routingToken, ciphertext) {
+    async push(routingToken, ciphertext, opts) {
       const r = o.codec.open(routingToken)
       if (!r.ok) {
         const out = { ok: false as const, gone: true, reason: `routing_token_${r.reason}` }
@@ -46,9 +47,10 @@ export function createRelayCore(o: {
       let out: PushOutcome
       if (!(await o.limiter.allow(routingToken, o.ratePerMin))) out = { ok: false, gone: false, reason: "rate_limited" }
       else if (!(await o.limiter.allow("__global__", o.globalRatePerMin))) out = { ok: false, gone: false, reason: "rate_limited_global" }
-      else out = await send(r.platform, r.pushToken, { ciphertext })
-      if (out.ok) log.info("relay_push", { platform: r.platform, ok: true })
-      else log.warn("relay_push", { platform: r.platform, ok: false, gone: out.gone, reason: out.reason })
+      else out = await send(r.platform, r.pushToken, { ciphertext }, opts?.silent ? { silent: true } : undefined)
+      const silent = opts?.silent ? { silent: true } : {}
+      if (out.ok) log.info("relay_push", { platform: r.platform, ok: true, ...silent })
+      else log.warn("relay_push", { platform: r.platform, ok: false, gone: out.gone, reason: out.reason, ...silent })
       return out
     },
     unregister() { /* stateless: nothing to delete; tokens expire via TTL */ },
