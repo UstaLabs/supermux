@@ -26,8 +26,6 @@ import androidx.glance.LocalSize
 import androidx.glance.action.Action
 import androidx.glance.action.actionParametersOf
 import androidx.glance.action.clickable
-import androidx.glance.appwidget.CheckBox
-import androidx.glance.appwidget.CheckboxDefaults
 import androidx.glance.appwidget.LinearProgressIndicator
 import androidx.glance.appwidget.action.actionRunCallback
 import androidx.glance.appwidget.cornerRadius
@@ -175,15 +173,17 @@ private fun ColumnScope.Block(s: BlockScope, b: WidgetBlock) {
         }
         is WidgetBlock.Toggles -> Column(GlanceModifier.fillMaxWidth()) {
             for (t in b.items.take(if (s.size == WidgetSize.Small || s.size == WidgetSize.Medium) 3 else 6)) {
-                Row(GlanceModifier.fillMaxWidth().height(44.dp), verticalAlignment = Alignment.CenterVertically) {
-                    CheckBox(
-                        checked = t.on,
-                        onCheckedChange = runAction(s, WidgetButton(t.title, t.action, t.args, false)),
-                        text = t.title,
-                        colors = CheckboxDefaults.colors(checkedColor = UnitColorProvider(s.accent), uncheckedColor = muted),
+                // Our own check mark: Glance's CheckBox loses its checked state across responsive sizes.
+                Row(
+                    GlanceModifier.fillMaxWidth().height(44.dp).clickable(runAction(s, WidgetButton(t.title, t.action, t.args, false)))
+                        .semantics { contentDescription = t.title + if (t.on) " ✓" else "" },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Image(ImageProvider(checkBitmap(dp(s.context, 20), t.on, s.accent, s.dark)), contentDescription = null, modifier = GlanceModifier.size(20.dp))
+                    Spacer(GlanceModifier.width(10.dp))
+                    Text(
+                        t.title, maxLines = 1, modifier = GlanceModifier.defaultWeight(),
                         style = TextStyle(fontSize = 13.sp, color = if (t.on) muted else fg, textDecoration = if (t.on) TextDecoration.LineThrough else TextDecoration.None),
-                        maxLines = 1,
-                        modifier = GlanceModifier.defaultWeight(),
                     )
                     t.sub?.let { Text(it, style = TextStyle(fontSize = 11.sp, color = muted)) }
                 }
@@ -310,6 +310,21 @@ private fun chartBitmap(w: Int, h: Int, b: WidgetBlock.Chart, color: Color): Bit
             p.alpha = if (i < n - 1) 150 else 255
             c.drawRoundRect(RectF(i * (bw + gap), h - bh, i * (bw + gap) + bw, h.toFloat()), 3f, 3f, p)
         }
+    }
+    return bmp
+}
+
+private fun checkBitmap(px: Int, on: Boolean, color: Color, dark: Boolean): Bitmap {
+    val bmp = Bitmap.createBitmap(px, px, Bitmap.Config.ARGB_8888)
+    val c = Canvas(bmp)
+    val r = RectF(px * 0.08f, px * 0.08f, px * 0.92f, px * 0.92f)
+    val corner = px * 0.22f
+    if (on) {
+        c.drawRoundRect(r, corner, corner, Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color.toArgb() })
+        val tick = Path().apply { moveTo(px * 0.27f, px * 0.52f); lineTo(px * 0.43f, px * 0.68f); lineTo(px * 0.74f, px * 0.35f) }
+        c.drawPath(tick, Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = android.graphics.Color.WHITE; style = Paint.Style.STROKE; strokeWidth = px * 0.11f; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND })
+    } else {
+        c.drawRoundRect(r, corner, corner, Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = if (dark) 0xFF938F99.toInt() else 0xFF79747E.toInt(); style = Paint.Style.STROKE; strokeWidth = px * 0.09f })
     }
     return bmp
 }

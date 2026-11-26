@@ -69,7 +69,7 @@ internal object AppletWidgetPictures {
                 }
             } ?: continue
             // Drawn again only when the page or the document changed (the pictures are kept otherwise).
-            val sig = widgetFileKey(page + "\u0000" + a.widget.toString())
+            val sig = widgetFileKey("r2\u0000" + page + "\u0000" + a.widget.toString())
             val sigFile = File(AppletWidgetStore.dir(context), "pics-${widgetFileKey("$hostId/${a.name}")}.sig")
             if (a.pictures.isNotEmpty() && runCatching { sigFile.readText() }.getOrNull() == sig) continue
             val out = mutableMapOf<String, String>()
@@ -111,8 +111,9 @@ internal object AppletWidgetPictures {
             }, "supermux")
             view.webViewClient = object : WebViewClient() {
                 // Nothing leaves the phone: a widget page is one self-contained file.
-                override fun shouldInterceptRequest(v: WebView, r: WebResourceRequest): WebResourceResponse =
-                    WebResourceResponse("text/plain", "utf-8", 403, "Forbidden", emptyMap(), ByteArrayInputStream(ByteArray(0)))
+                // The page itself is the data handed in (never fetched); everything else is refused.
+                override fun shouldInterceptRequest(v: WebView, r: WebResourceRequest): WebResourceResponse? =
+                    if (r.isForMainFrame) null else WebResourceResponse("text/plain", "utf-8", 403, "Forbidden", emptyMap(), ByteArrayInputStream(ByteArray(0)))
                 override fun onPageFinished(v: WebView, url: String?) { loaded.complete(Unit) }
             }
             view.measure(View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(h, View.MeasureSpec.EXACTLY))
