@@ -386,6 +386,8 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
                 kotlinx.coroutines.flow.combine(fleet.activeHost, fleet.activeApplets) { h, a -> h to a }.collect { (hostId, applets) ->
                     if (hostId != null && applets != null) {
                         runCatching {
+                            // #165: the widgets' buttons call the host themselves, with this.
+                            fleet.appForRecord(hostId)?.widgetCredentials()?.let { (url, token) -> dev.supermux.auth.WidgetCredentials.save(hostId, url, token) }
                             IosAppletWidgetStore.save(hostId, applets, icon = { fleet.appForRecord(hostId)?.appletIconBytes(it) }, reload = { bridge.reloadWidgets() })
                         }
                     }

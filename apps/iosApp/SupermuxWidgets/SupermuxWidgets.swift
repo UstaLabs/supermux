@@ -106,12 +106,12 @@ struct AppletCell: View {
                         .accessibilityLabel(Text("Needs you"))
                 }
             }
-            Text(applet.title).font(.system(size: 10.5)).lineLimit(1)
+            Text(applet.title).font(.system(size: 11)).lineLimit(1)
         }
     }
 }
 
-// MARK: - "Applet": one applet and its summary
+// MARK: - "Applet": one applet, drawn from its widget blocks (#165) or its summary
 
 struct AppletEntry: TimelineEntry {
     let date: Date
@@ -119,6 +119,8 @@ struct AppletEntry: TimelineEntry {
     let applet: WidgetApplet?
     /// Chosen, but gone from the host's applets.
     let gone: Bool
+    /// When the snapshot was written (to say "Updated …" when it's old).
+    var at: Date? = nil
 }
 
 struct AppletProvider: AppIntentTimelineProvider {
@@ -126,20 +128,25 @@ struct AppletProvider: AppIntentTimelineProvider {
         AppletEntry(date: .now, host: nil, applet: WidgetApplet(name: "issues", title: "Issues", summary: AppletSummary(value: "31", label: "open", lines: ["2 waiting for testing"])), gone: false)
     }
 
-    func snapshot(for configuration: SelectAppletIntent, in context: Context) async -> AppletEntry { entry(configuration) }
+    func snapshot(for configuration: SelectAppletIntent, in context: Context) async -> AppletEntry { entry(configuration, .now) }
 
     func timeline(for configuration: SelectAppletIntent, in context: Context) async -> Timeline<AppletEntry> {
-        Timeline(entries: [entry(configuration)], policy: .after(.now.addingTimeInterval(1800)))
+        let now = Date.now
+        let first = entry(configuration, now)
+        // A document's timeline changes the widget at its own times with no reload (#165).
+        let later = (first.applet?.doc?.changes(after: now) ?? []).prefix(10).map { entry(configuration, $0) }
+        return Timeline(entries: [first] + later, policy: .after(now.addingTimeInterval(1800)))
     }
 
-    private func entry(_ configuration: SelectAppletIntent) -> AppletEntry {
+    private func entry(_ configuration: SelectAppletIntent, _ date: Date) -> AppletEntry {
         guard let chosen = configuration.applet else {
             // Not chosen yet: the first pinned applet, so a fresh widget isn't empty.
             let host = AppletSnapshot.active()
-            return AppletEntry(date: .now, host: host?.hostId, applet: host?.pinned.first, gone: false)
+            return AppletEntry(date: date, host: host?.hostId, applet: host?.pinned.first, gone: false, at: host.map { Date(timeIntervalSince1970: Double($0.at) / 1000) })
         }
-        let a = AppletSnapshot.applet(host: chosen.host, name: chosen.name)
-        return AppletEntry(date: .now, host: chosen.host, applet: a, gone: a == nil)
+        let h = AppletSnapshot.hosts().first { $0.hostId == chosen.host }
+        let a = h?.applets.first { $0.name == chosen.name }
+        return AppletEntry(date: date, host: chosen.host, applet: a, gone: a == nil, at: h.map { Date(timeIntervalSince1970: Double($0.at) / 1000) })
     }
 }
 
@@ -150,22 +157,60 @@ struct AppletWidget: Widget {
                 .containerBackground(.fill.tertiary, for: .widget)
         }
         .configurationDisplayName("Applet")
-        .description("One applet and what it has to say, like how many are open.")
-        .supportedFamilies([.systemSmall, .systemMedium])
+        .description("See an applet at a glance and act on it, like marking an issue tested.")
+        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge, .systemExtraLarge, .accessoryCircular, .accessoryRectangular, .accessoryInline])
     }
 }
 
 struct AppletWidgetView: View {
     let entry: AppletEntry
+    @Environment(\.widgetFamily) private var family
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         if let a = entry.applet, let host = entry.host {
-            content(a).widgetURL(AppletSnapshot.url(host: host, name: a.name))
+            switch family {
+            case .accessoryCircular, .accessoryRectangular, .accessoryInline:
+                AccessoryView(family: family, host: host, applet: a, doc: a.doc)
+                    .widgetURL(AppletSnapshot.url(host: host, name: a.name, at: a.doc?.href))
+            default:
+                if let doc = a.doc {
+                    docContent(host, a, doc).widgetURL(AppletSnapshot.url(host: host, name: a.name, at: doc.href))
+                } else {
+                    content(a).widgetURL(AppletSnapshot.url(host: host, name: a.name))
+                }
+            }
         } else {
             Text(entry.gone ? "This applet is gone. Choose another." : "Touch and hold to choose an applet.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+        }
+    }
+
+    private var sizeKey: WidgetSizeKey {
+        switch family {
+        case .systemMedium: return .medium
+        case .systemLarge: return .large
+        case .systemExtraLarge: return .xlarge
+        default: return .small
+        }
+    }
+
+    @ViewBuilder private func docContent(_ host: String, _ a: WidgetApplet, _ doc: WidgetDoc) -> some View {
+        let ctx = DocContext(host: host, applet: a, doc: doc, size: sizeKey, accent: hexColor(a.accent), dark: scheme == .dark, rowLinks: family != .systemSmall)
+        VStack(alignment: .leading, spacing: 0) {
+            if doc.fullSnapshot, let img = ctx.picture("full") {
+                Image(uiImage: img).resizable().scaledToFill().accessibilityLabel(Text(doc.label ?? a.title))
+            } else {
+                DocBlocksView(ctx: ctx, blocks: doc.layout(sizeKey, at: entry.date))
+            }
+            if let err = a.widgetError {
+                Text(err).font(.system(size: 11)).foregroundStyle(.red).lineLimit(1)
+            } else if family != .systemSmall, let at = entry.at, entry.date.timeIntervalSince(at) > 3600 {
+                // Older than an hour: say so, rather than show old numbers as if they were now.
+                Text("Updated \(at.formatted(date: .omitted, time: .shortened))").font(.system(size: 11)).foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -187,7 +232,7 @@ struct AppletWidgetView: View {
                     Text(label).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
                 }
                 ForEach(s.lines ?? [], id: \.self) { line in
-                    Text(line).font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
+                    Text(line).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 0)
             } else {

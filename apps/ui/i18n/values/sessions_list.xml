@@ -166,6 +166,8 @@
     <string name="applets_widget_choose">Choose an applet</string>
     <string name="applets_widget_gone">This applet is gone. Choose another.</string>
     <string name="applets_widget_needs_you">Needs you</string>
+    <string name="applets_widget_action_failed">Couldn't do that: %1$s</string>
+    <string name="applets_widget_host_unreachable">The host didn't answer.</string>
     <string name="applets_widget_no_home">This Home screen doesn't take widgets from apps.</string>
     <string name="applets_widget_none">No applets on this machine yet.</string>
     <string name="applets_widget_ios_title">Add the Applets widget</string>

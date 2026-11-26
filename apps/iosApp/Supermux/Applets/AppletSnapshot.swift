@@ -27,6 +27,25 @@ struct WidgetApplet: Codable, Hashable {
     var pin: Int?
     var summary: AppletSummary?
     var iconFile: String?
+    /// #165: its widget document (AppletWidgetDoc.swift); nil: the widget draws [summary] as before.
+    var widget: JSONValue?
+    /// Its picture page, relative to the host; the app draws its pictures from it.
+    var widgetHtml: String?
+    var accent: String?
+    /// Actions to confirm in the applet rather than run from the widget.
+    var confirm: [String]?
+    /// Pictures the app has drawn, by "<size>/<part>/<light|dark>" → file name.
+    var pictures: [String: String]?
+    /// Why the last widget tap failed (written by the widget's intent; gone with the next snapshot).
+    var widgetError: String?
+
+    init(name: String, title: String, needs: Bool? = nil, pin: Int? = nil, summary: AppletSummary? = nil, iconFile: String? = nil,
+         widget: JSONValue? = nil, widgetHtml: String? = nil, accent: String? = nil, confirm: [String]? = nil, pictures: [String: String]? = nil) {
+        self.name = name; self.title = title; self.needs = needs; self.pin = pin; self.summary = summary; self.iconFile = iconFile
+        self.widget = widget; self.widgetHtml = widgetHtml; self.accent = accent; self.confirm = confirm; self.pictures = pictures
+    }
+
+    var doc: WidgetDoc? { WidgetDoc.parse(widget) }
 }
 
 struct WidgetHost: Codable {
@@ -81,10 +100,41 @@ enum AppletSnapshot {
         return UIImage(contentsOfFile: dir.appendingPathComponent(file).path)
     }
 
-    /// The address every way in opens: the app shows the applet full screen (`AppletCover`).
-    static func uri(host: String, name: String) -> String { "supermux://applet/\(host)/\(name)" }
+    /// The address every way in opens: the app shows the applet full screen (`AppletCover`); [at] is where in it.
+    static func uri(host: String, name: String, at: String? = nil) -> String {
+        let base = "supermux://applet/\(host)/\(name)"
+        guard let at, at.hasPrefix("/") || at.hasPrefix("#"), !at.hasPrefix("//") else { return base }
+        return base + "?at=" + (at.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-._~/"))) ?? "")
+    }
 
-    static func url(host: String, name: String) -> URL? { URL(string: uri(host: host, name: name)) }
+    static func url(host: String, name: String, at: String? = nil) -> URL? { URL(string: uri(host: host, name: name, at: at)) }
+
+    /// A picture the app drew for a widget, or nil before it exists.
+    static func picture(_ file: String?) -> UIImage? {
+        guard let dir, let file, !file.isEmpty else { return nil }
+        return UIImage(contentsOfFile: dir.appendingPathComponent(file).path)
+    }
+
+    /// #165: changes one applet's entry in [host]'s snapshot file, keeping every other field as the app wrote it.
+    static func update(host: String, applet: String, _ change: (inout [String: Any]) -> Void) {
+        guard let dir else { return }
+        let path = dir.appendingPathComponent("host-\(fnv64(host)).json")
+        guard let data = try? Data(contentsOf: path),
+              var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              var list = root["applets"] as? [[String: Any]],
+              let i = list.firstIndex(where: { $0["name"] as? String == applet }) else { return }
+        var entry = list[i]
+        change(&entry)
+        list[i] = entry
+        root["applets"] = list
+        if let out = try? JSONSerialization.data(withJSONObject: root) { try? out.write(to: path, options: .atomic) }
+    }
+
+    /// An action's answer: the applet's new widget, shown at once.
+    static func putWidget(host: String, applet: String, doc: JSONValue) {
+        guard let data = try? JSONEncoder().encode(doc), let obj = try? JSONSerialization.jsonObject(with: data) else { return }
+        update(host: host, applet: applet) { $0["widget"] = obj }
+    }
 }
 
 /// An applet's icon: its own image, else the app's lettered tile (the project tiles' colour: hsl of the title's

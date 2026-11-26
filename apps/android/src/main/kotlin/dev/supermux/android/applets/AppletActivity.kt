@@ -43,6 +43,7 @@ class AppletActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        intent?.data?.toString()?.let { dev.supermux.ui.applets.AppletDeepLinks.note(it) }
         val target = intent?.data?.toString()?.let(::parseAppletUri)
         if (target == null) {
             finish()
@@ -96,10 +97,10 @@ class AppletActivity : ComponentActivity() {
     companion object {
         private const val EXTRA_TITLE = "dev.supermux.applet.TITLE"
 
-        fun intent(context: Context, hostId: String, name: String, title: String): Intent =
+        fun intent(context: Context, hostId: String, name: String, title: String, at: String? = null): Intent =
             Intent(context, AppletActivity::class.java)
                 .setAction(Intent.ACTION_VIEW)
-                .setData(Uri.parse(appletUri(hostId, name)))
+                .setData(Uri.parse(appletUri(hostId, name, at)))
                 .putExtra(EXTRA_TITLE, title)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT)
 

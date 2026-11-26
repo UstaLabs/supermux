@@ -212,6 +212,9 @@ class HostStore(
         speakRemoteUrl: suspend (String) -> String?,
     ) -> Unit)? = null,
 ) {
+    /** #165: the address and key an iPhone's applet widgets call this host with (kept in the shared keychain). */
+    fun widgetCredentials(): Pair<String, String> = baseUrl to token
+
     /** Own child scope — supervised and parented to the caller's [scope] — so [close] can cancel
      *  the collector / WS run-loop / heartbeat without tearing down the caller's scope, and one
      *  failed child never cancels its siblings. */

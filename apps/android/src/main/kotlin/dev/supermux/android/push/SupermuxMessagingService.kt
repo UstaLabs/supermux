@@ -98,6 +98,17 @@ class SupermuxMessagingService : FirebaseMessagingService() {
             Log.w(TAG, "failed to decrypt sealed push: ${e.message}")
             return
         }
+        // #165: "an applet's widget changed": nothing to show, the widgets ask the host for what's true now.
+        if (PushRouter.parseWidgetRefresh(plaintext) != null) {
+            val app = applicationContext
+            appScope.launch {
+                runCatching {
+                    dev.supermux.android.applets.AppletWidgetStore.refreshIfStale(app, force = true)
+                    dev.supermux.android.applets.AppletWidgetStore.updateWidgets(app)
+                }
+            }
+            return
+        }
         val note = PushRouter.parseNotification(plaintext)
         if (note == null) {
             Log.w(TAG, "decrypted payload did not parse as a notification")

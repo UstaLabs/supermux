@@ -170,3 +170,15 @@ posix("#165 widget: check names what's wrong, show writes a preview of every siz
   expect(await op("applet_widget", { applet: "habits", do: "dance" })).toMatchObject({ ok: false, code: "usage" })
   expect(await op("applet_widget", { applet: "nope" })).toMatchObject({ ok: false, code: "not_found" })
 })
+
+posix("#165 widget check: a widget.html that loads files from elsewhere is named (the phone draws it with no network)", async () => {
+  const { svc, op, root } = setup()
+  const dir = join(root, "applets", "board")
+  mkdirSync(join(dir, "public"), { recursive: true })
+  writeFileSync(join(dir, "applet.json"), JSON.stringify({ title: "Board", widget: { data: "/widget.json", html: "/widget.html" } }))
+  writeFileSync(join(dir, "public/widget.json"), JSON.stringify({ v: 2, layouts: { small: [{ type: "html", part: "p", height: 60, label: "Chart", alt: { type: "text", text: "x" } }] } }))
+  writeFileSync(join(dir, "public/widget.html"), `<link href="style.css" rel="stylesheet"><img src="data:image/png;base64,AA"><script src="https://cdn.example/x.js"></script><script>supermux.widgetReady()</script>`)
+  await svc.scan()
+  const c = await op("applet_widget", { applet: "board", do: "check" }) as any
+  expect(c.value.problems.join("\n")).toContain("loads style.css, https://cdn.example/x.js")
+})

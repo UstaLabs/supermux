@@ -181,9 +181,11 @@ Phone widget (Home Screen, Lock Screen, StandBy; iPhone, iPad, Android). Do it w
     button?}]} (≤8) · toggles {items: [{title, on, action, args?, sub?}], grid?} · buttons {items: [{title, action,
     args?, style?: "fill"}]} (≤3) · image {src, label?} · text {text} · columns {cols: [[blocks]…], w?} · gap · grow ·
     html {part, height, label, caption?, alt} (a picture: graphics only; "alt" is a native block shown until it's drawn).
-  /widget.html: the phone opens ?size=medium&w=364&h=170&scale=3&theme=dark&platform=ios&part=chart and takes a
-    picture of exactly w×h CSS px, light and dark. No scrolling, no animation, nothing from other sites; text at
-    11 px or more. Call supermux.widgetReady() when drawn (otherwise 2 s after load).
+  /widget.html: ONE self-contained file (styles, scripts, fonts and images inline or as data: URLs): the phone
+    loads it with no network at all. It is opened as …/widget.html?size=medium&w=364&h=170&scale=3&theme=dark
+    &platform=ios&part=chart and pictured at exactly w×h CSS px, once light and once dark: read the look from
+    ?theme=, and draw the ?part= asked for. No scrolling, no animation; text at 11 px or more. Call
+    supermux.widgetReady() when drawn (otherwise the picture is taken 2 s after load).
   Escape hatch, flagged by check: {"v": 2, "snapshot": "full", "label": "…"} makes the whole widget one picture
   (VoiceOver hears only the label, its text doesn't grow, it goes grey in the clear and tinted looks).
   The old {"value": "3", "label": "open", "lines": ["…"]} still works.

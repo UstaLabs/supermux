@@ -13,6 +13,7 @@ import dev.supermux.auth.SecureTokenStoreContext
 import dev.supermux.net.AppletDto
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.WidgetHost
+import dev.supermux.net.keepPictures
 import dev.supermux.net.toWidgetApplets
 import dev.supermux.net.widgetFileKey
 import dev.supermux.net.widgetHostFile
@@ -33,7 +34,7 @@ internal object AppletWidgetStore {
     private val json = Json { ignoreUnknownKeys = true }
     private val lock = Mutex()
 
-    private fun dir(context: Context) = File(context.filesDir, "applet-widgets").also { it.mkdirs() }
+    fun dir(context: Context) = File(context.filesDir, "applet-widgets").also { it.mkdirs() }
     private fun hostFile(context: Context, hostId: String) = File(dir(context), widgetHostFile(hostId))
     private fun activeFile(context: Context) = File(dir(context), "active")
     private fun iconFile(context: Context, hostId: String, name: String) = File(dir(context), "icon-${widgetFileKey("$hostId/$name")}.png")
@@ -65,7 +66,7 @@ internal object AppletWidgetStore {
                 val before = host(context, hostId)
                 val drawn = before?.applets?.associate { it.name to it.iconAt }.orEmpty()
                 val byName = applets.associateBy { it.name }
-                val next = applets.toWidgetApplets(hostId)
+                val next = applets.toWidgetApplets(hostId).keepPictures(before?.applets)
                 for (w in next) {
                     val file = File(dir(context), w.iconFile)
                     if (drawn[w.name] == w.iconAt && file.exists()) continue
@@ -88,6 +89,46 @@ internal object AppletWidgetStore {
             }
         }
         if (changed && redraw) updateWidgets(context)
+        // #165: the pictures its widgets show come from the applets' widget.html, drawn here on the phone.
+        if (changed) AppletWidgetPictures.schedule(context, hostId)
+    }
+
+    /**
+     * #165: an action's answer ([doc]: the applet's new widget) put into the snapshot at once, so the widget that was
+     * tapped redraws without waiting for the next read of the whole list.
+     */
+    suspend fun putWidget(context: Context, hostId: String, name: String, doc: kotlinx.serialization.json.JsonObject?) {
+        if (doc == null) return
+        lock.withLock {
+            withContext(Dispatchers.IO) {
+                val h = host(context, hostId) ?: return@withContext
+                val next = h.copy(at = System.currentTimeMillis(), applets = h.applets.map { if (it.name == name) it.copy(widget = doc) else it })
+                hostFile(context, hostId).writeText(json.encodeToString(WidgetHost.serializer(), next))
+            }
+        }
+        updateWidgets(context)
+        AppletWidgetPictures.schedule(context, hostId)
+    }
+
+    /** #165: records the pictures drawn for [name] (keys "<size>/<part>/<look>" → file names) and redraws. */
+    suspend fun putPictures(context: Context, hostId: String, name: String, pictures: Map<String, String>) {
+        lock.withLock {
+            withContext(Dispatchers.IO) {
+                val h = host(context, hostId) ?: return@withContext
+                val next = h.copy(applets = h.applets.map { if (it.name == name) it.copy(pictures = pictures) else it })
+                hostFile(context, hostId).writeText(json.encodeToString(WidgetHost.serializer(), next))
+            }
+        }
+        updateWidgets(context)
+    }
+
+    /** The paired host [hostId]'s address and key, for a widget's own call to it; null when it isn't paired. */
+    fun hostApi(context: Context, hostId: String, http: HttpClient): BrokerApi? {
+        SecureTokenStoreContext.init(context.applicationContext)
+        val h = runCatching { HostStores.store(context).list() }.getOrDefault(emptyList()).firstOrNull { it.recordId == hostId } ?: return null
+        val url = FleetStore.effectiveUrl(h) ?: return null
+        if (h.token.isBlank()) return null
+        return BrokerApi(url, h.token, http)
     }
 
     /** Redraws every supermux widget on the Home screen from the snapshot. */

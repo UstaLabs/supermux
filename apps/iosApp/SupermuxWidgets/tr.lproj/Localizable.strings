@@ -3,7 +3,7 @@
 "Applets" = "Appletler";
 "Applet" = "Applet";
 "Your pinned applets. Tap one to open it." = "Sabitlediğiniz appletler. Dokunduğunuz açılır.";
-"One applet and what it has to say, like how many are open." = "Tek bir applet ve söyledikleri, örneğin kaç tane açık olduğu.";
+"See an applet at a glance and act on it, like marking an issue tested." = "Bir appleti bir bakışta görün ve üzerinde işlem yapın; örneğin bir işi test edildi olarak işaretleyin.";
 "Open supermux to see your applets." = "Appletlerinizi görmek için supermux'ı açın.";
 "Pin applets in supermux to see them here." = "Burada görmek için supermux'ta applet sabitleyin.";
 "Needs you" = "Sizi bekliyor";
@@ -14,3 +14,8 @@
 "Opens an applet in supermux." = "Bir appleti supermux'ta açar.";
 "Choose an applet" = "Bir applet seçin";
 "The applet this widget shows." = "Bu widget'ın gösterdiği applet.";
+
+/* #165: widget buttons and the applet widget's every size. */
+"Run an applet action" = "Bir applet işlemini çalıştır";
+"A button on an applet's widget." = "Bir applet widget'ındaki düğme.";
+"Updated %@" = "Güncellendi: %@";

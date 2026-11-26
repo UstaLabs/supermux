@@ -282,6 +282,8 @@ export class AppletService {
         const small = [...page.matchAll(/font(?:-size)?\s*:[^;"}]*?\b(\d+(?:\.\d+)?)px/g)].map((m) => Number(m[1])).filter((n) => n < 11)
         if (small.length) problems.push(`${cfg.html} sets text under 11 px (${[...new Set(small)].join(", ")}px): pictures are graphics, and text that matters belongs in native blocks`)
         if (!page.includes("widgetReady")) problems.push(`${cfg.html} never calls supermux.widgetReady(): the phone waits 2 s after load before it takes the picture`)
+        const external = [...page.matchAll(/(?:src|href)\s*=\s*["'](?!data:|#)([^"']+)["']|@import\s+url\(["']?(?!data:)([^"')]+)/gi)].map((m) => m[1] ?? m[2]).filter(Boolean)
+        if (external.length) problems.push(`${cfg.html} loads ${[...new Set(external)].slice(0, 3).join(", ")}: the phone draws it with no network, so put styles, scripts, fonts and images inline (data: URLs)`)
       }
       if (!usesPictures) problems.push(`applet.json has "widget.html" but no layout uses a picture ({"type": "html"})`)
     } else if (usesPictures) problems.push(`a layout uses a picture ({"type": "html"}) but applet.json has no "widget.html"`)

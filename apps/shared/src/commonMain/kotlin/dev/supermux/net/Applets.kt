@@ -4,6 +4,7 @@
 package dev.supermux.net
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 
 @Serializable
 data class AppletDto(
@@ -28,10 +29,21 @@ data class AppletDto(
     val process: AppletProcessDto? = null,
     /** What its phone widget shows (its applet.json "widget" path), or null: the widget shows just its icon and name. */
     val summary: AppletSummaryDto? = null,
+    /** #165: its whole widget, every size laid out ([WidgetDoc.parse]); null on an older broker or with no widget. */
+    val widgetDoc: JsonObject? = null,
+    /** Its picture page, relative to the host ("/a/<name>/widget.html"), or null. */
+    val widgetHtml: String? = null,
+    val widgetAccent: String? = null,
+    /** The actions its buttons run, by name. */
+    val widgetActions: Map<String, AppletWidgetActionDto> = emptyMap(),
     val updatedBy: String? = null,
     val updatedAt: String = "",
     val createdAt: String = "",
 )
+
+/** A widget action: a tap on a [confirm] one opens the applet to confirm instead of running it. */
+@Serializable
+data class AppletWidgetActionDto(val title: String = "", val confirm: Boolean = false)
 
 /** A widget's glance: "31" · "open" · up to three short lines. */
 @Serializable
