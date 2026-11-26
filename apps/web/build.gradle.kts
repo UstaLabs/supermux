@@ -335,7 +335,8 @@ val distDir = layout.buildDirectory.dir("dist/wasmJs/productionExecutable")
 // 2026-11-16 (#117 iOS model + offline cache, Muxie): +1 KiB ("Open in new window" × 2, cached applets), measured 9241 KiB on train14 43836099208.
 // 2026-11-17 (#117 preload + visible, Muxie): +1 KiB, measured 9242.x KiB on train13 43978603632 after the preload moved behind the native-only slot (it was 9247).
 // 2026-11-22 (#163 notification settings, Muxie): +17 KiB, measured 9259 KiB on train14 45044995001 after its waste check (the applet icon pipeline moved off web): the Settings › Notifications page, its menus, en+tr strings, the prefs model.
-val maxGzipBytes = 9260L * 1024
+// 2026-11-26 (#165 applet deep links, Muxie): +2 KiB, measured 9260.x KiB on train13 45850952628: AppletPage open-at-an-item helpers (appletAt, AppletDeepLinks, percent encode/decode) in ui commonMain.
+val maxGzipBytes = 9261L * 1024
 
 // THE NATIVE EDITOR'S SYNTAX MODULE IS OUTSIDE THAT CEILING, with a ceiling of its own (M5).
 // `supermux-syntax.wasm` is 7.45 MB raw / 2.69 MB gzipped (editor-syntax/native/README.md): counted
