@@ -119,6 +119,16 @@ export class AppletService {
     this.jobs = deps.jobs ?? new JobRunner({ db: deps.db })
     this.backups = new AppletBackups(deps.backupsDir, this.now)
     this.hostKey = this.loadHostKey()
+    // #165: a server that just started gets its widget read once it answers, not at the next 15-minute pass.
+    this.supervisor.onStarted = (id) => {
+      for (const ms of [1_500, 6_000]) {
+        const t = setTimeout(() => {
+          const v = this.list().find((x) => x.row.id === id)
+          if (v?.manifest?.widget) void this.readWidget(v).then((moved) => { if (moved) this.widgetMoved(v) })
+        }, ms)
+        ;(t as { unref?: () => void }).unref?.()
+      }
+    }
   }
 
   private loadHostKey(): Buffer {

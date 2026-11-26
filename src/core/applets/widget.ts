@@ -358,8 +358,10 @@ export function parseWidget(raw: unknown, opts: { title: string; actions?: strin
     layouts: { ...layouts, circular, rectangular, inline },
     timeline,
   }
+  // Older apps draw only the v1 summary: the small size's first figure, else the Lock Screen circle's.
+  const glance = fig ?? (acc.circular ? { value: acc.circular.text, ...(acc.circular.label ? { label: acc.circular.label } : {}) } : null)
   const summary: WidgetSummary | null = isV2
-    ? (fig ? { value: fig.value.slice(0, 12), ...(fig.label ? { label: fig.label.slice(0, 40) } : {}), ...(rows.length ? { lines: rows.slice(0, 3).map((x) => x.title.slice(0, 80)) } : {}) } : null)
+    ? (glance ? { value: glance.value.slice(0, 12), ...(glance.label ? { label: glance.label.slice(0, 40) } : {}), ...(rows.length ? { lines: rows.slice(0, 3).map((x) => x.title.slice(0, 80)) } : {}) } : null)
     : parseWidgetSummary(raw)
   return { doc, summary, problems: r.problems }
 }

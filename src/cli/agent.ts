@@ -185,7 +185,7 @@ Phone widget (Home Screen, Lock Screen, StandBy; iPhone, iPad, Android). Do it w
     loads it with no network at all. It is opened as …/widget.html?size=medium&w=364&h=170&scale=3&theme=dark
     &platform=ios&part=chart and pictured at exactly w×h CSS px, once light and once dark: read the look from
     ?theme=, and draw the ?part= asked for. No scrolling, no animation; text at 11 px or more. Call
-    supermux.widgetReady() when drawn (otherwise the picture is taken 2 s after load).
+    window.supermux?.widgetReady?.() when drawn (otherwise the picture is taken 2 s after load).
   Escape hatch, flagged by check: {"v": 2, "snapshot": "full", "label": "…"} makes the whole widget one picture
   (VoiceOver hears only the label, its text doesn't grow, it goes grey in the clear and tinted looks).
   The old {"value": "3", "label": "open", "lines": ["…"]} still works.
