@@ -15,6 +15,10 @@ function consoleDb(rows: { account?: Record<string, unknown>; state?: { active_a
   dirs.push(dir)
   const path = join(dir, "opencode.db")
   const db = new Database(path)
+  // No journal file and one transaction: on Windows each statement's -journal was created and deleted on disk, and a
+  // delete an antivirus scan held cost SQLite's I/O retries up to ~1.4 s each, past the 5 s test timeout (#166).
+  db.run("PRAGMA journal_mode = MEMORY")
+  db.run("BEGIN")
   db.run(`CREATE TABLE account (id text PRIMARY KEY, email text NOT NULL, url text NOT NULL, access_token text NOT NULL,
     refresh_token text NOT NULL, token_expiry integer, time_created integer NOT NULL, time_updated integer NOT NULL)`)
   db.run(`CREATE TABLE account_state (id integer PRIMARY KEY NOT NULL, active_account_id text, active_org_id text)`)
@@ -24,6 +28,7 @@ function consoleDb(rows: { account?: Record<string, unknown>; state?: { active_a
     db.run("INSERT INTO account VALUES (?,?,?,?,?,?,?,?)", [a.id, a.email, a.url, a.access_token, a.refresh_token, a.token_expiry, a.time_created, a.time_updated] as any)
   }
   if (rows.state) db.run("INSERT INTO account_state VALUES (1, ?, ?)", [rows.state.active_account_id, rows.state.active_org_id])
+  db.run("COMMIT")
   db.close()
   return path
 }
