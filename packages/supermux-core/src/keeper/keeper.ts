@@ -427,6 +427,10 @@ async function main() {
   process.on('unhandledRejection', guard)
 
   agent.stdout?.on('data', onAgentChunk)
+  // A write to an agent that stopped reading fails later, as an 'error' on its stdin (EPIPE): one that exits before it
+  // reads (Claude's "No conversation found") leaves a gap before 'close' says so. Unheard, that error was the keeper's
+  // own crash ("keeper error: EPIPE", #166) and hid how the agent ended; 'close' reports that.
+  agent.stdin?.on('error', () => { /* the agent is gone or done reading */ })
   agent.on('error', err => fail(err.message))
   agent.on('close', (code, signal) => {
     agentExited = code ?? (signal ? 1 : 0)
