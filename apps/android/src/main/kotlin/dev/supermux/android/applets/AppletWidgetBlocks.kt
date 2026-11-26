@@ -38,6 +38,7 @@ import androidx.glance.layout.ColumnScope
 import androidx.glance.layout.ContentScale
 import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
+import androidx.glance.layout.fillMaxHeight
 import androidx.glance.layout.fillMaxSize
 import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.height
@@ -60,13 +61,15 @@ import dev.supermux.net.widgetPictureFile
 import java.io.File
 
 /** The shapes the launcher picks from: Glance draws each once and shows the best fit (2×1, 2×2, 4×1, 4×2, 2×4, 4×4). */
+// The widths are a phone's 2 and 4 cells ((73n − 16) dp): Glance hands the chosen shape's size to the layout, so it
+// should be as close to the real one as the smallest launcher allows.
 internal val WIDGET_SHAPES: Map<DpSize, WidgetSize> = linkedMapOf(
-    DpSize(110.dp, 40.dp) to WidgetSize.Slim,
-    DpSize(110.dp, 110.dp) to WidgetSize.Small,
-    DpSize(250.dp, 40.dp) to WidgetSize.Wide,
-    DpSize(250.dp, 110.dp) to WidgetSize.Medium,
-    DpSize(110.dp, 250.dp) to WidgetSize.Tall,
-    DpSize(250.dp, 250.dp) to WidgetSize.Large,
+    DpSize(130.dp, 40.dp) to WidgetSize.Slim,
+    DpSize(130.dp, 110.dp) to WidgetSize.Small,
+    DpSize(276.dp, 40.dp) to WidgetSize.Wide,
+    DpSize(276.dp, 110.dp) to WidgetSize.Medium,
+    DpSize(130.dp, 250.dp) to WidgetSize.Tall,
+    DpSize(276.dp, 250.dp) to WidgetSize.Large,
 )
 
 /** What the blocks need beyond themselves. */
@@ -89,11 +92,12 @@ private const val PAD = 16
 @Composable
 internal fun DocWidget(context: Context, hostId: String, applet: WidgetApplet, doc: WidgetDoc, icon: Bitmap?, dark: Boolean) {
     val drawn = LocalSize.current
-    val size = WIDGET_SHAPES[drawn] ?: WidgetSize.forCells(if (drawn.width >= 250.dp) 4 else 2, if (drawn.height >= 250.dp) 4 else if (drawn.height >= 110.dp) 2 else 1)
+    val size = WIDGET_SHAPES[drawn] ?: WidgetSize.forCells(if (drawn.width >= 276.dp) 4 else 2, if (drawn.height >= 250.dp) 4 else if (drawn.height >= 110.dp) 2 else 1)
     val accent = applet.accent?.let(::parseColor) ?: Color(0xFF4B6BEA)
     val s = BlockScope(context, hostId, applet, doc, size, accent, dark, icon, drawn.width - (PAD * 2).dp)
     val open = openAppletAt(context, hostId, applet, doc.href)
-    Column(widgetFrame().padding(PAD.dp).clickable(open)) {
+    val short = size == WidgetSize.Slim || size == WidgetSize.Wide
+    Column(widgetFrame().padding(horizontal = PAD.dp, vertical = if (short) 10.dp else PAD.dp).clickable(open), verticalAlignment = if (short) Alignment.CenterVertically else Alignment.Top) {
         Blocks(s, doc.layout(size, System.currentTimeMillis()))
     }
 }
@@ -139,11 +143,13 @@ private fun ColumnScope.Block(s: BlockScope, b: WidgetBlock) {
             LinearProgressIndicator(b.value, GlanceModifier.fillMaxWidth().height(6.dp), color = UnitColorProvider(s.accent), backgroundColor = GlanceTheme.colors.secondaryContainer)
         }
         is WidgetBlock.Ring -> Box(GlanceModifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            val px = dp(s.context, 64)
-            Image(ImageProvider(ringBitmap(px, b.value, s.accent, s.dark)), contentDescription = null, modifier = GlanceModifier.size(64.dp))
+            // A one-row shape (2×1, 4×1) has about 50 dp inside its padding.
+            val short = s.size == WidgetSize.Slim || s.size == WidgetSize.Wide
+            val ring = minOf(if (short) 48 else 64, s.width.value.toInt()).coerceAtLeast(32)
+            Image(ImageProvider(ringBitmap(dp(s.context, ring), b.value, s.accent, s.dark)), contentDescription = null, modifier = GlanceModifier.size(ring.dp))
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                b.text?.let { Text(it, style = TextStyle(fontSize = 17.sp, fontWeight = FontWeight.Bold, color = fg)) }
-                b.sub?.let { Text(it, style = TextStyle(fontSize = 11.sp, color = muted)) }
+                b.text?.let { Text(it, style = TextStyle(fontSize = if (short) 14.sp else 17.sp, fontWeight = FontWeight.Bold, color = fg)) }
+                if (!short) b.sub?.let { Text(it, style = TextStyle(fontSize = 11.sp, color = muted)) }
             }
         }
         is WidgetBlock.Chart -> Column(GlanceModifier.fillMaxWidth()) {
@@ -215,7 +221,8 @@ private fun ColumnScope.Block(s: BlockScope, b: WidgetBlock) {
             b.cols.forEachIndexed { i, col ->
                 if (i > 0) Spacer(GlanceModifier.width(gap.dp))
                 val w = (s.width - (gap * (b.cols.size - 1)).dp) * (b.weights[i] / total)
-                Column(GlanceModifier.width(w).fillMaxSize()) { Blocks(BlockScope(s.context, s.hostId, s.applet, s.doc, s.size, s.accent, s.dark, s.icon, w), col) }
+                // Glance gives the shape's size, not the real one: the last column takes whatever is left.
+                Column((if (i == b.cols.lastIndex) GlanceModifier.defaultWeight() else GlanceModifier.width(w)).fillMaxHeight()) { Blocks(BlockScope(s.context, s.hostId, s.applet, s.doc, s.size, s.accent, s.dark, s.icon, w), col) }
             }
         }
         is WidgetBlock.Gap -> Spacer(GlanceModifier.height(when (b.size) { "s" -> 5.dp; "l" -> 12.dp; else -> 8.dp }))
