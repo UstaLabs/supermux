@@ -62,7 +62,7 @@ final class AppletWidgetPictures: NSObject, WKScriptMessageHandler, WKNavigation
             return false
         }
         guard let page = await fetchPage(host: host, path: a.widgetHtml!) else { return false }
-        let sig = fnv64(page + "\u{0}" + (a.widget?.json ?? ""))
+        let sig = fnv64("r2\u{0}" + page + "\u{0}" + (a.widget?.json ?? ""))
         let defaults = UserDefaults(suiteName: AppletSnapshot.appGroup)
         let sigKey = "pictures.sig.\(host)/\(a.name)"
         if !(a.pictures ?? [:]).isEmpty, defaults?.string(forKey: sigKey) == sig { return false }
@@ -112,6 +112,8 @@ final class AppletWidgetPictures: NSObject, WKScriptMessageHandler, WKNavigation
         view.isOpaque = false
         view.backgroundColor = .clear
         view.scrollView.isScrollEnabled = false
+        // In a window, a web view insets its page by the safe area; a picture must start at its top-left.
+        view.scrollView.contentInsetAdjustmentBehavior = .never
         view.isUserInteractionEnabled = false
         view.navigationDelegate = self
         // Behind the app's own view: in a window, so WebKit paints it, and never seen.
