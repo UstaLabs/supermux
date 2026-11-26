@@ -60,14 +60,55 @@ import kotlinx.coroutines.flow.first
 /** The scheme an applet opens by on every OS: `supermux://applet/<host record id>/<applet name>` (shortcuts, S1). */
 const val APPLET_URI_PREFIX = "supermux://applet/"
 
-fun appletUri(hostId: String, name: String): String = "$APPLET_URI_PREFIX$hostId/$name"
+fun appletUri(hostId: String, name: String, at: String? = null): String =
+    "$APPLET_URI_PREFIX$hostId/$name" + (appletAt(at)?.let { "?at=" + pctEncode(it) } ?: "")
 
 /** (host record id, applet name) from [appletUri]'s form; null for anything else. */
 fun parseAppletUri(uri: String): Pair<String, String>? {
     if (!uri.startsWith(APPLET_URI_PREFIX)) return null
-    val parts = uri.removePrefix(APPLET_URI_PREFIX).trimEnd('/').split('/') // platform-ok: url
+    val parts = uri.removePrefix(APPLET_URI_PREFIX).substringBefore('?').trimEnd('/').split('/') // platform-ok: url
     if (parts.size != 2 || parts.any { it.isBlank() }) return null
     return parts[0] to parts[1]
+}
+
+/**
+ * #165: where in the applet a link opens ("/#164", "/board?x=1"): its widget row's href. Only a place inside the applet
+ * ("/…" or "#…"), never another site.
+ */
+fun appletAt(at: String?): String? =
+    at?.trim()?.takeIf { (it.startsWith("/") || it.startsWith("#")) && !it.startsWith("//") && it.length <= 300 } // platform-ok: url
+
+/** The place an [appletUri] opens at ([appletAt]), or null. */
+fun appletUriAt(uri: String): String? =
+    uri.substringAfter('?', "").split('&').firstOrNull { it.startsWith("at=") }?.removePrefix("at=")
+        ?.let(::pctDecode)?.let(::appletAt)
+
+private fun pctEncode(s: String): String = buildString {
+    for (b in s.encodeToByteArray()) {
+        val c = b.toInt() and 0xff
+        if (c.toChar().isLetterOrDigit() && c < 0x80 || c.toChar() in "-._~/") append(c.toChar()) else append('%').append("0123456789ABCDEF"[c shr 4]).append("0123456789ABCDEF"[c and 15])
+    }
+}
+
+private fun pctDecode(s: String): String? {
+    val out = ArrayList<Byte>(s.length)
+    var i = 0
+    while (i < s.length) {
+        val c = s[i]
+        if (c == '%') { if (i + 2 >= s.length) return null; out += (s.substring(i + 1, i + 3).toIntOrNull(16) ?: return null).toByte(); i += 3 }
+        else { out += c.toString().encodeToByteArray().toList(); i++ }
+    }
+    return out.toByteArray().decodeToString()
+}
+
+/**
+ * #165: places to open applets at, left by whatever opened them (a widget row's link) for the page to take on its
+ * first load. Keyed by host and applet; taken once.
+ */
+object AppletDeepLinks {
+    private val pending = mutableMapOf<String, String>()
+    fun note(uri: String) { val at = appletUriAt(uri) ?: return; parseAppletUri(uri)?.let { (h, n) -> pending["$h/$n"] = at } }
+    fun take(hostId: String, name: String): String? = pending.remove("$hostId/$name")
 }
 
 /** "https://relay.example" from "https://relay.example/p/": where the preview key is valid, which serves /a/ too. */
@@ -79,7 +120,8 @@ internal fun originOf(url: String): String {
 }
 
 /** The applet's page on the origin the key was minted for, so the cookie and the page always agree. */
-internal fun appletPageUrl(key: PreviewCookieDto, name: String): String = "${originOf(key.url)}/a/$name/"
+internal fun appletPageUrl(key: PreviewCookieDto, name: String, at: String? = null): String =
+    "${originOf(key.url)}/a/$name/" + (appletAt(at)?.removePrefix("/") ?: "") // platform-ok: url
 
 /** An applet's answers to its page: a link that opens a new window, with his click, opens in the system browser. */
 private class AppletClient(private val external: (String) -> Unit) : WebClient {
@@ -106,10 +148,11 @@ fun AppletPage(
     noEngine: String? = null,
     reload: kotlinx.coroutines.flow.Flow<Unit>? = null,
 ) {
+    val at = remember(hostId, name) { AppletDeepLinks.take(hostId, name) }
     val views by (fleet?.hostViews ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyList<dev.supermux.host.HostView>()) }).collectAsState()
     val app = remember(fleet, views, hostId) { fleet?.appForRecord(hostId) }
     when {
-        app != null -> AppletPage(app, name, modifier, onOpenChat, noEngine, reload)
+        app != null -> AppletPage(app, name, modifier, onOpenChat, noEngine, reload, at)
         fleet != null && views.isNotEmpty() && views.none { it.recordId == hostId } -> AppletMessage(localized(Str.applets_window_no_host), modifier)
         else -> Box(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background))
     }
@@ -119,7 +162,7 @@ fun AppletPage(
  * One applet page, the window's own: its web view state and where it loads from. Every open is a fresh navigation from
  * the server, as a page in the Browser tab (Ahmet): nothing of an earlier open is reused. Main thread only.
  */
-internal class AppletPageModel(val app: HostStore, val name: String) {
+internal class AppletPageModel(val app: HostStore, val name: String, val at: String? = null) {
     val state = WebViewState(BLANK)
     /** The applet's own origin, known once the key says where the page loads from: the bridge talks only to it. */
     var origin by mutableStateOf<String?>(null)
@@ -144,10 +187,11 @@ fun AppletPage(
     onOpenChat: (String) -> Unit = {},
     noEngine: String? = null,
     reload: kotlinx.coroutines.flow.Flow<Unit>? = null,
+    at: String? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val webViews = LocalAppWebViews.current ?: AppWebViews.app
-    val model = remember(app, name) { AppletPageModel(app, name) }
+    val model = remember(app, name) { AppletPageModel(app, name, at) }
     val state = model.state
     androidx.compose.runtime.DisposableEffect(model, webViews) {
         onDispose { (state.content as? WebContent.Url)?.let { webViews.runtime.forget(it) } }
@@ -220,7 +264,7 @@ private fun AppletPageLoader(model: AppletPageModel, onOpenChat: (String) -> Uni
                 model.problem = null
                 model.origin = originOf(key.url)
                 sink.put(key)
-                if (state.content !is WebContent.Url) state.load(WebContent.Url(appletPageUrl(key, name)))
+                if (state.content !is WebContent.Url) state.load(WebContent.Url(appletPageUrl(key, name, model.at)))
             }
             awaitCancellation()
         } finally {

@@ -3,5 +3,5 @@
     <string name="widget_applets_label">Appletler</string>
     <string name="widget_applets_description">Sabitlediğiniz appletler. Dokunduğunuz açılır.</string>
     <string name="widget_applet_label">Applet</string>
-    <string name="widget_applet_description">Tek bir applet ve söyledikleri, örneğin kaç tane açık olduğu.</string>
+    <string name="widget_applet_description">Bir appleti bir bakışta görün ve üzerinde işlem yapın; örneğin bir işi test edildi olarak işaretleyin.</string>
 </resources>

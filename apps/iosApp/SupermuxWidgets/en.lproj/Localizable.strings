@@ -4,7 +4,7 @@
 "Applets" = "Applets";
 "Applet" = "Applet";
 "Your pinned applets. Tap one to open it." = "Your pinned applets. Tap one to open it.";
-"One applet and what it has to say, like how many are open." = "One applet and what it has to say, like how many are open.";
+"See an applet at a glance and act on it, like marking an issue tested." = "See an applet at a glance and act on it, like marking an issue tested.";
 "Open supermux to see your applets." = "Open supermux to see your applets.";
 "Pin applets in supermux to see them here." = "Pin applets in supermux to see them here.";
 "Needs you" = "Needs you";
@@ -15,3 +15,8 @@
 "Opens an applet in supermux." = "Opens an applet in supermux.";
 "Choose an applet" = "Choose an applet";
 "The applet this widget shows." = "The applet this widget shows.";
+
+/* #165: widget buttons and the applet widget's every size. */
+"Run an applet action" = "Run an applet action";
+"A button on an applet's widget." = "A button on an applet's widget.";
+"Updated %@" = "Updated %@";

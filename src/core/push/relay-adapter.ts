@@ -1,4 +1,4 @@
-import type { PushPayload } from "./sender"
+import type { PushPayload, WidgetRefreshPayload } from "./sender"
 import type { DevicePushTokenStore } from "./device-tokens"
 import type { NativePushSender } from "./native-sender"
 import { sealForDevice } from "./encrypt"
@@ -11,14 +11,27 @@ export function createRelayClient(opts: {
   relayUrl: string
   fetchImpl?: (url: string, init: RequestInit) => Promise<Response>
   log?: Logger
+  now?: () => number
 }): NativePushSender {
   const fetchFn = opts.fetchImpl ?? fetch
   const log = opts.log ?? defaultLog
 
+  // #165: an older relay has no /push/silent (it answers 404); asked again after an hour, as relays get updated.
+  let silentMissingUntil = 0
+  const now = opts.now ?? Date.now
+
   return {
-    // Every outcome is logged (card #86): a relay host answering 404 once made
-    // res.json() throw into a bare catch, and pushes vanished for days unseen.
-    async sendToDevice(device: string, payload: PushPayload): Promise<{ ok: true } | { ok: false; gone: boolean }> {
+    async sendSilentToDevice(device: string, payload: WidgetRefreshPayload): Promise<{ ok: true } | { ok: false; gone: boolean }> {
+      if (now() < silentMissingUntil) return { ok: false, gone: false }
+      return send(device, payload, "/push/silent")
+    },
+    sendToDevice: (device: string, payload: PushPayload | WidgetRefreshPayload) => send(device, payload, "/push"),
+  }
+
+  // Every outcome is logged (card #86): a relay host answering 404 once made
+  // res.json() throw into a bare catch, and pushes vanished for days unseen.
+  async function send(device: string, payload: PushPayload | WidgetRefreshPayload, path: "/push" | "/push/silent"): Promise<{ ok: true } | { ok: false; gone: boolean }> {
+    {
       const row = opts.store.get(device)
       if (!row?.routing_token || !row.device_pubkey) {
         log.warn("push_result", { device, transport: "relay", ok: false, reason: "not_registered" })
@@ -31,11 +44,16 @@ export function createRelayClient(opts: {
       let res: Response
       let parsed: { ok?: boolean; gone?: boolean; reason?: string }
       try {
-        res = await fetchFn(`${opts.relayUrl}/push`, {
+        res = await fetchFn(`${opts.relayUrl}${path}`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ routingToken: row.routing_token, ciphertext }),
         })
+        if (path === "/push/silent" && res.status === 404) {
+          silentMissingUntil = now() + 3_600_000
+          log.info("push_result", { ...target, ok: false, silent: true, reason: "relay_has_no_silent_push" })
+          return { ok: false, gone: false }
+        }
         if (!res.ok) {
           log.warn("push_result", { ...target, ok: false, status: res.status, reason: `http_${res.status}` })
           return { ok: false, gone: false }
@@ -57,6 +75,6 @@ export function createRelayClient(opts: {
       }
       log.warn("push_result", { ...target, ok: false, status: res.status, reason: parsed.reason ?? "relay_refused" })
       return { ok: false, gone: false }
-    },
+    }
   }
 }

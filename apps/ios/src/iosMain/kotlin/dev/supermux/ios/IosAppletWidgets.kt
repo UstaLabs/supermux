@@ -6,6 +6,7 @@ package dev.supermux.ios
 
 import dev.supermux.net.AppletDto
 import dev.supermux.net.WidgetHost
+import dev.supermux.net.keepPictures
 import dev.supermux.net.toWidgetApplets
 import dev.supermux.net.widgetHostFile
 import dev.supermux.ui.applets.parseAppletUri
@@ -58,7 +59,7 @@ internal object IosAppletWidgetStore {
                 val before = read(hostPath)?.let { runCatching { json.decodeFromString(WidgetHost.serializer(), it.decodeToString()) }.getOrNull() }
                 val drawn = before?.applets?.associate { it.name to it.iconAt }.orEmpty()
                 val byName = applets.associateBy { it.name }
-                val next = applets.toWidgetApplets(hostId)
+                val next = applets.toWidgetApplets(hostId).keepPictures(before?.applets)
                 for (w in next) {
                     val path = "$dir/${w.iconFile}"
                     if (drawn[w.name] == w.iconAt && NSFileManager.defaultManager.fileExistsAtPath(path)) continue

@@ -5,5 +5,5 @@
     <string name="widget_applets_label">Applets</string>
     <string name="widget_applets_description">Your pinned applets. A tap opens one.</string>
     <string name="widget_applet_label">Applet</string>
-    <string name="widget_applet_description">One applet and what it has to say, like how many are open.</string>
+    <string name="widget_applet_description">See an applet at a glance and act on it, like marking an issue tested.</string>
 </resources>

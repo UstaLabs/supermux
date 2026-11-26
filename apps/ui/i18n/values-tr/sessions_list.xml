@@ -166,6 +166,8 @@
     <string name="applets_widget_choose">Bir applet seçin</string>
     <string name="applets_widget_gone">Bu applet artık yok. Başka birini seçin.</string>
     <string name="applets_widget_needs_you">Sizi bekliyor</string>
+    <string name="applets_widget_action_failed">Yapılamadı: %1$s</string>
+    <string name="applets_widget_host_unreachable">Bilgisayar yanıt vermedi.</string>
     <string name="applets_widget_no_home">Bu ana ekran uygulamalardan widget almıyor.</string>
     <string name="applets_widget_none">Bu makinede henüz applet yok.</string>
     <string name="applets_widget_ios_title">Appletler widget'ını ekleyin</string>

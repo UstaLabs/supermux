@@ -1232,7 +1232,7 @@ export class WebChannel implements Channel {
       const v = this.opts.applets.appletForToken(req.headers.get("x-supermux-applet-token") ?? "")
       if (!v) return this.json({ error: "not an applet token" }, 401)
       const r = await this.opts.applets.refreshWidget(v.row.name)
-      return r.ok ? this.json({ ok: true, summary: r.summary }) : this.json({ error: r.error }, 400)
+      return r.ok ? this.json({ ok: true, summary: r.summary, problems: r.problems }) : this.json({ error: r.error }, 400)
     }
     if (sub) {
       return this.handleProxyRoute(req, sub, server)

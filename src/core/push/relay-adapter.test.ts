@@ -102,3 +102,19 @@ test("a device with no routing token is logged as not registered", async () => {
   await client.sendToDevice("missing", { session: "s", ts: "t" })
   expect(lines).toEqual([{ level: "warn", msg: "push_result", extra: { device: "missing", transport: "relay", ok: false, reason: "not_registered" } }])
 })
+
+test("#165: a silent push goes to /push/silent; a relay without it (404) is left alone for an hour, never sent a normal push", async () => {
+  const s = store(); s.putNative("phone", "ios", "rt", await deviceKey())
+  const urls: string[] = []
+  let status = 404
+  let t = 0
+  const client = createRelayClient({ store: s, relayUrl: "https://relay.test", now: () => t,
+    fetchImpl: async (url) => { urls.push(url); return status === 404 ? new Response("not found", { status: 404 }) : new Response('{"ok":true}') } })
+  expect(await client.sendSilentToDevice!("phone", { widget: "issues", ts: "x" })).toEqual({ ok: false, gone: false })
+  expect(await client.sendSilentToDevice!("phone", { widget: "issues", ts: "x" })).toEqual({ ok: false, gone: false })
+  expect(urls).toEqual(["https://relay.test/push/silent"])
+  t += 3_600_001
+  status = 200
+  expect(await client.sendSilentToDevice!("phone", { widget: "issues", ts: "x" })).toEqual({ ok: true })
+  expect(urls).toEqual(["https://relay.test/push/silent", "https://relay.test/push/silent"])
+})

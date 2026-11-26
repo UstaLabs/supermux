@@ -22,6 +22,12 @@ export interface PushPayload {
   applet?: string
 }
 
+/**
+ * #165: "this applet's widget changed", a silent push. No [session], so an app that predates it parses no notification
+ * from it and shows nothing; a newer one redraws that host's widgets for [widget] (an applet name).
+ */
+export interface WidgetRefreshPayload { widget: string; hostId?: string; ts: string }
+
 /** An open prompt, as a notification carries it (inside the encrypted native payload). */
 export interface PushRequest {
   requestId: string

@@ -51,6 +51,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlin.time.Clock
@@ -3604,6 +3605,26 @@ class BrokerApi(
                 runCatching { json.parseToJsonElement(body).jsonObject["error"]?.jsonPrimitive?.contentOrNull }.getOrNull() ?: "HTTP ${resp.status.value}",
             )
         }
+    }
+
+    /**
+     * #165: POST /applets/<name>/widget/actions/<action> {args}: a widget button or toggle. The applet's new widget
+     * document, or null when it has none; the broker's reason when it refuses is the error message.
+     */
+    suspend fun appletWidgetAction(name: String, action: String, args: JsonObject?): JsonObject? {
+        val body = appletCall(http.post("$httpBase/applets/${urlEncode(name)}/widget/actions/${urlEncode(action)}") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(buildJsonObject { args?.let { put("args", it) } }.toString())
+        })
+        return runCatching { json.parseToJsonElement(body).jsonObject["widget"] as? JsonObject }.getOrNull()
+    }
+
+    /** #165: an applet's page ([path] relative to the host, e.g. its widget.html) as text, with this client's key. */
+    suspend fun authedGetText(path: String): String {
+        val resp = http.get("$httpBase$path") { authHeader() }
+        if (!resp.status.isSuccess()) throw IllegalStateException("HTTP ${resp.status.value}")
+        return resp.bodyAsText()
     }
 
     /** GET /applets/<name>: Applet info. */

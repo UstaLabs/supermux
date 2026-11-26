@@ -78,6 +78,13 @@ object PushRouter {
      */
     data class Prompt(val requestId: String, val allow: Answer?, val reject: Answer?)
 
+    /** #165: the applet whose widget changed, from a silent widget push ({widget, hostId?, ts}, no session); else null. */
+    fun parseWidgetRefresh(plaintext: String): String? {
+        val obj = parseObjectOrNull(plaintext) ?: return null
+        if (obj["session"] != null) return null
+        return obj["widget"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+    }
+
     /**
      * Parse the decrypted plaintext of a sealed message into a [Notification].
      *

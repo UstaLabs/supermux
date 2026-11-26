@@ -105,6 +105,8 @@ interface Entry {
 
 export class AppletSupervisor {
   private entries = new Map<string, Entry>()
+  /** #165: told when a server has just been started (its widget can be read as soon as it answers). */
+  onStarted?: (id: string) => void
   private readonly d: Required<Omit<SupervisorDeps, "stateDir">> & { stateDir: string }
 
   constructor(deps: SupervisorDeps) {
@@ -308,6 +310,7 @@ export class AppletSupervisor {
     writeFileSync(this.pidPath(spec.id), JSON.stringify(pf))
     child.onExit((code, signal) => this.onExit(spec.id, gen, code, signal))
     log.info("applet.started", { name: spec.name, pid: child.pid, port })
+    this.onStarted?.(spec.id)
   }
 
   private onExit(id: string, gen: number, code: number | null, signal: string | null): void {

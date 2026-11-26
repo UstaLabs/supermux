@@ -1,6 +1,7 @@
 // #117: applet.json, the one manifest every applet has, whatever its language. Whatever belongs to the applet's code
 // lives here (in git): how to start it, its jobs, which secrets it needs, the shape of its settings. Host state (the
 // id, status, secret values, settings values) lives in the broker's database, never in this file.
+import { parseWidgetConfig, type WidgetConfig } from "./widget"
 
 export interface AppletJob { name: string; every: string; run: string; /** What it does, as the Jobs tab names it. */ label?: string }
 
@@ -29,8 +30,8 @@ export interface AppletManifest {
   config: AppletConfigField[]
   /** Paths (prefixes) only the owner's devices may reach: an agent gets 403. */
   ownerOnly: string[]
-  /** The optional summary a widget shows, e.g. /widget.json. */
-  widget?: string
+  /** #165: the phone widget: where the applet answers it, its picture page and the actions its buttons run. */
+  widget?: WidgetConfig
   /** An adopted applet's own data folder, when it is not <folder>/data. */
   data?: string
 }
@@ -41,7 +42,7 @@ export type ManifestResult = { ok: true; manifest: AppletManifest } | { ok: fals
 export const APPLET_NAME = /^[a-z][a-z0-9-]{0,47}$/
 
 /** The CLI's own verbs: `supermux applet <name> <cmd>` runs an applet's bin, so an applet can't be called one. */
-export const RESERVED_APPLET_NAMES = new Set(["list", "info", "new", "restart", "logs", "run", "backup", "delete", "help", "secret", "secrets", "share"])
+export const RESERVED_APPLET_NAMES = new Set(["list", "info", "new", "restart", "logs", "run", "backup", "delete", "help", "secret", "secrets", "share", "widget"])
 
 export function isAppletName(name: string): boolean {
   return APPLET_NAME.test(name) && !name.endsWith("-")
@@ -84,13 +85,13 @@ export function parseManifest(text: string): ManifestResult {
   const o = raw as Record<string, unknown>
 
   if (typeof o.title !== "string" || !o.title.trim()) return { ok: false, error: `"title" is required` }
-  for (const k of ["icon", "run", "health", "widget", "data"] as const) {
+  for (const k of ["icon", "run", "health", "data"] as const) {
     if (o[k] !== undefined && (typeof o[k] !== "string" || !(o[k] as string).trim())) return { ok: false, error: `"${k}" must be a non-empty string` }
   }
   if (typeof o.icon === "string" && !isInsidePath(o.icon)) return { ok: false, error: `"icon" must be a path inside the applet folder` }
-  for (const k of ["health", "widget"] as const) {
-    if (typeof o[k] === "string" && !(o[k] as string).startsWith("/")) return { ok: false, error: `"${k}" must be a path starting with /` } // platform-ok: URL paths
-  }
+  if (typeof o.health === "string" && !o.health.startsWith("/")) return { ok: false, error: `"health" must be a path starting with /` } // platform-ok: URL paths
+  const widget = parseWidgetConfig(o.widget)
+  if (!widget.ok) return { ok: false, error: widget.error }
 
   // A secret is its environment variable's name, or {name, label} with words for the owner ("Gmail sign-in").
   const secretLabels: Record<string, string> = {}
@@ -155,7 +156,7 @@ export function parseManifest(text: string): ManifestResult {
       ...(typeof o.icon === "string" ? { icon: o.icon.trim() } : {}),
       ...(typeof o.run === "string" ? { run: o.run.trim() } : {}),
       ...(typeof o.health === "string" ? { health: o.health } : {}),
-      ...(typeof o.widget === "string" ? { widget: o.widget } : {}),
+      ...(widget.config ? { widget: widget.config } : {}),
       ...(typeof o.data === "string" ? { data: o.data.trim() } : {}),
       jobs, secrets, bin, config, ownerOnly,
       ...(Object.keys(secretLabels).length ? { secretLabels } : {}),

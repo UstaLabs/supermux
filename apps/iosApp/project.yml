@@ -307,6 +307,8 @@ targets:
       # Shared with the app: the snapshot reader and the applet App Intents (Spotlight lives in the app).
       - path: Supermux/Applets/AppletSnapshot.swift
       - path: Supermux/Applets/AppletIntents.swift
+      # #165: the widget document, and the widget's own call to its host for a button.
+      - path: Supermux/Applets/AppletWidgetDoc.swift
     info:
       path: SupermuxWidgets/Info.plist
       properties:

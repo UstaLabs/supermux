@@ -55,6 +55,7 @@ import dev.supermux.android.MainActivity
 import dev.supermux.android.R
 import dev.supermux.net.AppletDto
 import dev.supermux.net.WidgetApplet
+import dev.supermux.net.WidgetDoc
 import dev.supermux.ui.i18n.Str
 import dev.supermux.ui.i18n.localized
 import dev.supermux.ui.session.AppletWidgets
@@ -149,9 +150,12 @@ private fun AppletIconImage(context: Context, a: WidgetApplet, icon: android.gra
     Image(ImageProvider(bmp), contentDescription = a.title, modifier = GlanceModifier.size(size))
 }
 
-/** "Applet": one applet, its summary in large type when it gives one. */
+/**
+ * "Applet": one applet. #165: an applet with a widget document is drawn from its blocks, laid out for the shape the
+ * launcher gives it (2×1 … 4×4); an older broker's summary is drawn as before, in large type.
+ */
 class AppletWidget : GlanceAppWidget() {
-    override val sizeMode = SizeMode.Single
+    override val sizeMode = SizeMode.Responsive(WIDGET_SHAPES.keys)
     override val stateDefinition: GlanceStateDefinition<*> = PreferencesGlanceStateDefinition
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
@@ -168,7 +172,12 @@ class AppletWidget : GlanceAppWidget() {
                 when {
                     hostId == null || name == null -> Message(localized(Str.applets_widget_choose), chooseApplet(context, appWidgetId))
                     a == null -> Message(localized(Str.applets_widget_gone), chooseApplet(context, appWidgetId))
-                    else -> OneApplet(context, hostId, a, AppletWidgetStore.icon(context, hostId, a.name))
+                    else -> {
+                        val doc = androidx.compose.runtime.remember(drawn, a.widget) { WidgetDoc.parse(a.widget) }
+                        val dark = (context.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
+                        if (doc != null) DocWidget(context, hostId, a, doc, AppletWidgetStore.icon(context, hostId, a.name), dark)
+                        else OneApplet(context, hostId, a, AppletWidgetStore.icon(context, hostId, a.name))
+                    }
                 }
             }
         }
@@ -213,8 +222,15 @@ private fun Message(text: String, action: Action) {
 
 /** The widget's own surface: the system's widget background and corner radius. */
 private val WidgetFrame: GlanceModifier
-    @Composable get() = GlanceModifier.fillMaxSize().appWidgetBackground().background(GlanceTheme.colors.widgetBackground)
-        .cornerRadius(24.dp) // Android 12+ rounds widgets itself to the launcher's radius; older ones draw it square
+    @Composable get() = widgetFrame()
+
+@Composable
+internal fun widgetFrame(): GlanceModifier = GlanceModifier.fillMaxSize().appWidgetBackground().background(GlanceTheme.colors.widgetBackground)
+    .cornerRadius(24.dp) // Android 12+ rounds widgets itself to the launcher's radius; older ones draw it square
+
+/** #165: the applet, opened at [at] (a widget row's item) when it gives one. */
+internal fun openAppletAt(context: Context, hostId: String, a: WidgetApplet, at: String?): Action =
+    actionStartActivity(AppletActivity.intent(context, hostId, a.name, a.title, at))
 
 private fun openApplet(context: Context, hostId: String, a: WidgetApplet): Action =
     actionStartActivity(AppletActivity.intent(context, hostId, a.name, a.title))

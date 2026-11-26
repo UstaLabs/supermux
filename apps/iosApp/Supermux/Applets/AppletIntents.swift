@@ -95,3 +95,39 @@ struct OpenAppletIntent: ControlConfigurationIntent {
         return .result()
     }
 }
+
+/// #165: a widget button or toggle (Home Screen or Lock Screen): runs the applet's action through the paired host,
+/// from the widget extension, with no app on screen. WidgetKit reloads the widget when it returns, outside the budget;
+/// the answer (the applet's new widget) is already in the snapshot by then. A failure shows on the widget's next draw.
+@available(iOS 18.0, *)
+struct RunWidgetActionIntent: AppIntent {
+    static var title: LocalizedStringResource = "Run an applet action"
+    static var description = IntentDescription("A button on an applet's widget.")
+    static var isDiscoverable = false
+
+    @Parameter(title: "Host") var host: String
+    @Parameter(title: "Applet") var applet: String
+    @Parameter(title: "Action") var action: String
+    @Parameter(title: "Arguments") var args: String
+
+    init() {}
+
+    init(host: String, applet: String, action: String, args: String) {
+        self.host = host
+        self.applet = applet
+        self.action = action
+        self.args = args
+    }
+
+    func perform() async throws -> some IntentResult {
+        do {
+            try await WidgetHostAccess.run(host: host, applet: applet, action: action, argsJSON: args)
+            AppletSnapshot.update(host: host, applet: applet) { $0.removeValue(forKey: "widgetError") }
+        } catch {
+            // Shown on the widget (it can't show an alert); cleared by the next good tap or snapshot.
+            let why = error.localizedDescription
+            AppletSnapshot.update(host: host, applet: applet) { $0["widgetError"] = why }
+        }
+        return .result()
+    }
+}

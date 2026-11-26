@@ -416,6 +416,8 @@ final class SwiftBridge: NSObject, IosBridge {
     /// #117 W1: the applet widgets' snapshot (App Group, applet-widgets/) changed; WidgetKit redraws them.
     func reloadWidgets() {
         WidgetCenter.shared.reloadAllTimelines()
+        // #165: the pictures the new snapshot's widgets show, drawn here (it reloads the widgets again when done).
+        Task { @MainActor in AppletWidgetPictures.shared.renderIfNeeded() }
         if #available(iOS 18.0, *) {
             ControlCenter.shared.reloadAllControls()
             // Spotlight learns new applets' names.

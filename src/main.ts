@@ -27,6 +27,7 @@ import { ProjectImages } from "./core/project/images"
 import { propagateSessionRename } from "./core/workspace/name"
 import { makeReadAdvancer } from "./core/session-manager/read-status"
 import { AppletService } from "./core/applets/service"
+import { createWidgetPusher } from "./core/applets/widget-push"
 import { handleAppletOp } from "./core/applets/ops"
 import { ProxyLivenessMonitor, type ProxyStatus } from "./core/proxy/liveness"
 import { exposedLinksPublicUrl, hostRelayUrl } from "./core/relay/public-url"
@@ -2444,6 +2445,14 @@ const proxyLivenessMonitor = new ProxyLivenessMonitor({
   listTargets: () => registry.listProxies().map((p) => ({ domain: p.domain, port: p.port })),
   onChange: (domain, status) => webChannel?.broadcastToAll({ type: "proxy_status", domain, status }),
 })
+// #165: "an applet's widget changed" → a push that shows nothing, to the owner's phones (see widget-push.ts).
+const widgetPusher = createWidgetPusher({
+  devices: () => deviceTokenStore.all().filter((r) => r.routing_token).map((r) => ({ device: r.device, platform: r.platform })),
+  // iOS: only ever silent (/push/silent); a relay without it gets nothing rather than a normal, visible push.
+  send: (device, payload, platform) => platform === "ios" ? (nativeSender.sendSilentToDevice?.(device, payload) ?? Promise.resolve()) : nativeSender.sendToDevice(device, payload),
+  // Read when a push goes out: the host identity is loaded further down.
+  hostId: () => hostIdentity.hostId,
+})
 // #117: the host's applets (~/.mux/applets/<name>/), served at /a/<name>/ and kept running with no session involved.
 // Started after webChannel.start(); servers outlive a broker restart and are adopted by the next one.
 const appletService = new AppletService({
@@ -2476,6 +2485,7 @@ const appletService = new AppletService({
       decide: () => pushVerdict({ kind: "applet", id: applet.id }, "applet", opts.needsYou),
     })
   },
+  widgetChanged: (applet, except) => widgetPusher.changed(applet.name, except),
   // No payload: a device showing applets reloads GET /applets (older apps skip the unknown frame).
   onChange: () => webChannel?.broadcastToAll({ type: "applets_changed" }),
 })
