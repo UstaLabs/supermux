@@ -12,6 +12,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 
 /** An applet window's place: its last floating bounds (dp, AWT user space), and whether it was maximized or full screen. */
@@ -57,7 +58,7 @@ internal class AppletWindowPlacements(private val path: Path = defaultPath()) {
             val all = loaded()
             if (all[key(hostId, name)] == place) return
             all[key(hostId, name)] = place
-            json.encodeToString(kotlinx.serialization.builtins.MapSerializer(kotlinx.serialization.builtins.serializer<String>(), AppletWindowPlace.serializer()), all)
+            json.encodeToString(kotlinx.serialization.builtins.MapSerializer(String.serializer(), AppletWindowPlace.serializer()), all)
         }
         runCatching {
             Files.createDirectories(path.parent)
