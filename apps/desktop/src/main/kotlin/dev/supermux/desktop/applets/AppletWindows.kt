@@ -9,6 +9,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.awt.ComposeWindow
+import kotlinx.coroutines.flow.collectLatest
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.key as keyOf
@@ -108,7 +109,41 @@ internal object DesktopApplets {
 internal fun AppletWindows(fleet: FleetStore?, onOpenChat: (String) -> Unit, theme: @Composable (@Composable () -> Unit) -> Unit) {
     for (a in DesktopApplets.open) {
         key(a.key) {
-            val state = rememberWindowState(position = WindowPosition.PlatformDefault, size = DpSize(1100.dp, 780.dp))
+            // Where this applet's window was on this computer, when that is still on a screen (AppletWindowPlacements).
+            val opening = androidx.compose.runtime.remember(a.key) {
+                appletWindowOpening(AppletWindowPlacements.shared.get(a.hostId, a.name), dev.supermux.desktop.platform.usableScreens())
+            }
+            val state = rememberWindowState(
+                placement = when {
+                    opening.fullscreen -> androidx.compose.ui.window.WindowPlacement.Fullscreen
+                    opening.bounds.maximized -> androidx.compose.ui.window.WindowPlacement.Maximized
+                    else -> androidx.compose.ui.window.WindowPlacement.Floating
+                },
+                position = if (opening.bounds.x != null && opening.bounds.y != null) WindowPosition(opening.bounds.x.dp, opening.bounds.y.dp) else WindowPosition.PlatformDefault,
+                size = DpSize(opening.bounds.width.dp, opening.bounds.height.dp),
+            )
+            // Its place as it moves: its last floating bounds, and whether it is maximized or full screen.
+            androidx.compose.runtime.LaunchedEffect(a.key, state) {
+                var floating = AppletWindowPlacements.shared.get(a.hostId, a.name)?.window
+                androidx.compose.runtime.snapshotFlow {
+                    val pos = state.position
+                    if (state.placement == androidx.compose.ui.window.WindowPlacement.Floating && pos.isSpecified) {
+                        floating = dev.supermux.desktop.platform.SavedWindow(
+                            pos.x.value.toInt(), pos.y.value.toInt(), state.size.width.value.toInt(), state.size.height.value.toInt(),
+                        )
+                    }
+                    floating?.let { w ->
+                        AppletWindowPlace(
+                            w.copy(maximized = state.placement == androidx.compose.ui.window.WindowPlacement.Maximized),
+                            fullscreen = state.placement == androidx.compose.ui.window.WindowPlacement.Fullscreen,
+                        )
+                    }
+                }.collectLatest { place ->
+                    if (place == null) return@collectLatest
+                    kotlinx.coroutines.delay(500)
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { AppletWindowPlacements.shared.put(a.hostId, a.name, place) }
+                }
+            }
             // Opened from a shortcut it has only its name: the window takes the title the host gives it.
             val none = androidx.compose.runtime.remember { kotlinx.coroutines.flow.MutableStateFlow<List<AppletDto>?>(null) }
             val listed by (fleet?.appForRecord(a.hostId)?.applets ?: none).collectAsState()
