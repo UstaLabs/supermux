@@ -1,4 +1,4 @@
-import type { PushPayload } from "./sender"
+import type { PushPayload, WidgetRefreshPayload } from "./sender"
 import type { DevicePushTokenStore } from "./device-tokens"
 import type { NativePushSender } from "./native-sender"
 import { sealForDevice } from "./encrypt"
@@ -18,7 +18,7 @@ export function createRelayClient(opts: {
   return {
     // Every outcome is logged (card #86): a relay host answering 404 once made
     // res.json() throw into a bare catch, and pushes vanished for days unseen.
-    async sendToDevice(device: string, payload: PushPayload): Promise<{ ok: true } | { ok: false; gone: boolean }> {
+    async sendToDevice(device: string, payload: PushPayload | WidgetRefreshPayload): Promise<{ ok: true } | { ok: false; gone: boolean }> {
       const row = opts.store.get(device)
       if (!row?.routing_token || !row.device_pubkey) {
         log.warn("push_result", { device, transport: "relay", ok: false, reason: "not_registered" })

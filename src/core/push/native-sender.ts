@@ -1,4 +1,4 @@
-import type { PushPayload } from "./sender"
+import type { PushPayload, WidgetRefreshPayload } from "./sender"
 import type { DevicePushTokenStore } from "./device-tokens"
 
 export interface PlatformPushAdapter {
@@ -7,7 +7,7 @@ export interface PlatformPushAdapter {
 }
 
 export interface NativePushSender {
-  sendToDevice(device: string, payload: PushPayload): Promise<{ ok: true } | { ok: false; gone: boolean }>
+  sendToDevice(device: string, payload: PushPayload | WidgetRefreshPayload): Promise<{ ok: true } | { ok: false; gone: boolean }>
 }
 
 export function createNativePushSender(opts: {
@@ -20,7 +20,7 @@ export function createNativePushSender(opts: {
       const row = opts.store.get(device)
       if (!row) return { ok: false, gone: true }
       const adapter = row.platform === "ios" ? opts.apns : opts.fcm
-      const res = await adapter.send(row.token, payload)
+      const res = await adapter.send(row.token, payload as PushPayload)
       if (res.ok === false && res.gone) opts.store.remove(device)
       return res
     },

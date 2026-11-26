@@ -19,6 +19,8 @@ import { resolveStaticFile } from "./applet-route"
  *   POST   /applets/<name>/restart | backup {why} | jobs/<job>/run | pin | unpin | stop | start | notify {title, body} | ask {text, agent?} | chat | installs {where}
  *   PUT    /applets/<name>/secrets/<NAME> {value, expiresAt?}   DELETE the same
  *   PUT    /applets/<name>/settings/<key> {value}
+ *   GET    /applets/<name>/widget                      #165: its widget document, and what was wrong with it
+ *   POST   /applets/<name>/widget/actions/<action> {args}   a widget button or toggle; answers the new document
  */
 
 type Json = (body: unknown, status?: number) => Response
@@ -33,7 +35,7 @@ function detail(applets: AppletService, v: AppletView) {
   const m = v.manifest
   const settingsValues = applets.secrets.settings(v.row.id)
   return {
-    ...appletPayload(v, applets.needsYou(v), applets.pinnedIds().includes(v.row.id) ? applets.pinnedIds().indexOf(v.row.id) : null, applets.widgetSummary(v.row.id)),
+    ...appletPayload(v, applets.needsYou(v), applets.pinnedIds().includes(v.row.id) ? applets.pinnedIds().indexOf(v.row.id) : null, applets.widgetSummary(v.row.id), applets.widget(v.row.id)),
     secrets: applets.secrets.status(v.row.id, m?.secrets ?? []).map((s) => ({ ...s, wanted: (m?.secrets ?? []).includes(s.name), label: m?.secretLabels?.[s.name] ?? null })),
     jobs: (m?.jobs ?? []).map((j) => {
       const last = applets.jobs.lastRun(v.row.id, j.name)
@@ -68,7 +70,7 @@ export async function handleAppletApi(req: Request, opts: { applets: AppletServi
   if (parts.length === 0 || (parts.length === 1 && parts[0] === "")) {
     if (method === "GET") {
       const pins = applets.pinnedIds()
-      return json(applets.list().map((v) => appletPayload(v, applets.needsYou(v), pins.includes(v.row.id) ? pins.indexOf(v.row.id) : null, applets.widgetSummary(v.row.id))))
+      return json(applets.list().map((v) => appletPayload(v, applets.needsYou(v), pins.includes(v.row.id) ? pins.indexOf(v.row.id) : null, applets.widgetSummary(v.row.id), applets.widget(v.row.id))))
     }
     return json({ error: "not found" }, 404)
   }
@@ -132,6 +134,15 @@ export async function handleAppletApi(req: Request, opts: { applets: AppletServi
     const p = await body(req)
     const r = await applets.ask(name, p.text, p.agent ?? undefined)
     return r.ok ? json({ ok: true, sessionId: r.sessionId, session: r.session }) : json({ error: r.error }, 400)
+  }
+  if (a === "widget" && !b && method === "GET") {
+    const w = applets.widget(v.row.id)
+    return json({ widget: w?.doc ?? null, problems: w?.problems ?? [], at: w?.at ?? null })
+  }
+  if (a === "widget" && b === "actions" && c && method === "POST") {
+    const p = await body(req)
+    const r = await applets.runWidgetAction(name, c, p.args, by, opts.device)
+    return r.ok ? json({ ok: true, widget: r.widget }) : json({ error: r.error }, 409)
   }
   if (a === "notify" && !b && method === "POST") {
     const p = await body(req)

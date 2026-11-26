@@ -1,4 +1,6 @@
 import { isAbsolute, join } from "path"
+import { mkdirSync, writeFileSync } from "fs"
+import previewTemplate from "./widget-preview.tmpl" with { type: "text" }
 import type { AppletService, AppletView } from "./service"
 
 /**
@@ -138,6 +140,41 @@ export async function handleAppletOp(svc: AppletService, name: string, args: Rec
       const r = svc.backup(n, str(args, "why"))
       if (!r.ok) return { ok: false, error: r.error }
       return { ok: true, value: { name: n, path: join(svc.backups.dirOf(n), r.backup.id, "data"), why: r.backup.why, created_at: r.backup.createdAt } }
+    }
+    case "applet_widget": {
+      // #165: supermux applet widget show|check|changed|run APPLET …
+      const n = need(); if (typeof n !== "string") return n
+      const v = find(n); if (!("row" in v)) return v
+      const what = str(args, "do") ?? "check"
+      if (what === "changed") {
+        const r = await svc.refreshWidget(n)
+        if (!r.ok) return { ok: false, error: r.error }
+        return { ok: true, value: { name: n, summary: r.summary, problems: r.problems, note: svc.widget(v.row.id) ? "phones redraw it now (Android at once; iPhone on its next reload)" : "no widget was read" } }
+      }
+      if (what === "run") {
+        const action = str(args, "action")
+        if (!action) return { ok: false, code: "usage", error: `which action? (${Object.keys(v.manifest?.widget?.actions ?? {}).join(", ") || "applet.json has none"})` }
+        const r = await svc.runWidgetAction(n, action, args?.args ?? {}, by)
+        if (!r.ok) return { ok: false, error: r.error }
+        return { ok: true, value: { name: n, action, widget: r.widget } }
+      }
+      const c = await svc.checkWidget(n)
+      if (!c.ok) return { ok: false, error: c.error }
+      if (what === "check") return { ok: true, value: { name: n, problems: c.problems, sizes: c.doc ? Object.keys(c.doc.layouts) : [] } }
+      if (what !== "show") return { ok: false, code: "usage", error: `unknown: ${what} (show, check, changed, run)` }
+      if (!c.doc) return { ok: false, error: c.problems.join("\n") }
+      const cfg = v.manifest!.widget!
+      const port = svc.supervisor.port(v.row.id)
+      const base = v.manifest?.run ? (port ? `http://127.0.0.1:${port}/` : "") : `file://${join(v.folder, "public")}/`
+      const data = {
+        title: v.row.title, accent: cfg.accent ?? "#4b6bea", doc: c.doc, problems: c.problems, base,
+        html: cfg.html && base ? base + cfg.html.replace(/^\//, "") : null,
+        icon: v.manifest?.icon ? `file://${join(v.folder, v.manifest.icon)}` : null,
+      }
+      mkdirSync(svc.previewDir(), { recursive: true })
+      const file = join(svc.previewDir(), `${n}.html`)
+      writeFileSync(file, previewTemplate.replace("/*__DATA__*/null", () => JSON.stringify(data).replace(/</g, "\\u003c")))
+      return { ok: true, value: { name: n, file, problems: c.problems, note: "open it in a browser, or screenshot it, to see every size in light and dark as the phones draw them" } }
     }
     default:
       return { ok: false, code: "usage", error: `unknown applet op ${name}` }

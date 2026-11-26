@@ -139,3 +139,34 @@ posix("ask: one chat per applet, made once; an Agent by name", async () => {
   ])
   expect(await svc.ask("mail", " ")).toMatchObject({ ok: false })
 })
+
+posix("#165 widget: check names what's wrong, show writes a preview of every size, changed re-reads", async () => {
+  const { svc, op, root } = setup()
+  const dir = join(root, "applets", "habits")
+  mkdirSync(join(dir, "public"), { recursive: true })
+  writeFileSync(join(dir, "applet.json"), JSON.stringify({ title: "Habits", widget: { data: "/widget.json", html: "/widget.html", actions: { toggle: { path: "/api/{id}" } } } }))
+  writeFileSync(join(dir, "public/widget.json"), JSON.stringify({ v: 2, layouts: {
+    small: [{ type: "header" }, { type: "ring", value: 0.5, text: "2/4", sub: "today" }],
+    medium: [{ type: "html", part: "heat", height: 100, alt: { type: "chart", kind: "bars", points: [1, 2, 3] } }, { type: "html", part: "heat", height: 100, label: "Heat map", alt: { type: "chart", kind: "bars", points: [1, 2, 3] } }],
+  } }))
+  writeFileSync(join(dir, "public/widget.html"), `<style>.x{font-size:9px}</style><div class="x">hi</div>`)
+  await svc.scan()
+  const c = await op("applet_widget", { applet: "habits", do: "check" }) as any
+  expect(c.ok).toBe(true)
+  expect(c.value.problems.join("\n")).toContain(`needs a "label"`)
+  expect(c.value.problems.join("\n")).toContain("under 11 px (9px)")
+  expect(c.value.problems.join("\n")).toContain("widgetReady")
+  expect(c.value.problems.join("\n")).toContain(`action "toggle" can't run: a static applet`)
+  expect(c.value.sizes).toContain("slim")
+  const s = await op("applet_widget", { applet: "habits", do: "show" }) as any
+  expect(s.ok).toBe(true)
+  const page = readFileSync(s.value.file, "utf8")
+  expect(page).toContain(`"title":"Habits"`)
+  expect(page).toContain(`file://${join(dir, "public")}/widget.html`)
+  expect(page).not.toContain("/*__DATA__*/null")
+  const ch = await op("applet_widget", { applet: "habits", do: "changed" }) as any
+  expect(ch.ok).toBe(true)
+  expect(await op("applet_widget", { applet: "habits", do: "run" })).toMatchObject({ ok: false, code: "usage" })
+  expect(await op("applet_widget", { applet: "habits", do: "dance" })).toMatchObject({ ok: false, code: "usage" })
+  expect(await op("applet_widget", { applet: "nope" })).toMatchObject({ ok: false, code: "not_found" })
+})

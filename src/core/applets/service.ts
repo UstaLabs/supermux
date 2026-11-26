@@ -12,6 +12,8 @@ import { AppletSecrets, type SecretStatus } from "./secrets"
 import { JobRunner, type JobRun, type JobTarget } from "./jobs"
 import { AppletBackups, nightlyDue, type BackupInfo } from "./backups"
 import { AppletDataApi } from "./data-api"
+import { actionPath, parseWidget, type WidgetDoc, type WidgetSummary } from "./widget"
+export { parseWidgetSummary, type WidgetSummary } from "./widget"
 
 /** How long a deleted applet (row, folder, backups) is kept before it is gone for good. */
 export const DELETED_KEEP_MS = 30 * 86_400_000
@@ -60,6 +62,8 @@ export interface AppletServiceDeps {
   now?: () => Date
   /** The broker's own loopback address, given to applet servers and jobs as $SUPERMUX_URL. */
   brokerUrl?: () => string | undefined
+  /** #165: tells the owner's phones an applet's widget changed, so they redraw it ([except]: the device that caused it). */
+  widgetChanged?: (applet: { id: string; name: string }, except?: string) => void
   /** Pushes a notice to the owner's devices (supermux.notify). */
   notify?: (applet: { id: string; name: string; title: string }, title: string, body: string, opts: { needsYou: boolean }) => Promise<void>
   /**
@@ -77,21 +81,8 @@ export interface AppletServiceDeps {
 /** How many applets the sidebar grid holds (3×3); a phone shows the first 8. */
 export const MAX_PINS = 9
 
-/** What a phone widget shows for an applet: its applet.json "widget" path answers this (all optional). */
-export interface WidgetSummary { value?: string; label?: string; lines?: string[] }
-
-/** The summary an applet answered, trimmed to what fits a widget; null when it isn't one. */
-export function parseWidgetSummary(raw: unknown): WidgetSummary | null {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null
-  const o = raw as Record<string, unknown>
-  const text = (x: unknown, max: number) =>
-    typeof x === "string" ? x.trim().slice(0, max) : typeof x === "number" && Number.isFinite(x) ? String(x).slice(0, max) : ""
-  const value = text(o.value, 12)
-  const label = text(o.label, 40)
-  const lines = Array.isArray(o.lines) ? o.lines.map((l) => text(l, 80)).filter(Boolean).slice(0, 3) : []
-  if (!value && !label && !lines.length) return null
-  return { ...(value ? { value } : {}), ...(label ? { label } : {}), ...(lines.length ? { lines } : {}) }
-}
+/** #165: an applet's widget as last read: the v2 document phones draw, the v1 summary older apps show, and what was wrong. */
+export interface WidgetState { doc: WidgetDoc; summary: WidgetSummary | null; problems: string[]; at: string }
 const PINS_KEY = "applets.pins"
 
 export type Result<T> = ({ ok: true } & T) | { ok: false; error: string }
@@ -110,8 +101,8 @@ export class AppletService {
   /** The built-in data API static applets keep their data with (/a/<name>/api/). */
   readonly dataApi = new AppletDataApi()
   private views = new Map<string, AppletView>()
-  /** The last widget summary each applet answered, by applet id. */
-  private summaries = new Map<string, WidgetSummary>()
+  /** The last widget each applet answered, by applet id. */
+  private widgets = new Map<string, WidgetState>()
   private timers: ReturnType<typeof setInterval>[] = []
   private hostKey: Buffer
   private readonly now: () => Date
@@ -181,29 +172,137 @@ export class AppletService {
     return { ok: true }
   }
 
-  /** The summary its widget shows, as last read; undefined when the applet has none (or it couldn't be read). */
-  widgetSummary(id: string): WidgetSummary | undefined { return this.summaries.get(id) }
+  /** The v1 summary its widget shows, as last read; undefined when the applet has none (or it couldn't be read). */
+  widgetSummary(id: string): WidgetSummary | undefined { return this.widgets.get(id)?.summary ?? undefined }
 
-  /** Reads one applet's widget summary again (an applet's server asks this after a change, so widgets follow at once). */
-  async refreshWidget(name: string): Promise<Result<{ summary: WidgetSummary | null }>> {
+  /** #165: its whole widget as last read (the v2 document); undefined when it has none. */
+  widget(id: string): WidgetState | undefined { return this.widgets.get(id) }
+
+  /** Reads one applet's widget again (an applet's server asks this after a change, so widgets follow at once). */
+  async refreshWidget(name: string, except?: string): Promise<Result<{ summary: WidgetSummary | null; problems: string[] }>> {
     const v = this.get(name)
     if (!v) return { ok: false, error: `no applet named "${name}"` }
     const changed = await this.readWidget(v)
-    if (changed) this.deps.onChange?.()
-    return { ok: true, summary: this.summaries.get(v.row.id) ?? null }
+    if (changed) this.widgetMoved(v, except)
+    const w = this.widgets.get(v.row.id)
+    return { ok: true, summary: w?.summary ?? null, problems: w?.problems ?? [] }
   }
 
-  /** Every applet's summary again; one change notice when any moved. */
+  /** Every applet's widget again; one change notice when any moved. */
   async refreshWidgets(): Promise<void> {
     let changed = false
-    for (const v of this.list()) if (await this.readWidget(v)) changed = true
+    for (const v of this.list()) if (await this.readWidget(v)) { changed = true; this.deps.widgetChanged?.({ id: v.row.id, name: v.row.name }) }
     if (changed) this.deps.onChange?.()
   }
 
-  /** Reads [v]'s summary: a file under public/ for a static applet, a GET to its server otherwise. True when it moved. */
+  private widgetMoved(v: AppletView, except?: string): void {
+    this.deps.onChange?.()
+    this.deps.widgetChanged?.({ id: v.row.id, name: v.row.name }, except)
+  }
+
+  /**
+   * #165: a widget button or toggle (on a phone's Home or Lock Screen). Runs the action applet.json declares against
+   * the applet's server, signed as supermux:widget-action and naming who tapped; the server may answer its new widget
+   * document, otherwise it is read again. The tapping device gets the new widget in the reply, the others a push.
+   */
+  async runWidgetAction(name: string, action: string, args: unknown, by: string, device?: string): Promise<Result<{ widget: WidgetDoc | null }>> {
+    const v = this.get(name)
+    if (!v) return { ok: false, error: `no applet named "${name}"` }
+    const def = v.manifest?.widget?.actions[action]
+    if (!def) return { ok: false, error: `${v.row.title} has no widget action "${action}"` }
+    if (!v.manifest?.run) return { ok: false, error: `${v.row.title} has no server to run "${action}"` }
+    const port = this.supervisor.port(v.row.id)
+    if (!port || v.process?.state !== "running") return { ok: false, error: `${v.row.title} isn't running` }
+    const a = args && typeof args === "object" && !Array.isArray(args) ? args as Record<string, unknown> : {}
+    const path = actionPath(def.path, a)
+    if (!path) return { ok: false, error: `"${action}" needs ${def.path.match(/\{[a-zA-Z0-9_]+\}/g)?.join(", ")}` }
+    let answered: unknown
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}${path}`, {
+        method: def.method,
+        signal: AbortSignal.timeout(10_000),
+        headers: {
+          "content-type": "application/json",
+          "x-mux-via": "supermux:widget-action", "x-mux-via-sig": this.signVia(v.row.id, "supermux:widget-action"),
+          "x-mux-actor": by,
+        },
+        body: JSON.stringify({ action, args: a }),
+      })
+      if (!res.ok) {
+        const t = (await res.text().catch(() => "")).slice(0, 200)
+        return { ok: false, error: `${v.row.title} answered ${res.status}${t ? `: ${t}` : ""}` }
+      }
+      if ((res.headers.get("content-type") ?? "").includes("json")) answered = await res.json().catch(() => undefined)
+    } catch (err) {
+      return { ok: false, error: `${v.row.title} didn't answer: ${(err as Error).message}` }
+    }
+    log.info("applet_widget_action", { applet: v.row.name, action, by })
+    const before = JSON.stringify(this.widgets.get(v.row.id)?.doc ?? null)
+    const fromAnswer = answered && typeof answered === "object" && ("layouts" in (answered as object) || "value" in (answered as object))
+    if (fromAnswer) this.setWidget(v, answered)
+    else await this.readWidget(v)
+    if (JSON.stringify(this.widgets.get(v.row.id)?.doc ?? null) !== before) this.widgetMoved(v, device)
+    return { ok: true, widget: this.widgets.get(v.row.id)?.doc ?? null }
+  }
+
+  /** Where the preview of `supermux applet widget show` is written. */
+  previewDir(): string { return join(this.deps.stateDir, "widget-preview") }
+
+  /**
+   * #165: what an agent should fix in its widget: the document's own problems plus its picture page's. Reads the
+   * widget again first, so the answer is about the files as they are now.
+   */
+  async checkWidget(name: string): Promise<Result<{ problems: string[]; doc: WidgetDoc | null; html: string | null }>> {
+    const v = this.get(name)
+    if (!v) return { ok: false, error: `no applet named "${name}"` }
+    const cfg = v.manifest?.widget
+    if (!cfg) return { ok: false, error: `${v.row.title} has no widget: add "widget" to applet.json (supermux applet --help)` }
+    await this.refreshWidget(name)
+    const w = this.widgets.get(v.row.id)
+    const problems = [...(w?.problems ?? [])]
+    if (!w) problems.unshift(`${cfg.data} didn't answer a widget (v2 {"v": 2, "layouts": {…}} or v1 {"value", "label", "lines"})`)
+    const usesPictures = !!w && (w.doc.snapshot === "full" || JSON.stringify(w.doc.layouts).includes('"type":"html"'))
+    let page: string | null = null
+    if (cfg.html) {
+      try {
+        if (v.manifest?.run) {
+          const port = this.supervisor.port(v.row.id)
+          if (port) {
+            const res = await fetch(`http://127.0.0.1:${port}${cfg.html}`, { signal: AbortSignal.timeout(5_000), headers: { "x-mux-via": "supermux:widget", "x-mux-via-sig": this.signVia(v.row.id, "supermux:widget") } })
+            if (res.ok) page = await res.text()
+            else problems.push(`${cfg.html} answered ${res.status}`)
+          } else problems.push(`${v.row.title} isn't running, so ${cfg.html} couldn't be read`)
+        } else {
+          const file = join(v.folder, "public", cfg.html)
+          if (existsSync(file)) page = readFileSync(file, "utf8")
+          else problems.push(`${cfg.html} isn't in public/`)
+        }
+      } catch (err) { problems.push(`${cfg.html} couldn't be read: ${(err as Error).message}`) }
+      if (page !== null) {
+        const small = [...page.matchAll(/font(?:-size)?\s*:[^;"}]*?\b(\d+(?:\.\d+)?)px/g)].map((m) => Number(m[1])).filter((n) => n < 11)
+        if (small.length) problems.push(`${cfg.html} sets text under 11 px (${[...new Set(small)].join(", ")}px): pictures are graphics, and text that matters belongs in native blocks`)
+        if (!page.includes("widgetReady")) problems.push(`${cfg.html} never calls supermux.widgetReady(): the phone waits 2 s after load before it takes the picture`)
+      }
+      if (!usesPictures) problems.push(`applet.json has "widget.html" but no layout uses a picture ({"type": "html"})`)
+    } else if (usesPictures) problems.push(`a layout uses a picture ({"type": "html"}) but applet.json has no "widget.html"`)
+    for (const [k, a] of Object.entries(cfg.actions)) {
+      if (!v.manifest?.run) problems.push(`action "${k}" can't run: a static applet has no server for ${a.path}`)
+    }
+    return { ok: true, problems, doc: w?.doc ?? null, html: page }
+  }
+
+  /** Keeps what [raw] says as [v]'s widget (or forgets it). True when the document moved. */
+  private setWidget(v: AppletView, raw: unknown): boolean {
+    const before = JSON.stringify(this.widgets.get(v.row.id)?.doc ?? null)
+    const parsed = parseWidget(raw, { title: v.row.title, actions: Object.keys(v.manifest?.widget?.actions ?? {}) })
+    if (parsed) this.widgets.set(v.row.id, { ...parsed, at: this.now().toISOString() })
+    else this.widgets.delete(v.row.id)
+    return JSON.stringify(parsed?.doc ?? null) !== before
+  }
+
+  /** Reads [v]'s widget: a file under public/ for a static applet, a GET to its server otherwise. True when it moved. */
   private async readWidget(v: AppletView): Promise<boolean> {
-    const before = JSON.stringify(this.summaries.get(v.row.id) ?? null)
-    const path = v.manifest?.widget
+    const path = v.manifest?.widget?.data
     let raw: unknown = undefined
     if (path && !v.row.stoppedAt) {
       try {
@@ -226,10 +325,7 @@ export class AppletService {
         log.debug("applet_widget_read_failed", { applet: v.row.name, error: (err as Error).message })
       }
     }
-    const summary = parseWidgetSummary(raw)
-    if (summary) this.summaries.set(v.row.id, summary)
-    else this.summaries.delete(v.row.id)
-    return JSON.stringify(summary) !== before
+    return this.setWidget(v, raw)
   }
 
   /**
@@ -774,7 +870,7 @@ export class AppletService {
 }
 
 /** What a device sees of one applet (GET /applets): no paths on the host, no keys. */
-export function appletPayload(v: AppletView, needsYou: SecretStatus[] = [], pin: number | null = null, summary?: WidgetSummary) {
+export function appletPayload(v: AppletView, needsYou: SecretStatus[] = [], pin: number | null = null, summary?: WidgetSummary, widget?: WidgetState) {
   const m = v.manifest
   return {
     id: v.row.id,
@@ -789,9 +885,16 @@ export function appletPayload(v: AppletView, needsYou: SecretStatus[] = [], pin:
     needsYou: needsYou.map((s) => ({ secret: s.name, state: s.state, label: m?.secretLabels?.[s.name] ?? null })),
     /** Its place in the sidebar grid, or null when it isn't pinned. */
     pin,
-    ...(m ? { jobs: m.jobs.map((j) => ({ name: j.name, every: j.every })), secrets: m.secrets, widget: m.widget ?? null } : {}),
+    ...(m ? { jobs: m.jobs.map((j) => ({ name: j.name, every: j.every })), secrets: m.secrets, widget: m.widget?.data ?? null } : {}),
     /** What its phone widget shows (from its "widget" path); null when it has none. */
     summary: summary ?? null,
+    /** #165: the whole widget (v2: every size laid out), its picture page and its actions; null when it has none. */
+    widgetDoc: widget?.doc ?? null,
+    ...(widget && m?.widget ? {
+      widgetHtml: m.widget.html ? `/a/${v.row.name}${m.widget.html}` : null,
+      widgetAccent: m.widget.accent ?? null,
+      widgetActions: Object.fromEntries(Object.entries(m.widget.actions).map(([k, a]) => [k, { title: a.title, confirm: a.confirm }])),
+    } : {}),
     ...(v.process ? {
       process: {
         state: v.process.state, restarts: v.process.restarts, startedAt: v.process.startedAt ?? null,

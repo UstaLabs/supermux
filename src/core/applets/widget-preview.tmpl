@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Widget preview</title>
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; padding: 24px; background: #0e100d; color: #eaece6; font: 14px/1.5 system-ui, sans-serif; }
+h1 { font-size: 22px; margin: 0 0 8px; } h2 { font-size: 15px; margin: 26px 0 8px; color: #b9bdb2; }
+.probs { color: #ebb25f; } .ok { color: #53be70; }
+.screen { border-radius: 24px; padding: 20px; overflow: hidden; }
+.screen .row { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; }
+.ios-home { background: radial-gradient(120% 140% at 10% 0%, #8fb7c9 0%, #5c7fa8 35%, #2f3d63 70%, #1b2035 100%); }
+.android-home { background: linear-gradient(170deg, #36463b 0%, #1f2a24 60%, #121815 100%); }
+.lock { background: linear-gradient(160deg, #1f3550 0%, #3b2a4f 55%, #11131a 100%); }
+.lock-inner { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.lock-row { justify-content: center; }
+.lock-inline { font: 600 15px system-ui, sans-serif; color: rgba(255,255,255,.88); }
+.slot { display: flex; flex-direction: column; align-items: center; gap: 7px; }
+.slot-l { font: 11px ui-monospace, monospace; color: rgba(255,255,255,.8); }
+.w .hdr .ic img { display: block; }
+.chart .cap { margin-bottom: 2px; }
+/* ===== widgets: shared ===== */
+.w { position: relative; overflow: hidden; flex: none; display: flex; flex-direction: column; isolation: isolate; }
+.w .blk { position: relative; }
+.w .grow { flex: 1 1 auto; min-height: 0; }
+.w.ios { --wfg:#000; --wfg2:rgba(60,60,67,.62); --wbg:#fff; --wsep:rgba(60,60,67,.14); --wfill:rgba(120,120,128,.14); border-radius: 22px; padding: 16px; font-family: -apple-system, "SF Pro Text", system-ui, sans-serif; background: var(--wbg); color: var(--wfg); box-shadow: 0 6px 24px rgba(0,0,0,.18); }
+.w.ios.dark { --wfg:#fff; --wfg2:rgba(235,235,245,.6); --wbg:#1c1c1e; --wsep:rgba(84,84,88,.55); --wfill:rgba(118,118,128,.24); }
+.w.ios.tinted { --wfg:rgba(255,255,255,.95); --wfg2:rgba(255,255,255,.6); --wbg:rgba(28,30,40,.55); --wsep:rgba(255,255,255,.15); --wfill:rgba(255,255,255,.14); --acc: #9fc6ff !important; backdrop-filter: blur(24px) saturate(1.2); -webkit-backdrop-filter: blur(24px) saturate(1.2); }
+.w.ios.tinted .snap { filter: grayscale(1) brightness(1.05) contrast(.9); mix-blend-mode: luminosity; opacity: .9; }
+.w.ios.tinted .snap::after { content: ""; position: absolute; inset: 0; background: rgba(120,170,255,.18); mix-blend-mode: color; pointer-events: none; }
+.w.ios.xlarge { border-radius: 26px; }
+.w.and { --wfg:#1b1c18; --wfg2:#5b5f57; --wbg: color-mix(in srgb, var(--acc) 9%, #fbfdf7); --wsep: rgba(0,0,0,.08); --wfill: color-mix(in srgb, var(--acc) 16%, #fff); border-radius: 26px; padding: 16px; font-family: "Google Sans Text", "Google Sans", Roboto, system-ui, sans-serif; background: var(--wbg); color: var(--wfg); box-shadow: 0 4px 16px rgba(0,0,0,.14); }
+.w.and.dark, .w.and.tinted { --wfg:#e4e3dc; --wfg2:#a7aa9f; --wbg: color-mix(in srgb, var(--acc) 12%, #17190f); --wsep: rgba(255,255,255,.09); --wfill: color-mix(in srgb, var(--acc) 22%, #24261f); }
+/* lock screen / accessory */
+.w.acc { background: transparent; box-shadow: none; color: rgba(255,255,255,.95); font-family: -apple-system, system-ui, sans-serif; --wfg: rgba(255,255,255,.95); --wfg2: rgba(255,255,255,.62); --acc: #fff !important; padding: 0; border-radius: 0; }
+.w.acc.circ { border-radius: 50%; background: rgba(255,255,255,.14); backdrop-filter: blur(10px); align-items: center; justify-content: center; }
+.w.acc.rect { justify-content: center; }
+.lock-inline { font: 600 15px system-ui, -apple-system, sans-serif; color: rgba(255,255,255,.88); display: flex; gap: 6px; align-items: center; min-height: 20px; }
+/* standby */
+.w.sb { background: transparent; box-shadow: none; --wbg: transparent; --wfg:#fff; --wfg2: rgba(255,255,255,.6); --wfill: rgba(255,255,255,.12); --wsep: rgba(255,255,255,.14); padding: 6px; }
+.standby.night .w.sb { filter: grayscale(1) sepia(1) saturate(6) hue-rotate(-50deg) brightness(.7); }
+
+/* blocks */
+.hdr { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; min-width: 0; }
+.hdr .ic { width: 18px; height: 18px; border-radius: 5px; background: var(--acc); flex: none; display: grid; place-items: center; color: #fff; }
+.hdr .ic svg { width: 12px; height: 12px; }
+.w.and .hdr .ic { border-radius: 50%; width: 22px; height: 22px; }
+.hdr .tt { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--acc); }
+.w.and .hdr .tt { color: var(--wfg); font-size: 14px; }
+.w.ios.tinted .hdr .tt, .w.ios.tinted .hdr .ic { color: var(--wfg); }
+.w.ios.tinted .hdr .ic { background: rgba(255,255,255,.25); }
+.hdr .hs { margin-left: auto; font-size: 11px; color: var(--wfg2); white-space: nowrap; }
+.stat .v { font-weight: 700; font-size: 34px; line-height: 1.05; letter-spacing: -.5px; font-variant-numeric: tabular-nums; }
+.stat.big .v { font-size: 44px; }
+.stat.sm .v { font-size: 24px; }
+.stat .l { font-size: 13px; color: var(--wfg2); line-height: 1.25; }
+.stat .tr { font-size: 12px; font-weight: 600; margin-top: 2px; }
+.tone-up { color: #34c759; } .tone-down, .tone-bad { color: #ff3b30; } .tone-warn { color: #ff9500; } .tone-ok { color: #34c759; }
+.w.and .tone-up, .w.and .tone-ok { color: #2e8b4a; } .w.and.dark .tone-up, .w.and.dark .tone-ok { color: #7bd68f; }
+.w.ios.tinted [class*="tone-"] { color: var(--wfg); }
+.stats { display: flex; gap: 6px; }
+.stats .it { flex: 1; min-width: 0; background: var(--wfill); border-radius: 12px; padding: 7px 9px; }
+.w.and .stats .it { border-radius: 16px; }
+.stats .it .v { font-weight: 700; font-size: 20px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.stats .it .l { font-size: 11.5px; color: var(--wfg2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prog .bar { height: 6px; border-radius: 3px; background: var(--wfill); overflow: hidden; margin-top: 5px; }
+.prog .bar i { display: block; height: 100%; background: var(--acc); border-radius: 3px; }
+.prog .pl { display: flex; justify-content: space-between; font-size: 12px; color: var(--wfg2); }
+.chart svg { display: block; width: 100%; }
+.list { display: flex; flex-direction: column; }
+.list .lt { font-size: 11.5px; font-weight: 600; color: var(--wfg2); text-transform: uppercase; letter-spacing: .03em; margin: 2px 0 2px; }
+.list .r { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-top: .5px solid var(--wsep); min-width: 0; }
+.list .r:first-of-type { border-top: 0; }
+.list .lt + .r { border-top: 0; }
+.list .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.list .rt { flex: 1; min-width: 0; }
+.list .rt b { display: block; font-weight: 500; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.list .rt span { display: block; font-size: 11.5px; color: var(--wfg2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.list .rv { font-size: 12px; color: var(--wfg2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.list.compact .r { padding: 3px 0; } .list.compact .rt span { display: none; }
+.btn { font: 600 12.5px inherit; font-family: inherit; border: 0; border-radius: 999px; padding: 5px 11px; background: var(--wfill); color: var(--acc); cursor: pointer; white-space: nowrap; flex: none; }
+.btn.fill { background: var(--acc); color: #fff; }
+.w.ios.tinted .btn { color: var(--wfg); } .w.ios.tinted .btn.fill { background: rgba(255,255,255,.25); }
+.btn.busy { opacity: .55; pointer-events: none; }
+.btns { display: flex; gap: 6px; }
+.btns .btn { flex: 1; padding: 7px 8px; }
+.tgl { display: flex; flex-direction: column; gap: 4px; }
+.tgl .ti { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; padding: 2px 0; background: none; border: 0; color: inherit; font-family: inherit; text-align: left; width: 100%; }
+.tgl .ck { width: 20px; height: 20px; border-radius: 50%; border: 1.6px solid var(--wfg2); flex: none; display: grid; place-items: center; }
+.w.and .tgl .ck { border-radius: 6px; }
+.tgl .ti.on .ck { background: var(--acc); border-color: var(--acc); }
+.tgl .ti.on .ck::after { content: ""; width: 9px; height: 5px; border-left: 2px solid #fff; border-bottom: 2px solid #fff; transform: rotate(-45deg) translate(1px,-1px); }
+.tgl .ti.on .tn { color: var(--wfg2); text-decoration: line-through; }
+.tgl .tn { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tgl .ts { font-size: 11.5px; color: var(--wfg2); }
+.tgl.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.tgl.grid .ti { background: var(--wfill); border-radius: 12px; padding: 7px 8px; }
+.ring { position: relative; display: grid; place-items: center; }
+.ring svg { position: absolute; inset: 0; }
+.ring .rc { position: relative; text-align: center; line-height: 1.05; }
+.ring .rc b { display: block; font-size: 20px; font-weight: 700; }
+.ring .rc span { font-size: 11px; color: var(--wfg2); }
+.acc-rect .t1 { font-weight: 700; font-size: 15px; display: flex; gap: 5px; align-items: center; }
+.acc-rect .t2, .acc-rect .t3 { font-size: 13.5px; color: var(--wfg2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.acc-rect .t2 { color: var(--wfg); }
+.asof { font-size: 11px; color: var(--wfg2); margin-top: 4px; }
+.fail { font-size: 11.5px; color: #ff3b30; }
+.gap { height: 8px; flex: none; } .gap.s { height: 5px; } .gap.l { height: 12px; }
+.hsplit { display: flex; gap: 14px; min-height: 0; } .hsplit > * { flex: 1; min-width: 0; }
+.vsplit { display: flex; flex-direction: column; min-height: 0; }
+.center { display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; }
+
+/* snapshot */
+.snap { position: relative; overflow: hidden; border-radius: inherit; }
+.snap.full { position: absolute; inset: 0; }
+.snap.part { border-radius: 10px; }
+.snapwrap { position: relative; }
+
+/* clickable hints */
+[data-href] { cursor: pointer; }
+[data-href]:active { opacity: .6; }
+
+/* x-ray */
+body.xray .w .blk:not(.snapwrap) { outline: 1.5px dashed #3b82f6; outline-offset: 1px; }
+body.xray .w .snap { outline: 2px dashed #f59e0b; outline-offset: -2px; }
+body.xray .w .snap::before { content: "snapshot"; position: absolute; right: 6px; top: 5px; z-index: 5; font: 600 9px "Geist Mono", monospace; text-transform: uppercase; background: #f59e0b; color: #000; padding: 1px 5px; border-radius: 4px; }
+body.xray .w [data-href] { box-shadow: inset 0 0 0 1.5px #22c55e; border-radius: 6px; }
+body.xray .w [data-act] { box-shadow: 0 0 0 2px #ec4899; }
+body.xray .w.ios.small[data-whole]::after { content: "whole widget = 1 link"; position: absolute; left: 50%; bottom: 4px; transform: translateX(-50%); font: 600 9px "Geist Mono", monospace; background: #22c55e; color: #000; padding: 1px 5px; border-radius: 4px; white-space: nowrap; }
+.fb { position: absolute; left: 8px; bottom: 6px; z-index: 6; font: 600 9px "Geist Mono", monospace; background: rgba(0,0,0,.6); color: #fff; padding: 1px 6px; border-radius: 4px; display: none; }
+body.xray .fb { display: block; }
+
+/* research pass: clear look, parts, flags, lock buttons, android targets */
+.w.ios.clear { --wfg:#fff; --wfg2:rgba(255,255,255,.72); --wbg:rgba(255,255,255,.10); --wsep:rgba(255,255,255,.18); --wfill:rgba(255,255,255,.16); --acc:#fff !important; background: linear-gradient(160deg, rgba(255,255,255,.22), rgba(255,255,255,.06)); backdrop-filter: blur(18px) saturate(1.6); -webkit-backdrop-filter: blur(18px) saturate(1.6); box-shadow: inset 0 1px 0 rgba(255,255,255,.55), inset 0 0 0 1px rgba(255,255,255,.22), 0 8px 26px rgba(0,0,0,.18); }
+.w.ios.clear .snap { filter: grayscale(1) brightness(1.15); opacity: .8; }
+.w.ios.clear [class*="tone-"], .w.ios.clear .hdr .tt { color: #fff; }
+.w.ios.clear .hdr .ic { background: rgba(255,255,255,.3); }
+.w.ios.clear .btn { color: #fff; } .w.ios.clear .btn.fill { background: rgba(255,255,255,.3); }
+.cap { font-size: 11px; color: var(--wfg2); height: 17px; line-height: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vo { display: none; position: absolute; left: 4px; right: 4px; bottom: 3px; z-index: 6; font: 600 9px "Geist Mono", monospace; background: rgba(245,158,11,.95); color: #000; padding: 2px 5px; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+body.xray .vo { display: block; }
+.flag { position: absolute; right: 8px; bottom: 7px; z-index: 6; font: 700 11px system-ui, sans-serif; background: #f59e0b; color: #000; padding: 1px 7px; border-radius: 999px; box-shadow: 0 1px 4px rgba(0,0,0,.3); }
+.accbtn { margin-top: 3px; align-self: flex-start; font: 600 12.5px system-ui, -apple-system, sans-serif; color: #fff; background: rgba(255,255,255,.22); border: 0; border-radius: 999px; padding: 3px 10px; cursor: pointer; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.acc-rect { display: flex; flex-direction: column; }
+.w.acc.circ[data-act] { cursor: pointer; }
+body.xray .w .accbtn, body.xray .w.acc.circ[data-act] { box-shadow: 0 0 0 2px #ec4899; }
+/* Android: 48 dp touch targets */
+.w.and .btn { min-height: 40px; padding: 0 16px; position: relative; font-size: 13px; }
+.w.and .btn::before { content: ""; position: absolute; inset: -4px -2px; }
+.w.and .btns .btn { padding: 0 10px; }
+.w.and .list .r { min-height: 48px; }
+.w.and .list.compact .r { min-height: 40px; }
+.w.and .tgl .ti { min-height: 44px; }
+body.xray .w.and .btn::before { outline: 1px dotted #ec4899; }
+/* iPad lock screen */
+.w .blk { flex-shrink: 0; }
+.w.and.small .tgl .ti:nth-child(n+4), .w.and.medium .tgl .ti:nth-child(n+4) { display: none; }
+.w.and .tgl:not(.grid) .ti { min-height: 40px; }
+.w.and .tgl { gap: 2px; }
+.list .r.r2 .rt b { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.25; }
+.list .r.r2 .rt span { display: none; }
+.vo { display: block; }
+</style></head><body><div id="root"></div><script>
+// supermux applet widget show: every size of one applet's widget, drawn the way the phones draw it.
+const DATA = /*__DATA__*/null;
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function svgBars(pts, w, h, color) { const max = Math.max(...pts, 1), n = pts.length, gap = 2, bw = (w - gap * (n - 1)) / n; return `<svg preserveAspectRatio="none" style="width:100%;height:${h}px" viewBox="0 0 ${w} ${h}">${pts.map((p, i) => { const bh = Math.max(2, (p / max) * h); return `<rect x="${(i * (bw + gap)).toFixed(1)}" y="${(h - bh).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="2" fill="${color}" opacity="${i < n - 1 ? 0.6 : 1}"/>`; }).join("")}</svg>`; }
+function svgLine(pts, w, h, color) { const max = Math.max(...pts, 1), n = pts.length; const d = pts.map((p, i) => `${i ? "L" : "M"}${((i / (n - 1)) * w).toFixed(1)},${(3 + (1 - p / max) * (h - 6)).toFixed(1)}`).join(""); return `<svg preserveAspectRatio="none" style="width:100%;height:${h}px" viewBox="0 0 ${w} ${h}"><path d="${d}L${w},${h}L0,${h}Z" fill="${color}" opacity=".18"/><path d="${d}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>`; }
+function ringSvg(v, size, stroke, color, track) { const r = (size - stroke) / 2, c = 2 * Math.PI * r; return `<svg width="${size}" height="${size}"><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${track}" stroke-width="${stroke}"/><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${color}" stroke-width="${stroke}" stroke-linecap="round" stroke-dasharray="${(c * Math.min(1, v)).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 ${size / 2} ${size / 2})"/></svg>`; }
+function part(ctx, b, w, h) {
+  if (!DATA.html) return `<div style="height:${h}px;display:grid;place-items:center;font-size:11px;color:var(--wfg2)">no widget.html</div>`;
+  const q = new URLSearchParams({ size: ctx.k, w: Math.round(w), h: Math.round(h), scale: 1, theme: ctx.dark ? "dark" : "light", platform: ctx.plat, part: b.part });
+  return `<iframe src="${esc(DATA.html)}?${q}" style="border:0;width:100%;height:${h}px;display:block;pointer-events:none" scrolling="no"></iframe>`;
+}
+function block(b, ctx) {
+  switch (b.type) {
+    case "header": return `<div class="blk hdr"><span class="ic">${DATA.icon ? `<img src="${esc(DATA.icon)}" style="width:12px;height:12px">` : ""}</span><span class="tt">${esc(b.title ?? DATA.title)}</span>${b.sub && ctx.w > 200 ? `<span class="hs">${esc(b.sub)}</span>` : ""}</div>`;
+    case "stat": return `<div class="blk stat ${b.size || ""}"><div class="v ${b.tone && !b.trend ? "tone-" + b.tone : ""}">${esc(b.value)}</div>${b.label ? `<div class="l">${esc(b.label)}</div>` : ""}${b.trend ? `<div class="tr ${b.tone ? "tone-" + b.tone : ""}">${esc(b.trend)}</div>` : ""}</div>`;
+    case "stats": return `<div class="blk stats">${b.items.map((i) => `<div class="it"><div class="v ${i.tone ? "tone-" + i.tone : ""}">${esc(i.value)}</div><div class="l">${esc(i.label ?? "")}</div></div>`).join("")}</div>`;
+    case "progress": return `<div class="blk prog"><div class="pl"><span>${esc(b.label ?? "")}</span><span>${esc(b.right ?? "")}</span></div><div class="bar"><i style="width:${Math.round(b.value * 100)}%"></i></div></div>`;
+    case "ring": return `<div class="blk ring" style="width:64px;height:64px;margin:2px auto">${ringSvg(b.value, 64, 7, ctx.acc, ctx.track)}<div class="rc"><b>${esc(b.text ?? "")}</b><span>${esc(b.sub ?? "")}</span></div></div>`;
+    case "chart": { const h = 40; return `<div class="blk chart">${b.label ? `<div class="cap">${esc(b.label)}</div>` : ""}${b.kind === "line" ? svgLine(b.points, 300, h, ctx.acc) : svgBars(b.points, 300, h, ctx.acc)}</div>`; }
+    case "list": return `<div class="blk list">${b.title ? `<div class="lt">${esc(b.title)}</div>` : ""}${b.rows.map((r) => `<div class="r ${r.button ? "r2" : ""}"><span class="dot" style="background:${r.color || ctx.acc}"></span><span class="rt"><b>${esc(r.title)}</b>${r.sub ? `<span>${esc(r.sub)}</span>` : ""}</span>${r.value ? `<span class="rv">${esc(r.value)}</span>` : ""}${r.button ? `<span class="btn">${esc(r.button.title)}</span>` : ""}</div>`).join("")}</div>`;
+    case "toggles": return `<div class="blk tgl ${b.grid ? "grid" : ""}">${b.items.map((t) => `<span class="ti ${t.on ? "on" : ""}"><span class="ck"></span><span class="tn">${esc(t.title)}</span>${t.sub ? `<span class="ts">${esc(t.sub)}</span>` : ""}</span>`).join("")}</div>`;
+    case "buttons": return `<div class="blk btns">${b.items.map((i) => `<span class="btn ${i.style || ""}" style="text-align:center">${esc(i.title)}</span>`).join("")}</div>`;
+    case "image": return `<div class="blk"><img src="${esc(DATA.base + b.src.replace(/^\//, ""))}" alt="${esc(b.label ?? "")}" style="max-width:100%;max-height:80px"></div>`;
+    case "html": { if (ctx.native) return b.alt ? block(b.alt, ctx) : ""; const cap = b.caption ? 17 : 0; return `${b.caption ? `<div class="blk cap">${esc(b.caption)}</div>` : ""}<div class="blk snapwrap" style="height:${b.height - cap}px"><div class="snap part">${part(ctx, b, ctx.w, b.height - cap)}</div><div class="vo">VoiceOver: “${esc(b.label)}”</div></div>`; }
+    case "text": return `<div class="blk" style="font-size:12.5px;font-weight:500;line-height:1.3">${esc(b.text)}</div>`;
+    case "gap": return `<div class="gap ${b.size || ""}"></div>`;
+    case "grow": return `<div class="grow"></div>`;
+    case "columns": { const ws = b.w || b.cols.map(() => 1); const tot = ws.reduce((a, x) => a + x, 0); return `<div class="hsplit grow">${b.cols.map((c, i) => `<div class="vsplit" style="flex:${ws[i]}">${c.map((x) => block(x, { ...ctx, w: ctx.w * ws[i] / tot })).join("")}</div>`).join("")}</div>`; }
+  }
+  return "";
+}
+function widget(k, plat, w, h, dark, label, native) {
+  const theme = dark ? "dark" : "light";
+  const ctx = { k, plat, dark, native, w: w - 32, acc: DATA.accent, track: dark ? "rgba(255,255,255,.14)" : "rgba(0,0,0,.08)" };
+  let inner;
+  if (DATA.doc.snapshot === "full" && !native) inner = `<div class="snap full">${part(ctx, { part: "full" }, w, h)}</div><div class="flag">⚠ one image</div>`;
+  else inner = DATA.doc.layouts[k].map((b) => block(b, ctx)).join("");
+  return `<div class="slot"><div class="w ${plat} ${theme} ${k}" style="width:${w}px;height:${h}px;--acc:${DATA.accent}">${inner}</div><div class="slot-l">${label}</div></div>`;
+}
+function acc(kind) {
+  const L = DATA.doc.layouts;
+  if (kind === "circular") { const c = L.circular; return `<div class="slot"><div class="w acc circ" style="width:72px;height:72px"><div class="blk ring" style="width:72px;height:72px">${ringSvg(c.ring ?? 0, 72, 6, "rgba(255,255,255,.95)", "rgba(255,255,255,.22)")}<div class="rc"><b>${esc(c.text)}</b><span>${esc(c.label ?? "")}</span></div></div></div><div class="slot-l">circular${c.action ? " · button" : ""}</div></div>`; }
+  if (kind === "rectangular") { const r = L.rectangular; return `<div class="slot"><div class="w acc rect" style="width:172px;height:72px"><div class="blk acc-rect">${r.lines.map((l, i) => `<div class="t${i + 1}">${esc(l)}</div>`).join("")}${r.button ? `<span class="accbtn">${esc(r.button.title)}</span>` : ""}</div></div><div class="slot-l">rectangular</div></div>`; }
+  return `<div class="lock-inline">${esc(L.inline)}</div>`;
+}
+const IOS = [["small", 170, 170], ["medium", 364, 170], ["large", 364, 382], ["xlarge", 715, 338]];
+const AND = [["slim", 192, 88], ["small", 192, 184], ["wide", 392, 88], ["medium", 392, 184], ["tall", 192, 376], ["large", 392, 376]];
+let html = `<h1>${esc(DATA.title)} widget</h1>${DATA.problems.length ? `<ul class="probs">${DATA.problems.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` : `<p class="ok">No problems found.</p>`}`;
+for (const dark of [false, true]) {
+  html += `<h2>iPhone / iPad · ${dark ? "dark" : "light"}</h2><div class="screen ios-home"><div class="row">${IOS.map(([k, w, h]) => widget(k, "ios", w, h, dark, k)).join("")}</div></div>`;
+  html += `<h2>Android · ${dark ? "dark" : "light"}</h2><div class="screen android-home"><div class="row">${AND.map(([k, w, h]) => widget(k, "and", w, h, dark, k)).join("")}</div></div>`;
+}
+html += `<h2>Lock Screen</h2><div class="screen lock"><div class="lock-inner">${acc("inline")}<div class="row lock-row">${acc("circular")}${acc("rectangular")}</div></div></div>`;
+html += `<h2>Native only (what shows before a picture is drawn)</h2><div class="screen ios-home"><div class="row">${IOS.slice(0, 3).map(([k, w, h]) => widget(k, "ios", w, h, true, k, true)).join("")}</div></div>`;
+document.getElementById("root").innerHTML = html;
+</script></body></html>

@@ -96,6 +96,11 @@ or not any chat is open, and shows up in the Applets grid on every paired device
   supermux applet run APPLET JOB                run one of its jobs now; prints its output and exit code
   supermux applet backup APPLET [-m WHY]        copy its data/ to a new read-only backup. Run this before a
                                                 risky data change (migration, bulk edit, import).
+  supermux applet widget show APPLET            draw every size of its phone widget, light and dark, into a page
+                                                you can open or screenshot (look at it before you ship)
+  supermux applet widget check APPLET           what is wrong with its widget (exit 1 when anything is)
+  supermux applet widget changed APPLET         tell phones to redraw it now (same as POST /applet-api/widget)
+  supermux applet widget run APPLET ACTION [JSON]   run a widget button's action as a tap would
   supermux applet APPLET CMD …                  the applet's own command (its applet.json "bin")
 
 Examples:
@@ -116,7 +121,7 @@ applet.json:
     "jobs": [{ "name": "sync", "every": "30m", "run": "python3 jobs/sync.py" }],
     "secrets": ["SOME_API_KEY"],         # names only (or {"name": "…", "label": "Gmail sign-in"})
     "ownerOnly": ["/api/settings"],      # paths only the user's own devices may open
-    "widget": "/widget.json" }           # optional: what its phone widget shows (see below)
+    "widget": { "data": "/widget.json" } } # optional: its phone widget (see "Phone widget" below)
   supermux gives the server $PORT and the applet's data dir as $DATA_DIR (= <folder>/data). A static applet's
   public/ is served at its link, and it keeps data with the built-in data API, relative to its page:
   fetch("api/collections/books/records") (GET ?field=value&sort=-created, POST, and records/ID for GET, PATCH,
@@ -139,9 +144,51 @@ copy the device kept is reused only when the server says it is current. Ask for 
 kept for a year without asking again: do that for scripts, styles and fonts that you rename when they change.
 Notify the user from a server or job: POST $SUPERMUX_URL/applet-api/notify with header
 X-Supermux-Applet-Token: $SUPERMUX_APPLET_TOKEN and {"title": "…", "body": "…", "needsYou": false} (a push to their devices).
-Phone widget: the "widget" path (a file in public/, or your server's route) answers
-{"value": "3", "label": "open", "lines": ["2 waiting for testing"]}; supermux re-reads it every 15 minutes.
-After a change, POST $SUPERMUX_URL/applet-api/widget with the same header so widgets update now.
+Phone widget (Home Screen, Lock Screen, StandBy; iPhone, iPad, Android). Do it well or not at all:
+  1. ONE JOB: the one thing the user glances at (what waits for them, today's progress). Most people keep only
+     0-2 widgets: one good widget beats one of every size.
+  2. NATIVE FIRST: numbers, words, rows, toggles and buttons are native blocks the phone draws (crisp, dark mode,
+     VoiceOver, larger text). A picture from widget.html only for a graphic blocks can't draw (a heat map, a
+     board), never for text that matters, and always with a "label" (what VoiceOver says).
+  3. BIGGER SIZES ADD DETAIL, never padding: small = one number; medium = the number + the items; large = + a
+     chart. Never a whole app in a widget.
+  4. Every row opens its item ("href": "/#164"); a button does a real action, not "open the app". Anything hard to
+     undo gets "confirm": true (the tap opens the applet to confirm instead).
+  5. Look before you ship: supermux applet widget show APPLET, then check.
+  applet.json: "widget": { "data": "/widget.json", "html": "/widget.html", "accent": "#2f9e8c",
+      "actions": { "tested": { "title": "Tested", "path": "/api/issues/{id}/tested" } } }
+    An action is a POST (or "method": "PUT"/"DELETE") to your server, {id} filled from the button's args, body
+    {"action", "args"}, with X-Mux-Via: supermux:widget-action (signed like any X-Mux-Via) and X-Mux-Actor.
+    Answer 204, or 200 with your new widget document so the phone redraws at once. Static applets can't have actions.
+  /widget.json (a file in public/, or your server's route; re-read every 15 minutes and after every action):
+    { "v": 2, "href": "/#board",
+      "layouts": {
+        "small":  [ {"type": "header"}, {"type": "stat", "value": "2", "label": "to test", "tone": "warn"} ],
+        "medium": [ {"type": "columns", "w": [0.4, 0.6], "cols": [ [ …small… ],
+                    [ {"type": "list", "title": "Waiting for you", "rows": [ {"title": "#164 Resize is jumpy",
+                       "sub": "bug · high", "color": "#ff9500", "href": "/#164",
+                       "button": {"title": "Tested", "action": "tested", "args": {"id": 164}}} ]} ] ]} ],
+        "large": […], "xlarge": […] (iPad), "wide": […] (4×1), "tall": […] (2×4), "slim": […] (2×1),
+        "circular": {"text": "2", "ring": 0.5, "label": "test", "action": {"action": "tested", "args": {"id": 164}}},
+        "rectangular": {"lines": ["Issues", "2 waiting"], "button": {"title": "Tested #164", "action": "tested", "args": {"id": 164}}},
+        "inline": "2 to test · 7 in progress" },
+      "timeline": [ {"at": "2026-11-27T00:00:00+03:00", "layouts": {"small": […]}} ] }
+    A size you leave out borrows the nearest one. Lock Screen widgets (circular, rectangular, inline) are always
+    native and one colour; their buttons work once the phone is unlocked.
+    Blocks: header {title?, sub?} · stat {value, label?, trend?, tone? up|down|warn|bad|ok, size? sm|lg} ·
+    stats {items: [{value, label?, tone?}]} (≤4) · progress {value 0-1, label?, right?} · ring {value 0-1, text?, sub?} ·
+    chart {kind: bars|line, points: [n…], labels?, label?} · list {title?, rows: [{title, sub?, value?, color?, href?,
+    button?}]} (≤8) · toggles {items: [{title, on, action, args?, sub?}], grid?} · buttons {items: [{title, action,
+    args?, style?: "fill"}]} (≤3) · image {src, label?} · text {text} · columns {cols: [[blocks]…], w?} · gap · grow ·
+    html {part, height, label, caption?, alt} (a picture: graphics only; "alt" is a native block shown until it's drawn).
+  /widget.html: the phone opens ?size=medium&w=364&h=170&scale=3&theme=dark&platform=ios&part=chart and takes a
+    picture of exactly w×h CSS px, light and dark. No scrolling, no animation, nothing from other sites; text at
+    11 px or more. Call supermux.widgetReady() when drawn (otherwise 2 s after load).
+  Escape hatch, flagged by check: {"v": 2, "snapshot": "full", "label": "…"} makes the whole widget one picture
+  (VoiceOver hears only the label, its text doesn't grow, it goes grey in the clear and tinted looks).
+  The old {"value": "3", "label": "open", "lines": ["…"]} still works.
+  After a change: supermux applet widget changed APPLET, or POST $SUPERMUX_URL/applet-api/widget with the
+  X-Supermux-Applet-Token header, so widgets update now.
 
 Secrets: only the user can set secret values, on the applet's page. Declare the name in applet.json "secrets"
 and ask them to fill it in. You cannot read or set values.
@@ -521,6 +568,25 @@ export async function runAgentCli(argv: string[], io: AgentCliIo): Promise<numbe
             out(v, () => io.out(`backup of ${v.name}: ${v.path}${v.why ? ` (${v.why})` : ""}`))
             return 0
           }
+          case "widget": {
+            // #165: supermux applet widget show|check|changed|run APPLET [ACTION [JSON]]
+            const line = "applet widget show|check|changed|run APPLET [ACTION [JSON-ARGS]]"
+            const what = rest[0]
+            if (!what || !["show", "check", "changed", "run"].includes(what)) usage("show, check, changed or run?", line)
+            if (!rest[1]) usage("which applet?", line)
+            let args: unknown = {}
+            if (what === "run" && rest[3]) { try { args = JSON.parse(rest[3]) } catch { usage("the args must be JSON, e.g. '{\"id\": 164}'", line) } }
+            const v = await call("applet_widget", { applet: rest[1], do: what, ...(what === "run" ? { action: rest[2] ?? "", args } : {}) }, 60_000)
+            const problems = (v.problems ?? []) as string[]
+            out(v, () => {
+              if (what === "show") io.out(`preview: ${v.file}\n${v.note}`)
+              if (what === "check") io.out(`sizes: ${(v.sizes ?? []).join(", ") || "none"}`)
+              if (what === "changed") io.out(v.note)
+              if (what === "run") io.out(`ran ${v.action}; the widget is now:\n${JSON.stringify(v.widget, null, 1)}`)
+              if (what !== "run") io.out(problems.length ? problems.map((p) => `problem: ${p}`).join("\n") : "no problems found")
+            })
+            return what === "check" && problems.length ? 1 : 0
+          }
           case "delete": case "rm": case "secret": case "secrets": {
             await call(`applet_${verb === "rm" ? "delete" : verb === "secrets" ? "secret" : verb}`, { applet: rest[0] ?? "" })
             return 4
@@ -563,7 +629,7 @@ export async function runAgentCli(argv: string[], io: AgentCliIo): Promise<numbe
 }
 
 /** The broker ops behind `supermux applet` (#117): socket-only, never MCP tools. */
-export const APPLET_OPS = ["applet_list", "applet_info", "applet_new", "applet_restart", "applet_logs", "applet_run", "applet_backup"]
+export const APPLET_OPS = ["applet_list", "applet_info", "applet_new", "applet_restart", "applet_logs", "applet_run", "applet_backup", "applet_widget"]
 
 /** Broker ops that are not MCP tools: only the CLI calls them (listed by a bare `supermux api`). */
 export const CLI_ONLY_OPS = ["list_proxies", "cli_adoption", ...APPLET_OPS]

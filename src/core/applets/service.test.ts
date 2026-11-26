@@ -251,7 +251,7 @@ posix("widget summaries: a static applet's file, a server's route, trimmed to fi
   expect(changes).toBe(1)
   writeFileSync(join(issues, "public/widget.json"), JSON.stringify({ value: 30, label: "open" }))
   const r = await svc.refreshWidget("issues")
-  expect(r).toEqual({ ok: true, summary: { value: "30", label: "open" } })
+  expect(r).toEqual({ ok: true, summary: { value: "30", label: "open" }, problems: [] })
   expect(changes).toBe(2)
 
   // Gone or broken: no summary (the widget shows just the icon and name).
@@ -268,4 +268,65 @@ test("parseWidgetSummary keeps what fits a widget and drops the rest", async () 
   expect(parseWidgetSummary({ other: 1 })).toBeNull()
   expect(parseWidgetSummary({ value: "1234567890123456", label: "x".repeat(50) })).toEqual({ value: "123456789012", label: "x".repeat(40) })
   expect(parseWidgetSummary({ lines: ["a", { b: 1 }, "c"] })).toEqual({ lines: ["a", "c"] })
+})
+
+posix("#165: a widget button runs the declared action on the applet's server, signed and named, and the widget follows", async () => {
+  const { svc, make } = setup()
+  const moved: { name: string; except?: string }[] = []
+  ;(svc as any).deps.widgetChanged = (a: { name: string }, except?: string) => moved.push({ name: a.name, except })
+  const SERVER = `let done = []
+Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", async fetch(r) {
+  const u = new URL(r.url)
+  if (u.pathname === "/widget.json") return Response.json({ v: 2, layouts: { small: [
+    { type: "stat", value: String(2 - done.length), label: "to test" },
+    { type: "list", rows: [{ title: "#164", button: { title: "Tested", action: "tested", args: { id: 164 } } }] },
+  ] } })
+  if (u.pathname.startsWith("/api/issues/") && r.method === "POST") {
+    const b = await r.json()
+    done.push({ path: u.pathname, via: r.headers.get("x-mux-via"), sig: r.headers.get("x-mux-via-sig"), actor: r.headers.get("x-mux-actor"), body: b })
+    return new Response(null, { status: 204 })
+  }
+  if (u.pathname === "/done") return Response.json(done)
+  if (u.pathname === "/api/fail") return new Response("nope", { status: 500 })
+  return new Response("no", { status: 404 })
+} })`
+  make("issues", { title: "Issues", run: `${process.execPath} server.ts`, widget: { data: "/widget.json", actions: {
+    tested: { title: "Tested", path: "/api/issues/{id}/tested" }, fail: { path: "/api/fail" },
+  } } }, { "server.ts": SERVER })
+  await svc.scan()
+  const { waitForPort } = await import("../../channels/web/applet-route")
+  const id = svc.get("issues")!.row.id
+  expect(await waitForPort(svc.supervisor.port(id)!, 5_000)).toBe(true)
+  for (let i = 0; i < 50 && svc.get("issues")!.process?.state !== "running"; i++) await Bun.sleep(100)
+  await svc.refreshWidget("issues")
+  expect((svc.widget(id)!.doc.layouts.small[0] as any).value).toBe("2")
+  moved.length = 0
+
+  const r = await svc.runWidgetAction("issues", "tested", { id: 164 }, "device:phone1", "phone1")
+  expect(r.ok).toBe(true)
+  expect(((r as any).widget.layouts.small[0]).value).toBe("1")
+  expect(moved).toEqual([{ name: "issues", except: "phone1" }])
+  const port = svc.supervisor.port(id)!
+  const done = await (await fetch(`http://127.0.0.1:${port}/done`)).json() as any[]
+  expect(done).toEqual([{ path: "/api/issues/164/tested", via: "supermux:widget-action", sig: createHmac("sha256", svc.viaKey(id)).update("supermux:widget-action").digest("hex"), actor: "device:phone1", body: { action: "tested", args: { id: 164 } } }])
+
+  expect(await svc.runWidgetAction("issues", "nope", {}, "device:phone1")).toEqual({ ok: false, error: `Issues has no widget action "nope"` })
+  expect(await svc.runWidgetAction("issues", "tested", {}, "device:phone1")).toEqual({ ok: false, error: `"tested" needs {id}` })
+  expect(await svc.runWidgetAction("issues", "fail", {}, "device:phone1")).toEqual({ ok: false, error: "Issues answered 500: nope" })
+
+  // The device API: GET the document, POST an action.
+  const { handleAppletApi } = await import("../../channels/web/applet-api")
+  const json = (b: unknown, status = 200) => Response.json(b, { status })
+  const g = await handleAppletApi(new Request("http://broker/applets/issues/widget"), { applets: svc, device: "phone1", json })
+  expect(((await g.json()) as any).widget.layouts.small[0].value).toBe("1")
+  const p = await handleAppletApi(new Request("http://broker/applets/issues/widget/actions/tested", { method: "POST", body: JSON.stringify({ args: { id: 165 } }) }), { applets: svc, device: "phone1", json })
+  expect(p.status).toBe(200)
+  expect(((await p.json()) as any).widget.layouts.small[0].value).toBe("0")
+  const bad = await handleAppletApi(new Request("http://broker/applets/issues/widget/actions/nope", { method: "POST", body: "{}" }), { applets: svc, device: "phone1", json })
+  expect(bad.status).toBe(409)
+  const list = await handleAppletApi(new Request("http://broker/applets"), { applets: svc, device: "phone1", json })
+  const row = ((await list.json()) as any[])[0]
+  expect(row.widget).toBe("/widget.json")
+  expect(row.widgetActions).toEqual({ tested: { title: "Tested", confirm: false }, fail: { title: "fail", confirm: false } })
+  expect(row.widgetDoc.v).toBe(2)
 })
