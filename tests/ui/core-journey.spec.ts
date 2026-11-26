@@ -9,6 +9,9 @@
  *
  * Run: scripts/test-broker.sh bun tests/ui/core-journey.spec.ts
  */
+import { writeFileSync } from "node:fs"
+import { join } from "node:path"
+import type { Page } from "playwright"
 import { launchBrowser, uiFixture, freshPairLink } from "./fixture-env"
 import { byTag, byTagPrefix, innerTextOf, openSeededSession, tap, typeInto, waitForTextWithin } from "./compose-dom"
 
@@ -24,6 +27,10 @@ export async function main(): Promise<void> {
     const context = await browser.newContext()
     const page = await context.newPage()
     page.on("pageerror", (error) => console.error(`[pageerror] ${error.message}`))
+    // The page's own console, kept for a failure report: the broker's log alone can't say why a reply it sent
+    // never showed (#166).
+    const consoleLines: string[] = []
+    page.on("console", (message) => { consoleLines.push(`${new Date().toISOString()} [${message.type()}] ${message.text()}`) })
 
     await page.goto((await freshPairLink(fixture)).url, {
       waitUntil: "domcontentloaded",
@@ -46,8 +53,13 @@ export async function main(): Promise<void> {
     // socket, the per-row ID proves the transcript actually rendered it as an
     // outbound message row rather than echoing it somewhere else on screen.
     const replyText = `Fixture reply: ${prompt}`
-    await page.getByText(replyText, { exact: false }).first()
-      .waitFor({ state: "attached", timeout: 30_000 })
+    try {
+      await page.getByText(replyText, { exact: false }).first()
+        .waitFor({ state: "attached", timeout: 30_000 })
+    } catch (error) {
+      await reportMissingReply(page, fixture.sessionId, consoleLines)
+      throw error
+    }
 
     const outbound = byTagPrefix(page, "chat-message:outbound:")
     await outbound.last().waitFor({ state: "attached", timeout: 30_000 })
@@ -78,6 +90,30 @@ export async function main(): Promise<void> {
   } finally {
     await browser.close()
   }
+}
+
+/**
+ * What the page showed when the reply did not appear, next to the broker's log (MUX_HOME is the fixture directory CI
+ * uploads on failure): the chat's rows, what the broker persisted, the page's console and a screenshot.
+ */
+async function reportMissingReply(page: Page, sessionId: string, consoleLines: string[]): Promise<void> {
+  const dir = process.env.MUX_HOME
+  if (!dir) return
+  const rows = await page.locator('[id^="chat-message:"]').evaluateAll((nodes) =>
+    nodes.map((node) => `${node.id}: ${(node.textContent ?? "").trim().slice(0, 200)}`)).catch((e) => [`<rows: ${e}>`])
+  const persisted = await page.evaluate(async (id) => {
+    const response = await fetch(`/sessions/${encodeURIComponent(id)}/messages`)
+    return response.ok ? JSON.stringify(await response.json()) : `messages endpoint ${response.status}`
+  }, sessionId).catch((e) => `<messages: ${e}>`)
+  const chat = await page.locator('[id="view_chat"]').first().innerText().catch((e) => `<view_chat: ${e}>`)
+  writeFileSync(join(dir, "journey-failure.log"), [
+    `at ${new Date().toISOString()}`,
+    "--- chat rows", ...rows,
+    "--- view_chat text", chat,
+    "--- persisted messages", persisted,
+    "--- page console", ...consoleLines,
+  ].join("\n"))
+  await page.screenshot({ path: join(dir, "journey-failure.png") }).catch(() => {})
 }
 
 if (import.meta.main) {
