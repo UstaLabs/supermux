@@ -11,6 +11,10 @@ import dev.supermux.terminal.TerminalLimits
 import dev.supermux.terminal.TerminalPoint
 import dev.supermux.terminal.TerminalSelection
 import dev.supermux.terminal.TerminalSize
+import dev.supermux.terminal.TerminalSession
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -400,6 +404,34 @@ class SelectionTest {
         assertNull(fixture.selection(), "a finger drag selected instead of scrolling")
         assertFalse(fixture.scroll.following, "a finger drag did not walk into history")
         fixture.assertSilence("a finger drag")
+    }
+
+    /**
+     * A click selects its cell on the press and clears it on the release, and a frame can be published in between that the
+     * engine drew before it took the press. That frame has no selection, which is not the engine dropping it: the release
+     * must still clear it. It used to be taken for an eviction, the clear was skipped, and the cell stayed selected, so
+     * the next Ctrl+C copied it instead of interrupting the program (#166).
+     */
+    @Test fun aFrameDrawnBeforeTheEngineTookTheSelectionDoesNotKeepItFromBeingCleared() = runBlocking {
+        val session = TerminalSession.open(size = size)
+        try {
+            session.receive("hello".encodeToByteArray())
+            session.selectedText()
+            val model = ViewportModel()
+            model.apply(session.viewports.value)
+            val drawnBefore = assertNotNull(model.frame)
+            assertNull(drawnBefore.selection)
+            val scope = CoroutineScope(Dispatchers.Unconfined)
+            val controller = TerminalSelectionController(session, model, ScrollController(scope) { true }, scope)
+
+            controller.begin(TerminalCellPosition(column = 1, row = 0))
+            controller.onFrame(drawnBefore)
+            controller.clear()
+
+            assertEquals("", session.selectedText(), "the click left its cell selected")
+        } finally {
+            session.close()
+        }
     }
 
     @OptIn(ExperimentalTestApi::class)

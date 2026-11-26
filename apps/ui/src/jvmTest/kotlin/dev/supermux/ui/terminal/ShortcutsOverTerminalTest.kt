@@ -108,7 +108,7 @@ class ShortcutsOverTerminalTest {
      * The real terminal in a [ShortcutRoot] for [os], with New terminal and Find in chat registered at the root (so both
      * are in reach from the terminal), clicked into once its first frame is on screen. Each command run is added to [runs].
      */
-    private fun ComposeUiTest.focusedTerminal(os: KeyOs, h: Harness, runs: MutableList<String>) {
+    private suspend fun ComposeUiTest.focusedTerminal(os: KeyOs, h: Harness, runs: MutableList<String>) {
         setContent {
             ShortcutRoot(remember { ShortcutDispatcher(os = os) }) {
                 RegisterCommand(AppCommands.NewTerminal) { runs += "new terminal"; true }
@@ -125,6 +125,14 @@ class ShortcutsOverTerminalTest {
         waitForIdle()
         grid().performClick()
         until("the click gave the terminal the keyboard", h) { h.engine.focused }
+        // A click's press selects the cell under it and its release clears that, both through the session's mailbox. Until
+        // a frame without the selection is published the surface still has one, and ⌘C copies it instead of reaching the
+        // terminal. Reading the selection goes through the same mailbox: once it answers, the click's commands have run.
+        h.session!!.selectedText()
+        until("the click's selection is gone from the published frame", h) {
+            h.session?.viewports?.value?.let { it.selection == null && it.generation == h.engine.screen.generation } == true
+        }
+        waitForIdle()
     }
 
     private fun ComposeUiTest.grid() = onNodeWithTag(TERMINAL_GRID_TAG)
