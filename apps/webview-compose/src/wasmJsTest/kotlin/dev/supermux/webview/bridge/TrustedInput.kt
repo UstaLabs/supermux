@@ -38,4 +38,57 @@ internal suspend fun trustedKey(key: String) {
     fetchText("/webview-test/key?key=$key").await<JsAny?>()
 }
 
+/** Logs where the focus is as [test] starts (#166: FocusGuardTest's frames never got the keyboard on CI, now and then). */
+internal fun logFocus(test: String) {
+    clearFocusTries()
+    val line = "$test: ${focusState()}"
+    println("[webview-test] $line")
+    serverLogWithTargets(line)
+}
+
+/** Starts (once) collecting what the frames say their focus() did (the test DRIVER's `focusTried`), from empty. */
+private fun clearFocusTries(): Unit = js("""{
+  if (!window.__focusTriesOn) {
+    window.__focusTriesOn = true;
+    window.addEventListener('message', function (e) { if (e.data && e.data.focusTried) window.__focusTries.push(JSON.stringify(e.data)); });
+  }
+  window.__focusTries = [];
+}""")
+
+private fun serverLogWithTargets(line: String): Unit =
+    js("{ fetch('/webview-test/log?targets=1&line=' + encodeURIComponent(line)).catch(function () {}); }")
+
+/** Where the focus is, for the build's output: this frame's and the top page's view of it. */
+internal fun focusState(): String = js(
+    """(function () {
+      var a = document.activeElement;
+      var top = 'other origin';
+      try { top = String(window.top.document.hasFocus()); } catch (e) {}
+      return 'hasFocus=' + document.hasFocus() + ' top.hasFocus=' + top + ' visibility=' + document.visibilityState +
+        ' active=' + (a && a.localName) + ' inTop=' + (window === window.top) + ' at=' + location.pathname +
+        ' iframes=' + document.querySelectorAll('iframe').length + ' (' + (function () {
+          var kinds = {};
+          document.querySelectorAll('iframe').forEach(function (f) {
+            var p = f.parentElement, k = f.getAttribute('src') ? 'src' : 'no-src';
+            k += ' in ' + (p ? p.localName + (p.id ? '#' + p.id : '') + (p.getAttribute('data-click-test') !== null ? '[click-test]' : '') +
+              (p.parentElement ? '<' + p.parentElement.localName : '') : 'detached') + (f.isConnected ? '' : ' disconnected') +
+              ' ' + (f.style.display || '') + (f.style.visibility || '');
+            kinds[k] = (kinds[k] || 0) + 1;
+          });
+          return Object.keys(kinds).map(function (k) { return kinds[k] + '× ' + k; }).join(', ');
+        })() + ')';
+    })()""",
+)
+
+/**
+ * Logs [line] where a failed CI run keeps it: the test's own output (the test results' system-out) and the Karma
+ * server's log file (karma.config.d/webview-trusted-input.js). Never fails.
+ */
+internal fun testLog(line: String) {
+    println("[webview-test] $line")
+    serverLog(line)
+}
+
+private fun serverLog(line: String): Unit = js("{ fetch('/webview-test/log?line=' + encodeURIComponent(line)).catch(function () {}); }")
+
 internal fun waitMillis(millis: Int): Promise<JsAny?> = js("new Promise(function (resolve) { setTimeout(resolve, millis); })")

@@ -44,11 +44,50 @@ internal suspend fun pause(millis: Int) {
     timeout(millis).await<JsAny?>()
 }
 
+/** How many times the app's window lost the keyboard (to a frame, or away), counted from the first call. */
+private fun windowBlurs(): Int = js("""(function () {
+  if (window.__blurs === undefined) { window.__blurs = 0; window.addEventListener('blur', function () { window.__blurs++; }); }
+  return window.__blurs;
+})()""")
+
+/** What the frames said their focus() did since the test began ([dev.supermux.webview.bridge.logFocus] clears it). */
+private fun focusTries(): String = js("(function () { var t = (window.__focusTries || []).join(' '); return t || 'none'; })()")
+
+/** Whether a frame told it called focus() and the browser left its document without the focus (DRIVER's focusTried). */
+internal fun aFrameSaidItsFocusFailed(): Boolean =
+    js("(window.__focusTries || []).some(function (t) { return JSON.parse(t).hasFocus === false; })")
+
+private fun activeName(): String = js("String(document.activeElement && document.activeElement.localName)")
+
+/** Each iframe's address and whether its permissions policy lets it take the focus without the user's activation. */
+private fun framePolicies(): String = js(
+    """(function () {
+      var out = [];
+      document.querySelectorAll('iframe').forEach(function (f) {
+        var p = f.featurePolicy || f.permissionsPolicy;
+        var allows = p && p.allowsFeature ? String(p.allowsFeature('focus-without-user-activation')) : 'n/a';
+        out.push(String(f.src || f.getAttribute('src') || '').slice(0, 40) + ' allow=' + (f.getAttribute('allow') || '') + ' focusWithoutActivation=' + allows);
+      });
+      return out.join(' | ');
+    })()""",
+)
+
 /** Waits until [condition] holds, checking once a frame, for [timeoutMillis] of real time at most. */
 internal suspend fun waitUntil(what: String, timeoutMillis: Int = 10_000, condition: () -> Boolean) {
     val deadline = now() + timeoutMillis
+    // What had the keyboard while it waited (#166: did a frame get it and lose it, or never get it?).
+    val seen = LinkedHashSet<String>()
+    val blursBefore = windowBlurs()
     while (!condition()) {
-        check(now() < deadline) { "timed out after $timeoutMillis ms waiting for $what" }
+        seen += activeName()
+        if (now() >= deadline) {
+            // The build's output names only the exception's type: say what it was, and where the focus was.
+            val message = "timed out after $timeoutMillis ms waiting for $what"
+            dev.supermux.webview.bridge.testLog(
+                "$message; ${dev.supermux.webview.bridge.focusState()}; active while waiting: $seen; window blurs: ${windowBlurs() - blursBefore}; the frames said: ${focusTries()}; frames: ${framePolicies()}",
+            )
+            error(message)
+        }
         frames(1)
     }
 }

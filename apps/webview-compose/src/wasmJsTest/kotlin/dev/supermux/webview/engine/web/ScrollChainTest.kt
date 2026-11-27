@@ -44,11 +44,17 @@ addEventListener('message', function (e) {
   if (typeof d.click === 'string') document.getElementById(d.click).click();
   if (typeof d.call === 'string') window[d.call]();
   if (d.reportFocus) parent.postMessage({ demoHasFocus: document.hasFocus() }, '*');
-  if (typeof d.focus === 'string') document.getElementById(d.focus).focus();
+  // What a focus() here did, told to the app (#166: on CI the frame now and then never took the keyboard).
+  function focusTried(what) {
+    var a = document.activeElement;
+    parent.postMessage({ focusTried: what, hasFocus: document.hasFocus(), active: a && (a.id || a.localName), activation: !!(navigator.userActivation && navigator.userActivation.isActive) }, '*');
+  }
+  if (typeof d.focus === 'string') { document.getElementById(d.focus).focus(); focusTried('focus ' + d.focus); }
   if (typeof d.press === 'string') {
     var pressed = document.getElementById(d.press);
     pressed.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerType: 'mouse', isPrimary: true }));
     pressed.focus();
+    focusTried('press ' + d.press);
   }
   // An element of that id in the document, or in the open shadow root the page keeps in window.__shadow.
   var at = document.getElementById(d.at) || (window.__shadow && window.__shadow.getElementById(d.at)) || document.body;

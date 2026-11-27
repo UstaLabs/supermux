@@ -6,6 +6,8 @@
 //     /webview-test/click?x=<x>&y=<y>   a left click at (x, y), CSS px in the top page's viewport
 //     /webview-test/key?key=Enter|Space a key press, to whatever has the focus
 //   each once Chrome has dispatched it, with "ok"; or 500 and the error.
+//     /webview-test/log?line=<text>[&targets=1]  logs the line (with Chrome's open pages and frames), as `[webview-test] <text>`, to stdout and to $WEBVIEW_TEST_LOG
+//                                        (default <tmpdir>/webview-test.log; CI uploads it when the lane fails)
 // The leading `;` keeps the IIFE from being parsed as a call on the snippet before it.
 ;(function () {
   var port = 20000 + Math.floor(Math.random() * 20000)
@@ -43,6 +45,13 @@
       })
     })
   }
+  // Karma's own console.log never reaches the build's output: each line also goes to a file CI uploads on failure.
+  var LOG_FILE = process.env.WEBVIEW_TEST_LOG || require('os').tmpdir() + '/webview-test.log'
+  function log(line) {
+    var text = new Date().toISOString() + ' [webview-test] ' + line
+    console.log(text)
+    try { require('fs').appendFileSync(LOG_FILE, text + '\n') } catch (e) { /* diagnostics never fail a run */ }
+  }
   var KEYS = {
     Enter: { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13, text: '\r' },
     Space: { key: ' ', code: 'Space', windowsVirtualKeyCode: 32, nativeVirtualKeyCode: 32, text: ' ' },
@@ -59,6 +68,19 @@
           { method: 'Input.dispatchMouseEvent', params: Object.assign({ type: 'mousePressed' }, at) },
           { method: 'Input.dispatchMouseEvent', params: Object.assign({ type: 'mouseReleased' }, at) },
         ]
+      } else if (url.pathname === '/webview-test/log') {
+        var line = url.searchParams.get('line') || ''
+        // With targets=1, what Chrome has open too: a popup a test left behind takes the browser's focus from the page.
+        if (url.searchParams.get('targets') === '1') {
+          fetch('http://127.0.0.1:' + port + '/json/list').then(function (r) { return r.json() }).then(function (list) {
+            log(line + '; targets: ' + list.filter(function (t) { return t.type === 'page' || t.type === 'iframe' }).map(function (t) { return t.type + ' ' + t.url.slice(0, 60) }).join(' | '))
+          }, function (e) { log(line + '; targets: ' + e) })
+        } else {
+          log(line)
+        }
+        res.writeHead(200, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' })
+        res.end('ok')
+        return
       } else if (url.pathname === '/webview-test/key') {
         var key = KEYS[url.searchParams.get('key')]
         if (!key) { res.writeHead(400); res.end('unknown key'); return }
@@ -79,6 +101,10 @@
       })
     }
   }
+  // The browser's console, too: in the test results' system-out and, where Karma's terminal shows, there.
+  config.client = config.client || {}
+  config.client.captureConsole = true
+  config.browserConsoleLogOptions = { level: 'log', terminal: true }
   config.plugins = config.plugins || []
   config.plugins.push({ 'middleware:webviewTrustedInput': ['factory', trustedInput] })
   config.middleware = (config.middleware || []).concat(['webviewTrustedInput'])

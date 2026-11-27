@@ -673,6 +673,20 @@ jobs:
       - name: Webview library (wasm, headless Chrome)
         working-directory: apps
         run: ./gradlew :webview-compose:wasmJsBrowserTest --build-cache --console=plain
+        env:
+          WEBVIEW_TEST_LOG: ${{ runner.temp }}/webview-test.log
+      # The build's output names a failed test's exception type only: its message, its output and the Karma server's
+      # [webview-test] lines are in these (#166).
+      - name: Upload webview test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webview-wasm-test-reports-${{ github.run_attempt }}
+          path: |
+            apps/webview-compose/build/test-results/wasmJsBrowserTest/
+            apps/webview-compose/build/reports/tests/wasmJsBrowserTest/
+            ${{ runner.temp }}/webview-test.log
+          retention-days: 7
 
   # The library's iOS suites in a simulator: what needs no page (a Kotlin/Native test process isn't an app, so no
   # WKWebView loads one); the engine's conformance checks run in the sample app on a device. It links nothing native

@@ -25,7 +25,9 @@
         case '/webview-test/focus':
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' })
           res.end('<!doctype html><html><body style="margin:0"><input id="i"><script>' +
-            'addEventListener("message", function (e) { if (e.data === "focus") document.getElementById("i").focus(); });' +
+            'addEventListener("message", function (e) { if (e.data === "focus") { document.getElementById("i").focus();' +
+            ' var a = document.activeElement; parent.postMessage({ focusTried: "url focus", hasFocus: document.hasFocus(),' +
+            ' active: a && (a.id || a.localName) }, "*"); } });' +
             '</script></body></html>')
           return
         case '/webview-test/hits':

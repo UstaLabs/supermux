@@ -25,7 +25,10 @@ private fun sentAt(w: JsAny, index: Int): String = js("w.__sent[index]")
  * (WebKitRelayBrowserTest).
  */
 class ClickProofBrowserTest {
-    @AfterTest fun clear() = removePinnedFrames()
+    @AfterTest fun clear() {
+        removePinnedFrames()
+        logFocus("after a ClickProofBrowserTest")
+    }
 
     /** A document whose first script is the shim, as engines inject it at document start, then [body]. */
     private fun card(body: String, left: Int = 0): JsAny {
