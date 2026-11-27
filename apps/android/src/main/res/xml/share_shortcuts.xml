@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #167: the Direct Share target. The agents themselves are dynamic long-lived shortcuts in this category
+     (share/ShareQueue.kt publishShortcuts), so the share sheet shows them and ranks them by use. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <share-target android:targetClass="dev.supermux.android.share.ShareActivity">
+        <data android:mimeType="text/*" />
+        <data android:mimeType="image/*" />
+        <data android:mimeType="video/*" />
+        <data android:mimeType="audio/*" />
+        <data android:mimeType="application/*" />
+        <category android:name="dev.supermux.category.SHARE_TARGET" />
+    </share-target>
+</shortcuts>

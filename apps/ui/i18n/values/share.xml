@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #167: sharing from another app straight to an agent (the share sheet). -->
+<resources>
+    <string name="share_title">Send to agent</string>
+    <string name="share_close">Close</string>
+    <string name="share_to">To</string>
+    <string name="share_pick">Pick an agent</string>
+    <string name="share_search">Search agents</string>
+    <string name="share_tab_agents">Agents</string>
+    <string name="share_tab_sessions">Sessions</string>
+    <string name="share_host_all">All hosts</string>
+    <string name="share_host">Host: %1$s</string>
+    <string name="share_no_match">No match</string>
+    <string name="share_none">Open supermux once to see your agents here.</string>
+    <string name="share_message">Add a message…</string>
+    <string name="share_send">Send</string>
+    <string name="share_sending">Sending…</string>
+    <string name="share_sent">Sent to %1$s</string>
+    <string name="share_queued">Queued for %1$s · sends when you're back online</string>
+    <string name="share_failed">Couldn't send to %1$s: %2$s</string>
+    <string name="share_open_chat">Open chat</string>
+    <string name="share_ok">OK</string>
+    <string name="share_nothing">There is nothing to share.</string>
+    <string name="share_link">Link</string>
+    <string name="share_text">Text</string>
+    <plurals name="share_items">
+        <item quantity="one">%1$d item</item>
+        <item quantity="other">%1$d items</item>
+    </plurals>
+    <string name="share_channel">Shares</string>
+    <string name="share_notify_sending">Sending to %1$s</string>
+</resources>

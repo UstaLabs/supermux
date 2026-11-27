@@ -61,6 +61,28 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="supermux" android:host="pair" />
             </intent-filter>
+            <!-- #167: the agents in the system share sheet's Direct Share row (res/xml/share_shortcuts.xml). -->
+            <meta-data android:name="android.app.shortcuts" android:resource="@xml/share_shortcuts" />
+        </activity>
+        <!-- #167: a share from another app → the share sheet over it (share/ShareActivity.kt). Its own task, gone
+             from Recents once sent, so the user lands back in the app they shared from. -->
+        <activity
+            android:name=".share.ShareActivity"
+            android:theme="@style/Theme.Supermux.Share"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity="${applicationId}.share"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
         </activity>
         <!-- A pane moved out into its own window (windows/ExtraWindowActivity.kt).
              Each one is launched into a NEW task beside the app; the distinct taskAffinity keeps

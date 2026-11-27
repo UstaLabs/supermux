@@ -5,6 +5,7 @@ import android.app.Application
 import android.os.Bundle
 import dev.supermux.android.update.AndroidAppUpdater
 import dev.supermux.ui.i18n.Catalogs
+import kotlinx.coroutines.launch
 import dev.supermux.android.platform.AndroidTts
 
 /**
@@ -27,6 +28,10 @@ class SupermuxApplication : Application() {
         super.onCreate()
         // #123: the string catalogs are read here, off the main thread, so the first frame never parses one on it.
         Catalogs.warm()
+        // #167: a share still queued (the app was updated or killed mid-send) gets its worker back.
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            runCatching { dev.supermux.android.share.ShareQueue.resume(this@SupermuxApplication) }
+        }
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityCreated(activity: Activity, state: Bundle?) { activities++ }
             override fun onActivityDestroyed(activity: Activity) {
