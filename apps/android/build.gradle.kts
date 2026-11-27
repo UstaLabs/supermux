@@ -147,6 +147,9 @@ dependencies {
     // #117 W1: the applets widgets.
     implementation(libs.androidx.glance.appwidget)
     implementation(libs.androidx.glance.material3)
+    // #167: the share queue (WorkManager) and the Direct Share shortcuts (ShortcutManagerCompat).
+    implementation(libs.androidx.work.runtime.ktx)
+    implementation(libs.androidx.core.core)
     // (Navigation 3 replaced navigation-compose in cluster G8: the shared `SupermuxApp` root
     //  drives one `NavDisplay` back stack on BOTH hosts, and it arrives transitively from :ui.)
     implementation(libs.androidx.lifecycle.viewmodel.compose)

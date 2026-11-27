@@ -62,6 +62,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import platform.Foundation.NSUserDefaults
@@ -380,6 +384,14 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
                 IosAppState.foreground.collect { now ->
                     if (now) IosAppletWidgetStore.takePendingOpen()?.let { (h, n) -> openApplet(h, n) }
                 }
+            }
+            // #167: the share extension offers the chats the app knows, and reaches their hosts with the keys it keeps.
+            LaunchedEffect(fleet) {
+                fleet.sessions
+                    .map { all -> all.map { listOf(it.id, it.name, it.role, it.isDefault, it.avatar) } }
+                    .distinctUntilChanged()
+                    .debounce(1_500)
+                    .collect { withContext(Dispatchers.Default) { runCatching { IosShareTargets.publish() } } }
             }
             // ...and the widgets follow the host picker's applets whenever the app sees them change.
             LaunchedEffect(fleet) {

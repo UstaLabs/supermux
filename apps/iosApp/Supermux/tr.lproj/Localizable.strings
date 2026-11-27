@@ -19,3 +19,7 @@
 "Opens an applet in supermux." = "Bir appleti supermux'ta açar.";
 "Choose an applet" = "Bir applet seçin";
 "The applet this widget shows." = "Bu widget'ın gösterdiği applet.";
+
+/* #167: ShareCore.swift (paylaşım uzantısında da). */
+"Open supermux once, then share again." = "supermux'ı bir kez açın, sonra yeniden paylaşın.";
+"%@ is no longer there" = "%@ artık yok";

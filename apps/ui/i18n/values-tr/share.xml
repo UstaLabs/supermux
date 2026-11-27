@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #167: başka bir uygulamadan doğrudan bir ajana paylaşma (paylaşım sayfası). -->
+<resources>
+    <string name="share_title">Ajana gönder</string>
+    <string name="share_close">Kapat</string>
+    <string name="share_to">Kime</string>
+    <string name="share_pick">Bir ajan seçin</string>
+    <string name="share_search">Ajan ara</string>
+    <string name="share_tab_agents">Ajanlar</string>
+    <string name="share_tab_sessions">Oturumlar</string>
+    <string name="share_host_all">Tüm makineler</string>
+    <string name="share_host">Makine: %1$s</string>
+    <string name="share_no_match">Eşleşme yok</string>
+    <string name="share_none">Ajanlarınızı burada görmek için supermux'ı bir kez açın.</string>
+    <string name="share_message">Bir mesaj ekleyin…</string>
+    <string name="share_send">Gönder</string>
+    <string name="share_sending">Gönderiliyor…</string>
+    <string name="share_sent">%1$s'a gönderildi</string>
+    <string name="share_queued">%1$s için sırada · tekrar çevrimiçi olunca gider</string>
+    <string name="share_failed">%1$s'a gönderilemedi: %2$s</string>
+    <string name="share_open_chat">Sohbeti aç</string>
+    <string name="share_ok">Tamam</string>
+    <string name="share_nothing">Paylaşılacak bir şey yok.</string>
+    <string name="share_link">Bağlantı</string>
+    <string name="share_text">Metin</string>
+    <plurals name="share_items">
+        <item quantity="one">%1$d öğe</item>
+        <item quantity="other">%1$d öğe</item>
+    </plurals>
+    <string name="share_channel">Paylaşımlar</string>
+    <string name="share_notify_sending">%1$s'a gönderiliyor</string>
+</resources>

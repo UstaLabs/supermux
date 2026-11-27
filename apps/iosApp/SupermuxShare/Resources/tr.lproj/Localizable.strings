@@ -1,0 +1,23 @@
+/* #167: paylaşım uzantısı. */
+"Send to agent" = "Ajana gönder";
+"Cancel" = "Vazgeç";
+"Send" = "Gönder";
+"OK" = "Tamam";
+"To" = "Kime";
+"All hosts" = "Tüm makineler";
+"Host: %@" = "Makine: %@";
+"Search agents" = "Ajan ara";
+"Agents" = "Ajanlar";
+"Sessions" = "Oturumlar";
+"%d items" = "%d öğe";
+"Link" = "Bağlantı";
+"Text" = "Metin";
+"Open supermux once to see your agents here." = "Ajanlarınızı burada görmek için supermux'ı bir kez açın.";
+"No match" = "Eşleşme yok";
+"Pick an agent" = "Bir ajan seçin";
+"Add a message…" = "Bir mesaj ekleyin…";
+"Sent to %@" = "%@'a gönderildi";
+"Couldn't send to %@: %@" = "%@'a gönderilemedi: %@";
+"Queued for %@ · sends when you open supermux" = "%@ için sırada · supermux'ı açınca gider";
+"Open supermux once, then share again." = "supermux'ı bir kez açın, sonra yeniden paylaşın.";
+"%@ is no longer there" = "%@ artık yok";

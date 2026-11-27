@@ -1,0 +1,23 @@
+/* #167: the share extension. */
+"Send to agent" = "Send to agent";
+"Cancel" = "Cancel";
+"Send" = "Send";
+"OK" = "OK";
+"To" = "To";
+"All hosts" = "All hosts";
+"Host: %@" = "Host: %@";
+"Search agents" = "Search agents";
+"Agents" = "Agents";
+"Sessions" = "Sessions";
+"%d items" = "%d items";
+"Link" = "Link";
+"Text" = "Text";
+"Open supermux once to see your agents here." = "Open supermux once to see your agents here.";
+"No match" = "No match";
+"Pick an agent" = "Pick an agent";
+"Add a message…" = "Add a message…";
+"Sent to %@" = "Sent to %@";
+"Couldn't send to %@: %@" = "Couldn't send to %@: %@";
+"Queued for %@ · sends when you open supermux" = "Queued for %@ · sends when you open supermux";
+"Open supermux once, then share again." = "Open supermux once, then share again.";
+"%@ is no longer there" = "%@ is no longer there";

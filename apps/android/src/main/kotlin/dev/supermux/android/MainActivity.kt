@@ -76,6 +76,11 @@ import kotlinx.coroutines.launch
 import androidx.lifecycle.lifecycleScope
 import dev.supermux.workspace.toDomainOrNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.runBlocking
 import androidx.compose.ui.unit.dp
 
@@ -343,6 +348,15 @@ class MainActivity : ComponentActivity() {
                         handledPushSessionId = sid
                         currentIntent?.removeExtra(SupermuxMessagingService.EXTRA_SESSION_ID)
                     }
+                }
+
+                // #167: the agents in the system share sheet follow the sessions (the snapshot the share sheet reads).
+                LaunchedEffect(vm.fleet) {
+                    vm.fleet.sessions
+                        .map { all -> all.filter { it.role == "personal_assistant" }.map { it.id to it.name } }
+                        .distinctUntilChanged()
+                        .debounce(2_000)
+                        .collect { withContext(Dispatchers.IO) { dev.supermux.android.share.ShareQueue.publishShortcuts(applicationContext) } }
                 }
 
                 // #117: applets open in their own tasks.

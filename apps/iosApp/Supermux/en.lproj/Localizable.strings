@@ -19,3 +19,7 @@
 "Opens an applet in supermux." = "Opens an applet in supermux.";
 "Choose an applet" = "Choose an applet";
 "The applet this widget shows." = "The applet this widget shows.";
+
+/* #167: ShareCore.swift (also in the share extension). */
+"Open supermux once, then share again." = "Open supermux once, then share again.";
+"%@ is no longer there" = "%@ is no longer there";

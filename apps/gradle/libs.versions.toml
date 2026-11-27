@@ -36,6 +36,8 @@ lifecycle = "2.8.7"
 coreSplashscreen = "1.0.1"
 # #117 W1: the applets Home screen widgets (Glance runs on WorkManager, which it brings along).
 glance = "1.2.0"
+# #167: the share queue sends with the app closed and once the phone is back online.
+work = "2.10.1"
 skie = "0.10.14"
 zxingEmbedded = "4.3.0"
 zxingCore = "3.4.1"
@@ -118,6 +120,7 @@ androidx-core-core = { module = "androidx.core:core", version.ref = "androidxCor
 androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidxTestRunner" }
 androidx-test-core = { module = "androidx.test:core", version.ref = "androidxTestCore" }
 androidx-test-ext-junit = { module = "androidx.test.ext:junit", version.ref = "androidxTestExtJunit" }
+androidx-work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
 androidx-glance-appwidget = { module = "androidx.glance:glance-appwidget", version.ref = "glance" }
 androidx-glance-material3 = { module = "androidx.glance:glance-material3", version.ref = "glance" }
 androidx-core-splashscreen = { module = "androidx.core:core-splashscreen", version.ref = "coreSplashscreen" }
