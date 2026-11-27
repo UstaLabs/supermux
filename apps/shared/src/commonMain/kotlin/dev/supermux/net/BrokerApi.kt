@@ -2031,6 +2031,9 @@ private data class FinishBody(
 @Serializable
 private data class MessageBody(val text: String)
 
+@Serializable
+private data class ShareSendBody(val text: String, val attachments: List<String>, val client_message_id: String)
+
 // Voice dictation request bodies.
 @Serializable
 private data class DraftBody(val draft: String)
@@ -2239,6 +2242,11 @@ class BrokerApi(
     private val token: String,
     private val http: HttpClient,
 ) {
+    companion object {
+        /** How an unreachable host or a refusal starts the message of the CancellationException every call throws. */
+        const val UNAVAILABLE_PREFIX: String = UNAVAILABLE
+    }
+
     init {
         // Card #54: every request this client sends lands in the load-time trace.
         http.installPerfTrace()
@@ -3570,6 +3578,35 @@ class BrokerApi(
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(MessageBody(text)))
         }
+    }
+
+    /** #167: what POST /sessions/<id>/send answered. */
+    sealed interface ShareSendOutcome {
+        data object Ok : ShareSendOutcome
+        data class Refused(val status: Int, val error: String) : ShareSendOutcome
+    }
+
+    /**
+     * #167: POST /sessions/<id>/send — a share as a normal user message, with uploads this device made. The broker
+     * accepts one [clientMessageId] once (`web-…`), so a queued share can be retried safely. A refusal comes back as
+     * [ShareSendOutcome.Refused]; an unreachable host throws, like every other call here.
+     */
+    suspend fun sendShare(id: String, clientMessageId: String, text: String, attachments: List<String>): ShareSendOutcome {
+        val resp = try {
+            http.post("$httpBase/sessions/${urlEncode(id)}/send") {
+                authHeader()
+                contentType(ContentType.Application.Json)
+                setBody(json.encodeToString(ShareSendBody(text, attachments, clientMessageId)))
+            }
+        } catch (c: CancellationException) {
+            throw c
+        } catch (e: Throwable) {
+            throw CancellationException("$UNAVAILABLE: ${e.message}")
+        }
+        if (resp.status.isSuccess()) return ShareSendOutcome.Ok
+        val body = runCatching { resp.bodyAsText() }.getOrDefault("")
+        val err = runCatching { json.parseToJsonElement(body).jsonObject["error"]?.jsonPrimitive?.content }.getOrNull()
+        return ShareSendOutcome.Refused(resp.status.value, err ?: "HTTP ${resp.status.value}")
     }
 
     /** GET /api/pas — the Agents (kept on the old path so pre-Agents brokers answer too). */
