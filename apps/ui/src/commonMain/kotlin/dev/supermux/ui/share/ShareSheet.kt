@@ -186,10 +186,11 @@ private fun SharedPreviewCard(items: List<SharePreview>) {
     val cs = MaterialTheme.colorScheme
     val files = items.filter { it.item.path != null }
     val first = items.firstOrNull()?.item
+    val firstText = first?.text
     val (title, sub) = when {
         items.size > 1 -> localizedPlural(Plurals.share_items, items.size, items.size) to (files.mapNotNull { it.item.name }.joinToString(", ").ifEmpty { first?.text.orEmpty() })
         first?.path != null -> (first.name ?: "") to listOfNotNull(first.mime, dev.supermux.ui.worktree.formatBytes(first.size).takeIf { first.size > 0 }).joinToString(" · ")
-        first?.text != null && isLink(first.text) -> first.text to localized(Str.share_link)
+        firstText != null && isLink(firstText) -> firstText to localized(Str.share_link)
         else -> (first?.text.orEmpty()) to localized(Str.share_text)
     }
     Row(
@@ -212,12 +213,13 @@ private fun Thumb(p: SharePreview, size: Int) {
     val cs = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(10.dp)
     val thumb = p.thumb
+    val text = p.item.text
     if (thumb != null) {
         Image(thumb, null, contentScale = ContentScale.Crop, modifier = Modifier.size(size.dp).clip(shape))
     } else {
         val icon = when {
             p.item.path != null -> Icons.Default.Description
-            p.item.text != null && isLink(p.item.text) -> Icons.Default.Link
+            text != null && isLink(text) -> Icons.Default.Link
             else -> Icons.AutoMirrored.Filled.ShortText
         }
         Box(Modifier.size(size.dp).clip(shape).background(cs.surfaceVariant), contentAlignment = Alignment.Center) {
