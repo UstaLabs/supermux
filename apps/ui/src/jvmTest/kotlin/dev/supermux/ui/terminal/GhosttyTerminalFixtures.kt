@@ -158,8 +158,11 @@ class FakeTerminalEngine(@Volatile var size: TerminalSize) : TerminalEngine {
 
     override fun focus(focused: Boolean) = Unit
 
+    /** A new frame, as the real engine's (`st_select` bumps its generation): a frame without the change is never republished. */
     override fun select(selection: TerminalSelection?) {
         this.selection = selection
+        generation++
+        sequence++
     }
 
     override fun selectedText(): String = ""

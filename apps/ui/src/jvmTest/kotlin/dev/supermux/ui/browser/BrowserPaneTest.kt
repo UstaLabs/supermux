@@ -304,7 +304,14 @@ class BrowserPaneTest {
         rig.engines.created.toList().forEach { it.findAnswer = { _, _ -> FindResult(found = true, count = 5, current = 2) } }
         onNodeWithTag("browser-find-field").performTextInput("vite")
         // The count shows at once, empty, and the engine's answer lands after: wait for the answer, not the node.
-        waitUntil(timeoutMillis = 10_000) { runCatching { onNodeWithTag("browser-find-count").assertTextEquals("2 of 5") }.isSuccess }
+        try {
+            waitUntil(timeoutMillis = 10_000) { runCatching { onNodeWithTag("browser-find-count").assertTextEquals("2 of 5") }.isSuccess }
+        } catch (timeout: Throwable) {
+            // It failed on CI twice (#166) and never in hundreds of runs elsewhere: say what the bar showed and what each engine was asked.
+            val said = runCatching { onNodeWithTag("browser-find-count").fetchSemanticsNode().config.toString() }.getOrElse { "<$it>" }
+            val engines = rig.engines.created.toList().joinToString("\n") { "engine ${it.id}: ${it.calls.toList()}" }
+            throw AssertionError("the find count never read 2 of 5; the bar: $said\n$engines", timeout)
+        }
         onNodeWithTag("browser-find-count").assertTextEquals("2 of 5")
     }
 

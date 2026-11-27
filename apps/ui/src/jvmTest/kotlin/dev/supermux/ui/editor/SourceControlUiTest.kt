@@ -32,6 +32,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.ktor.utils.io.ByteReadChannel
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
@@ -55,7 +56,8 @@ class SourceControlUiTest {
         /** POST …/git/pull's answer. */
         val pull: String = """{"status":"clean"}""",
     ) {
-        val sent = mutableListOf<String>()
+        /** Written on MockEngine's threads, read on the test's. */
+        val sent = java.util.concurrent.CopyOnWriteArrayList<String>()
         private var creates = 0
         fun api(history: String): SourceControlApi {
             val engine = MockEngine { req ->
@@ -86,6 +88,14 @@ class SourceControlUiTest {
         }
     }
 
+    /**
+     * The pane's coroutines on a standard test dispatcher. The default one is unconfined: a coroutine resumes on the
+     * thread that woke it (MockEngine's IO threads), so the pane's state was written off the UI thread while a frame was
+     * measured (#166: an IndexOutOfBoundsException in the file list).
+     */
+    private fun scmTest(block: suspend ComposeUiTest.() -> Unit) =
+        runComposeUiTest(effectContext = StandardTestDispatcher(), block = block)
+
     private fun ComposeUiTest.pane(host: Host): SourceControlState {
         val state = SourceControlState(host.api(chatHistory))
         setContent {
@@ -111,7 +121,7 @@ class SourceControlUiTest {
         waitUntil(timeoutMillis = 5_000) { host.sent.any { it.contains(what) } }
     }
 
-    @Test fun publishWithSeveralRemotesAsksWhichAndPublishesThere() = runComposeUiTest {
+    @Test fun publishWithSeveralRemotesAsksWhichAndPublishesThere() = scmTest {
         val host = Host(status = """{"isRepo":true,"hasRemote":true,"remotes":["fork","origin"],"branch":"feature/search","upstream":null}""")
         pane(host)
         click("scm_where_sync")                                        // "not published" on the where line
@@ -120,7 +130,7 @@ class SourceControlUiTest {
         sent(host, """/git/publish {"remote":"fork"}""")
     }
 
-    @Test fun createPullRequestAsksAboutUnpushedCommitsThenPushes() = runComposeUiTest {
+    @Test fun createPullRequestAsksAboutUnpushedCommitsThenPushes() = scmTest {
         val host = Host(prCreate = listOf(HttpStatusCode.Conflict to """{"status":"ask","ask":"push","count":2}"""))
         pane(host)
         click("scm_pr_create")
@@ -133,7 +143,7 @@ class SourceControlUiTest {
         waitUntil(timeoutMillis = 5_000) { onAllNodes(hasTestTag("scm_pr_form")).fetchSemanticsNodes().isEmpty() }
     }
 
-    @Test fun alwaysPushIsRememberedOnTheHost() = runComposeUiTest {
+    @Test fun alwaysPushIsRememberedOnTheHost() = scmTest {
         val host = Host(prCreate = listOf(HttpStatusCode.Conflict to """{"status":"ask","ask":"push","count":1}"""))
         pane(host)
         click("scm_pr_create")
@@ -143,7 +153,7 @@ class SourceControlUiTest {
         sent(host, "\"push\":true")
     }
 
-    @Test fun continueWithoutPushingCreatesFromWhatIsOnTheRemote() = runComposeUiTest {
+    @Test fun continueWithoutPushingCreatesFromWhatIsOnTheRemote() = scmTest {
         val host = Host(prCreate = listOf(HttpStatusCode.Conflict to """{"status":"ask","ask":"push","count":1}"""))
         pane(host)
         click("scm_pr_create")
@@ -152,7 +162,7 @@ class SourceControlUiTest {
         sent(host, "\"skipPush\":true")
     }
 
-    @Test fun aFailedCreateSaysWhyByTheButtonWithGhsWordsUnderDetails() = runComposeUiTest {
+    @Test fun aFailedCreateSaysWhyByTheButtonWithGhsWordsUnderDetails() = scmTest {
         val gh = "pull request create failed: GraphQL: Something unexpected happened (createPullRequest)"
         val host = Host(prCreate = listOf(HttpStatusCode.Conflict to """{"status":"unavailable","forge":"github","reason":"error","message":"$gh"}"""))
         pane(host)
@@ -163,7 +173,7 @@ class SourceControlUiTest {
         onNodeWithText(gh).assertExists()
     }
 
-    @Test fun theBranchPickerCreatesTheTypedBranch() = runComposeUiTest {
+    @Test fun theBranchPickerCreatesTheTypedBranch() = scmTest {
         val host = Host()
         pane(host)
         click("scm_where_branch")
@@ -173,7 +183,7 @@ class SourceControlUiTest {
         assertTrue(host.sent.last { it.contains("/git/switch") }.contains("fix/typo"))
     }
 
-    @Test fun aConflictIsSettledFromItsRow() = runComposeUiTest {
+    @Test fun aConflictIsSettledFromItsRow() = scmTest {
         val host = Host(files = conflict, merging = true)
         pane(host)
         onNodeWithTag("scm_merging").assertExists()
@@ -182,7 +192,7 @@ class SourceControlUiTest {
         sent(host, "\"side\":\"mine\"")
     }
 
-    @Test fun theBaseMovedOnGetLatestFromTheBaseLineAndTheGraph() = runComposeUiTest {
+    @Test fun theBaseMovedOnGetLatestFromTheBaseLineAndTheGraph() = scmTest {
         val host = Host(incoming = 5)
         pane(host)
         onNodeWithText("dev has 5 new", substring = true).assertExists()
@@ -193,7 +203,7 @@ class SourceControlUiTest {
         sent(host, "/sessions/s1/git/latest")
     }
 
-    @Test fun theWhereLineIsTheUpstreamAndNeverTheBase() = runComposeUiTest {
+    @Test fun theWhereLineIsTheUpstreamAndNeverTheBase() = scmTest {
         val host = Host(status = """{"isRepo":true,"hasRemote":true,"remotes":["origin"],"branch":"feature/search","upstream":"origin/feature/search","ahead":1,"behind":2}""", incoming = 3)
         pane(host)
         onNodeWithText("2↓ 1↑ vs origin/feature/search").assertExists()
@@ -204,7 +214,7 @@ class SourceControlUiTest {
     }
 
     /** Found clicking through: Sync pushed after its pull stopped on a conflict. VS Code's Sync stops there. */
-    @Test fun syncStopsAtAPullConflictAndSaysSo() = runComposeUiTest {
+    @Test fun syncStopsAtAPullConflictAndSaysSo() = scmTest {
         val host = Host(status = """{"isRepo":true,"hasRemote":true,"remotes":["origin"],"branch":"feature/search","upstream":"origin/feature/search","ahead":1,"behind":1}""",
             pull = """{"status":"conflict","files":["notes.md"]}""")
         pane(host)
@@ -215,14 +225,14 @@ class SourceControlUiTest {
     }
 
     /** VS Code: nothing to commit, the button is off. */
-    @Test fun commitIsOffWithNothingToCommit() = runComposeUiTest {
+    @Test fun commitIsOffWithNothingToCommit() = scmTest {
         pane(Host())
         waitUntil(timeoutMillis = 5_000) { onAllNodes(hasTestTag("scm_commit")).fetchSemanticsNodes().isNotEmpty() }
         assertTrue(onAllNodes(hasTestTag("scm_commit") and isEnabled()).fetchSemanticsNodes().isEmpty())
     }
 
     /** Found clicking through: the history came from the workspace, which has no base, so the base line never showed. */
-    @Test fun theHistoryIsTheChatsOwnSoItsBaseShows() = runComposeUiTest {
+    @Test fun theHistoryIsTheChatsOwnSoItsBaseShows() = scmTest {
         val host = Host()
         val state = pane(host)
         assertTrue(state.base == "dev")

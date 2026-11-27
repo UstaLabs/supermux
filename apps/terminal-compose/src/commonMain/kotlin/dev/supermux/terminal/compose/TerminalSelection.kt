@@ -67,6 +67,9 @@ internal class TerminalSelectionController(
     /** The selection this controller last asked for; [onFrame] compares the engine's against it. */
     private var lastSent: TerminalSelection? = null
 
+    /** A frame has carried [lastSent] back: from then on a frame without it means the engine dropped it. */
+    private var shown = false
+
     /** Where the pointer is, for edge autoscroll to keep extending from. */
     private var pointer: Offset = Offset.Zero
     private var autoScrollPxPerSecond = 0f
@@ -174,6 +177,7 @@ internal class TerminalSelectionController(
         if (anchor == null && lastSent == null && model.frame?.selection == null) return
         anchor = null
         lastSent = null
+        shown = false
         stopAutoScroll()
         dragging = false
         draggingHandle = null
@@ -261,16 +265,21 @@ internal class TerminalSelectionController(
      *
      * A selection the engine no longer has (eviction took every selected row) forgets the anchor:
      * the highlight disappears — which is the visible part — and a later drag starts fresh instead
-     * of extending from a row that no longer exists.
+     * of extending from a row that no longer exists. Only once a frame has shown it: a frame the
+     * engine drew before it took the request has none either, and forgetting then left a click's
+     * one-cell selection uncleared, so the next Ctrl+C copied it instead of interrupting (#166).
      */
     fun onFrame(frame: TerminalFrame) {
         val sent = lastSent ?: return
         val live = frame.selection
         if (live == null) {
+            if (!shown) return
             anchor = null
             lastSent = null
+            shown = false
             return
         }
+        shown = true
         val drift = driftBetween(sent, live)
         if (drift != null && drift != 0L) {
             anchor = anchor?.let { TerminalPoint((it.row + drift).coerceAtLeast(0), it.column) }
@@ -308,6 +317,7 @@ internal class TerminalSelectionController(
     private fun send(start: TerminalPoint, end: TerminalPoint) {
         val selection = TerminalSelection(start, end)
         lastSent = selection
+        shown = false
         session.select(selection)
     }
 

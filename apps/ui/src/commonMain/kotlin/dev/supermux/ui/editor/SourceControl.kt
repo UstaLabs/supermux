@@ -723,7 +723,6 @@ fun SourceControlPane(
     val cs = MaterialTheme.colorScheme
     // A phone has no hover: every row action stays shown.
     val touch = LocalWindowWidthClass.current == WindowWidthClass.Compact
-    // Real time, off the UI's frame clock: a poll on it would keep a UI test from ever going idle.
     // The footer's ☁ Publish asked: with no remote that is the pick, else the branch is published. Collected, not keyed:
     // clearing the ask (so another pane doesn't take it) must not cancel the work it starts.
     LaunchedEffect(state) {
@@ -737,12 +736,13 @@ fun SourceControlPane(
             state.refresh()
         }
     }
+    // The poll waits in real time, off the UI's frame clock: a wait on it would keep a UI test from ever going idle.
+    // Only the wait is off it: refresh() writes the pane's state, which belongs to the UI thread. Written from another
+    // thread mid-frame, the file list changed between composing and measuring (#166: "Index 4, size 4").
     LaunchedEffect(state) {
-        withContext(Dispatchers.Default) {
-            while (true) {
-                state.refresh()
-                delay(SCM_POLL_MS)
-            }
+        while (true) {
+            state.refresh()
+            withContext(Dispatchers.Default) { delay(SCM_POLL_MS) }
         }
     }
     // The host's tag and this pane's on separate nodes: Compose merges two tags on one chain, hiding one (as DiffPane says).
