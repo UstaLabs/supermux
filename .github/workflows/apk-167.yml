@@ -9,7 +9,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: share167, sha: cbe4b0d80f5306b03cbc17c7f59beb5a85680caa }
+          - { name: share167, sha: 0ee53734e02da55763b724b78a627684cb181ef1 }
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
