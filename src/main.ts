@@ -3316,6 +3316,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       const visible = shouldShowReasoningControl(agent, models, model)
       return { agent, levels: visible ? supportedReasoningLevels(agent, models, model) : [], visible }
     },
+    hasInboundMessage: (sessionId, chatId, messageId) => !!messageLog.findByChannelMessageId(sessionId, chatId, messageId),
     getSessionAgent: (id) => {
       const s = registry.get(id)
       if (!s) return undefined

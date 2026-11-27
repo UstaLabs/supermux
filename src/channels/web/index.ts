@@ -434,6 +434,8 @@ export interface WebChannelOpts {
   getSessionRequests?: (id: string) => unknown[]
   /** [who].by: the answering device's name (#143: request_closed says who answered; a user, once there are users). */
   respondRequest?: (sessionId: string, requestId: string, answer: unknown, who?: { by: string }) => Promise<{ ok: true } | { ok: false; error: string }>
+  /** #167: whether a session already has this inbound (channel, client message id), so a retried share is accepted once. */
+  hasInboundMessage?: (sessionId: string, chatId: string, messageId: string) => boolean
   getSessionAgent?: (name: string) => { agent: AgentKind; model?: string; reasoningLevel?: string } | undefined
   interruptSession?: (id: string) => Promise<{ ok: boolean; reason?: string }>
   finishSession?: (id: string, req: { action: "merge"|"pr"|"keep"|"discard"; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prTitle?: string; prBody?: string; keep?: boolean }) => Promise<import("../../core/worktree/finish-job").FinishJob | { error: string }>
@@ -2160,52 +2162,13 @@ export class WebChannel implements Channel {
         fromCard = { id: fromCardId, title: ok.title }
       }
       const requestedIds: string[] = Array.isArray(frame.args?.attachments) ? frame.args.attachments : []
-      let attachments: InboundAttachment[] | undefined = undefined
-      if (requestedIds.length > 0) {
-        if (!this.fileStore) {
-          ws.send(JSON.stringify({ type: "error", reason: "file store not mounted" }))
-          return
-        }
-        attachments = []
-        for (const id of requestedIds) {
-          const meta = await this.fileStore.resolveOwnedWebUpload(id, ws.data.deviceName)
-          if (!meta) {
-            ws.send(JSON.stringify({ type: "error", reason: "invalid attachment reference" }))
-            return
-          }
-          attachments.push({
-            kind: meta.kind,
-            file_id: meta.file_id,
-            mime: meta.mime,
-            size: meta.size,
-            name: meta.name,
-          })
-        }
-      }
-
-      if (!frame.args?.text && !(attachments && attachments.length > 0)) {
-        ws.send(JSON.stringify({ type: "error", reason: "send must include text or attachments" }))
+      const sent = await this.acceptSend(ws.data.deviceName, String(frame.session), {
+        text: frame.args?.text, attachmentIds: requestedIds, clientMessageId: clientMessageIdOf(frame.client_message_id), fromCard,
+      })
+      if (!sent.ok) {
+        ws.send(JSON.stringify({ type: "error", reason: sent.reason }))
         return
       }
-
-      const clientMessageId = clientMessageIdOf(frame.client_message_id)
-
-      const msg: InboundMessage = {
-        channel: "web",
-        // Web is one logical channel — a constant chat_id. The device identity
-        // lives in user/user_id (+ presence/push), not the routing key.
-        chat_id: "web",
-        message_id: clientMessageId ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        user: ws.data.deviceName,
-        user_id: ws.data.deviceName,
-        ts: new Date().toISOString(),
-        text: frame.args?.text,
-        target_session_id: frame.session,
-        ...(attachments && attachments.length > 0 ? { attachments } : {}),
-        ...(fromCard ? { from_card: fromCard } : {}),
-      }
-      this.opts.onSendFromWeb(msg)
-      for (const h of this.inboundHandlers) h(msg)
       // The draft just became a real message — clear it for this session on the
       // user's other devices too (the sender's composer already cleared locally).
       this.opts.setDraft?.(frame.session, null)
@@ -2272,6 +2235,50 @@ export class WebChannel implements Channel {
       return
     }
     ws.send(JSON.stringify({ type: "error", reason: "unknown frame type" }))
+  }
+
+  /** Recent HTTP sends by client id, so a retried share (the phone lost the answer) never posts twice. */
+  private recentSendIds = new Set<string>()
+
+  /**
+   * One user message from a device, with uploads it owns as attachments: the WS `send` frame and the
+   * HTTP `/sessions/:id/send` (#167, a share from another app) both end here.
+   */
+  private async acceptSend(
+    deviceName: string,
+    session: string,
+    args: { text?: string; attachmentIds: string[]; clientMessageId?: string; fromCard?: { id: string; title: string } },
+  ): Promise<{ ok: true } | { ok: false; reason: string; status: number }> {
+    let attachments: InboundAttachment[] | undefined = undefined
+    if (args.attachmentIds.length > 0) {
+      if (!this.fileStore) return { ok: false, reason: "file store not mounted", status: 500 }
+      attachments = []
+      for (const id of args.attachmentIds) {
+        const meta = typeof id === "string" ? await this.fileStore.resolveOwnedWebUpload(id, deviceName) : null
+        if (!meta) return { ok: false, reason: "invalid attachment reference", status: 400 }
+        attachments.push({ kind: meta.kind, file_id: meta.file_id, mime: meta.mime, size: meta.size, name: meta.name })
+      }
+    }
+    if (!args.text && !(attachments && attachments.length > 0)) {
+      return { ok: false, reason: "send must include text or attachments", status: 400 }
+    }
+    const msg: InboundMessage = {
+      channel: "web",
+      // Web is one logical channel — a constant chat_id. The device identity
+      // lives in user/user_id (+ presence/push), not the routing key.
+      chat_id: "web",
+      message_id: args.clientMessageId ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      user: deviceName,
+      user_id: deviceName,
+      ts: new Date().toISOString(),
+      text: args.text,
+      target_session_id: session,
+      ...(attachments && attachments.length > 0 ? { attachments } : {}),
+      ...(args.fromCard ? { from_card: args.fromCard } : {}),
+    }
+    this.opts.onSendFromWeb(msg)
+    for (const h of this.inboundHandlers) h(msg)
+    return { ok: true }
   }
 
   private requireAuth(req: Request): { ok: true; device: { name: string; token: string } } | { ok: false; throttled: boolean } {
@@ -4489,6 +4496,32 @@ export class WebChannel implements Channel {
       const name = String(body.name ?? "").trim()
       if (!name) return this.json({ error: "name required" }, 400)
       return this.json(this.withOpenIn(switchBranch(dir, name, { requireClean: true }), this.branchOwners()))
+    }
+    // #167: a share from another app (the phone's share sheet): text and/or the device's own uploads, as a
+    // normal user message. client_message_id is required and idempotent: a queued share retried after a lost
+    // answer is accepted once.
+    if (method === "POST" && path.match(/^\/sessions\/[^/]+\/send$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const auth = this.authenticate(req)
+      if (!auth.ok) return this.json({ error: "unauthorized" }, 401)
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      const clientMessageId = clientMessageIdOf(body.client_message_id)
+      if (!clientMessageId) return this.json({ error: "client_message_id required (web-…)" }, 400)
+      const text = typeof body.text === "string" ? body.text.trim() : ""
+      if (text.length > 100_000) return this.json({ error: "text too long" }, 400)
+      const ids = Array.isArray(body.attachments) ? body.attachments : []
+      if (ids.length > 50 || ids.some((x) => typeof x !== "string")) return this.json({ error: "attachments is up to 50 upload ids" }, 400)
+      if (!this.opts.getSessionAgent?.(id)) return this.json({ error: "session not found" }, 404)
+      const key = `${id}\u0000${clientMessageId}`
+      if (this.recentSendIds.has(key) || this.opts.hasInboundMessage?.(id, "web", clientMessageId)) return this.json({ ok: true, duplicate: true })
+      this.recentSendIds.add(key)
+      if (this.recentSendIds.size > 2000) this.recentSendIds.delete(this.recentSendIds.values().next().value!)
+      const sent = await this.acceptSend(auth.device.name, id, { text: text || undefined, attachmentIds: ids as string[], clientMessageId })
+      if (!sent.ok) {
+        this.recentSendIds.delete(key)
+        return this.json({ error: sent.reason }, sent.status)
+      }
+      return this.json({ ok: true })
     }
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/message$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
