@@ -1,15 +1,15 @@
-# Scratch: TEST-ONLY debug APK for #117's Fold check (suffix .applets117). Never merge.
-name: apk-117
+# Scratch: TEST-ONLY debug APK for #167's Fold check (suffix .share167). Never merge.
+name: apk-167
 on:
   push:
-    branches: [apk-117]
+    branches: [apk-167]
 jobs:
   apk:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: applets117, sha: 594499acefc076bf830d6feee7697af72ad5d29d }
+          - { name: share167, sha: cbe4b0d80f5306b03cbc17c7f59beb5a85680caa }
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -29,19 +29,19 @@ jobs:
       - run: sdkmanager --channel=1 "platforms;android-37.0" "build-tools;36.0.0"
       - run: bun install --frozen-lockfile
       - run: cp apps/android/google-services.json.example apps/android/google-services.json
-      - name: Suffix the debug applicationId with .applets117
+      - name: Suffix the debug applicationId with .share167
         run: |
           python3 - <<'PY2'
           import json, re
           g = "apps/android/build.gradle.kts"
           s = open(g).read()
-          s2 = s.replace('getByName("debug") {', 'getByName("debug") {\n            applicationIdSuffix = ".applets117"', 1)
+          s2 = s.replace('getByName("debug") {', 'getByName("debug") {\n            applicationIdSuffix = ".share167"', 1)
           assert s2 != s, "debug block not found"
           open(g, "w").write(s2)
           j = "apps/android/google-services.json"
           d = json.load(open(j))
           c = json.loads(json.dumps(d["client"][0]))
-          c["client_info"]["android_client_info"]["package_name"] = "dev.supermux.android.applets117"
+          c["client_info"]["android_client_info"]["package_name"] = "dev.supermux.android.share167"
           d["client"].append(c)
           json.dump(d, open(j, "w"), indent=2)
           PY2
