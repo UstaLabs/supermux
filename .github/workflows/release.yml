@@ -1357,6 +1357,9 @@ jobs:
       # #117: the applet widgets extension (dev.supermux.app.widgets, App Group group.dev.supermux.app). Optional:
       # without it a TestFlight build ships without the widgets extension instead of failing to sign.
       IOS_PP_WIDGETS_BASE64: ${{ secrets.IOS_PP_WIDGETS_BASE64 }}
+      # #167: the share extension (dev.supermux.app.share, same App Group and keychain group). Optional like the widgets:
+      # without it a TestFlight build ships without the share extension instead of failing to sign.
+      IOS_PP_SHARE_BASE64: ${{ secrets.IOS_PP_SHARE_BASE64 }}
       # App Store Connect API key used for the TestFlight upload. Dedicated key (App Manager
       # role) rather than the Compose macOS job's notary key, which may be notarization-scoped and would
       # 403 on an upload.
@@ -1501,6 +1504,7 @@ jobs:
           install_pp "$IOS_PP_PUSH_NSE_BASE64"
           install_pp "$IOS_PP_NOTIF_CONTENT_BASE64"
           if [ -n "$IOS_PP_WIDGETS_BASE64" ]; then install_pp "$IOS_PP_WIDGETS_BASE64"; fi
+          if [ -n "$IOS_PP_SHARE_BASE64" ]; then install_pp "$IOS_PP_SHARE_BASE64"; fi
       - name: Applet widgets only with their profile
         # #117: the widgets extension needs its own App Store profile ("Supermux Widgets App Store"). Until that
         # secret exists, a signed build leaves the extension out (and says so) rather than failing to sign;
@@ -1525,6 +1529,32 @@ jobs:
           p = "ExportOptions.plist"
           d = plistlib.load(open(p, "rb"))
           d["provisioningProfiles"]["dev.supermux.app.widgets"] = "Supermux Widgets App Store"
+          plistlib.dump(d, open(p, "wb"))
+          PY
+          fi
+      - name: Share extension only with its profile
+        # #167: like the widgets — leave the share extension out of a signed build (and say so) until its App Store
+        # profile ("Supermux Share App Store") is a secret; with it, the export maps the extension to its profile.
+        if: steps.signing.outputs.upload == '1'
+        working-directory: apps/iosApp
+        run: |
+          if [ -z "$IOS_PP_SHARE_BASE64" ]; then
+            echo "::warning::IOS_PP_SHARE_BASE64 is absent — this TestFlight build has no share extension."
+            python3 - <<'PY'
+          import re
+          p = "project.yml"
+          s = open(p).read()
+          s2 = re.sub(r"\n      # #167: the share extension[^\n]*\n(      #[^\n]*\n)*      - target: SupermuxShare\n        embed: true", "", s)
+          assert s2 != s, "the SupermuxShare dependency was not found in project.yml"
+          open(p, "w").write(s2)
+          PY
+            xcodegen generate
+          else
+            python3 - <<'PY'
+          import plistlib
+          p = "ExportOptions.plist"
+          d = plistlib.load(open(p, "rb"))
+          d["provisioningProfiles"]["dev.supermux.app.share"] = "Supermux Share App Store"
           plistlib.dump(d, open(p, "wb"))
           PY
           fi

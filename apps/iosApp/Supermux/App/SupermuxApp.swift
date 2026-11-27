@@ -122,6 +122,8 @@ private struct MainWindowContent: View {
                 // `.active` would report "not looking" while the user is plainly reading the
                 // chat, and the broker would push a notification for a message on screen.
                 IosAppState.shared.setForeground(value: phase != .background)
+                // #167: a share the extension couldn't send (offline, or a long upload) goes out now.
+                if phase == .active { Task { await ShareSend.drain() } }
             }
     }
 }

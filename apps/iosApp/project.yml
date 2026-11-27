@@ -71,6 +71,10 @@ targets:
       # signed build until its App Store profile exists (IOS_PP_WIDGETS_BASE64).
       - target: SupermuxWidgets
         embed: true
+      # #167: the share extension ("supermux" and the agents in any app's share sheet). release.yml drops these lines
+      # from a signed build until its App Store profile exists (IOS_PP_SHARE_BASE64).
+      - target: SupermuxShare
+        embed: true
     info:
       path: Supermux/Info.plist
       properties:
@@ -113,6 +117,10 @@ targets:
         NSSpeechRecognitionUsageDescription: supermux uses on-device speech recognition to turn your voice into editable text.
         NSLocalNetworkUsageDescription: Supermux connects to the broker server running on your own computer when you reach it by its LAN address (for example 192.168.1.50). It does not scan or collect information about other devices on your network.
         ITSAppUsesNonExemptEncryption: false
+        # #167: the share extension donates INSendMessageIntent per agent, so the agents appear in the share sheet's
+        # suggestions row; the app declares the intent type it donates.
+        NSUserActivityTypes:
+          - INSendMessageIntent
         # Dev builds connect to a self-hosted broker (LAN / Tailscale, often plain http).
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
@@ -326,6 +334,49 @@ targets:
       configs:
         Release:
           PROVISIONING_PROFILE_SPECIFIER: "Supermux Widgets App Store"
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+          "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Distribution"
+
+  SupermuxShare:
+    # #167: the share extension — share from any app straight to an agent, with a message. Reads the targets the app
+    # writes into the App Group and the host's key from the shared keychain group; queues into the App Group what it
+    # couldn't send, and the app sends it.
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: SupermuxShare
+      # Shared with the app: targets, outbox, the send and the INSendMessageIntent donation.
+      - path: Supermux/Share/ShareCore.swift
+    info:
+      path: SupermuxShare/Info.plist
+      properties:
+        CFBundleDisplayName: supermux
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+          NSExtensionAttributes:
+            # An agent in the share sheet's suggestions row opens this extension with that agent picked.
+            IntentsSupported:
+              - INSendMessageIntent
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsText: true
+              NSExtensionActivationSupportsWebURLWithMaxCount: 1
+              NSExtensionActivationSupportsImageWithMaxCount: 20
+              NSExtensionActivationSupportsMovieWithMaxCount: 10
+              NSExtensionActivationSupportsFileWithMaxCount: 20
+              NSExtensionActivationSupportsAttachmentsWithMaxCount: 20
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.supermux.app.share
+        CODE_SIGN_ENTITLEMENTS: SupermuxShare/SupermuxShare.entitlements
+        APPLICATION_EXTENSION_API_ONLY: "YES"
+      configs:
+        Release:
+          PROVISIONING_PROFILE_SPECIFIER: "Supermux Share App Store"
           CODE_SIGN_IDENTITY: "Apple Distribution"
           "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Distribution"
 
